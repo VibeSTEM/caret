@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="15" height="15" viewBox="0 0 15 15" fill="none">
+  <!-- 来源：prototypes/shell/shell.js 的 #i-undo；内部绘制，原始几何与颜色保留。 -->
+  <path d="M6 3L2.5 6.5 6 10" stroke="#4a4a4a" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M2.5 6.5h5a4 4 0 0 1 4 4v1" stroke="#4a4a4a" stroke-width="1.4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,25 @@
+[package]
+name = "caret-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+links = "caret_ffi"
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+cxx.workspace = true
+caret-app.workspace = true
+
+# 构建脚本只用 caret-build 定位与 native 相同的托管 Clang。运行时不依赖它。
+[build-dependencies]
+cxx-build.workspace = true
+caret-build.workspace = true
+
+[lints]
+workspace = true

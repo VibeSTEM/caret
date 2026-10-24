@@ -873,14 +873,24 @@ mod tests {
     fn project_boundary_modules_and_shared_qt_support_select_their_consumers()
     -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
-        for input in [
-            "crates/caret-core/src/project/command_job.rs",
-            "crates/caret-ffi/src/project_operation.rs",
-        ] {
-            let plan = make_plan(&[input.into()], &root)?;
-            assert!(plan.full, "{input}: {plan:?}");
-            assert!(plan.rust && plan.native, "{input}");
-        }
+        let input = "crates/caret-core/src/project/command_job.rs";
+        let plan = make_plan(&[input.into()], &root)?;
+        assert!(plan.full, "{input}: {plan:?}");
+        assert!(plan.rust && plan.native, "{input}");
+        let ffi_operation =
+            make_plan(&["crates/caret-ffi/src/project_operation.rs".into()], &root)?;
+        assert!(
+            !ffi_operation.full,
+            "已登记的 caret-ffi 路径应留在包范围内：{ffi_operation:?}"
+        );
+        assert!(
+            ffi_operation.packages_l1.contains("caret-ffi"),
+            "{ffi_operation:?}"
+        );
+        assert!(
+            ffi_operation.native_labels.contains("ffi"),
+            "{ffi_operation:?}"
+        );
         for input in [
             "tests/support/qt/project_operation_helpers.hpp",
             "tests/support/qt/mesh_frame_tracker.hpp",
@@ -950,7 +960,9 @@ mod tests {
 
         let app = make_plan(&["crates/caret-app/src/lib.rs".into()], &root)?;
         assert!(app.packages_l1.contains("caret-app"), "{app:?}");
-        assert!(app.packages_l2.is_empty(), "{app:?}");
+        // 内置主题快照从 caret-app 经 caret-ffi 进入 launcher。
+        assert!(app.packages_l2.contains("caret-ffi"), "{app:?}");
+        assert!(app.packages_l2.contains("caret-launcher"), "{app:?}");
         assert!(!app.full);
         Ok(())
     }
@@ -970,17 +982,20 @@ mod tests {
     }
 
     #[test]
-    fn unregistered_ffi_paths_fall_back_to_the_full_suite() -> Result<(), Box<dyn Error>> {
+    fn ffi_sources_select_the_ffi_package_and_native_labels() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
         for path in [
+            "crates/caret-ffi/src/lib.rs",
             "crates/caret-ffi/Cargo.toml",
-            "crates/caret-ffi/src/ffi_support.cc",
-            "crates/caret-ffi/include/caret/ffi.hpp",
+            "crates/caret-ffi/build.rs",
         ] {
             let plan = make_plan(&[path.into()], &root)?;
-            assert!(plan.full, "{path}: {plan:?}");
-            assert!(plan.native, "{path}");
+            assert!(!plan.full, "{path}: {plan:?}");
+            assert!(plan.packages_l1.contains("caret-ffi"), "{path}: {plan:?}");
+            assert!(plan.native_labels.contains("ffi"), "{path}: {plan:?}");
         }
+        let outside = make_plan(&["unregistered/outside-any-crate.rs".into()], &root)?;
+        assert!(outside.full, "{outside:?}");
         Ok(())
     }
 
@@ -1017,7 +1032,8 @@ mod tests {
             let plan = make_plan(&[path.into()], &root)?;
             assert!(plan.rust, "{plan:?}");
             assert!(plan.packages_l1.contains("caret-app"), "{plan:?}");
-            assert!(plan.packages_l2.is_empty(), "{plan:?}");
+            assert!(plan.packages_l2.contains("caret-ffi"), "{plan:?}");
+            assert!(plan.packages_l2.contains("caret-launcher"), "{plan:?}");
             assert!(plan.native && plan.qml, "{plan:?}");
             assert!(plan.native_labels.contains("bridge"), "{plan:?}");
             assert!(plan.native_labels.contains("qml"), "{plan:?}");

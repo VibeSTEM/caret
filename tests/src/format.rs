@@ -279,7 +279,7 @@ fn run_qml_format(check: bool) -> Result<(), Box<dyn Error>> {
     let root = repository_root()?;
     let mut files = Vec::new();
     for directory in ["qml", "tests/qml", "tests/fixtures/qml"] {
-        files.extend(qml_sources(&root.join(directory))?);
+        extend_if_dir(&mut files, &root.join(directory), qml_sources)?;
     }
     files.sort();
     if files.is_empty() {
@@ -331,13 +331,18 @@ fn check_cpp_format(check: bool) -> Result<(), Box<dyn Error>> {
         return Err(format!("clang-format 不存在：{}", clang_format.display()).into());
     }
     let root = repository_root()?;
-    let mut files = cpp_sources(&root.join("native"))?;
-    files.extend(cpp_sources(&root.join("tests/cpp"))?);
-    files.extend(cpp_sources(&root.join("tests/qml"))?);
-    files.extend(cpp_sources(&root.join("tests/performance"))?);
-    files.extend(cpp_sources(&root.join("tests/support"))?);
-    files.extend(cpp_sources(&root.join("crates/caret-ffi/src"))?);
-    files.extend(cpp_sources(&root.join("crates/caret-ffi/include"))?);
+    let mut files = Vec::new();
+    for directory in [
+        "native",
+        "tests/cpp",
+        "tests/qml",
+        "tests/performance",
+        "tests/support",
+        "crates/caret-ffi/src",
+        "crates/caret-ffi/include",
+    ] {
+        extend_if_dir(&mut files, &root.join(directory), cpp_sources)?;
+    }
     if files.is_empty() {
         return Err("C++ 源文件清单为空".into());
     }
@@ -366,6 +371,18 @@ pub(super) fn run_cmake_tool(tool: &str, arguments: &[&str]) -> Result<(), Box<d
     let mut command = caret_build::python::command(root, tool)?;
     command.args(arguments).args(cmake_files(root)?);
     run_scanner(tool, command)
+}
+
+/// 尚未建立的目录跳过。空清单仍由调用方拒绝。
+fn extend_if_dir(
+    files: &mut Vec<PathBuf>,
+    dir: &Path,
+    collect: fn(&Path) -> std::io::Result<Vec<PathBuf>>,
+) -> std::io::Result<()> {
+    if dir.is_dir() {
+        files.extend(collect(dir)?);
+    }
+    Ok(())
 }
 
 fn cpp_sources(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -406,7 +423,7 @@ fn cmake_sources(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 fn cmake_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
     for directory in ["native", "qml", "tools"] {
-        files.extend(cmake_sources(&root.join(directory))?);
+        extend_if_dir(&mut files, &root.join(directory), cmake_sources)?;
     }
     if files.is_empty() {
         return Err("CMake 源文件清单为空".into());

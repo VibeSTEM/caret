@@ -44,7 +44,7 @@
 | 依赖 | 来源中的入口 | Caret 中的消费方式 |
 | --- | --- | --- |
 | CMake / Ninja / LLVM / uv / hyperfine | 构建 crate 的资产表 | 官方预编译包。格式化和 clang-tidy 使用其中的 LLVM |
-| Qt | native 的 Qt 供给脚本 | 官方模块包。启用界面桥时再查找 StateMachine |
+| Qt | native 的 Qt 供给脚本；`caret-build::ensure_qt` 调用它 | 官方模块包，安装到 `.toolchain/qt`。启用界面桥时再查找 StateMachine |
 | Linux ICU | 同一 Qt 供给 | 与 Qt Linux 工具 ABI 匹配，不替换成系统 ICU |
 | GoogleTest | SDK 清单 | `find_package(GTest CONFIG)`，仅测试构建 |
 

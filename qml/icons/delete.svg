@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="15" height="15" viewBox="0 0 15 15" fill="none">
+  <!-- 来源：prototypes/shell/shell.js 的 #i-delete；内部绘制，原始几何与颜色保留。 -->
+  <path d="M2.5 4h10M5.5 4V2.5h4V4M4 4l1 9h5l1-9" stroke="currentColor" stroke-width="1.2"/>
+</svg>

@@ -1,0 +1,19 @@
+version: 1
+kind: language
+catalog: caret
+language: en
+sourcelanguage: en
+
+[DialogAction]
+ok:
+  src: OK
+  tr: OK
+
+cancel:
+  src: Cancel
+  tr: Cancel
+
+[CaretWindow]
+title:
+  src: Caret
+  tr: Caret

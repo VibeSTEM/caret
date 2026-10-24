@@ -31,6 +31,7 @@ Theme 不计入组件层级。原子组件不接业务服务。组合组件不�
 | `ThemedTextField.qml` | 文本输入和校验态 |
 | `ThemedNumberField.qml` | 数值输入 |
 | `ThemedCheckBox.qml` | 复选框 |
+| `ThemedSwitch.qml` | 紧凑开关。默认关闭，轨道为灰色 |
 | `ThemedRadioButton.qml` | 单选框 |
 | `ThemedComboBox.qml` | 下拉框 |
 | `RibbonComboBox.qml` | 命令条里的下拉框 |
@@ -78,7 +79,7 @@ Theme 不计入组件层级。原子组件不接业务服务。组合组件不�
 
 ## 主题与写法
 
-- `qml/Themes/Theme.qml` 是唯一的 QML token 门面，属性只读，绑定 C++ 发布的快照。同时移植 `gui-default.pa`、`light.pa` 和 `dark.pa`。
+- `qml/Themes/Theme.qml` 是唯一的 QML token 门面，属性只读，绑定 C++ 发布的快照。`gui-default.pa`、`light.pa`、`dark.pa` 和 Rust schema 使用同一组键，只保留界面和已移植控件读到的项。
 - 间距、字号、圆角、图标和控件高度来自 token。调用方覆盖时仍用 token 或布局计算。
 - 组件文件用 `PascalCase.qml`，id、属性和信号用 `camelCase`。
 - 用属性绑定表达状态。命令式赋值前先确认不会拆掉绑定。

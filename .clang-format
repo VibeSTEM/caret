@@ -1,0 +1,12 @@
+---
+# C++ 与 Objective-C++ 共用 LLVM 样式。包含按分类重排，块间空行。
+BasedOnStyle: LLVM
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '.*'
+    Priority: 1
+Standard: c++20
+IndentWidth: 4
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Left

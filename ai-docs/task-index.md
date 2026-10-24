@@ -39,10 +39,10 @@
 | 001 | [工具链、workspace 与基础 crate](task/001-infra-toolchain.md) | P0 | — | L | done |
 | 002 | [DSL 核心与 dslc](task/002-infra-dsl.md) | P0 | 001 | M | done |
 | 003 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
-| 004 | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | planned |
-| 005 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | planned |
-| 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | planned |
-| 007 | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | planned |
+| 004 | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
+| 005 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
+| 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | ready |
+| 007 | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | in-progress |
 | 008 | [M0：打开、打字、保存](task/008-impl-document.md) | P2 | 007 | L | planned |
 | 009 | [M1：`\` 命令与补全层](task/009-impl-commands.md) | P2 | 008 | M | planned |
 | 010 | [M2：结构导航](task/010-impl-structure.md) | P2 | 009 | M | planned |
@@ -52,7 +52,7 @@
 | 014 | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
 | 015 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
 
-007 只有标题、页面区域和一行状态。009 才加补全层。010 在同一扇窗口上加焦点框和状态栏文字。公式和表格画在画布里。014 不挡后续里程碑。
+007 是简化后的文档窗口：自定义标题栏、Home 与右侧 Comments / Editing / Share、居中的页面、底栏左侧页码字数语言、右侧缩放尺。009 才加补全层。010 在同一扇窗口上加焦点框和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 

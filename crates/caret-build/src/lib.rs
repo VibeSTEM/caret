@@ -10,6 +10,7 @@ mod compiler;
 mod environment;
 mod install;
 mod paths;
+mod qt;
 
 pub mod database;
 pub mod python;
@@ -25,6 +26,7 @@ pub use environment::{
 };
 pub use install::{install_directory, install_lock};
 pub use paths::{exe_name, toolchain_root};
+pub use qt::{ensure_qt, qt_provision_dir};
 
 /// 解析按需安装并经 SHA256 校验的 hyperfine 命令。安装根是 `.toolchain/`。
 pub fn resolve_hyperfine() -> Result<PathBuf, String> {

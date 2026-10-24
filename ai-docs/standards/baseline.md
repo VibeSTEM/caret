@@ -1,6 +1,6 @@
 # 技术基线与版本决策
 
-更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine 和 DSL 已由 `caret-build` 与 `caret-dsl-core` 接入。Qt、GoogleTest、CXX 和 native 工程留到后续任务。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
+更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX 和 native 工程已接入。GoogleTest 仍留到后续任务。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
 
 ## 当前选择
 
