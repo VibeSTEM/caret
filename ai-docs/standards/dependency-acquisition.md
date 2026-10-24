@@ -1,6 +1,6 @@
 # 依赖获取与主平台环境
 
-更新日期：2026-10-24。版本选择见[技术基线](baseline.md)。供给程序计划落在 `caret-build`：固定 URL 与 SHA256、安装到仓库根的 `.toolchain/`、缺包即失败。移植 panta 的构建 crate 时改掉它把工具装进 `target/` 的布局，不把这两套目录再叠在一起。
+更新日期：2026-10-25。版本选择见[技术基线](baseline.md)。供给程序在 `caret-build`：固定 URL 与 SHA256、安装到仓库根的 `.toolchain/`、缺包即失败。不把工具装进 `target/`。
 
 ## 目录
 
@@ -13,11 +13,13 @@
 ├── tools/<name>/<id>/                 # CMake、Ninja、LLVM、uv、hyperfine、Python
 ├── qt/staging/                        # Qt 与 Linux ICU，各 profile 共用
 ├── sdk/<name>/<version>/<triple>/     # GoogleTest 等静态 SDK
-├── archives/                          # 校验过的压缩包，供离线重装
+├── archives/                          # 下载校验时的临时压缩包，发布成功后删除
 └── locks/                             # 安装锁
 ```
 
 `<id>` 包含版本、平台、架构和摘要，避免不同资产共用一个目录。整个 `.toolchain/` 不提交。
+
+成功发布后删除归档，避免和已解包的工具长期各存一份。安装树损坏时删掉对应的 `tools/<name>/<id>/` 再下载。不靠常驻压缩包离线重装。
 
 ## 托管原则
 

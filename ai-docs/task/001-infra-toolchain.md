@@ -1,6 +1,6 @@
 # 001 — 工具链、workspace 与基础 crate
 
-- 状态：ready
+- 状态：done
 - 依赖：无
 - 优先级：P0
 - 创建 / 更新：2026-10-25 / 2026-10-25
@@ -45,19 +45,20 @@
 
 ## 验收标准
 
-- [ ] 工具装在仓库根 `.toolchain/`，不在 `target/`。未设置 `CARET_TOOLCHAIN_ROOT` 时不回退到 `target/`。
-- [ ] `cargo clean` 之后已安装的 CMake 或 Ninja 仍可调用。
-- [ ] `caret-foundation` 不依赖其他 workspace crate，也不依赖 Qt。
-- [ ] 工作区里没有编辑器 crate，也没有几何、网格、VTK 相关 crate。
-- [ ] fmt 和 clippy `-D warnings` 通过。独立评审的发现已处理，范围和限制有记录。
+- [x] 工具装在仓库根 `.toolchain/`，不在 `target/`。未设置 `CARET_TOOLCHAIN_ROOT` 时不回退到 `target/`。
+- [x] `cargo clean` 之后已安装的 CMake 或 Ninja 仍可调用。
+- [x] `caret-foundation` 不依赖其他 workspace crate，也不依赖 Qt。
+- [x] 工作区里没有编辑器 crate，也没有几何、网格、VTK 相关 crate。
+- [x] fmt 和 clippy `-D warnings` 通过。独立评审的发现已处理，范围和限制有记录。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | `cargo fmt --all -- --check` | 无差异 | 未执行 |
-| — | `cargo clippy --locked --workspace --all-targets -- -D warnings` | 无警告 | 未执行 |
-| — | 安装一个锁定工具后执行 `cargo clean`，再调用该工具 | 工具仍在 `.toolchain/` | 未执行 |
+| 2026-10-25 | macOS，`cargo fmt --all -- --check` | 无差异 | 通过 |
+| 2026-10-25 | macOS，`cargo clippy --locked --workspace --all-targets -- -D warnings` | 无警告 | 通过 |
+| 2026-10-25 | macOS，安装锁定 CMake 4.4.3 后 `cargo clean`，再执行该二进制 `--version` | 工具仍在 `.toolchain/` | `cmake version 4.4.3`。路径在 `.toolchain/tools/cmake/`，不在 `target/` |
+| 2026-10-25 | macOS，`cargo test --workspace --locked --offline` | 通过 | 通过。caret-build 23 项，caret-foundation 4 项加 1 项忽略，caret-tests 34 项加 3 项忽略 |
 
 ## 风险与回退
 
@@ -66,7 +67,9 @@
 ## 决策与工作记录
 
 - 2026-10-25：创建任务。来源提交以索引为准。
+- 2026-10-25：从 panta `ee84d95` 整份复制 `caret-build`、`caret-foundation` 和 `caret-tests` 调度入口，再改名并把安装根改到仓库根 `.toolchain/`。`CARET_TOOLCHAIN_ROOT` 未设置时不读 `target/`。`cc` 锁在 `1.4.6`，与来源一致。同一工作区里还放了 002 的 DSL 和 003 的应用服务，见对应任务。
+- 2026-10-25：独立评审没有验收缺陷。成功发布后删除安装归档，与来源一致，规范改成不靠常驻压缩包离线重装。`paths` 注释和 `deny.toml` 里过时的 syn 理由已改正。`cargo quality`、`cargo lint`、`cargo format` 仍会找尚未存在的 launcher、Qt 和 native 工程，那是 004–006 的范围。
 
 ## 完成摘要
 
-未完成。
+工具链、workspace、`caret-build`、`caret-foundation` 和测试调度已落地。编辑器 crate 和 Qt 工程不在本次。

@@ -36,9 +36,9 @@
 
 | 编号 | 任务 | 阶段 | 依赖 | 规模 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 001 | [工具链、workspace 与基础 crate](task/001-infra-toolchain.md) | P0 | — | L | ready |
-| 002 | [DSL 核心与 dslc](task/002-infra-dsl.md) | P0 | 001 | M | planned |
-| 003 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | planned |
+| 001 | [工具链、workspace 与基础 crate](task/001-infra-toolchain.md) | P0 | — | L | done |
+| 002 | [DSL 核心与 dslc](task/002-infra-dsl.md) | P0 | 001 | M | done |
+| 003 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
 | 004 | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | planned |
 | 005 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | planned |
 | 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | planned |

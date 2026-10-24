@@ -1,0 +1,6 @@
+# rustup 锁定日常编译器与质量组件；MSRV 另见 Cargo.toml。
+# 升级决策及验证见任务 001。
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

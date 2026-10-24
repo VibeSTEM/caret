@@ -1,0 +1,19 @@
+[alias]
+# 桌面安装别名等 launcher 建立后再登记。裸 cargo run 现在不能打开窗口。
+# 根目录跨语言质量入口；实现位于 tests/，避免 shell/Node 运行时分叉。
+performance = "run -q --locked --package caret-tests -- performance"
+# 命令级基准只在显式调用时下载并运行固定版本 hyperfine。
+hyperfine = "run -q --locked --package caret-tests -- toolchain hyperfine"
+# 本地与 PR CI 共用 Rust 影响范围选择器；test-scope 和 verify-changed 从 origin/main 与工作树计算变更。
+test-plan = "run -q --locked --package caret-tests -- test-plan"
+test-scope = "run -q --locked --package caret-tests -- test-scope"
+quality = "run -q --locked --package caret-tests -- quality"
+verify-changed = "run -q --locked --package caret-tests -- verify-changed"
+lint = "run -q --locked --package caret-tests -- lint"
+format = "run -q --locked --package caret-tests -- format"
+audit = "run -q --locked --package caret-tests -- audit"
+coverage = "run -q --locked --package caret-tests -- coverage"
+sanitize = "run -q --locked --package caret-tests -- sanitize"
+# 不叫 miri：别名会遮蔽真正的 cargo-miri 外部子命令（cargo #10049，
+# runner 内部 `cargo +nightly miri test` 需要解析到真身）。
+ub-check = "run -q --locked --package caret-tests -- ub-check"
