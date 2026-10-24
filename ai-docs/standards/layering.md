@@ -1,6 +1,6 @@
 # 分层与依赖方向
 
-更新日期：2026-10-24。这是移植后的目标方向。具体 crate 还没有建立，不能用“当前能链接”代替本表。编辑器的文档和排版模型由架构文档规定，不在这里预建空 crate。
+更新日期：2026-10-24。这是移植后的目标方向。具体 crate 还没有建立，不能用“当前能链接”代替本表。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
 
 ```text
 QML 原子组件 / 组合组件 / 对话框
@@ -20,8 +20,10 @@ Rust 应用服务 / 领域模型 / DSL 快照
 | --- | --- | --- |
 | 基础 | `caret-foundation`、`caret-build`、`caret-dsl-core` | 不依赖其他 workspace crate |
 | 工具入口 | `caret-dslc` | `caret-dsl-core` |
-| 应用服务 | 持有路径、运行时、设置、语言和主题的服务 crate | 基础库和 DSL 核心。不依赖 Qt、CXX 或 FFI |
-| 语言边界 | `caret-ffi` | 应用服务和 foundation。只做 DTO、错误和句柄 |
+| 文档 | `caret-doc`、`caret-layout`、`caret-structure` | 只依赖基础库。布局依赖文档，结构索引依赖文档 |
+| 会话 | `caret-engine` | 文档三件套。不依赖 Qt、CXX 或 FFI |
+| 应用服务 | `caret-app`：路径、运行时、设置、语言、主题 | 会话、基础库和 DSL 核心。不依赖 Qt 或 FFI |
+| 语言边界 | `caret-ffi` | `caret-app` 和 foundation。只做 DTO、错误和句柄 |
 | 组合根 | launcher | FFI、构建供给，以及启动所需的 DSL 聚合 |
 
 `caret-dslc` 是独立命令行，不是桌面程序的组合根。禁止应用服务依赖 FFI，再由 FFI 依赖应用服务形成环。
