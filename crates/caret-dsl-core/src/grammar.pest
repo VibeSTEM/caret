@@ -1,0 +1,69 @@
+document = { SOI ~ line* ~ EOI }
+
+line = { blank | comment_line | version | kind | catalog | language | sourcelanguage | context | section | message | src | oldsrc | translation | status | comment_field | extra_field | numerus | entry }
+blank = { hws* ~ newline }
+comment_line = { hws* ~ "//" ~ (!newline ~ ANY)* ~ newline? }
+
+version = { hws* ~ "version" ~ hws* ~ ":" ~ hws* ~ integer ~ hws* ~ newline? }
+kind = { hws* ~ "kind" ~ hws* ~ ":" ~ hws* ~ kind_name ~ hws* ~ newline? }
+catalog = { hws* ~ "catalog" ~ hws* ~ ":" ~ hws* ~ catalog_name ~ hws* ~ newline? }
+language = { hws* ~ "language" ~ hws* ~ ":" ~ hws* ~ locale_name ~ hws* ~ newline? }
+sourcelanguage = { hws* ~ "sourcelanguage" ~ hws* ~ ":" ~ hws* ~ locale_name ~ hws* ~ newline? }
+context = { hws* ~ "[" ~ context_name ~ "]" ~ hws* ~ newline }
+section = { hws* ~ section_name ~ hws* ~ ":" ~ hws* ~ newline? }
+
+message = { hws* ~ message_key ~ hws* ~ ":" ~ hws* ~ newline }
+src = { indent ~ "src" ~ hws* ~ ":" ~ hws* ~ value ~ hws* ~ newline? }
+oldsrc = { indent ~ "oldsrc" ~ hws* ~ ":" ~ hws* ~ value ~ hws* ~ newline? }
+translation = { indent ~ "tr" ~ hws* ~ ":" ~ hws* ~ translation_value ~ hws* ~ newline? }
+status = { indent ~ "st" ~ hws* ~ ":" ~ hws* ~ status_name ~ hws* ~ newline? }
+comment_field = { indent ~ "comment" ~ hws* ~ ":" ~ hws* ~ value ~ hws* ~ newline? }
+extra_field = { indent ~ "extra" ~ hws* ~ ":" ~ hws* ~ value ~ hws* ~ newline? }
+numerus = { indent ~ "numerus" ~ hws* ~ ":" ~ hws* ~ boolean ~ hws* ~ newline? }
+entry = { indent ~ key ~ hws* ~ ":" ~ hws* ~ entry_value ~ hws* ~ newline? }
+
+translation_value = { array | value }
+array = { "[" ~ hws* ~ quoted ~ (hws* ~ "," ~ hws* ~ quoted)* ~ hws* ~ "]" }
+entry_value = _{ typed_value | scalar }
+typed_value = { type_name ~ hws+ ~ "=" ~ hws* ~ scalar }
+value = { quoted | scalar }
+quoted = { "\"" ~ ("\\\"" | "\\\\" | (!"\"" ~ !newline ~ ANY))* ~ "\"" }
+
+integer = @{ ASCII_DIGIT+ }
+boolean = @{ "true" | "false" }
+kind_name = @{ "language" | "theme" | "variables" | "fsm" }
+section_name = @{ "values" }
+status_name = @{ "finished" | "unfinished" | "vanished" }
+type_name = @{ "bool" | "int" | "real" | "string" | "resource" }
+locale_name = @{ (ASCII_ALPHANUMERIC | "-" | "_")+ }
+catalog_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "-")* }
+context_name = @{ (!"]" ~ !newline ~ ANY)+ }
+message_key = { quoted_key | bare_key }
+quoted_key = { quoted }
+bare_key = @{ identifier ~ ("." ~ identifier)* }
+key = @{ identifier ~ ("." ~ identifier)* }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+scalar = @{ (!newline ~ ANY)* }
+
+indent = _{ "  " }
+hws = _{ " " | "\t" }
+newline = _{ "\r\n" | "\n" }
+
+// FSM 声明（073）：独立入口 fsm_document；顶层仅 version/kind/name/initial
+// 与 states/transitions 两节，沿用两格缩进与 kebab-case 约定。
+fsm_document = { SOI ~ fsm_line* ~ EOI }
+fsm_line = { blank | comment_line | version | kind | fsm_name | fsm_initial | fsm_states_header | fsm_state_decl | fsm_transitions_header | fsm_transition_decl | fsm_transition_field }
+fsm_name = { hws* ~ "name" ~ hws* ~ ":" ~ hws* ~ fsm_kebab ~ hws* ~ newline? }
+fsm_initial = { hws* ~ "initial" ~ hws* ~ ":" ~ hws* ~ fsm_state_name ~ hws* ~ newline? }
+fsm_states_header = { hws* ~ "states" ~ hws* ~ ":" ~ hws* ~ newline? }
+fsm_state_decl = { fsm_indent ~ fsm_state_name ~ hws* ~ ":" ~ hws* ~ fsm_state_kind ~ hws* ~ newline? }
+fsm_transitions_header = { hws* ~ "transitions" ~ hws* ~ ":" ~ hws* ~ newline? }
+fsm_transition_decl = { fsm_indent ~ fsm_kebab ~ hws* ~ ":" ~ hws* ~ newline }
+fsm_transition_field = { fsm_indent2 ~ fsm_field_name ~ hws* ~ ":" ~ hws* ~ fsm_field_value ~ hws* ~ newline? }
+fsm_state_kind = @{ "active" | "terminal" }
+fsm_field_name = @{ "from" | "on" | "to" | "guard" }
+fsm_field_value = { fsm_state_name | fsm_kebab }
+fsm_state_name = @{ ASCII_ALPHA_UPPER ~ ASCII_ALPHANUMERIC* }
+fsm_kebab = @{ ASCII_ALPHANUMERIC ~ (ASCII_ALPHANUMERIC | "-")* }
+fsm_indent = _{ "  " }
+fsm_indent2 = _{ "    " }

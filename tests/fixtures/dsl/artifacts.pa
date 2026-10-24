@@ -1,0 +1,27 @@
+version: 1
+kind: language
+language: cn
+
+// retained note
+[Z]
+items:
+  src: %n item
+  oldsrc: Old
+  numerus: true
+  tr: ["%n A", "%n B"]
+  comment: translators note
+  extra: hint
+  st: unfinished
+
+[A]
+symbols:
+  src: <&>
+  tr: <&>
+
+old:
+  src: Old text
+  tr: Old translation
+  st: vanished
+
+missing:
+  src: Missing translation

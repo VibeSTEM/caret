@@ -1,0 +1,17 @@
+version: 1
+kind: language
+language: cn
+sourcelanguage: en
+
+[FileMenu]
+open:
+  src: Open
+  tr: 打开
+
+ok:
+  src: ok
+  tr: 好的
+
+ok-pair:
+  src: ok ok
+  tr: 好好的

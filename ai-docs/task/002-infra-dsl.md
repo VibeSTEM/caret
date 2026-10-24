@@ -1,6 +1,6 @@
 # 002 — DSL 核心与 dslc
 
-- 状态：planned
+- 状态：done
 - 依赖：001
 - 优先级：P0
 - 创建 / 更新：2026-10-25 / 2026-10-25
@@ -38,17 +38,17 @@
 
 ## 验收标准
 
-- [ ] `caret-dslc check` 对一份合法 `.pa` 成功，对一份故意写错的 `.pa` 失败并给出诊断。
-- [ ] `format --check` 能区分已格式化和未格式化的输入。
-- [ ] crate 不依赖 Qt、FFI 和编辑器 crate。
-- [ ] fmt 与 clippy `-D warnings` 通过。评审发现已处理。
+- [x] `caret-dslc check` 对一份合法 `.pa` 成功，对一份故意写错的 `.pa` 失败并给出诊断。
+- [x] `format --check` 能区分已格式化和未格式化的输入。
+- [x] crate 不依赖 Qt、FFI 和编辑器 crate。
+- [x] fmt 与 clippy `-D warnings` 通过。评审发现已处理。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | `cargo test --locked -p caret-dsl-core -p caret-dslc` | 通过 | 未执行 |
-| — | `caret-dslc check` / `format --check` 对正反夹具 | 合法通过，非法失败 | 未执行 |
+| 2026-10-25 | macOS，`cargo test --workspace --locked --offline` | 通过 | 通过。dsl-core 库 30 项、catalog 7 项、features 31 项、fsm 21 项；dslc 单测 14 项、cli 2 项 |
+| 2026-10-25 | 同上，`check` 与 `format --check` 由 `caret-dslc` 的 cli 测试覆盖 | 合法通过，非法失败 | 通过 |
 
 ## 风险与回退
 
@@ -57,7 +57,10 @@
 ## 决策与工作记录
 
 - 2026-10-25：创建任务。
+- 2026-10-25：从 panta `ee84d95` 整份复制 `caret-dsl-core` 和 `caret-dslc`。fsm 的声明、校验、格式化和 Rust 元数据生成在 `caret-dsl-core`。来源里打开 STL 的消费者状态机和对应 `.pa` 没有复制。
+- 2026-10-25：测试夹具 `open-saved-stl` 改成中性样例 `open-saved-note`。状态、转移和 guard 的形状保留，用来覆盖语言，不代表产品流程。`cargo test --offline -p caret-dsl-core --test fsm` 21 项通过。
+- 2026-10-25：独立评审没有验收缺陷。打开 STL 的消费者不在仓库里。
 
 ## 完成摘要
 
-未完成。
+`caret-dsl-core` 与 `caret-dslc` 可以检查、格式化并生成，包含状态机设计。不链接 Qt。

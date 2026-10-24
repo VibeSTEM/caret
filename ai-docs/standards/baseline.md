@@ -1,6 +1,6 @@
 # 技术基线与版本决策
 
-更新日期：2026-10-24。下表是准备从 panta 移植的锁定版本。Caret 仓库尚未接入这些工具；移植时以当时源文件里的 URL、SHA256 和 commit 为准，并在同一次提交里更新本表。
+更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine 和 DSL 已由 `caret-build` 与 `caret-dsl-core` 接入。Qt、GoogleTest、CXX 和 native 工程留到后续任务。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
 
 ## 当前选择
 

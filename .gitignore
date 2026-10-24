@@ -1,0 +1,62 @@
+# Cargo workspace outputs; keep Cargo.lock and .cargo/config.toml tracked.
+/target/
+
+# Downloaded tools, Qt, SDKs, archives and locks. cargo clean must not remove these.
+/.toolchain/
+
+# Native/Python build and package outputs (out-of-source builds only).
+/build/
+/out/
+/dist/
+/native/build/
+/native/out/
+/python/build/
+/python/dist/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+compile_commands.json
+.ninja_deps
+.ninja_log
+
+# Qt Creator per-user state; QML/resources and generated-code inputs stay tracked.
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+
+# Python environments, bytecode, package metadata and tool caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local runtime data and verification outputs; fixtures belong outside these dirs.
+/.local/
+/artifacts/
+/coverage/
+
+# Machine-local environment overrides; keep documented examples.
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Editor/system caches; shared .vscode settings are intentionally not excluded.
+.cache/
+.clangd/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

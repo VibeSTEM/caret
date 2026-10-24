@@ -1,6 +1,6 @@
 # 仓库协作指南
 
-Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界面在 Qt 6 / QML。工程栈见[技术规范索引](ai-docs/standards/README.md)。规范里的命令和路径是规划，落地前不能当成已经可以运行。
+Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界面在 Qt 6 / QML。工程栈见[技术规范索引](ai-docs/standards/README.md)。还没落地的入口不能当成已经可以运行。当前可以跑 `cargo fmt`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 和 `cargo test --workspace --locked`。根别名里的 `format`、`lint`、`quality` 还要等 Qt 与 launcher。
 
 只阅读当前任务相关的文档。工程栈以规范为准。外部调查只放在 [research](ai-docs/research/)。
 

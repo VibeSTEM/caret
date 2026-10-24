@@ -1,0 +1,46 @@
+# cargo-deny 配置（任务 032；固定工具版本 0.20.2，见 modules/quality-tooling.md）。
+# 门禁语义：cargo deny check 任一节失败即非零退出。
+
+[graph]
+# 检查整个 workspace 的依赖图（含 build/dev 依赖）。
+all-features = true
+
+[licenses]
+version = 2
+# 允许的许可证：宽松系；出现未列出的即失败，新增依赖必须显式登记。
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+
+[bans]
+# 依赖图里不允许出现同一 crate 的多版本；确需例外时在下方 skip 登记理由。
+multiple-versions = "deny"
+wildcards = "deny"
+deny = []
+skip = [
+  # syn 2 来自 zerocopy-derive，syn 3 来自 pest_generator 与 serde_derive。
+  # 都是锁定传递依赖，无法在不换锁的情况下合并。cxx 还没有进入依赖图。
+  { crate = "syn", reason = "zerocopy-derive 用 syn 2，pest_generator 与 serde_derive 用 syn 3" },
+]
+skip-tree = []
+
+[advisories]
+version = 2
+# 默认拉取 RustSec advisory DB；有未修复告警即失败。
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

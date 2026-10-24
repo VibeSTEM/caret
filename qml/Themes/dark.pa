@@ -1,0 +1,31 @@
+version: 1
+kind: theme
+
+values:
+  color-background: string = "#202124"
+  color-panel: string = "#292a2d"
+  color-chrome: string = "#34363a"
+  color-chrome-hover: string = "#42454a"
+  color-chrome-pressed: string = "#50545a"
+  color-chrome-line: string = "#4a4c50"
+  color-panel-line: string = "#4a4c50"
+  color-status: string = "#252629"
+  color-text: string = "#f1f3f4"
+  color-text-muted: string = "#bdc1c6"
+  color-icon: string = "#d7d9dc"
+  color-hover: string = "#263746"
+  color-selected: string = "#243d51"
+  color-focus: string = "#8ab4f8"
+  color-error: string = "#f28b82"
+  color-menubar: string = "#242528"
+  color-menubar-text: string = "#f1f3f4"
+  color-menubar-hover: string = "#3d3f43"
+  color-ribbon: string = "#3a3c40"
+  color-document-band: string = "#302e2c"
+  color-document-band-line: string = "#4a4642"
+  color-document-hover: string = "#3b3936"
+  color-document-close-pressed: string = "#344758"
+  color-dialog-primary: string = "#263d50"
+  color-dialog-primary-border: string = "#6ca6d2"
+  font-body: int = 15
+  control-height: int = 28

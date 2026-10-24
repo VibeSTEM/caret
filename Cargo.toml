@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/caret-app",
+    "crates/caret-build",
+    "crates/caret-dsl-core",
+    "crates/caret-dslc",
+    "crates/caret-foundation",
+    "tests",
+]
+# launcher 还没有。多个二进制并存时不设默认可执行成员，避免裸 `cargo run` 被当成开窗口。
+default-members = [
+    "crates/caret-app",
+    "crates/caret-build",
+    "crates/caret-dsl-core",
+    "crates/caret-foundation",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# 支持下限由当前使用的标准库 / 依赖 API 决定（Atomic::try_update 要求 1.95）。
+# 日常工具链由 rust-toolchain.toml 锁定；resolver 3 按此下限解析依赖。
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/VibeSTEM/caret"
+
+[workspace.dependencies]
+libc = "0.2"
+fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
+caret-build = { path = "crates/caret-build", version = "0.1.0" }
+caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
+caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
+serde_json = "1.0"
+criterion = "0.8.2"
+pest = "2.8"
+pest_derive = "2.8"
+quick-xml = { version = "0.41", features = ["serialize"] }
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+
+[workspace.lints.rust]
+# 默认拒绝 unsafe。已登记例外只有 caret-foundation::crash，模块级 allow。
+# 手写 unsafe 必须逐块写 // SAFETY:。
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# 测试和 build script 也必须显式处理失败。
+unwrap_used = "deny"
+expect_used = "deny"
