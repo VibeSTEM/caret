@@ -27,11 +27,11 @@
 
 ## 前置条件与待决策
 
-003、004 已 done。Qt 已由 `caret-build` 装到 `.toolchain/`。
+003、004 已 done。004 已通过 `caret-build` 将 Qt 装到 `.toolchain/`，并交付最小 CMake 工程和可独立加载的 QML 模块。
 
 ## 实施步骤
 
-1. 移植 launcher 和 CMake 骨架，改名前缀。记录来源 commit。
+1. 移植 launcher，在 004 的 CMake 工程上增加桌面应用和 FFI 链接，复用已有模块与测试登记，改名前缀。记录来源 commit。
 2. 写最小 `#[cxx::bridge]`。实现只转发，不放业务。
 3. 空白窗口加载 QML 模块。确认没有把来源的工艺页登记进工程。
 4. 跑通配置、编译、启动、关闭。Debug 和 Release 都用 `/MD` 的平台按规范检查运行库。
@@ -39,7 +39,7 @@
 
 ## 预计改动
 
-新建 `crates/launcher/`、`crates/caret-ffi/`、`native/`、`qml/App.qml` 的空白页。CMake 不回调 Cargo。
+新建 `crates/launcher/`、`crates/caret-ffi/`、`qml/App.qml` 的空白页，扩展 004 已有的 `native/` CMake 工程。CMake 不回调 Cargo。
 
 ## 验收标准
 

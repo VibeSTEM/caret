@@ -18,4 +18,3 @@ Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界
 | 提交、分支与 GitHub | [提交规范](ai-docs/standards/commits.md) |
 | 注释、文件和兼容例外 | [注释](ai-docs/standards/comments.md)、[仓库文件](ai-docs/standards/repository-hygiene.md)、[代码生命周期](ai-docs/standards/code-lifecycle.md) |
 | 快捷键 | [快捷键](ai-docs/architecture/interface/keyboard-shortcuts.md) |
-| 未排期构想 | [ideas](ai-docs/ideas/) |
