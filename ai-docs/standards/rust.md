@@ -19,7 +19,7 @@
 
 | 来源 | 规划名 | 带走的内容 |
 | --- | --- | --- |
-| `panta-build` | `caret-build` | 工具资产、安装事务、LLVM / CMake / Ninja 定位、构建树路径、`exe_name`、编译数据库、Python 工具供给 |
+| `panta-build` | `caret-build` | 工具资产、安装事务、LLVM / CMake / Ninja 定位、`.toolchain/` 安装根、`exe_name`、编译数据库、Python 工具供给 |
 | `panta-foundation` | `caret-foundation` | 进程早期的崩溃信号。不放文档或界面模型 |
 | `panta-dsl-core` | `caret-dsl-core` | `.pa` 的语法、诊断、校验、格式化、求值、Artifact 聚合、TS 输出和 FSM 生成 |
 | `panta-dslc` | `caret-dslc` | 单文件检查、格式化和生成的命令行。不链接 Qt |
@@ -34,7 +34,7 @@
 
 ## 路径
 
-构建 crate 负责工具安装目录和可执行文件查找：Windows 补 `.exe`，在有限深度内查找 `bin/` 下的 CMake 和 LLVM 工具。
+构建 crate 把下载的工具装进 `.toolchain/`，不放进 `target/`。Windows 可执行名补 `.exe`，并在有限深度内查找 `bin/` 下的 CMake 和 LLVM 工具。
 
 应用内逻辑路径移植来源的六类根：
 

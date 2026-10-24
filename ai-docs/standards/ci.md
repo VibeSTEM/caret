@@ -25,8 +25,8 @@
 - native lint 把 clang-tidy、include-cleaner 和 cppcheck 分成独立检查。macOS 另查手写 Objective-C++。
 - 格式检查覆盖 Rust、C++ / CXX、CMake、QML 和 `.pa`。
 - 夜间任务在 macOS、Ubuntu 和 Windows 上运行 `cargo test --locked --workspace`。Rust 覆盖率的函数和行门槛各为 85%，只在夜间阻断。native 覆盖率归档报告。性能基准不设失败阈值。
-- Linux job 安装 QML 运行所需的系统库。工具、Qt 和 GoogleTest 仍经 Cargo 供给，不装成系统包。
+- Linux job 安装 QML 运行所需的系统库。工具、Qt 和 GoogleTest 仍经 Cargo 供给到 `.toolchain/`，不装成系统包，也不写入 `target/`。
 
 ## 移植时要改的名字
 
-缓存目录、环境变量和打包文件名使用 `caret`。来源中的 `PANTA_*` 在 Caret 里写成 `CARET_*`，包括系统工具旁路和界面测试用的截图变量。选择器比较的基线仍是 `origin/main`，可用参数改成其他 ref。
+环境变量和打包文件名使用 `caret`。来源中的 `PANTA_*` 在 Caret 里写成 `CARET_*`，包括系统工具旁路和界面测试用的截图变量。工具缓存指向 `.toolchain/`，不用来源仓库里 `target/` 下的工具目录。选择器比较的基线仍是 `origin/main`，可用参数改成其他 ref。

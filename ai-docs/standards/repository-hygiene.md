@@ -13,10 +13,11 @@
 | CXX、moc、rcc、临时 TS 和 QM | 留在构建树 |
 | 小型夹具 | `tests/fixtures/<module>/`，记录来源和预期 |
 | 日志、截图、覆盖率、包 | `artifacts/`、`coverage/` 或构建目录 |
+| 下载的工具、Qt、SDK、uv / Python | 仓库根 `.toolchain/`，不提交 |
 
 根 `.gitattributes` 使用 `* text=auto eol=lf`。需要字节级比较的夹具不在断言前改写换行。
 
-Cargo 和 native 产物都在根 `target/` 下。build script 遵守 `OUT_DIR`。忽略规则覆盖构建目录，不用 `*.qml`、`*.json` 或 `*.svg` 这类会误伤源文件的通配。Qt 和 CXX 的生成文件随构建树排除。
+编译产物在根 `target/` 下：Cargo 输出、`target/native/<profile>` 和 build script 的 `OUT_DIR`。下载的依赖在 `.toolchain/`，两套忽略规则分开写。清理构建目录不会卸掉工具链。不用 `*.qml`、`*.json` 或 `*.svg` 这类会误伤源文件的通配。Qt 和 CXX 的生成文件随构建树排除。
 
 `.vscode/` 可以提交可移植的推荐设置。个人偏好放本机 exclude。`.env.example` 可以提交，真实环境文件不提交。
 

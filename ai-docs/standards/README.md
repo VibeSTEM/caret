@@ -8,7 +8,7 @@
 
 | 类别 | 处理 |
 | --- | --- |
-| 工具链 | 移植 Rust 工具链、CMake、Ninja、LLVM、uv / Python 质量工具、Qt、GoogleTest、CXX |
+| 工具链 | 移植 Rust 工具链、CMake、Ninja、LLVM、uv / Python 质量工具、Qt、GoogleTest、CXX。下载内容放在 `.toolchain/`，不放进 `target/` |
 | Rust crate | 移植构建供给、进程设施、路径、运行时上下文、设置、语言、主题，以及 DSL 核心和 `dslc` |
 | QML | 移植原子组件、组合组件、对话框外壳、设置 / 语言对话框和主题门面 |
 | CI | 移植质量、构建、夜间检查、桌面打包和 GoogleTest SDK 管线 |

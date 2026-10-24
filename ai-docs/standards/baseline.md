@@ -20,6 +20,7 @@
 | DSL | pest 2.8，`.pa` | `caret-dsl-core` 与 `caret-dslc` |
 | 基准计时 | hyperfine 2.0.0 | 按需安装，不进入默认构建 |
 | macOS 部署目标 | 13.0 | LLVM 不替代 Apple SDK；sysroot 仍用系统 SDK |
+| 供给目录 | 仓库根 `.toolchain/` | 预编译工具、Qt、SDK 和 uv / Python。编译产物仍在 `target/` |
 
 ## 版本维护
 

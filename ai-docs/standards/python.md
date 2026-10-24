@@ -1,6 +1,6 @@
 # Python 工具环境
 
-更新日期：2026-10-24。uv 0.12.18 管理 CPython 3.14.7。解释器和缓存放在 Cargo 的 target 树里。Python 只用于质量工具，不是桌面运行时，也还没有绑定。
+更新日期：2026-10-24。uv 0.12.18 管理 CPython 3.14.7。解释器和 wheel 缓存在 `.toolchain/tools/python/<id>/`，见[依赖获取](dependency-acquisition.md)。Python 只用于质量工具，不是桌面运行时，也还没有绑定。
 
 ## 项目规则
 

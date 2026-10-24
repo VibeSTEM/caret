@@ -11,6 +11,7 @@
 - 共享 presets 不含个人路径。Cargo 调度和手工诊断使用同一套有效配置。
 - `cmake_minimum_required` 沿用移植来源里已经验证的声明。托管 CMake 的版本可以更高，这不自动抬高源码声明。
 - native 层不调用发起本次构建的同一个 Cargo target。
+- 预编译的 CMake、Ninja、Qt 和 SDK 从 `.toolchain/` 引入。构建目录仍是 `target/native/<profile>`。
 
 构建默认值和平台 ABI 放在单一策略文件里，在 `find_package` 和 `qt_add_qml_module` 之前加载。子目录只声明自己的目标和依赖。
 

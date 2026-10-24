@@ -29,7 +29,7 @@ Caret 是轻量的所见即所得结构化编辑器：边写边看结构。领�
 - Rust 承担领域数据、业务规则、路径、设置、语言、主题和 DSL。CXX 只声明映射和签名。C++ 适配层持有 Qt 对象、窗口、输入和画布，并封装异常与所有权。
 - QML 使用移植来的原子组件、组合组件和通用对话框，经 C++ ViewModel 提交意图。QML 不解析 `.pa`，不直接读写文档存储。
 - 自有 C++ 使用 C++20。依赖方向见[分层规范](ai-docs/standards/layering.md)。
-- Cargo 是统一入口，CMake 拥有 native 构建图。版本见[技术基线](ai-docs/standards/baseline.md)。
+- Cargo 是统一入口，CMake 拥有 native 构建图。版本见[技术基线](ai-docs/standards/baseline.md)。下载的工具和 SDK 放在仓库根 `.toolchain/`，编译产物留在 `target/`。
 - 用户可见的行为由与 Qt 无关的 Rust 服务提供。界面提交意图；以后的命令行适配同一服务。
 - 快捷键借鉴 Mogan 的键位语义，不复制它的代码、键表或注释。Mogan 是 GPL。键位说明见[快捷键](ai-docs/architecture/interface/keyboard-shortcuts.md)。
 
