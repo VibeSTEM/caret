@@ -13,6 +13,7 @@
 
 - [QML](../standards/qml.md)、[图标](../standards/icons.md)、[Qt](../standards/qt.md)、[DSL](../standards/dsl.md)
 - [界面外壳](../architecture/interface/ui-shell.md)
+- [依赖获取](../standards/dependency-acquisition.md)、[CMake](../standards/cmake.md)、[测试规范](../standards/testing.md)
 
 ## 范围与非目标
 
@@ -20,29 +21,33 @@
 
 对话框随库移植，并去掉工艺字段。需求里的里程碑都不打开设置、语言或新建文档对话框，所以本任务不装配它们。
 
+本任务扩展 `caret-build`，按技术基线供给 Qt 及匹配的 Linux ICU 到 `.toolchain/`。同时建立最小 native/CMake 工程、`Caret.Shell` 模块登记和加载测试宿主，供 qmllint、资源加载和主题绑定验证使用。语言 `.pa` 到 TS、QM 的构建链也在这里接入。测试宿主不依赖 launcher、FFI 或应用服务，主题使用符合快照契约的测试数据。
+
 不包含：编辑器页面装配、画布、功能区、分析、浇口、保压、材料和导入对话框。不复制来源的 1280×720 最小尺寸。
 
 ## 前置条件与待决策
 
-001 提供 Qt 供给，002 提供主题 `.pa`。无未决组件清单。
+001 提供工具供给设施及 CMake、Ninja、LLVM；002 提供 DSL 解析、求值和 TS 输出能力。Qt 供给、生产主题源和最小 QML 构建入口由本任务补齐，不依赖 005 的桌面启动链。无未决组件清单。
 
 ## 实施步骤
 
-1. 按清单移植并改模块名、资源 URL。记录来源 commit。
+1. 扩展 Qt 供给，核对 URL、摘要、模块和平台 ABI；建立最小 CMake 工程及测试入口。按清单移植并改模块名、资源 URL，记录来源 commit。
 2. 删除规范列出的排除对话框和未被移植控件引用的图标。
-3. 主题从 `.pa` 生成到 `Theme.qml` 的链路跑通。生成物不提交。
+3. 主题 `.pa` 经 Rust 求值得到快照，`Theme.qml` 作为只读绑定门面随源码提交，不把主题值再写成一份默认值。测试宿主注入快照验证绑定；临时 TS、QM 等生成物留在构建树。
 4. 用 qmllint 和一份最小加载测试确认 `Caret.Shell` 能导入。
 5. 独立评审后复验。
 
 ## 预计改动
 
-新建 `qml/Components/`、`qml/Dialogs/`、`qml/Themes/`、`resources/` 中的主题源和图标。不新建 `App.qml` 的编辑器装配；空加载页可以有，供测试导入模块。
+扩展 `crates/caret-build/`。新建最小 `native/` CMake 工程、`tests/qml/` 加载宿主，以及 `qml/Components/`、`qml/Dialogs/`、`qml/Themes/`、`resources/` 中的主题、语言源和图标。不新建 `App.qml` 的编辑器装配；空加载页可以有，供测试导入模块。
 
 ## 验收标准
 
 - [ ] 规范中的原子和组合组件都在，排除的对话框不在。
 - [ ] 模块名和 `image://` 资源前缀是 caret，不是来源前缀。
 - [ ] 新建文档对话框没有工艺字段。
+- [ ] 从 001、002 的交付出发，可供给锁定 Qt 并独立配置、构建和运行模块加载测试，不需要 005。
+- [ ] 主题切换后只读绑定仍有效；语言源可生成 QM，资源从构建树加载。
 - [ ] qmllint 通过。评审发现已处理。
 
 ## 验证计划与结果
@@ -50,6 +55,7 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | — | qmllint 覆盖移植的 QML | 无错误 | 未执行 |
+| — | Qt 供给、最小 CMake 构建与 QML 加载测试 | 不依赖 005，模块、主题和 QM 可加载 | 未执行 |
 | — | 检索排除的对话框文件名 | 无匹配 | 未执行 |
 
 ## 风险与回退

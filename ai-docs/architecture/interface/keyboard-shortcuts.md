@@ -1,8 +1,8 @@
 # 快捷键
 
-更新日期：2026-10-24。仓库里还没有键位实现。这里是目标绑定。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-10-25。仓库里还没有键位实现。这里是目标绑定。命令 id 见[命令](../editor/commands.md)。
 
-macOS 上复制、保存、撤销用 Command。结构键用 Control 和 Option。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
+macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
 Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区时收到插入点，再否则跳出当前结构。
 
@@ -18,10 +18,12 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 | 结构的首 / 尾 | Ctrl+Alt+Home / End | Command+Option+Home / End |
 | 跳出结构 | Esc / Shift+Esc | 同左 |
 | 逐级扩大选区 | Ctrl+Space | Control+Space |
-| 插入行或列 | Alt+方向键 | Option+方向键 |
+| 插入行或列 | Alt+方向键 | Control+Option+Shift+方向键 |
 | 删除列 | Alt+Backspace / Delete | Option+Backspace / Delete |
 
-表格里，Ctrl+↑ / ↓ 先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。
+表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。
+
+插入行列和删除列只在表格内可用。插入方向以当前单元格为基准：↑ / ↓ 在前 / 后插入行，← / → 在前 / 后插入列。macOS 的 Option+↑ / ↓ 始终用于导航，不插入行。
 
 ## 命令与公式
 

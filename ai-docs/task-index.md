@@ -50,8 +50,11 @@
 | 012 | [M3：表格](task/012-impl-table.md) | P2 | 010 | M | planned |
 | 013 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012 | M | planned |
 | 014 | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
+| 015 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
 
 007 只有标题、页面区域和一行状态。009 才加补全层。010 在同一扇窗口上加焦点框和状态栏文字。公式和表格画在画布里。014 不挡后续里程碑。
+
+004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
 006 完成前不创建 `caret-doc`、`caret-layout`、`caret-structure`、`caret-engine`、`caret-cli`。
 
