@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
+use crate::settings::DEFAULT_THEME_ID;
 use caret_dsl_core::{EvaluatedValue, EvaluatedVariables, evaluate_theme, evaluate_variables};
 
 #[path = "theme_schema.rs"]
@@ -145,6 +146,49 @@ impl ThemeService {
         self.active_theme_id = id.to_owned();
         Ok(self.current())
     }
+
+    /// 给桌面入口的快照。键是 QML 属性名，值带 kind，便于原样放进 `QVariant`。
+    fn bridge_json(&self) -> Result<String, ThemeError> {
+        let mut themes = serde_json::Map::new();
+        for (id, snapshot) in &self.themes {
+            let mut tokens = serde_json::Map::new();
+            for token in &snapshot.tokens {
+                let kind = match token.kind {
+                    ThemeTokenKind::Color => "color",
+                    ThemeTokenKind::Integer => "int",
+                    ThemeTokenKind::Real => "real",
+                    ThemeTokenKind::Boolean => "bool",
+                };
+                let value = match &token.value {
+                    ThemeTokenValue::Color(value) => serde_json::Value::String(value.clone()),
+                    ThemeTokenValue::Integer(value) => serde_json::Value::from(*value),
+                    ThemeTokenValue::Real(value) => {
+                        let Some(number) = serde_json::Number::from_f64(*value) else {
+                            return Err(ThemeError {
+                                code: "theme.invalid_token_type",
+                                detail: format!("token '{}' is not a finite real", token.qml_name),
+                            });
+                        };
+                        serde_json::Value::Number(number)
+                    }
+                    ThemeTokenValue::Boolean(value) => serde_json::Value::from(*value),
+                };
+                tokens.insert(
+                    token.qml_name.clone(),
+                    serde_json::json!({ "kind": kind, "value": value }),
+                );
+            }
+            themes.insert(id.clone(), serde_json::Value::Object(tokens));
+        }
+        serde_json::to_string(&serde_json::json!({
+            "active": self.active_theme_id,
+            "themes": themes,
+        }))
+        .map_err(|error| ThemeError {
+            code: "theme.invalid_definition",
+            detail: error.to_string(),
+        })
+    }
 }
 
 fn validate_theme_id(id: &str) -> Result<(), ThemeError> {
@@ -260,6 +304,25 @@ fn validate_value(
         _ => return Err(invalid_type()),
     };
     Ok(token)
+}
+
+/// 用仓库里的基线和 light/dark 主题构造服务。源文件就是 QML 资源，不另写默认值。
+pub fn builtin_theme_catalog() -> Result<String, ThemeError> {
+    let service = ThemeService::new(
+        include_str!("../../../qml/Themes/gui-default.pa"),
+        [
+            (
+                "light".to_owned(),
+                include_str!("../../../qml/Themes/light.pa").to_owned(),
+            ),
+            (
+                "dark".to_owned(),
+                include_str!("../../../qml/Themes/dark.pa").to_owned(),
+            ),
+        ],
+        DEFAULT_THEME_ID,
+    )?;
+    service.bridge_json()
 }
 
 fn valid_color(value: &str) -> bool {
@@ -590,5 +653,19 @@ mod tests {
             .map(|error| error.code),
             Some("theme.token_out_of_range")
         );
+    }
+
+    #[test]
+    fn builtin_catalog_json_carries_the_light_background() {
+        let json = builtin_theme_catalog().unwrap_or_else(|error| panic!("{error}"));
+        let value: serde_json::Value =
+            serde_json::from_str(&json).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(value["active"], "light");
+        assert_eq!(value["themes"]["light"]["colorBackground"]["kind"], "color");
+        assert_eq!(
+            value["themes"]["light"]["colorBackground"]["value"],
+            "#ffffff"
+        );
+        assert_eq!(value["themes"]["dark"]["fontBody"]["kind"], "int");
     }
 }

@@ -17,6 +17,12 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
     ("caret-dslc", &["caret-dsl-core"]),
     ("caret-app", &["caret-dsl-core"]),
     ("caret-tests", &["caret-build"]),
+    // 运行时只依赖 caret-app 读取内置主题。build script 使用 caret-build 定位托管 Clang。
+    ("caret-ffi", &["caret-app", "caret-build"]),
+    (
+        "caret-launcher",
+        &["caret-ffi", "caret-build", "caret-dsl-core"],
+    ),
 ];
 
 pub(super) fn run_lint() -> Result<(), Box<dyn Error>> {

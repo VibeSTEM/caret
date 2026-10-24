@@ -1,0 +1,25 @@
+[package]
+name = "caret-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# caret-ffi 只经 build.rs 的 DEP_CARET_FFI_* 消费。普通依赖边必须留下，
+# cargo 1.95/1.98 不把纯 build-dependencies 的 links metadata 注入构建脚本。
+[package.metadata.cargo-machete]
+ignored = ["caret-ffi"]
+
+[dependencies]
+caret-ffi.workspace = true
+
+# 构建脚本调度 CMake、生成 TS，并读取已经产出的 staticlib。不从这里再启动 Cargo。
+[build-dependencies]
+caret-ffi.workspace = true
+caret-dsl-core.workspace = true
+caret-build.workspace = true

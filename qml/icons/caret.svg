@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="7" height="5" viewBox="0 0 7 5" fill="none">
+  <!-- 来源：prototypes/shell/shell.js 的 #i-caret；按维护者意见缩小 path，保留原 viewBox。 -->
+  <path d="M0.7 0.6h5.6L3.5 4.4z" fill="currentColor"/>
+</svg>

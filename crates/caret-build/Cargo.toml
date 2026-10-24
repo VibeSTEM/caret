@@ -12,7 +12,7 @@ sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 fs4.workspace = true
-cc = "=1.4.6"
+cc.workspace = true
 shlex = "=2.0.1"
 
 [lints]

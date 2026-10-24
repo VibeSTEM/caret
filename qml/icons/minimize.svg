@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="11" height="11" viewBox="0 0 11 11" fill="none">
+  <!-- 来源：prototypes/shell/shell.js 的 #i-minimize；内部绘制，原始几何与颜色保留。 -->
+  <path d="M1 5.5h9" stroke="currentColor" stroke-width="1.1"/>
+</svg>

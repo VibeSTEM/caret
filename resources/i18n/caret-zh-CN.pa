@@ -1,0 +1,19 @@
+version: 1
+kind: language
+catalog: caret
+language: zh-CN
+sourcelanguage: en
+
+[DialogAction]
+ok:
+  src: OK
+  tr: 确定
+
+cancel:
+  src: Cancel
+  tr: 取消
+
+[CaretWindow]
+title:
+  src: Caret
+  tr: Caret

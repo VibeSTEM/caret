@@ -5,16 +5,14 @@ members = [
     "crates/caret-build",
     "crates/caret-dsl-core",
     "crates/caret-dslc",
+    "crates/caret-ffi",
     "crates/caret-foundation",
+    "crates/launcher",
     "tests",
 ]
-# launcher 还没有。多个二进制并存时不设默认可执行成员，避免裸 `cargo run` 被当成开窗口。
-default-members = [
-    "crates/caret-app",
-    "crates/caret-build",
-    "crates/caret-dsl-core",
-    "crates/caret-foundation",
-]
+# 默认成员只有桌面 launcher。裸 `cargo run` 打开 M0 文档窗口，页面仍是占位。
+# `cargo test` 不带 `--workspace` 时只测 launcher。
+default-members = ["crates/launcher"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,9 +26,14 @@ repository = "https://github.com/VibeSTEM/caret"
 [workspace.dependencies]
 libc = "0.2"
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
+caret-app = { path = "crates/caret-app", version = "0.1.0" }
 caret-build = { path = "crates/caret-build", version = "0.1.0" }
 caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
+caret-ffi = { path = "crates/caret-ffi", version = "0.1.0" }
+cc = "=1.4.6"
+cxx = "=1.0.202"
+cxx-build = "=1.0.202"
 serde_json = "1.0"
 criterion = "0.8.2"
 pest = "2.8"
