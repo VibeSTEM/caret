@@ -1,6 +1,6 @@
 # Rust 编码、crate 与工具链
 
-更新日期：2026-10-24。版本见[技术基线](baseline.md)。DSL 见 [DSL](dsl.md)。测试位置见[测试规范](testing.md)。
+更新日期：2026-10-25。版本见[技术基线](baseline.md)。DSL 见 [DSL](dsl.md)。测试位置见[测试规范](testing.md)。
 
 ## 项目规则
 
@@ -26,9 +26,10 @@
 | `panta-core` 的一部分 | 并入应用服务 crate | `path`、`runtime`、`settings`、`language`、`theme` |
 | `panta-ffi` 的骨架 | `caret-ffi` | DTO、错误和句柄转换。不复制来源里的网格和工程接口 |
 | launcher | `crates/launcher` | 调度 CMake 并启动桌面程序 |
+| `panta-cli` 的进程入口 | `caret-cli` | 把参数适配成 `caret-app` 的命令。不链接 Qt 或 FFI |
 | `panta-tests` | `caret-tests` | 格式、lint、测试范围和 native 聚合 |
 
-`panta-mesh`、`panta-import`，以及来源应用 crate 里的网格、材料和工艺模型不移植。命令行进程骨架可以以后按 Caret 的命令重写；来源里的 STL 子命令不保留。
+`panta-mesh`、`panta-import`，以及来源应用 crate 里的网格、材料和工艺模型不移植。来源 CLI 里的 STL 子命令不保留。应用命令行的依赖见[分层](layering.md)。
 
 拆 crate 时看它是否依赖重库、是否有独立生命周期、消费者是不是只需要其中一小块。依赖 Qt 或重型 C++ 库的能力留在 C++ 适配器。领域 crate 不依赖 FFI。不为了猜测复用而建立 `caret-common`。
 

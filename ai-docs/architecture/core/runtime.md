@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-24。这是目标结构，代码还没有。
+更新日期：2026-10-25。这是目标结构，代码还没有。
 
 ## 权威与派生
 
@@ -17,7 +17,7 @@
 
 ## 会话
 
-`Session` 放在 `caret-engine`。界面和测试都走它。
+`Session` 放在 `caret-engine`。界面经 `caret-ffi` 进入，`caret-cli` 经 `caret-app` 进入，测试可以直接调用。修改都走 `Session::run`。
 
 ```text
 Session

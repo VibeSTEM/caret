@@ -1,6 +1,6 @@
 # 仓库结构
 
-更新日期：2026-10-24。下面是目标树。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
+更新日期：2026-10-25。下面是目标树。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
 
 ```text
 crates/
@@ -14,6 +14,7 @@ crates/
 ├── caret-engine/        # Session、命令、.cdoc
 ├── caret-app/           # 路径、设置、语言、主题；调用 engine
 ├── caret-ffi/           # DTO 与转发
+├── caret-cli/           # 参数适配成 caret-app 的命令
 └── launcher/            # 调度 CMake 并启动窗口
 native/
 ├── adapters/            # Qt 路径、线程、窗口几何
@@ -28,7 +29,7 @@ resources/i18n/
 tests/
 ```
 
-`caret-doc`、`caret-layout`、`caret-structure` 不依赖引擎，也不知道 Qt。`caret-engine` 依赖这三者。`caret-app` 依赖引擎和 DSL，向引擎传入已经解析的路径。`caret-ffi` 只依赖 `caret-app`。界面 crate 不依赖领域 crate。
+`caret-doc`、`caret-layout`、`caret-structure` 不依赖引擎，也不知道 Qt。`caret-engine` 依赖这三者。`caret-app` 依赖引擎和 DSL，向引擎传入已经解析的路径。`caret-ffi` 只依赖 `caret-app`。`caret-cli` 也只通过 `caret-app` 调用命令，不经过 `caret-ffi`。界面 crate 不依赖领域 crate。
 
 下载的工具在 `.toolchain/`。编译产物在 `target/`。生成的桥接头和 QM 留在构建树。
 
