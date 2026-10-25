@@ -370,53 +370,24 @@ fn validate_media(media: &[Media]) -> Result<(), DocumentError> {
 }
 
 fn validate_base64(data: &str) -> Result<(), DocumentError> {
-    if data.len() > MAX_MEDIA_BASE64_BYTES || !data.len().is_multiple_of(4) || !data.is_ascii() {
+    if data.len() > MAX_MEDIA_BASE64_BYTES {
         return Err(DocumentError::InvalidMedia(
             "base64 payload is malformed or exceeds 32 MiB".to_owned(),
         ));
     }
-    let padding = data.bytes().rev().take_while(|byte| *byte == b'=').count();
-    if padding > 2
-        || data[..data.len().saturating_sub(padding)]
-            .bytes()
-            .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'+' && byte != b'/')
-        || data[..data.len().saturating_sub(padding)].contains('=')
-    {
-        return Err(DocumentError::InvalidMedia(
-            "base64 payload is malformed".to_owned(),
-        ));
-    }
-    let padding_bits_are_zero =
-        match padding {
-            2 => base64_sextet(data.as_bytes()[data.len() - 3])
-                .is_some_and(|value| value & 0b1111 == 0),
-            1 => base64_sextet(data.as_bytes()[data.len() - 2])
-                .is_some_and(|value| value & 0b0011 == 0),
-            _ => true,
-        };
-    if !padding_bits_are_zero {
-        return Err(DocumentError::InvalidMedia(
-            "base64 payload has non-zero padding bits".to_owned(),
-        ));
-    }
-    let decoded_bytes = (data.len() / 4) * 3 - padding;
-    if decoded_bytes > MAX_MEDIA_BYTES {
+
+    let mut decoder = base64::read::DecoderReader::new(
+        data.as_bytes(),
+        &base64::engine::general_purpose::STANDARD,
+    );
+    let decoded_bytes = std::io::copy(&mut decoder, &mut std::io::sink())
+        .map_err(|_| DocumentError::InvalidMedia("base64 payload is malformed".to_owned()))?;
+    if decoded_bytes > MAX_MEDIA_BYTES as u64 {
         return Err(DocumentError::InvalidMedia(
             "decoded media payload exceeds 32 MiB".to_owned(),
         ));
     }
     Ok(())
-}
-
-fn base64_sextet(byte: u8) -> Option<u8> {
-    match byte {
-        b'A'..=b'Z' => Some(byte - b'A'),
-        b'a'..=b'z' => Some(byte - b'a' + 26),
-        b'0'..=b'9' => Some(byte - b'0' + 52),
-        b'+' => Some(62),
-        b'/' => Some(63),
-        _ => None,
-    }
 }
 
 fn contains_opaque_block(blocks: &[Block]) -> bool {

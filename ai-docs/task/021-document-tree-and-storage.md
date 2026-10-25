@@ -57,6 +57,7 @@ caret-doc、caret-engine/caret-app 存储边界、测试夹具和文档模型。
 | 2026-10-25 | 同目录临时文件写入失败注入 | 原文件保留且临时文件清理 | 部分写入失败用例通过，旧文件字节不变且临时文件已清理 |
 | 2026-10-25 | 全工作区测试、Clippy、格式和 diff 检查 | 无回归且代码符合规范 | `cargo test --locked --workspace`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` 通过 |
 | 2026-10-25 | `cargo test-plan` | 新 crate 与黑盒测试进入受影响范围 | 包含 `caret-doc`、`caret-app`、`caret-tests`；Cargo manifest 改动按配置触发完整质量回退 |
+| 2026-10-25 | Rust 依赖审查：媒体 Base64 校验 | 使用严格规范解码，不产生第二份媒体缓冲区 | 改用 `base64` 的标准严格 `DecoderReader`，流式读入 sink 并计数；18 项文档黑盒测试、`caret-doc` Clippy、fmt 和 diff 检查通过 |
 
 ## 风险与回退
 
@@ -72,6 +73,7 @@ caret-doc、caret-engine/caret-app 存储边界、测试夹具和文档模型。
 - 2026-10-25：节点 ID 唯一性校验改用借用字符串的 `HashSet`，避免复制 ID；新增未知行内环境定位、嵌套环境/主题扩展字段和媒体扩展字段往返测试。
 - 2026-10-25：安全预览验收限定为存储/模型可提供的 DTO 数据；原位占位、提示 UI 和禁用丢失数据的复制/导出由画布与编辑集成任务实现。
 - 2026-10-25：独立评审发现写入只读数据的绕过路径、feature 列表二次扫描和 Base64 非零填充位；写入序列化统一校验、feature 改为线性递增检查、Base64 增加规范位校验，并补充回归测试。第二轮独立复审确认三项已修复且无新增问题。
+- 2026-10-25：Rust 库审查后用 `base64` crate 替换手写 Base64 字母表、填充及尾随位校验；严格流式解码保留既有 32 MiB 上限，避免额外分配完整解码副本。其他 Unicode、语言标签和排版候选记录在 [Rust 库审查](../research/rust-library-audit-2026.md)，按 022/024 的版本和跨平台验收再选择。
 
 ## 完成摘要
 
