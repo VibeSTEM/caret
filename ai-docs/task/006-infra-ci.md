@@ -63,13 +63,14 @@
 | 2026-10-25 | `cargo run --locked -p caret-tests -- sdk-googletest target/sdk-production/googletest target/sdk-production/work macos-arm64` | 生产固定源码 SDK 并消费搬迁归档 | 通过；解包目录中静态链接及运行 1/1，归档在 `target/sdk-production/work/dist/` |
 | 2026-10-25 | `caret_require_googletest()` 真实归档消费与失败路径夹具 | 强摘要、懒供给、CONFIG 和升级失败保留旧 SDK | 通过；真实 `GoogleTest.ConsumerSmoke` 1/1；错误摘要、缺 target、错误版本等均拒绝，旧安装保持有效 |
 | 2026-10-25 | subagent `review_006`，`gpt-6.1-sol`、high，完整 diff 及最终增量 | 独立评审发现已处理并复验 | 通过；配置缺失、Windows 安装转义、manifest、发布保留资产及 SDK 升级事务均已修复，最终无剩余实质问题 |
-| — | 日常 Ubuntu CI、三平台 nightly 和桌面打包 | 对应远程运行证据 | 日常 CI 待本次 PR 运行；nightly 与跨平台桌面包待运行，不把静态检查记成远程通过；SDK 另见 016 |
+| 2026-10-26 | [PR #26 Ubuntu CI](https://github.com/VibeSTEM/caret/actions/runs/40211041328)、[PR #27 Ubuntu CI](https://github.com/VibeSTEM/caret/actions/runs/40212390890) 与[三平台 Nightly](https://github.com/VibeSTEM/caret/actions/runs/40212431385) | 日常 CI 和三平台 nightly 全部通过；桌面打包分别有三平台证据 | PR #26 CI 全部检查通过；PR #27 相关 Ubuntu 检查通过，按变更范围跳过无关 job。Nightly 12/12 job 成功，覆盖率函数 87.12%、行 88.32%，macOS sanitizer 两个 profile 的 CTest 均 4/4。Windows/Linux 桌面包仍待远程验证；SDK 另见 016 |
 | 2026-10-25 | 016 的 [三平台运行](https://github.com/VibeSTEM/caret/actions/runs/40172423089)及[正式 Release](https://github.com/VibeSTEM/caret/releases/tag/sdk-googletest-1.18.0)，下载三归档复算 SHA256 | 当前仓库有完整、不可变资产 | 全部成功；正式三平台摘要固定在 `native/cmake/googletest-sha256.json`，与各校验文件和 GitHub 资产 digest 一致 |
 | 2026-10-25 | 不设本地 ROOT/URL/SHA 覆盖，经默认正式 URL 和固定清单供给 SDK，再编译链接消费 | 正式发布与消费者端到端可用 | macOS 通过；`GoogleTest.ConsumerSmoke` 1/1，构建树 `target/gtest-official-consumer` |
 | 2026-10-25 | subagent `final_index_review`，`gpt-6.1-sol`、high，完整暂存区及修复增量 | 无未处理实质问题 | 79 文件完整审查发现 1 项分层表达式绕过；修复后独立复跑全部分层夹具通过，原绕过被拒绝、合法 namespace 包装可用，最终无剩余实质发现 |
 | 2026-10-26 | [Nightly run 40209293853](https://github.com/VibeSTEM/caret/actions/runs/40209293853) | 三平台 nightly、覆盖率与 sanitizer 检查通过 | 覆盖率门槛失败（函数 77.89%、行 82.12%）：`caret-tests --test document` 的 18 项公开文档测试没有被 coverage runner 采集；macOS `Qml.ShellLoad` 因 Qt/CoreText/CoreGraphics 进程缓存泄漏报告失败。修复已加入文档测试采集、行为覆盖及窄符号抑制，等待新 Nightly 复验 |
 | 2026-10-26 | [Nightly run 40211105819](https://github.com/VibeSTEM/caret/actions/runs/40211105819) | 重跑覆盖率与三平台 nightly | 覆盖率门禁通过；Miri、Ubuntu quality、三平台 workspace tests、Linux/Windows sanitizer、native coverage、macOS Objective-C++ 和性能样例均通过。仅 macOS sanitizer 的 `Qml.ShellLoad` 仍报告 8,824 字节 / 69 个 Apple CoreText/CoreGraphics/FontParser 字体缓存分配；新增按失败栈符号限定的抑制，等待再次 Nightly 复验 |
 | 2026-10-26 | 本机 macOS 27：`ASAN_SYMBOLIZER_PATH=<managed llvm-symbolizer> cargo sanitize` | 本机 macOS ASan/UBSan 与 TSan 全套通过 | 精确 CoreText/Qt 规则将 `Qml.ShellLoad` 字体缓存报告从 17,812 字节降为 192 字节；`QmLoad` 和 `ShellLoad` 各仍有 192 字节未符号化的 CoreFoundation preferences/XPC 栈。现有 `CFPrefsPlistSource` 抑制无法在本机命中；未添加通用屏蔽。因 ASan/UBSan profile 失败，TSan profile 未运行 |
+| 2026-10-26 | [Nightly run 40212431385](https://github.com/VibeSTEM/caret/actions/runs/40212431385) | 覆盖率门槛、三平台完整测试、所有 sanitizer 与质量检查通过 | 全部 12 个 job 成功；函数覆盖率 710/815（87.12%），行覆盖率 8477/9598（88.32%）；macOS sanitizer 两个 profile 的 CTest 各 4/4，Linux/Windows sanitizer、Miri、native coverage、三平台 workspace tests、Objective-C++、quality 和 CPU performance 均通过 |
 
 ## 风险与回退
 
@@ -94,7 +95,8 @@
 - 2026-10-26：Nightly run 40211105819 通过 Rust 覆盖率、三平台 workspace tests、Miri、质量、Linux/Windows sanitizer、native coverage、macOS Objective-C++ 与性能样例。macOS sanitizer 剩余 8,824 字节 / 69 个分配，日志栈为 CoreText fallback/font variation、Apple FontParser glyph cache 和字体注册 XPC URL 解码，没有 Caret 代码分配帧；再补充对应系统符号抑制，需再次 Nightly 验收。
 - 2026-10-26：subagent `nightly_fixes_review` 独立复核第二轮 LSAN 配置，要求移除类级泛匹配并仅保留日志中三个直接分配入口 `TDescriptorSource::CopyDescriptorUncached`、`TCGFontCache::CopyFontWithOpticalSizeVariation`、`XTCopyPropertiesForFontsMatchingRequest`；收窄后复核通过，无剩余实质发现。新 Nightly 仍须验证这些根对象抑制能否覆盖相关间接缓存。
 - 2026-10-26：本机 macOS 27 sanitizer 验证发现 Qt 6.11 的 CoreText 路径使用不同于 macOS 26 的具体 cache 函数名。针对本机报告的 Qt font database / font engine 入口增加精确规则，使 ShellLoad 字体缓存报告从 17,812 字节降为 192 字节。`qt_apple_urlFromPossiblySecurityScopedURL` 的三组 64 字节栈来自 `QDirListing`→`QFactoryLoader`→`QPlatformIntegrationFactory` 插件目录扫描；它是 stripped Qt 下最近的导出栈帧，不是完整所有权证明。CoreFoundation preferences/XPC 栈仍不可符号化，未扩大匹配。subagent 复核认为保留剩余 192 字节为失败是合适的；需在 Nightly macOS runner 验证。
+- 2026-10-26：PR #26 Ubuntu CI 全检查通过（run 40211041328）；PR #27 变更相关 Ubuntu 检查通过（run 40212390890）。合并后的 Nightly run 40212431385 全 12 个 job 通过，包括 macOS ASan/UBSan 与 TSan、Linux/Windows sanitizer、三平台 workspace tests、Rust 覆盖率 87.12% / 88.32%、quality、Miri、native coverage、Objective-C++ 和 CPU performance。PR #27 CI 与 Nightly 均未复现本机 macOS 27 未符号化的 192 字节 preferences/XPC 报告。Windows/Linux 桌面包证据仍待补齐，因此 006 继续保持 implemented，尚不标记 done。
 
 ## 完成摘要
 
-本地实现与验证完成，保持 panta 的统一 format/lint/test 调度机制。GoogleTest 已由 016 独立完成三平台生产、自检与正式发布，006 已固定正式摘要并跑通默认消费路径。日常 CI 只运行 Ubuntu，Windows/macOS 的完整构建测试留到 nightly；桌面包的 Windows/Linux、夜间覆盖率与动态检查仍待远程运行，不能将本任务记为 done。
+本地实现与验证完成，保持 panta 的统一 format/lint/test 调度机制。GoogleTest 已由 016 独立完成三平台生产、自检与正式发布，006 已固定正式摘要并跑通默认消费路径。日常 Ubuntu CI 和三平台 Nightly 已有成功的远程证据，覆盖率和动态检查全部通过；Windows/Linux 桌面包仍待远程验证，因此本任务保持 implemented，不标记 done。
