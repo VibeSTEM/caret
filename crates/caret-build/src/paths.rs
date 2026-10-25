@@ -1,7 +1,7 @@
 //! 工具安装布局、可执行文件查找及可执行权限。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// 平台可执行名；测试运行器与本 crate 的工具定位共用同一后缀规则。
 pub fn exe_name(name: &str) -> String {
@@ -29,7 +29,22 @@ pub(super) fn resolve_toolchain_root(
         if value.is_empty() {
             return Err("CARET_TOOLCHAIN_ROOT 为空".into());
         }
-        return Ok(PathBuf::from(value));
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            return Ok(path);
+        }
+        if path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_))) {
+            return Err(
+                "CARET_TOOLCHAIN_ROOT 必须为绝对路径或不带盘符、根前缀的仓库相对路径".into(),
+            );
+        }
+        let repo = manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("无法从 caret-build 清单定位仓库根")?;
+        // build script、runner 和 CMake 子进程的 cwd 不同；相对覆盖始终
+        // 以仓库根解析，不能返回会随子进程 cwd 改变含义的工具路径。
+        return Ok(repo.join(path));
     }
     let repo = manifest_dir
         .parent()
@@ -164,14 +179,36 @@ mod tests {
 
     #[test]
     fn toolchain_root_uses_repo_dot_toolchain_without_target_fallback() {
-        let manifest = Path::new("/work/caret/crates/caret-build");
-        let root = resolve_toolchain_root(None, manifest)
+        let repository = std::env::temp_dir().join("caret-toolchain-repo");
+        let manifest = repository.join("crates/caret-build");
+        let root = resolve_toolchain_root(None, &manifest)
             .unwrap_or_else(|error| panic!("resolve failed: {error}"));
-        assert_eq!(root, Path::new("/work/caret/.toolchain"));
-        assert!(resolve_toolchain_root(Some(std::ffi::OsStr::new("")), manifest).is_err());
-        let custom =
-            resolve_toolchain_root(Some(std::ffi::OsStr::new("/opt/caret-tools")), manifest)
-                .unwrap_or_else(|error| panic!("resolve failed: {error}"));
-        assert_eq!(custom, Path::new("/opt/caret-tools"));
+        assert_eq!(root, repository.join(".toolchain"));
+        assert!(resolve_toolchain_root(Some(std::ffi::OsStr::new("")), &manifest).is_err());
+        let custom_root = std::env::temp_dir().join("caret-custom-tools");
+        let custom = resolve_toolchain_root(Some(custom_root.as_os_str()), &manifest)
+            .unwrap_or_else(|error| panic!("resolve failed: {error}"));
+        assert_eq!(custom, custom_root);
+    }
+
+    #[test]
+    fn relative_toolchain_override_is_anchored_to_the_repository() -> Result<(), String> {
+        let repository = std::env::temp_dir().join("caret-relative-toolchain");
+        let root = resolve_toolchain_root(
+            Some(std::ffi::OsStr::new("shared/tools")),
+            &repository.join("crates/caret-build"),
+        )?;
+        assert_eq!(root, repository.join("shared/tools"));
+        assert!(root.is_absolute());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ambiguous_windows_toolchain_roots_are_rejected() {
+        let manifest = std::env::temp_dir().join("caret-repo/crates/caret-build");
+        for value in [r"D:tools", r"\tools"] {
+            assert!(resolve_toolchain_root(Some(std::ffi::OsStr::new(value)), &manifest).is_err());
+        }
     }
 }

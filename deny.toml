@@ -1,4 +1,4 @@
-# cargo-deny 配置（任务 032；固定工具版本 0.20.2，见 modules/quality-tooling.md）。
+# cargo-deny 配置；固定工具版本 0.20.2，由 caret-tests 调度。
 # 门禁语义：cargo deny check 任一节失败即非零退出。
 
 [graph]
@@ -27,12 +27,7 @@ allow = [
 multiple-versions = "deny"
 wildcards = "deny"
 deny = []
-skip = [
-  # syn 2.0.119 来自 zerocopy-derive（half → zerocopy）。
-  # syn 3.0.9 来自 pest_generator、serde_derive、cxx-build 与 cxxbridge-macro。
-  # 都是锁定传递依赖，无法在不换这些 crate 的情况下合并。
-  { crate = "syn", reason = "zerocopy-derive 用 syn 2；pest_generator、serde_derive 与 cxx 1.0.202 用 syn 3" },
-]
+skip = []
 skip-tree = []
 
 [advisories]

@@ -1,6 +1,6 @@
 # 016 — 独立 GoogleTest SDK 生产与发布
 
-- 状态：implemented
+- 状态：done
 - 依赖：001
 - 优先级：P0
 - 创建 / 更新：2026-10-25 / 2026-10-25
@@ -50,6 +50,8 @@
 | 2026-10-25 | 在独立 worktree 执行 `cargo run --locked -p caret-tests -- sdk-googletest <锁定源码目录> target/sdk-production/work macos-arm64` | 编译、链接、运行通过 | 通过；归档解包后的独立干净消费者运行 1/1，通过托管 LLVM 22.1.7 生产；SHA256 `57e62c5c9a6980a2e81da1e6e6a45ab19f4659f689ce4d077a36b0759fc742a0` |
 | 2026-10-25 | [首次三平台运行](https://github.com/VibeSTEM/caret/actions/runs/40171787099) | 实际远程结果 | Windows 在上游启用 C 时自动选择 GNU 风格 clang.exe，却收到 MSVC 参数，配置失败；未发布。修复为显式固定 C/C++ 编译器，Windows 均用 clang-cl，待复验 |
 | 2026-10-25 | subagent `review_006`，`gpt-6.1-sol`、high，独立 worktree 全部 diff 与未跟踪文件 | 无未处理发现 | 通过；确认分支不依赖 006、pin/ABI/搬迁自检和发布保留资产均完整，远程结果仍待运行 |
+| 2026-10-25 | [最终三平台运行](https://github.com/VibeSTEM/caret/actions/runs/40172423089) | 三平台生产、自检、上传及发布成功 | 全部成功；Windows 显式 C/CXX 驱动和普通源码路径、默认 artifact 多文件封装均经实际运行复验 |
+| 2026-10-25 | [正式 SDK Release](https://github.com/VibeSTEM/caret/releases/tag/sdk-googletest-1.18.0) 六项资产下载与 SHA256 复算 | 完整且一致 | 已发布，非 draft；三归档实算与对应校验文件及 GitHub 资产 digest 一致，006 消费清单已固定正式摘要 |
 
 ## 风险与回退
 
@@ -63,7 +65,8 @@ SDK 源码与工具下载需要网络；摘要或 pin 不符必须失败。正�
 - 2026-10-25：独立 SDK 已由 [PR 6](https://github.com/VibeSTEM/caret/pull/6) 合并。首次远程验收发现 C 编译器驱动器混用，补齐显式 C 编译器配置后继续复验，不绕过失败 job 发布。
 - 2026-10-25：首轮 Linux、macOS 的归档搬迁自检已通过，但 artifact 上传同时包含归档和校验文件，`archive: false` 仅支持单文件，上传失败。移除该选项，保留默认 artifact 封装供发布 job 解包收集；不改 SDK 归档本身。
 - 2026-10-25：第二轮 Windows 已通过 C 编译器配置，但源码 `canonicalize()` 产生的设备路径前缀进入 clang-cl include 参数，导致找不到 `gtest/gtest.h`。生产入口保留以仓库根锚定的普通源码路径，仍检查目录和锁定 commit；取消被该修复取代的第三轮运行，修复后统一复验。
+- 2026-10-25：经 PR 6、7、8、9 合并独立 SDK 及远程修复。最终运行 `40172423089` 的 macOS、Linux、Windows 与 publish job 全部成功，`sdk-googletest-1.18.0` 正式发布。用户随后要求 006 固定正式 SHA256 并对暂存区独立评审后创建 PR 合并。
 
 ## 完成摘要
 
-未完成。远程三平台和发布仍待验收，不把本机产物当作三平台可分发证明。
+独立 SDK 生产、归档搬迁消费自检、三平台远程验收和正式发布全部完成。六项资产完整，消费端可使用当前仓库 Release 及逐平台固定摘要，不依赖其他组织或本机临时产物。

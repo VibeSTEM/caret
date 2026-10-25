@@ -13,7 +13,7 @@
 #include <QVariant>
 #include <QVariantMap>
 #include <cstdio>
-#include <rust/cxx.h>
+#include <qcontainerfwd.h>
 #include <utility>
 
 namespace caret {

@@ -55,11 +55,11 @@ if(CARET_ENABLE_COVERAGE)
   add_link_options(-fprofile-instr-generate)
 endif()
 
-# sanitizer 矩阵（任务 042）：值为逗号分隔的 address/undefined/thread 组合，
+# sanitizer 矩阵：值为逗号分隔的 address/undefined/thread 组合，
 # 空关闭。ASan+UBSan 是三平台主组合；TSan 与其他 sanitizer 运行库互斥，
 # 只能独立构建。三平台不等价：TSan 官方支持平台不含 Windows，clang-cl 仅
 # 支持部分 UBSan 检查，Windows 矩阵只验证 ASan；不满足的组合在 configure
-# 期失败，不隐式降级。官方依据见任务 042 矩阵表。
+# 期失败，不隐式降级。
 set(CARET_SANITIZER
     ""
     CACHE STRING "逗号分隔的 sanitizer：address、undefined、thread；空关闭")
@@ -108,7 +108,7 @@ if(_caret_sanitizers)
                           "运行库：${CMAKE_CXX_COMPILER}")
     endif()
     if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64)$")
-      message(FATAL_ERROR "Windows ASan 矩阵只登记 x64（任务 042），未知架构 " "${CMAKE_SYSTEM_PROCESSOR}")
+      message(FATAL_ERROR "Windows ASan 矩阵只登记 x64，未知架构 " "${CMAKE_SYSTEM_PROCESSOR}")
     endif()
     # lld-link 的响应文件词法把 `\x` 当转义消费，路径统一正斜杠并加引号。
     string(REPLACE "\\" "/" _caret_asan_rt_dir "${_caret_asan_resource}/lib/windows")
@@ -157,10 +157,8 @@ endfunction()
 
 # QML 测试统一使用托管 Qt、无窗口平台与可定制的 Controls 样式。
 # Windows 无控制台时 QtTest 默认写调试输出；强制 stderr 使 CTest 能展示断言。
-# TIMEOUT 兜底：这些测试正常亚秒完成；平台挂起（Windows 上链接 VTK/Dawn
-# 静态库的消费方二进制曾整轮挂起，见任务 007 验证表）时快速失败并保留
-# 诊断输出，不拖垮整个 CI。20s 对亚秒级测试已留足 20 倍余量；sanitizer
-# 构建（尤其 TSan）启动与运行显著变慢，余量改按 120s。
+# 普通 QML 测试超时为 20s；sanitizer 下放宽到 120s，防止工具或平台
+# 挂起拖垮整个 CI。实际超时和失败证据记录在 Caret 的对应任务中。
 function(caret_add_qml_test name target)
   set(_caret_qml_timeout 20)
   if(_caret_sanitizers)

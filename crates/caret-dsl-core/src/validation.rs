@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::diagnostic::push_diagnostic;
+use crate::diagnostic::{SourcePositions, push_diagnostic};
 use crate::{Diagnostic, Document, Kind, Status};
 
 #[derive(Default)]
@@ -59,7 +59,7 @@ pub(crate) fn validate_document(
     document: &Document,
     seen_version: bool,
     seen_kind: bool,
-    source: &str,
+    source: &SourcePositions<'_>,
     locations: &DocumentLocations,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -176,7 +176,7 @@ pub(crate) fn validate_document(
 
 fn validate_messages(
     document: &Document,
-    source: &str,
+    source: &SourcePositions<'_>,
     locations: &DocumentLocations,
     diagnostics: &mut Vec<Diagnostic>,
 ) {

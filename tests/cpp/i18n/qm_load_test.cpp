@@ -4,6 +4,8 @@
 #include <QString>
 #include <QTranslator>
 #include <QtTest/qtest.h>
+#include <qtestcase.h>
+#include <qtmetamacros.h>
 
 class QmLoadTest : public QObject {
     Q_OBJECT

@@ -1,0 +1,36 @@
+# 保存托管缓存（任务 006）。由日常 Ubuntu check 和 nightly 三平台 full-tests 调用；
+# PR 只恢复不保存，避免条目按 PR 数量膨胀。缓存瘦身在供给层完成：
+# caret-build 安装归档发布即删并按白名单裁剪 LLVM，Qt/SDK CMake 供给发布
+# 即删归档；cargo-home 键不缓存 registry src/ 解包副本。改键时与
+# caret-cache-restore 两处必须同步。Cargo 扩展由 caret-cargo-tool-cache
+# 按工具独立保存；不缓存其 cargo-build 临时编译树。
+name: Save caret caches
+description: 输出缓存体积并保存 cargo-home 与 tools/deps 两键缓存
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        du -sh .toolchain/tools .toolchain/qt .toolchain/sdk ~/.cargo/registry 2>/dev/null || true
+
+    - if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          ~/.cargo/git/checkouts
+        key: cargo-home-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+    - if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          .toolchain/tools
+          .toolchain/qt
+          .toolchain/sdk
+          !.toolchain/tools/cargo-*
+        key: caret-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/caret-build/Cargo.toml', 'crates/caret-build/src/*.rs', 'native/CMakeLists.txt', 'native/cmake/*.cmake', 'native/cmake/**/*.cmake', 'native/cmake/*.json') }}

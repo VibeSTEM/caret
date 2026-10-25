@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pest::Parser as PestParser;
 
-use crate::diagnostic::push_diagnostic;
+use crate::diagnostic::{SourcePositions, push_diagnostic};
 use crate::syntax::{MAX_SOURCE_BYTES, PaParser, Rule, pest_diagnostic};
 use crate::{Diagnostic, Diagnostics};
 
@@ -78,6 +78,8 @@ pub fn parse(source: &str) -> Result<FsmDocument, Diagnostics> {
         ));
     }
 
+    let positions = SourcePositions::new(source);
+    let source = &positions;
     let Some(document_pair) = PaParser::parse(Rule::fsm_document, source)
         .map_err(|error| pest_diagnostic(error, source))?
         .next()
@@ -467,7 +469,7 @@ struct FsmHeader {
 }
 
 fn validate_document(
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
     header: &FsmHeader,
     states: &[FsmState],
@@ -739,7 +741,7 @@ fn validate_document(
 }
 
 fn validate_event_and_guard_names(
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
     transitions: &[FsmTransition],
 ) {

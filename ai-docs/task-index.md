@@ -41,7 +41,7 @@
 | 003 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
 | 004 | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
 | 005 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
-| 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | ready |
+| 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
 | 007 | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | in-progress |
 | 008 | [M0：打开、打字、保存](task/008-impl-document.md) | P2 | 007 | L | planned |
 | 009 | [M1：`\` 命令与补全层](task/009-impl-commands.md) | P2 | 008 | M | planned |
@@ -51,7 +51,8 @@
 | 013 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012 | M | planned |
 | 014 | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
 | 015 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
-| 016 | [独立 GoogleTest SDK 生产与发布](task/016-googletest-package.md) | P0 | 001 | S | implemented |
+| 016 | [独立 GoogleTest SDK 生产与发布](task/016-googletest-package.md) | P0 | 001 | S | done |
+| 017 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
 
 007 是简化后的文档窗口：自定义标题栏、Home 与右侧 Comments / Editing / Share、居中的页面、底栏左侧页码字数语言、右侧缩放尺。009 才加补全层。010 在同一扇窗口上加焦点框和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 

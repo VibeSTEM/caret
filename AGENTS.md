@@ -1,6 +1,6 @@
 # 仓库协作指南
 
-Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界面在 Qt 6 / QML。工程栈见[技术规范索引](ai-docs/standards/README.md)。`cargo run` 打开 M0 文档窗口，页面仍是占位。当前可以跑 `cargo fmt`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 和 `cargo test --workspace --locked`。不带 `--workspace` 的 `cargo test` 只测 launcher。根别名里的 `format`、`lint`、`quality` 还要等 CMake 分层夹具。
+Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界面在 Qt 6 / QML。工程栈见[技术规范索引](ai-docs/standards/README.md)。`cargo run` 打开 M0 文档窗口，页面仍是占位。当前可以跑 `cargo fmt`、`cargo clippy --locked --workspace --all-targets -- -D warnings` 和 `cargo test --workspace --locked`。不带 `--workspace` 的 `cargo test` 只测 launcher。跨语言入口是 `cargo format --check`、`cargo lint --check` 和 `cargo quality`，前置与首次工具供给见[测试规范](ai-docs/standards/testing.md)。
 
 只阅读当前任务相关的文档。工程栈以规范为准。外部调查只放在 [research](ai-docs/research/)。
 

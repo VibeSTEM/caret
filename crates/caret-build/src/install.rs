@@ -91,15 +91,11 @@ pub(super) fn ensure_tool(tool: Tool, cmake: Option<&Path>) -> Result<PathBuf, S
         }
         Ok(())
     };
-    let mut directory = install_directory(&toolchain, name, &identity, install)?;
-    // 历史缓存树可能被旧版裁剪留下悬空链接（如 clang++ → clang-<ver> 真身
-    // 被删）；marker 命中但二进制缺失时，删除该版本目录重装一次自愈，仍
-    // 失败才报损坏，不再要求手工清理。
-    if tool.locate_installed(&directory).is_none() {
-        eprintln!("[caret-tools] {name}：安装树不完整，删除后重装自愈");
-        fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
-        directory = install_directory(&toolchain, name, &identity, install)?;
-    }
+    // 缓存完整性检查和重装必须共用安装锁；锁外删除损坏目录可能删掉
+    // 另一安装者刚发布的有效工具，也会让其余等待者因目录已删除而失败。
+    let directory = install_directory_validated(&toolchain, name, &identity, install, |root| {
+        tool.locate_installed(root).is_some()
+    })?;
     tool.locate_installed(&directory).ok_or_else(|| {
         format!(
             "托管 {name} 缓存损坏：{}；清理该版本目录后重试",
@@ -139,6 +135,16 @@ pub fn install_directory(
     identity: &str,
     install: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<PathBuf, String> {
+    install_directory_validated(toolchain_root, name, identity, install, |_| true)
+}
+
+fn install_directory_validated(
+    toolchain_root: &Path,
+    name: &str,
+    identity: &str,
+    install: impl FnOnce(&Path) -> Result<(), String>,
+    is_valid: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
     let _lock = install_lock(toolchain_root, name)?;
     let parent = tools_root(toolchain_root).join(name);
     let destination = parent.join(identity);
@@ -146,6 +152,7 @@ pub fn install_directory(
         .ok()
         .as_deref()
         == Some(identity)
+        && is_valid(&destination)
     {
         // 命中缓存是例行路径，不打日志；安装与自愈才输出诊断。
         return Ok(destination);
@@ -157,6 +164,9 @@ pub fn install_directory(
     }
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     install(&staging)?;
+    if !is_valid(&staging) {
+        return Err(format!("{name} 安装未生成有效的工具目录"));
+    }
     fs::write(staging.join(".complete"), identity).map_err(|e| e.to_string())?;
     if destination.exists() {
         fs::remove_dir_all(&destination).map_err(|e| e.to_string())?;
@@ -166,16 +176,13 @@ pub fn install_directory(
     Ok(destination)
 }
 
-/// 官方 LLVM 发布包面向全量工具链消费者：bin 是数百个各 100–290 MB 的
-/// 胖二进制（含 MLIR 工具），lib 是 LLDB/MLIR 静态库与 dylib，include 是
-/// LLVM 开发头文件。本项目只用 clang 系编译器、clang-tidy 与 coverage/AR
-/// 工具（042 验证器要求 clang-tidy/llvm-profdata/llvm-cov 在 llvm/bin 下，
-/// Windows 链接使用 lld-link）。解包后按白名单裁剪，安装树从约 7.4 GB
-/// 降到约 2 GB；lib 仅保留编译器资源目录 lib/clang（内建头与覆盖/消毒
-/// 运行时）。白名单与验证器同步，新增工具先登记再使用。
+/// 官方 LLVM 发布包包含编译器、LLDB/MLIR 工具和开发库；此处按白名单
+/// 保留构建与质量检查所需的编译器、clang-tidy、覆盖率、符号化和 AR 工具，
+/// Windows 还保留 lld-link。lib 仅保留编译器资源目录 lib/clang，供内建头、
+/// 覆盖率和 sanitizer 运行库使用。白名单与安装验证器同步，新增工具先登记。
 fn slim_llvm(root: &Path) -> Result<(), String> {
     // 按前缀保留：官方发布里 clang/clang++ 常是指向 clang-<major> 等带版本
-    // 名的链接，精确名匹配会删掉真身、留下悬空链接（run 35430519988 实证）。
+    // 名的链接，精确名匹配会删掉真身、留下悬空链接。
     // 前缀命中后再排除确定不用的胖工具；lld 前缀会误吞 lldb 全家，先排除。
     const KEEP_PREFIXES: &[&str] = &[
         "clang",
@@ -343,6 +350,52 @@ mod tests {
             "v2"
         );
         install_directory(&root, "fixture", "v1", |_| Err("旧版本不应重新安装".into()))?;
+        fs::remove_dir_all(root).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn concurrent_cache_repair_checks_integrity_under_the_install_lock() -> Result<(), String> {
+        use std::sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let root = std::env::temp_dir().join(format!("caret-repair-test-{}", std::process::id()));
+        // 完成标记存在，但工具二进制已损坏；四个调用者同时要求自愈。
+        let destination = install_directory(&root, "fixture", "v1", |_| Ok(()))?;
+        let repairs = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(4));
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let root = root.clone();
+                let repairs = repairs.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    let path = install_directory_validated(
+                        &root,
+                        "fixture",
+                        "v1",
+                        |staging| {
+                            repairs.fetch_add(1, Ordering::SeqCst);
+                            fs::write(staging.join("binary"), "repaired").map_err(|e| e.to_string())
+                        },
+                        |path| path.join("binary").is_file(),
+                    )?;
+                    fs::read_to_string(path.join("binary")).map_err(|e| e.to_string())
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(
+                worker.join().map_err(|_| "repair thread panicked")??,
+                "repaired"
+            );
+        }
+        assert_eq!(repairs.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fs::read_to_string(destination.join(".complete")).map_err(|e| e.to_string())?,
+            "v1"
+        );
         fs::remove_dir_all(root).map_err(|e| e.to_string())
     }
     #[test]

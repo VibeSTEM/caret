@@ -50,9 +50,8 @@ pub fn prepend_path(
 /// 运行器，以及构建脚本自身——Windows 下 POST_BUILD gtest discovery 在
 /// 链接后立即启动测试可执行文件，构建子进程必须能解析这些 DLL。
 ///
-/// Windows 的 PATH 组成：托管 Qt runtime 与 SDK 运行库 bin（含嵌套布局，
-/// 如 VTK 的 `bin/`、OCCT 8 的 `win64/vc14/bin/`；macOS/Linux 经构建 rpath
-/// 解析无此需求）前置到继承的 PATH 之前，整体替换后下发。
+/// Windows 将托管 Qt runtime 与已安装 SDK 的运行库 bin 前置到继承的
+/// PATH，兼容 SDK 内的嵌套 bin 布局；macOS/Linux 依靠构建 rpath 解析。
 pub fn native_test_env(
     target: &str,
 ) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, String> {
@@ -72,7 +71,7 @@ pub fn native_test_env(
 }
 
 /// SDK 缓存（`<toolchain>/sdk/<name>/<version>/<triple>/`）里 Windows triple 的
-/// 运行库目录：顶层 `bin/` 与嵌套布局（OCCT 8 为 `win64/vc14/bin/`）都收集；
+/// 运行库目录：顶层与嵌套的 `bin/` 都收集；
 /// triple 目录不存在或无 bin 时跳过，保持幂等。
 fn windows_sdk_dll_dirs(toolchain: &Path) -> Vec<PathBuf> {
     let sdk_root = toolchain.join("sdk");
@@ -100,8 +99,8 @@ fn windows_sdk_dll_dirs(toolchain: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// 递归收集 `bin` 命名的目录（其余子目录继续下探）；深度上限按现有制品
-/// 最深布局（2 层）取 4，防御异常树形导致无限递归。
+/// 递归收集 `bin` 命名的目录，其余子目录最多下探 4 层，避免异常目录树
+/// 导致无界遍历。
 fn collect_dll_dirs(dir: &Path, depth: u8, dirs: &mut Vec<PathBuf>) {
     if depth > 4 {
         return;
@@ -180,7 +179,7 @@ mod tests {
         // 另一 SDK 同布局；windows triple 缺 bin 时不收录。
         fs::create_dir_all(sdk.join("dawn/1.0.0/windows-x86_64/bin")).map_err(|e| e.to_string())?;
         fs::create_dir_all(sdk.join("dawn/1.0.0/macos-arm64/bin")).map_err(|e| e.to_string())?;
-        // 嵌套布局（OCCT 8：win64/vc14/bin）；非 bin 中间目录照常下探。
+        // 嵌套运行库布局：非 bin 中间目录照常下探。
         let occt = sdk.join("occt/8.0.1/windows-x86_64");
         fs::create_dir_all(occt.join("win64/vc14/bin")).map_err(|e| e.to_string())?;
         let dirs = windows_sdk_dll_dirs(&root);

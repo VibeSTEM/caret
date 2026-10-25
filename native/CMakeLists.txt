@@ -26,7 +26,16 @@ set(CARET_FFI_STATIC_LIB
     CACHE FILEPATH "caret-ffi static library produced by Cargo")
 
 include(cmake/build-policy.cmake)
+include(cmake/layering.cmake)
+cmake_language(DEFER CALL caret_verify_layering)
 include(CTest)
+include(cmake/sdk-provision.cmake)
+if(BUILD_TESTING)
+  add_test(NAME Build.SdkProvision
+           COMMAND "${CMAKE_COMMAND}" "-DCARET_SDK_FIXTURE_ROOT=${CMAKE_BINARY_DIR}/sdk-fixtures"
+                   -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/check-sdk-provision.cmake")
+  set_tests_properties(Build.SdkProvision PROPERTIES LABELS "build" TIMEOUT 120)
+endif()
 
 include(cmake/qt-provision.cmake)
 set(QT_HOST_PATH "${QT_STAGING}")
@@ -67,5 +76,5 @@ if(CARET_ENABLE_APP)
 endif()
 
 if(MSVC)
-  caret_verify_msvc_abi("${CMAKE_SOURCE_DIR}")
+  cmake_language(DEFER CALL caret_verify_msvc_abi "${CMAKE_SOURCE_DIR}")
 endif()

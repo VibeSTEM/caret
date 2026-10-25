@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<suppressions>
+  <!-- googletest.cfg 将 TEST/TEST_F 展开为 __Suite_Case；注册和执行由 GTest/CTest 验证。 -->
+  <suppress>
+    <id>unusedFunction</id>
+    <fileName>*/tests/*</fileName>
+    <symbolName>__*</symbolName>
+  </suppress>
+</suppressions>

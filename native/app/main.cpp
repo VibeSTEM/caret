@@ -16,8 +16,8 @@
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <cstdio>
-#include <rust/cxx.h>
-#include <string>
+#include <exception>
+#include <qnamespace.h>
 #include <string_view>
 #include <vector>
 
@@ -36,7 +36,7 @@ void print_version() {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) try {
     bool quit_after_load = false;
     std::vector<char*> forwarded;
     forwarded.push_back(argv[0]);
@@ -98,4 +98,10 @@ int main(int argc, char* argv[]) {
         return kExitUnavailable;
     }
     return QGuiApplication::exec();
+} catch (const std::exception& error) {
+    std::fprintf(stderr, "caret: 启动失败：%s\n", error.what());
+    return kExitUnavailable;
+} catch (...) {
+    std::fprintf(stderr, "caret: 启动失败：未知异常\n");
+    return kExitUnavailable;
 }

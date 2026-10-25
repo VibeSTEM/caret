@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// 逻辑根类别；scheme 用于 `ResourceRef` 的字符串形态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RootCategory {
-    /// 工程相对资产，绑定显式工程根；不依赖 cwd。
+    /// 文档相对资源，绑定显式文档资源根（`project:/`）；不依赖 cwd。
     Project,
     /// 用户配置目录（宿主经 QStandardPaths::AppConfigLocation 注入）。
     UserConfig,
@@ -192,7 +192,7 @@ impl From<PathError> for String {
 
 impl std::error::Error for PathError {}
 
-/// Windows 保留设备名（不含扩展名比较）；跨平台统一拒绝，保证工程资产
+/// Windows 保留设备名（不含扩展名比较）；跨平台统一拒绝，保证文档资源引用
 /// 在平台间搬迁时不会落到目标平台非法文件名上。
 const RESERVED_NAMES: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -335,16 +335,19 @@ impl PathService {
     /// 根）规范化后必须仍在根内，覆盖"未创建目标"的越界场景。返回未
     /// 规范化的拼接路径（写入方按原语义创建文件），包含性已由祖先保证。
     /// 祖先回溯按注入形态的根做前缀判断，包含判定用双方的规范化形态，
-    /// 注入根本身含符号链接时不会误判。根必现存（canonical_root 已验证），
-    /// 故祖先链必然在根内命中现存目录——并发删除等极端竞态由 unwrap_or
-    /// 以根为保守祖先兜底，再交由规范化包含检查拒绝。
+    /// 注入根本身含符号链接时不会误判。悬空链接也算已有路径项，无法规范化
+    /// 时拒绝，不能跳过链接后把其目标误当成根内尚未创建的文件。
     pub fn resolve_write_target(&self, reference: &ResourceRef) -> Result<PathBuf, PathError> {
         let canonical_root = self.canonical_root(reference.category)?;
         let path = self.resolve(reference)?;
         let ancestor = path
             .ancestors()
-            .find(|candidate| candidate.exists())
-            .unwrap_or(canonical_root.as_path());
+            .find(|candidate| {
+                // exists() 跟随符号链接，悬空链接会被误判为不存在。
+                !matches!(std::fs::symlink_metadata(candidate),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            })
+            .ok_or_else(|| PathError::NotContained(path.display().to_string()))?;
         let canonical_ancestor = std::fs::canonicalize(ancestor)
             .map_err(|_| PathError::NotContained(ancestor.display().to_string()))?;
         if !canonical_ancestor.starts_with(canonical_root) {
@@ -670,6 +673,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn dangling_symlinks_are_not_treated_as_new_write_targets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let fixture = FixtureRoot::new("dangling-symlink")?;
+        let outside = FixtureRoot::new("dangling-outside")?;
+        let service = fixture.service()?;
+        for (name, target) in [
+            ("outside-file", outside.root.join("missing.txt")),
+            ("inside-file", fixture.root.join("missing.txt")),
+        ] {
+            symlink(&target, fixture.root.join(name))?;
+            assert!(service.resolve_existing(&reference(name)).is_err());
+            assert!(matches!(
+                service.resolve_write_target(&reference(name)),
+                Err(PathError::NotContained(_))
+            ));
+            assert!(!target.exists());
+        }
+        symlink(
+            outside.root.join("missing-dir"),
+            fixture.root.join("outside-dir"),
+        )?;
+        assert!(matches!(
+            service.resolve_write_target(&reference("outside-dir/new.txt")),
+            Err(PathError::NotContained(_))
+        ));
+        assert!(!outside.root.join("missing-dir").exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn symlink_root_allows_existing_and_missing_targets_inside_the_root()
     -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::symlink;
@@ -696,7 +732,7 @@ mod tests {
 
     #[test]
     fn error_code_and_detail_cover_every_variant() -> Result<(), Box<dyn std::error::Error>> {
-        // 全变体遍历：code()/detail() 的每个 match 臂都真实执行（032 门禁）。
+        // 遍历所有错误变体，覆盖 code()/detail() 的每个 match 臂。
         let cases: Vec<(PathError, &str, &str)> = vec![
             (PathError::EmptyReference, "path.empty_reference", ""),
             (

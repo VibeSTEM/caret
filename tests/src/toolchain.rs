@@ -37,16 +37,6 @@ pub(super) fn verify_toolchain() -> Result<(), Box<dyn Error>> {
     let managed_llvm = managed_root.join("llvm");
     let ninja = caret_build::resolve_ninja(&cmake)?;
     let qt_bin = toolchain.join("qt/staging/bin");
-    let googletest_triple = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "macos-arm64",
-        ("linux", "x86_64") => "linux-x86_64",
-        ("windows", "x86_64") => "windows-x86_64",
-        (os, arch) => return Err(format!("不支持的 GoogleTest SDK 平台：{os}/{arch}").into()),
-    };
-    let googletest = toolchain
-        .join("sdk/googletest/1.18.0")
-        .join(googletest_triple)
-        .join("lib/cmake/GTest/GTestConfig.cmake");
     let compile_database = native_dir.join("compile_commands.json");
 
     require_file("托管 CMake", &cmake)?;
@@ -81,7 +71,6 @@ pub(super) fn verify_toolchain() -> Result<(), Box<dyn Error>> {
         &qt_bin.join(caret_build::exe_name("qmlformat")),
     )?;
     require_file("Qt qmllint", &qt_bin.join(caret_build::exe_name("qmllint")))?;
-    require_file("GoogleTest SDK", &googletest)?;
     require_file("native compile_commands.json", &compile_database)?;
     if !cmake.starts_with(&managed_cmake) {
         return Err(format!(
@@ -132,20 +121,12 @@ pub(super) fn verify_toolchain() -> Result<(), Box<dyn Error>> {
     }
     let commands = caret_build::database::read(&native_dir.join("quality/compile_commands.json"))?;
     caret_build::database::verify(&commands, &version_binary)?;
-    if !commands.iter().any(|entry| {
-        entry
-            .source()
-            .ends_with("crates/caret-ffi/src/ffi_support.cc")
-    }) {
-        return Err("编译数据库缺少手写 CXX adapter".into());
-    }
     println!(
-        "Cargo 工具链已就绪：LLVM={} CMake={} Ninja={} Qt={} GoogleTest={} compile_commands={}",
+        "Cargo 工具链已就绪：LLVM={} CMake={} Ninja={} Qt={} compile_commands={}",
         llvm_root.display(),
         cmake.display(),
         ninja.display(),
         qt_bin.display(),
-        googletest.display(),
         compile_database.display()
     );
     Ok(())

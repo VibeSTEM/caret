@@ -1,4 +1,4 @@
-//! 工程会话的只读运行期上下文与不可变变量快照。
+//! 文档会话的只读运行期上下文与不可变变量快照。
 //!
 //! 上下文由应用服务持有，不保存 UI 引擎对象。任务捕获共享快照后，后续
 //! 变量提交不会改变其输入；会话替换或关闭会协作取消旧作用域。
@@ -97,7 +97,7 @@ impl std::fmt::Display for RuntimeCommitError {
 
 impl std::error::Error for RuntimeCommitError {}
 
-/// 当前运行时会话；只提供变量读取与工程根内现存资源解析。
+/// 当前运行时会话；只提供变量读取与文档资源根内现存资源解析。
 #[derive(Debug)]
 pub struct RuntimeContext {
     identity: Arc<()>,
@@ -109,7 +109,7 @@ pub struct RuntimeContext {
 }
 
 impl RuntimeContext {
-    /// 为当前工程创建只读资源根上下文。
+    /// 为当前文档创建只读资源根上下文。
     pub fn for_project(generation: u64, project_root: &Path) -> Result<Self, PathError> {
         let mut paths = PathService::new();
         paths.set_root(RootCategory::Project, project_root)?;
@@ -128,7 +128,7 @@ impl RuntimeContext {
         }
     }
 
-    /// 此上下文所属的工程会话代次，与清单和变量修订分开。
+    /// 此上下文所属的文档会话代次，与变量快照的修订号分开。
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -196,7 +196,7 @@ impl RuntimeContext {
         self.commit_variables(scope.variables.revision, values)
     }
 
-    /// 在工程根约束下解析现存资源；上下文不暴露任意写入路径能力。
+    /// 在文档资源根约束下解析现存资源；上下文不暴露任意写入路径能力。
     pub fn resolve_existing(
         &self,
         reference: &ResourceRef,
@@ -272,7 +272,7 @@ pub struct RuntimeTaskScope {
 }
 
 impl RuntimeTaskScope {
-    /// 任务提交时的工程会话代次。
+    /// 任务提交时的文档会话代次。
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -287,7 +287,7 @@ impl RuntimeTaskScope {
         self.cancelled.load(Ordering::Acquire)
     }
 
-    /// 在捕获时已授权的工程根中读取现存资源。
+    /// 在捕获时已授权的文档资源根中读取现存资源。
     pub fn resolve_existing(
         &self,
         reference: &ResourceRef,

@@ -1,4 +1,4 @@
-# Qml.FormatCheck 驱动（任务 032）：qmlformat（Qt 供给，qmllint 同源）输出
+# Qml.FormatCheck 驱动：qmlformat（Qt 供给，qmllint 同源）输出
 # 与源文件逐字节比对，任何需要重排的文件都列出并失败。qmlformat 本版无
 # --check，等价实现为 stdout diff。
 #

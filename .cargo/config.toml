@@ -1,5 +1,6 @@
 [alias]
-# 桌面安装别名等 launcher 建立后再登记。裸 cargo run 现在不能打开窗口。
+# 桌面安装由 runner 调度 CMake Runtime component；cargo package 仍是标准 Rust 命令。
+caret-package = "run -q --locked --package caret-tests -- package"
 # 根目录跨语言质量入口；实现位于 tests/，避免 shell/Node 运行时分叉。
 performance = "run -q --locked --package caret-tests -- performance"
 # 命令级基准只在显式调用时下载并运行固定版本 hyperfine。

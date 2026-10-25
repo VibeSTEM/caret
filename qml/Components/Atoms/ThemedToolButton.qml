@@ -20,7 +20,7 @@ ToolButton {
     property string accessibleName: text
     property int iconSize: Theme.iconSizeDefault
     property bool showCaret: false
-    // 主文案后的弱化后缀，例如工程入口的省略号。
+    // 主文案后的弱化后缀，例如文档操作的省略号。
     property string dimText: ""
     // 宽按钮（列表条目）内容靠左；默认在按钮内水平居中。
     property bool contentAlignLeft: false

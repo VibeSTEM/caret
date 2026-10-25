@@ -1,4 +1,4 @@
-//! 平台 sanitizer 矩阵、构建目录、子进程环境与已登记排除。
+//! 平台 sanitizer 矩阵、构建目录和子进程环境。
 
 use std::error::Error;
 use std::path::Path;
@@ -50,9 +50,8 @@ impl SanitizerProfile {
     }
 }
 
-/// sanitizer 矩阵（任务 042）：ASan+UBSan 是三平台主组合；TSan 与其他
-/// sanitizer 运行库互斥，只能独立构建，且官方支持平台不含 Windows；clang-cl
-/// 仅支持部分 UBSan 检查，Windows 矩阵只验证 ASan。官方依据见任务 042。
+/// 项目矩阵：Unix 使用 ASan+UBSan 和独立的 TSan 构建，Windows 使用 ASan。
+/// clang-cl 的 UBSan 支持有限，TSan 不进入 Windows 矩阵；不同组合不共用运行库。
 fn sanitizer_profiles(platform: SanitizerPlatform) -> &'static [SanitizerProfile] {
     if platform == SanitizerPlatform::Windows {
         &[SanitizerProfile::Address]
@@ -84,100 +83,20 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
     if !native.is_dir() {
         return Err(format!("sanitizer 构建树不存在：{}", native.display()).into());
     }
-    // 组合级排除（边界登记 042）：当前仅插桩 C++，TSan 无法识别 Rust std
-    // 同步关系（rust-lang/rust#110485），相关异步结果测试仍由普通 CTest、
-    // ASan/UBSan 与 Rust 侧 Miri 覆盖。
-    // QML 测试栈（Qt/glib/系统库）连续三轮仅产出第三方噪声，无自有信号。
-    // macOS 仅额外排除一个经未插桩 Qt QFuture/QPromise 内部同步的用例。
-    // Windows asan 下未插桩 Qt DLL 走 ucrt/RTL 堆而 ASan 用自有分配器，
-    // QML 引擎跨模块对象生命周期触发 bad-free。
-    let exclude = sanitizer_test_exclude(profile, sanitizer_platform());
+    // 当前仅插桩自有 native 代码，Qt 和 Rust 的同步边界仍需结合普通测试判断。
+    // 没有本仓库复现证据时不继承来源项目的用例排除或第三方抑制清单。
     run_ctest_in(
         &native,
         sanitizer_test_env(profile)?,
         &format!("sanitizer {} ctest", profile.name()),
         None,
         None,
-        exclude.as_deref(),
+        None,
     )
 }
 
-const TSAN_PROJECT_VIEW_MODEL_SHARED_EXCLUDES: &[&str] = &[
-    "ConfirmedImportCompletesThroughBackgroundViewModelRequest",
-    "DuplicateImportOrdinalsFollowImportOrderAcrossActivationAndClose",
-    "ReopenLoadsWelcomeOnlyAndActivatesSavedRecordOnDemand",
-    "FailedLoadRetainsTabAndCloseReleasesActivationState",
-    "FillSettingsConfirmAsynchronouslyAndReopenFromRust",
-    "StructuredImportFailuresPreserveTheCommittedProjectAndViewport",
-    "PreviewsImportsAndPersistsLatestRecord",
-    "PreviewCancellationReplacementAndProjectSwitchIgnoreOldResults",
-    "PreviewNotificationsCanReplaceOrCancelTheCompletedRequest",
-];
-
-const TSAN_PROJECT_VIEW_MODEL_CROSS_PLATFORM_EXCLUDES: &[&str] =
-    &["ImportInteractionStateMachineGatesAndSerializesCommands"];
-
-const TSAN_LINUX_PROJECT_VIEW_MODEL_EXCLUDES: &[&str] = &[
-    "CreatesOpensRenamesAndSavesThroughRustService",
-    "ProjectCommandsReturnAdmissionAndPublishWithoutBlockingGuiEvents",
-    "ProjectWaiterStartupFailureNeverAdmitsFilesystemWork",
-    "CompletionDoesNotEraseAnErrorFromTheNextReentrantCommand",
-    "DestroyingProjectRequestOwnerDoesNotAccessDeletedQtObjects",
-    "DisplayPreparationCoalescesSelectionAndRejectsTheOldDisplayResult",
-    "GpuSamplingRejectsEmptyFramesAndWaitsForTheTargetScene",
-    "DestroyingDisplayPreparationOwnerDoesNotAccessDeletedQtObjects",
-    "CreatesAndOpensProjectThroughUnicodeFilesystemPaths",
-    "VariableDocumentsPreserveDiagnosticsAndRejectStaleUpdates",
-    "OldVariableRequestCannotWriteIntoAnotherProject",
-    "VariableWaiterStartupFailureDoesNotSubmitOrFreezeProject",
-    "VariableSaveRejectsConflictingSwitchUntilQueuedCompletion",
-    "VariableReadCompletionFromOldProjectDoesNotReplaceNewProjection",
-    "VariableReadKeepsGuiResponsiveWhileFilesystemIsBlocked",
-    "DestroyingVariableRequestOwnerDoesNotWaitForQtCompletion",
-    "MapsRustErrorsWithoutCreatingInvalidTargets",
-    "ImportProjectionRefreshFailureDoesNotRepeatCommittedImport",
-    "DocumentTabsFollowWelcomeImportAndClose",
-    "ReorderingAndClosingDocumentsPreservesActiveMeshSelection",
-    "ClosedDocumentsReleaseTheirMeshSnapshotsAfterRepeatedSwitching",
-    "ClosingLastTabFlipsPlaceholderVisibility",
-];
-
-/// 只排除 TSan 无法观察同步边界的具体用例；普通 CTest 和 ASan/UBSan 仍覆盖全部测试。
-fn sanitizer_test_exclude(
-    profile: SanitizerProfile,
-    platform: SanitizerPlatform,
-) -> Option<String> {
-    match profile {
-        SanitizerProfile::Thread => {
-            let platform_excludes = match platform {
-                SanitizerPlatform::Linux => TSAN_LINUX_PROJECT_VIEW_MODEL_EXCLUDES,
-                SanitizerPlatform::MacOs => &[],
-                SanitizerPlatform::Windows => return None,
-            };
-            let names = TSAN_PROJECT_VIEW_MODEL_SHARED_EXCLUDES
-                .iter()
-                .chain(TSAN_PROJECT_VIEW_MODEL_CROSS_PLATFORM_EXCLUDES)
-                .chain(platform_excludes)
-                .copied()
-                .collect::<Vec<_>>();
-            Some(format!(
-                "^(Ffi|Qml)\\.|^ProjectViewModelTest\\.({})$",
-                names.join("|")
-            ))
-        }
-        SanitizerProfile::Address if platform == SanitizerPlatform::Windows => {
-            Some("^Qml\\.".to_owned())
-        }
-        _ => None,
-    }
-}
-
-/// sanitizer 测试环境：托管 LLVM bin 前置到 PATH，让运行时报告用配套
-/// llvm-symbolizer 符号化；Windows 的 ASan 动态运行库 DLL 由编译器资源
-/// 目录解析。LeakSanitizer 在 macOS 默认关闭，显式开启；第三方 SDK/系统
-/// 运行时的已知问题按 `tests/lsan-suppressions.txt`（泄漏）与
-/// `tests/tsan-suppressions.txt`（竞态，仅 tsan 组合）抑制，自有代码的
-/// 问题报告仍然阻断。
+/// 托管 LLVM 的符号器和 Windows ASan 运行库加入 PATH；所有问题默认阻断。
+/// Unix 显式开启泄漏检查，不引用未在本仓库登记和验证的抑制文件。
 fn sanitizer_test_env(
     profile: SanitizerProfile,
 ) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, Box<dyn Error>> {
@@ -188,31 +107,22 @@ fn sanitizer_test_env(
         prepend.push(caret_build::compiler_rt_dll_dir(&llvm)?);
     }
     let mut environment = caret_build::prepend_path(environment, prepend)?;
-    if !cfg!(windows) {
-        let suppressions = repository_root()?.join("tests/lsan-suppressions.txt");
-        environment.push((
-            std::ffi::OsString::from("ASAN_OPTIONS"),
-            std::ffi::OsString::from("detect_leaks=1"),
-        ));
-        environment.push((
-            std::ffi::OsString::from("LSAN_OPTIONS"),
-            std::ffi::OsString::from(format!(
-                "suppressions={}",
-                suppressions.to_str().ok_or("抑制清单路径不是 UTF-8")?
-            )),
-        ));
+    environment.extend(sanitizer_runtime_options(profile, sanitizer_platform()));
+    Ok(environment)
+}
+
+fn sanitizer_runtime_options(
+    profile: SanitizerProfile,
+    platform: SanitizerPlatform,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut options = Vec::new();
+    if platform != SanitizerPlatform::Windows {
+        options.push(("ASAN_OPTIONS".into(), "detect_leaks=1".into()));
     }
     if profile == SanitizerProfile::Thread {
-        let suppressions = repository_root()?.join("tests/tsan-suppressions.txt");
-        environment.push((
-            std::ffi::OsString::from("TSAN_OPTIONS"),
-            std::ffi::OsString::from(format!(
-                "suppressions={}",
-                suppressions.to_str().ok_or("抑制清单路径不是 UTF-8")?
-            )),
-        ));
+        options.push(("TSAN_OPTIONS".into(), "halt_on_error=1".into()));
     }
-    Ok(environment)
+    options
 }
 
 fn sanitizer_build_command(root: &Path, target: &Path, flags: &str) -> Command {
@@ -252,59 +162,28 @@ mod tests {
     }
 
     #[test]
-    fn tsan_excludes_only_tests_with_uninstrumented_sync_boundaries() {
-        fn project_view_model_names(exclude: &str) -> Vec<&str> {
-            exclude
-                .split_once("ProjectViewModelTest\\.(")
-                .map(|(_, names)| names.trim_end_matches(")$").split('|').collect())
-                .unwrap_or_default()
+    fn supported_profiles_do_not_suppress_reports_or_reference_missing_lists() {
+        for platform in [
+            SanitizerPlatform::Linux,
+            SanitizerPlatform::MacOs,
+            SanitizerPlatform::Windows,
+        ] {
+            for profile in sanitizer_profiles(platform) {
+                let options = sanitizer_runtime_options(*profile, platform);
+                for (name, value) in &options {
+                    assert_ne!(name, "LSAN_OPTIONS");
+                    assert!(!value.to_string_lossy().contains("suppressions="));
+                }
+                if *profile == SanitizerProfile::Thread {
+                    assert!(options.contains(&("TSAN_OPTIONS".into(), "halt_on_error=1".into())));
+                }
+                if platform == SanitizerPlatform::Windows {
+                    assert!(options.is_empty());
+                } else {
+                    assert!(options.contains(&("ASAN_OPTIONS".into(), "detect_leaks=1".into())));
+                }
+            }
         }
-
-        let linux = sanitizer_test_exclude(SanitizerProfile::Thread, SanitizerPlatform::Linux)
-            .unwrap_or_default();
-        let macos = sanitizer_test_exclude(SanitizerProfile::Thread, SanitizerPlatform::MacOs)
-            .unwrap_or_default();
-        let linux_names = project_view_model_names(&linux);
-        let macos_names = project_view_model_names(&macos);
-        for exclude in [&linux, &macos] {
-            assert!(exclude.starts_with("^(Ffi|Qml)\\.|^ProjectViewModelTest\\.("));
-            assert!(exclude.ends_with(")$"));
-        }
-        assert_eq!(TSAN_PROJECT_VIEW_MODEL_SHARED_EXCLUDES.len(), 9);
-        assert_eq!(TSAN_PROJECT_VIEW_MODEL_CROSS_PLATFORM_EXCLUDES.len(), 1);
-        assert_eq!(TSAN_LINUX_PROJECT_VIEW_MODEL_EXCLUDES.len(), 22);
-        assert_eq!(linux_names.len(), 32);
-        assert_eq!(macos_names.len(), 10);
-        for name in TSAN_PROJECT_VIEW_MODEL_SHARED_EXCLUDES {
-            assert!(linux_names.contains(name));
-            assert!(macos_names.contains(name));
-        }
-        for name in TSAN_PROJECT_VIEW_MODEL_CROSS_PLATFORM_EXCLUDES {
-            assert!(linux_names.contains(name));
-            assert!(macos_names.contains(name));
-        }
-        for name in TSAN_LINUX_PROJECT_VIEW_MODEL_EXCLUDES {
-            assert!(linux_names.contains(name));
-            assert!(!macos_names.contains(name));
-        }
-
-        assert_eq!(
-            sanitizer_test_exclude(SanitizerProfile::AddressUndefined, SanitizerPlatform::Linux),
-            None
-        );
-        assert_eq!(
-            sanitizer_test_exclude(SanitizerProfile::Address, SanitizerPlatform::Windows)
-                .as_deref(),
-            Some("^Qml\\.")
-        );
-        assert_eq!(
-            sanitizer_test_exclude(SanitizerProfile::Address, SanitizerPlatform::Linux),
-            None
-        );
-        assert_eq!(
-            sanitizer_test_exclude(SanitizerProfile::Thread, SanitizerPlatform::Windows),
-            None
-        );
     }
 
     #[test]

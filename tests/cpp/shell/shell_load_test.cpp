@@ -1,5 +1,5 @@
 /// 不链接 launcher、FFI 或应用服务。注入快照后确认 Caret.Shell 可导入，
-/// 主题切换后只读绑定仍更新，未知图标拒绝着色，新建文档窗口没有工艺字段。
+/// 验证主题切换绑定、未知图标拒绝着色，以及新建文档窗口的字段边界。
 #include "icon_provider.hpp"
 #include "theme_view_model.hpp"
 #include <QByteArray>
@@ -18,6 +18,9 @@
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/qtest.h>
+#include <qcontainerfwd.h>
+#include <qtestcase.h>
+#include <qtmetamacros.h>
 
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
 

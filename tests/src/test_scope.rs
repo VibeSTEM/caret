@@ -9,34 +9,16 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
-const NATIVE_LABELS: &[(&str, &[&str])] = &[
-    ("foundation", &["foundation", "ffi", "bridge", "app", "qml"]),
-    ("i18n", &["i18n", "qt-adapter", "bridge", "app", "qml"]),
-    (
-        "geometry",
-        &["geometry", "mesh", "ffi", "bridge", "app", "qml"],
-    ),
-    ("mesh", &["geometry", "mesh", "ffi", "bridge", "app", "qml"]),
-    ("qt-adapter", &["qt-adapter", "bridge", "app", "qml"]),
-    ("visualization", &["visualization", "bridge", "app", "qml"]),
-    ("bridge", &["bridge", "app", "qml"]),
-    ("app", &["app", "qml"]),
-    ("ffi", &["ffi", "bridge", "app", "qml"]),
-];
+// 只登记当前 native 模块和真实 CTest 标签。未知模块回退全量。
+const NATIVE_LABELS: &[(&str, &[&str])] = &[("i18n", &["i18n", "qml"]), ("app", &["qml"])];
 
 // Rust package 的直接消费端可能跨过 CXX/构建脚本进入 native 测试。
 // 新增此类边时同步扩展此表和下面的回归用例。
 const RUST_NATIVE_LABELS: &[(&str, &[&str])] = &[
-    (
-        "caret-dsl-core",
-        &["i18n", "qt-adapter", "bridge", "app", "qml"],
-    ),
-    ("caret-mesh", &["mesh", "ffi", "bridge", "app", "qml"]),
-    ("caret-ffi", &["mesh", "ffi", "bridge", "app", "qml"]),
-    ("caret-foundation", &["mesh", "ffi", "bridge", "app", "qml"]),
-    ("caret-import", &["mesh", "ffi", "bridge", "app", "qml"]),
-    ("caret-core", &["mesh", "ffi", "bridge", "app", "qml"]),
-    ("caret-launcher", &["i18n", "qt-adapter", "app", "qml"]),
+    ("caret-dsl-core", &["i18n", "qml"]),
+    ("caret-app", &["qml"]),
+    ("caret-ffi", &["qml"]),
+    ("caret-launcher", &["i18n", "qml"]),
 ];
 
 #[derive(Debug, Default)]
@@ -526,8 +508,7 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
             changed_packages.insert("caret-app".into());
             plan.qml = true;
             plan.native = true;
-            plan.native_labels
-                .extend(["bridge".to_owned(), "qml".to_owned()]);
+            plan.native_labels.insert("qml".to_owned());
             continue;
         }
         if path.starts_with("qml/")
@@ -536,8 +517,7 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         {
             plan.qml = true;
             plan.native = true;
-            plan.native_labels
-                .extend(["qml".to_owned(), "bridge".to_owned()]);
+            plan.native_labels.insert("qml".to_owned());
             continue;
         }
         if path.starts_with("resources/") {
@@ -572,6 +552,7 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         for (package, labels) in RUST_NATIVE_LABELS {
             if affected.contains(*package) {
                 plan.native = true;
+                plan.qml |= labels.contains(&"qml");
                 plan.native_labels
                     .extend(labels.iter().map(|label| (*label).to_owned()));
             }
@@ -598,6 +579,7 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         plan.native = true;
         plan.qml = true;
     }
+    plan.qml |= plan.native_labels.contains("qml");
     plan.code = plan.rust || plan.native || plan.qml;
     Ok(plan)
 }
@@ -742,7 +724,7 @@ fn is_document_path(path: &str) -> bool {
 fn all_native_labels() -> BTreeSet<String> {
     NATIVE_LABELS
         .iter()
-        .map(|(label, _)| (*label).to_owned())
+        .flat_map(|(_, labels)| labels.iter().map(|label| (*label).to_owned()))
         .chain(["build".into(), "qml".into()])
         .collect()
 }
@@ -832,7 +814,7 @@ mod tests {
     #[test]
     fn local_scope_escalates_to_full_suite_when_impact_is_unknown() -> Result<(), Box<dyn Error>> {
         let plan = Plan {
-            packages_l2: BTreeSet::from(["caret-core".into(), "caret-tests".into()]),
+            packages_l2: BTreeSet::from(["caret-app".into(), "caret-tests".into()]),
             full: true,
             ..Plan::default()
         };
@@ -852,7 +834,7 @@ mod tests {
         assert!(is_document_path("ai-docs/task/120.md"));
         assert!(is_document_path("README.md"));
         assert!(!is_document_path("tests/fixtures/readme.md"));
-        assert!(!is_document_path("native/foundation/README.md"));
+        assert!(!is_document_path("native/app/README.md"));
         assert!(!is_document_path("ai-docs/unregistered-input.js"));
     }
 
@@ -870,38 +852,18 @@ mod tests {
     }
 
     #[test]
-    fn project_boundary_modules_and_shared_qt_support_select_their_consumers()
-    -> Result<(), Box<dyn Error>> {
+    fn unknown_modules_and_shared_test_support_fail_closed() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
-        let input = "crates/caret-core/src/project/command_job.rs";
-        let plan = make_plan(&[input.into()], &root)?;
-        assert!(plan.full, "{input}: {plan:?}");
-        assert!(plan.rust && plan.native, "{input}");
-        let ffi_operation =
-            make_plan(&["crates/caret-ffi/src/project_operation.rs".into()], &root)?;
-        assert!(
-            !ffi_operation.full,
-            "已登记的 caret-ffi 路径应留在包范围内：{ffi_operation:?}"
-        );
-        assert!(
-            ffi_operation.packages_l1.contains("caret-ffi"),
-            "{ffi_operation:?}"
-        );
-        assert!(
-            ffi_operation.native_labels.contains("ffi"),
-            "{ffi_operation:?}"
-        );
         for input in [
-            "tests/support/qt/project_operation_helpers.hpp",
-            "tests/support/qt/mesh_frame_tracker.hpp",
+            "crates/unregistered-module/src/lib.rs",
+            "tests/support/qt/theme_snapshot_helpers.hpp",
         ] {
-            let support = make_plan(&[input.into()], &root)?;
+            let plan = make_plan(&[input.into()], &root)?;
             assert!(
-                support.full && support.full_quality && support.qml,
-                "{input}"
+                plan.full && plan.rust && plan.native && plan.qml,
+                "{input}: {plan:?}"
             );
-            assert!(support.native_labels.contains("bridge"), "{input}");
-            assert!(support.native_labels.contains("visualization"), "{input}");
+            assert!(plan.native_labels.contains("qml"));
         }
         Ok(())
     }
@@ -928,14 +890,14 @@ mod tests {
             native_scope_for_paths(&[source.into()]),
             NativeLintScope::Sources(BTreeSet::from([source.into()]))
         );
-        assert!(native_scope_for_paths(&["crates/caret-core/src/project.rs".into()]).is_empty());
+        assert!(native_scope_for_paths(&["crates/caret-app/src/theme.rs".into()]).is_empty());
         assert!(native_scope_for_paths(&["qml/App.qml".into()]).is_empty());
     }
 
     #[test]
     fn label_regex_is_anchored_and_deterministic() {
-        let labels = BTreeSet::from(["qml".into(), "bridge".into()]);
-        assert_eq!(label_regex(&labels), "^(bridge|qml)$");
+        let labels = BTreeSet::from(["qml".into(), "i18n".into()]);
+        assert_eq!(label_regex(&labels), "^(i18n|qml)$");
     }
 
     #[test]
@@ -945,7 +907,8 @@ mod tests {
         let plan = make_plan(&["crates/caret-foundation/Cargo.toml".into()], &root)?;
         assert!(plan.packages_l1.contains("caret-foundation"));
         assert!(plan.packages_l2.is_empty(), "{plan:?}");
-        assert!(plan.native_labels.contains("ffi"));
+        assert!(!plan.native);
+        assert!(plan.native_labels.is_empty());
         assert!(!plan.full);
         Ok(())
     }
@@ -963,6 +926,8 @@ mod tests {
         // 内置主题快照从 caret-app 经 caret-ffi 进入 launcher。
         assert!(app.packages_l2.contains("caret-ffi"), "{app:?}");
         assert!(app.packages_l2.contains("caret-launcher"), "{app:?}");
+        assert!(app.native && app.qml, "{app:?}");
+        assert!(app.native_labels.contains("qml"), "{app:?}");
         assert!(!app.full);
         Ok(())
     }
@@ -992,7 +957,7 @@ mod tests {
             let plan = make_plan(&[path.into()], &root)?;
             assert!(!plan.full, "{path}: {plan:?}");
             assert!(plan.packages_l1.contains("caret-ffi"), "{path}: {plan:?}");
-            assert!(plan.native_labels.contains("ffi"), "{path}: {plan:?}");
+            assert!(plan.native_labels.contains("qml"), "{path}: {plan:?}");
         }
         let outside = make_plan(&["unregistered/outside-any-crate.rs".into()], &root)?;
         assert!(outside.full, "{outside:?}");
@@ -1000,12 +965,11 @@ mod tests {
     }
 
     #[test]
-    fn mesh_adapter_changes_select_geometry_and_mesh_tests() -> Result<(), Box<dyn Error>> {
+    fn unknown_native_module_selects_all_tests() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
-        let plan = make_plan(&["native/mesh/src/netgen/netgen_mesher.cpp".into()], &root)?;
-        assert!(plan.native_labels.contains("geometry"), "{plan:?}");
-        assert!(plan.native_labels.contains("mesh"), "{plan:?}");
-        assert!(!plan.full, "{plan:?}");
+        let plan = make_plan(&["native/unregistered/src/adapter.cpp".into()], &root)?;
+        assert!(plan.full && plan.native && plan.qml, "{plan:?}");
+        assert_eq!(plan.native_labels, all_native_labels());
         Ok(())
     }
 
@@ -1017,7 +981,7 @@ mod tests {
         assert!(plan.packages_l2.contains("caret-dslc"), "{plan:?}");
         assert!(plan.packages_l2.contains("caret-app"), "{plan:?}");
         assert!(plan.native_labels.contains("i18n"));
-        assert!(plan.native_labels.contains("qt-adapter"));
+        assert!(plan.native_labels.contains("qml"));
         Ok(())
     }
 
@@ -1035,7 +999,6 @@ mod tests {
             assert!(plan.packages_l2.contains("caret-ffi"), "{plan:?}");
             assert!(plan.packages_l2.contains("caret-launcher"), "{plan:?}");
             assert!(plan.native && plan.qml, "{plan:?}");
-            assert!(plan.native_labels.contains("bridge"), "{plan:?}");
             assert!(plan.native_labels.contains("qml"), "{plan:?}");
             assert!(!plan.full, "{plan:?}");
         }
@@ -1079,19 +1042,15 @@ mod tests {
     #[test]
     fn native_module_change_selects_registered_label_closure() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
-        let plan = make_plan(&["native/geometry/src/adapter.cpp".into()], &root)?;
+        let plan = make_plan(&["native/i18n/qm_catalog.cpp".into()], &root)?;
         assert!(!plan.full);
         assert_eq!(
             plan.native_labels,
-            BTreeSet::from([
-                "geometry".into(),
-                "mesh".into(),
-                "ffi".into(),
-                "bridge".into(),
-                "app".into(),
-                "qml".into(),
-            ])
+            BTreeSet::from(["i18n".into(), "qml".into()])
         );
+        let app = make_plan(&["native/app/theme_catalog.cpp".into()], &root)?;
+        assert!(!app.full);
+        assert_eq!(app.native_labels, BTreeSet::from(["qml".into()]));
         Ok(())
     }
 
@@ -1105,10 +1064,7 @@ mod tests {
         let cmake = make_plan(&["native/CMakeLists.txt".into()], &root)?;
         assert!(!cmake.full_quality);
 
-        for path in [
-            "tests/cpp/geometry/.clang-tidy",
-            "tests/cpp/mesh/.clang-tidy",
-        ] {
+        for path in ["tests/cpp/shell/.clang-tidy", "tests/cpp/i18n/.clang-tidy"] {
             assert!(make_plan(&[path.into()], &root)?.full_quality, "{path}");
         }
 

@@ -1,0 +1,21 @@
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(^|/)(native|tests/(cpp|qml|performance|support)|crates/caret-ffi)/'
+# target 中的 Qt/CXX 生成头属于构建输入，不对其应用自有代码告警。
+ExcludeHeaderFilterRegex: '(^|/)target/'
+FormatStyle: file
+
+CheckOptions:
+  # IgnoreHeaders 为后缀匹配语义（每条正则匹配头文件路径的后缀，`;` 分隔），
+  # 直接列文件名即可。include-cleaner 不追踪宏内部依赖，也不理解"聚合头/
+  # 契约头"的框架与上游约定，下列头按来源分类豁免删除与缺失插入：
+  # - Qt 框架头：QtGlobal 转发 qglobal 系聚合头；QTRY_* 依赖 qtest.h 宏内部。
+  # 注意：IgnoreHeaders 会同时剥夺被豁免头的 provider 语义（其符号会被
+  # 误报为"无头直接提供"），只适用于符号本就无需 granular 追踪的聚合头。
+  # Windows SDK 伞头 windows.h 不走此表：它必须继续作为 provider，改在
+  # 包含行 NOLINT 并注明理由（见 standards/comments.md 例外条款）。
+  misc-include-cleaner.IgnoreHeaders: 'QtGlobal;qglobal\.h;qtypes\.h;qminmax\.h;qnumeric\.h;qstringliteral\.h;qtest\.h'
