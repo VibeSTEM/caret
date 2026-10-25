@@ -26,7 +26,7 @@
 
 ## 实施步骤
 
-1. 按 [Rust 库审查](../research/rust-library-audit-2026.md)评估 HarfRust shaping、字体目录候选及统一 Unicode 数据版本；同时核实 Qt/平台字体 API 的用户级字体发现、刷新和实际字体数据访问能力。
+1. 按 [Rust 库审查](../research/005-rust-library-audit.md)评估 HarfRust shaping、字体目录候选及统一 Unicode 数据版本；同时核实 Qt/平台字体 API 的用户级字体发现、刷新和实际字体数据访问能力。
 2. 通过同一版 Unicode conformance corpus 验证 grapheme、bidi、line-break 候选后再锁定依赖；实现缓存的字体目录、shaping 输入、cluster 映射和回退，不自行实现标准算法。
 3. 建立中英混排、组合字符、emoji、阿拉伯 RTL 和缺失字体样例。
 4. 独立评审并复验。
