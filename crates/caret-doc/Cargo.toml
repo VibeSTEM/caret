@@ -1,3 +1,4 @@
+# caret-doc crate 清单：声明领域模型、校验和 .cdoc 持久化依赖。
 [package]
 name = "caret-doc"
 version.workspace = true

@@ -4,7 +4,8 @@ use super::text_map::TextMap;
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    InlineEnvironmentKind, InlineNode, NodeId, Orientation, PageGeometry, PageMargins, PaperSize,
+    Paragraph, Run,
 };
 
 fn run(text: &str) -> InlineNode {
@@ -138,6 +139,43 @@ fn composition_update_is_transient_and_commit_is_idempotent() {
         Err(error) => panic!("failed to map committed text: {error}"),
     };
     assert_eq!(map.text, "に");
+}
+
+#[test]
+fn page_geometry_command_is_atomic_and_idempotent() {
+    let mut session = session_with(Vec::new());
+    let target = PageGeometry {
+        paper_size: PaperSize::A3,
+        orientation: Orientation::Landscape,
+        margins: PageMargins {
+            top: 36.0,
+            right: 54.0,
+            bottom: 72.0,
+            left: 90.0,
+        },
+    };
+    let effect = session.run(Command::SetPageGeometry(target));
+    assert!(effect.is_ok());
+    assert!(effect.is_ok_and(|effect| effect.document_changed));
+    assert_eq!(session.document.page_sections[0].geometry(), Ok(target));
+
+    let unchanged = session.run(Command::SetPageGeometry(target));
+    assert!(unchanged.is_ok_and(|effect| !effect.document_changed));
+
+    let before = session.document.clone();
+    let invalid = PageGeometry {
+        margins: PageMargins {
+            left: 500.0,
+            right: 200.0,
+            ..PageMargins::default()
+        },
+        ..PageGeometry::default()
+    };
+    assert!(matches!(
+        session.run(Command::SetPageGeometry(invalid)),
+        Err(EditError::InvalidPageGeometry(_))
+    ));
+    assert_eq!(session.document, before);
 }
 
 #[test]
