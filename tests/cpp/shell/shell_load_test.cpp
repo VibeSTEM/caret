@@ -122,6 +122,12 @@ void ShellLoadTest::unknownIconRefusesColoring() {
     const QImage known =
         provider->requestImage(QStringLiteral("close/ff112233"), &size, QSize(16, 16));
     QVERIFY(!known.isNull());
+    const QImage zoom_out =
+        provider->requestImage(QStringLiteral("zoom-out/ff112233"), &size, QSize(16, 16));
+    QVERIFY(!zoom_out.isNull());
+    const QImage zoom_in =
+        provider->requestImage(QStringLiteral("zoom-in/ff112233"), &size, QSize(16, 16));
+    QVERIFY(!zoom_in.isNull());
     const QImage unknown =
         provider->requestImage(QStringLiteral("mesh-gate/ff112233"), &size, QSize(16, 16));
     QVERIFY(unknown.isNull());

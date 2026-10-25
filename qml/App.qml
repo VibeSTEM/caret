@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import Caret.Shell
 
 Window {
@@ -22,6 +23,10 @@ Window {
 
     // 只缩放占位页，不表示文档缩放比。
     property real pageScale: 1
+    property string documentName: qsTr("Untitled")
+    property url documentFileUrl: ""
+    property url pendingSaveFileUrl: ""
+    property url suggestedSaveFileUrl: ""
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
 
@@ -42,6 +47,12 @@ Window {
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
                 onSettingsRequested: settingsDialog.open()
+                documentName: window.documentName
+                onSaveRequested: {
+                    if (window.documentFileUrl.toString().length === 0)
+                        window.suggestedSaveFileUrl = DocumentPathAdapter.defaultSaveFileUrl();
+                    saveDialog.open();
+                }
             }
 
             WindowCommandBar {
@@ -72,5 +83,19 @@ Window {
         objectName: "settingsDialog"
         ownerWindow: window
         onAcceptRequested: settingsDialog.completeAccept()
+    }
+
+    FileDialog {
+        id: saveDialog
+        objectName: "saveDocumentDialog"
+        title: qsTr("Save document")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Caret documents (*.cdoc)")]
+        defaultSuffix: "cdoc"
+        selectedFile: window.pendingSaveFileUrl.toString().length > 0 ? window.pendingSaveFileUrl : window.suggestedSaveFileUrl
+        acceptLabel: qsTr("Save")
+        onAccepted: {
+            window.pendingSaveFileUrl = selectedFile;
+        }
     }
 }

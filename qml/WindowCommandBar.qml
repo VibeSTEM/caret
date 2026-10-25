@@ -9,7 +9,7 @@ Rectangle {
 
     readonly property int rowHeight: Theme.menubarHeight
 
-    readonly property int chipHeight: Math.min(Theme.toolbarButtonHeight, rowHeight - Theme.borderWidth)
+    readonly property int chipHeight: Math.min(Theme.toolbarButtonHeight - Theme.spacingTiny, rowHeight - Theme.spacingSmall)
 
     implicitHeight: rowHeight
     clip: true
@@ -18,7 +18,7 @@ Rectangle {
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: Theme.spacingMedium
-        anchors.rightMargin: Theme.spacingMedium
+        anchors.rightMargin: Theme.spacingLarge
         spacing: Theme.spacingSmall
         z: 1
 
@@ -60,6 +60,8 @@ Rectangle {
             objectName: "commentsButton"
             Layout.alignment: Qt.AlignVCenter
             Layout.maximumHeight: commandBar.chipHeight
+            font.pixelSize: Theme.fontSmall
+            contentPadding: Theme.spacingTiny
             text: qsTr("Comments")
             controlHeight: commandBar.chipHeight
             contentColor: Theme.colorText
@@ -71,6 +73,8 @@ Rectangle {
             objectName: "editingButton"
             Layout.alignment: Qt.AlignVCenter
             Layout.maximumHeight: commandBar.chipHeight
+            font.pixelSize: Theme.fontSmall
+            contentPadding: Theme.spacingTiny
             text: qsTr("Editing")
             showCaret: true
             controlHeight: commandBar.chipHeight
@@ -84,6 +88,8 @@ Rectangle {
             objectName: "shareButton"
             Layout.alignment: Qt.AlignVCenter
             Layout.maximumHeight: commandBar.chipHeight
+            font.pixelSize: Theme.fontSmall
+            contentPadding: Theme.spacingTiny
             text: qsTr("Share")
             controlHeight: commandBar.chipHeight
             contentColor: Theme.colorPanel

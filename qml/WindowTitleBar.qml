@@ -12,6 +12,8 @@ Rectangle {
     property real leftInset: 0
     property real rightInset: 0
     signal settingsRequested
+    signal saveRequested
+    property string documentName: qsTr("Untitled")
 
     readonly property int toolSide: Math.min(Theme.toolbarButtonHeight, Theme.titlebarHeight - Theme.spacingSmall)
     readonly property int fieldHeight: Math.min(Theme.searchHeight, Theme.titlebarHeight - Theme.spacingSmall)
@@ -51,8 +53,14 @@ Rectangle {
         }
 
         TitleToolButton {
+            objectName: "saveButton"
+            iconName: "save"
+            accessibleName: qsTr("Save")
+            onClicked: titleBar.saveRequested()
+        }
+
+        TitleToolButton {
             objectName: "undoButton"
-            Layout.leftMargin: Theme.spacingSmall
             iconName: "undo"
             accessibleName: qsTr("Undo")
         }
@@ -76,7 +84,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
-                text: qsTr("Document1 — Edited")
+                text: titleBar.documentName
                 textColor: Theme.colorText
                 textSize: Theme.fontBody
                 font.weight: Font.DemiBold

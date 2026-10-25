@@ -64,7 +64,8 @@ Rectangle {
             Layout.maximumHeight: statusBar.rowHeight - Theme.spacingXSmall
             controlHeight: statusBar.rowHeight - Theme.spacingSmall
             contentPadding: 0
-            text: "−"
+            iconName: "zoom-out"
+            iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom out")
             contentColor: Theme.colorText
             onClicked: zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - 0.1)
@@ -124,7 +125,8 @@ Rectangle {
             Layout.maximumHeight: statusBar.rowHeight - Theme.spacingXSmall
             controlHeight: statusBar.rowHeight - Theme.spacingSmall
             contentPadding: 0
-            text: "+"
+            iconName: "zoom-in"
+            iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom in")
             contentColor: Theme.colorText
             onClicked: zoomSlider.value = Math.min(zoomSlider.to, zoomSlider.value + 0.1)

@@ -33,7 +33,7 @@
       border-bottom: 1px solid var(--line);
     }
     .title { height: 30px; padding-left: 78px; }
-    .tabs { height: 24px; }
+    .tabs { height: 24px; padding-right: 12px; gap: 6px; }
     .status { height: 26px; border-bottom: 0; border-top: 1px solid var(--line); background: var(--status); }
     .title { position: relative; }
     .grow { flex: 1; }
@@ -62,6 +62,16 @@
       border: 0;
       background: transparent url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='%234a4a4a' fill-rule='evenodd' d='M7.05 1h1.9l.28 1.55c.42.1.81.28 1.16.5l1.32-.78 1.34 1.34-.78 1.32c.22.35.4.74.5 1.16L14.95 7.05v1.9l-1.55.28c-.1.42-.28.81-.5 1.16l.78 1.32-1.34 1.34-1.32-.78c-.35.22-.74.4-1.16.5L8.95 15h-1.9l-.28-1.55a4.2 4.2 0 0 1-1.16-.5l-1.32.78-1.34-1.34.78-1.32a4.2 4.2 0 0 1-.5-1.16L1.05 8.95v-1.9l1.55-.28c.1-.42.28-.81.5-1.16l-.78-1.32 1.34-1.34 1.32.78c.35-.22.74-.4 1.16-.5L7.05 1zM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 0 0 0-3.7z'/></svg>") center / 16px no-repeat;
     }
+    .quick-action, .zoom-action {
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      color: #4a4a4a;
+      background: transparent;
+    }
+    .quick-action { width: 22px; height: 22px; }
+    .quick-action svg { width: 15px; height: 15px; }
     .tabs { padding-left: 16px; }
     .home {
       font-weight: 600;
@@ -69,13 +79,16 @@
       border-bottom: 2px solid var(--focus);
     }
     .chip, .share {
-      height: 24px;
-      padding: 0 10px;
+      height: 18px;
+      padding: 0 2px;
       border-radius: 3px;
       border: 1px solid #c9c9c9;
       background: transparent;
       color: var(--text);
+      font: 12px/1 "Segoe UI", sans-serif;
     }
+    .chip { display: inline-flex; align-items: center; gap: 4px; }
+    .caret { width: 0; height: 0; border: 4px solid transparent; border-top-color: currentColor; transform: translateY(2px); }
     .share { border: 0; background: var(--focus); color: white; }
     .canvas {
       flex: 1;
@@ -110,13 +123,24 @@
       background: white;
     }
     .zoom { width: 120px; }
+    .zoom-action { width: 20px; height: 22px; }
+    .zoom-action svg { width: 14px; height: 14px; }
   </style>
 </head>
 <body>
   <header class="title">
     <span class="switch" aria-label="AutoSave"></span>
     <span style="color:#5a5a5a">AutoSave</span>
-    <span class="doc-title">Document1 — Edited</span>
+    <button class="quick-action" aria-label="Save" title="Save">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h9l2 2v9h-11zM4.5 2.5v4h6v-4M4.5 13.5v-4h7v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="quick-action" aria-label="Undo" title="Undo">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4 2.5 7.5 6 11M3 7.5h6a4.5 4.5 0 0 1 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="quick-action" aria-label="Redo" title="Redo">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10 4 3.5 3.5L10 11M13 7.5H7A4.5 4.5 0 0 0 2.5 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <span class="doc-title">Untitled</span>
     <span class="grow"></span>
     <input class="search" placeholder="Search commands and help" readonly>
     <button class="gear" aria-label="Settings"></button>
@@ -125,7 +149,7 @@
     <span class="home">Home</span>
     <span class="grow"></span>
     <button class="chip">Comments</button>
-    <button class="chip">Editing</button>
+    <button class="chip">Editing<span class="caret" aria-hidden="true"></span></button>
     <button class="share">Share</button>
   </nav>
   <main class="canvas">
@@ -136,9 +160,13 @@
     <span>0 words</span>
     <span>English (United States)</span>
     <span class="grow"></span>
-    <span>−</span>
+    <button class="zoom-action" aria-label="Zoom out" title="Zoom out">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
     <input class="zoom" type="range" min="50" max="200" value="100" disabled>
-    <span>+</span>
+    <button class="zoom-action" aria-label="Zoom in" title="Zoom in">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
     <span>100%</span>
   </footer>
 </body>
