@@ -15,6 +15,7 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
     ("caret-build", &[]),
     ("caret-dsl-core", &[]),
     ("caret-doc", &[]),
+    ("caret-engine", &["caret-doc"]),
     ("caret-dslc", &["caret-dsl-core"]),
     ("caret-app", &["caret-doc", "caret-dsl-core"]),
     ("caret-tests", &["caret-app", "caret-build", "caret-doc"]),
