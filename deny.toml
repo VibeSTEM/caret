@@ -27,7 +27,11 @@ allow = [
 multiple-versions = "deny"
 wildcards = "deny"
 deny = []
-skip = []
+skip = [
+  # syn 3 由 cxx、serde、pest 等宏依赖引入；Windows API 和 zerocopy 宏仍要求 syn 2。
+  # 上游当前版本仍使用 syn 2，Cargo 不能跨主版本统一；仅豁免已审查的 3.0.9。
+  { name = "syn", version = "=3.0.9", reason = "上游过程宏仍分别依赖 syn 2 与 syn 3，无法跨主版本统一" },
+]
 skip-tree = []
 
 [advisories]

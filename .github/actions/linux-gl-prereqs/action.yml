@@ -1,7 +1,8 @@
 # Linux 宿主 GL 前置（任务 006）：Qt 链接期 GL 头文件，以及 QML 运行所需的
-# EGL、xkbcommon 和软件渲染驱动。属宿主能力，不进项目依赖。
+# EGL、xkbcommon、软件渲染驱动及 Linux 系统字体发现所需的 Fontconfig 开发文件。
+# 属宿主能力，不进项目依赖。
 name: Install Linux GL prerequisites
-description: apt 安装 Qt configure 与 QML 运行所需的宿主 GL 前置
+description: apt 安装 Qt、QML 和系统字体发现所需的 Linux 宿主依赖
 runs:
   using: composite
   steps:
@@ -9,4 +10,5 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          libgl-dev libegl1 libxkbcommon-dev libxkbcommon0 libgl1-mesa-dri
+          libgl-dev libegl1 libxkbcommon-dev libxkbcommon0 libgl1-mesa-dri \
+          libfontconfig1-dev
