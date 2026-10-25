@@ -1,6 +1,6 @@
 # 024 — 字体回退与文字塑形
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：022、023
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-25
@@ -24,10 +24,12 @@
 
 022 的文本位置、023 的版心几何接口稳定。设计选定实际使用的 shaping API。
 
+依赖审查候选：以 Parley Engine 0.12 的段落分析与 shaping API 为主，字体发现/回退由其 fontique 0.12 层提供。实现前仍需在本仓库的锁定构建中验证完整 UAX conformance 版本与 API；不能只按依赖树中的 ICU crate 版本推断所有算法版本。Parley Engine 目前要求断行落在 Atom/ShapedCluster 边界，且逐行 reshaping 仍在开发中；Caret 的布局适配不得假设它已处理任意断点后的重新塑形。
+
 ## 实施步骤
 
-1. 按 [Rust 库审查](../research/005-rust-library-audit.md)评估 HarfRust shaping、字体目录候选及统一 Unicode 数据版本；同时核实 Qt/平台字体 API 的用户级字体发现、刷新和实际字体数据访问能力。
-2. 通过同一版 Unicode conformance corpus 验证 grapheme、bidi、line-break 候选后再锁定依赖；实现缓存的字体目录、shaping 输入、cluster 映射和回退，不自行实现标准算法。
+1. 按 [Rust 库审查](../research/005-rust-library-audit.md)评估 Parley Engine/HarfRust shaping、fontique 字体目录及统一 Unicode 数据版本；核实 Qt/平台字体 API 的用户级字体发现、刷新和实际字体数据访问能力。
+2. 通过同一版 Unicode conformance corpus 验证候选的 grapheme、bidi、line-break；验证通过后锁定依赖。实现缓存字体目录、shaping 输入、cluster 映射和回退，不自行实现标准算法。
 3. 建立中英混排、组合字符、emoji、阿拉伯 RTL 和缺失字体样例。
 4. 独立评审并复验。
 
