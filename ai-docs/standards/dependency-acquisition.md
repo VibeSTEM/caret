@@ -52,7 +52,7 @@ Qt 放在 `.toolchain/qt/staging`，跨 profile 共享。官方源失败时可�
 
 ## GoogleTest 生产与消费
 
-Caret 的[独立 SDK 管线](ci.md#桌面包与独立-sdk)生产 GoogleTest 1.18.0 静态包，默认下载位置为当前仓库 Release。三平台已发布资产经下载复算后固定在 [GoogleTest 摘要清单](../../native/cmake/googletest-sha256.json)，供给不在运行时下载校验文件充当信任来源。升级时逐一核验并更新清单，不使用本机临时归档的摘要。
+Caret 的[独立 SDK 管线](ci.md#桌面包与独立-sdk)生产[技术基线](baseline.md)中锁定版本的 GoogleTest 静态包，默认下载位置为当前仓库 Release。三平台已发布资产经下载复算后固定在 [GoogleTest 摘要清单](../../native/cmake/googletest-sha256.json)，供给不在运行时下载校验文件充当信任来源。升级时逐一核验并更新清单，不使用本机临时归档的摘要。
 
 `native/cmake/sdk-provision.cmake` 只有在真实测试消费者调用 `caret_require_googletest()` 且 `BUILD_TESTING=ON` 时才供给 SDK。`include` 本身不下载。消费端通过 `GTest::gtest` / `GTest::gtest_main` 链接，使用 `gtest_discover_tests` 注册；当前 Qt 加载与翻译测试仍使用 Qt Test。
 

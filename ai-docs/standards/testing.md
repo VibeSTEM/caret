@@ -31,6 +31,7 @@ tests/
 工作目录为仓库根；前置为 git、rustup 和[平台宿主能力](dependency-acquisition.md#宿主前置)。首次使用会按锁定版本供给工具，需联网。完整检查与 panta 共用相同调度方式，只裁掉不属于 Caret 的领域目标。`format`、`lint` 在 CI 中带 `--check`，省略时可能修复源码。`cargo quality` 聚合只读格式、完整 lint、依赖审计和完整 workspace 测试。
 
 ```text
+cargo caret-package [新的输出目录]
 cargo test --locked --workspace
 cargo test-plan
 cargo test-scope l1
@@ -41,12 +42,18 @@ cargo format
 cargo lint
 cargo audit
 cargo coverage
+cargo sanitize
+cargo ub-check
+cargo hyperfine <command> [options]
+cargo performance
 cargo quality
 ```
 
 `cargo lint` 包含 Clippy、未使用依赖、CMake 格式与 lint、Rust/CMake 分层、qmllint、clang-tidy、include-cleaner 和 cppcheck。Objective-C++ 仅在 macOS 检查。`cargo test --locked -p caret-tests --test native` 是单独的 native 聚合；CI 可通过 `CARET_TEST_CTEST_LABELS` 选择 CTest 标签，空匹配会失败。`CARET_TEST_QML_LINT=false` 仅供已有独立 qmllint job 的 CI 跳过重复扫描，本地默认仍检查。
 
 `l1` 是直接受影响的 Rust package，`l2` 是它们的消费者以及相关 native / QML 测试。这两个名字不是[分层](layering.md)里的层号。未知路径和公共构建边界扩大到完整范围。
+
+`cargo hyperfine <command> [options]` 将参数转交给锁定版本的 hyperfine；没有被测命令时不调用。
 
 日常改动用 `cargo verify-changed`。完整聚合用于范围无法缩小的验收和夜间任务。选择器默认比较工作树和 `origin/main` 的 merge-base。
 

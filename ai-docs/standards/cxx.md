@@ -1,6 +1,6 @@
 # CXX
 
-更新日期：2026-10-24。桥接库使用 CXX 1.0.202。生成器必须和 Rust 依赖是同一次 release。官方说明见 [CXX](https://cxx.rs/concepts.html)。
+更新日期：2026-10-25。锁定版本见[技术基线](baseline.md)。生成器必须和 Rust 依赖是同一次 release。官方说明见 [CXX](https://cxx.rs/concepts.html)。
 
 ## 位置
 

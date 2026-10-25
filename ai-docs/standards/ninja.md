@@ -1,6 +1,6 @@
 # Ninja 构建执行规范
 
-更新日期：2026-10-24。Ninja 1.13.2 由 Cargo 供给，供 CMake 生成 native 构建。它不负责依赖选版。
+更新日期：2026-10-25。版本见[技术基线](baseline.md)。Ninja 由 Cargo 供给，供 CMake 生成 native 构建；它不负责依赖选版。
 
 ## 项目规则
 

@@ -11,21 +11,7 @@
 - build script 只把生成物写到 `OUT_DIR`。native 源文件、QML、资源和影响配置的环境变量都要进入重建追踪。
 - 交叉编译没有验证时给出不支持的诊断，不用主机探测结果冒充目标平台配置。
 
-规划中的根别名指向 `caret-tests`，避免再用 shell 或 Node 做一套入口：
-
-```text
-caret-package    安装当前 profile 的桌面运行目录
-test-plan        显示受影响的测试范围
-test-scope       运行 L1、L2 或全部受影响测试
-verify-changed   变更范围内的格式、lint 和测试
-quality          本地完整质量检查
-format / lint    跨语言格式与静态检查
-audit            依赖、许可证和 RustSec
-coverage         Rust 覆盖率
-performance      手动性能基准
-sanitize         平台允许的 sanitizer
-ub-check         纯 Rust 的补充动态检查
-```
+根目录 `.cargo/config.toml` 中的质量与开发别名由 `caret-tests` 提供，避免再用 shell 或 Node 做一套入口。命令清单与执行语义集中维护在[测试规范](testing.md#命令)。
 
 `ub-check` 不命名为 `miri`，以免别名挡住真正的 `cargo-miri`。裸 `cargo test` 在默认成员只有 launcher 时不等于完整聚合测试。native 聚合使用 `--no-tests=error`，避免零个测试被看成全部通过。
 

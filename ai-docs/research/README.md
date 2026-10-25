@@ -6,5 +6,5 @@
 
 | 编号 | 报告 | 用法 |
 | --- | --- | --- |
-| 001 | [WordCraft](001-wordcraft.md) | 借鉴文档模型、命令和排版 |
+| 001 | [WordCraft](001-wordcraft.md)（另见[编辑器设计摘记](wordcraft-editor-design-notes.md)） | 借鉴文档模型、命令和排版 |
 | 002 | [craft-libs](002-craft-libs.md) | 对照少量文件与界面行为 |

@@ -1,6 +1,6 @@
 # Qt 对象、线程与部署
 
-更新日期：2026-10-24。项目使用 Qt 6.11.2。对象线程模型见 [Qt 文档](https://doc.qt.io/qt-6/threads-qobject.html)。界面组件见 [QML](qml.md)。
+更新日期：2026-10-25。锁定版本见[技术基线](baseline.md)。对象线程模型见 [Qt 文档](https://doc.qt.io/qt-6/threads-qobject.html)。界面组件见 [QML](qml.md)。
 
 ## 项目规则
 

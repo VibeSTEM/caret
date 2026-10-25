@@ -1,6 +1,6 @@
 # C++ 测试（GoogleTest）
 
-更新日期：2026-10-24。版本 1.18.0，获取方式见[依赖获取](dependency-acquisition.md)。目录见[测试规范](testing.md)。
+更新日期：2026-10-25。锁定版本见[技术基线](baseline.md)，获取方式见[依赖获取](dependency-acquisition.md)。目录见[测试规范](testing.md)。
 
 ## 项目规则
 

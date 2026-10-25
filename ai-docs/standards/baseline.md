@@ -1,6 +1,6 @@
 # 技术基线与版本决策
 
-更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX 和 native 工程已接入。GoogleTest 仍留到后续任务。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
+更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX、native 工程和 GoogleTest SDK 已接入。GoogleTest 1.18.0 由 [016](../task/016-googletest-package.md) 独立生产并发布，消费摘要见 `native/cmake/googletest-sha256.json`。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
 
 ## 当前选择
 

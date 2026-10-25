@@ -24,7 +24,7 @@
 - 检查按路径分成依赖审计、Rust lint、native lint、QML、格式和受影响测试。未知路径扩大到完整范围。
 - 日常 push/PR 的构建、受影响测试、格式和 lint 只在 Ubuntu 运行，减少每次提交的 runner 成本。native lint 把 clang-tidy、include-cleaner 和 cppcheck 分成独立检查；macOS 的手写 Objective-C++ 检查放在 nightly。
 - 格式检查覆盖 Rust、C++ / CXX、CMake、QML 和 `.pa`。
-- 夜间任务在 macOS、Ubuntu 和 Windows 上运行 `cargo test --locked --workspace`。Rust 覆盖率的函数和行门槛各为 85%，只在夜间阻断。native 覆盖率归档报告。性能基准不设失败阈值。
+- 夜间任务在 macOS、Ubuntu 和 Windows 上运行 `cargo test --locked --workspace`。Rust 覆盖率只在夜间阻断，具体门槛见[测试规范](testing.md)。native 覆盖率归档报告。性能基准不设失败阈值。
 - Windows 和 macOS 的常规跨平台构建与测试由 nightly 负责；手动桌面打包、SDK 生产发布仍是三平台矩阵，不能只凭 Ubuntu 成功发布其他平台制品。
 - Linux job 安装 QML 运行所需的系统库。工具、Qt 和 GoogleTest 仍经 Cargo 供给到 `.toolchain/`，不装成系统包，也不写入 `target/`。
 
