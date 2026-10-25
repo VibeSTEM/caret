@@ -1,6 +1,6 @@
 # 技术规范索引
 
-更新日期：2026-10-24。这些规范是后续实现和评审的目标约定。仓库里还没有 Cargo、CMake、QML 和 CI，下文的命令、路径和 crate 都是规划，落地前不能把它们写成已经可以运行。
+更新日期：2026-10-25。这些规范是实现和评审的长期约定。Rust/Cargo、CMake/native、QML 基础设施和 CI 已接入；编辑器正文、布局和结构能力仍按架构与任务逐步规划。不要把尚未落地的 editor crate 或命令写成可用功能。
 
 工程基础设施从维护者自己的 [panta](https://github.com/Yuki-Nagori/panta) 移植：QML + Rust 桌面栈、工具链、基础库、DSL、测试入口和 CI。移植提交写明来源仓库和 commit，并把 `panta` 前缀改成 `caret`。本规范不写本机绝对路径。
 

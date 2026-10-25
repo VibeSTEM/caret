@@ -1,10 +1,10 @@
 # 分层与依赖方向
 
-更新日期：2026-10-25。这是移植后的目标方向。具体 crate 还没有建立，不能用“当前能链接”代替本表。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
+更新日期：2026-10-25。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、CMake 目标和 QML 模块已有一部分落地；编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
 
 层号越小越靠下。生产代码只能依赖更小的层，不能依赖同层的另一个成员，也不能依赖更大的层。Rust 的层号和 Native 的层号各算各的。测试可以依赖被测对象，生产代码不能依赖测试。
 
-这些 crate 和 native 目标都还没有建立。图里的箭头是允许的依赖，从依赖方指向被依赖方，不是已经写进 manifest 的边。同层成员之间没有边。
+图里的箭头是允许的依赖，从依赖方指向被依赖方；以实际 Cargo manifest 和配置后的 CMake 图确认当前已建立的边。同层成员之间没有边。
 
 ## 依赖图
 
@@ -126,4 +126,4 @@ QML 表达意图。它不解析 `.pa`，不读写文档存储，不创建 Rust �
 - 手写 unsafe 只留在已登记的崩溃模块。CXX 生成代码的 unsafe 按 [FFI](ffi.md) 审查，不扩散到业务调用方。
 - 逻辑路径的宿主是 Qt 适配器；Rust 路径服务不包含 Qt 类型。
 
-新增仓库内依赖时先改上面的图和分级表，再改 manifest 或 `target_link_libraries`。分层检查计划读取 Cargo metadata 和配置后的 CMake 图，对照这两张表。检查还没落地时，评审仍按表执行。
+新增仓库内依赖时先改上面的图和分级表，再改 manifest 或 `target_link_libraries`。`cargo lint` 的 layering 检查读取 Cargo metadata，并配置专用 CMake 夹具核对 native 依赖边；评审仍以本页分级表为准。

@@ -1,6 +1,6 @@
 # CMake target 与依赖规范
 
-更新日期：2026-10-24。CMake 由 Cargo 供给并调度，版本见[技术基线](baseline.md)。适用于规划中的 `native/` 和其中的 QML 模块。
+更新日期：2026-10-25。CMake 由 Cargo 供给并调度，版本见[技术基线](baseline.md)。适用于现有的 `native/` 目标和 QML 模块，并约束后续扩展。
 
 ## 项目规则
 

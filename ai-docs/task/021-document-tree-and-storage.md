@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-实现 020 选定的文档树与 DTO，涵盖空文档、Paragraph/Run、行内与块级 EnvironmentNode、PageSection 和其他结构对象。环境节点保存嵌套内容与格式作用域；当前光标环境的背景高亮是派生视图状态，不序列化。PageSection 保存页面属性。读写路径通过 caret-app/caret-engine；采用同目录临时文件、fsync、rename。
+实现 020 选定的文档树与 DTO，涵盖空文档、Paragraph/Run、行内与块级 EnvironmentNode、PageSection 和其他结构对象。模型和序列化规则以[文档模型](../architecture/editor/document-model.md)为准。读写路径通过 caret-app/caret-engine，并遵循其中定义的 `.cdoc` 与原子保存契约。
 
 不做文本输入 UI、排版、DOCX/PDF 导入导出或远程协作。
 
