@@ -116,9 +116,7 @@ fn lint_changed(check: bool) -> Result<(), Box<dyn Error>> {
     }
 
     let native_scope = active_native_scope(crate::test_scope::native_lint_scope()?, false);
-    let qml_changed = paths.iter().any(|path| {
-        path.starts_with("qml/") || path.starts_with("tests/qml/") || path.starts_with("native/")
-    }) || matches!(native_scope, NativeLintScope::All);
+    let qml_changed = crate::test_scope::qml_lint_needed()?;
 
     if !native_scope.is_empty() || qml_changed {
         // 当前平台共用一次构建；没有静态分析输入时不准备 LLVM/编译数据库。
@@ -177,7 +175,7 @@ fn run_cmake_lint() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_changed_cmake_lint() -> Result<(), Box<dyn Error>> {
-    if crate::test_scope::force_full_scope() {
+    if crate::test_scope::force_full_scope() || crate::test_scope::cmake_lint_all()? {
         return run_cmake_lint();
     }
     let root = repository_root()?;

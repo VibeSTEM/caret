@@ -54,18 +54,22 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       cargo_deps: ${{ steps.filter.outputs.cargo_deps }}
       rust: ${{ steps.filter.outputs.rust }}
+      rust_lint_packages: ${{ steps.filter.outputs.rust_lint_packages }}
       cpp: ${{ steps.filter.outputs.cpp }}
+      cpp_lint: ${{ steps.filter.outputs.cpp_lint }}
+      cpp_lint_all: ${{ steps.filter.outputs.cpp_lint_all }}
       cmake: ${{ steps.filter.outputs.cmake }}
+      cmake_lint_all: ${{ steps.filter.outputs.cmake_lint_all }}
       layering: ${{ steps.filter.outputs.layering }}
       native: ${{ steps.filter.outputs.native }}
       qml: ${{ steps.filter.outputs.qml }}
       qml_lint: ${{ steps.filter.outputs.qml_lint }}
+      runner_tests: ${{ steps.filter.outputs.runner_tests }}
       test_packages: ${{ steps.filter.outputs.test_packages }}
       test_packages_l1: ${{ steps.filter.outputs.test_packages_l1 }}
       test_packages_l2: ${{ steps.filter.outputs.test_packages_l2 }}
       native_labels: ${{ steps.filter.outputs.native_labels }}
       full_tests: ${{ steps.filter.outputs.full_tests }}
-      full_quality: ${{ steps.filter.outputs.full_quality }}
       changed_paths: ${{ steps.filter.outputs.changed_paths }}
     steps:
       # 本地 composite action 的解析依赖工作区已有仓库，checkout 必须在
@@ -115,7 +119,7 @@ jobs:
   lint-clippy:
     name: cargo lint (clippy, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_lint_packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -134,13 +138,12 @@ jobs:
         shell: bash
         env:
           CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
-          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
         run: cargo lint clippy --changed --check
 
   lint-native:
     name: cargo lint (clang-tidy, includes, cppcheck, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.cpp == 'true'
+    if: needs.changes.outputs.cpp_lint == 'true'
     runs-on: ubuntu-latest
     # 冷启动需供给 LLVM/Qt 并构建 native 树；上限防传输停滞拖满平台上限。
     timeout-minutes: 60
@@ -162,7 +165,6 @@ jobs:
         shell: bash
         env:
           CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
-          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
         run: |
           cargo lint clang-tidy --changed --check
           cargo lint includes --changed --check
@@ -173,7 +175,7 @@ jobs:
   lint-machete:
     name: cargo lint (machete, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_lint_packages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -217,7 +219,6 @@ jobs:
         shell: bash
         env:
           CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
-          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
         run: cargo lint cmake --changed --check
 
   lint-layering:
@@ -279,8 +280,26 @@ jobs:
         shell: bash
         env:
           CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
-          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
         run: cargo format --changed --check
+
+  runner-tests:
+    name: caret-tests selector self-test (ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.runner_tests == 'true' && !contains(fromJSON(needs.changes.outputs.test_packages_l1), 'caret-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+        with:
+          tools_deps: "false"
+
+      - name: Test CI path selector
+        shell: bash
+        run: cargo test --locked --package caret-tests --bin caret-tests
 
   check:
     name: cargo check and build (ubuntu)
