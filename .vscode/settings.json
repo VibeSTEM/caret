@@ -1,0 +1,23 @@
+{
+    // QML 语言服务读取 Cargo 驱动的 CMake 构建目录；不要在打开工作区时独立配置 native。
+    "cmake.sourceDirectory": "${workspaceFolder}/native",
+    "cmake.configureOnOpen": false,
+    "qt-qml.qmlls.customExePath": "${workspaceFolder}/.toolchain/qt/staging/bin/qmlls",
+    "qt-qml.qmlls.customArgs": [
+        "--no-cmake-calls",
+        "-b", "${workspaceFolder}/target/native/debug",
+        "-I", "${workspaceFolder}/.toolchain/qt/staging/qml"
+    ],
+    // 编译数据库由 cargo build 生成，供 C/C++ IntelliSense 复用。
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/target/native/debug/quality/compile_commands.json",
+    "C_Cpp.default.cppStandard": "c++20",
+    // 编译数据库尚未生成时的最小 include 回退路径。
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/native/**",
+        "${workspaceFolder}/tests/cpp/**",
+        "${workspaceFolder}/tests/qml/**",
+        "${workspaceFolder}/crates/caret-ffi/include/**",
+        "${workspaceFolder}/.toolchain/qt/staging/include/**",
+        "${workspaceFolder}/.toolchain/qt/staging/lib/**/Headers"
+    ]
+}
