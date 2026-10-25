@@ -32,6 +32,16 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
         "--no-self-update",
     ]);
     run("安装 Miri 工具链", install)?;
-    miri_test(&["-p", "caret-app", "--lib"])?;
-    miri_test(&["-p", "caret-dsl-core", "--lib"])
+    // pest/stacker 使用 Miri 不支持的外部汇编栈指针；排除调用 DSL parser 的测试。
+    miri_test(&["-p", "caret-app", "--lib", "--", "--skip", "theme::tests::"])?;
+    // 保留诊断、文档格式化、TS 输出和 parser 前置限额等纯 Rust DSL 测试。
+    for test in [
+        "diagnostic::tests::",
+        "format::tests::",
+        "ts::tests::",
+        "artifact::tests::aggregate_input_bytes_are_bounded_before_parsing",
+    ] {
+        miri_test(&["-p", "caret-dsl-core", "--lib", "--", test])?;
+    }
+    Ok(())
 }

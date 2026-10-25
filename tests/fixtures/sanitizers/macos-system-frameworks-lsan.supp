@@ -1,0 +1,5 @@
+# macOS 26 Qt translation startup leaves a process-wide CoreFoundation preferences cache.
+leak:CFPrefsPlistSource
+
+# Qt font discovery initializes Apple's global CoreText font registry and cached descriptors.
+leak:TGlobalFontRegistry

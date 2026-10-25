@@ -86,6 +86,7 @@
 - 2026-10-25：最终完整暂存区由 subagent `final_index_review`（`gpt-6.1-sol`、high）只读审查，发现分层生成表达式解析把 namespace 的冒号误作分隔符，可通过拼接 alias 绕过检查。改为只记录首个顶层分隔冒号，补 `$<LINK_ONLY:hidden::$<1:app>>` 反例后复验；其余暂存区未发现实质问题。
 - 2026-10-25：最终修复增量由同一 subagent 只读复核并独立执行夹具，确认无剩余实质问题。按用户明确授权提交、创建 PR，待当前 Ubuntu CI 通过后合并；nightly 与跨平台桌面包仍保持待验收。
 - 2026-10-25：按代码域拆分 PR CI 选择与工具触发：Rust package/test、C++/CMake、QML 静态检查、QML CTest 和分层检查分别选择；C++ 与 QML CTest 使用独立标签。Rust harness 普通测试改动只选择 `caret-tests`；测试选择器自身改动则验证完整路由。三个 C++ lint 工具共用一个 runner，`format` 继续按变更文件运行，不参与编译。
+- 2026-10-25：Nightly run 40206639630 暴露 Linux 覆盖率缺少 Fontconfig 前置、Pest/stacker 的外部汇编不受 Miri 支持，以及 macOS 系统框架泄漏缓存和 Linux Qt 6.11 QML loader 的 TSan 报告。修复分支补齐 Linux 前置、缩窄 Miri 到可运行的纯 Rust 测试、仅对已确认的 macOS 系统缓存使用 LSAN 抑制；Linux TSan 只排除 `Qml.ShellLoad` 并要求升级托管 Qt 后复查。修复后的三平台 Nightly 尚未运行，不据此标记验收完成。
 
 ## 完成摘要
 
