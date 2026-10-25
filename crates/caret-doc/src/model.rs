@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -112,7 +112,7 @@ impl Document {
                 self.page_sections.len()
             )));
         }
-        let mut ids = BTreeMap::new();
+        let mut ids = HashSet::new();
         if let Some(language) = &self.global_settings.default_language {
             validate_language_tag(language)?;
         }
@@ -321,18 +321,20 @@ pub struct Media {
     pub extra: BTreeMap<String, Value>,
 }
 
-fn insert_id(ids: &mut BTreeMap<String, ()>, id: &NodeId) -> Result<(), ModelError> {
-    NodeId::parse(id.0.clone())?;
-    if ids.insert(id.0.clone(), ()).is_some() {
+fn insert_id<'a>(ids: &mut HashSet<&'a str>, id: &'a NodeId) -> Result<(), ModelError> {
+    if id.0.is_empty() || id.0.len() > 128 || id.0.chars().any(char::is_control) {
+        return Err(ModelError::InvalidNodeId(id.0.clone()));
+    }
+    if !ids.insert(id.0.as_str()) {
         return Err(ModelError::DuplicateNodeId(id.0.clone()));
     }
     Ok(())
 }
 
-fn validate_block(
-    block: &Block,
+fn validate_block<'a>(
+    block: &'a Block,
     depth: usize,
-    ids: &mut BTreeMap<String, ()>,
+    ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
     validate_depth(depth, node_count)?;
@@ -352,10 +354,10 @@ fn validate_block(
     }
 }
 
-fn validate_paragraph(
-    paragraph: &Paragraph,
+fn validate_paragraph<'a>(
+    paragraph: &'a Paragraph,
     depth: usize,
-    ids: &mut BTreeMap<String, ()>,
+    ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
     validate_depth(depth, node_count)?;
@@ -377,10 +379,10 @@ fn validate_paragraph(
     Ok(())
 }
 
-fn validate_inline(
-    inline: &InlineNode,
+fn validate_inline<'a>(
+    inline: &'a InlineNode,
     depth: usize,
-    ids: &mut BTreeMap<String, ()>,
+    ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
     validate_depth(depth, node_count)?;

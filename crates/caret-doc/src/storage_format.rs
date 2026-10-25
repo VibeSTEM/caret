@@ -117,7 +117,7 @@ impl OpenedDocument {
     pub fn document(&self) -> &Document {
         match self {
             Self::Editable(file) => file.document(),
-            Self::SafePreview(preview) => &preview.document,
+            Self::SafePreview(preview) => preview.document(),
         }
     }
 
@@ -126,17 +126,22 @@ impl OpenedDocument {
     }
 }
 
-/// 只读安全预览，保留原始 JSON 供已知部分呈现与不透明数据定位。
+/// 只读安全预览保留完整 DTO 与不透明节点；通用 JSON 视图按需生成。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadOnlyPreview {
-    pub document: Document,
+    file: CdocFile,
     pub reasons: Vec<PreviewReason>,
-    raw: Value,
 }
 
 impl ReadOnlyPreview {
-    pub fn raw_json(&self) -> &Value {
-        &self.raw
+    pub fn document(&self) -> &Document {
+        self.file.document()
+    }
+
+    /// 仅在调用方需要 JSON 视图时创建，避免打开预览时复制整份文档。
+    pub fn to_json_value(&self) -> Result<Value, DocumentError> {
+        serde_json::to_value(&self.file)
+            .map_err(|error| DocumentError::Serialization(error.to_string()))
     }
 
     pub fn can_save(&self) -> bool {
@@ -223,7 +228,7 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         return Err(DocumentError::UnsupportedDocumentVersion(version));
     }
     let features = parse_features(object.get("requiredFeatures"))?;
-    let mut file: CdocFile = serde_json::from_value(raw.clone())
+    let mut file: CdocFile = serde_json::from_value(raw)
         .map_err(|error| DocumentError::InvalidDocument(error.to_string()))?;
     if file.format != "caret" {
         return Err(DocumentError::InvalidFormat(file.format));
@@ -253,9 +258,8 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         Ok(OpenedDocument::Editable(file))
     } else {
         Ok(OpenedDocument::SafePreview(ReadOnlyPreview {
-            document: file.document,
+            file,
             reasons,
-            raw,
         }))
     }
 }

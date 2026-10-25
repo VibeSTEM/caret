@@ -17,6 +17,55 @@ fn current_format_fixture_opens_and_round_trips() {
 }
 
 #[test]
+fn nested_environment_tree_round_trips() {
+    let mut source: Value = must(serde_json::from_str(&minimal_document(json!([{
+        "type": "environment",
+        "scope": "block",
+        "kind": "section",
+        "id": "section-1",
+        "definitionId": "outline.section",
+        "props": {"numbering": {"enabled": true}},
+        "futureEnvironmentField": "preserved",
+        "title": {
+            "id": "title-1",
+            "inlines": [{"type": "run", "text": "Heading", "props": {}}]
+        },
+        "children": [{
+            "type": "environment",
+            "scope": "block",
+            "kind": "showcase",
+            "id": "showcase-1",
+            "props": {},
+            "children": [{
+                "type": "paragraph",
+                "id": "paragraph-1",
+                "inlines": [{
+                    "type": "environment",
+                    "scope": "inline",
+                    "kind": "bold",
+                    "id": "bold-1",
+                    "props": {"enabled": true},
+                    "futureInlineField": 2,
+                    "children": [{"type": "run", "text": "text", "props": {}}]
+                }]
+            }]
+        }]
+    }]))));
+    source["document"]["globalSettings"]["theme"] = json!({
+        "formatVersion": 1,
+        "namedStyles": {},
+        "environmentTemplates": {},
+        "futureThemeField": {"preserved": true}
+    });
+    let opened = must(open(source.to_string().as_bytes()));
+    let OpenedDocument::Editable(file) = opened else {
+        panic!("known nested environments should be editable");
+    };
+    let reopened = must(open(&must(file.to_bytes())));
+    assert_eq!(reopened, OpenedDocument::Editable(file));
+}
+
+#[test]
 fn unicode_is_preserved_without_normalization() {
     let source = minimal_document(json!([{
         "type": "paragraph",
@@ -41,6 +90,12 @@ fn unknown_optional_fields_survive_open_and_save() {
     value["document"]["body"][0]["futureParagraphField"] = json!(true);
     value["document"]["body"][0]["inlines"][0]["futureRunField"] = json!({"x": 1});
     value["document"]["pageSections"][0]["futurePageField"] = json!("keep");
+    value["media"] = json!([{
+        "id": "media-1",
+        "mediaType": "image/png",
+        "data": "AQID",
+        "futureMediaField": "keep"
+    }]);
 
     let opened = must(open(value.to_string().as_bytes()));
     let OpenedDocument::Editable(file) = opened else {
@@ -62,6 +117,7 @@ fn unknown_optional_fields_survive_open_and_save() {
         output["document"]["pageSections"][0]["futurePageField"],
         "keep"
     );
+    assert_eq!(output["media"][0]["futureMediaField"], "keep");
 }
 
 #[test]
@@ -74,7 +130,7 @@ fn unknown_required_feature_opens_as_non_saveable_preview() {
     };
     assert!(!preview.can_save());
     assert_eq!(
-        preview.raw_json()["requiredFeatures"][0],
+        must(preview.to_json_value())["requiredFeatures"][0],
         "vendor.future-feature"
     );
     assert!(matches!(
@@ -117,8 +173,36 @@ fn unknown_node_kind_is_preserved_as_opaque_preview_data() {
         panic!("unknown node kind must be read-only");
     };
     assert_eq!(
-        preview.raw_json()["document"]["body"][0]["payload"]["keep"],
+        must(preview.to_json_value())["document"]["body"][0]["payload"]["keep"],
         true
+    );
+}
+
+#[test]
+fn unknown_inline_environment_remains_at_its_original_position() {
+    let source = minimal_document(json!([{
+        "type": "paragraph",
+        "id": "paragraph-1",
+        "inlines": [
+            {"type": "run", "text": "before", "props": {}},
+            {
+                "type": "environment",
+                "scope": "inline",
+                "kind": "futureInline",
+                "id": "unknown-inline-1",
+                "children": [{"type": "run", "text": "opaque", "props": {}}]
+            },
+            {"type": "run", "text": "after", "props": {}}
+        ]
+    }]));
+    let opened = must(open(source.as_bytes()));
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("unknown inline kind must be read-only");
+    };
+    let value = must(preview.to_json_value());
+    assert_eq!(
+        value["document"]["body"][0]["inlines"][1]["id"],
+        "unknown-inline-1"
     );
 }
 
@@ -209,6 +293,7 @@ fn app_storage_saves_and_reopens_document() -> Result<(), Box<dyn std::error::Er
     let directory = test_dir();
     fs::create_dir_all(&directory)?;
     let path = directory.join("sample.cdoc");
+    fs::write(&path, b"old document")?;
     let file = CdocFile::new(Document::blank())?;
     let storage = DocumentStorage;
     storage.save_file(&path, &file)?;

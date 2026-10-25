@@ -7,10 +7,11 @@ mod model;
 mod storage_format;
 
 pub use model::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentSettings, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, Media, NodeId, PageSection, Paragraph, Run, ThemeSnapshot,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentSettings, ExplicitBreak,
+    InlineEnvironment, InlineEnvironmentKind, InlineNode, Media, ModelError, NodeId, OpaqueNode,
+    PageSection, Paragraph, Run, SoftBreak, ThemeSnapshot,
 };
 pub use storage_format::{
-    CURRENT_FORMAT_VERSION, CdocFile, DocumentError, OpenedDocument, PreviewReason,
-    ReadOnlyPreview, open,
+    CURRENT_FORMAT_VERSION, CURRENT_THEME_FORMAT_VERSION, CdocFile, DocumentError, OpenedDocument,
+    PreviewReason, ReadOnlyPreview, open,
 };

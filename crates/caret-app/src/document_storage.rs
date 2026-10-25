@@ -60,7 +60,7 @@ impl DocumentStorage {
 fn write_atomically(
     path: &Path,
     payload: &[u8],
-    mut write_payload: impl FnMut(&mut fs::File, &[u8]) -> std::io::Result<()>,
+    write_payload: impl FnOnce(&mut fs::File, &[u8]) -> std::io::Result<()>,
 ) -> Result<(), DocumentStorageError> {
     let parent = path
         .parent()
