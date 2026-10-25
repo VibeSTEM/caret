@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-实现 text.insert、text.delete、caret.move、选区、段落拆分/合并、软换行和 IME 提交/取消。修改走 Session::run，位置规则遵循 020。
+实现 text.insert、text.delete、caret.move、选区、段落拆分/合并、软换行和 IME 提交/取消。按 020 的标题规则，在块环境标题内 Enter 时将后半段转为正文首段。修改走 Session::run，位置规则遵循 020。
 
 不包含格式 UI、反斜线命令、协作编辑或正式 Undo/Redo；历史由 018 跟进。
 
@@ -39,7 +39,8 @@ caret-engine、C++ 输入/画布适配器、FFI DTO 和编辑命令测试。
 
 - [ ] 中文、组合音符、emoji ZWJ 和阿拉伯双向文本不会被光标或删除截断；此任务不依赖 shaping 的 glyph cluster 输出。
 - [ ] IME 更新不写入文档；提交仅插入一次，取消无副作用。
-- [ ] Enter 创建段落，Shift+Enter 是软换行。
+- [ ] 正文 Paragraph 中 Enter 创建段落，Shift+Enter 是软换行；环境标题按 020 的独立标题规则处理。
+- [ ] 块环境标题内 Enter 保留标题前缀，新建正文首段放入后缀并插到现有子项前；首项为表格/嵌套环境时仍保留原顺序，后缀为空时新段为空。
 - [ ] 失败命令保持文档、选区和待输入状态不变。
 - [ ] 独立评审和定向测试通过。
 

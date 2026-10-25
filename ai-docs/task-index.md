@@ -26,7 +26,7 @@
 
 ## 执行顺序
 
-先做完基础设施，再按[需求](architecture/requirements.md#里程碑)做界面和实现。007 先完成能看见一页的窗口外壳，008 再把文档输入、保存和布局接成 M0 端到端功能。界面只做当前里程碑要用的部分，并且先写静态原型，再落成 QML。
+基础设施已接入，QML 窗口外壳按 007 当前形态冻结。编辑先从 020 文档模型、021 存储和 022 基础文本输入开始，再补齐 023/024/026/027 的最小编辑布局和画布能力，由 008 集成输入、保存、重开；025 格式命令不阻塞 M0，先实现默认字体设置与局部 Font 环境命令，不新增字体选择窗口或环境工具按钮。009 建立 `\` 命令入口，010 通过命令和快捷键创建、嵌套与操作环境。只有编辑纵向切片确实需要时才改动 QML 外观，并先写静态原型再落成 QML。
 
 来源是 [panta](https://github.com/Yuki-Nagori/panta) `ee84d95`。移植提交写明实际复制的 commit。不移植几何、网格、VTK、求解协议，以及只服务于这些领域的 crate 和对话框。
 
@@ -42,10 +42,10 @@
 | 004 | Qt/QML | [QML 组件库与通用对话框](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
 | 005 | 桌面入口 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
 | 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
-| 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | in-progress |
-| 008 | M0 集成 | [M0：文档编辑端到端集成](task/008-impl-document.md) | P2 | 021–027 | M | planned |
+| 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | implemented |
+| 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027 | M | planned |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | planned |
-| 010 | 结构导航 | [M2：结构导航](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
+| 010 | 结构导航 | [M2：结构导航与环境命令](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
 | 011 | 数学排版 | [M3：公式](task/011-impl-math.md) | P2 | 010 | L | planned |
 | 012 | 表格排版 | [M3：表格](task/012-impl-table.md) | P2 | 010 | M | planned |
 | 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
@@ -55,17 +55,17 @@
 | 017 | 代码质量 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
 | 018 | 文档生命周期 | [文档状态、关闭确认与编辑历史](task/018-document-lifecycle-history.md) | P2 | 008 | L | planned |
 | 019 | AutoSave | [AutoSave 策略设计](task/019-autosave-design.md) | P2 | 018 | S | planned |
-| 020 | 模型设计 | [Paragraph/Run 语义与文档模型细化](task/020-document-model-decision.md) | P2 | 007 | M | planned |
+| 020 | 模型设计 | [Paragraph/Run 语义与文档模型细化](task/020-document-model-decision.md) | P2 | — | M | in-progress |
 | 021 | 文档存储 | [文档树与 .cdoc 持久化](task/021-document-tree-and-storage.md) | P2 | 020 | L | planned |
 | 022 | 输入编辑 | [文本编辑、选择与 IME](task/022-text-editing-and-ime.md) | P2 | 021 | L | planned |
 | 023 | 页面几何 | [页面尺寸、节与几何](task/023-page-geometry.md) | P2 | 021 | M | planned |
 | 024 | 字体塑形 | [字体回退与文字塑形](task/024-text-shaping.md) | P2 | 022、023 | L | planned |
-| 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 021、022、024 | M | planned |
-| 026 | 段落排版 | [行距、段间距与分页](task/026-paragraph-layout.md) | P2 | 023、024、025 | L | planned |
+| 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 009、021、022、024 | M | planned |
+| 026 | 段落排版 | [行距、段间距与分页](task/026-paragraph-layout.md) | P2 | 023、024 | L | planned |
 | 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | planned |
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 
-分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。M0 先完成 020 模型决策，再按文档存储、文本输入、页面几何、塑形、格式、段落排版、画布命中的顺序拆做 021–027，最后由 008 端到端集成。018 依赖 008；019 在 018 后单独设计 AutoSave。009 才加命令补全层。010 在同一扇窗口上加结构状态。公式和表格画在画布里。014 不挡后续里程碑。
+分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。当前先完成 020，再做 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
