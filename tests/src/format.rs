@@ -62,6 +62,15 @@ fn format_changed(check: bool) -> Result<(), Box<dyn Error>> {
         run(&format!("cargo fmt ({package})"), command)?;
     }
 
+    let cpp_format_all = crate::test_scope::cpp_format_all()?;
+    if cpp_format_all {
+        check_cpp_format(check)?;
+    }
+    let cmake_format_all = crate::test_scope::cmake_format_all()?;
+    if cmake_format_all {
+        run_cmake_format(check)?;
+    }
+
     let changed_files = paths
         .iter()
         .map(|path| root.join(path))
@@ -94,7 +103,7 @@ fn format_changed(check: bool) -> Result<(), Box<dyn Error>> {
         })
         .cloned()
         .collect::<Vec<_>>();
-    if !cpp_files.is_empty() {
+    if !cpp_format_all && !cpp_files.is_empty() {
         format_cpp_files(check, &cpp_files)?;
     }
     let cmake_files = changed_files
@@ -113,7 +122,7 @@ fn format_changed(check: bool) -> Result<(), Box<dyn Error>> {
         })
         .cloned()
         .collect::<Vec<_>>();
-    if !cmake_files.is_empty() {
+    if !cmake_format_all && !cmake_files.is_empty() {
         let mut command = caret_build::python::command(root, "cmake-format")?;
         if check {
             command.args(["--check"]);
