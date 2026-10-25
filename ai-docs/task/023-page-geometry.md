@@ -48,7 +48,7 @@ caret-doc 的 PageSection 属性、caret-engine 页面设置命令、布局输�
 - [x] 非有限值、非法边距在修改前拒绝；文档不变。命令变更由 `Effect.document_changed` 标记，撤销栈由 018 接入。
 - [x] pt/mm 转换保留浮点精度；0.01 mm 显示精度按最多 0.005 mm 舍入误差约定。
 - [x] 页面几何 API 不接收 Zoom/DPR；文档明确二者属于视图，不参与物理页尺寸。
-- [ ] 独立评审通过。
+- [x] 独立评审通过；已修复页面规范中已决默认值仍列为待决策的矛盾，评审员确认修复有效且未发现新问题。
 - [x] 全工作区复验通过。
 
 ## 验证计划与结果
@@ -58,6 +58,7 @@ caret-doc 的 PageSection 属性、caret-engine 页面设置命令、布局输�
 | 2026-10-25 | `cargo test --locked -p caret-doc -p caret-engine` | 几何边界、原子拒绝、命令和往返稳定 | 38 项通过（caret-doc 6 项、caret-engine 32 项） |
 | 2026-10-25 | `cargo test --workspace --locked` | 全工作区与 native/QML 测试通过 | 通过，CTest 4/4 |
 | 2026-10-25 | `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`git diff --check` | 格式及 lint 无问题 | 通过 |
+| 2026-10-25 | 独立只读评审（完整 diff） | 核对模型、兼容性、原子性与规范一致性 | 发现 1 项文档矛盾并修复；评审员确认修复有效且未发现其他问题 |
 
 ## 风险与回退
 
@@ -68,7 +69,9 @@ caret-doc 的 PageSection 属性、caret-engine 页面设置命令、布局输�
 - 2026-10-25：从原 008 拆出页面与节几何。
 - 2026-10-25：开始 023；默认 A4 纵向/四边 72 pt，边距非负且不能耗尽版心。将页面设置做成 Session 原子命令，撤销栈由 018 接入，避免重复实现历史。
 - 2026-10-25：实现 A4/A3、纵横向、pt 边距、mm/pt 转换和 `PageSection.props` 几何读写；文件缺省时应用兼容默认值，未知属性保留，损坏的已知属性在文档校验时拒绝。增加 `page.geometry.set` 原子 Session 命令与几何/命令边界测试。
+- 2026-10-25：独立评审指出页面排版规范仍把已定的 Normal 页边距列为待决策，已修正为 A4/四边 72 pt，并明确装订线和页眉/页脚距离留待后续设计。
+- 2026-10-25：评审员只读复核确认该修正消除了默认值矛盾，且没有发现新问题。
 
 ## 完成摘要
 
-已实现：完整 workspace 测试、格式和 Clippy 通过；独立评审待完成。
+已实现：完整 workspace 测试、格式和 Clippy 通过；独立评审发现的问题已修复。
