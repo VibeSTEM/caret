@@ -125,18 +125,40 @@ fn sync_parent_best_effort(parent: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{DocumentStorageError, write_atomically};
+    use std::cell::Cell;
     use std::fs;
     use std::io::{Error, ErrorKind, Write};
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir {
+        root: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> std::io::Result<Self> {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos());
+            let root = std::env::temp_dir().join(format!(
+                "caret-atomic-save-{}-{label}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root)?;
+            Ok(Self { root })
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 
     #[test]
     fn failed_temporary_write_preserves_existing_file() -> Result<(), Box<dyn std::error::Error>> {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
-        let directory = std::env::temp_dir().join(format!("caret-atomic-save-{nonce}"));
-        fs::create_dir_all(&directory)?;
-        let target = directory.join("document.cdoc");
+        let directory = TempDir::new("write-failure")?;
+        let target = directory.root.join("document.cdoc");
         fs::write(&target, b"previous document")?;
 
         let result = write_atomically(&target, b"replacement document", |file, payload| {
@@ -146,9 +168,68 @@ mod tests {
 
         assert!(matches!(result, Err(DocumentStorageError::Io(_))));
         assert_eq!(fs::read(&target)?, b"previous document");
-        let entries = fs::read_dir(&directory)?.count();
+        let entries = fs::read_dir(&directory.root)?.count();
         assert_eq!(entries, 1, "failed save must remove its temporary file");
-        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_path_components_are_rejected_before_writing() {
+        for (target, diagnostic) in [
+            (
+                Path::new("document.cdoc"),
+                "document.storage_missing_parent",
+            ),
+            (Path::new("parent/.."), "document.storage_missing_filename"),
+        ] {
+            let wrote = Cell::new(false);
+            let result = write_atomically(target, b"replacement", |_, _| {
+                wrote.set(true);
+                Ok(())
+            });
+            let Err(error) = result else {
+                panic!("invalid target must be rejected");
+            };
+            assert_eq!(error.to_string(), diagnostic);
+            assert!(!wrote.get(), "invalid target must not reach the writer");
+        }
+    }
+
+    #[test]
+    fn file_in_parent_path_is_preserved_without_writing() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = TempDir::new("blocked-parent")?;
+        let blocker = directory.root.join("blocked");
+        fs::write(&blocker, b"existing file")?;
+        let wrote = Cell::new(false);
+        let result = write_atomically(&blocker.join("document.cdoc"), b"replacement", |_, _| {
+            wrote.set(true);
+            Ok(())
+        });
+
+        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
+        assert!(!wrote.get(), "parent failure must not reach the writer");
+        assert_eq!(fs::read(&blocker)?, b"existing file");
+        assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_replacement_preserves_target_directory_and_removes_temporary_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new("rename-failure")?;
+        let target = directory.root.join("document.cdoc");
+        fs::create_dir(&target)?;
+        let previous = target.join("previous.txt");
+        fs::write(&previous, b"previous contents")?;
+
+        let result = write_atomically(&target, b"replacement document", |file, payload| {
+            file.write_all(payload)
+        });
+
+        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
+        assert_eq!(fs::read(previous)?, b"previous contents");
+        assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
         Ok(())
     }
 }

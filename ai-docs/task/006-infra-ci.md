@@ -67,6 +67,7 @@
 | 2026-10-25 | 016 的 [三平台运行](https://github.com/VibeSTEM/caret/actions/runs/40172423089)及[正式 Release](https://github.com/VibeSTEM/caret/releases/tag/sdk-googletest-1.18.0)，下载三归档复算 SHA256 | 当前仓库有完整、不可变资产 | 全部成功；正式三平台摘要固定在 `native/cmake/googletest-sha256.json`，与各校验文件和 GitHub 资产 digest 一致 |
 | 2026-10-25 | 不设本地 ROOT/URL/SHA 覆盖，经默认正式 URL 和固定清单供给 SDK，再编译链接消费 | 正式发布与消费者端到端可用 | macOS 通过；`GoogleTest.ConsumerSmoke` 1/1，构建树 `target/gtest-official-consumer` |
 | 2026-10-25 | subagent `final_index_review`，`gpt-6.1-sol`、high，完整暂存区及修复增量 | 无未处理实质问题 | 79 文件完整审查发现 1 项分层表达式绕过；修复后独立复跑全部分层夹具通过，原绕过被拒绝、合法 namespace 包装可用，最终无剩余实质发现 |
+| 2026-10-26 | [Nightly run 40209293853](https://github.com/VibeSTEM/caret/actions/runs/40209293853) | 三平台 nightly、覆盖率与 sanitizer 检查通过 | 覆盖率门槛失败（函数 77.89%、行 82.12%）：`caret-tests --test document` 的 18 项公开文档测试没有被 coverage runner 采集；macOS `Qml.ShellLoad` 因 Qt/CoreText/CoreGraphics 进程缓存泄漏报告失败。修复已加入文档测试采集、行为覆盖及窄符号抑制，等待新 Nightly 复验 |
 
 ## 风险与回退
 
@@ -87,6 +88,7 @@
 - 2026-10-25：最终修复增量由同一 subagent 只读复核并独立执行夹具，确认无剩余实质问题。按用户明确授权提交、创建 PR，待当前 Ubuntu CI 通过后合并；nightly 与跨平台桌面包仍保持待验收。
 - 2026-10-25：按代码域拆分 PR CI 选择与工具触发：Rust package/test、C++/CMake、QML 静态检查、QML CTest 和分层检查分别选择；C++ 与 QML CTest 使用独立标签。Rust harness 普通测试改动只选择 `caret-tests`；测试选择器自身改动则验证完整路由。三个 C++ lint 工具共用一个 runner，`format` 继续按变更文件运行，不参与编译。
 - 2026-10-25：Nightly run 40206639630 暴露 Linux 覆盖率缺少 Fontconfig 前置、Pest/stacker 的外部汇编不受 Miri 支持，以及 macOS 系统框架泄漏缓存和 Linux Qt 6.11 QML loader 的 TSan 报告。修复分支补齐 Linux 前置、缩窄 Miri 到可运行的纯 Rust 测试、仅对已确认的 macOS 系统缓存使用 LSAN 抑制；Linux TSan 只排除 `Qml.ShellLoad` 并要求升级托管 Qt 后复查。修复后的三平台 Nightly 尚未运行，不据此标记验收完成。
+- 2026-10-26：Nightly run 40209293853 通过 Miri、Linux workspace/native coverage 前置、Linux 与 Windows sanitizer、质量检查和 CPU 性能；覆盖率汇总未包含 `caret-tests --test document`，实际门槛为函数 77.89%、行 82.12%。将该公开集成测试纳入独立 coverage pass，并按 Cargo workspace 动态生成报告 package 范围，避免新增 crate 被白名单遗漏；增加存储错误路径、编辑状态和 FFI 成功路径断言以补齐可达行为。macOS `Qml.ShellLoad` 的 LSan 报告指向 Qt/CoreText/CoreGraphics 系统缓存，新增针对日志栈符号的有限抑制。待 PR 合并后的 Nightly 复验，不先标记任务完成。
 
 ## 完成摘要
 

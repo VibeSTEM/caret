@@ -1252,3 +1252,357 @@ fn ime_cancel_is_transient_and_enter_is_rejected_while_composing() {
     assert_eq!(session.document, before);
     assert!(session.composition().is_none());
 }
+
+#[test]
+fn public_command_ids_and_error_codes_remain_stable() {
+    let commands = [
+        (Command::InsertText("text".to_owned()), "text.insert"),
+        (Command::InsertSoftBreak, "text.soft_break"),
+        (Command::SplitParagraph, "text.split_paragraph"),
+        (Command::Delete(Direction::Forward), "text.delete"),
+        (Command::MoveCaret(Direction::Backward), "caret.move"),
+        (Command::SetSelection(None), "selection.set"),
+        (
+            Command::UpdateComposition {
+                id: 1,
+                preedit: String::new(),
+            },
+            "ime.update",
+        ),
+        (
+            Command::CommitComposition {
+                id: 1,
+                text: String::new(),
+            },
+            "ime.commit",
+        ),
+        (Command::CancelComposition { id: 1 }, "ime.cancel"),
+        (
+            Command::SetPageGeometry(PageGeometry::default()),
+            "page.geometry.set",
+        ),
+    ];
+    for (command, expected) in commands {
+        assert_eq!(command.id(), expected);
+    }
+    let errors = [
+        (
+            EditError::InvalidDocument("missing body".to_owned()),
+            "edit.invalid_document: missing body",
+        ),
+        (
+            EditError::UnknownParagraph("paragraph-1".to_owned()),
+            "edit.unknown_paragraph: paragraph-1",
+        ),
+        (EditError::WrongStory, "edit.position_story_mismatch"),
+        (EditError::InvalidPosition, "edit.invalid_position"),
+        (
+            EditError::CrossParagraphSelection,
+            "edit.cross_paragraph_selection",
+        ),
+        (
+            EditError::UnsupportedOpaqueContent,
+            "edit.opaque_content_boundary",
+        ),
+        (
+            EditError::UnsupportedNewline,
+            "edit.newline_requires_paragraph_command",
+        ),
+        (
+            EditError::IncompatibleParagraphMerge,
+            "edit.incompatible_paragraph_merge",
+        ),
+        (EditError::InvalidUtf16Offset, "edit.invalid_utf16_offset"),
+        (
+            EditError::InvalidCompositionId,
+            "edit.invalid_composition_id",
+        ),
+        (EditError::CompositionPending, "edit.composition_pending"),
+        (
+            EditError::InvalidPageGeometry("invalid margins".to_owned()),
+            "edit.invalid_page_geometry: invalid margins",
+        ),
+        (EditError::UnknownCommand, "edit.unknown_command"),
+    ];
+    for (error, expected) in errors {
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn sessions_reject_invalid_models_and_models_without_an_editable_paragraph() {
+    let mut invalid = Document::blank();
+    invalid.page_sections.clear();
+    assert!(matches!(
+        Session::new(invalid),
+        Err(EditError::InvalidDocument(message)) if message.contains("PageSection")
+    ));
+    let mut without_paragraph = Document::blank();
+    without_paragraph.body.clear();
+    assert!(matches!(
+        Session::new(without_paragraph),
+        Err(EditError::InvalidDocument(message)) if message == "document has no paragraph"
+    ));
+}
+
+#[test]
+fn caret_movement_uses_graphemes_and_selection_collapse_is_directional() -> Result<(), EditError> {
+    let mut session = session_with(vec![run("a🇨🇳e\u{301}z")]);
+    let boundaries = [0, 1, 9, 12, 13];
+    for offset in boundaries.into_iter().skip(1) {
+        let effect = session.run(Command::MoveCaret(Direction::Forward))?;
+        assert!(effect.selection_changed);
+        assert_eq!(session.selection().focus.offset, offset);
+    }
+    assert_eq!(
+        session.run(Command::MoveCaret(Direction::Forward))?,
+        Effect::default()
+    );
+    for offset in boundaries.into_iter().rev().skip(1) {
+        session.run(Command::MoveCaret(Direction::Backward))?;
+        assert_eq!(session.selection().focus.offset, offset);
+    }
+    let start = session.selection().focus.clone();
+    let end = Pos {
+        offset: 12,
+        ..start.clone()
+    };
+    let reversed = Selection {
+        anchor: end.clone(),
+        focus: start.clone(),
+    };
+    session.run(Command::SetSelection(Some(reversed.clone())))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(session.selection().anchor, start);
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    session.run(Command::SetSelection(Some(reversed)))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    assert_eq!(session.selection().focus, end);
+    session.run(Command::SetSelection(None))?;
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(session.document().body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn cross_paragraph_selection_collapses_in_document_order() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let mut first = Paragraph::empty(NodeId::generate());
+    first.inlines = vec![run("first")];
+    let mut last = Paragraph::empty(NodeId::generate());
+    last.inlines = vec![run("last")];
+    let first_id = first.id.clone();
+    let last_id = last.id.clone();
+    document.body = vec![Block::Paragraph(first), Block::Paragraph(last)];
+    let mut session = Session::new(document)?;
+    let first = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id,
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let last = Pos {
+        paragraph_id: last_id,
+        offset: 2,
+        ..first.clone()
+    };
+    let reversed = Selection {
+        anchor: last.clone(),
+        focus: first.clone(),
+    };
+    session.run(Command::SetSelection(Some(reversed.clone())))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(session.selection().focus, first);
+    session.run(Command::SetSelection(Some(reversed)))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    assert_eq!(session.selection().focus, last);
+    Ok(())
+}
+
+#[test]
+fn invalid_selection_and_incompatible_merge_preserve_the_session() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("left")];
+    let first_id = first.id.clone();
+    let mut second = Paragraph::empty(NodeId::generate());
+    second.inlines = vec![run("right")];
+    second.language = Some("en".to_owned());
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
+    let unknown = Pos {
+        paragraph_id: NodeId::generate(),
+        ..before_selection.focus.clone()
+    };
+    assert!(matches!(
+        session.run(Command::SetSelection(Some(Selection {
+            anchor: unknown.clone(),
+            focus: unknown,
+        }))),
+        Err(EditError::UnknownParagraph(_))
+    ));
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.selection(), &before_selection);
+    let end = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id,
+        offset: 4,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: end.clone(),
+        focus: end,
+    })))?;
+    let before_merge_selection = session.selection().clone();
+    assert_eq!(
+        session.run(Command::Delete(Direction::Forward)),
+        Err(EditError::IncompatibleParagraphMerge)
+    );
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.selection(), &before_merge_selection);
+    Ok(())
+}
+
+#[test]
+fn ime_failure_restores_preedit_and_rejects_other_composition_ids() -> Result<(), EditError> {
+    let mut session = session_with(vec![run("before")]);
+    session.run(Command::UpdateComposition {
+        id: 21,
+        preedit: "候補".to_owned(),
+    })?;
+    let before = session.document().clone();
+    let selection = session.selection().clone();
+    for command in [
+        Command::UpdateComposition {
+            id: 22,
+            preedit: "other".to_owned(),
+        },
+        Command::CommitComposition {
+            id: 22,
+            text: "other".to_owned(),
+        },
+        Command::CancelComposition { id: 22 },
+    ] {
+        assert_eq!(session.run(command), Err(EditError::InvalidCompositionId));
+        assert_eq!(session.composition().map(|value| value.id), Some(21));
+    }
+    assert_eq!(
+        session.run(Command::CommitComposition {
+            id: 21,
+            text: "line\nbreak".to_owned(),
+        }),
+        Err(EditError::UnsupportedNewline)
+    );
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.selection(), &selection);
+    assert_eq!(
+        session.composition().map(|value| value.preedit.as_str()),
+        Some("候補")
+    );
+    for command in [
+        Command::InsertText("blocked".to_owned()),
+        Command::InsertSoftBreak,
+        Command::Delete(Direction::Backward),
+        Command::MoveCaret(Direction::Forward),
+    ] {
+        assert_eq!(session.run(command), Err(EditError::CompositionPending));
+    }
+    session.run(Command::CommitComposition {
+        id: 21,
+        text: "確定".to_owned(),
+    })?;
+    assert!(session.composition().is_none());
+    assert_eq!(
+        session.run(Command::UpdateComposition {
+            id: 21,
+            preedit: "duplicate".to_owned(),
+        }),
+        Err(EditError::InvalidCompositionId)
+    );
+    assert_eq!(
+        session.run(Command::CancelComposition { id: 21 }),
+        Err(EditError::InvalidCompositionId)
+    );
+    Ok(())
+}
+
+#[test]
+fn soft_break_refuses_to_split_unknown_run_fields_or_delete_unknown_break_fields()
+-> Result<(), EditError> {
+    let mut unknown_run = match run("ab") {
+        InlineNode::Run(run) => run,
+        _ => unreachable!(),
+    };
+    unknown_run
+        .extra
+        .insert("future".to_owned(), serde_json::json!(true));
+    let mut session = session_with(vec![InlineNode::Run(unknown_run)]);
+    let caret = Pos {
+        offset: 1,
+        ..session.selection().focus.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: caret.clone(),
+        focus: caret,
+    })))?;
+    let before = session.document().clone();
+    assert_eq!(
+        session.run(Command::InsertSoftBreak),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &before);
+
+    let mut soft_break = caret_doc::SoftBreak::default();
+    soft_break
+        .extra
+        .insert("future".to_owned(), serde_json::json!({"mode": 1}));
+    let mut session = session_with(vec![run("a"), InlineNode::SoftBreak(soft_break), run("b")]);
+    let anchor = Pos {
+        offset: 1,
+        ..session.selection().focus.clone()
+    };
+    let focus = Pos {
+        offset: 2,
+        ..anchor.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection { anchor, focus })))?;
+    let before = session.document().clone();
+    let selection = session.selection().clone();
+    assert_eq!(
+        session.run(Command::Delete(Direction::Forward)),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.selection(), &selection);
+    Ok(())
+}
+
+#[test]
+fn empty_runs_keep_their_order_when_inserting_soft_breaks() -> Result<(), EditError> {
+    for (affinity, break_index) in [(Affinity::Upstream, 1), (Affinity::Downstream, 0)] {
+        let mut session = session_with(vec![run("")]);
+        let caret = Pos {
+            affinity,
+            ..session.selection().focus.clone()
+        };
+        session.run(Command::SetSelection(Some(Selection {
+            anchor: caret.clone(),
+            focus: caret,
+        })))?;
+        session.run(Command::InsertSoftBreak)?;
+        let Block::Paragraph(paragraph) = &session.document().body[0] else {
+            unreachable!();
+        };
+        assert_eq!(paragraph.inlines.len(), 2);
+        assert!(matches!(
+            paragraph.inlines[break_index],
+            InlineNode::SoftBreak(_)
+        ));
+        assert_eq!(paragraph_text(paragraph), "\n");
+    }
+    Ok(())
+}

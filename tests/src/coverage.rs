@@ -16,13 +16,14 @@ const CARGO_LLVM_COV_VERSION: &str = "0.9.1";
 const FUNCTIONS_MINIMUM: u64 = 85;
 const LINES_MINIMUM: u64 = 85;
 const IGNORED_SOURCE_REGEX: &str = r"[/\\](caret-launcher|caret-tests|caret-build)[/\\]";
-// 构建和测试调度不计入领域覆盖率；其正确性由安装事务、选择器及 native 聚合测试验证。
-// 新增领域 crate 仍须纳入统计；调整排除边界时在当前 task 记录理由并独立评审。
-const EXCLUDED_PACKAGES: &[&str] = &["caret-launcher", "caret-tests", "caret-build"];
+// 构建和测试调度不计入领域覆盖率；caret-tests::document 作为额外测试目标单独参与采集，
+// 避免执行会重新构建并启动 CTest 的 native 聚合入口。报告范围从 workspace 动态推导。
+const WORKSPACE_TEST_EXCLUSIONS: &[&str] = &["caret-tests", "caret-launcher", "caret-build"];
 
 pub(super) fn run() -> Result<(), Box<dyn Error>> {
     let tool = ensure_cargo_tool("cargo-llvm-cov", CARGO_LLVM_COV_VERSION)?;
     let root = repository_root()?;
+    let coverage_packages = coverage_packages(root)?;
     let target = target_root();
     let directory = target.join("rust-coverage");
     // 失败时也不能把上次的报告上传成当前提交的结果。
@@ -37,7 +38,9 @@ pub(super) fn run() -> Result<(), Box<dyn Error>> {
     let metadata = json!({
         "commit": commit, "working_tree_dirty": dirty,
         "rustc": rustc, "cargo_llvm_cov": tool_version,
-        "excluded_packages": EXCLUDED_PACKAGES,
+        "workspace_test_exclusions": WORKSPACE_TEST_EXCLUSIONS,
+        "coverage_packages": coverage_packages,
+        "additional_test_targets": ["caret-tests::document"],
         "minimum_percent": {"functions": FUNCTIONS_MINIMUM, "lines": LINES_MINIMUM},
         "branch_coverage": "not measured",
         "scope": "cargo-llvm-cov default filters; inline tests remain included",
@@ -47,23 +50,55 @@ pub(super) fn run() -> Result<(), Box<dyn Error>> {
         directory.join("metadata.json"),
         serde_json::to_vec_pretty(&metadata)?,
     )?;
-    let report_path = directory.join("coverage.json");
+    let mut clean = Command::new(&tool);
+    clean
+        .arg("llvm-cov")
+        .args(["clean", "--workspace"])
+        .env("CARGO_TARGET_DIR", target.as_os_str())
+        .current_dir(root);
+    run_command("清理旧 Rust coverage profiles", clean)?;
+
+    // 分开运行领域单测与公开文档集成测试，避免 coverage 执行会再次启动 CTest 的 native target。
     let mut command = Command::new(&tool);
-    command.arg("llvm-cov").args(["--locked", "--workspace"]);
-    for package in EXCLUDED_PACKAGES {
+    command
+        .arg("llvm-cov")
+        .args(["--locked", "--workspace", "--no-report"]);
+    for package in WORKSPACE_TEST_EXCLUSIONS {
         command.args(["--exclude", package]);
     }
-    command
-        .args(["--json", "--output-path"])
-        .arg(&report_path)
+    command.env("CARGO_TARGET_DIR", target).current_dir(root);
+    run_command("cargo llvm-cov workspace 单元测试", command)?;
+
+    let mut document_tests = Command::new(&tool);
+    document_tests
+        .arg("llvm-cov")
+        .args([
+            "--locked",
+            "--package",
+            "caret-tests",
+            "--test",
+            "document",
+            "--no-report",
+        ])
         .env("CARGO_TARGET_DIR", target)
         .current_dir(root);
-    run_command("cargo llvm-cov", command)?;
+    run_command("cargo llvm-cov document 集成测试", document_tests)?;
+
+    let report_path = directory.join("coverage.json");
+    let mut report_command = Command::new(&tool);
+    report_command.arg("llvm-cov").args(["report", "--locked"]);
+    configure_report_scope(&mut report_command, &coverage_packages);
+    report_command
+        .args(["--json", "--output-path"])
+        .arg(&report_path)
+        .env("CARGO_TARGET_DIR", target.as_os_str())
+        .current_dir(root);
+    run_command("cargo llvm-cov 合并覆盖率", report_command)?;
     let report = Report::parse(&fs::read(report_path)?, root)?;
     let summary = report.summary();
     fs::write(directory.join("summary.txt"), &summary)?;
     print!("{summary}");
-    write_rust_details(&tool, root, target, &directory)?;
+    write_rust_details(&tool, root, target, &directory, &coverage_packages)?;
     report.check_gate()
 }
 
@@ -73,6 +108,7 @@ fn write_rust_details(
     root: &Path,
     target: &Path,
     directory: &Path,
+    coverage_packages: &[String],
 ) -> Result<(), Box<dyn Error>> {
     let mut missing = Command::new(tool);
     missing
@@ -87,6 +123,7 @@ fn write_rust_details(
             "--output-path",
         ])
         .arg(directory.join("uncovered-lines.txt"));
+    configure_report_scope(&mut missing, coverage_packages);
     configure_report_command(&mut missing, root, target);
     run_command("Rust uncovered-line report", missing)?;
 
@@ -101,9 +138,54 @@ fn write_rust_details(
         "--output-dir",
     ])
     .arg(directory);
+    configure_report_scope(&mut html, coverage_packages);
     configure_report_command(&mut html, root, target);
     run_command("Rust HTML coverage report", html)?;
     Ok(())
+}
+
+fn configure_report_scope(command: &mut Command, packages: &[String]) {
+    for package in packages {
+        command.arg("--package").arg(package);
+    }
+}
+
+fn coverage_packages(root: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let metadata: Value = serde_json::from_str(&command_text(
+        "cargo",
+        &["metadata", "--locked", "--format-version", "1", "--no-deps"],
+        root,
+    )?)?;
+    coverage_packages_from_metadata(&metadata)
+}
+
+fn coverage_packages_from_metadata(metadata: &Value) -> Result<Vec<String>, Box<dyn Error>> {
+    let workspace_members = metadata["workspace_members"]
+        .as_array()
+        .ok_or("Cargo metadata workspace_members 缺失")?;
+    let packages = metadata["packages"]
+        .as_array()
+        .ok_or("Cargo metadata packages 缺失")?;
+    let members: std::collections::BTreeSet<_> = workspace_members
+        .iter()
+        .map(|member| member.as_str().ok_or("Cargo metadata member ID 无效"))
+        .collect::<Result<_, _>>()?;
+    let mut names = packages
+        .iter()
+        .filter(|package| {
+            package["id"]
+                .as_str()
+                .is_some_and(|id| members.contains(id))
+        })
+        .filter_map(|package| package["name"].as_str())
+        .filter(|name| !WORKSPACE_TEST_EXCLUSIONS.contains(name))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    names.sort();
+    if names.is_empty() {
+        return Err("Cargo workspace 中没有可统计覆盖率的 package".into());
+    }
+    Ok(names)
 }
 
 fn configure_report_command(command: &mut Command, root: &Path, target: &Path) {
@@ -444,6 +526,26 @@ mod tests {
             }]
         })
     }
+
+    #[test]
+    fn coverage_scope_tracks_workspace_members_and_excludes_only_infrastructure()
+    -> Result<(), Box<dyn Error>> {
+        let metadata = json!({
+            "workspace_members": ["app-id", "future-domain-id", "tests-id"],
+            "packages": [
+                {"id": "app-id", "name": "caret-app"},
+                {"id": "future-domain-id", "name": "caret-future-domain"},
+                {"id": "tests-id", "name": "caret-tests"},
+                {"id": "external-id", "name": "serde"}
+            ]
+        });
+        assert_eq!(
+            coverage_packages_from_metadata(&metadata)?,
+            ["caret-app", "caret-future-domain"]
+        );
+        Ok(())
+    }
+
     fn parse(value: &Value) -> Result<Report, Box<dyn Error>> {
         Report::parse(&serde_json::to_vec(value)?, Path::new("/repo"))
     }

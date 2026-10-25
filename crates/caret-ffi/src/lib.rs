@@ -23,4 +23,23 @@ mod generated {
             Err(error) => format!("error:{error}"),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{builtin_theme_catalog, version};
+
+        #[test]
+        fn ffi_version_matches_package_metadata() {
+            assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+        }
+
+        #[test]
+        fn ffi_theme_catalog_contains_the_builtin_theme_snapshots() {
+            let catalog = builtin_theme_catalog();
+            assert!(!catalog.starts_with("error:"));
+            assert!(catalog.contains("\"light\""));
+            assert!(catalog.contains("\"dark\""));
+            assert!(catalog.contains("\"colorBackground\""));
+        }
+    }
 }
