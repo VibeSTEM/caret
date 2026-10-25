@@ -581,11 +581,6 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
                 plan.native = true;
                 plan.native_labels.extend(all_native_labels.iter().cloned());
             }
-            if path == "tests/src/lint.rs" {
-                plan.cpp_lint = true;
-                plan.cpp_lint_all = true;
-                plan.qml_lint = true;
-            }
             continue;
         }
         if path.starts_with("tests/integration/") {
@@ -1198,13 +1193,13 @@ mod tests {
     }
 
     #[test]
-    fn qml_lint_runner_changes_revalidate_qml_lint() -> Result<(), Box<dyn Error>> {
+    fn lint_runner_changes_stay_scoped_to_runner_tests() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
         let path = "tests/src/lint.rs";
         let plan = make_plan(&[path.into()], &root)?;
         assert!(!plan.full, "{path}: {plan:?}");
-        assert!(plan.qml_lint, "{path}: {plan:?}");
-        assert!(plan.cpp_lint_all, "{path}: {plan:?}");
+        assert!(!plan.qml_lint, "{path}: {plan:?}");
+        assert!(!plan.cpp_lint && !plan.cpp_lint_all, "{path}: {plan:?}");
         assert!(plan.packages_l1.contains("caret-tests"), "{plan:?}");
         assert!(!plan.native, "{path}: {plan:?}");
         Ok(())
