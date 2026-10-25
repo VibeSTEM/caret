@@ -1,9 +1,9 @@
 # 024 — 字体回退与文字塑形
 
-- 状态：implemented
+- 状态：done
 - 依赖：022、023
 - 优先级：P2
-- 创建 / 更新：2026-10-25 / 2026-10-25
+- 创建 / 更新：2026-10-25 / 2026-10-26
 
 ## 目标与背景
 
@@ -48,7 +48,7 @@ caret-layout 字体/shaping 模块、Windows 系统字体刷新适配、缓存�
 - [x] 段落塑形接收已解析的基础样式；格式全局值、主题命名样式与 Run/Paragraph 直接格式优先级由 025 解析并传入。
 - [x] 未加入应用字体资源；字体目录代际作为布局缓存失效输入。
 - [x] 独立只读 subagent review；P1/P2 发现已修复并复验。
-- [ ] Linux/Windows 系统字体目录和刷新 smoke；本机是 macOS aarch64/CoreText。
+- [x] Linux/Windows 系统字体目录和刷新 smoke；本机另有 macOS aarch64/CoreText 验证。
 
 ## 验证计划与结果
 
@@ -57,6 +57,7 @@ caret-layout 字体/shaping 模块、Windows 系统字体刷新适配、缓存�
 | 2026-10-25 | `cargo test --locked -p caret-layout` | Unicode 17 官方 UCD corpus 与 shaping/fallback fixtures 通过 | 15 项通过；三份完整 corpus、Run 分片一致、0.5/12.25 pt、Cyrillic/Greek、emoji/ZWJ 非零 glyph、词典字素边界与 Run 语言范围泰语均通过 |
 | 2026-10-25 | `cargo clippy --locked -p caret-layout --all-targets -- -D warnings` | 新 crate 无 lint 告警 | 通过 |
 | 2026-10-25 | macOS 字体 smoke | 请求字体和 fallback 行为一致 | 本机 aarch64/CoreText 测试通过；Windows/Linux 待平台 CI |
+| 2026-10-26 | [Nightly run 40212431385](https://github.com/VibeSTEM/caret/actions/runs/40212431385)，Linux/Windows workspace tests | 两个平台均读取系统字体并显式刷新目录成功 | `caret-layout::tests::explicit_font_refresh_replaces_catalog_generation` 在 Ubuntu 和 Windows 2022 均通过；该用例断言系统族非空、刷新代际递增且目录替换成功。整轮 Nightly 12/12 job 通过 |
 
 ## 风险与回退
 
@@ -69,7 +70,8 @@ caret-layout 字体/shaping 模块、Windows 系统字体刷新适配、缓存�
 - 2026-10-25：实现 `caret-layout`、平台字体目录显式刷新、嵌套 Run/Font/Bold/Italic 样式展平和 Unicode 17 全量 grapheme/bidi-character/line-break conformance。
 - 2026-10-25：根据独立评审合并相同有效样式 Run、按 LB1 映射 SA、缓存字体别名和样式索引、支持按 Run 语言范围的词典断行、emoji 专用字体回退，并拒绝不完整塑形结果。词典断点限定完整字素边界，语言范围匹配以二分查找避免断点数乘范围数增长。
 - 2026-10-25：字号 API 使用整数百分之一 pt（界面仍显示/输入 pt），支持 0.5 pt 与更细的 0.01 pt 精度；Parley 与布局输出保持 pt，视图边界才转换 logical px。
+- 2026-10-26：Nightly run 40212431385 在 Ubuntu 和 Windows 2022 实际运行并通过系统字体目录刷新测试；本任务所有验收项完成，状态改为 done。
 
 ## 完成摘要
 
-本机实现与 Unicode 17 conformance 完成，macOS/CoreText smoke 通过。Parley Engine 尚未提供任意断点后的逐行 reshaping，后续行布局必须在 Atom/ShapedCluster 安全边界断行。Linux/Windows 字体目录和刷新 smoke 留待 PR CI；Windows 对非标准路径注册或删除系统字体的即时检测不在 fontique 0.12 适配保证范围。
+本机实现与 Unicode 17 conformance 完成，macOS/CoreText smoke 通过；Nightly 的 Ubuntu 和 Windows 2022 workspace tests 也通过系统字体目录和显式刷新 smoke。Parley Engine 尚未提供任意断点后的逐行 reshaping，后续行布局必须在 Atom/ShapedCluster 安全边界断行。Windows 对非标准路径注册或删除系统字体的即时检测不在 fontique 0.12 适配保证范围。
