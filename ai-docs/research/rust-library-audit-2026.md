@@ -7,7 +7,7 @@
 | 能力 | 建议 | 依据与边界 |
 | --- | --- | --- |
 | `.cdoc` 媒体 Base64 | 已采用 `base64` 0.23.1 | 021 原来手写字符集、填充及规范尾随位验证。标准 `STANDARD` decoder 已执行严格填充与尾随位检查；`DecoderReader` 流式读入 sink 可复用验证而不分配完整解码副本。 |
-| BCP 47 语法 | 后续评估 `langtag`，替换自维护语法状态机 | crate 声明实现 RFC 5646，`LangTag::new` 借用输入，覆盖 normal/private-use/grandfathered 类型；只用于语法解析，不规范化或改写保存的原始标签。加入前应以仓库固定的 BCP 47/RFC 用例集验证非法重复 variant/extension、private use 和 grandfathered 标签。ICU4X `Locale` 不适合直接代替：其文档说明当前拒绝超过三个字符的主语言标签，而 BCP 47 语法允许更长语言子标签。 |
+| BCP 47 语法 | 暂保留 021 的校验器，不采用 `langtag` 1.1.0 | `langtag` 的借用式 RFC 5646 解析接口原本很适合保留原始标签；但实际用 `en-1901-1901` 坏输入调用 `LangTag::new` 时 crate 内部 panic，而不是返回错误。面对不可信 `.cdoc` 输入不能采用此版本。待上游修复后再用固定 RFC/BCP 47 语料复测。ICU4X `Locale` 也不适合直接代替：其文档说明当前拒绝超过三个字符的主语言标签，而 BCP 47 语法允许更长语言子标签。 |
 | 扩展字素簇 | 022 采用 `unicode-segmentation` 候选，先锁定数据版本 | 当前 1.13.3 提供 UAX #29 并带 Unicode 17.0 数据；跨 Run 与行内环境的逻辑段落拼接/回映仍是 Caret 的领域适配，不应自己重写分段算法。 |
 | 双向算法 | 024 评估 `unicode-bidi` 或统一 Unicode 栈 | `unicode-bidi` 提供 UAX #9，但当前 0.3.18 数据为 Unicode 16.0，与 Unicode 17 grapheme 数据不一致；不能未经 corpus 和版本决策就直接与上项混用。 |
 | 行断 | 024 选定和 bidi/grapheme 同版的实现，不写自制规则 | ICU4X segmenter 对 UAX #14 有 15.1 稳定构造和 17.0 构造；17.0 构造当前标为 unstable。较新的 `uniworld` 声称将 bidi、UAX #14、UAX #29 统一到 Unicode 17，但版本为 0.2，采用前需检查 API 稳定性、数据许可、性能以及三套 UAX conformance corpus。 |
@@ -19,7 +19,7 @@
 ## 执行记录
 
 - 021 的 Base64 手写校验已在完成后的依赖审查中替换为严格流式解码；锁文件和 workspace manifest 一并更新。
-- BCP 47 替换与 Unicode/排版依赖的选择需要对应固定语料和平台验证，不能为消除手写代码而引入版本不一致或未经验证的新栈。实施入口分别记在 021 与 024。
+- 对 `langtag` 1.1.0 的坏输入测试触发库内 panic，故没有引入该依赖；恢复 021 原有验证器。Unicode/排版依赖的选择需要对应固定语料和平台验证，不能为消除手写代码而引入版本不一致或未经验证的新栈。实施入口分别记在 021 与 024。
 
 ## 参考资料
 
