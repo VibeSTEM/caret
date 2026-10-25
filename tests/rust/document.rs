@@ -14,6 +14,29 @@ fn current_format_fixture_opens_and_round_trips() {
     };
     let reopened = must(open(&must(file.to_bytes())));
     assert_eq!(reopened, OpenedDocument::Editable(file));
+
+    let generated = CdocFile::new(Document::blank());
+    let generated = must(generated);
+    let value: Value = must(serde_json::from_slice(&must(generated.to_bytes())));
+    let Some(document) = value.get("document").and_then(Value::as_object) else {
+        panic!("serialized file should contain a document object");
+    };
+    for runtime_field in ["layout", "selection", "imeComposition", "glyphRuns"] {
+        assert!(!document.contains_key(runtime_field));
+    }
+}
+
+#[test]
+fn invalid_document_serialization_does_not_mutate_the_model() {
+    let mut file = must(CdocFile::new(Document::blank()));
+    file.document_mut().page_sections.clear();
+    let before = file.clone();
+
+    assert!(matches!(
+        file.to_bytes(),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+    assert_eq!(file, before);
 }
 
 #[test]
@@ -138,6 +161,25 @@ fn unknown_required_feature_opens_as_non_saveable_preview() {
         [caret_doc::PreviewReason::UnsupportedRequiredFeature(feature)]
             if feature == "vendor.future-feature"
     ));
+
+    let file: CdocFile = must(serde_json::from_value(value));
+    assert!(matches!(
+        file.to_bytes(),
+        Err(DocumentError::ReadOnlyPreview)
+    ));
+    assert!(serde_json::to_vec(&file).is_err());
+    let directory = test_dir();
+    must(fs::create_dir_all(&directory));
+    let path = directory.join("unsupported.cdoc");
+    must(fs::write(&path, b"previous contents"));
+    assert!(matches!(
+        DocumentStorage.save_file(&path, &file),
+        Err(DocumentStorageError::Document(
+            DocumentError::ReadOnlyPreview
+        ))
+    ));
+    assert_eq!(must(fs::read(&path)), b"previous contents");
+    must(fs::remove_dir_all(directory));
 }
 
 #[test]
@@ -176,6 +218,12 @@ fn unknown_node_kind_is_preserved_as_opaque_preview_data() {
         must(preview.to_json_value())["document"]["body"][0]["payload"]["keep"],
         true
     );
+
+    let file: CdocFile = must(serde_json::from_str(&source));
+    assert!(matches!(
+        file.to_bytes(),
+        Err(DocumentError::ReadOnlyPreview)
+    ));
 }
 
 #[test]
@@ -207,6 +255,15 @@ fn unknown_inline_environment_remains_at_its_original_position() {
 }
 
 #[test]
+fn unlocatable_unknown_node_boundary_is_rejected() {
+    let source = minimal_document(json!(["unknown node has no typed JSON boundary"]));
+    assert!(matches!(
+        open(source.as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+}
+
+#[test]
 fn newer_format_version_is_rejected() {
     let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
     value["version"] = json!(2);
@@ -214,6 +271,21 @@ fn newer_format_version_is_rejected() {
         open(value.to_string().as_bytes()),
         Err(DocumentError::UnsupportedDocumentVersion(2))
     ));
+}
+
+#[test]
+fn duplicate_or_unsorted_required_features_are_rejected() {
+    for features in [
+        json!(["caret.theme.snapshot", "caret.env.bold"]),
+        json!(["caret.env.bold", "caret.env.bold"]),
+    ] {
+        let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+        value["requiredFeatures"] = features;
+        assert!(matches!(
+            open(value.to_string().as_bytes()),
+            Err(DocumentError::InvalidRequiredFeatures(_))
+        ));
+    }
 }
 
 #[test]
@@ -253,16 +325,31 @@ fn duplicate_node_ids_and_multiple_page_sections_are_rejected() {
 
 #[test]
 fn malformed_media_base64_is_rejected() {
-    let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
-    value["media"] = json!([{
-        "id": "media-1",
-        "mediaType": "image/png",
-        "data": "A==="
-    }]);
-    assert!(matches!(
-        open(value.to_string().as_bytes()),
-        Err(DocumentError::InvalidMedia(_))
-    ));
+    for data in ["A===", "AB==", "ABJ="] {
+        let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+        value["media"] = json!([{
+            "id": "media-1",
+            "mediaType": "image/png",
+            "data": data
+        }]);
+        assert!(matches!(
+            open(value.to_string().as_bytes()),
+            Err(DocumentError::InvalidMedia(_))
+        ));
+    }
+
+    for data in ["AQ==", "AQI="] {
+        let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+        value["media"] = json!([{
+            "id": "media-1",
+            "mediaType": "image/png",
+            "data": data
+        }]);
+        assert!(matches!(
+            open(value.to_string().as_bytes()),
+            Ok(OpenedDocument::Editable(_))
+        ));
+    }
 }
 
 #[test]

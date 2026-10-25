@@ -22,7 +22,7 @@ const KNOWN_FEATURES: &[&str] = &[
 ];
 
 /// 可供编辑并保存的当前 `.cdoc` 文档。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CdocFile {
     pub format: String,
@@ -38,7 +38,6 @@ pub struct CdocFile {
 
 impl CdocFile {
     pub fn new(document: Document) -> Result<Self, DocumentError> {
-        document.validate()?;
         let mut file = Self {
             format: "caret".to_owned(),
             version: CURRENT_FORMAT_VERSION,
@@ -48,6 +47,7 @@ impl CdocFile {
             extra: BTreeMap::new(),
         };
         file.refresh_required_features();
+        file.validate()?;
         Ok(file)
     }
 
@@ -74,6 +74,14 @@ impl CdocFile {
         validate_media(&self.media)?;
         validate_feature_list(&self.required_features)?;
         if self
+            .required_features
+            .iter()
+            .any(|feature| !KNOWN_FEATURES.contains(&feature.as_str()))
+            || contains_opaque_block(&self.document.body)
+        {
+            return Err(DocumentError::ReadOnlyPreview);
+        }
+        if self
             .document
             .global_settings
             .theme
@@ -95,7 +103,7 @@ impl CdocFile {
         self.validate()?;
         let mut candidate = self.clone();
         candidate.refresh_required_features();
-        serde_json::to_vec_pretty(&candidate)
+        serde_json::to_vec_pretty(&CdocFileRaw::from(&candidate))
             .map_err(|error| DocumentError::Serialization(error.to_string()))
     }
 
@@ -103,6 +111,41 @@ impl CdocFile {
         self.required_features = self.document.required_features();
         self.required_features.sort();
         self.required_features.dedup();
+    }
+}
+
+impl Serialize for CdocFile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        CdocFileRaw::from(self).serialize(serializer)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CdocFileRaw<'a> {
+    format: &'a str,
+    version: u32,
+    required_features: &'a [String],
+    media: &'a [Media],
+    document: &'a Document,
+    #[serde(flatten)]
+    extra: &'a BTreeMap<String, Value>,
+}
+
+impl<'a> From<&'a CdocFile> for CdocFileRaw<'a> {
+    fn from(file: &'a CdocFile) -> Self {
+        Self {
+            format: &file.format,
+            version: file.version,
+            required_features: &file.required_features,
+            media: &file.media,
+            document: &file.document,
+            extra: &file.extra,
+        }
     }
 }
 
@@ -140,7 +183,7 @@ impl ReadOnlyPreview {
 
     /// 仅在调用方需要 JSON 视图时创建，避免打开预览时复制整份文档。
     pub fn to_json_value(&self) -> Result<Value, DocumentError> {
-        serde_json::to_value(&self.file)
+        serde_json::to_value(CdocFileRaw::from(&self.file))
             .map_err(|error| DocumentError::Serialization(error.to_string()))
     }
 
@@ -273,24 +316,27 @@ fn parse_features(raw: Option<&Value>) -> Result<Vec<String>, DocumentError> {
             "requiredFeatures must be an array".to_owned(),
         ));
     };
-    let mut features = Vec::with_capacity(values.len());
+    let mut features = Vec::<String>::with_capacity(values.len());
     for value in values {
         let Some(feature) = value.as_str() else {
             return Err(DocumentError::InvalidRequiredFeatures(
                 "feature identifiers must be strings".to_owned(),
             ));
         };
-        if feature.is_empty() || features.iter().any(|existing| existing == feature) {
+        if feature.is_empty() {
             return Err(DocumentError::InvalidRequiredFeatures(format!(
-                "empty or duplicate feature identifier {feature:?}"
+                "empty feature identifier {feature:?}"
             )));
         }
+        if features
+            .last()
+            .is_some_and(|previous| previous.as_str() >= feature)
+        {
+            return Err(DocumentError::InvalidRequiredFeatures(
+                "feature identifiers must be sorted and unique".to_owned(),
+            ));
+        }
         features.push(feature.to_owned());
-    }
-    if features.windows(2).any(|window| window[0] > window[1]) {
-        return Err(DocumentError::InvalidRequiredFeatures(
-            "feature identifiers must be sorted".to_owned(),
-        ));
     }
     Ok(features)
 }
@@ -340,6 +386,19 @@ fn validate_base64(data: &str) -> Result<(), DocumentError> {
             "base64 payload is malformed".to_owned(),
         ));
     }
+    let padding_bits_are_zero =
+        match padding {
+            2 => base64_sextet(data.as_bytes()[data.len() - 3])
+                .is_some_and(|value| value & 0b1111 == 0),
+            1 => base64_sextet(data.as_bytes()[data.len() - 2])
+                .is_some_and(|value| value & 0b0011 == 0),
+            _ => true,
+        };
+    if !padding_bits_are_zero {
+        return Err(DocumentError::InvalidMedia(
+            "base64 payload has non-zero padding bits".to_owned(),
+        ));
+    }
     let decoded_bytes = (data.len() / 4) * 3 - padding;
     if decoded_bytes > MAX_MEDIA_BYTES {
         return Err(DocumentError::InvalidMedia(
@@ -347,6 +406,17 @@ fn validate_base64(data: &str) -> Result<(), DocumentError> {
         ));
     }
     Ok(())
+}
+
+fn base64_sextet(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
 }
 
 fn contains_opaque_block(blocks: &[Block]) -> bool {
