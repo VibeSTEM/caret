@@ -1,0 +1,373 @@
+# 质量与构建门禁（任务 006）。公共步骤封装在
+# .github/actions/*：changed-paths（路径分类门控）、caret-toolchain、
+# linux-gl-prereqs、caret-cache-restore / caret-cache-save（cargo-home 与 SDK 缓存，
+# 仅 check 在 main push 保存）、caret-cargo-tool-cache（质量工具独立缓存）。
+# - changes：按变更路径拆分触发，未知路径一律保守触发全量检查并输出测试闭包；
+# - check：Ubuntu 执行 check/build/工具核验和受影响测试；
+# - lint：Ubuntu 上每个工具独立成一个矩阵检查，失败项可直接定位，按域触发；
+# - macOS / Windows 构建测试与 Objective-C++ 检查仅在 nightly 执行；
+# - format：Ubuntu 上通过 cargo format --check 检查 Rust、C++/CXX、CMake、QML 和 `.pa`；
+# - dependency-audit：仅在依赖清单/审计配置变更时运行；
+# - 完整 Rust/native coverage 与长时动态检查由 nightly.yml 每日运行；
+#   PR 与 main push 都按影响范围测试；nightly 独占完整测试与 coverage。
+name: CI
+
+on:
+  # 纯文档变更不创建 run；代码目录内的 Markdown 夹具仍须触发测试。
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "crates/**/*.md"
+      - "tests/**/*.md"
+      - "native/**/*.md"
+      - "qml/**/*.md"
+      - "resources/**/*.md"
+      - ".github/**/*.md"
+      - ".cargo/**/*.md"
+  pull_request:
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "crates/**/*.md"
+      - "tests/**/*.md"
+      - "native/**/*.md"
+      - "qml/**/*.md"
+      - "resources/**/*.md"
+      - ".github/**/*.md"
+      - ".cargo/**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: detect changed paths (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      cargo_deps: ${{ steps.filter.outputs.cargo_deps }}
+      rust: ${{ steps.filter.outputs.rust }}
+      native: ${{ steps.filter.outputs.native }}
+      qml: ${{ steps.filter.outputs.qml }}
+      test_packages: ${{ steps.filter.outputs.test_packages }}
+      test_packages_l1: ${{ steps.filter.outputs.test_packages_l1 }}
+      test_packages_l2: ${{ steps.filter.outputs.test_packages_l2 }}
+      native_labels: ${{ steps.filter.outputs.native_labels }}
+      full_tests: ${{ steps.filter.outputs.full_tests }}
+      full_quality: ${{ steps.filter.outputs.full_quality }}
+      changed_paths: ${{ steps.filter.outputs.changed_paths }}
+    steps:
+      # 本地 composite action 的解析依赖工作区已有仓库，checkout 必须在
+      # 调用前完成；分类需要全量历史取 merge-base/before diff。
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+        with:
+          tools_deps: "false"
+
+      - id: filter
+        uses: ./.github/actions/changed-paths
+
+  dependency-audit:
+    name: cargo audit (ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.cargo_deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+        with:
+          tools_deps: "false"
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        with:
+          tool: cargo-deny
+
+      - name: Dependency and license audit
+        shell: bash
+        run: cargo audit
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        if: always()
+        with:
+          tool: cargo-deny
+          mode: save
+
+  lint-clippy:
+    name: cargo lint (clippy, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "rustfmt,clippy"
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run Clippy
+        shell: bash
+        env:
+          CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
+          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
+        run: cargo lint clippy --changed --check
+
+  lint-native:
+    name: cargo lint (${{ matrix.tool }}, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.native == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [clang-tidy, includes, cppcheck]
+    runs-on: ubuntu-latest
+    # 冷启动需供给 LLVM/Qt 并构建 native 树；上限防传输停滞拖满平台上限。
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "rustfmt,clippy"
+
+      # 这些工具都经由 launcher 构建脚本触发 native 配置；供给 Qt 的
+      # find_package(Gui) 经 WrapOpenGL 强依赖宿主 GL 开发文件。
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run selected lint
+        shell: bash
+        env:
+          CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
+          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
+        run: cargo lint "${{ matrix.tool }}" --changed --check
+
+  # machete 只读 Rust 清单与源码，不进 native 构建图：按 rust 域触发，
+  # 且不需要托管工具/依赖缓存。
+  lint-machete:
+    name: cargo lint (machete, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+        with:
+          tools_deps: "false"
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        with:
+          tool: cargo-machete
+
+      - name: Run cargo machete
+        shell: bash
+        run: cargo lint machete --check
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        if: always()
+        with:
+          tool: cargo-machete
+          mode: save
+
+  # cmake-lint 只检查 native CMake 文件：按 native 域触发。
+  lint-cmake:
+    name: cargo lint (cmake, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run cmake lint
+        shell: bash
+        env:
+          CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
+          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
+        run: cargo lint cmake --changed --check
+
+  lint-layering:
+    name: cargo lint (layering, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.native == 'true' || needs.changes.outputs.cargo_deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Check Rust and configured CMake dependency layers
+        shell: bash
+        run: cargo lint layering --check
+
+  # qmllint 消费 Qt 供给与 QML/bridge 输出：按 qml 或 native 域触发。
+  lint-qmllint:
+    name: cargo lint (qmllint, ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.qml == 'true' || needs.changes.outputs.native == 'true' || needs.changes.outputs.native_labels != '[]' || needs.changes.outputs.full_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run qmllint
+        shell: bash
+        run: cargo lint qmllint --check
+
+  format:
+    name: cargo format (ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "rustfmt"
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run changed-file format checks (Rust, C++/Objective-C++/CXX, CMake and QML)
+        shell: bash
+        env:
+          CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
+          CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
+        run: cargo format --changed --check
+
+  check:
+    name: cargo check and build (ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "rustfmt,clippy"
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Check workspace and all aggregated targets
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Build workspace and native targets
+        run: cargo build --locked --workspace
+
+      - name: Verify Cargo-provisioned toolchain
+        shell: bash
+        run: cargo run --locked --package caret-tests -- toolchain
+
+      - name: Test L1 Rust packages
+        shell: bash
+        env:
+          TEST_PACKAGES: ${{ needs.changes.outputs.test_packages_l1 }}
+        run: |
+          selected=()
+          test_runner=false
+          while IFS= read -r -d '' package; do
+            [[ -n "$package" ]] || continue
+            if [[ "$package" == "caret-tests" ]]; then
+              test_runner=true
+            else
+              selected+=(--package "$package")
+            fi
+            printf 'Selected L1 Rust package: %s\n' "$package"
+          done < <(jq -j '.[] | ., "\u0000"' <<< "$TEST_PACKAGES")
+          if (( ${#selected[@]} > 0 )); then
+            cargo test --locked "${selected[@]}"
+          fi
+          if $test_runner; then
+            cargo test --locked --package caret-tests --bin caret-tests
+          fi
+
+      - name: Test L2 Rust consumers
+        shell: bash
+        env:
+          TEST_PACKAGES: ${{ needs.changes.outputs.test_packages_l2 }}
+        run: |
+          selected=()
+          test_runner=false
+          while IFS= read -r -d '' package; do
+            [[ -n "$package" ]] || continue
+            if [[ "$package" == "caret-tests" ]]; then
+              test_runner=true
+            else
+              selected+=(--package "$package")
+            fi
+            printf 'Selected L2 Rust package: %s\n' "$package"
+          done < <(jq -j '.[] | ., "\u0000"' <<< "$TEST_PACKAGES")
+          if (( ${#selected[@]} > 0 )); then
+            cargo test --locked "${selected[@]}"
+          fi
+          if $test_runner; then
+            cargo test --locked --package caret-tests --bin caret-tests
+          fi
+
+      - name: Test affected native and QML cases
+        if: needs.changes.outputs.native_labels != '[]'
+        shell: bash
+        env:
+          NATIVE_LABELS: ${{ needs.changes.outputs.native_labels }}
+          CARET_TEST_QML_LINT: "false"
+        run: |
+          if [[ "${{ needs.changes.outputs.full_tests }}" == "true" ]]; then
+            cargo test --locked --package caret-tests --test native
+          else
+            labels="$(jq -r 'join("|")' <<< "$NATIVE_LABELS")"
+            export CARET_TEST_CTEST_LABELS="^(${labels})$"
+            cargo test --locked --package caret-tests --test native
+          fi
+
+      - uses: ./.github/actions/caret-cache-save

@@ -16,7 +16,8 @@ const CARGO_LLVM_COV_VERSION: &str = "0.9.1";
 const FUNCTIONS_MINIMUM: u64 = 85;
 const LINES_MINIMUM: u64 = 85;
 const IGNORED_SOURCE_REGEX: &str = r"[/\\](caret-launcher|caret-tests|caret-build)[/\\]";
-// 保持既有业务统计边界；这些构建/调度代码的覆盖缺口登记于任务 032。
+// 构建和测试调度不计入领域覆盖率；其正确性由安装事务、选择器及 native 聚合测试验证。
+// 新增领域 crate 仍须纳入统计；调整排除边界时在当前 task 记录理由并独立评审。
 const EXCLUDED_PACKAGES: &[&str] = &["caret-launcher", "caret-tests", "caret-build"];
 
 pub(super) fn run() -> Result<(), Box<dyn Error>> {
@@ -437,7 +438,7 @@ mod tests {
             "data": [{
                 "totals": totals,
                 "files": [{
-                    "filename": "/repo/crates/caret-core/src/lib.rs",
+                    "filename": "/repo/crates/caret-app/src/lib.rs",
                     "summary": totals
                 }]
             }]
@@ -497,7 +498,7 @@ mod tests {
         assert!(
             report
                 .summary()
-                .contains("caret-core: functions 200/200 (100.00%)")
+                .contains("caret-app: functions 200/200 (100.00%)")
         );
         assert_eq!(Metric::default().percent(), "n/a");
         let mut metric = Metric {

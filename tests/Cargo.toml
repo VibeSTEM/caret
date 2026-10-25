@@ -8,6 +8,10 @@ repository.workspace = true
 publish = false
 build = "build.rs"
 
+[[test]]
+name = "native"
+path = "integration/native.rs"
+
 [dependencies]
 caret-build.workspace = true
 serde_json.workspace = true

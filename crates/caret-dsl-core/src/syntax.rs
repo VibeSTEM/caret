@@ -19,7 +19,9 @@ pub fn source_kind(source: &str) -> Option<SourceKind> {
         if trimmed.starts_with("//") {
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("kind:") {
+        if let Some((key, value)) = trimmed.split_once(':')
+            && key.trim_end() == "kind"
+        {
             return match value.trim() {
                 "language" => Some(SourceKind::Language),
                 "theme" => Some(SourceKind::Theme),

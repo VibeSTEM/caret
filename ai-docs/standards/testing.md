@@ -1,8 +1,8 @@
 # 测试目录与入口
 
-更新日期：2026-10-24。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
+更新日期：2026-10-25。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
 
-目录和命令是规划。移植 `caret-tests` 之后，它们才成为可运行入口。
+`caret-tests` 已接入。下面是测试目录约定，不因目录树而提前建立空文件。现有 native 聚合入口为 `tests/integration/native.rs`，`cargo test --workspace --locked` 会同时执行 Rust 测试、qmllint 和 CTest；Qt 相关用例使用 Qt Test。GoogleTest 的生产与消费见[依赖获取](dependency-acquisition.md#googletest-生产与消费)。
 
 ## 目录
 
@@ -28,6 +28,8 @@ tests/
 
 ## 命令
 
+工作目录为仓库根；前置为 git、rustup 和[平台宿主能力](dependency-acquisition.md#宿主前置)。首次使用会按锁定版本供给工具，需联网。完整检查与 panta 共用相同调度方式，只裁掉不属于 Caret 的领域目标。`format`、`lint` 在 CI 中带 `--check`，省略时可能修复源码。`cargo quality` 聚合只读格式、完整 lint、依赖审计和完整 workspace 测试。
+
 ```text
 cargo test --locked --workspace
 cargo test-plan
@@ -41,6 +43,8 @@ cargo audit
 cargo coverage
 cargo quality
 ```
+
+`cargo lint` 包含 Clippy、未使用依赖、CMake 格式与 lint、Rust/CMake 分层、qmllint、clang-tidy、include-cleaner 和 cppcheck。Objective-C++ 仅在 macOS 检查。`cargo test --locked -p caret-tests --test native` 是单独的 native 聚合；CI 可通过 `CARET_TEST_CTEST_LABELS` 选择 CTest 标签，空匹配会失败。`CARET_TEST_QML_LINT=false` 仅供已有独立 qmllint job 的 CI 跳过重复扫描，本地默认仍检查。
 
 `l1` 是直接受影响的 Rust package，`l2` 是它们的消费者以及相关 native / QML 测试。这两个名字不是[分层](layering.md)里的层号。未知路径和公共构建边界扩大到完整范围。
 

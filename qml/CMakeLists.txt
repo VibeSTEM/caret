@@ -71,11 +71,8 @@ caret_native_defaults(caret_shell)
 add_library(caret::shell ALIAS caret_shell)
 target_sources(
   caret_shell
-  PRIVATE
-  ../native/app/icon_provider.cpp
-  ../native/app/icon_provider.hpp
-  ../native/app/window_chrome_metrics.cpp
-  ../native/app/window_chrome_metrics.hpp)
+  PRIVATE ../native/app/icon_provider.cpp ../native/app/icon_provider.hpp
+          ../native/app/window_chrome_metrics.cpp ../native/app/window_chrome_metrics.hpp)
 if(APPLE)
   target_sources(caret_shell PRIVATE ../native/app/window_chrome_metrics_mac.mm)
 endif()
@@ -118,8 +115,14 @@ if(BUILD_TESTING)
     caret_shell_load_test PRIVATE "CARET_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\""
                                   "CARET_QML_IMPORT_PATH=\"${QT_QML_OUTPUT_DIRECTORY}\"")
   target_link_libraries(
-    caret_shell_load_test PRIVATE caret_shell caret_shellplugin Qt6::Gui Qt6::Qml Qt6::Quick
-                                  Qt6::QuickControls2 Qt6::Test)
+    caret_shell_load_test
+    PRIVATE caret_shell
+            caret_shellplugin
+            Qt6::Gui
+            Qt6::Qml
+            Qt6::Quick
+            Qt6::QuickControls2
+            Qt6::Test)
   caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
 
   find_program(

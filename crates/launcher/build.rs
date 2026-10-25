@@ -31,6 +31,9 @@ const RERUN_ENVS: &[&str] = &[
     "CARET_USE_SYSTEM_TOOLS",
     "CARET_TOOLCHAIN_ROOT",
     "CARET_QT_MIRROR",
+    "CARET_GTEST_ROOT",
+    "CARET_GTEST_URL",
+    "CARET_GTEST_SHA256",
     "CC",
     "CXX",
     "CLANG_FORMAT",
@@ -128,6 +131,11 @@ fn orchestrate() -> Result<PathBuf, String> {
         .arg("Ninja")
         .arg(format!("-DCMAKE_BUILD_TYPE={build_type}"))
         .arg("-DCARET_ENABLE_APP=ON")
+        .arg(format!(
+            "-DCARET_TOOLCHAIN_ROOT={}",
+            provision::toolchain_root()?.display()
+        ))
+        .arg(format!("-DCARET_TARGET_TRIPLE={target_triple}"))
         .arg(format!("-DCARET_FFI_INCLUDE_DIR={}", ffi_include.display()))
         .arg(format!(
             "-DCARET_FFI_STATIC_LIB={}",
@@ -157,6 +165,13 @@ fn orchestrate() -> Result<PathBuf, String> {
             }
         ))
         .arg(format!("-DCARET_SANITIZER={sanitizer}"));
+    for key in ["CARET_GTEST_ROOT", "CARET_GTEST_URL", "CARET_GTEST_SHA256"] {
+        // 每次都显式传值，移除环境覆盖后不得继续沿用旧 CMake cache。
+        configure.arg(format!(
+            "-D{key}={}",
+            std::env::var(key).unwrap_or_default()
+        ));
+    }
     if let Some(sdk) = provision::macos_sdk()? {
         configure.arg(format!("-DCMAKE_OSX_SYSROOT={}", sdk.display()));
         let deployment = match std::env::var("MACOSX_DEPLOYMENT_TARGET") {

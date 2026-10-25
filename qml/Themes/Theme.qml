@@ -118,7 +118,7 @@ QtObject {
     // 禁用状态
     readonly property real disabledOpacity: ThemeViewModel.tokens.disabledOpacity
 
-    // 新建工程窗口尺寸与最小约束（逻辑像素）
+    // 新建文档窗口尺寸与最小约束（逻辑像素）
     readonly property int newProjectDialogWidth: ThemeViewModel.tokens.newProjectDialogWidth
     readonly property int newProjectDialogHeight: ThemeViewModel.tokens.newProjectDialogHeight
     readonly property int newProjectDialogMinimumWidth: ThemeViewModel.tokens.newProjectDialogMinimumWidth

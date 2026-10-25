@@ -7,6 +7,7 @@ mod format;
 mod layering;
 mod lint;
 mod miri;
+mod package;
 mod paths;
 mod performance;
 mod sanitize;
@@ -24,6 +25,8 @@ fn main() -> ExitCode {
         Some("verify-changed") => verify_changed(),
         Some("performance") => performance::run(arguments.collect()),
         Some("test") => build::test_all(),
+        Some("native-test") => build::test_native(),
+        Some("package") => package::desktop(arguments.collect()),
         Some("sdk-googletest") => sdk::run(arguments.collect()),
         Some("test-plan") => test_scope::print_plan(arguments.collect()),
         Some("test-scope") => test_scope::run_scope(arguments.collect()),
@@ -52,12 +55,12 @@ fn main() -> ExitCode {
             lint::lint(tool, check, changed, tool_args)
         }
         Some(command) => Err(format!(
-            "未知命令 '{command}'；可用：quality、verify-changed、test、test-plan、test-scope、sdk-googletest、audit、lint、format、coverage、sanitize、\
+            "未知命令 '{command}'；可用：quality、verify-changed、test、test-plan、test-scope、package、sdk-googletest、audit、lint、format、coverage、sanitize、\
              ub-check、toolchain [hyperfine <参数>…]、performance"
         )
         .into()),
         None => Err(
-            "缺少命令；可用：quality、verify-changed、test、test-plan、test-scope、sdk-googletest、audit、lint、format、coverage、sanitize、ub-check、\
+            "缺少命令；可用：quality、verify-changed、test、test-plan、test-scope、package、sdk-googletest、audit、lint、format、coverage、sanitize、ub-check、\
                  toolchain [hyperfine <参数>…]、performance"
                 .into(),
         ),

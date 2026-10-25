@@ -1,4 +1,4 @@
-//! 032 行为测试：theme/variables 校验、消息全字段、TS 写出与诊断路径。
+//! DSL 行为测试：theme/variables 校验、消息全字段、TS 写出与诊断路径。
 //! 全部经公共 API（parse/emit_ts/format_source/source_prefix）驱动。
 
 use std::error::Error;
@@ -325,7 +325,7 @@ fn source_prefix_prefers_longest_source_match() -> Result<(), Box<dyn Error>> {
 
 // 两个容量压力用例的输入必须超过固定阈值（2^20 字节 / 16384 条声明）才能
 // 触发拒绝诊断，无法在 Miri 解释执行下按可行时间完成；容量维度由常规
-// cargo test 覆盖（任务 032 Miri 边界登记）。
+// cargo test 覆盖。
 #[test]
 #[cfg_attr(miri, ignore)]
 fn oversized_source_is_rejected() -> Result<(), Box<dyn Error>> {
@@ -380,7 +380,7 @@ fn diagnostics_render_code_line_and_column() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// ── 第二批:校验边角与转义解码(032 缺口清零)──
+// 校验边界与转义解码。
 
 #[test]
 fn numerus_list_without_numerus_flag_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
@@ -511,6 +511,94 @@ fn quoted_message_ids_are_decoded() -> Result<(), Box<dyn Error>> {
 
     assert!(document.messages.contains_key("App\u{1f}menu open"));
     Ok(())
+}
+
+#[test]
+fn quotes_round_trip_in_message_ids_and_text_fields() -> Result<(), Box<dyn Error>> {
+    let source = "version: 1\nkind: language\nlanguage: en\n\n[App]\n\"menu \\\"open\\\"\":\n  src: Say \"Hello\"\n  oldsrc: \"Old \\\"Hello\\\"\"\n  tr: \"Say \\\"Hello\\\"\"\n  comment: \"Use \\\"quotes\\\"\"\n  extra: \"More \\\"quotes\\\"\"\n";
+    let document = parse(source)?;
+    let message = &document.messages["App\u{1f}menu \"open\""];
+    assert_eq!(message.source, "Say \"Hello\"");
+    assert_eq!(message.old_source.as_deref(), Some("Old \"Hello\""));
+    assert_eq!(message.translations["en"].forms, ["Say \"Hello\""]);
+    assert_eq!(message.comment.as_deref(), Some("Use \"quotes\""));
+    assert_eq!(message.extra.as_deref(), Some("More \"quotes\""));
+
+    let formatted = format_source(source)?;
+    assert_eq!(parse(&formatted)?, document);
+    assert_eq!(format_source(&formatted)?, formatted);
+    assert_eq!(
+        emit_ts(&parse(&formatted)?, "en")?,
+        emit_ts(&document, "en")?
+    );
+    Ok(())
+}
+
+#[test]
+fn quoted_and_escaped_trailing_spaces_survive_format_and_ts_output() -> Result<(), Box<dyn Error>> {
+    let source = "version: 1\nkind: language\nlanguage: en\n\n[App]\n\"open \":\n  src: \"Open \"\n  oldsrc: \"Old \"\n  tr: \"Translated \"\n  comment: \"note \"\n  extra: \"hint \"\nitems:\n  src: \"%n item \"\n  numerus: true\n  tr: [\"%n one \", \"%n many \"]\nescaped:\n  src: Escaped\\ \n";
+    let document = parse(source)?;
+    let message = &document.messages["App\u{1f}open "];
+    assert_eq!(message.source, "Open ");
+    assert_eq!(message.old_source.as_deref(), Some("Old "));
+    assert_eq!(message.translations["en"].forms, ["Translated "]);
+    assert_eq!(message.comment.as_deref(), Some("note "));
+    assert_eq!(message.extra.as_deref(), Some("hint "));
+    assert_eq!(document.messages["App\u{1f}escaped"].source, "Escaped ");
+    assert_eq!(
+        document.messages["App\u{1f}items"].translations["en"].forms,
+        ["%n one ", "%n many "]
+    );
+
+    let formatted = format_source(source)?;
+    assert_eq!(parse(&formatted)?, document);
+    assert_eq!(format_source(&formatted)?, formatted);
+    let ts = emit_ts(&document, "en")?;
+    assert!(ts.contains("<source>Open </source>"), "{ts}");
+    assert!(
+        ts.contains("<translation>Translated </translation>"),
+        "{ts}"
+    );
+    assert_eq!(emit_ts(&parse(&formatted)?, "en")?, ts);
+    Ok(())
+}
+
+#[test]
+fn empty_source_field_still_counts_for_duplicate_detection() {
+    let source =
+        "version: 1\nkind: language\nlanguage: en\n\n[App]\nopen:\n  src: \"\"\n  src: Open\n";
+    let Err(error) = parse(source) else {
+        panic!("empty first src must not allow a repeated src");
+    };
+    assert!(error.diagnostics.iter().any(|item| {
+        item.code == "pa.duplicate_field"
+            && item.start_offset == source.find("  src: Open").unwrap_or(usize::MAX)
+    }));
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "大量诊断的资源压力由普通测试验证，避免解释执行遍历全部输出"
+)]
+fn many_unicode_line_diagnostics_keep_every_offset_and_character_column() {
+    const ESCAPES: usize = 16_384;
+    let mut source =
+        String::from("version: 1\nkind: language\nlanguage: en\n\n[App]\ntext:\n  src: ");
+    let start = source.len();
+    source.push_str(&"\\x中".repeat(ESCAPES));
+    source.push('\n');
+    let Err(error) = parse(&source) else {
+        panic!("unsupported escapes unexpectedly parsed");
+    };
+    assert_eq!(error.diagnostics.len(), ESCAPES);
+    for (index, diagnostic) in error.diagnostics.iter().enumerate() {
+        assert_eq!(diagnostic.code, "pa.invalid_escape");
+        assert_eq!(diagnostic.start_offset, start + index * "\\x中".len());
+        assert_eq!(diagnostic.end_offset, diagnostic.start_offset);
+        assert_eq!(diagnostic.line, 7);
+        assert_eq!(diagnostic.column, 8 + index * 3);
+    }
 }
 
 #[test]

@@ -1,4 +1,4 @@
-// 新建文档窗口壳。草稿和校验留在窗口内，不接应用服务，也不含工艺字段。
+// 新建文档窗口壳。草稿和校验留在窗口内，通过信号提交文档信息。
 import QtQuick
 import QtQuick.Dialogs
 import QtQuick.Layouts

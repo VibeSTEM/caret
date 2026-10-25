@@ -1,0 +1,253 @@
+# 完整测试、质量检查、覆盖率与长时动态检查（任务 006）。
+name: Nightly diagnostics
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 每天 UTC 18:00 / 上海 02:00
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-tests:
+    name: full workspace tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run complete Rust, native and QML test suites
+        shell: bash
+        run: cargo test --locked --workspace
+
+      - uses: ./.github/actions/caret-cache-save
+
+  full-lint:
+    name: full quality checks (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "rustfmt,clippy"
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        with:
+          tool: cargo-machete
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        with:
+          tool: cargo-deny
+
+      - name: Run full format, lint and dependency audit
+        shell: bash
+        run: |
+          cargo format --check
+          cargo lint --check
+          cargo audit
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        if: always()
+        with:
+          tool: cargo-machete
+          mode: save
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        if: always()
+        with:
+          tool: cargo-deny
+          mode: save
+
+  objcxx-lint:
+    name: full Objective-C++ checks (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Check all handwritten Objective-C++ translation units
+        shell: bash
+        run: |
+          cargo lint clang-tidy --objcxx-only --check
+          cargo lint includes --objcxx-only --check
+
+  rust-coverage:
+    name: full Rust coverage gate (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+        with:
+          components: "llvm-tools-preview"
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Run Rust coverage gate
+        shell: bash
+        run: cargo coverage
+
+      - uses: ./.github/actions/caret-cargo-tool-cache
+        if: always()
+        with:
+          tool: cargo-llvm-cov
+          mode: save
+
+      - name: Upload Rust coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/rust-coverage/
+          if-no-files-found: error
+          retention-days: 30
+
+  native-coverage:
+    name: full native coverage report (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run native coverage and full QML/native tests
+        shell: bash
+        run: cargo coverage native
+
+      - name: Upload native coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/native-coverage/summary.txt
+            target/native-coverage/line-coverage.txt
+            target/native-coverage/product-summary.txt
+            target/native-coverage/product-line-coverage.txt
+            target/native-coverage/html/
+          if-no-files-found: error
+          retention-days: 30
+
+  miri:
+    name: rust miri UB checks (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - name: Run Miri on pure Rust crates
+        shell: bash
+        run: cargo ub-check
+
+  sanitize:
+    name: sanitizer matrix (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Build and test with sanitizers
+        shell: bash
+        run: cargo sanitize
+
+  cpu-performance:
+    name: CPU performance sample (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run CPU performance suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/performance-ci
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            cargo performance cpu --samples 31
+            cargo build --locked -p caret-dslc
+            cargo build --locked --release -p caret-dslc
+            cargo hyperfine --runs 30 --warmup 5 \
+              --export-json target/performance-ci/dslc-hyperfine.json \
+              'target/debug/caret-dslc check tests/fixtures/dsl/artifacts.pa' \
+              'target/release/caret-dslc check tests/fixtures/dsl/artifacts.pa'
+          } 2>&1 | tee target/performance-ci/cpu.log
+
+      - name: Upload CPU performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/performance-ci/
+          if-no-files-found: warn
+          retention-days: 30

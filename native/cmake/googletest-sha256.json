@@ -1,0 +1,5 @@
+{
+  "macos-arm64": "de5c8001be4c1dfc28c9a5021fdcef81c158a45aa7cc832950c62374ab4a83ab",
+  "linux-x86_64": "75b9551eb8aac603715e205c3db4636e1fb3f0af54afc92cf1f05574b0a0902f",
+  "windows-x86_64": "8b745caf2b102a776e0a7e1c74ccf45c0cc4ab70fed801a17cb7f25ef6f220b7"
+}

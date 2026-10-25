@@ -1,0 +1,217 @@
+# 来源记录见任务 006；手动生产三平台可搬迁测试包，不创建正式 Release。
+name: Package desktop builds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-arm64
+            archive: caret-macos-arm64.zip
+          - os: windows-2022
+            platform: windows-x86_64
+            archive: caret-windows-x86_64.zip
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            archive: caret-linux-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CMAKE_GENERATOR: Ninja
+      PACKAGE_DIR: target/package/portable
+      ARCHIVE_DIR: target/package/archive
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/caret-toolchain
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+      - uses: ./.github/actions/caret-cache-restore
+      - name: Set macOS deployment target
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
+      - name: Build and install release application
+        shell: bash
+        run: cargo run --locked --release --package caret-tests -- package "$PACKAGE_DIR"
+      - name: Verify Windows manifest embedding setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $buildDir = (Resolve-Path 'target/native/release').Path
+          $expectedManifest = [IO.Path]::GetFullPath((Join-Path $buildDir 'app/caret.exe.manifest'))
+          $cachePath = Join-Path $buildDir 'CMakeCache.txt'
+          $makeProgramEntry = Select-String -Path $cachePath -Pattern '^CMAKE_MAKE_PROGRAM:[^=]+=([^\r\n]+)$' | Select-Object -First 1
+          if (-not $makeProgramEntry) {
+            throw "CMakeCache.txt 中没有 CMAKE_MAKE_PROGRAM：$cachePath"
+          }
+          $ninja = $makeProgramEntry.Matches[0].Groups[1].Value
+          $rcCompilerEntry = Select-String -Path $cachePath -Pattern '^CMAKE_RC_COMPILER:[^=]+=([^\r\n]+)$' | Select-Object -First 1
+          if (-not $rcCompilerEntry) {
+            throw "CMakeCache.txt 中没有 CMAKE_RC_COMPILER：$cachePath"
+          }
+          $expectedManifestTool = [IO.Path]::GetFullPath((Join-Path (Split-Path $rcCompilerEntry.Matches[0].Groups[1].Value -Parent) 'mt.exe'))
+          $commands = @(& $ninja -C $buildDir -t commands caret_native_app)
+          if ($LASTEXITCODE -ne 0) {
+            throw "无法读取 caret_native_app 的 Ninja 链接命令（退出码 $LASTEXITCODE）"
+          }
+          $linkCommands = @($commands | Where-Object { $_ -match 'vs_link_exe' })
+          if ($linkCommands.Count -ne 1) {
+            throw "预期一个 Windows 链接命令，实际找到 $($linkCommands.Count) 个。"
+          }
+          $normalizedExpectedManifest = $expectedManifest.Replace('/', '\')
+          $linkCommandParts = @($linkCommands[0] -split '\s+&&\s+')
+          $linkInvocations = @($linkCommandParts | Where-Object { $_ -match 'vs_link_exe' })
+          if ($linkInvocations.Count -ne 1) {
+            throw "预期唯一的 vs_link_exe 子命令，实际找到 $($linkInvocations.Count) 个。"
+          }
+          $linkInvocation = $linkInvocations[0]
+          $normalizedLinkInvocation = $linkInvocation.Replace('/', '\')
+          if ($normalizedLinkInvocation.Contains($normalizedExpectedManifest) -or
+            $linkInvocation -match '(?i)/MANIFESTINPUT' -or
+            $linkInvocation -notmatch '(?i)/MANIFEST:NO') {
+            throw '链接器必须保留 /MANIFEST:NO，且不得接收 Qt manifest 输入。'
+          }
+          $embedCommands = @(
+            $commands | Where-Object {
+              $normalizedCommand = $_.Replace('/', '\')
+              $normalizedCommand.Contains($expectedManifestTool.Replace('/', '\')) -and
+                $normalizedCommand.Contains($normalizedExpectedManifest) -and
+                $normalizedCommand.Contains('-outputresource:')
+            }
+          )
+          if ($embedCommands.Count -ne 1) {
+            throw "预期一个由 Windows SDK mt.exe 执行的 post-link manifest 嵌入命令，实际找到 $($embedCommands.Count) 个。"
+          }
+          if (-not (Test-Path -LiteralPath $expectedManifestTool) -or -not (Test-Path -LiteralPath $expectedManifest)) {
+            throw "Windows SDK mt.exe 或 Qt 生成的源 manifest 不存在：$expectedManifestTool；$expectedManifest"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "CARET_WINDOWS_MANIFEST_TOOL=$expectedManifestTool"
+          $null = [xml](Get-Content -Raw -LiteralPath $expectedManifest)
+
+      - name: Verify packaged Windows manifest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $buildDir = 'target/native/release'
+          $builtExe = @(
+            (Join-Path $buildDir 'app/caret.exe'),
+            (Join-Path $buildDir 'caret.exe')
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $builtExe) {
+            throw "native 构建产物未找到：$buildDir/app/caret.exe 或 $buildDir/caret.exe"
+          }
+          $packagedExe = Join-Path $env:PACKAGE_DIR 'bin/caret.exe'
+          $builtHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $builtExe).Hash
+          $packagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $packagedExe).Hash
+          if ($builtHash -ne $packagedHash) {
+            throw "安装包中的 caret.exe 与链接产物不同：$builtHash / $packagedHash"
+          }
+          $mt = $env:CARET_WINDOWS_MANIFEST_TOOL
+          if (-not $mt -or -not (Test-Path -LiteralPath $mt)) {
+            throw "Windows SDK mt.exe 不存在：$mt"
+          }
+          $manifestPath = Join-Path $env:RUNNER_TEMP 'caret.exe.manifest'
+          & $mt "-inputresource:$packagedExe;#1" "-out:$manifestPath"
+          if ($LASTEXITCODE -ne 0) {
+            throw "无法提取安装包 PE manifest（退出码 $LASTEXITCODE）"
+          }
+          [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
+          $namespaces = [System.Xml.XmlNamespaceManager]::new($manifest.NameTable)
+          $namespaces.AddNamespace('asmv1', 'urn:schemas-microsoft-com:asm.v1')
+          $namespaces.AddNamespace('asmv2', 'urn:schemas-microsoft-com:asm.v2')
+          $namespaces.AddNamespace('asmv3', 'urn:schemas-microsoft-com:asm.v3')
+          $executionLevel = $manifest.SelectSingleNode('/asmv1:assembly/asmv2:trustInfo/asmv2:security/asmv2:requestedPrivileges/asmv2:requestedExecutionLevel', $namespaces)
+          if (-not $executionLevel) {
+            $executionLevel = $manifest.SelectSingleNode('/asmv1:assembly/asmv3:trustInfo/asmv3:security/asmv3:requestedPrivileges/asmv3:requestedExecutionLevel', $namespaces)
+          }
+          if (-not $executionLevel) {
+            $executionLevel = $manifest.SelectSingleNode('/asmv1:assembly/asmv2:trustInfo/asmv2:security/asmv3:requestedPrivileges/asmv3:requestedExecutionLevel', $namespaces)
+          }
+          if (-not $executionLevel) {
+            throw "安装包 PE manifest 缺少 requestedExecutionLevel：$manifestPath"
+          }
+          $level = $executionLevel.GetAttributeNode('level')
+          $uiAccess = $executionLevel.GetAttributeNode('uiAccess')
+          $namespacedExecutionAttributes = @($executionLevel.Attributes | Where-Object {
+            ($_.LocalName -eq 'level' -or $_.LocalName -eq 'uiAccess') -and $_.NamespaceURI
+          })
+          $hasInvalidExecutionLevel = (
+            -not $level -or
+            -not $uiAccess -or
+            $level.NamespaceURI -ne '' -or
+            $uiAccess.NamespaceURI -ne '' -or
+            $namespacedExecutionAttributes.Count -gt 0 -or
+            $level.Value -ne 'asInvoker' -or
+            $uiAccess.Value -ne 'false'
+          )
+          if ($hasInvalidExecutionLevel) {
+            $actualAttributes = @($executionLevel.Attributes | ForEach-Object {
+              "$($_.Name) {$($_.NamespaceURI)}='$($_.Value)'"
+            }) -join ', '
+            throw "安装包 PE manifest 的 requestedExecutionLevel 不符合标准：$($executionLevel.OuterXml)；属性：$actualAttributes；文件：$manifestPath"
+          }
+          Write-Host "PE manifest valid; package SHA256: $packagedHash"
+
+      - name: Verify relocated application without development paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          moved="$RUNNER_TEMP/caret-portable"
+          mv "$PACKAGE_DIR" "$moved"
+          unset QT_PLUGIN_PATH QML_IMPORT_PATH QML2_IMPORT_PATH DYLD_LIBRARY_PATH LD_LIBRARY_PATH
+          case "$RUNNER_OS" in
+            macOS)
+              test -x "$moved/caret.app/Contents/MacOS/caret"
+              codesign --verify --deep --strict "$moved/caret.app"
+              binary="$moved/caret.app/Contents/MacOS/caret"
+              test -f "$moved/caret.app/Contents/Resources/licenses/Caret-LICENSE"
+              ;;
+            Windows)
+              binary="$moved/bin/caret.exe"
+              test -f "$binary"
+              test -f "$moved/share/caret/licenses/Caret-LICENSE"
+              ;;
+            Linux)
+              binary="$moved/bin/caret"
+              test -x "$binary"
+              test -f "$moved/share/caret/licenses/Caret-LICENSE"
+              ;;
+          esac
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software "$binary" --quit-after-load
+          else
+            QT_QUICK_BACKEND=software "$binary" --quit-after-load
+          fi
+          mv "$moved" "$PACKAGE_DIR"
+      - name: Archive installation tree
+        shell: bash
+        run: |
+          mkdir -p "$ARCHIVE_DIR"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            ditto -c -k --sequesterRsrc --keepParent "$PACKAGE_DIR/caret.app" "$ARCHIVE_DIR/${{ matrix.archive }}"
+          elif [[ "$RUNNER_OS" == Linux ]]; then
+            tar -czf "$ARCHIVE_DIR/${{ matrix.archive }}" -C "$PACKAGE_DIR" .
+          fi
+      - name: Archive Windows installation tree
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "$env:PACKAGE_DIR\*" -DestinationPath "$env:ARCHIVE_DIR\${{ matrix.archive }}"
+      - name: Upload portable test package
+        uses: actions/upload-artifact@v7
+        with:
+          path: target/package/archive/${{ matrix.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 1

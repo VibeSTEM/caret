@@ -383,6 +383,7 @@ fn scan_cppcheck() -> Result<(), Box<dyn Error>> {
     // Qt 6.11 的编译器宏超出 Cppcheck 解析能力；使用 Qt 库模型，LLVM 负责真实头文件。
     for entry in &mut entries {
         entry.exclude_include_root(&caret_build::toolchain_root()?.join("qt"))?;
+        escape_cppcheck_defines(entry);
     }
     let database = database.with_file_name("cppcheck-configured.json");
     caret_build::database::write(&database, &entries)?;
@@ -422,11 +423,50 @@ fn scan_cppcheck() -> Result<(), Box<dyn Error>> {
     run_scanner("cppcheck", command)
 }
 
+/// Cppcheck 的 arguments 导入仍会消费宏值中的引号，须保留字符串字面量。
+/// 只转换其专用数据库，不能改变 Clang 使用的原始编译命令。
+fn escape_cppcheck_defines(entry: &mut caret_build::database::CompileCommand) {
+    if let Some(arguments) = &mut entry.arguments {
+        for argument in arguments {
+            if argument.starts_with("-D") || argument.starts_with("/D") {
+                *argument = argument.replace('"', "\\\"");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use caret_build::database::CompileCommand;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn cppcheck_preserves_quoted_definitions_without_changing_other_arguments() {
+        let mut entry = CompileCommand {
+            directory: "/repo".into(),
+            file: "test.cpp".into(),
+            arguments: Some(vec![
+                "clang++".into(),
+                "-DROOT=\"/repo with space\"".into(),
+                "/DNAME=\"Caret\"".into(),
+                "-DCOUNT=2".into(),
+                "-I/repo with space".into(),
+            ]),
+            command: None,
+        };
+        escape_cppcheck_defines(&mut entry);
+        assert_eq!(
+            entry.arguments,
+            Some(vec![
+                "clang++".into(),
+                "-DROOT=\\\"/repo with space\\\"".into(),
+                "/DNAME=\\\"Caret\\\"".into(),
+                "-DCOUNT=2".into(),
+                "-I/repo with space".into(),
+            ])
+        );
+    }
 
     #[test]
     fn native_scan_preserves_shared_consumers_and_rejects_an_empty_platform_graph()

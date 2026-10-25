@@ -1,4 +1,4 @@
-// 工艺表单的分组布局。
+// 通用表单的分组布局。
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts

@@ -6,7 +6,7 @@
 
 `.toolchain/` 只放下载和解包后的依赖。Cargo 编译产物、native 构建树和 `OUT_DIR` 仍在 `target/`。`cargo clean` 不清 `.toolchain/`。要重装工具时单独删除对应子目录。
 
-默认根是仓库根下的 `.toolchain/`。`CARET_TOOLCHAIN_ROOT` 可以把它指到别处，未设置时不回退到 `target/`。
+默认根是仓库根下的 `.toolchain/`。`CARET_TOOLCHAIN_ROOT` 可以把它指到别处；普通相对路径始终以仓库根解析，Windows 的带盘符相对路径和仅带根前缀的路径会拒绝，避免随子进程工作目录改变含义。未设置时不回退到 `target/`。
 
 ```text
 .toolchain/
@@ -49,6 +49,14 @@
 | GoogleTest | SDK 清单 | `find_package(GTest CONFIG)`，仅测试构建 |
 
 Qt 放在 `.toolchain/qt/staging`，跨 profile 共享。官方源失败时可以尝试来源仓库已有的镜像策略；每个来源都做强校验。SDK 放在 `.toolchain/sdk/<name>/<version>/<triple>/`，用限制搜索路径的 `find_package` 消费。
+
+## GoogleTest 生产与消费
+
+Caret 的[独立 SDK 管线](ci.md#桌面包与独立-sdk)生产 GoogleTest 1.18.0 静态包，默认下载位置为当前仓库 Release。三平台已发布资产经下载复算后固定在 [GoogleTest 摘要清单](../../native/cmake/googletest-sha256.json)，供给不在运行时下载校验文件充当信任来源。升级时逐一核验并更新清单，不使用本机临时归档的摘要。
+
+`native/cmake/sdk-provision.cmake` 只有在真实测试消费者调用 `caret_require_googletest()` 且 `BUILD_TESTING=ON` 时才供给 SDK。`include` 本身不下载。消费端通过 `GTest::gtest` / `GTest::gtest_main` 链接，使用 `gtest_discover_tests` 注册；当前 Qt 加载与翻译测试仍使用 Qt Test。
+
+本地可显式设置 `CARET_GTEST_ROOT` 指向已生产的 SDK 安装树。默认归档消费使用清单内的平台摘要，URL 指向 `VibeSTEM/caret` 的 `sdk-googletest-1.18.0`。用 `CARET_GTEST_URL` 指定其他 HTTPS 或本地 `file:` 归档时，必须同时提供固定的 `CARET_GTEST_SHA256`；不隐式沿用另一来源的校验文件。这些值经 launcher 传给 CMake，下载校验后安装至 `.toolchain/sdk/googletest/1.18.0/<sdk-triple>/`，限定 CONFIG 搜索，不回退系统 GTest。SDK triple 为 `macos-arm64`、`linux-x86_64`、`windows-x86_64`，由 Cargo 目标映射；版本、平台和 ABI 不符时拒绝。
 
 ## 下载预算
 

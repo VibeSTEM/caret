@@ -3,6 +3,7 @@
 
 use crate::language::LanguageService;
 use serde::{Deserialize, Serialize};
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -169,7 +170,7 @@ impl SettingsService {
         fs::create_dir_all(parent).map_err(|error| {
             SettingsFileError::Io(format!("settings.storage_access_error: {error}"))
         })?;
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        let Some(file_name) = path.file_name() else {
             return Err(SettingsFileError::Io(format!(
                 "settings.storage_access_error: {}",
                 path.display()
@@ -233,18 +234,19 @@ fn quarantine_settings_file(path: &Path, bytes: &[u8]) -> Result<PathBuf, Settin
         .ok_or_else(|| {
             SettingsFileError::Io("settings.storage_access_error: missing parent".to_owned())
         })?;
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+    let Some(file_name) = path.file_name() else {
         return Err(SettingsFileError::Io(format!(
             "settings.storage_access_error: {}",
             path.display()
         )));
     };
     for index in 0..1000 {
-        let suffix = if index == 0 {
-            format!("{file_name}.isolated")
+        let mut suffix = file_name.to_os_string();
+        suffix.push(if index == 0 {
+            ".isolated".to_owned()
         } else {
-            format!("{file_name}.isolated-{index}")
-        };
+            format!(".isolated-{index}")
+        });
         let destination = parent.join(suffix);
         match write_synced(&destination, bytes) {
             Ok(()) => match fs::remove_file(path) {
@@ -271,12 +273,15 @@ fn quarantine_settings_file(path: &Path, bytes: &[u8]) -> Result<PathBuf, Settin
     ))
 }
 
-fn unique_temp_path(parent: &Path, file_name: &str) -> PathBuf {
+fn unique_temp_path(parent: &Path, file_name: &OsStr) -> PathBuf {
     let token = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    parent.join(format!(".{file_name}.{}.{token}.tmp", std::process::id()))
+    let mut name = OsString::from(".");
+    name.push(file_name);
+    name.push(format!(".{}.{token}.tmp", std::process::id()));
+    parent.join(name)
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -511,6 +516,33 @@ mod tests {
         service.load_file(&dir.root.join("settings.json"))?;
         assert_eq!(service.current(), &original);
         assert!(!dir.root.join("settings.json").exists());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_settings_paths_round_trip_and_isolate_corrupt_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = TempDir::new("non-utf8")?;
+        let path = dir
+            .root
+            .join(std::ffi::OsString::from_vec(b"settings-\xff.json".to_vec()));
+        let service = SettingsService::default();
+        service.save_file(&path)?;
+        let mut loaded = SettingsService::default();
+        loaded.load_file(&path)?;
+        assert_eq!(loaded.current(), service.current());
+        let corrupt = b"{broken";
+        std::fs::write(&path, corrupt)?;
+        let error = loaded.load_file(&path);
+        let Err(super::SettingsFileError::Isolated { quarantined, .. }) = error else {
+            return Err("损坏的非 UTF-8 路径设置未隔离".into());
+        };
+        assert_eq!(std::fs::read(quarantined)?, corrupt);
+        assert!(!path.exists());
+        assert_eq!(loaded.current(), service.current());
         Ok(())
     }
 

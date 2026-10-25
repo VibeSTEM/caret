@@ -1,0 +1,54 @@
+# Cargo 扩展按工具/版本独立保存，避免 SDK 的不可变缓存先于质量 job 发布。
+# 仅缓存安装成品；cargo-build 临时编译树不进入任何缓存。
+name: Cache a pinned Cargo quality tool
+description: 恢复或保存单个 Cargo 质量工具的已完成安装目录
+inputs:
+  tool:
+    description: cargo-deny、cargo-machete 或 cargo-llvm-cov
+    required: true
+  mode:
+    description: restore 或 save；仅 main 的受信 workflow 可保存
+    required: false
+    default: restore
+runs:
+  using: composite
+  steps:
+    - id: identity
+      shell: bash
+      env:
+        TOOL: ${{ inputs.tool }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$TOOL" in
+          cargo-deny) source=tests/src/command.rs; constant=CARGO_DENY_VERSION ;;
+          cargo-machete) source=tests/src/command.rs; constant=CARGO_MACHETE_VERSION ;;
+          cargo-llvm-cov) source=tests/src/coverage.rs; constant=CARGO_LLVM_COV_VERSION ;;
+          *) printf 'Unsupported Cargo tool: %s\n' "$TOOL" >&2; exit 1 ;;
+        esac
+        case "$MODE" in
+          restore|save) ;;
+          *) printf 'Unsupported cache mode: %s\n' "$MODE" >&2; exit 1 ;;
+        esac
+        version="$(awk -F'"' -v name="$constant" '$1 ~ "^const " name ":" {print $2}' "$source")"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'Invalid %s version: %s\n' "$TOOL" "$version" >&2; exit 1; }
+        directory=".toolchain/tools/$TOOL/$version"
+        executable="$directory/bin/$TOOL"
+        if [[ "$RUNNER_OS" == Windows ]]; then executable+=.exe; fi
+        printf 'version=%s\npath=%s\n' "$version" "$directory" >> "$GITHUB_OUTPUT"
+        if [[ -f "$executable" && -f "$directory/.complete" && "$(cat "$directory/.complete")" == "$version" ]]; then
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+        fi
+
+    - if: inputs.mode == 'restore'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.identity.outputs.path }}
+        key: caret-cargo-quality-tool-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tool }}-${{ steps.identity.outputs.version }}-${{ hashFiles('rust-toolchain.toml') }}
+
+    - if: inputs.mode == 'save' && steps.identity.outputs.complete == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.identity.outputs.path }}
+        key: caret-cargo-quality-tool-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.tool }}-${{ steps.identity.outputs.version }}-${{ hashFiles('rust-toolchain.toml') }}

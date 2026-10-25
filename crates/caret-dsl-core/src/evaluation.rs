@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::diagnostic::push_diagnostic_span;
+use crate::diagnostic::{SourcePositions, push_diagnostic_span};
 use crate::{Diagnostic, Diagnostics, Document, Kind, ValueType, parse};
 
 const MAX_EXPRESSION_DEPTH: usize = 128;
@@ -10,7 +10,7 @@ const MAX_EXPRESSION_OPERATORS: usize = 128;
 const MAX_DEPENDENCY_DEPTH: usize = 128;
 const MAX_EVALUATION_OPERATIONS: usize = 100_000;
 
-/// 已求值的变量值；resource 保留逻辑引用，由应用层按工程路径策略解析。
+/// 已求值的变量值；resource 保留逻辑引用，由应用层按文档资源根解析。
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvaluatedValue {
     Bool(bool),
@@ -85,6 +85,8 @@ fn evaluate_for_kind(
         return Err(Diagnostics::one(code, description, 0, source));
     }
 
+    let positions = SourcePositions::new(source);
+    let source = &positions;
     let mut diagnostics = Vec::new();
     let names: HashMap<&str, usize> = document
         .values
@@ -281,7 +283,7 @@ fn evaluate_for_kind(
 
 fn parse_bool_literal(
     variable: &crate::Variable,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Expr> {
     let literal = match variable.expression.trim() {
@@ -305,7 +307,7 @@ fn parse_bool_literal(
 
 fn parse_string_literal(
     variable: &crate::Variable,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Expr> {
     decode_literal(&variable.expression, variable, source, diagnostics)
@@ -314,7 +316,7 @@ fn parse_string_literal(
 
 fn parse_resource_literal(
     variable: &crate::Variable,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Expr> {
     let value = decode_literal(&variable.expression, variable, source, diagnostics)?;
@@ -340,7 +342,7 @@ fn parse_resource_literal(
 fn decode_literal(
     expression: &str,
     variable: &crate::Variable,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<String> {
     let leading_whitespace = expression.len() - expression.trim_start().len();
@@ -434,7 +436,7 @@ fn push_variable_error(
     variable: &crate::Variable,
     relative_start: usize,
     relative_end: usize,
-    source: &str,
+    source: &SourcePositions<'_>,
 ) {
     let start = variable
         .expression_start
@@ -486,7 +488,7 @@ struct Evaluator<'a> {
     operations: &'a mut usize,
     diagnostics: &'a mut Vec<Diagnostic>,
     variable: &'a crate::Variable,
-    source: &'a str,
+    source: &'a SourcePositions<'a>,
 }
 
 impl Evaluator<'_> {

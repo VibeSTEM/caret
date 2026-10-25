@@ -5,6 +5,8 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <qcontainerfwd.h>
+#include <qtmetamacros.h>
 #include <utility>
 
 namespace caret {

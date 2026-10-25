@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use pest::Parser as PestParser;
 use pest::iterators::Pair;
 
-use crate::diagnostic::push_diagnostic;
+use crate::diagnostic::{SourcePositions, push_diagnostic};
 use crate::syntax::{MAX_DECLARATIONS, MAX_SOURCE_BYTES, PaParser, Rule, pest_diagnostic};
 use crate::validation::{DocumentLocations, MessageLocations, normalize_locale, validate_document};
 use crate::{
@@ -32,6 +32,8 @@ pub fn parse(source: &str) -> Result<Document, Diagnostics> {
         ));
     }
 
+    let positions = SourcePositions::new(source);
+    let source = &positions;
     let Some(document_pair) = PaParser::parse(Rule::document, source)
         .map_err(|error| pest_diagnostic(error, source))?
         .next()
@@ -62,6 +64,7 @@ pub fn parse(source: &str) -> Result<Document, Diagnostics> {
     let mut section: Option<String> = None;
     let mut current_context = "Caret".to_owned();
     let mut current_message: Option<(String, Message, usize)> = None;
+    let mut current_message_source_seen = false;
     let mut current_message_numerus_seen = false;
     let mut declaration_count = 0usize;
     let mut seen_contexts = HashSet::new();
@@ -241,11 +244,13 @@ pub fn parse(source: &str) -> Result<Document, Diagnostics> {
                     body_offset,
                 ));
                 current_message_numerus_seen = false;
+                current_message_source_seen = false;
             }
             Rule::src => {
                 if let Some((_, message, _)) = current_message.as_mut() {
                     let value = field_value(body, source, &mut diagnostics);
-                    if message.source.is_empty() {
+                    if !current_message_source_seen {
+                        current_message_source_seen = true;
                         message.source = value;
                     } else {
                         duplicate_field(&mut diagnostics, "src", body_offset, source);
@@ -461,7 +466,7 @@ fn count_declaration(
     count: &mut usize,
     diagnostics: &mut Vec<Diagnostic>,
     offset: usize,
-    source: &str,
+    source: &SourcePositions<'_>,
 ) -> bool {
     *count += 1;
     if *count <= MAX_DECLARATIONS {
@@ -478,7 +483,12 @@ fn count_declaration(
     true
 }
 
-fn duplicate_field(diagnostics: &mut Vec<Diagnostic>, field: &str, offset: usize, source: &str) {
+fn duplicate_field(
+    diagnostics: &mut Vec<Diagnostic>,
+    field: &str,
+    offset: usize,
+    source: &SourcePositions<'_>,
+) {
     push_diagnostic(
         diagnostics,
         "pa.duplicate_field",
@@ -492,7 +502,7 @@ fn set_header(
     target: &mut Option<String>,
     body: Pair<'_, Rule>,
     name: &str,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
     value_rule: Rule,
 ) {
@@ -513,7 +523,7 @@ fn flush_message(
     current: &mut Option<(String, Message, usize)>,
     result: &mut Document,
     diagnostics: &mut Vec<Diagnostic>,
-    source: &str,
+    source: &SourcePositions<'_>,
 ) {
     let Some((key, message, message_offset)) = current.take() else {
         return;
@@ -549,7 +559,7 @@ fn find_text(body: Pair<'_, Rule>, rule: Rule) -> Option<String> {
 
 fn find_message_key(
     body: Pair<'_, Rule>,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<String> {
     find_pair(body.clone(), Rule::bare_key)
@@ -557,7 +567,11 @@ fn find_message_key(
         .map(|pair| decode_pair_value(pair, source, diagnostics))
 }
 
-fn field_value(body: Pair<'_, Rule>, source: &str, diagnostics: &mut Vec<Diagnostic>) -> String {
+fn field_value(
+    body: Pair<'_, Rule>,
+    source: &SourcePositions<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> String {
     find_pair(body.clone(), Rule::quoted)
         .or_else(|| find_pair(body, Rule::scalar))
         .map(|pair| decode_pair_value(pair, source, diagnostics))
@@ -566,7 +580,7 @@ fn field_value(body: Pair<'_, Rule>, source: &str, diagnostics: &mut Vec<Diagnos
 
 fn translation_value(
     body: Pair<'_, Rule>,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<String> {
     if let Some(array) = find_pair(body.clone(), Rule::array) {
@@ -593,7 +607,7 @@ fn message_key(context: &str, id: &str) -> String {
 
 fn typed_entry(
     value_pair: Pair<'_, Rule>,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Option<ValueType>, String, usize, usize) {
     if value_pair.as_rule() != Rule::typed_value {
@@ -644,7 +658,7 @@ fn trim_unescaped_trailing_whitespace(value: &str) -> &str {
 
 fn decode_pair_value(
     pair: Pair<'_, Rule>,
-    source: &str,
+    source: &SourcePositions<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> String {
     let span = pair.as_span();
@@ -656,17 +670,21 @@ fn decode_pair_value(
             .unwrap_or(raw);
         decode_scalar(value, source, span.start() + 1, diagnostics)
     } else {
-        decode_scalar(raw, source, span.start(), diagnostics)
+        decode_scalar(
+            trim_unescaped_trailing_whitespace(raw),
+            source,
+            span.start(),
+            diagnostics,
+        )
     }
 }
 
 fn decode_scalar(
     raw: &str,
-    source: &str,
+    source: &SourcePositions<'_>,
     source_offset: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> String {
-    let raw = raw.trim_end_matches([' ', '\t']);
     let mut result = String::with_capacity(raw.len());
     let mut escape_offset = None;
     for (relative_offset, character) in raw.char_indices() {
@@ -675,7 +693,7 @@ fn decode_scalar(
                 'n' => result.push('\n'),
                 'r' => result.push('\r'),
                 't' => result.push('\t'),
-                ':' | '=' | ' ' | '\\' => result.push(character),
+                ':' | '=' | ' ' | '\\' | '"' => result.push(character),
                 _ => {
                     push_diagnostic(
                         diagnostics,
