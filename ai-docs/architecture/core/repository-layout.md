@@ -12,6 +12,7 @@
 │   ├── caret-doc/
 │   ├── caret-ffi/
 │   ├── caret-foundation/
+│   ├── caret-layout/
 │   └── launcher/
 ├── native/
 │   ├── app/
@@ -31,7 +32,6 @@
     └── src/
 
 规划中的编辑器领域 crate
-├── caret-layout/        # 纯排版
 ├── caret-structure/     # 只读结构索引
 └── caret-engine/        # Session、命令、.cdoc
 native/
