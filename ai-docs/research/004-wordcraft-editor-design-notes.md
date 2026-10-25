@@ -1,4 +1,4 @@
-# WordCraft 编辑器方案参考笔记
+# 004 — WordCraft 编辑器方案参考笔记
 
 更新日期：2026-10-25。来源是用户提供的 `editor-design.md`，该文档将 WordCraft 源码静态阅读固定在 commit `254351c01bc6e498eaede5c1bd79050d3f2d5c23`。本文件只提炼可供 Caret 设计讨论的事实和候选方案，不把来源项目的代码、注释或功能状态当作 Caret 的实现证据。
 

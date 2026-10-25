@@ -1,6 +1,6 @@
 # 分层与依赖方向
 
-更新日期：2026-10-25。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、CMake 目标和 QML 模块已有一部分落地；编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
+更新日期：2026-10-25。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
 
 层号越小越靠下。生产代码只能依赖更小的层，不能依赖同层的另一个成员，也不能依赖更大的层。Rust 的层号和 Native 的层号各算各的。测试可以依赖被测对象，生产代码不能依赖测试。
 
@@ -47,6 +47,7 @@ flowchart TB
   ffi --> foundation
   app --> engine
   app --> dslcore
+  app --> doc
   app --> foundation
   engine --> doc
   engine --> layout
@@ -99,7 +100,7 @@ flowchart TB
 | L2 叶子 | `caret-doc`、`caret-dslc` | `caret-doc` 只可到 `caret-foundation`。`caret-dslc` 只可到 `caret-dsl-core`。二者互不依赖 |
 | L3 派生 | `caret-layout`、`caret-structure` | `caret-doc`，以及 `caret-foundation`。二者互不依赖 |
 | L4 会话 | `caret-engine` | `caret-doc`、`caret-layout`、`caret-structure`、`caret-foundation` |
-| L5 应用 | `caret-app` | `caret-engine`、`caret-dsl-core`、`caret-foundation`。需要文档类型时可以再依赖 `caret-doc` |
+| L5 应用 | `caret-app` | `caret-engine`、`caret-doc`、`caret-dsl-core`、`caret-foundation` |
 | L6 边界 | `caret-ffi` | `caret-app`、`caret-foundation` |
 | L7 组合根 | launcher、`caret-cli` | launcher 可到 `caret-ffi`、`caret-build`、`caret-dsl-core`。`caret-cli` 可到 `caret-app`、`caret-foundation`。二者互不依赖 |
 

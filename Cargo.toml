@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/caret-app",
     "crates/caret-build",
+    "crates/caret-doc",
     "crates/caret-dsl-core",
     "crates/caret-dslc",
     "crates/caret-ffi",
@@ -25,8 +26,10 @@ repository = "https://github.com/VibeSTEM/caret"
 
 [workspace.dependencies]
 libc = "0.2"
+base64 = "0.23.1"
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 caret-app = { path = "crates/caret-app", version = "0.1.0" }
+caret-doc = { path = "crates/caret-doc", version = "0.1.0" }
 caret-build = { path = "crates/caret-build", version = "0.1.0" }
 caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }

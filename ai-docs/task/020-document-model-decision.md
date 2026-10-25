@@ -13,7 +13,7 @@
 
 - [文档模型](../architecture/editor/document-model.md)、[运行时](../architecture/core/runtime.md)、[命令](../architecture/editor/commands.md)
 - [分层](../standards/layering.md)、[Rust](../standards/rust.md)
-- [WordCraft 参考笔记](../research/wordcraft-editor-design-notes.md)
+- [WordCraft 参考笔记](../research/004-wordcraft-editor-design-notes.md)
 
 ## 范围与非目标
 

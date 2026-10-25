@@ -9,6 +9,7 @@
 │   ├── caret-build/
 │   ├── caret-dsl-core/
 │   ├── caret-dslc/
+│   ├── caret-doc/
 │   ├── caret-ffi/
 │   ├── caret-foundation/
 │   └── launcher/
@@ -26,10 +27,10 @@
     ├── fixtures/
     ├── integration/
     ├── performance/
+    ├── rust/
     └── src/
 
 规划中的编辑器领域 crate
-├── caret-doc/           # 文档模型，无 I/O 策略
 ├── caret-layout/        # 纯排版
 ├── caret-structure/     # 只读结构索引
 └── caret-engine/        # Session、命令、.cdoc

@@ -39,6 +39,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -63,6 +69,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 name = "caret-app"
 version = "0.1.0"
 dependencies = [
+ "caret-doc",
  "caret-dsl-core",
  "serde",
  "serde_json",
@@ -78,6 +85,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "shlex",
+]
+
+[[package]]
+name = "caret-doc"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -129,7 +145,9 @@ dependencies = [
 name = "caret-tests"
 version = "0.1.0"
 dependencies = [
+ "caret-app",
  "caret-build",
+ "caret-doc",
  "serde_json",
 ]
 
