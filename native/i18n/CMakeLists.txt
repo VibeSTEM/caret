@@ -55,6 +55,6 @@ if(BUILD_TESTING)
   caret_native_defaults(caret_i18n_qm_test)
   target_link_libraries(caret_i18n_qm_test PRIVATE caret_i18n Qt6::Core Qt6::Test)
   add_test(NAME I18n.CompiledQmLoads COMMAND caret_i18n_qm_test)
-  set_tests_properties(I18n.CompiledQmLoads PROPERTIES LABELS "i18n" ENVIRONMENT
+  set_tests_properties(I18n.CompiledQmLoads PROPERTIES LABELS "cpp;i18n" ENVIRONMENT
                                                        "QT_QPA_PLATFORM=offscreen")
 endif()

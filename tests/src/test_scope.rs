@@ -1,4 +1,5 @@
 //! PR 与本地共用的受影响测试规划和分层执行。
+//! `qml_lint` 单独追踪静态 QML 源/bridge 影响，不随全量 Rust/native 测试自动扩大。
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -10,15 +11,15 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 // 只登记当前 native 模块和真实 CTest 标签。未知模块回退全量。
-const NATIVE_LABELS: &[(&str, &[&str])] = &[("i18n", &["i18n", "qml"]), ("app", &["qml"])];
+const NATIVE_LABELS: &[(&str, &[&str])] = &[("i18n", &["cpp", "i18n", "qml"]), ("app", &["qml"])];
 
 // Rust package 的直接消费端可能跨过 CXX/构建脚本进入 native 测试。
 // 新增此类边时同步扩展此表和下面的回归用例。
 const RUST_NATIVE_LABELS: &[(&str, &[&str])] = &[
-    ("caret-dsl-core", &["i18n", "qml"]),
+    ("caret-dsl-core", &["cpp", "i18n", "qml"]),
     ("caret-app", &["qml"]),
     ("caret-ffi", &["qml"]),
-    ("caret-launcher", &["i18n", "qml"]),
+    ("caret-launcher", &["cpp", "i18n", "qml"]),
 ];
 
 #[derive(Debug, Default)]
@@ -26,8 +27,12 @@ struct Plan {
     code: bool,
     cargo_deps: bool,
     rust: bool,
+    cpp: bool,
+    cmake: bool,
+    layering: bool,
     native: bool,
     qml: bool,
+    qml_lint: bool,
     packages_l1: BTreeSet<String>,
     packages_l2: BTreeSet<String>,
     native_labels: BTreeSet<String>,
@@ -48,8 +53,12 @@ impl Plan {
         println!("code={}", self.code);
         println!("cargo_deps={}", self.cargo_deps);
         println!("rust={}", self.rust);
+        println!("cpp={}", self.cpp);
+        println!("cmake={}", self.cmake);
+        println!("layering={}", self.layering);
         println!("native={}", self.native);
         println!("qml={}", self.qml);
+        println!("qml_lint={}", self.qml_lint);
         println!("test_packages={packages}");
         println!("test_packages_l1={packages_l1}");
         println!("test_packages_l2={packages_l2}");
@@ -358,14 +367,18 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
     let all_packages = packages.keys().cloned().collect::<BTreeSet<_>>();
     let reverse = reverse_dependencies(&packages);
     let mut changed_packages = BTreeSet::new();
+    let mut native_dependency_changed = false;
     let all_native_labels = all_native_labels();
     plan.full = paths.is_empty();
     plan.full_quality = paths.is_empty();
     if paths.is_empty() {
         plan.cargo_deps = true;
         plan.rust = true;
+        plan.cpp = true;
+        plan.cmake = true;
         plan.native = true;
         plan.qml = true;
+        plan.qml_lint = true;
     }
 
     for path in paths {
@@ -378,17 +391,42 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         ) {
             // 工具配置变更会影响对应域中的所有文件，不能按普通单文件处理。
             plan.full_quality = true;
+            plan.cpp |= matches!(
+                Path::new(path).file_name().and_then(|name| name.to_str()),
+                Some(".clang-format" | ".clang-tidy")
+            );
+            plan.cmake |= path.ends_with(".cmake-format.py");
+            plan.layering |= path.ends_with(".cmake-format.py");
+        }
+        if matches!(
+            path.as_str(),
+            ".github/workflows/ci.yml" | ".github/actions/changed-paths/action.yml"
+        ) {
+            // CI 选择器本身变更时跑全量检查，但这两类配置不改变 QML 输入。
+            plan.full = true;
+            plan.full_quality = true;
+            plan.layering = true;
+            plan.rust = true;
+            plan.cpp = true;
+            plan.cmake = true;
+            plan.native = true;
+            plan.qml = true;
+            plan.native_labels.extend(all_native_labels.iter().cloned());
+            continue;
         }
         if path == "Cargo.toml"
             || path == "Cargo.lock"
             || path == "rust-toolchain.toml"
             || path.starts_with(".cargo/")
         {
+            // 工作区依赖锁、目标配置和 toolchain 均可能改变 CXX/native 产物。
             plan.full = true;
             plan.full_quality = true;
             plan.rust = true;
-            plan.native = true;
-            plan.qml = true;
+            plan.cpp = true;
+            plan.cmake = true;
+            plan.layering = true;
+            plan.qml_lint = true;
             plan.cargo_deps = true;
             continue;
         }
@@ -397,61 +435,109 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
             continue;
         }
         if path == "tests/Cargo.toml" {
-            plan.full_quality = true;
             plan.cargo_deps = true;
             plan.rust = true;
-            plan.native = true;
+            plan.layering = true;
             if let Some(package) = package_for_path(path, &packages, root) {
                 changed_packages.insert(package);
             } else {
                 plan.full = true;
                 plan.qml = true;
+                plan.qml_lint = true;
+                plan.cpp = true;
+                plan.cmake = true;
             }
-            plan.native_labels.extend(all_native_labels.iter().cloned());
             continue;
         }
         if path.ends_with("/Cargo.toml") {
             plan.cargo_deps = true;
             plan.rust = true;
+            plan.layering = true;
             if let Some(package) = package_for_path(path, &packages, root) {
+                plan.qml_lint |= package_path_affects_qml_bridge(&package, path);
+                plan.cpp |= package == "caret-ffi"
+                    || package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                plan.cmake |= package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                native_dependency_changed |= package_path_requires_native_tests(&package, path);
                 changed_packages.insert(package);
             } else {
                 plan.full = true;
                 plan.native = true;
                 plan.qml = true;
+                plan.qml_lint = true;
+                plan.cpp = true;
+                plan.cmake = true;
             }
             continue;
         }
         if path.starts_with("crates/") || path.starts_with("tests/rust/") {
             plan.rust = true;
             if let Some(package) = package_for_path(path, &packages, root) {
+                plan.qml_lint |= package_path_affects_qml_bridge(&package, path);
+                plan.cpp |= package == "caret-ffi"
+                    || package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                plan.cmake |= package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                native_dependency_changed |= package_path_requires_native_tests(&package, path);
                 changed_packages.insert(package);
             } else {
                 plan.full = true;
                 plan.native = true;
                 plan.qml = true;
+                plan.qml_lint = true;
+                plan.cpp = true;
+                plan.cmake = true;
             }
             continue;
         }
         if path.starts_with("tests/performance/cpu/") && path.ends_with(".rs") {
             plan.rust = true;
             if let Some(package) = package_for_path(path, &packages, root) {
+                plan.qml_lint |= package_path_affects_qml_bridge(&package, path);
+                plan.cpp |= package == "caret-ffi"
+                    || package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                plan.cmake |= package == "caret-build"
+                    || (package == "caret-launcher" && path.ends_with("/build.rs"));
+                native_dependency_changed |= package_path_requires_native_tests(&package, path);
                 changed_packages.insert(package);
             } else {
                 plan.full = true;
                 plan.native = true;
                 plan.qml = true;
+                plan.qml_lint = true;
+                plan.cpp = true;
+                plan.cmake = true;
             }
             continue;
         }
         if path.starts_with("tests/src/") {
-            plan.full = true;
-            plan.full_quality = true;
             plan.rust = true;
-            plan.native = true;
-            plan.qml = true;
-            changed_packages.extend(all_packages.iter().cloned());
-            plan.native_labels.extend(all_native_labels.iter().cloned());
+            changed_packages.insert("caret-tests".into());
+            if path == "tests/src/test_scope.rs" {
+                // 选择器改变时验证所有路由目标，避免 CI 本身误跳过测试域。
+                plan.full = true;
+                plan.full_quality = true;
+                plan.cpp = true;
+                plan.cmake = true;
+                plan.layering = true;
+                plan.qml_lint = true;
+            } else if path == "tests/src/layering.rs" {
+                plan.layering = true;
+            }
+            if path == "tests/src/build.rs" {
+                plan.native = true;
+                plan.native_labels.extend(all_native_labels.iter().cloned());
+            }
+            if path == "tests/src/lint.rs" {
+                plan.full_quality = true;
+                plan.cpp = true;
+                plan.cmake = true;
+                plan.qml_lint = true;
+            }
             continue;
         }
         if path.starts_with("tests/integration/") {
@@ -468,6 +554,9 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         }
         if path.starts_with("tests/cpp/") || path.starts_with("native/") {
             plan.native = true;
+            plan.cpp = true;
+            plan.cmake |= is_cmake_path(path);
+            plan.layering |= is_cmake_path(path);
             let parts = Path::new(path)
                 .components()
                 .filter_map(|part| part.as_os_str().to_str())
@@ -481,14 +570,25 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
                 {
                     plan.native_labels
                         .extend(labels.iter().map(|label| (*label).to_owned()));
+                    plan.qml_lint |= parts[1] == "app";
                 } else {
                     plan.full = true;
+                    plan.qml_lint = true;
                     plan.native_labels.extend(all_native_labels.iter().cloned());
                 }
             } else if path.starts_with("native/") {
                 plan.full = true;
+                plan.qml_lint = true;
+                plan.cmake = true;
                 plan.native_labels.extend(all_native_labels.iter().cloned());
+            } else if path.starts_with("tests/cpp/i18n/") {
+                plan.native_labels.insert("cpp".to_owned());
+            } else if path.starts_with("tests/cpp/shell/") {
+                plan.qml = true;
+                plan.native_labels.insert("qml".to_owned());
             } else if path.starts_with("tests/cpp/") {
+                plan.full = true;
+                plan.qml_lint = true;
                 plan.native_labels.extend(all_native_labels.iter().cloned());
             }
             continue;
@@ -499,6 +599,10 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
             plan.rust = true;
             plan.native = true;
             plan.qml = true;
+            plan.qml_lint |= path.ends_with(".qml");
+            plan.cpp |= caret_build::database::is_header(Path::new(path))
+                || caret_build::database::is_source(Path::new(path));
+            plan.cmake |= is_cmake_path(path);
             changed_packages.extend(all_packages.iter().cloned());
             plan.native_labels.extend(all_native_labels.iter().cloned());
             continue;
@@ -516,6 +620,10 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
             || path.starts_with("prototypes/shell/")
         {
             plan.qml = true;
+            plan.qml_lint = true;
+            plan.cmake |= is_cmake_path(path);
+            plan.layering |= is_cmake_path(path);
+            plan.cpp |= is_cmake_path(path);
             plan.native = true;
             plan.native_labels.insert("qml".to_owned());
             continue;
@@ -533,7 +641,11 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         // 新增/未登记路径保守回退，避免选择器落后时 CI 假绿。
         plan.full = true;
         plan.full_quality = true;
+        plan.qml_lint = true;
         plan.rust = true;
+        plan.cpp = true;
+        plan.cmake = true;
+        plan.layering = true;
         plan.native = true;
         plan.qml = true;
         plan.cargo_deps = true;
@@ -545,26 +657,37 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         plan.native_labels = all_native_labels;
     } else {
         plan.packages_l1 = changed_packages.clone();
-        let affected = dependency_closure(changed_packages.clone(), &reverse);
+        let mut affected = dependency_closure(changed_packages.clone(), &reverse);
+        if !native_dependency_changed && !changed_packages.contains("caret-launcher") {
+            // 纯 Rust 改动无需构建 launcher 的 Qt/CMake 树；仍编译其他直接消费者。
+            affected.remove("caret-launcher");
+        }
         if !affected.is_empty() {
             plan.rust = true;
         }
-        for (package, labels) in RUST_NATIVE_LABELS {
-            if affected.contains(*package) {
-                plan.native = true;
-                plan.qml |= labels.contains(&"qml");
-                plan.native_labels
-                    .extend(labels.iter().map(|label| (*label).to_owned()));
+        if native_dependency_changed {
+            for (package, labels) in RUST_NATIVE_LABELS {
+                if affected.contains(*package) {
+                    plan.native = true;
+                    plan.qml |= labels.contains(&"qml");
+                    plan.native_labels
+                        .extend(labels.iter().map(|label| (*label).to_owned()));
+                }
             }
         }
-        if changed_packages
-            .iter()
-            .any(|name| matches!(name.as_str(), "caret-build" | "caret-launcher"))
+        if changed_packages.iter().any(|name| name == "caret-build")
+            && paths
+                .iter()
+                .any(|path| path.starts_with("crates/caret-build/"))
         {
             plan.full = true;
             plan.full_quality = true;
+            plan.cpp = true;
+            plan.cmake = true;
+            plan.layering = true;
             plan.native = true;
             plan.qml = true;
+            plan.qml_lint |= changed_packages.contains("caret-build");
             plan.packages_l1.clear();
             plan.packages_l2 = all_packages;
             plan.native_labels = all_native_labels;
@@ -576,12 +699,37 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
         // 完整回退必须同步唤起每个域对应的 CI job，不能只扩大测试列表。
         plan.cargo_deps = true;
         plan.rust = true;
+        plan.layering = true;
         plan.native = true;
         plan.qml = true;
     }
+    plan.cpp |= plan.native_labels.contains("cpp");
     plan.qml |= plan.native_labels.contains("qml");
     plan.code = plan.rust || plan.native || plan.qml;
     Ok(plan)
+}
+
+fn package_path_affects_qml_bridge(package: &str, path: &str) -> bool {
+    match package {
+        "caret-ffi" | "caret-build" => true,
+        "caret-launcher" => path.ends_with("/build.rs"),
+        "caret-app" => matches!(
+            path,
+            "crates/caret-app/src/theme.rs" | "crates/caret-app/src/theme_schema.rs"
+        ),
+        _ => false,
+    }
+}
+
+fn package_path_requires_native_tests(package: &str, path: &str) -> bool {
+    match package {
+        "caret-ffi" | "caret-dsl-core" | "caret-build" | "caret-launcher" => true,
+        "caret-app" => matches!(
+            path,
+            "crates/caret-app/src/theme.rs" | "crates/caret-app/src/theme_schema.rs"
+        ),
+        _ => false,
+    }
 }
 
 fn cargo_packages(root: &Path) -> Result<Packages, Box<dyn Error>> {
@@ -864,6 +1012,9 @@ mod tests {
                 "{input}: {plan:?}"
             );
             assert!(plan.native_labels.contains("qml"));
+            if input.starts_with("crates/") {
+                assert!(plan.qml_lint, "{input}: {plan:?}");
+            }
         }
         Ok(())
     }
@@ -914,6 +1065,97 @@ mod tests {
     }
 
     #[test]
+    fn qml_lint_follows_direct_and_mixed_qml_bridge_changes() -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        for path in [
+            "crates/caret-app/src/theme.rs",
+            "crates/caret-app/src/theme_schema.rs",
+            "crates/caret-ffi/src/lib.rs",
+        ] {
+            assert!(make_plan(&[path.into()], &root)?.qml_lint, "{path}");
+        }
+        let storage = make_plan(&["crates/caret-app/src/document_storage.rs".into()], &root)?;
+        assert!(!storage.qml_lint, "{storage:?}");
+        assert!(!storage.native, "{storage:?}");
+        let theme = make_plan(&["crates/caret-app/src/theme.rs".into()], &root)?;
+        assert!(theme.native && theme.qml, "{theme:?}");
+
+        let mixed = make_plan(
+            &["Cargo.toml".into(), "crates/caret-ffi/src/lib.rs".into()],
+            &root,
+        )?;
+        assert!(mixed.full && mixed.full_quality, "{mixed:?}");
+        assert!(mixed.qml_lint && mixed.cpp && mixed.qml, "{mixed:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn native_test_source_skips_rust_lint_and_qml_lint() -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        let plan = make_plan(&["tests/cpp/i18n/qm_load_test.cpp".into()], &root)?;
+        assert!(plan.native, "{plan:?}");
+        assert!(plan.cpp, "{plan:?}");
+        assert!(!plan.rust, "{plan:?}");
+        assert!(!plan.qml, "{plan:?}");
+        assert!(!plan.qml_lint, "{plan:?}");
+        assert_eq!(plan.native_labels, BTreeSet::from(["cpp".into()]));
+
+        let shell = make_plan(&["tests/cpp/shell/shell_load_test.cpp".into()], &root)?;
+        assert!(shell.native && shell.cpp && shell.qml, "{shell:?}");
+        assert!(!shell.rust && !shell.qml_lint, "{shell:?}");
+        assert_eq!(shell.native_labels, BTreeSet::from(["qml".into()]));
+
+        let qml_cmake = make_plan(&["qml/CMakeLists.txt".into()], &root)?;
+        assert!(qml_cmake.qml && qml_cmake.qml_lint, "{qml_cmake:?}");
+        assert!(qml_cmake.cmake && qml_cmake.layering, "{qml_cmake:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn qml_lint_runner_changes_revalidate_qml_lint() -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        for path in ["tests/src/lint.rs"] {
+            let plan = make_plan(&[path.into()], &root)?;
+            assert!(!plan.full, "{path}: {plan:?}");
+            assert!(plan.qml_lint, "{path}: {plan:?}");
+            assert!(plan.packages_l1.contains("caret-tests"), "{plan:?}");
+            assert!(!plan.native, "{plan:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rust_test_harness_sources_stay_scoped_to_the_runner() -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        for path in [
+            "tests/Cargo.toml",
+            "tests/src/coverage.rs",
+            "tests/src/layering.rs",
+        ] {
+            let plan = make_plan(&[path.into()], &root)?;
+            assert!(plan.rust, "{path}: {plan:?}");
+            assert!(plan.packages_l1.contains("caret-tests"), "{path}: {plan:?}");
+            assert!(!plan.full, "{path}: {plan:?}");
+            assert!(!plan.native, "{path}: {plan:?}");
+            assert!(
+                plan.layering == (path == "tests/src/layering.rs" || path == "tests/Cargo.toml"),
+                "{path}: {plan:?}"
+            );
+        }
+        let build = make_plan(&["tests/src/build.rs".into()], &root)?;
+        assert!(build.native, "{build:?}");
+        assert!(build.native_labels.contains("qml"), "{build:?}");
+        assert!(!build.full, "{build:?}");
+        let selector = make_plan(&["tests/src/test_scope.rs".into()], &root)?;
+        assert!(selector.full && selector.full_quality, "{selector:?}");
+        assert!(
+            selector.cpp && selector.cmake && selector.qml_lint,
+            "{selector:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn dslc_and_app_changes_select_their_packages() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
         let dslc = make_plan(&["crates/caret-dslc/src/main.rs".into()], &root)?;
@@ -923,12 +1165,12 @@ mod tests {
 
         let app = make_plan(&["crates/caret-app/src/lib.rs".into()], &root)?;
         assert!(app.packages_l1.contains("caret-app"), "{app:?}");
-        // 内置主题快照从 caret-app 经 caret-ffi 进入 launcher。
+        // 普通应用服务只编译 Rust 消费端，不构建 Qt/CMake launcher。
         assert!(app.packages_l2.contains("caret-ffi"), "{app:?}");
-        assert!(app.packages_l2.contains("caret-launcher"), "{app:?}");
-        assert!(app.native && app.qml, "{app:?}");
-        assert!(app.native_labels.contains("qml"), "{app:?}");
+        assert!(!app.packages_l2.contains("caret-launcher"), "{app:?}");
+        assert!(!app.native && !app.qml, "{app:?}");
         assert!(!app.full);
+        assert!(!app.qml_lint, "{app:?}");
         Ok(())
     }
 
@@ -943,6 +1185,21 @@ mod tests {
         assert!(plan.packages_l1.contains(package), "{plan:?}");
         assert!(!plan.full, "{path} should stay package-scoped");
         assert!(!is_rust_package_path("tests/performance/cpu/example.cpp"));
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_and_test_harness_changes_skip_qml_lint() -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        for path in [
+            "tests/Cargo.toml",
+            "tests/src/layering.rs",
+            ".github/workflows/ci.yml",
+            ".github/actions/changed-paths/action.yml",
+        ] {
+            let plan = make_plan(&[path.into()], &root)?;
+            assert!(!plan.qml_lint, "{path}: {plan:?}");
+        }
         Ok(())
     }
 
@@ -997,7 +1254,7 @@ mod tests {
             assert!(plan.rust, "{plan:?}");
             assert!(plan.packages_l1.contains("caret-app"), "{plan:?}");
             assert!(plan.packages_l2.contains("caret-ffi"), "{plan:?}");
-            assert!(plan.packages_l2.contains("caret-launcher"), "{plan:?}");
+            assert!(!plan.packages_l2.contains("caret-launcher"), "{plan:?}");
             assert!(plan.native && plan.qml, "{plan:?}");
             assert!(plan.native_labels.contains("qml"), "{plan:?}");
             assert!(!plan.full, "{plan:?}");
@@ -1011,7 +1268,6 @@ mod tests {
         for path in [
             Some("native/CMakeLists.txt"),
             Some("unregistered/new-area/file.rs"),
-            Some("crates/launcher/build.rs"),
             None,
         ] {
             let paths = path.map(|path| vec![path.into()]).unwrap_or_default();
@@ -1023,10 +1279,19 @@ mod tests {
                 plan.rust && plan.native && plan.qml,
                 "{path:?} must schedule all domains"
             );
+            assert!(plan.layering, "{path:?} must schedule layering checks");
             assert_eq!(plan.packages_l1.len(), 0);
             assert_eq!(plan.packages_l2.len(), cargo_packages(&root)?.len());
             assert_eq!(plan.native_labels, all_native_labels());
+            assert!(plan.qml_lint, "{path:?} must retain fail-closed QML lint");
         }
+        let launcher_build = make_plan(&["crates/launcher/build.rs".into()], &root)?;
+        assert!(!launcher_build.full, "{launcher_build:?}");
+        assert!(
+            launcher_build.cpp && launcher_build.cmake,
+            "{launcher_build:?}"
+        );
+        assert!(launcher_build.native, "{launcher_build:?}");
         Ok(())
     }
 
@@ -1046,11 +1311,14 @@ mod tests {
         assert!(!plan.full);
         assert_eq!(
             plan.native_labels,
-            BTreeSet::from(["i18n".into(), "qml".into()])
+            BTreeSet::from(["cpp".into(), "i18n".into(), "qml".into()])
         );
         let app = make_plan(&["native/app/theme_catalog.cpp".into()], &root)?;
         assert!(!app.full);
         assert_eq!(app.native_labels, BTreeSet::from(["qml".into()]));
+        assert!(app.qml_lint, "{app:?}");
+        let i18n = make_plan(&["native/i18n/qm_catalog.cpp".into()], &root)?;
+        assert!(!i18n.qml_lint, "{i18n:?}");
         Ok(())
     }
 
@@ -1070,6 +1338,9 @@ mod tests {
 
         let cargo_config = make_plan(&["Cargo.toml".into()], &root)?;
         assert!(cargo_config.full_quality);
+        assert!(cargo_config.full, "{cargo_config:?}");
+        assert!(cargo_config.cpp && cargo_config.cmake && cargo_config.layering);
+        assert!(cargo_config.native && cargo_config.qml && cargo_config.qml_lint);
         Ok(())
     }
 }

@@ -1,7 +1,9 @@
 # 变更路径分类（任务 006）。输出：
-#   code       —— rust/native/qml 任一命中即 true（纯文档为 false）
+#   code       —— rust/cpp/qml 任一命中即 true（纯文档为 false）
 #   cargo_deps —— Cargo 清单或 deny.toml 变更
-#   rust / native / qml —— 对应域是否有变更
+#   rust / cpp / cmake / native / qml —— 对应源码或测试域是否有变更
+#   qml_lint —— 是否需要静态 QML 检查；独立于全量 native 测试闭包
+#   layering —— 是否需要验证 Rust/CMake 分层配置
 #   test_packages / native_labels —— PR 受影响测试选择；无法计算时回退全量
 #   changed_paths —— 统一的变更路径 JSON，供文件级格式与 lint 复用
 #   full_quality —— 公共工具配置、空 CI diff 或未知范围时启用完整质量检查
@@ -19,10 +21,18 @@ outputs:
     value: ${{ steps.filter.outputs.cargo_deps }}
   rust:
     value: ${{ steps.filter.outputs.rust }}
+  cpp:
+    value: ${{ steps.filter.outputs.cpp }}
+  cmake:
+    value: ${{ steps.filter.outputs.cmake }}
+  layering:
+    value: ${{ steps.filter.outputs.layering }}
   native:
     value: ${{ steps.filter.outputs.native }}
   qml:
     value: ${{ steps.filter.outputs.qml }}
+  qml_lint:
+    value: ${{ steps.filter.outputs.qml_lint }}
   test_packages:
     value: ${{ steps.filter.outputs.test_packages }}
   test_packages_l1:

@@ -54,8 +54,12 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       cargo_deps: ${{ steps.filter.outputs.cargo_deps }}
       rust: ${{ steps.filter.outputs.rust }}
+      cpp: ${{ steps.filter.outputs.cpp }}
+      cmake: ${{ steps.filter.outputs.cmake }}
+      layering: ${{ steps.filter.outputs.layering }}
       native: ${{ steps.filter.outputs.native }}
       qml: ${{ steps.filter.outputs.qml }}
+      qml_lint: ${{ steps.filter.outputs.qml_lint }}
       test_packages: ${{ steps.filter.outputs.test_packages }}
       test_packages_l1: ${{ steps.filter.outputs.test_packages_l1 }}
       test_packages_l2: ${{ steps.filter.outputs.test_packages_l2 }}
@@ -134,13 +138,9 @@ jobs:
         run: cargo lint clippy --changed --check
 
   lint-native:
-    name: cargo lint (${{ matrix.tool }}, ubuntu)
+    name: cargo lint (clang-tidy, includes, cppcheck, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.native == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        tool: [clang-tidy, includes, cppcheck]
+    if: needs.changes.outputs.cpp == 'true'
     runs-on: ubuntu-latest
     # 冷启动需供给 LLVM/Qt 并构建 native 树；上限防传输停滞拖满平台上限。
     timeout-minutes: 60
@@ -158,12 +158,15 @@ jobs:
 
       - uses: ./.github/actions/caret-cache-restore
 
-      - name: Run selected lint
+      - name: Run C++ lint tools
         shell: bash
         env:
           CARET_CHANGED_PATHS_JSON: ${{ needs.changes.outputs.changed_paths }}
           CARET_FORCE_FULL: ${{ needs.changes.outputs.full_quality }}
-        run: cargo lint "${{ matrix.tool }}" --changed --check
+        run: |
+          cargo lint clang-tidy --changed --check
+          cargo lint includes --changed --check
+          cargo lint cppcheck --changed --check
 
   # machete 只读 Rust 清单与源码，不进 native 构建图：按 rust 域触发，
   # 且不需要托管工具/依赖缓存。
@@ -200,7 +203,7 @@ jobs:
   lint-cmake:
     name: cargo lint (cmake, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.native == 'true'
+    if: needs.changes.outputs.cmake == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -220,7 +223,7 @@ jobs:
   lint-layering:
     name: cargo lint (layering, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.native == 'true' || needs.changes.outputs.cargo_deps == 'true'
+    if: needs.changes.outputs.layering == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -236,11 +239,11 @@ jobs:
         shell: bash
         run: cargo lint layering --check
 
-  # qmllint 消费 Qt 供给与 QML/bridge 输出：按 qml 或 native 域触发。
+  # 只在 QML 源或影响 QML bridge 的变更时运行；其他 native/Rust 变更由构建和受影响测试覆盖。
   lint-qmllint:
     name: cargo lint (qmllint, ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.qml == 'true' || needs.changes.outputs.native == 'true' || needs.changes.outputs.native_labels != '[]' || needs.changes.outputs.full_tests == 'true'
+    if: needs.changes.outputs.qml_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -299,17 +302,47 @@ jobs:
 
       - uses: ./.github/actions/caret-cache-restore
 
-      - name: Check workspace and all aggregated targets
-        run: cargo check --locked --workspace --all-targets
+      - name: Check affected Rust packages and targets
+        if: needs.changes.outputs.rust == 'true'
+        shell: bash
+        env:
+          TEST_PACKAGES: ${{ needs.changes.outputs.test_packages }}
+        run: |
+          selected=()
+          while IFS= read -r -d '' package; do
+            [[ -n "$package" ]] || continue
+            selected+=(--package "$package")
+          done < <(jq -j '.[] | ., "\u0000"' <<< "$TEST_PACKAGES")
+          if (( ${#selected[@]} == 0 )); then
+            echo "Rust changes did not select any Cargo packages" >&2
+            exit 1
+          fi
+          cargo check --locked --all-targets "${selected[@]}"
 
-      - name: Build workspace and native targets
-        run: cargo build --locked --workspace
+      - name: Build affected Rust packages and their native dependencies
+        if: needs.changes.outputs.rust == 'true'
+        shell: bash
+        env:
+          TEST_PACKAGES: ${{ needs.changes.outputs.test_packages }}
+        run: |
+          selected=()
+          while IFS= read -r -d '' package; do
+            [[ -n "$package" ]] || continue
+            selected+=(--package "$package")
+          done < <(jq -j '.[] | ., "\u0000"' <<< "$TEST_PACKAGES")
+          if (( ${#selected[@]} == 0 )); then
+            echo "Rust changes did not select any Cargo packages" >&2
+            exit 1
+          fi
+          cargo build --locked "${selected[@]}"
 
       - name: Verify Cargo-provisioned toolchain
+        if: needs.changes.outputs.native_labels != '[]'
         shell: bash
         run: cargo run --locked --package caret-tests -- toolchain
 
       - name: Test L1 Rust packages
+        if: needs.changes.outputs.rust == 'true'
         shell: bash
         env:
           TEST_PACKAGES: ${{ needs.changes.outputs.test_packages_l1 }}
@@ -333,6 +366,7 @@ jobs:
           fi
 
       - name: Test L2 Rust consumers
+        if: needs.changes.outputs.rust == 'true'
         shell: bash
         env:
           TEST_PACKAGES: ${{ needs.changes.outputs.test_packages_l2 }}
@@ -355,17 +389,28 @@ jobs:
             cargo test --locked --package caret-tests --bin caret-tests
           fi
 
-      - name: Test affected native and QML cases
-        if: needs.changes.outputs.native_labels != '[]'
+      - name: Test affected C++ and native cases
+        if: needs.changes.outputs.cpp == 'true' && needs.changes.outputs.native_labels != '[]'
         shell: bash
         env:
           NATIVE_LABELS: ${{ needs.changes.outputs.native_labels }}
           CARET_TEST_QML_LINT: "false"
         run: |
-          if [[ "${{ needs.changes.outputs.full_tests }}" == "true" ]]; then
+          labels="$(jq -r 'map(select(. != "qml")) | join("|")' <<< "$NATIVE_LABELS")"
+          if [[ -n "$labels" ]]; then
+            export CARET_TEST_CTEST_LABELS="^(${labels})$"
             cargo test --locked --package caret-tests --test native
-          else
-            labels="$(jq -r 'join("|")' <<< "$NATIVE_LABELS")"
+          fi
+
+      - name: Test affected QML cases
+        if: needs.changes.outputs.qml == 'true' && needs.changes.outputs.native_labels != '[]'
+        shell: bash
+        env:
+          NATIVE_LABELS: ${{ needs.changes.outputs.native_labels }}
+          CARET_TEST_QML_LINT: "false"
+        run: |
+          labels="$(jq -r 'map(select(. == "qml")) | join("|")' <<< "$NATIVE_LABELS")"
+          if [[ -n "$labels" ]]; then
             export CARET_TEST_CTEST_LABELS="^(${labels})$"
             cargo test --locked --package caret-tests --test native
           fi
