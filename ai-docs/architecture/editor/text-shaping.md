@@ -1,6 +1,6 @@
 # 文字塑形与位置
 
-更新日期：2026-10-25。文字运行和格式来源见[格式语义](text-formatting.md)。这里只描述布局与输入之间需要共享的文本映射，不指定具体 shaping 引擎。
+更新日期：2026-10-25。文字运行和格式来源见[格式语义](text-formatting.md)。文本分析、字体目录与 shaping 由 Rust `caret-layout` 管理，Qt 只暴露平台默认文本字体等宿主信息。
 
 ## 跨平台与多语言契约
 
@@ -10,19 +10,23 @@ Windows、macOS 和 Linux 共用同一 Unicode 数据版本及字素、双向和
 
 ## 塑形流程
 
-候选流程：按脚本、语言、方向分段 → 查字体覆盖并回退 → shaping → 生成 Unicode 换行机会 → 行排列和双向重排。文档默认字体或 Font EnvironmentNode 保存用户请求的 family；运行时找不到时显示替代字体，不把替代结果永久写回文档。
+实现流程：Parley Engine 0.12 做段落脚本/双向分析、字体选择、HarfRust shaping 和 glyph/cluster 映射；fontique 0.12 通过 CoreText、DirectWrite、Fontconfig 等平台后端发现字体并匹配覆盖；`icu_segmenter` 2.3.0 的 Unicode 17 UAX #14 行断机会独立传给后续行布局。字素边界由 `unicode-segmentation` 1.13.3 提供。依赖精确版本和数据均由 Cargo.lock 固定，Windows、macOS、Linux 运行同一份 Unicode 17 UCD grapheme、bidi-character 和 line-break corpus。
+
+文档排版器传入已按格式优先级解析的 `ShapingStyle`；`caret-layout` 再应用 Paragraph/Run 语言与嵌套 Font/Bold/Italic 环境。粗体、斜体和字体环境的有效值进入 shaping items；相邻同有效样式 Run 合并为同一塑形范围，避免文档分段改变连字、字形连接或组合字符塑形。无显式请求族时，Fontique 的 SystemUi generic family 作为主族，缺字再按脚本和语言回退；emoji cluster 优先查询 Emoji generic family。请求族缺失时保留并报告请求名与实际族，不回写文档。系统及用户字体列表在 FontCatalog 创建或显式 refresh 时读取，字体 blob 与引擎状态缓存，不在编辑热路径扫描磁盘。Windows 额外扫描系统 Fonts 与当前用户 Fonts 标准目录，以绕过 Fontique 0.12 对 DirectWrite 缓存集合不检查更新的问题；不承诺检测非标准路径注册及删除项，待 Windows 平台 smoke 复核。
+
+Parley Engine 目前尚未实现任意断点后的逐行 reshaping，且其内部 soft-wrap 标记使用的 LineBreak API 不作为 Caret 的规范断点来源。026 的行布局必须将实际断点限制在引擎安全的 Atom/ShapedCluster 边界；需要跨 boundary 重塑时要在对应 task 中设计和验证，不能假定本 task 已支持。
 
 Latin、East Asian 和 Complex Script 可以有不同字体。实际字体选择必须考虑系统可用性和许可证；不随应用分发未获许可的字体。请求字体、实际字体文件/实例、合成字重和语言方向都可能影响度量和缓存键。
 
 字体目录从操作系统枚举当前用户和系统已安装字体；用户安装的字体可被文档使用，但不会被 Caret 复制进安装包或 `.cdoc`。应用默认字体族是系统默认文本字体，具体解析受平台和文字脚本影响。字体目录在启动或显式刷新时更新并缓存，不在每次输入或塑形时扫描文件系统。字体环境保留请求的字体族；粗体/斜体环境优先选同族对应字形，没有对应字形时允许合成或回退，并保留语义环境。
 
-Glyph run 是排版结果，不取代文档中的文字和格式片段。布局需保留 cluster 到文本位置的映射：多个码点可能组成一个字素或 glyph，一个连字也可能覆盖多个字符。需处理组合附加符、emoji ZWJ、阿拉伯连接、RTL/LTR 混排和中文标点禁则。
+Glyph run 是排版结果，不取代文档中的文字和格式片段。布局需保留 cluster 到文本位置的映射：多个码点可能组成一个字素或 glyph，一个连字也可能覆盖多个字符。需处理组合附加符、emoji ZWJ、阿拉伯连接、RTL/LTR 混排和中文标点禁则。Unicode 17 官方 grapheme、bidi-character、line-break 测试集位于 [`tests/fixtures/unicode-17`](../../../tests/fixtures/unicode-17/)；规范断行将复杂上下文脚本的词典切分作为显式语言 tailoring。
 
 替代字体的度量可能改变换行和页数；不能只凭字体名称映射承诺与 Word 分页一致。
 
 ## 位置契约
 
-文档存储位置、用户可见光标移动边界、shaping cluster 和 glyph index 是不同概念。每个 Paragraph 建立逻辑文本视图，将 Run 按文档顺序串接；行内格式环境对字素分段透明，因此 Run、Bold/Italic/Font 环境边界都不能制造额外光标停靠点。行内对象是原子边界，不能进入对象内部。内部位置用 UTF-8 字节偏移，但方向键、删除、选区扩展和鼠标命中按同一 Unicode 版本的 extended grapheme cluster 边界移动；普通格式操作的非空选区按逻辑起止边界向外扩展到完整字素簇，保留锚点/焦点方向。任何转换都经过同一份逻辑文本到节点、cluster 和 glyph 的映射。位置不得落在无效 UTF-8 边界或字素簇中间；外部 API 提交非法偏移时拒绝，不静默猜测。
+文档存储位置、用户可见光标移动边界、shaping cluster 和 glyph index 是不同概念。每个 Paragraph 建立逻辑文本视图，将 Run 按文档顺序串接；行内格式环境对字素分段透明，因此 Run、Bold/Italic/Font 环境边界都不能制造额外光标停靠点。行内对象是原子边界，不能进入对象内部。内部位置用 UTF-8 字节偏移，但方向键、删除、选区扩展和鼠标命中按同一 Unicode 版本的 extended grapheme cluster 边界移动；普通格式操作的非空选区按逻辑起止边界向外扩展到完整字素簇，保留锚点/焦点方向。词典断行仅替换其有效 Run 语言范围内的默认断点，并将词典新增断点约束到完整字素边界；范围外仍提供完整 UAX #14 机会，实际行布局还须避免在字素簇中断行。任何转换都经过同一份逻辑文本到节点、cluster 和 glyph 的映射。位置不得落在无效 UTF-8 边界或字素簇中间；外部 API 提交非法偏移时拒绝，不静默猜测。
 
 环境边界亲和性使用逻辑文档顺序，决定插入时继承的环境，不表示屏幕左/右。视觉 caret affinity 是独立的布局状态，用于 bidi 混排或换行处同一逻辑位置的视觉侧；方向键先依视觉布局确定目标，再映射回逻辑 Pos，不能直接增减字节偏移。
 
@@ -30,7 +34,7 @@ Glyph run 是排版结果，不取代文档中的文字和格式片段。布局�
 
 ## 显示坐标
 
-文档几何和字号以 pt 保存。候选视图约定为 96 logical px/in；因此 `screenLogical = pageOrigin + documentPt * (96 / 72) * zoom - scrollLogical`，再由设备像素比转换为物理像素。该约定确保 zoom 不改文档字号，也不使 DPR 参与换行。
+文档几何和字号以 pt 保存，界面按 pt 输入和显示。排版 API 用 `u16` 百分之一 pt（`centipoints`）传递字号，50 表示 0.5 pt；API 边界再转换为 Parley 使用的浮点 pt，便于低层样式紧凑且支持 0.01 pt 精度。Parley 尺度沿用文档 pt，输出度量也以 pt 表示；视图边界统一转换为 logical px，系数为 `96 / 72`。坐标为 `screenLogical = pageOrigin + documentPt * (96 / 72) * zoom - scrollLogical`，再由设备像素比转换为物理像素。该约定确保 zoom 不改文档字号，也不使 DPR 参与换行。
 
 如果鼠标事件已是 Qt logical pixels，不再除 DPR。缩放应以鼠标点或视口中心为锚，调整滚动位置以保持文档锚点稳定。页面 origin 是滚动前内容坐标时才减 scroll，不能把视口坐标再减一次。
 
