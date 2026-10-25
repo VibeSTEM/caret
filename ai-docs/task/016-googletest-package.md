@@ -48,7 +48,7 @@
 | --- | --- | --- | --- |
 | 2026-10-25 | `cargo fmt --all -- --check`、`cargo clippy --locked -p caret-tests --all-targets -- -D warnings`、`cargo test --locked -p caret-tests` | 通过 | 通过；36 passed、3 ignored（基线现有忽略用例），新增 SDK 参数与宿主拒绝用例通过 |
 | 2026-10-25 | 在独立 worktree 执行 `cargo run --locked -p caret-tests -- sdk-googletest <锁定源码目录> target/sdk-production/work macos-arm64` | 编译、链接、运行通过 | 通过；归档解包后的独立干净消费者运行 1/1，通过托管 LLVM 22.1.7 生产；SHA256 `57e62c5c9a6980a2e81da1e6e6a45ab19f4659f689ce4d077a36b0759fc742a0` |
-| — | SDK workflow 三平台与发布 | 实际远程结果 | 未执行，未提交或推送 |
+| 2026-10-25 | [首次三平台运行](https://github.com/VibeSTEM/caret/actions/runs/40171787099) | 实际远程结果 | Windows 在上游启用 C 时自动选择 GNU 风格 clang.exe，却收到 MSVC 参数，配置失败；未发布。修复为显式固定 C/C++ 编译器，Windows 均用 clang-cl，待复验 |
 | 2026-10-25 | subagent `review_006`，`gpt-6.1-sol`、high，独立 worktree 全部 diff 与未跟踪文件 | 无未处理发现 | 通过；确认分支不依赖 006、pin/ABI/搬迁自检和发布保留资产均完整，远程结果仍待运行 |
 
 ## 风险与回退
@@ -60,6 +60,7 @@ SDK 源码与工具下载需要网络；摘要或 pin 不符必须失败。正�
 - 2026-10-25：独立 worktree 本地 fmt、Clippy、runner 单元测试和 macOS SDK 生产自检通过。生产与编译输出均位于该 worktree 的 `target/`，只复用既有 `.toolchain/`。远程权限由主代理按当前会话授权执行，本代理未提交或推送。
 - 2026-10-25：按用户要求从 006 工作区拆出独立分支 `yuki/googletest-package`，参考 `sdk-packaging a435195`，保留 Caret 自身的托管 LLVM 和 `.toolchain/` 约定。
 - 2026-10-25：用户明确授权提交、推送、PR 合并并打包发布 SDK Release。独立评审通过，先标为 implemented，三平台运行与发布有证据后再收尾。
+- 2026-10-25：独立 SDK 已由 [PR 6](https://github.com/VibeSTEM/caret/pull/6) 合并。首次远程验收发现 C 编译器驱动器混用，补齐显式 C 编译器配置后继续复验，不绕过失败 job 发布。
 
 ## 完成摘要
 
