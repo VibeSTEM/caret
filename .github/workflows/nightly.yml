@@ -114,6 +114,8 @@ jobs:
         with:
           components: "llvm-tools-preview"
 
+      - uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
 
       - uses: ./.github/actions/caret-cargo-tool-cache

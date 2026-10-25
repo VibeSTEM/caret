@@ -83,23 +83,30 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
     if !native.is_dir() {
         return Err(format!("sanitizer 构建树不存在：{}", native.display()).into());
     }
-    // 当前仅插桩自有 native 代码，Qt 和 Rust 的同步边界仍需结合普通测试判断。
-    // 没有本仓库复现证据时不继承来源项目的用例排除或第三方抑制清单。
+    // Linux Qt 6.11 的预编译 QML loader 在 TSan 下报告 QtCore 内部的分配/释放竞态
+    // （Nightly run 40206639630）；仅该平台的 TSan 排除此测试。升级托管 Qt 后复查。
+    // 其他 sanitizer、平台和常规测试仍完整运行。
     run_ctest_in(
         &native,
         sanitizer_test_env(profile)?,
         &format!("sanitizer {} ctest", profile.name()),
         None,
         None,
-        None,
+        ctest_exclusion(profile, sanitizer_platform()),
     )
 }
 
+fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
+    (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux)
+        .then_some("^Qml\\.ShellLoad$")
+}
+
 /// 托管 LLVM 的符号器和 Windows ASan 运行库加入 PATH；所有问题默认阻断。
-/// Unix 显式开启泄漏检查，不引用未在本仓库登记和验证的抑制文件。
+/// Unix 显式开启泄漏检查；macOS 仅抑制 CI 已确认的系统框架进程级缓存。
 fn sanitizer_test_env(
     profile: SanitizerProfile,
 ) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, Box<dyn Error>> {
+    let root = repository_root()?;
     let environment = caret_build::native_test_env(env!("CARET_TEST_HOST"))?;
     let llvm = caret_build::resolve_llvm_compilers()?;
     let mut prepend = vec![llvm.root.join("bin")];
@@ -107,13 +114,18 @@ fn sanitizer_test_env(
         prepend.push(caret_build::compiler_rt_dll_dir(&llvm)?);
     }
     let mut environment = caret_build::prepend_path(environment, prepend)?;
-    environment.extend(sanitizer_runtime_options(profile, sanitizer_platform()));
+    environment.extend(sanitizer_runtime_options(
+        profile,
+        sanitizer_platform(),
+        root,
+    ));
     Ok(environment)
 }
 
 fn sanitizer_runtime_options(
     profile: SanitizerProfile,
     platform: SanitizerPlatform,
+    root: &Path,
 ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     let mut options = Vec::new();
     if platform != SanitizerPlatform::Windows {
@@ -121,6 +133,17 @@ fn sanitizer_runtime_options(
     }
     if profile == SanitizerProfile::Thread {
         options.push(("TSAN_OPTIONS".into(), "halt_on_error=1".into()));
+    }
+    if platform == SanitizerPlatform::MacOs && profile == SanitizerProfile::AddressUndefined {
+        options.push((
+            "LSAN_OPTIONS".into(),
+            format!(
+                "suppressions={}",
+                root.join("tests/fixtures/sanitizers/macos-system-frameworks-lsan.supp")
+                    .display()
+            )
+            .into(),
+        ));
     }
     options
 }
@@ -162,26 +185,36 @@ mod tests {
     }
 
     #[test]
-    fn supported_profiles_do_not_suppress_reports_or_reference_missing_lists() {
+    fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_test() {
+        let root = Path::new("repository root");
         for platform in [
             SanitizerPlatform::Linux,
             SanitizerPlatform::MacOs,
             SanitizerPlatform::Windows,
         ] {
             for profile in sanitizer_profiles(platform) {
-                let options = sanitizer_runtime_options(*profile, platform);
+                let options = sanitizer_runtime_options(*profile, platform, root);
                 for (name, value) in &options {
-                    assert_ne!(name, "LSAN_OPTIONS");
-                    assert!(!value.to_string_lossy().contains("suppressions="));
+                    if name == "LSAN_OPTIONS" {
+                        assert!(value.to_string_lossy().ends_with(
+                            "tests/fixtures/sanitizers/macos-system-frameworks-lsan.supp"
+                        ));
+                    }
                 }
                 if *profile == SanitizerProfile::Thread {
-                    assert!(options.contains(&("TSAN_OPTIONS".into(), "halt_on_error=1".into())));
+                    assert!(options.iter().any(|(name, value)| name == "TSAN_OPTIONS"
+                        && value.to_string_lossy().starts_with("halt_on_error=1")));
                 }
                 if platform == SanitizerPlatform::Windows {
                     assert!(options.is_empty());
                 } else {
                     assert!(options.contains(&("ASAN_OPTIONS".into(), "detect_leaks=1".into())));
                 }
+                assert_eq!(
+                    ctest_exclusion(*profile, platform),
+                    (platform == SanitizerPlatform::Linux && *profile == SanitizerProfile::Thread)
+                        .then_some("^Qml\\.ShellLoad$")
+                );
             }
         }
     }
