@@ -1,3 +1,5 @@
+//! 验证 `.cdoc` 外层格式、必需能力并提供安全预览/读写类型。
+
 use crate::model::{Block, Document, Media, ModelError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

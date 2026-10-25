@@ -11,7 +11,7 @@ use super::{
     Affinity, Command, Direction, EditError, Effect, InputComposition, Pos, PositionMap, Selection,
     StoryId,
 };
-use caret_doc::{Document, NodeId, Paragraph};
+use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -73,7 +73,31 @@ impl Session {
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),
             Command::CancelComposition { id } => self.cancel_composition(id),
+            Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
         }
+    }
+
+    fn set_page_geometry(&mut self, geometry: PageGeometry) -> Result<Effect, EditError> {
+        geometry
+            .validate()
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        let section =
+            self.document.page_sections.first_mut().ok_or_else(|| {
+                EditError::InvalidDocument("document has no PageSection".to_owned())
+            })?;
+        let current = section
+            .geometry()
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        if current == geometry {
+            return Ok(Effect::default());
+        }
+        section
+            .set_geometry(geometry)
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        Ok(Effect {
+            document_changed: true,
+            ..Effect::default()
+        })
     }
 
     fn insert_text(&mut self, text: &str) -> Result<Effect, EditError> {

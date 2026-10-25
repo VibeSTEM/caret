@@ -18,6 +18,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `text.soft_break` / `text.split_paragraph` | 插入软换行 / 拆分或合并段落 | 一步 |
 | `caret.move` / `selection.set` | 移动插入点 / 设置选区 | 纯命令 |
 | `ime.update` / `ime.commit` / `ime.cancel` | 更新、提交或取消输入法组字 | 仅提交正文时一步 |
+| `page.geometry.set` | 设置整份文档的纸型、方向和边距 | 一步 |
 | `para.heading` | 设大纲级别 | 一步 |
 | `para.bullets` / `para.numbering` | 列表 | 一步 |
 | `insert.equation` | 插入公式对象 | 一步 |

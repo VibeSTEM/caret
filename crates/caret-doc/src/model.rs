@@ -1,3 +1,5 @@
+//! 定义文档树、节点 DTO、字段校验与语义节点序列化。
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -118,6 +120,7 @@ impl Document {
         }
         for section in &self.page_sections {
             insert_id(&mut ids, &section.id)?;
+            section.geometry().map_err(ModelError::from)?;
         }
         let mut count = 0usize;
         for block in &self.body {

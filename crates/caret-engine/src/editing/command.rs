@@ -1,5 +1,7 @@
 //! 定义编辑命令及其稳定命令 ID。
 
+use caret_doc::PageGeometry;
+
 use super::Selection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,7 +10,7 @@ pub enum Direction {
     Forward,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
     InsertSoftBreak,
@@ -19,6 +21,7 @@ pub enum Command {
     UpdateComposition { id: u64, preedit: String },
     CommitComposition { id: u64, text: String },
     CancelComposition { id: u64 },
+    SetPageGeometry(PageGeometry),
 }
 
 impl Command {
@@ -33,6 +36,7 @@ impl Command {
             Self::UpdateComposition { .. } => "ime.update",
             Self::CommitComposition { .. } => "ime.commit",
             Self::CancelComposition { .. } => "ime.cancel",
+            Self::SetPageGeometry(_) => "page.geometry.set",
         }
     }
 }

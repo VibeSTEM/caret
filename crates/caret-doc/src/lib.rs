@@ -4,12 +4,17 @@
 //! 随对应对象保留；未知节点或必需能力产生只读安全预览。
 
 mod model;
+mod page_geometry;
 mod storage_format;
 
 pub use model::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentSettings, ExplicitBreak,
     InlineEnvironment, InlineEnvironmentKind, InlineNode, Media, ModelError, NodeId, OpaqueNode,
     PageSection, Paragraph, Run, SoftBreak, ThemeSnapshot,
+};
+pub use page_geometry::{
+    Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,
+    points_to_millimeters,
 };
 pub use storage_format::{
     CURRENT_FORMAT_VERSION, CURRENT_THEME_FORMAT_VERSION, CdocFile, DocumentError, OpenedDocument,
