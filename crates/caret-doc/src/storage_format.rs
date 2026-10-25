@@ -238,12 +238,14 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
     if contains_opaque_block(&file.document.body) {
         reasons.push(PreviewReason::UnsupportedNodeKind);
     }
-    if let Some(theme) = &file.document.global_settings.theme {
-        if theme.format_version > CURRENT_THEME_FORMAT_VERSION {
-            reasons.push(PreviewReason::UnsupportedThemeVersion(theme.format_version));
-        } else if theme.format_version < CURRENT_THEME_FORMAT_VERSION {
-            return Err(DocumentError::UnsupportedThemeVersion(theme.format_version));
-        }
+    if let Some(theme) = file
+        .document
+        .global_settings
+        .theme
+        .as_ref()
+        .filter(|theme| theme.format_version != CURRENT_THEME_FORMAT_VERSION)
+    {
+        reasons.push(PreviewReason::UnsupportedThemeVersion(theme.format_version));
     }
     if reasons.is_empty() {
         file.refresh_required_features();
@@ -332,6 +334,12 @@ fn validate_base64(data: &str) -> Result<(), DocumentError> {
     {
         return Err(DocumentError::InvalidMedia(
             "base64 payload is malformed".to_owned(),
+        ));
+    }
+    let decoded_bytes = (data.len() / 4) * 3 - padding;
+    if decoded_bytes > MAX_MEDIA_BYTES {
+        return Err(DocumentError::InvalidMedia(
+            "decoded media payload exceeds 32 MiB".to_owned(),
         ));
     }
     Ok(())

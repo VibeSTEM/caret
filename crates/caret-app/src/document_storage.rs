@@ -53,29 +53,36 @@ impl DocumentStorage {
     /// 先写入同目录临时文件并同步，再原子替换目标。
     pub fn save_file(&self, path: &Path, document: &CdocFile) -> Result<(), DocumentStorageError> {
         let payload = document.to_bytes()?;
-        let parent = path
-            .parent()
-            .filter(|value| !value.as_os_str().is_empty())
-            .ok_or(DocumentStorageError::MissingParent)?;
-        let file_name = path
-            .file_name()
-            .ok_or(DocumentStorageError::MissingFileName)?;
-        fs::create_dir_all(parent).map_err(DocumentStorageError::Io)?;
-
-        let (temporary, mut file) = create_temp_file(parent, file_name)?;
-        let result = (|| {
-            file.write_all(&payload).map_err(DocumentStorageError::Io)?;
-            file.sync_all().map_err(DocumentStorageError::Io)?;
-            drop(file);
-            fs::rename(&temporary, path).map_err(DocumentStorageError::Io)?;
-            sync_parent_best_effort(parent);
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
+        write_atomically(path, &payload, |file, payload| file.write_all(payload))
     }
+}
+
+fn write_atomically(
+    path: &Path,
+    payload: &[u8],
+    mut write_payload: impl FnMut(&mut fs::File, &[u8]) -> std::io::Result<()>,
+) -> Result<(), DocumentStorageError> {
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .ok_or(DocumentStorageError::MissingParent)?;
+    let file_name = path
+        .file_name()
+        .ok_or(DocumentStorageError::MissingFileName)?;
+    fs::create_dir_all(parent).map_err(DocumentStorageError::Io)?;
+
+    let (temporary, mut file) = create_temp_file(parent, file_name)?;
+    let write_result = write_payload(&mut file, payload).and_then(|()| file.sync_all());
+    drop(file);
+    let result = write_result
+        .map_err(DocumentStorageError::Io)
+        .and_then(|()| fs::rename(&temporary, path).map_err(DocumentStorageError::Io));
+    if result.is_ok() {
+        sync_parent_best_effort(parent);
+    } else {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn create_temp_file(
@@ -113,4 +120,35 @@ fn sync_parent_best_effort(parent: &Path) {
     }
     #[cfg(not(unix))]
     let _ = parent;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DocumentStorageError, write_atomically};
+    use std::fs;
+    use std::io::{Error, ErrorKind, Write};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn failed_temporary_write_preserves_existing_file() -> Result<(), Box<dyn std::error::Error>> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let directory = std::env::temp_dir().join(format!("caret-atomic-save-{nonce}"));
+        fs::create_dir_all(&directory)?;
+        let target = directory.join("document.cdoc");
+        fs::write(&target, b"previous document")?;
+
+        let result = write_atomically(&target, b"replacement document", |file, payload| {
+            file.write_all(&payload[..5])?;
+            Err(Error::new(ErrorKind::WriteZero, "injected write failure"))
+        });
+
+        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
+        assert_eq!(fs::read(&target)?, b"previous document");
+        let entries = fs::read_dir(&directory)?.count();
+        assert_eq!(entries, 1, "failed save must remove its temporary file");
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
 }

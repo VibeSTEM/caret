@@ -530,10 +530,14 @@ fn is_well_formed_language_tag(tag: &str) -> bool {
     {
         index += 1;
     }
+    let mut variants = std::collections::BTreeSet::new();
     while index < subtags.len()
         && ((5..=8).contains(&subtags[index].len())
             || (subtags[index].len() == 4 && subtags[index].as_bytes()[0].is_ascii_digit()))
     {
+        if !variants.insert(subtags[index].to_ascii_lowercase()) {
+            return false;
+        }
         index += 1;
     }
 

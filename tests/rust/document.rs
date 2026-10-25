@@ -85,6 +85,27 @@ fn unknown_required_feature_opens_as_non_saveable_preview() {
 }
 
 #[test]
+fn unsupported_theme_snapshot_version_opens_as_non_saveable_preview() {
+    for version in [0, 2] {
+        let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+        value["document"]["globalSettings"]["theme"] = json!({
+            "formatVersion": version,
+            "namedStyles": {},
+            "environmentTemplates": {}
+        });
+        let opened = must(open(value.to_string().as_bytes()));
+        let OpenedDocument::SafePreview(preview) = opened else {
+            panic!("unsupported theme should be read-only");
+        };
+        assert!(!preview.can_save());
+        assert!(matches!(
+            preview.reasons.as_slice(),
+            [caret_doc::PreviewReason::UnsupportedThemeVersion(actual)] if *actual == version
+        ));
+    }
+}
+
+#[test]
 fn unknown_node_kind_is_preserved_as_opaque_preview_data() {
     let source = minimal_document(json!([{
         "type": "futureBlock",
@@ -125,10 +146,51 @@ fn direct_run_bold_is_rejected() {
 }
 
 #[test]
+fn duplicate_node_ids_and_multiple_page_sections_are_rejected() {
+    let duplicate_id = minimal_document(json!([
+        {"type": "paragraph", "id": "p-1", "inlines": []},
+        {"type": "paragraph", "id": "p-1", "inlines": []}
+    ]));
+    assert!(matches!(
+        open(duplicate_id.as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+
+    let mut multiple_pages: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+    multiple_pages["document"]["pageSections"] = json!([
+        {"id": "page-1"},
+        {"id": "page-2"}
+    ]);
+    assert!(matches!(
+        open(multiple_pages.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+}
+
+#[test]
+fn malformed_media_base64_is_rejected() {
+    let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
+    value["media"] = json!([{
+        "id": "media-1",
+        "mediaType": "image/png",
+        "data": "A==="
+    }]);
+    assert!(matches!(
+        open(value.to_string().as_bytes()),
+        Err(DocumentError::InvalidMedia(_))
+    ));
+}
+
+#[test]
 fn invalid_language_tag_is_rejected_and_valid_original_case_is_retained() {
     let invalid = minimal_document_with_language("en--US");
     assert!(matches!(
         open(invalid.as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+    let duplicate_variant = minimal_document_with_language("en-1901-1901");
+    assert!(matches!(
+        open(duplicate_variant.as_bytes()),
         Err(DocumentError::InvalidDocument(_))
     ));
     let valid = minimal_document_with_language("ZH-hans-cn");
