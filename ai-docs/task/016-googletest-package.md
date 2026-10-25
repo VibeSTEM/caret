@@ -62,6 +62,7 @@ SDK 源码与工具下载需要网络；摘要或 pin 不符必须失败。正�
 - 2026-10-25：用户明确授权提交、推送、PR 合并并打包发布 SDK Release。独立评审通过，先标为 implemented，三平台运行与发布有证据后再收尾。
 - 2026-10-25：独立 SDK 已由 [PR 6](https://github.com/VibeSTEM/caret/pull/6) 合并。首次远程验收发现 C 编译器驱动器混用，补齐显式 C 编译器配置后继续复验，不绕过失败 job 发布。
 - 2026-10-25：首轮 Linux、macOS 的归档搬迁自检已通过，但 artifact 上传同时包含归档和校验文件，`archive: false` 仅支持单文件，上传失败。移除该选项，保留默认 artifact 封装供发布 job 解包收集；不改 SDK 归档本身。
+- 2026-10-25：第二轮 Windows 已通过 C 编译器配置，但源码 `canonicalize()` 产生的设备路径前缀进入 clang-cl include 参数，导致找不到 `gtest/gtest.h`。生产入口保留以仓库根锚定的普通源码路径，仍检查目录和锁定 commit；取消被该修复取代的第三轮运行，修复后统一复验。
 
 ## 完成摘要
 

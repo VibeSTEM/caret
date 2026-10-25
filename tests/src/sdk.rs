@@ -14,7 +14,12 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), Box<dyn Error>> {
         return Err("用法：sdk-googletest <源码目录> <构建目录> <平台 triple>".into());
     }
     let root = repository_root()?;
-    let source = root.join(&arguments[0]).canonicalize()?;
+    // Windows canonicalize 会产生 \\?\ 设备路径前缀；CMake 再生成 -I/-imsvc
+    // 参数时不能可靠传给 clang-cl。保留已经以仓库根锚定的普通路径。
+    let source = root.join(&arguments[0]);
+    if !source.is_dir() {
+        return Err(format!("GoogleTest 源码目录不存在：{}", source.display()).into());
+    }
     let work = root.join(&arguments[1]);
     let triple = &arguments[2];
     let expected = match (std::env::consts::OS, std::env::consts::ARCH) {
