@@ -56,7 +56,6 @@ jobs:
         with:
           name: googletest-1.18.0-${{ matrix.sdk_triple }}
           path: target/sdk-production/work/dist/*
-          archive: false
           if-no-files-found: error
 
   publish:

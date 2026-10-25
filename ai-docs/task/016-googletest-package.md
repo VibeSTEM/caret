@@ -61,6 +61,7 @@ SDK 源码与工具下载需要网络；摘要或 pin 不符必须失败。正�
 - 2026-10-25：按用户要求从 006 工作区拆出独立分支 `yuki/googletest-package`，参考 `sdk-packaging a435195`，保留 Caret 自身的托管 LLVM 和 `.toolchain/` 约定。
 - 2026-10-25：用户明确授权提交、推送、PR 合并并打包发布 SDK Release。独立评审通过，先标为 implemented，三平台运行与发布有证据后再收尾。
 - 2026-10-25：独立 SDK 已由 [PR 6](https://github.com/VibeSTEM/caret/pull/6) 合并。首次远程验收发现 C 编译器驱动器混用，补齐显式 C 编译器配置后继续复验，不绕过失败 job 发布。
+- 2026-10-25：首轮 Linux、macOS 的归档搬迁自检已通过，但 artifact 上传同时包含归档和校验文件，`archive: false` 仅支持单文件，上传失败。移除该选项，保留默认 artifact 封装供发布 job 解包收集；不改 SDK 归档本身。
 
 ## 完成摘要
 
