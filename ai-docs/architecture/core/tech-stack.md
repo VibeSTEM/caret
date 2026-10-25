@@ -6,7 +6,7 @@
 | --- | --- |
 | 界面 | Qt 6 / QML。画布是 C++ 的绘制面，不是每帧回 Rust 的控件树 |
 | 桥 | CXX。签名见 [CXX](../../standards/cxx.md) |
-| 文档模型 | 段落-run，块用 `Arc` 共享。公式是树，不是一段带标记的 LaTeX |
+| 文档模型 | Paragraph/Run 表示段落与文字；行内或块级 EnvironmentNode 表达格式作用域和嵌套结构，由 [020](../../task/020-document-model-decision.md)细化。公式作为语义树，而非一段带标记的 LaTeX |
 | 原生文件 | UTF-8 JSON，扩展名 `.cdoc`，带格式版本。见[文档模型](../editor/document-model.md) |
 | 命令 | Rust 里的注册表。界面只提交 id 和参数 |
 | 主题和界面文案 | `.pa`，运行时用快照和 QM。见 [DSL](../../standards/dsl.md) |
