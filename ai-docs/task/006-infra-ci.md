@@ -68,6 +68,8 @@
 | 2026-10-25 | 不设本地 ROOT/URL/SHA 覆盖，经默认正式 URL 和固定清单供给 SDK，再编译链接消费 | 正式发布与消费者端到端可用 | macOS 通过；`GoogleTest.ConsumerSmoke` 1/1，构建树 `target/gtest-official-consumer` |
 | 2026-10-25 | subagent `final_index_review`，`gpt-6.1-sol`、high，完整暂存区及修复增量 | 无未处理实质问题 | 79 文件完整审查发现 1 项分层表达式绕过；修复后独立复跑全部分层夹具通过，原绕过被拒绝、合法 namespace 包装可用，最终无剩余实质发现 |
 | 2026-10-26 | [Nightly run 40209293853](https://github.com/VibeSTEM/caret/actions/runs/40209293853) | 三平台 nightly、覆盖率与 sanitizer 检查通过 | 覆盖率门槛失败（函数 77.89%、行 82.12%）：`caret-tests --test document` 的 18 项公开文档测试没有被 coverage runner 采集；macOS `Qml.ShellLoad` 因 Qt/CoreText/CoreGraphics 进程缓存泄漏报告失败。修复已加入文档测试采集、行为覆盖及窄符号抑制，等待新 Nightly 复验 |
+| 2026-10-26 | [Nightly run 40211105819](https://github.com/VibeSTEM/caret/actions/runs/40211105819) | 重跑覆盖率与三平台 nightly | 覆盖率门禁通过；Miri、Ubuntu quality、三平台 workspace tests、Linux/Windows sanitizer、native coverage、macOS Objective-C++ 和性能样例均通过。仅 macOS sanitizer 的 `Qml.ShellLoad` 仍报告 8,824 字节 / 69 个 Apple CoreText/CoreGraphics/FontParser 字体缓存分配；新增按失败栈符号限定的抑制，等待再次 Nightly 复验 |
+| 2026-10-26 | 本机 macOS 27：`ASAN_SYMBOLIZER_PATH=<managed llvm-symbolizer> cargo sanitize` | 本机 macOS ASan/UBSan 与 TSan 全套通过 | 精确 CoreText/Qt 规则将 `Qml.ShellLoad` 字体缓存报告从 17,812 字节降为 192 字节；`QmLoad` 和 `ShellLoad` 各仍有 192 字节未符号化的 CoreFoundation preferences/XPC 栈。现有 `CFPrefsPlistSource` 抑制无法在本机命中；未添加通用屏蔽。因 ASan/UBSan profile 失败，TSan profile 未运行 |
 
 ## 风险与回退
 
@@ -89,6 +91,9 @@
 - 2026-10-25：按代码域拆分 PR CI 选择与工具触发：Rust package/test、C++/CMake、QML 静态检查、QML CTest 和分层检查分别选择；C++ 与 QML CTest 使用独立标签。Rust harness 普通测试改动只选择 `caret-tests`；测试选择器自身改动则验证完整路由。三个 C++ lint 工具共用一个 runner，`format` 继续按变更文件运行，不参与编译。
 - 2026-10-25：Nightly run 40206639630 暴露 Linux 覆盖率缺少 Fontconfig 前置、Pest/stacker 的外部汇编不受 Miri 支持，以及 macOS 系统框架泄漏缓存和 Linux Qt 6.11 QML loader 的 TSan 报告。修复分支补齐 Linux 前置、缩窄 Miri 到可运行的纯 Rust 测试、仅对已确认的 macOS 系统缓存使用 LSAN 抑制；Linux TSan 只排除 `Qml.ShellLoad` 并要求升级托管 Qt 后复查。修复后的三平台 Nightly 尚未运行，不据此标记验收完成。
 - 2026-10-26：Nightly run 40209293853 通过 Miri、Linux workspace/native coverage 前置、Linux 与 Windows sanitizer、质量检查和 CPU 性能；覆盖率汇总未包含 `caret-tests --test document`，实际门槛为函数 77.89%、行 82.12%。将该公开集成测试纳入独立 coverage pass，并按 Cargo workspace 动态生成报告 package 范围，避免新增 crate 被白名单遗漏；增加存储错误路径、编辑状态和 FFI 成功路径断言以补齐可达行为。macOS `Qml.ShellLoad` 的 LSan 报告指向 Qt/CoreText/CoreGraphics 系统缓存，新增针对日志栈符号的有限抑制。待 PR 合并后的 Nightly 复验，不先标记任务完成。
+- 2026-10-26：Nightly run 40211105819 通过 Rust 覆盖率、三平台 workspace tests、Miri、质量、Linux/Windows sanitizer、native coverage、macOS Objective-C++ 与性能样例。macOS sanitizer 剩余 8,824 字节 / 69 个分配，日志栈为 CoreText fallback/font variation、Apple FontParser glyph cache 和字体注册 XPC URL 解码，没有 Caret 代码分配帧；再补充对应系统符号抑制，需再次 Nightly 验收。
+- 2026-10-26：subagent `nightly_fixes_review` 独立复核第二轮 LSAN 配置，要求移除类级泛匹配并仅保留日志中三个直接分配入口 `TDescriptorSource::CopyDescriptorUncached`、`TCGFontCache::CopyFontWithOpticalSizeVariation`、`XTCopyPropertiesForFontsMatchingRequest`；收窄后复核通过，无剩余实质发现。新 Nightly 仍须验证这些根对象抑制能否覆盖相关间接缓存。
+- 2026-10-26：本机 macOS 27 sanitizer 验证发现 Qt 6.11 的 CoreText 路径使用不同于 macOS 26 的具体 cache 函数名。针对本机报告的 Qt font database / font engine 入口增加精确规则，使 ShellLoad 字体缓存报告从 17,812 字节降为 192 字节。`qt_apple_urlFromPossiblySecurityScopedURL` 的三组 64 字节栈来自 `QDirListing`→`QFactoryLoader`→`QPlatformIntegrationFactory` 插件目录扫描；它是 stripped Qt 下最近的导出栈帧，不是完整所有权证明。CoreFoundation preferences/XPC 栈仍不可符号化，未扩大匹配。subagent 复核认为保留剩余 192 字节为失败是合适的；需在 Nightly macOS runner 验证。
 
 ## 完成摘要
 

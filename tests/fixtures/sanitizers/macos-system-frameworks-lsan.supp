@@ -8,3 +8,22 @@ leak:QCoreTextFontEngine::init
 
 # Apple color conversion retains CoreGraphics ColorSync transform caches process-wide.
 leak:CGCMSConverterCreate
+
+# CoreText fallback discovery retains descriptors and variation-font cache roots process-wide.
+leak:TDescriptorSource::CopyDescriptorUncached
+leak:TCGFontCache::CopyFontWithOpticalSizeVariation
+
+# macOS 26 font registry replies retain decoded URL objects in its XPC callback.
+leak:XTCopyPropertiesForFontsMatchingRequest
+leak:XTCopyPropertiesForFont
+
+# Qt 6.11 uses these CoreText cache paths on newer macOS releases.
+leak:QCoreTextFontDatabase::invalidate
+leak:QCoreTextFontDatabase::fallbacksForFamily
+leak:QCoreTextFontEngine::boundingBox
+leak:QCoreTextFontEngine::QCoreTextFontEngine
+leak:QCoreTextFontEngine::loadAdvancesForGlyphs
+leak:QCoreTextFontEngine::ct_getSfntTable
+
+# Qt 6.11's nearest exported frame for macOS 27 plugin-directory scan URL allocations.
+leak:qt_apple_urlFromPossiblySecurityScopedURL
