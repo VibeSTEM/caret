@@ -1,0 +1,39 @@
+# SDK workflow 只恢复 Cargo 和 .toolchain 缓存，不写缓存或依赖其他 CI job。
+# 后续 CI 可以复用同样的缓存键；没有缓存时由固定版本供给重新准备工具。
+name: Restore caret caches
+description: 按 scope 恢复 cargo-home 与 tools/deps 缓存
+inputs:
+  cargo_home:
+    description: 是否恢复 ~/.cargo 的 index/cache/git
+    required: false
+    default: "true"
+  tools_deps:
+    description: 是否恢复 .toolchain/ 下已安装的工具、Qt 与 SDK
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - if: inputs.cargo_home == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          ~/.cargo/git/checkouts
+        key: cargo-home-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+        restore-keys: |
+          cargo-home-${{ runner.os }}-${{ runner.arch }}-
+
+    - if: inputs.tools_deps == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          .toolchain/tools
+          .toolchain/qt
+          .toolchain/sdk
+          !.toolchain/tools/cargo-*
+        key: caret-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/caret-build/Cargo.toml', 'crates/caret-build/src/*.rs', 'native/CMakeLists.txt', 'native/cmake/*.cmake', 'native/cmake/**/*.cmake') }}
+        restore-keys: |
+          caret-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-

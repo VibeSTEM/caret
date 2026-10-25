@@ -10,6 +10,7 @@ mod miri;
 mod paths;
 mod performance;
 mod sanitize;
+mod sdk;
 mod test_scope;
 mod toolchain;
 
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         Some("verify-changed") => verify_changed(),
         Some("performance") => performance::run(arguments.collect()),
         Some("test") => build::test_all(),
+        Some("sdk-googletest") => sdk::run(arguments.collect()),
         Some("test-plan") => test_scope::print_plan(arguments.collect()),
         Some("test-scope") => test_scope::run_scope(arguments.collect()),
         Some("format") => {
@@ -50,12 +52,12 @@ fn main() -> ExitCode {
             lint::lint(tool, check, changed, tool_args)
         }
         Some(command) => Err(format!(
-            "未知命令 '{command}'；可用：quality、verify-changed、test、test-plan、test-scope、audit、lint、format、coverage、sanitize、\
+            "未知命令 '{command}'；可用：quality、verify-changed、test、test-plan、test-scope、sdk-googletest、audit、lint、format、coverage、sanitize、\
              ub-check、toolchain [hyperfine <参数>…]、performance"
         )
         .into()),
         None => Err(
-            "缺少命令；可用：quality、verify-changed、test、test-plan、test-scope、audit、lint、format、coverage、sanitize、ub-check、\
+            "缺少命令；可用：quality、verify-changed、test、test-plan、test-scope、sdk-googletest、audit、lint、format、coverage、sanitize、ub-check、\
                  toolchain [hyperfine <参数>…]、performance"
                 .into(),
         ),

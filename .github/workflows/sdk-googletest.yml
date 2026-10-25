@@ -1,0 +1,110 @@
+# SDK 生产与发布方式参考 sdk-packaging a435195；在当前仓库独立打包。
+name: SDK artifacts (GoogleTest)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 发布到当前仓库的 sdk-googletest-1.18.0 Release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-googletest
+  cancel-in-progress: false
+
+jobs:
+  googletest:
+    name: GoogleTest 1.18.0 (${{ matrix.sdk_triple }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            sdk_triple: macos-arm64
+          - os: ubuntu-latest
+            sdk_triple: linux-x86_64
+          - os: windows-2022
+            sdk_triple: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/caret-toolchain
+      - uses: ./.github/actions/caret-cache-restore
+      - name: Set macOS SDK deployment target
+        if: runner.os == 'macOS'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
+      - name: Checkout pinned GoogleTest source
+        uses: actions/checkout@v7
+        with:
+          repository: google/googletest
+          ref: 063de7e9578f82b369302001269680b4b1553359
+          path: target/sdk-production/googletest
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Build, selfcheck and archive static SDK with managed LLVM
+        shell: bash
+        run: cargo run --locked --package caret-tests -- sdk-googletest target/sdk-production/googletest target/sdk-production/work '${{ matrix.sdk_triple }}'
+      - name: Upload SDK archives and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: googletest-1.18.0-${{ matrix.sdk_triple }}
+          path: target/sdk-production/work/dist/*
+          archive: false
+          if-no-files-found: error
+
+  publish:
+    name: publish release assets (single tag)
+    if: inputs.publish
+    needs: [googletest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: googletest-1.18.0-*
+          merge-multiple: true
+          path: target/sdk-production/dist
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=sdk-googletest-1.18.0
+          dist=target/sdk-production/dist
+          for triple in macos-arm64 linux-x86_64 windows-x86_64; do
+            test -f "$dist/googletest-1.18.0-$triple.tar.gz"
+            test -f "$dist/googletest-1.18.0-$triple.sha256"
+            expected=$(tr -d '\r\n' < "$dist/googletest-1.18.0-$triple.sha256")
+            actual=$(sha256sum "$dist/googletest-1.18.0-$triple.tar.gz" | cut -d ' ' -f 1)
+            test "$actual" = "$expected"
+          done
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            if [[ "$draft" != true ]]; then
+              previous=$(mktemp -d)
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir "$previous"
+              for triple in macos-arm64 linux-x86_64 windows-x86_64; do
+                cmp "$dist/googletest-1.18.0-$triple.sha256" "$previous/googletest-1.18.0-$triple.sha256"
+              done
+              echo 'Published SDK is identical; keeping immutable release assets.'
+              exit 0
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+              --title 'GoogleTest 1.18.0 静态 SDK' --notes-file tools/sdk/releases/googletest-1.18.0.md
+          fi
+          gh release upload "$tag" "$dist"/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$tag" --draft=false --repo "$GITHUB_REPOSITORY"
