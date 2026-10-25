@@ -1,8 +1,11 @@
 #include "document_path_adapter.hpp"
 
 #include <QDir>
+#include <QObject>
 #include <QStandardPaths>
+#include <QString>
 #include <QUrl>
+#include <qstringliteral.h>
 
 namespace caret {
 
