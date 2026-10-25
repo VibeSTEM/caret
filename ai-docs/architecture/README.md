@@ -22,7 +22,7 @@ Caret 是轻量的所见即所得结构化编辑器。用户看到的就是排�
     → C++ 输入 / ViewModel
     → Session::run(命令 id, 参数)
         → 改 Document，或只改叠加层
-        → 按段落 rev 更新布局和结构索引
+        → 按 layoutRev 更新布局、按 structureRev 更新结构索引
     → 把页面快照交给 C++ 画布
     → QML 只绑定光标、选区、补全和状态栏
 ```
