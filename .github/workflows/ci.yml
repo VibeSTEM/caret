@@ -355,11 +355,6 @@ jobs:
           fi
           cargo build --locked "${selected[@]}"
 
-      - name: Verify Cargo-provisioned toolchain
-        if: needs.changes.outputs.native_labels != '[]'
-        shell: bash
-        run: cargo run --locked --package caret-tests -- toolchain
-
       - name: Test L1 Rust packages
         if: needs.changes.outputs.rust == 'true'
         shell: bash
@@ -433,5 +428,10 @@ jobs:
             export CARET_TEST_CTEST_LABELS="^(${labels})$"
             cargo test --locked --package caret-tests --test native
           fi
+
+      - name: Verify Cargo-provisioned toolchain
+        if: needs.changes.outputs.native_labels != '[]'
+        shell: bash
+        run: cargo run --locked --package caret-tests -- toolchain
 
       - uses: ./.github/actions/caret-cache-save
