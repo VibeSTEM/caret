@@ -72,6 +72,7 @@ const QSet<QString>& monochrome_icon_names() {
         QStringLiteral("copy"),     QStringLiteral("delete"),   QStringLiteral("caret"),
         QStringLiteral("search"),   QStringLiteral("new"),      QStringLiteral("open"),
         QStringLiteral("save"),     QStringLiteral("settings"), QStringLiteral("right"),
+        QStringLiteral("zoom-out"), QStringLiteral("zoom-in"),
     };
     return names;
 }

@@ -64,6 +64,8 @@ qt_add_qml_module(
   SOURCES
   ../native/app/platform_fonts.hpp
   ../native/app/platform_fonts.cpp
+  ../native/app/document_path_adapter.hpp
+  ../native/app/document_path_adapter.cpp
   ../native/app/theme_view_model.hpp
   ../native/app/theme_view_model.cpp)
 set_target_properties(caret_shell PROPERTIES EXPORT_NAME shell)
@@ -104,7 +106,9 @@ set(CARET_SHELL_ICON_FILES
     icons/save.svg
     icons/search.svg
     icons/settings.svg
-    icons/undo.svg)
+    icons/undo.svg
+    icons/zoom-in.svg
+    icons/zoom-out.svg)
 qt_add_resources(caret_shell "caret_shell_icons" PREFIX "/qt/qml/Caret/Shell" FILES
                  ${CARET_SHELL_ICON_FILES})
 

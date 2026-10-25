@@ -53,6 +53,8 @@
 | 015 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
 | 016 | [独立 GoogleTest SDK 生产与发布](task/016-googletest-package.md) | P0 | 001 | S | done |
 | 017 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
+| 018 | [文档状态、关闭确认与编辑历史](task/018-document-lifecycle-history.md) | P2 | 008 | L | planned |
+| 019 | [AutoSave 策略设计](task/019-autosave-design.md) | P2 | 018 | S | planned |
 
 007 是简化后的文档窗口：自定义标题栏、Home 与右侧 Comments / Editing / Share、居中的页面、底栏左侧页码字数语言、右侧缩放尺。009 才加补全层。010 在同一扇窗口上加焦点框和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
