@@ -55,7 +55,7 @@
 | 017 | 代码质量 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
 | 018 | 文档生命周期 | [文档状态、关闭确认与编辑历史](task/018-document-lifecycle-history.md) | P2 | 008 | L | planned |
 | 019 | AutoSave | [AutoSave 策略设计](task/019-autosave-design.md) | P2 | 018 | S | planned |
-| 020 | 模型设计 | [Paragraph/Run 语义与文档模型细化](task/020-document-model-decision.md) | P2 | — | M | in-progress |
+| 020 | 模型设计 | [Paragraph/Run 语义与文档模型细化](task/020-document-model-decision.md) | P2 | — | M | done |
 | 021 | 文档存储 | [文档树与 .cdoc 持久化](task/021-document-tree-and-storage.md) | P2 | 020 | L | planned |
 | 022 | 输入编辑 | [文本编辑、选择与 IME](task/022-text-editing-and-ime.md) | P2 | 021 | L | planned |
 | 023 | 页面几何 | [页面尺寸、节与几何](task/023-page-geometry.md) | P2 | 021 | M | planned |
@@ -65,7 +65,7 @@
 | 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | planned |
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 
-分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。当前先完成 020，再做 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
+分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
@@ -73,4 +73,4 @@
 
 ## 待决策
 
-文档模型仍待 020 决策。产品行为以架构为准，版本和移植边界以规范为准。
+020 已通过最终独立评审。后续实现任务须遵守其定稿的产品语义；产品行为以架构为准，版本和移植边界以规范为准。

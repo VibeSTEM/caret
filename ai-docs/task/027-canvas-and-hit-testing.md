@@ -40,6 +40,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 - [ ] 页面没有独立正文或 Undo 栈；跨页命中返回同一文档位置。
 - [ ] 绘制、选择、光标和 hit-testing 用同版 LayoutResult。
+- [ ] 视觉左右键按 bidi/line layout 选择目标 caret；逻辑边界 affinity 只决定输入继承，混合方向文本的同一逻辑位置可由独立 visual affinity 区分。
 - [ ] hover 和拖选预览由 C++ 画布本地更新，鼠标释放时才向 Rust 提交最终插入点或选区。
 - [ ] 光标进入不同嵌套环境时，高亮跟随最内层环境；块级高亮容器、行内高亮文字范围，并在退出时清除旧高亮。
 - [ ] 高亮在缩放、分页和选区操作中位置正确，且不写入文档格式；环境内容仍可绘制字符高亮和底纹。

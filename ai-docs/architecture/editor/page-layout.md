@@ -1,6 +1,6 @@
 # 页面与段落排版
 
-更新日期：2026-10-25。版式属性属于文档；页、行和视觉片段是派生布局。文档模型结构待 [020](../../task/020-document-model-decision.md)确认，增量策略见[增量排版](incremental-layout.md)。
+更新日期：2026-10-25。版式属性属于文档；页、行和视觉片段是派生布局。文档模型结构由 [020](../../task/020-document-model-decision.md) 定稿，增量策略见[增量排版](incremental-layout.md)。
 
 ## 纸张、节与单位
 
