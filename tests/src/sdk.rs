@@ -47,6 +47,10 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), Box<dyn Error>> {
     } else {
         &llvm.clangxx
     };
+    // 上游 GoogleTest 的 project 还会启用 C，必须同时固定两个驱动器。
+    // Windows 不能让 CMake 为 C 自动找到 GNU 命令行的 clang.exe，
+    // 再把 MSVC 风格的 /D、/Zi 等参数交给它。
+    let c_compiler = if cfg!(windows) { compiler } else { &llvm.clang };
     let sdk_env = caret_build::windows_sdk_env(env!("CARET_TEST_HOST"))?;
     let install = work.join("install");
     for (name, source_dir) in [
@@ -73,6 +77,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<(), Box<dyn Error>> {
             .args(["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"])
             .arg(format!("-DCMAKE_MAKE_PROGRAM={}", ninja.display()))
             .arg(format!("-DCMAKE_CXX_COMPILER={}", compiler.display()))
+            .arg(format!("-DCMAKE_C_COMPILER={}", c_compiler.display()))
             .arg(format!("-DCMAKE_INSTALL_PREFIX={}", install.display()))
             .arg(format!("-DGOOGLETEST_SOURCE={}", source.display()))
             .arg(format!("-DSDK_TRIPLE={triple}"))
