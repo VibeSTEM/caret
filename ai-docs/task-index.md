@@ -34,29 +34,37 @@
 
 ## 任务队列
 
-| 编号 | 任务 | 阶段 | 依赖 | 规模 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-| 001 | [工具链、workspace 与基础 crate](task/001-infra-toolchain.md) | P0 | — | L | done |
-| 002 | [DSL 核心与 dslc](task/002-infra-dsl.md) | P0 | 001 | M | done |
-| 003 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
-| 004 | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
-| 005 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
-| 006 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
-| 007 | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | in-progress |
-| 008 | [M0：打开、打字、保存](task/008-impl-document.md) | P2 | 007 | L | planned |
-| 009 | [M1：`\` 命令与补全层](task/009-impl-commands.md) | P2 | 008 | M | planned |
-| 010 | [M2：结构导航](task/010-impl-structure.md) | P2 | 009 | M | planned |
-| 011 | [M3：公式](task/011-impl-math.md) | P2 | 010 | L | planned |
-| 012 | [M3：表格](task/012-impl-table.md) | P2 | 010 | M | planned |
-| 013 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012 | M | planned |
-| 014 | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
-| 015 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
-| 016 | [独立 GoogleTest SDK 生产与发布](task/016-googletest-package.md) | P0 | 001 | S | done |
-| 017 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
-| 018 | [文档状态、关闭确认与编辑历史](task/018-document-lifecycle-history.md) | P2 | 008 | L | planned |
-| 019 | [AutoSave 策略设计](task/019-autosave-design.md) | P2 | 018 | S | planned |
+| 编号 | 分类 | 任务 | 阶段 | 依赖 | 规模 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 001 | 工具链 | [工具链、workspace 与基础 crate](task/001-infra-toolchain.md) | P0 | — | L | done |
+| 002 | DSL | [DSL 核心与 dslc](task/002-infra-dsl.md) | P0 | 001 | M | done |
+| 003 | 应用服务 | [路径、设置、语言与主题](task/003-infra-app.md) | P0 | 001、002 | M | done |
+| 004 | Qt/QML | [QML 组件库](task/004-infra-qml-kit.md) | P0 | 001、002 | L | done |
+| 005 | 桌面入口 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
+| 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
+| 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | in-progress |
+| 008 | M0 集成 | [M0：文档编辑端到端集成](task/008-impl-document.md) | P2 | 021–027 | M | planned |
+| 009 | 命令输入 | [M1：`\` 命令与补全层](task/009-impl-commands.md) | P2 | 008 | M | planned |
+| 010 | 结构导航 | [M2：结构导航](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
+| 011 | 数学排版 | [M3：公式](task/011-impl-math.md) | P2 | 010 | L | planned |
+| 012 | 表格排版 | [M3：表格](task/012-impl-table.md) | P2 | 010 | M | planned |
+| 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
+| 014 | CLI | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
+| 015 | 文档维护 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
+| 016 | SDK 发布 | [独立 GoogleTest SDK 生产与发布](task/016-googletest-package.md) | P0 | 001 | S | done |
+| 017 | 代码质量 | [当前代码整体审查与优化](task/017-code-review.md) | P0 | — | M | done |
+| 018 | 文档生命周期 | [文档状态、关闭确认与编辑历史](task/018-document-lifecycle-history.md) | P2 | 008 | L | planned |
+| 019 | AutoSave | [AutoSave 策略设计](task/019-autosave-design.md) | P2 | 018 | S | planned |
+| 020 | 模型设计 | [文档模型与 Paragraph/Run 决策](task/020-document-model-decision.md) | P2 | 007 | M | planned |
+| 021 | 文档存储 | [文档树与 .cdoc 持久化](task/021-document-tree-and-storage.md) | P2 | 020 | L | planned |
+| 022 | 输入编辑 | [文本编辑、选择与 IME](task/022-text-editing-and-ime.md) | P2 | 021 | L | planned |
+| 023 | 页面几何 | [页面尺寸、节与几何](task/023-page-geometry.md) | P2 | 021 | M | planned |
+| 024 | 字体塑形 | [字体回退与文字塑形](task/024-text-shaping.md) | P2 | 022、023 | L | planned |
+| 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 021、022、024 | M | planned |
+| 026 | 段落排版 | [行距、段间距与分页](task/026-paragraph-layout.md) | P2 | 023、024、025 | L | planned |
+| 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | planned |
 
-007 是简化后的文档窗口：自定义标题栏、Home 与右侧 Comments / Editing / Share、居中的页面、底栏左侧页码字数语言、右侧缩放尺。009 才加补全层。010 在同一扇窗口上加焦点框和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
+分类列描述实现主题；阶段列仍描述产品里程碑。M0 先完成 020 模型决策，再按文档存储、文本输入、页面几何、塑形、格式、段落排版、画布命中的顺序拆做 021–027，最后由 008 端到端集成。018 依赖 008；019 在 018 后单独设计 AutoSave。009 才加命令补全层。010 在同一扇窗口上加结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
@@ -64,4 +72,4 @@
 
 ## 待决策
 
-没有阻塞本队列的未决问题。产品行为以架构为准，版本和移植边界以规范为准。
+文档模型仍待 020 决策。产品行为以架构为准，版本和移植边界以规范为准。
