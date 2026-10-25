@@ -1,6 +1,6 @@
 # 021 — 文档树与 .cdoc 持久化
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：020
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-25
@@ -61,8 +61,9 @@ caret-doc、caret-engine/caret-app 存储边界、测试夹具和文档模型。
 
 ## 决策与工作记录
 
-- 2026-10-25：按 020 决议实现；尚未开始。
+- 2026-10-25：开始实现 `caret-doc` 文档模型与 `.cdoc` JSON 边界，并在 `caret-app` 增加显式路径打开和同目录原子保存。加入固定 v1 往返夹具、Unicode/未知字段/只读预览/版本/语言校验和存储黑盒测试；其余验收项仍在实施。
+- 2026-10-25：`cargo test --locked -p caret-doc -p caret-app` 与 `cargo clippy --locked -p caret-doc -p caret-app --all-targets -- -D warnings` 初次通过；补入黑盒测试后待复验。
 
 ## 完成摘要
 
-未完成。
+未完成。未知字段结构变换、迁移策略、写入失败注入和完整工作区验证尚未收尾。

@@ -1,0 +1,28 @@
+{
+  "format": "caret",
+  "version": 1,
+  "requiredFeatures": [],
+  "media": [],
+  "document": {
+    "globalSettings": {},
+    "body": [
+      {
+        "type": "paragraph",
+        "id": "paragraph-1",
+        "inlines": [
+          {
+            "type": "run",
+            "text": "Caret",
+            "props": {}
+          }
+        ]
+      }
+    ],
+    "pageSections": [
+      {
+        "id": "page-section-1",
+        "props": {}
+      }
+    ]
+  }
+}
