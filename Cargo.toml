@@ -6,6 +6,7 @@ members = [
     "crates/caret-doc",
     "crates/caret-dsl-core",
     "crates/caret-dslc",
+    "crates/caret-engine",
     "crates/caret-ffi",
     "crates/caret-foundation",
     "crates/launcher",
@@ -30,6 +31,7 @@ base64 = "0.23.1"
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 caret-app = { path = "crates/caret-app", version = "0.1.0" }
 caret-doc = { path = "crates/caret-doc", version = "0.1.0" }
+caret-engine = { path = "crates/caret-engine", version = "0.1.0" }
 caret-build = { path = "crates/caret-build", version = "0.1.0" }
 caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
@@ -38,6 +40,7 @@ cc = "=1.4.6"
 cxx = "=1.0.202"
 cxx-build = "=1.0.202"
 serde_json = "1.0"
+unicode-segmentation = "=1.13.3"
 criterion = "0.8.2"
 pest = "2.8"
 pest_derive = "2.8"

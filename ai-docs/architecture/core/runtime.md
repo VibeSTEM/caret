@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-25。下面的 `Session` 仍是目标结构，代码还没有。路径、设置、语言、主题和运行时上下文已经在 `caret-app`。
+更新日期：2026-10-25。`caret-engine` 已开始实现 `Session`、UTF-8 位置和基础文本/IME 命令；历史、布局缓存、结构索引与 FFI 接入仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
 
 ## 权威与派生
 
@@ -32,7 +32,7 @@ Session
 └── structure
 ```
 
-`Session::run(id, params) -> Result<Effect>` 是唯一的修改入口。`Effect` 只说明这次变了文档、选区、叠加层还是插入点。QML 不保存第二份正文。
+`Session::run(command) -> Result<Effect>` 是唯一的修改入口；命令类型提供稳定 id。`Effect` 只说明这次变了文档、选区、叠加层还是插入点。QML 不保存第二份正文。
 
 命令分两类：
 
