@@ -37,7 +37,7 @@ caret-layout 字体/shaping 模块、Qt 字体适配器、缓存键和跨平台�
 
 ## 验收标准
 
-- [ ] 文本、选区、光标与 glyph cluster 映射稳定。
+- [ ] 文本、选区、光标与 glyph cluster 映射稳定；段落逻辑文本跨 Run/行内格式环境形成同一字素视图，视觉 caret affinity 与逻辑格式边界 affinity 分离。
 - [ ] 中英、泰语（语言标记及词典断行可用时）、RTL、组合字符、Indic 组合和 emoji 无丢字、重字或无效位置。
 - [ ] Windows、macOS、Linux 从构建配置读取同一锁定的 Unicode 数据版本，使用相同 segmentation/bidi/line-break conformance corpus；升级显式改版本并更新测试样例，平台字体度量差异不作为行为测试差异。
 - [ ] 缺失字体保留请求名并报告替代，不静默改文档。

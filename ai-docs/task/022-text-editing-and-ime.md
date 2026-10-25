@@ -37,12 +37,15 @@ caret-engine、C++ 输入/画布适配器、FFI DTO 和编辑命令测试。
 
 ## 验收标准
 
-- [ ] 同一 Unicode 版本的扩展字素簇规则用于各平台光标、选区扩展和删除；中文、组合音符、emoji ZWJ/肤色、Indic 组合和阿拉伯双向文本不会被截断或拆开。此任务不依赖 shaping 的 glyph cluster 输出。
+- [ ] 同一 Unicode 版本的扩展字素簇规则作用于 Paragraph 逻辑文本，跨 Run 和 Bold/Italic/Font 节点分段；格式边界不能制造额外光标停靠点。测试含 `Run(U+0065) + Bold(Run(U+0301))` 和跨 Run/环境拆开的 emoji ZWJ/肤色序列；中文、Indic 组合和阿拉伯双向文本不会被截断或拆开。此任务不依赖 shaping 的 glyph cluster 输出。
+- [ ] 鼠标与命令选区端点保持在完整字素边界；格式操作把交互选区吸附到完整字素簇，外部非法 Pos 明确拒绝，不静默拆开字素。
 - [ ] 输入与编辑不隐式规范化 Unicode 码点序列；搜索/比较的规范化结果不能替代正文。
 - [ ] IME 更新不写入文档；提交仅插入一次，取消无副作用。
+- [ ] IME composition 未提交时 Return 由输入法优先消费，不误触发标题/正文 Enter；composition 映射到文档时保留原始码点序列。
 - [ ] Unicode/IME 用例在 Windows、macOS、Linux 共用同一预期结果；Qt UTF-16 与 Rust UTF-8 的映射不改变逻辑位置。
 - [ ] 正文 Paragraph 中 Enter 创建段落，Shift+Enter 是软换行；环境标题按 020 的独立标题规则处理。
 - [ ] 块环境标题内 Enter 保留标题前缀，新建正文首段放入后缀并插到现有子项前；首项为表格/嵌套环境时仍保留原顺序，后缀为空时新段为空。
+- [ ] 标题开头/末尾 Enter、标题内选区 Enter、跨标题/正文选区和未提交 IME composition 均有明确事务结果；映射或拒绝不得丢失标题/正文内容。
 - [ ] 失败命令保持文档、选区和待输入状态不变。
 - [ ] 独立评审和定向测试通过。
 
