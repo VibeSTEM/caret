@@ -1,0 +1,25 @@
+# 安装 rust-toolchain.toml 固定的工具链（任务 016；后续 CI 复用）。components 为逗号分隔
+# 的附加 rustup 组件（如 "rustfmt,clippy" 或 "llvm-tools-preview"）。
+name: Install pinned Rust toolchain
+description: 按 rust-toolchain.toml 固定 channel 安装最小 profile 工具链
+inputs:
+  components:
+    description: 逗号分隔的附加 rustup 组件
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        channel="$(awk -F'"' '/^channel[[:space:]]*=/{print $2}' rust-toolchain.toml)"
+        args=(--profile minimal --no-self-update)
+        if [ -n "$COMPONENTS" ]; then
+          IFS=',' read -ra items <<< "$COMPONENTS"
+          for item in "${items[@]}"; do
+            args+=(--component "$item")
+          done
+        fi
+        rustup toolchain install "$channel" "${args[@]}"
