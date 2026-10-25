@@ -2,6 +2,12 @@
 
 更新日期：2026-10-25。文字运行和格式来源见[格式语义](text-formatting.md)。这里只描述布局与输入之间需要共享的文本映射，不指定具体 shaping 引擎。
 
+## 跨平台与多语言契约
+
+Windows、macOS 和 Linux 共用同一 Unicode 数据版本及字素、双向和断行规则；版本在构建配置中集中锁定，升级必须显式进行，并运行相同的 conformance corpus。不能让光标边界、删除单位或行断机会因操作系统 API 默认值而变化。规范依据：[UAX #29 文本分段](https://www.unicode.org/reports/tr29/)、[UAX #9 双向算法](https://www.unicode.org/reports/tr9/) 和 [UAX #14 行断算法](https://www.unicode.org/reports/tr14/)。光标与退格/删除使用 UAX #29 extended grapheme cluster 边界；RTL 重排在段落内进行；断行先确定 Unicode 允许的断行机会，再由段落排版器选取实际断点。语言按 Run → Paragraph → 文档默认 BCP 47 标签回退；泰语等无空格语言可据此接入词典断行，不按平台或未经确认的自动检测猜测。
+
+一致性目标是相同的文档内容、编辑操作和 Unicode 边界行为，不承诺系统字体不同情况下逐像素相同或完全相同的分页。测试几何时使用固定测试字体；真实默认字体按平台和脚本回退。请求字体名和实际匹配字体分开保存/报告。
+
 ## 塑形流程
 
 候选流程：按脚本、语言、方向分段 → 查字体覆盖并回退 → shaping → 生成 Unicode 换行机会 → 行排列和双向重排。文档默认字体或 Font EnvironmentNode 保存用户请求的 family；运行时找不到时显示替代字体，不把替代结果永久写回文档。
@@ -16,7 +22,7 @@ Glyph run 是排版结果，不取代文档中的文字和格式片段。布局�
 
 ## 位置契约
 
-文档存储位置、用户可见光标移动边界、shaping cluster 和 glyph index 是不同概念。内部位置可以用 UTF-8 字节偏移，但方向键、删除、选区扩展要按定义好的字素边界移动；任何转换都经过同一份文本到 cluster 映射。位置不得落在无效 UTF-8 边界。
+文档存储位置、用户可见光标移动边界、shaping cluster 和 glyph index 是不同概念。内部位置用 UTF-8 字节偏移，但方向键、删除、选区扩展按同一 Unicode 版本的 extended grapheme cluster 边界移动；任何转换都经过同一份文本到 cluster 映射。位置不得落在无效 UTF-8 边界或字素簇中间。
 
 命中测试顺序：找到页面矩形 → 把屏幕坐标逆变换到页面物理单位 → 找行与视觉片段 → 根据 bidi 与 cluster 映射回文档位置。光标、选区、文字绘制引用同一版本的布局结果。
 
