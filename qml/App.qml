@@ -21,8 +21,6 @@ Window {
     // Windows 隐藏系统标题但保留原生按钮。Linux 显式保留空标题和系统按钮提示。
     flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint | (Qt.platform.os === "windows" ? Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : Qt.platform.os === "linux" ? Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : 0)
 
-    // 只缩放占位页，不表示文档缩放比。
-    property real pageScale: 1
     property string documentName: qsTr("Untitled")
     property url documentFileUrl: ""
     property url pendingSaveFileUrl: ""
@@ -63,9 +61,9 @@ Window {
             }
 
             PageSurface {
+                id: pageSurface
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                pageScale: window.pageScale
             }
 
             WindowStatusBar {
@@ -73,7 +71,7 @@ Window {
                 Layout.minimumHeight: Theme.statusbarHeight
                 Layout.preferredHeight: Theme.statusbarHeight
                 Layout.maximumHeight: Theme.statusbarHeight
-                onZoomEdited: value => window.pageScale = value
+                onZoomEdited: value => pageSurface.setZoomAtViewportCenter(value)
             }
         }
     }

@@ -6,6 +6,7 @@
 
 #include "caret_ffi.h"
 #include "icon_provider.hpp"
+#include "layout_view_model.hpp"
 #include "theme_catalog.hpp"
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -22,6 +23,8 @@
 #include <vector>
 
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
+Q_IMPORT_QML_PLUGIN(Caret_CanvasPlugin)
+Q_IMPORT_QML_PLUGIN(Caret_ViewModelsPlugin)
 
 namespace {
 
@@ -75,6 +78,15 @@ int main(int argc, char* argv[]) try {
 #endif
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     if (!caret::install_builtin_theme_catalog()) {
+        return kExitUnavailable;
+    }
+    const rust::String page_geometry_snapshot = caret::ffi::blank_document_page_geometry_snapshot();
+    const std::string_view page_geometry_snapshot_text(page_geometry_snapshot.data(),
+                                                       page_geometry_snapshot.size());
+    if (page_geometry_snapshot_text.starts_with("error:") ||
+        !caret::install_layout_snapshot(
+            QString::fromUtf8(page_geometry_snapshot.data(),
+                              static_cast<qsizetype>(page_geometry_snapshot.size())))) {
         return kExitUnavailable;
     }
 

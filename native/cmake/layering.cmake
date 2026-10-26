@@ -105,6 +105,18 @@ endfunction()
 
 function(caret_verify_layering)
   set(_production_targets caret_shell caret_shellplugin)
+  if(TARGET caret_canvas)
+    list(APPEND _production_targets caret_canvas)
+  endif()
+  if(TARGET caret_canvasplugin)
+    list(APPEND _production_targets caret_canvasplugin)
+  endif()
+  if(TARGET caret_viewmodels)
+    list(APPEND _production_targets caret_viewmodels)
+  endif()
+  if(TARGET caret_viewmodelsplugin)
+    list(APPEND _production_targets caret_viewmodelsplugin)
+  endif()
   if(TARGET caret_i18n)
     list(APPEND _production_targets caret_i18n)
   endif()
@@ -131,12 +143,12 @@ function(caret_verify_layering)
     endif()
     if(_target MATCHES "(_test|_benchmark)(_other_files)?$"
        OR _target STREQUAL "caret_performance_fixture"
-       OR _target MATCHES "^caret_(shell)(_resources_[0-9]+|_tooling)$"
-       OR _target MATCHES "^caret_(shell)plugin_init$"
-       OR _target MATCHES "^caret_(shell)_other_files$"
-       OR _target MATCHES "^caret_(shell)_qml[a-zA-Z0-9_]*$"
-       OR _target MATCHES "^caret_(shell)_.*_qml$"
-       OR _target MATCHES "^caret_(shell)_copy_(qml|res)$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling)$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)plugin_init$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_other_files$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_qml[a-zA-Z0-9_]*$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_.*_qml$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_copy_(qml|res)$"
        OR _target MATCHES
           "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$"
        OR _target MATCHES "^(caret_native_app_tooling|caret_benchmark_moc)$")
@@ -167,12 +179,27 @@ function(caret_verify_layering)
         TARGET_NAME)
     set(_allowed_dependencies)
     set(_allowed_aliases)
-    if(_source STREQUAL "caret_shellplugin")
+    if(_source STREQUAL "caret_shell")
+      set(_allowed_dependencies caret_canvas caret_viewmodels)
+      set(_allowed_aliases caret::canvas caret::viewmodels)
+    elseif(_source STREQUAL "caret_shellplugin")
       set(_allowed_dependencies caret_shell)
       set(_allowed_aliases caret::shell)
+    elseif(_source STREQUAL "caret_canvasplugin")
+      set(_allowed_dependencies caret_canvas)
+    elseif(_source STREQUAL "caret_viewmodelsplugin")
+      set(_allowed_dependencies caret_viewmodels)
     elseif(_source STREQUAL "caret_native_app")
-      set(_allowed_dependencies caret_shell caret_shellplugin caret_i18n caret_ffi)
-      set(_allowed_aliases caret::shell caret::i18n)
+      set(_allowed_dependencies
+          caret_shell
+          caret_shellplugin
+          caret_canvas
+          caret_canvasplugin
+          caret_viewmodels
+          caret_viewmodelsplugin
+          caret_i18n
+          caret_ffi)
+      set(_allowed_aliases caret::shell caret::canvas caret::viewmodels caret::i18n)
     endif()
 
     set(_links)
@@ -216,7 +243,7 @@ function(caret_verify_layering)
           endif()
           if(_dependency
              MATCHES
-             "^caret_(shell)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
+             "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
              OR _dependency MATCHES
                 "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$")
             continue()
@@ -242,7 +269,7 @@ function(caret_verify_layering)
           if(_resolved_target IN_LIST _allowed_dependencies
              OR _resolved_target
                 MATCHES
-                "^caret_(shell)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
+                "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
              OR _resolved_target MATCHES
                 "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$")
             continue()
@@ -270,11 +297,12 @@ function(caret_verify_layering)
         continue()
       endif()
 
-      if(_dependency MATCHES "^caret_(shell)(_resources_[0-9]+|_tooling|plugin_init)$"
-         OR _dependency MATCHES "^caret_(shell)_other_files$"
-         OR _dependency MATCHES "^caret_(shell)_qml[a-zA-Z0-9_]*$"
-         OR _dependency MATCHES "^caret_(shell)_.*_qml$"
-         OR _dependency MATCHES "^caret_(shell)_copy_(qml|res)$"
+      if(_dependency MATCHES
+         "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|plugin_init)$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_other_files$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_qml[a-zA-Z0-9_]*$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_.*_qml$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_copy_(qml|res)$"
          OR _dependency MATCHES
             "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$"
          OR _dependency STREQUAL "caret_native_app_tooling")

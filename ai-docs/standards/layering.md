@@ -1,6 +1,6 @@
 # 分层与依赖方向
 
-更新日期：2026-10-25。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
+更新日期：2026-10-26。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
 
 层号越小越靠下。生产代码只能依赖更小的层，不能依赖同层的另一个成员，也不能依赖更大的层。Rust 的层号和 Native 的层号各算各的。测试可以依赖被测对象，生产代码不能依赖测试。
 
@@ -84,6 +84,7 @@ flowchart TB
   entry --> adapter
   entry --> staticlib
   qml --> vm
+  qml --> canvas
   vm --> adapter
   vm --> staticlib
   canvas --> adapter
@@ -114,10 +115,10 @@ flowchart TB
 | --- | --- | --- |
 | N1 适配 | Qt 适配器 | Qt 和系统 API。不依赖 FFI、ViewModel、画布或 QML |
 | N2 界面能力 | 画布、ViewModel | 都可以依赖 N1。ViewModel 还可以链接 `caret-ffi` 的 staticlib。画布和 ViewModel 互不链接 |
-| N3 界面 | QML 模块 | 只依赖 ViewModel 暴露的类型。不链接 Rust，不链接画布 |
+| N3 界面 | QML 模块 | 依赖 ViewModel 暴露的属性和画布公开的声明式绘制项。不链接 Rust；画布不读取文档，文档数据由 ViewModel 提供 |
 | N4 入口 | native 应用 | N1、画布、ViewModel、QML 模块，以及 `caret-ffi` 的 staticlib |
 
-QML 表达意图。它不解析 `.pa`，不读写文档存储，不创建 Rust 对象。ViewModel 做 Qt 属性和参数转换，不实现文档事务。用户可见的行为由与 Qt 无关的 Rust 服务提供。界面和 `caret-cli` 提交同一种意图。命令 id 的目录写在[命令](../architecture/editor/commands.md)里。
+QML 表达意图并装配画布公开项。它不解析 `.pa`，不读写文档存储，不创建 Rust 对象。ViewModel 做 Qt 属性和参数转换，不实现文档事务。用户可见的行为由与 Qt 无关的 Rust 服务提供。界面和 `caret-cli` 提交同一种意图。命令 id 的目录写在[命令](../architecture/editor/commands.md)里。
 
 ## 边界
 

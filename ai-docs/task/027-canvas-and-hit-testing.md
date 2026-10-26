@@ -1,9 +1,9 @@
 # 027 — 页面画布、命中与布局快照
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：022、024、026
 - 优先级：P2
-- 创建 / 更新：2026-10-25 / 2026-10-25
+- 创建 / 更新：2026-10-25 / 2026-10-26
 
 ## 目标与背景
 
@@ -12,13 +12,16 @@
 ## 必读
 
 - [界面外壳](../architecture/interface/ui-shell.md)、[页面与段落排版](../architecture/editor/page-layout.md)、[文字塑形](../architecture/editor/text-shaping.md)
+- [光标与选区职责](../architecture/interface/caret.md)
 - [增量排版](../architecture/editor/incremental-layout.md)、[分层](../standards/layering.md)、[测试](../standards/testing.md)
 
 ## 范围与非目标
 
 实现滚动工作区、纸张绘制、布局快照、文本命中、选区/光标几何、当前环境背景高亮，以及 zoom。高亮由光标位置派生，作用于最内层 EnvironmentNode：块级环境高亮容器，行内环境高亮文字范围；它只属于视图叠加，不序列化。异步结果携带文档 generation，过期结果不能覆盖新版本。跨页选区仍是一条逻辑选区。
 
-不包含复杂尺规/页眉页脚、缓存性能优化和性能门槛；基准留给 013。
+光标与选区状态由 Rust 提供，页面内几何由 LayoutResult 提供，Canvas 只绘制。纸张、边框、光标和选区颜色来自 `qml/Themes/` token 并由 QML 注入；闪烁、粗细和焦点状态等视觉细节以[独立设计](../architecture/interface/caret.md)为准。
+
+不包含复杂尺规/页眉页脚、增量排版缓存和性能门槛；基准留给 013。页面几何使用前缀索引和 scene graph 几何，避免全篇纹理和二次方页面扫描。
 
 ## 前置条件与待决策
 
@@ -55,8 +58,9 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 | 日期 | 环境 / 检查 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | 坐标映射用例 | 不同 zoom/DPR 下命中一致 | 未执行 |
-| — | Qt 窗口跨页操作 | 跨页选择和输入连续 | 未执行 |
+| 2026-10-26 | `cargo test --offline --locked --workspace` | Rust 与 native 聚合测试通过 | 通过；native CTest 4/4 |
+| 2026-10-26 | `cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 无 lint 警告 | 通过 |
+| 2026-10-26 | 画布坐标与缩放边界 C++/QML 用例 | 多页 pt 映射、hit-test 往返及缩小后的滚动范围正确 | 通过；真实窗口跨页编辑仍未实现 |
 
 ## 风险与回退
 
@@ -65,6 +69,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 ## 决策与工作记录
 
 - 2026-10-25：从原 008 拆出画布与命中职责。
+- 2026-10-26：完成首个 C++/QML 页面几何切片。Rust 空白文档页几何经 FFI 到 ViewModel；Canvas 和 ViewModel 使用独立 QML 模块。页面点坐标映射、hit-test、缩放锚点和 scene graph 纸张绘制已落地。完整 LayoutResult、文字/字素命中、selection/caret 几何、generation 丢弃、环境高亮、输入预览和真实窗口交互仍待 027 后续实现。
 
 ## 完成摘要
 

@@ -18,6 +18,10 @@ target_link_libraries(
   caret_native_app
   PRIVATE caret::shell
           caret_shellplugin
+          caret::canvas
+          caret_canvasplugin
+          caret::viewmodels
+          caret_viewmodelsplugin
           "${CARET_FFI_STATIC_LIB}"
           Qt6::Gui
           Qt6::Qml

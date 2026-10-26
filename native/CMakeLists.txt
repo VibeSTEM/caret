@@ -61,6 +61,8 @@ if(CARET_I18N_TS_DIR)
   add_subdirectory(i18n)
 endif()
 
+add_subdirectory(canvas)
+add_subdirectory(viewmodels)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml" qml)
 
 if(CARET_ENABLE_APP)

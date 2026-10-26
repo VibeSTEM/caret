@@ -1,38 +1,48 @@
-// 页面占位。缩放只改变这一页的显示大小，不读文档。页面在编辑区里居中。
+// 可滚动多页工作区；尺寸由 Rust 页面几何快照提供，缩放只改变视图映射。
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Canvas
+import Caret.ViewModels
 
 Item {
     id: surface
 
     property real pageScale: 1
 
-    readonly property real pageMargin: Theme.spacingLarge * 2
-    readonly property real fittedWidth: Math.min(680, Math.max(240, width - pageMargin * 2))
-    readonly property real fittedHeight: fittedWidth * 11 / 8.5
-    readonly property real fit: Math.min(1, Math.max(0.35, (height - pageMargin * 2) / Math.max(1, fittedHeight)))
-    readonly property real pageWidth: fittedWidth * fit * pageScale
-    readonly property real pageHeight: fittedHeight * fit * pageScale
-
     Flickable {
         id: scroller
+        objectName: "documentScroller"
         anchors.fill: parent
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        contentWidth: Math.max(width, surface.pageWidth + surface.pageMargin * 2)
-        contentHeight: Math.max(height, surface.pageHeight + surface.pageMargin * 2)
+        contentWidth: Math.max(width, pageCanvas.implicitWidth)
+        contentHeight: Math.max(height, pageCanvas.implicitHeight)
 
-        Rectangle {
-            id: pageFrame
-            objectName: "documentPage"
-            width: surface.pageWidth
-            height: surface.pageHeight
-            x: Math.max(surface.pageMargin, (scroller.contentWidth - width) / 2)
-            y: Math.max(surface.pageMargin, (scroller.contentHeight - height) / 2)
-            color: Theme.colorPanel
-            border.width: Theme.borderWidth
-            border.color: Theme.colorPanelLine
+        DocumentCanvas {
+            id: pageCanvas
+            objectName: "documentCanvas"
+            width: scroller.contentWidth
+            height: scroller.contentHeight
+            zoom: surface.pageScale
+            pageColor: Theme.colorPanel
+            pageBorderColor: Theme.colorPanelLine
+            pageSizesPt: LayoutViewModel.pageSizesPt
         }
+    }
+
+    function setZoomAtViewportCenter(value) {
+        const center = Qt.point(scroller.width / 2, scroller.height / 2);
+        const contentPoint = scroller.mapToItem(pageCanvas, center.x, center.y);
+        const hit = pageCanvas.hitTestPage(contentPoint);
+        const documentPoint = hit.pageIndex >= 0 ? Qt.point(hit.xPt, hit.yPt) : Qt.point(0, 0);
+        pageScale = value;
+        if (hit.pageIndex < 0)
+            return;
+        Qt.callLater(function () {
+            const moved = pageCanvas.documentToContent(hit.pageIndex, documentPoint);
+            scroller.contentX = Math.min(Math.max(0, moved.x - center.x), Math.max(0, scroller.contentWidth - scroller.width));
+            scroller.contentY = Math.min(Math.max(0, moved.y - center.y), Math.max(0, scroller.contentHeight - scroller.height));
+        });
     }
 }

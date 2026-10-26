@@ -56,6 +56,9 @@ qt_add_qml_module(
   Caret.Shell
   VERSION
   1.0
+  DEPENDENCIES
+  Caret.Canvas
+  Caret.ViewModels
   RESOURCE_PREFIX
   /qt/qml
   ${CARET_QML_MODULE_OPTIONS}
@@ -122,6 +125,10 @@ if(BUILD_TESTING)
     caret_shell_load_test
     PRIVATE caret_shell
             caret_shellplugin
+            caret_canvas
+            caret_canvasplugin
+            caret_viewmodels
+            caret_viewmodelsplugin
             Qt6::Gui
             Qt6::Qml
             Qt6::Quick
