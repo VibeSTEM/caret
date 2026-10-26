@@ -21,7 +21,9 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QtCore/qcontainerfwd.h>
 #include <QtCore/qobjectdefs.h>
+#include <QtCore/qtmetamacros.h>
 #include <QtCore/qvariant.h>
 #include <algorithm>
 #include <cmath>
@@ -113,7 +115,7 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 struct ParsedLayoutSnapshot {
     QVariantList page_sizes;
     QVariantList page_layouts;
-    QVariantMap page_margins; // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
+    QVariantMap page_margins;
     QVariantList paragraph_layouts;
     qulonglong document_generation = 0;
     qulonglong font_generation = 0;
@@ -366,7 +368,7 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
     m_font_generation = parsed_snapshot.font_generation;
     m_error.clear();
     installed_snapshot() = snapshot_json;
-    emit layoutChanged(); // NOLINT(misc-include-cleaner): Qt 元对象系统提供 emit 宏。
+    emit layoutChanged();
     return true;
 }
 

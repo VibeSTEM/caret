@@ -24,8 +24,10 @@
 #include <QVariantMap>
 #include <Qt>
 #include <QtAlgorithms>
+#include <QtCore/qcontainerfwd.h>
 #include <QtCore/qglobal.h>
 #include <QtCore/qobjectdefs.h>
+#include <QtCore/qtmetamacros.h>
 #include <QtCore/qvariant.h>
 #include <algorithm>
 #include <cmath>
@@ -107,12 +109,10 @@ QSGImageNode* make_glyph_node(QQuickWindow* window, QSGTexture* texture,
     return node;
 }
 
-void build_glyph_frame(
-    PageGlyphNode* group, QQuickWindow* window,
-    const QVariantMap& frame, // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
-    const std::function<QRectF(int)>& page_rect,
-    const std::function<QPointF(int, const QPointF&)>& document_to_content, qreal logical_scale,
-    bool create_textures) {
+void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVariantMap& frame,
+                       const std::function<QRectF(int)>& page_rect,
+                       const std::function<QPointF(int, const QPointF&)>& document_to_content,
+                       qreal logical_scale, bool create_textures) {
     if (window == nullptr || !frame.value(QStringLiteral("valid")).toBool()) {
         return;
     }
@@ -210,12 +210,10 @@ void build_glyph_frame(
     }
 }
 
-void build_glyph_frames(
-    GlyphGroupNode* group, QQuickWindow* window,
-    const QVariantList& frames, // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
-    const std::function<QRectF(int)>& page_rect,
-    const std::function<QPointF(int, const QPointF&)>& document_to_content, qreal logical_scale,
-    bool frames_changed, bool geometry_changed) {
+void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVariantList& frames,
+                        const std::function<QRectF(int)>& page_rect,
+                        const std::function<QPointF(int, const QPointF&)>& document_to_content,
+                        qreal logical_scale, bool frames_changed, bool geometry_changed) {
     QSet<int> visible_pages;
     for (const QVariant& value : frames) {
         const QVariantMap frame = value.toMap();
@@ -278,10 +276,7 @@ DocumentCanvas::DocumentCanvas(QQuickItem* parent) : QQuickItem(parent) {
         if (target_window == nullptr) {
             return;
         }
-        const auto notify_raster_metrics = [this]() {
-            emit glyphRasterMetricsChanged(); // NOLINT(misc-include-cleaner): Qt 元对象系统提供
-                                              // emit 宏。
-        };
+        const auto notify_raster_metrics = [this]() { emit glyphRasterMetricsChanged(); };
         connect(target_window, &QWindow::screenChanged, this, notify_raster_metrics);
         connect(target_window, &QWindow::xChanged, this, notify_raster_metrics);
         connect(target_window, &QWindow::yChanged, this, notify_raster_metrics);

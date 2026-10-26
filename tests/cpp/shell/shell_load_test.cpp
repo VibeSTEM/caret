@@ -23,6 +23,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QRect>
 #include <QRectF>
@@ -52,6 +53,7 @@
 #include <limits>
 #include <qcontainerfwd.h>
 #include <qtestcase.h>
+#include <qtestsupport_core.h>
 #include <qtmetamacros.h>
 #include <string_view>
 #include <utility>
@@ -416,9 +418,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                           "}\n"),
         QUrl());
     QVERIFY2(render_component.isReady(), qPrintable(render_component.errorString()));
-    auto* rendered_canvas = qobject_cast<QQuickItem*>( // NOLINT(misc-include-cleaner): qobject_cast
-                                                       // 由 Qt 元对象头提供。
-        render_component.create());
+    auto* rendered_canvas = qobject_cast<QQuickItem*>(render_component.create());
     QVERIFY(rendered_canvas != nullptr);
     QCOMPARE(rendered_canvas->property("caretWidthCentipixels").toInt(), 125);
     constexpr qsizetype glyph_pixel_count = qsizetype{8} * 8;
@@ -521,7 +521,6 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                               kTestBlinkTransitionTimeoutMs);
     rendered_canvas->setProperty("caretBlinkEnabled", false);
     QTRY_COMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
-    // NOLINTNEXTLINE(misc-include-cleaner): QtTest 聚合头提供 qWait，include-cleaner 无法追踪。
     QTest::qWait(kDisabledBlinkObservationMs);
     QCOMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
     rendered_canvas->setProperty("caretBlinkEnabled", true);
