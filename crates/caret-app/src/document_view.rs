@@ -1,12 +1,14 @@
 //! 为界面提供由 Rust 文档会话生成的只读布局快照。
 
 use caret_doc::Document;
-use caret_engine::{DocumentLayoutRuntime, Session};
+use caret_engine::{DocumentLayoutRuntime, DocumentLayoutSnapshot, Session};
+use std::convert::TryFrom;
 
 /// 当前文档会话与可复用的字体/布局运行时。
 pub struct DocumentViewRuntime {
     session: Session,
     layout: DocumentLayoutRuntime,
+    last_snapshot: Option<DocumentLayoutSnapshot>,
 }
 
 impl DocumentViewRuntime {
@@ -14,17 +16,52 @@ impl DocumentViewRuntime {
     pub fn new_blank() -> Result<Self, String> {
         let session = Session::new(Document::blank()).map_err(|error| error.to_string())?;
         let layout = DocumentLayoutRuntime::new_system().map_err(|error| error.to_string())?;
-        Ok(Self { session, layout })
+        Ok(Self {
+            session,
+            layout,
+            last_snapshot: None,
+        })
     }
 
     /// 按当前会话和字体代际生成界面快照 JSON。
     pub fn layout_snapshot_json(&mut self) -> Result<String, String> {
-        let snapshot = self
-            .layout
-            .layout_session(&self.session)
-            .map_err(|error| error.to_string())?;
-        serde_json::to_string(&caret_engine::DocumentLayoutView::from(&snapshot))
+        let snapshot = self.current_snapshot()?;
+        serde_json::to_string(&caret_engine::DocumentLayoutView::from(snapshot))
             .map_err(|error| format!("layout.serialize: {error}"))
+    }
+
+    /// 在当前已发布或惰性重建的快照中命中，并返回稳定的 Rust 文档位置。
+    pub fn hit_test_json(
+        &mut self,
+        page_index: i32,
+        x_pt: f64,
+        y_pt: f64,
+    ) -> Result<String, String> {
+        let hit = match usize::try_from(page_index) {
+            Ok(page_index) => self
+                .current_snapshot()?
+                .hit_test_view(page_index, x_pt, y_pt),
+            Err(_) => None,
+        };
+        serde_json::to_string(&hit).map_err(|error| format!("layout.hit_test_serialize: {error}"))
+    }
+
+    fn current_snapshot(&mut self) -> Result<&DocumentLayoutSnapshot, String> {
+        let font_generation = self.layout.font_generation();
+        let current = self
+            .last_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_current_for(&self.session, font_generation));
+        if !current {
+            self.last_snapshot = Some(
+                self.layout
+                    .layout_session(&self.session)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        self.last_snapshot
+            .as_ref()
+            .ok_or_else(|| "layout.snapshot_unavailable".to_owned())
     }
 }
 
@@ -54,6 +91,21 @@ mod tests {
             snapshot["paragraphs"][0]["lines"][0]["heightPt"]
                 .as_f64()
                 .is_some_and(|height| height > 0.0)
+        );
+
+        let hit_json = runtime
+            .hit_test_json(0, 73.0, 73.0)
+            .unwrap_or_else(|error| panic!("document hit test failed: {error}"));
+        let hit: Value = serde_json::from_str(&hit_json)
+            .unwrap_or_else(|error| panic!("document hit JSON failed: {error}"));
+        assert_eq!(hit["position"]["offsetUtf8"], "0");
+        assert_eq!(hit["position"]["affinity"], "downstream");
+        assert_eq!(hit["visualAffinity"], "downstream");
+        assert_eq!(
+            runtime
+                .hit_test_json(-1, 73.0, 73.0)
+                .unwrap_or_else(|error| panic!("invalid page hit test failed: {error}")),
+            "null"
         );
     }
 }

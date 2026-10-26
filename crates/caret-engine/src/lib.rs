@@ -13,6 +13,6 @@ pub use layout::{
     LaidOutParagraph, PageHit, PageLayoutSnapshot, PageSelectionRect,
 };
 pub use layout_view::{
-    DocumentLayoutView, LayoutLineView, PageFragmentView, PageLayoutView, PageMarginsView,
-    ParagraphLayoutView,
+    DocumentLayoutView, DocumentPositionView, LayoutLineView, PageFragmentView, PageHitView,
+    PageLayoutView, PageMarginsView, ParagraphLayoutView, StoryView,
 };

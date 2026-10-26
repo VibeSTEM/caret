@@ -74,6 +74,9 @@ if(CARET_ENABLE_APP)
         "CARET_ENABLE_APP requires CARET_FFI_INCLUDE_DIR/caret_ffi.h and CARET_FFI_STATIC_LIB; build via Cargo"
     )
   endif()
+  target_compile_definitions(caret_viewmodels PRIVATE CARET_ENABLE_APP=1)
+  target_include_directories(caret_viewmodels PRIVATE "${CARET_FFI_INCLUDE_DIR}")
+  target_link_libraries(caret_viewmodels PRIVATE "${CARET_FFI_STATIC_LIB}")
   add_subdirectory(app)
 endif()
 

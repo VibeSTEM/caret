@@ -4,6 +4,10 @@
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "theme_view_model.hpp"
+#ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
+#include "document_runtime.hpp"
+#endif
 #include <QByteArray>
 #include <QColor>
 #include <QDir>
@@ -17,6 +21,7 @@
 #include <QQuickImageProvider>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QSignalSpy>
 #include <QString>
 #include <QVariantMap>
 #include <QtMath>
@@ -28,6 +33,7 @@
 #include <qcontainerfwd.h>
 #include <qtestcase.h>
 #include <qtmetamacros.h>
+#include <string_view>
 #include <utility>
 
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
@@ -78,6 +84,9 @@ class ShellLoadTest : public QObject {
     void unknownIconRefusesColoring();
     void newDocumentDialogHasNoProcessFields();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
+#ifdef CARET_ENABLE_APP
+    void documentHitTestReturnsRustPosition();
+#endif
 };
 
 void ShellLoadTest::initTestCase() { QQuickStyle::setStyle(QStringLiteral("Basic")); }
@@ -373,6 +382,72 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     delete view_model;
     delete root;
 }
+
+#ifdef CARET_ENABLE_APP
+void ShellLoadTest::documentHitTestReturnsRustPosition() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.ViewModels\n"
+                          "Item {\n"
+                          "    property var hit: LayoutViewModel.hitTestDocument(0, 73, 73)\n"
+                          "    property var miss: LayoutViewModel.hitTestDocument(-1, 73, 73)\n"
+                          "}\n"),
+        QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY(probe != nullptr);
+    const QVariantMap hit = probe->property("hit").toMap();
+    QVERIFY(hit.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!probe->property("miss").toMap().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(hit.value(QStringLiteral("documentGeneration")).toString(), QStringLiteral("0"));
+    const QVariantMap position = hit.value(QStringLiteral("position")).toMap();
+    QCOMPARE(position.value(QStringLiteral("paragraphId")).toString().isEmpty(), false);
+    QCOMPARE(position.value(QStringLiteral("offsetUtf8")).toString(), QStringLiteral("0"));
+    QCOMPARE(position.value(QStringLiteral("affinity")).toString(), QStringLiteral("downstream"));
+    QCOMPARE(
+        position.value(QStringLiteral("story")).toMap().value(QStringLiteral("kind")).toString(),
+        QStringLiteral("body"));
+    delete probe;
+
+    QQmlComponent surface_component(&engine);
+    surface_component.setData(QByteArrayLiteral("import QtQuick\n"
+                                                "import Caret.Shell\n"
+                                                "PageSurface { width: 500; height: 500 }\n"),
+                              QUrl());
+    QVERIFY2(surface_component.isReady(), qPrintable(surface_component.errorString()));
+    auto* surface = qobject_cast<QQuickItem*>(surface_component.create());
+    QVERIFY(surface != nullptr);
+    auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
+    QVERIFY(canvas != nullptr);
+
+    QQuickWindow window;
+    window.resize(500, 500);
+    surface->setParentItem(window.contentItem());
+    QSignalSpy position_spy(surface, SIGNAL(documentPositionHit(QVariant)));
+    QVERIFY(position_spy.isValid());
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+    const QPointF content_point = canvas->documentToContent(0, QPointF(73.0, 73.0));
+    const QPointF window_point = canvas->mapToItem(window.contentItem(), content_point);
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(position_spy.size(), 1, 3000);
+    const QVariantMap clicked_hit = position_spy.takeFirst().at(0).toMap();
+    QVERIFY(clicked_hit.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(clicked_hit.value(QStringLiteral("documentGeneration")).toString(),
+             QStringLiteral("0"));
+    delete surface;
+}
+#endif
 
 int main(int argc, char* argv[]) {
     QQuickWindow::setSceneGraphBackend(QStringLiteral("software"));

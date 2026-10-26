@@ -5,6 +5,7 @@
 /// 交给 QGuiApplication。
 
 #include "caret_ffi.h"
+#include "document_runtime.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "theme_catalog.hpp"
@@ -20,6 +21,7 @@
 #include <exception>
 #include <qnamespace.h>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
@@ -86,6 +88,9 @@ int main(int argc, char* argv[]) try {
     if (layout_snapshot_text.starts_with("error:") ||
         !caret::install_layout_snapshot(QString::fromUtf8(
             layout_snapshot.data(), static_cast<qsizetype>(layout_snapshot.size())))) {
+        return kExitUnavailable;
+    }
+    if (!caret::install_document_runtime(std::move(layout_runtime))) {
         return kExitUnavailable;
     }
 

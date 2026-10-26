@@ -134,6 +134,17 @@ if(BUILD_TESTING)
             Qt6::Quick
             Qt6::QuickControls2
             Qt6::Test)
+  if(CARET_ENABLE_APP)
+    target_compile_definitions(caret_shell_load_test PRIVATE CARET_ENABLE_APP=1)
+    target_include_directories(caret_shell_load_test PRIVATE "${CARET_FFI_INCLUDE_DIR}")
+    target_link_libraries(caret_shell_load_test PRIVATE "${CARET_FFI_STATIC_LIB}")
+    if(UNIX)
+      find_package(Threads REQUIRED)
+      target_link_libraries(caret_shell_load_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    elseif(WIN32)
+      target_link_libraries(caret_shell_load_test PRIVATE ws2_32 userenv ntdll)
+    endif()
+  endif()
   caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
 
   find_program(

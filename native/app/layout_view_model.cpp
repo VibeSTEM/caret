@@ -1,16 +1,24 @@
 // Rust 页面/段落快照的只读 Qt 属性适配。
 #include "layout_view_model.hpp"
 
+#ifdef CARET_ENABLE_APP
+#include "document_runtime.hpp"
+#endif
+
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QSizeF>
+#include <QThread>
 #include <QVariant>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace caret {
@@ -20,6 +28,13 @@ QString& installed_snapshot() {
     static QString value;
     return value;
 }
+
+#ifdef CARET_ENABLE_APP
+std::optional<rust::Box<ffi::DocumentRuntime>>& installed_runtime() {
+    static std::optional<rust::Box<ffi::DocumentRuntime>> value;
+    return value;
+}
+#endif
 
 bool nonnegative_index(const QJsonValue& value, qsizetype& result) {
     if (!value.isDouble()) {
@@ -296,6 +311,59 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     (void)parse_layout_snapshot(installed_snapshot(), m_page_sizes_pt, m_page_layouts,
                                 m_page_margins_pt, m_paragraph_layouts, m_document_generation,
                                 m_font_generation, m_error);
+}
+
+#ifdef CARET_ENABLE_APP
+bool install_document_runtime(rust::Box<ffi::DocumentRuntime> runtime) {
+    installed_runtime() = std::move(runtime);
+    return true;
+}
+#endif
+
+QVariantMap LayoutViewModel::hitTestDocument(int page_index, qreal x_pt, qreal y_pt) {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.hit_test_wrong_thread")}};
+    }
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+
+    const rust::String response = ffi::document_hit_test_json(
+        **runtime, page_index, static_cast<double>(x_pt), static_cast<double>(y_pt));
+    const QByteArray json(response.data(), static_cast<qsizetype>(response.size()));
+    if (json.startsWith("error:")) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QString::fromUtf8(json.sliced(6))}};
+    }
+    if (json == "null") {
+        return {{QStringLiteral("valid"), false}};
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(json, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
+    }
+    if (!document.isObject()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
+    }
+    QVariantMap result = document.object().toVariantMap();
+    result.insert(QStringLiteral("valid"), true);
+    return result;
+#else
+    Q_UNUSED(page_index)
+    Q_UNUSED(x_pt)
+    Q_UNUSED(y_pt)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
 }
 
 } // namespace caret

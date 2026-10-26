@@ -8,6 +8,8 @@ import Caret.ViewModels
 Item {
     id: surface
 
+    signal documentPositionHit(var result)
+
     property real pageScale: 1
 
     Flickable {
@@ -29,6 +31,17 @@ Item {
             pageBorderColor: Theme.colorPanelLine
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
+
+            TapHandler {
+                onTapped: function (eventPoint) {
+                    const pageHit = pageCanvas.hitTestPage(eventPoint.position);
+                    if (pageHit.pageIndex < 0)
+                        return;
+                    const result = LayoutViewModel.hitTestDocument(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
+                    if (result.valid)
+                        surface.documentPositionHit(result);
+                }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 //! 将 Rust 内部布局结果投影为供 FFI 与界面消费的稳定只读数据。
 
-use crate::DocumentLayoutSnapshot;
+use crate::{Affinity, DocumentLayoutSnapshot, PageHit, StoryId};
+use caret_layout::VisualAffinity;
 use serde::Serialize;
 
 /// 页面、段落和修订代际组成的界面布局快照。
@@ -66,6 +67,37 @@ pub struct LayoutLineView {
     pub height_pt: f64,
     pub advance_pt: f64,
     pub overflows_width: bool,
+}
+
+/// 与具体屏幕坐标分离的稳定 UTF-8 文档位置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPositionView {
+    pub story: StoryView,
+    pub paragraph_id: String,
+    pub offset_utf8: String,
+    pub affinity: String,
+}
+
+/// 正文或环境标题所在的文档故事。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StoryView {
+    Body,
+    EnvironmentTitle {
+        #[serde(rename = "environmentId")]
+        environment_id: String,
+    },
+}
+
+/// 文字命中位置，同时保留逻辑亲和性、视觉亲和性和输入代际。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageHitView {
+    pub session_id: Option<String>,
+    pub document_generation: String,
+    pub position: DocumentPositionView,
+    pub visual_affinity: String,
 }
 
 impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
@@ -139,5 +171,46 @@ impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
             pages,
             paragraphs,
         }
+    }
+}
+
+impl DocumentLayoutSnapshot {
+    /// 将页面点坐标命中结果投影为可通过 FFI 传输的稳定文档位置。
+    pub fn hit_test_view(&self, page_index: usize, x_pt: f64, y_pt: f64) -> Option<PageHitView> {
+        let hit = self.hit_test(page_index, x_pt, y_pt)?;
+        Some(PageHitView {
+            session_id: self.session_id.as_ref().map(ToString::to_string),
+            document_generation: self.document_generation.to_string(),
+            position: DocumentPositionView::from(&hit),
+            visual_affinity: visual_affinity_name(hit.visual_affinity).to_owned(),
+        })
+    }
+}
+
+impl From<&PageHit> for DocumentPositionView {
+    fn from(hit: &PageHit) -> Self {
+        let story = match &hit.position.story {
+            StoryId::Body => StoryView::Body,
+            StoryId::EnvironmentTitle(environment_id) => StoryView::EnvironmentTitle {
+                environment_id: environment_id.to_string(),
+            },
+        };
+        Self {
+            story,
+            paragraph_id: hit.position.paragraph_id.to_string(),
+            offset_utf8: hit.position.offset.to_string(),
+            affinity: match hit.position.affinity {
+                Affinity::Upstream => "upstream",
+                Affinity::Downstream => "downstream",
+            }
+            .to_owned(),
+        }
+    }
+}
+
+fn visual_affinity_name(affinity: VisualAffinity) -> &'static str {
+    match affinity {
+        VisualAffinity::Upstream => "upstream",
+        VisualAffinity::Downstream => "downstream",
     }
 }

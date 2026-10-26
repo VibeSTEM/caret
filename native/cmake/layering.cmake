@@ -189,6 +189,8 @@ function(caret_verify_layering)
       set(_allowed_dependencies caret_canvas)
     elseif(_source STREQUAL "caret_viewmodelsplugin")
       set(_allowed_dependencies caret_viewmodels)
+    elseif(_source STREQUAL "caret_viewmodels")
+      set(_allowed_dependencies caret_ffi)
     elseif(_source STREQUAL "caret_native_app")
       set(_allowed_dependencies
           caret_shell

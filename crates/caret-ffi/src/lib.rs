@@ -14,6 +14,13 @@ mod generated {
             fn new_blank_document_runtime() -> Box<DocumentRuntime>;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;
+            /// 仅在持有句柄的 UI 线程同步调用，不保留借用；无位置返回 JSON null，错误以 error: 开头。
+            fn document_hit_test_json(
+                runtime: &mut DocumentRuntime,
+                page_index: i32,
+                x_pt: f64,
+                y_pt: f64,
+            ) -> String;
         }
     }
 
@@ -52,10 +59,27 @@ mod generated {
         }
     }
 
+    /// 将页面内命中委托给与快照相同的 Rust 布局结果。
+    fn document_hit_test_json(
+        runtime: &mut DocumentRuntime,
+        page_index: i32,
+        x_pt: f64,
+        y_pt: f64,
+    ) -> String {
+        match &mut runtime.runtime {
+            Ok(runtime) => match runtime.hit_test_json(page_index, x_pt, y_pt) {
+                Ok(json) => json,
+                Err(error) => format!("error:{error}"),
+            },
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::{
-            builtin_theme_catalog, layout_snapshot_json, new_blank_document_runtime, version,
+            builtin_theme_catalog, document_hit_test_json, layout_snapshot_json,
+            new_blank_document_runtime, version,
         };
 
         #[test]
@@ -82,6 +106,9 @@ mod generated {
             assert!(snapshot.contains("\"paragraphs\":["));
             assert!(snapshot.contains("\"fontGeneration\":\"1\""));
             assert_eq!(layout_snapshot_json(&mut runtime), snapshot);
+            let hit = document_hit_test_json(&mut runtime, 0, 73.0, 73.0);
+            assert!(hit.contains("\"offsetUtf8\":\"0\""));
+            assert_eq!(document_hit_test_json(&mut runtime, -1, 73.0, 73.0), "null");
         }
     }
 }

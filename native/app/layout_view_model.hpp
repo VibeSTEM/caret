@@ -37,6 +37,9 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] QString fontGeneration() const { return QString::number(m_font_generation); }
     [[nodiscard]] const QString& error() const { return m_error; }
 
+    /// 将页面局部 pt 坐标交给 Rust 布局快照，返回带文档位置的命中结果。
+    Q_INVOKABLE QVariantMap hitTestDocument(int page_index, qreal x_pt, qreal y_pt);
+
   private:
     QVariantList m_page_sizes_pt;
     QVariantList m_page_layouts;
