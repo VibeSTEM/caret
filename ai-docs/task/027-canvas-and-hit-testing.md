@@ -60,17 +60,17 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine` | 段落与文档布局、跨页选区/命中回归通过 | 通过；caret-layout 59 项、caret-engine 42 项 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine` | 段落与文档布局、跨页选区/命中回归通过 | 通过；caret-layout 61 项、caret-engine 42 项 |
 | 2026-10-26 | `cargo fmt --all -- --check` | Rust 格式符合规范 | 通过 |
 | 2026-10-26 | `cargo clippy --offline --locked -p caret-engine -p caret-layout --all-targets -- -D warnings` | 新的 Rust 快照组合层无 lint 警告 | 通过 |
 | 2026-10-26 | `cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 全工作区测试和 lint 通过 | 通过；native CTest 4/4 |
 | 2026-10-26 | 画布坐标与缩放边界 C++/QML 用例 | 多页 pt 映射、hit-test 往返及缩小后的滚动范围正确 | 通过；真实窗口跨页编辑仍未实现 |
 | 2026-10-26 | `cmake --build target/native/debug --parallel 4` | ViewModel 页边距解析、版心坐标映射及 QML 绑定可编译 | 通过；链接器有既存 macOS LTO 路径与 deployment-target 警告；未运行测试 |
-| 2026-10-26 | 独立复核分页选区 y 偏移、页末命中和命中 affinity | 分页片段选区、页末命中和 RTL/LTR 字素边缘映射正确 | 这些问题已修复并通过复核；另发现多行 bidi 下 Parley caret 几何可能落到错误行，待处理 |
+| 2026-10-26 | 独立复核分页选区 y 偏移、页末命中和命中 affinity | 分页片段选区、页末命中和 RTL/LTR 字素边缘映射正确 | 通过；多行 bidi、硬换行和 LTR/RTL 起始边缘问题均修复并复验 |
 
 ## 风险与回退
 
-屏幕像素与文档 pt 混算会造成 DPR 下的换行或命中漂移。转换集中实现并测试往返。Parley 0.12 的 `Cursor::geometry` 在多行 bidi 文本中可能返回错误行的光标几何；须增加回归并修复或提供适配后再验收视觉光标。
+屏幕像素与文档 pt 混算会造成 DPR 下的换行或命中漂移。转换集中实现并测试往返。
 
 ## 决策与工作记录
 
@@ -79,6 +79,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：Session 布局代际与 `DocumentLayoutService` 已实现；服务生成包含正文文本、段落布局、分页和字体代际的只读快照。未知块及暂不支持的环境样式会拒绝整份布局，尚未连接 FFI/ViewModel。
 - 2026-10-26：段落布局改用 Parley 高层 Layout；Caret 保留 ICU 断点、字体偏好、行距和分页。一次 10 MiB 英文长段落对照中，双方计入断点生成、塑形和排版后，Parley 为 1.8044 秒，原实现为 2.4026 秒。该样本仅用于实现选型，不代表多段分页、内存或跨平台性能结论。
 - 2026-10-26：`DocumentLayoutSnapshot` 增加页面局部命中、跨页选区矩形及会话/文档/字体代际校验。独立复核发现并修复分页片段选区 y 偏移、固定/自然行高导致的页末误命中、小字号下光标矩形造成的命中偏差，以及按 Parley 命中字素侧生成逻辑 affinity。新增 0.5/12 pt 的 LTR、RTL、bidi 与跨 Run combining mark 回归测试。复核另发现 Parley 多行 bidi 光标几何错误行问题，未纳入本次修复。
+- 2026-10-26：后续复核确认 Parley 自身在多行 bidi 的 `Cursor::geometry` 可能选错行；适配层现按逻辑 affinity 对应的相邻字素簇计算 caret 几何，并新增第二行命中与光标几何一致性测试。补充处理硬换行后的下一行及尾随空行光标位置，覆盖 LF、CRLF、连续换行和 RTL。独立复核通过；`caret-layout` 61 项、`caret-engine` 42 项，格式、Clippy 和定向测试通过。
 
 ## 完成摘要
 

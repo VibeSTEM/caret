@@ -783,6 +783,89 @@ fn hit_testing_keeps_visual_sides_at_bidi_boundaries() {
 }
 
 #[test]
+fn multiline_bidi_hit_and_cursor_geometry_stay_on_the_selected_line() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("abc אבג def", Some("en")),
+            &settings,
+            &ShapingStyle::default(),
+            layout_options(24.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    assert!(result.paragraph.lines.len() > 1);
+
+    let hit = result
+        .cursor_from_point_on_line(0.0, 1)
+        .unwrap_or_else(|| panic!("second-line bidi hit did not resolve"));
+    assert_eq!(hit.cursor.byte_index(), 10);
+    assert_eq!(hit.logical_affinity, crate::HitAffinity::Upstream);
+
+    let bounds = result.cursor_geometry(hit.cursor, 1.0);
+    let second_line_top = f64::from(result.line_box_tops_pt[1]);
+    let second_line_bottom =
+        second_line_top + f64::from(result.paragraph.lines[1].metrics.height_pt);
+    let cursor_mid_y = (bounds.y0 + bounds.y1) / 2.0;
+    assert!(
+        (second_line_top..=second_line_bottom).contains(&cursor_mid_y),
+        "cursor y={cursor_mid_y} is outside second line {second_line_top}..{second_line_bottom}"
+    );
+}
+
+#[test]
+fn hard_line_break_caret_geometry_moves_to_the_following_or_trailing_line() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let cases = [
+        ("line\n", 5, 1),
+        ("a\nb", 2, 1),
+        ("a\r\nb", 3, 1),
+        ("\n\n", 2, 2),
+        ("אבג\nדהו", 7, 1),
+    ];
+    for (text, offset, expected_line) in cases {
+        let mut layouter = ParagraphLayouter::new();
+        let (_, result) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph(text, Some("en")),
+                &settings,
+                &ShapingStyle::default(),
+                layout_options(160.0),
+            )
+            .unwrap_or_else(|error| panic!("Parley layout failed for {text:?}: {error}"));
+        assert!(result.paragraph.lines.len() > expected_line);
+        let cursor = result
+            .cursor_at(offset, crate::VisualAffinity::Upstream)
+            .unwrap_or_else(|| panic!("cursor at {offset} missing for {text:?}"));
+        let bounds = result.cursor_geometry(cursor, 1.0);
+        let parley_line = result
+            .layout
+            .lines()
+            .nth(expected_line)
+            .unwrap_or_else(|| panic!("Parley line {expected_line} missing for {text:?}"));
+        let parley_line_metrics = parley_line.metrics();
+        let expected_x = if text.starts_with('א') {
+            parley_line_metrics.offset + parley_line_metrics.advance
+        } else {
+            parley_line_metrics.offset
+        };
+        assert_eq!(bounds.x0, f64::from(expected_x), "{text:?}");
+        let expected_top = f64::from(result.line_box_tops_pt[expected_line]);
+        let expected_bottom =
+            expected_top + f64::from(result.paragraph.lines[expected_line].metrics.height_pt);
+        let cursor_mid_y = (bounds.y0 + bounds.y1) / 2.0;
+        assert!(
+            (expected_top..=expected_bottom).contains(&cursor_mid_y),
+            "{text:?}: cursor y={cursor_mid_y} is outside expected line {expected_line} ({expected_top}..{expected_bottom})"
+        );
+    }
+}
+
+#[test]
 fn hit_testing_snaps_combining_cluster_to_its_logical_edges() {
     let mut catalog = font_catalog();
     let settings = document_settings();

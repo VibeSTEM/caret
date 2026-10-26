@@ -542,7 +542,19 @@ impl ParleyParagraphLayout {
                 f64::from(line.metrics.height_pt),
             );
         }
-        let mut bounds = cursor.geometry(&self.layout, width_pt);
+        let (mut bounds, line_index) =
+            cursor_geometry_on_logical_cluster(&self.layout, cursor, width_pt).unwrap_or_else(
+                || {
+                    let bounds = cursor.geometry(&self.layout, width_pt);
+                    let cursor_mid_y = ((bounds.y0 + bounds.y1) / 2.0) as f32;
+                    let line_index = self
+                        .parley_line_tops_pt
+                        .partition_point(|top| *top <= cursor_mid_y)
+                        .saturating_sub(1)
+                        .min(self.parley_line_tops_pt.len().saturating_sub(1));
+                    (bounds, line_index)
+                },
+            );
         if self.parley_line_tops_pt.is_empty() {
             if let Some(line) = self.paragraph.lines.first() {
                 return parley::BoundingBox::new(
@@ -554,12 +566,6 @@ impl ParleyParagraphLayout {
             }
             return bounds;
         }
-        let cursor_mid_y = ((bounds.y0 + bounds.y1) / 2.0) as f32;
-        let line_index = self
-            .parley_line_tops_pt
-            .partition_point(|top| *top <= cursor_mid_y)
-            .saturating_sub(1)
-            .min(self.parley_line_tops_pt.len() - 1);
         if let (Some(top_offset), Some(baseline_adjustment)) = (
             self.line_top_offsets_pt.get(line_index),
             self.baseline_adjustments_pt.get(line_index),
@@ -613,6 +619,62 @@ impl ParleyParagraphLayout {
         }
         Some((line_index, raw_top + raw_height / 2.0))
     }
+}
+
+fn cursor_geometry_on_logical_cluster(
+    layout: &Layout<[u8; 4]>,
+    cursor: parley::editing::Cursor,
+    width: f32,
+) -> Option<(parley::BoundingBox, usize)> {
+    let [upstream, downstream] = cursor.logical_clusters(layout);
+    if upstream.is_some_and(|cluster| cluster.is_hard_line_break()) {
+        if let Some(cluster) = downstream {
+            return cluster_cursor_geometry(cluster, cluster.is_rtl(), width);
+        }
+        let line_index = layout.len().checked_sub(1)?;
+        let line = layout.get(line_index)?;
+        let metrics = line.metrics();
+        return Some((
+            parley::BoundingBox::new(
+                f64::from(metrics.offset),
+                f64::from(metrics.block_min_coord.min(metrics.content_block_min_coord)),
+                f64::from(metrics.offset + width),
+                f64::from(metrics.block_max_coord.max(metrics.content_block_max_coord)),
+            ),
+            line_index,
+        ));
+    }
+    let (cluster, at_end) = match cursor.affinity() {
+        parley::Affinity::Upstream => {
+            let cluster = upstream.or(downstream)?;
+            (cluster, !cluster.is_rtl())
+        }
+        parley::Affinity::Downstream => {
+            let cluster = downstream.or(upstream)?;
+            (cluster, cluster.is_rtl())
+        }
+    };
+    cluster_cursor_geometry(cluster, at_end, width)
+}
+
+fn cluster_cursor_geometry(
+    cluster: parley::layout::Cluster<'_, [u8; 4]>,
+    at_end: bool,
+    width: f32,
+) -> Option<(parley::BoundingBox, usize)> {
+    let mut x = cluster.visual_offset()?;
+    if at_end {
+        x += cluster.advance();
+    }
+    let line = cluster.line();
+    let metrics = line.metrics();
+    let bounds = parley::BoundingBox::new(
+        f64::from(x),
+        f64::from(metrics.block_min_coord.min(metrics.content_block_min_coord)),
+        f64::from(x + width),
+        f64::from(metrics.block_max_coord.max(metrics.content_block_max_coord)),
+    );
+    Some((bounds, cluster.path().line_index()))
 }
 
 fn hit_affinity(affinity: parley::Affinity) -> HitAffinity {
