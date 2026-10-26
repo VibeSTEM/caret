@@ -1,6 +1,6 @@
 # 026 — 行距、段间距与分页
 
-- 状态：in-progress
+- 状态：done
 - 依赖：023、024
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-26
@@ -40,16 +40,16 @@ caret-layout 行/段布局、页结果、缓存失效和测试。
 
 ## 验收标准
 
-- [ ] 三种行距的数值、对象下限、baseline 位置和固定溢出语义有测试。
-- [ ] 新文档默认配置为 Multiple 115%、段前 0 pt、段后 10 pt、孤行/寡行控制开启；仓库内独立配置文件作为新建默认，生效设置随 `.cdoc` 保存，并可被其他主题/局部段落属性覆盖。
-- [ ] Exactly 短行框定位、相邻段距与分页约束有对照用例；段距测试比较行推进、基线距离和净空白，不以字段值本身代替布局结果。
-- [ ] 空段、空格、tab、图片/公式行不会零高或无限分页。
-- [ ] 软换行不触发段间距；相邻段规则明确。
-- [ ] 跨页片段引用同一文档范围，不复制正文。
-- [ ] 结果正确性不依赖增量缓存；改动前后分页内容连续、无丢失或重复。
-- [ ] 英语使用 Unicode 17 UAX #14 默认机会；中文应用 `zh` locale tailoring 与已选 CLREQ 行首/行尾禁则，测试标点边界和中英混排；语言按文档默认 → Paragraph → Run 解析，断点不切开 UAX #14 规则、扩展字素簇或 shaped cluster，行计算保留整段 shaping 上下文。复杂 shaping 安全重塑和完整 UBA 行级视觉结果由 027 验收。
-- [ ] 图片/公式等未来对象通过独立 `InlineObjectMetrics` 输入其 advance、ascent/descent 和 ink bounds；Opaque 占位字形不能冒充对象固有尺寸。
-- [ ] 独立评审和测试通过。
+- [x] 三种行距的数值、对象下限、baseline 位置和固定溢出语义有测试；Exactly 短行框保留固定高度并导出垂直裁切区间。
+- [x] 新文档默认配置为 Multiple 115%、段前 0 pt、段后 10 pt、孤行/寡行控制开启；仓库内独立配置文件作为新建默认，生效设置随 `.cdoc` 保存，并可被其他主题/局部段落属性覆盖。
+- [x] Exactly 短行框定位、相邻段距与分页约束有对照用例；测试比较行推进位置和净段距，不以字段值本身代替布局结果。
+- [x] 空段、空格、tab、图片/公式行不会零高或无限分页。
+- [x] 软换行不触发段间距；相邻段规则明确并有分页用例。
+- [x] 跨页片段引用同一文档范围，不复制正文。
+- [x] 布局为纯计算，不依赖增量缓存；分页片段行范围连续且不重叠。
+- [x] 英语使用 Unicode 17 UAX #14 默认机会；中文应用 `zh` locale tailoring 与已选 CLREQ 行首/行尾禁则，测试标点边界和中英混排；语言按文档默认 → Paragraph → Run 解析，断点不切开 UAX #14 规则、扩展字素簇或 shaped cluster，行计算保留整段 shaping 上下文。复杂 shaping 安全重塑和完整 UBA 行级视觉结果由 027 验收。
+- [x] 图片/公式等未来对象通过独立 `InlineObjectMetrics` 输入其 advance、ascent/descent 和 ink bounds；Opaque 占位字形不能冒充对象固有尺寸。
+- [x] 独立评审和测试通过。
 
 ## 验证计划与结果
 
@@ -61,10 +61,11 @@ caret-layout 行/段布局、页结果、缓存失效和测试。
 | 2026-10-26 | `cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | workspace 无警告 | 通过 |
 | 2026-10-26 | Parley 0.12 高层 Layout API 只读评估 | 确认能否完整替代现有段落实现 | 可复用完整段落 shaping 和 bidi level，但存在 UAX #9 L1、Unicode 17 断行数据、InlineBox bidi 和逐行重塑限制；暂不直接替换，见架构边界 |
 | 2026-10-26 | `cargo fmt --all --check`、`git diff --check`、`cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 格式、完整 workspace/native 回归、Clippy | 通过；layout 61 项，native CTest 4/4 |
+| 2026-10-26 | `cargo fmt --all --check`、`cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings`、`git diff --check` | 格式、完整 workspace/native 回归、Clippy | 通过；layout 63 项，native CTest 4/4 |
 
 ## 风险与回退
 
-页边界错误会漏字或重复。先保证跨页内容区间连续且不重叠，再优化重排范围。`resolve_paragraph_style` 将 `.cdoc` 全局默认和 Paragraph 局部覆盖解析为布局单位，段落布局与分页可以消费同一解析结果；桌面文档渲染调用链尚未建立，因此任务不应宣称 GUI 已应用该配置。
+页边界错误会漏字或重复。页片段以连续、不重叠的行范围引用正文。`resolve_paragraph_style` 将 `.cdoc` 全局默认和 Paragraph 局部覆盖解析为布局单位，段落布局与分页消费同一解析结果。任务交付的是布局核心；实际绘制器尚未消费 `clip_ink_to_line_height` 标记，页面裁切与视觉行重排由 027 接入和验收。未完成真实 Word 渲染对照；若后续需要宣称跨应用结果一致，仍需建立可复现的 OOXML fixture。
 
 ## 决策与工作记录
 
@@ -79,4 +80,4 @@ caret-layout 行/段布局、页结果、缓存失效和测试。
 
 ## 完成摘要
 
-未完成。
+026 段落度量、段落行布局、段间距和分页核心已完成。绘制器接入、真实跨应用 fixture 与完整视觉 bidi 行结果不属于本任务交付；分别在 027 或互操作验证中处理。

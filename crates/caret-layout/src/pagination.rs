@@ -356,6 +356,7 @@ mod tests {
                         baseline_pt: *height,
                         content_metrics_overflow_line_box: false,
                         object_ink_overflows_line_box: false,
+                        clip_ink_to_line_height: false,
                     },
                 })
                 .collect(),
@@ -418,6 +419,26 @@ mod tests {
 
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].fragments[1].y_offset_pt, 38.0);
+    }
+
+    #[test]
+    fn soft_wrapped_lines_do_not_repeat_paragraph_spacing() {
+        let first_id = NodeId::generate();
+        let second_id = NodeId::generate();
+        let first = paragraph(&[10.0, 10.0, 10.0]);
+        let second = paragraph(&[10.0]);
+        let pages = paginate_paragraphs(
+            &[
+                input(&first_id, &first, 0.0, 5.0),
+                input(&second_id, &second, 7.0, 0.0),
+            ],
+            100.0,
+        )
+        .unwrap_or_else(|error| panic!("valid paragraphs rejected: {error}"));
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].fragments[0].line_range, 0..3);
+        assert_eq!(pages[0].fragments[1].y_offset_pt, 37.0);
     }
 
     #[test]

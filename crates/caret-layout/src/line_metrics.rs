@@ -55,6 +55,9 @@ pub struct LineMetrics {
     pub baseline_pt: f32,
     pub content_metrics_overflow_line_box: bool,
     pub object_ink_overflows_line_box: bool,
+    /// 绘制器应把 ink 的垂直范围裁切到相对行顶的 `0..height_pt`；不裁左右悬垂。
+    /// Exactly 保持固定行推进，并使用这个垂直裁切区间。
+    pub clip_ink_to_line_height: bool,
 }
 
 /// 行度量无效时拒绝构造布局结果。
@@ -184,6 +187,7 @@ pub fn calculate_line_metrics(
             object.ink_bounds.top < -baseline_pt
                 || object.ink_bounds.bottom > height_pt - baseline_pt
         }),
+        clip_ink_to_line_height: matches!(spacing, LineSpacing::Exactly { .. }),
     })
 }
 
@@ -243,6 +247,7 @@ mod tests {
         assert_eq!(result.height_pt, 13.0);
         assert_eq!(result.baseline_pt, 9.0);
         assert!(!result.content_metrics_overflow_line_box);
+        assert!(!result.clip_ink_to_line_height);
     }
 
     #[test]
@@ -305,6 +310,7 @@ mod tests {
         assert_eq!(result.height_pt, 25.0);
         assert_eq!(result.baseline_pt, 18.5);
         assert!(!result.content_metrics_overflow_line_box);
+        assert!(!result.clip_ink_to_line_height);
     }
 
     #[test]
@@ -342,6 +348,23 @@ mod tests {
         assert_eq!(result.height_pt, 5.0);
         assert_eq!(result.baseline_pt, 1.0);
         assert!(result.content_metrics_overflow_line_box);
+        assert!(result.clip_ink_to_line_height);
+    }
+
+    #[test]
+    fn exactly_centers_content_when_fixed_line_box_exceeds_content() {
+        let result = calculate_line_metrics(
+            &[metrics(8.0, 2.0, 0.0)],
+            &[],
+            metrics(8.0, 2.0, 0.0),
+            LineSpacing::Exactly { centipoints: 1600 },
+        )
+        .unwrap_or_else(|error| panic!("valid metrics rejected: {error}"));
+
+        assert_eq!(result.height_pt, 16.0);
+        assert_eq!(result.baseline_pt, 11.0);
+        assert!(!result.content_metrics_overflow_line_box);
+        assert!(result.clip_ink_to_line_height);
     }
 
     #[test]
@@ -356,6 +379,7 @@ mod tests {
 
         assert!(result.content_metrics_overflow_line_box);
         assert!(result.object_ink_overflows_line_box);
+        assert!(result.clip_ink_to_line_height);
     }
 
     #[test]
