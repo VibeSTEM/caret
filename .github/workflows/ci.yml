@@ -80,6 +80,9 @@ jobs:
 
       - uses: ./.github/actions/caret-toolchain
 
+      # caret-tests 选择器依赖 caret-app，Ubuntu 的 Fontique 构建需要 Fontconfig。
+      - uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
         with:
           tools_deps: "false"
