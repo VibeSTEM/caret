@@ -5,6 +5,7 @@ mod fonts;
 mod line_metrics;
 pub mod pagination;
 mod paragraph;
+mod paragraph_style;
 mod shaping;
 
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
@@ -19,7 +20,9 @@ pub use pagination::{
 };
 pub use paragraph::{
     ParagraphLayout, ParagraphLayoutError, ParagraphLine, layout_shaped_paragraph,
+    layout_shaped_paragraph_with_style,
 };
+pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use shaping::{ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries};
 
 #[cfg(test)]

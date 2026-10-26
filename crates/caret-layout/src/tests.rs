@@ -309,6 +309,7 @@ fn run_language_enables_dictionary_breaks_over_paragraph_language() {
     let paragraph = Paragraph {
         id: node_id("localized-run-paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![InlineNode::Run(Run {
             text: "ภาษาไทยภาษาไทย".to_owned(),
             language: Some("th-TH".to_owned()),
@@ -344,6 +345,7 @@ fn document_language_is_used_when_paragraph_has_no_override() {
     let paragraph = Paragraph {
         id: node_id("document-language-paragraph"),
         language: None,
+        layout: None,
         inlines: vec![InlineNode::Run(Run {
             text: "ภาษาไทยภาษาไทย".to_owned(),
             language: None,
@@ -386,6 +388,7 @@ fn font_preferences_use_full_run_language_even_when_shaping_language_is_narrower
     let paragraph = Paragraph {
         id: node_id("variant-language-font-preference"),
         language: None,
+        layout: None,
         inlines: vec![InlineNode::Run(Run {
             text: "Slovenščina".to_owned(),
             language: Some("sl-rozaj".to_owned()),
@@ -429,6 +432,7 @@ fn paragraph_reshaping_rejects_empty_ranges_inside_utf8_characters() {
     let paragraph = Paragraph {
         id: node_id("utf8-range-paragraph"),
         language: None,
+        layout: None,
         inlines: vec![InlineNode::Run(Run {
             text: "中".to_owned(),
             language: None,
@@ -466,6 +470,7 @@ fn dictionary_breaks_stay_inside_runs_with_the_matching_language() {
     let paragraph = Paragraph {
         id: node_id("mixed-language-break-paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: first_run.to_owned(),
@@ -850,6 +855,7 @@ fn paragraph_shaping_resolves_nested_bold_and_font_environments() {
     let paragraph = Paragraph {
         id: node_id("paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: "plain ".to_owned(),
@@ -916,6 +922,7 @@ fn same_style_run_boundaries_do_not_change_shaping() {
     let paragraph = Paragraph {
         id: node_id("split-run-paragraph"),
         language: None,
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: "office العربية e".to_owned(),

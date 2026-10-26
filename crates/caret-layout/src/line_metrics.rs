@@ -148,7 +148,12 @@ pub fn calculate_line_metrics(
     let height_pt = match spacing {
         LineSpacing::Natural => required_height_pt,
         LineSpacing::Multiple { percent } if percent > 0 => {
-            (text_height_pt * f32::from(percent) / 100.0).max(object_height_pt)
+            let scaled_text_height_pt = text_height_pt * f32::from(percent) / 100.0;
+            if objects.is_empty() {
+                scaled_text_height_pt
+            } else {
+                scaled_text_height_pt.max(content_height_pt)
+            }
         }
         LineSpacing::AtLeast { min_centipoints } => {
             required_height_pt.max(min_centipoints as f32 * 0.01)
@@ -160,11 +165,13 @@ pub fn calculate_line_metrics(
         return Err(LineMetricsError::InvalidFontMetrics);
     }
     let content_overflows = height_pt < content_height_pt || height_pt < text_height_pt;
-    let baseline_pt = if content_overflows {
-        ascent_pt
-    } else {
-        let extra_space_pt = (height_pt - content_height_pt).max(0.0);
-        ascent_pt + extra_space_pt / 2.0
+    let baseline_pt = match spacing {
+        LineSpacing::Exactly { .. } if content_overflows => height_pt - descent_pt,
+        _ if content_overflows => ascent_pt,
+        _ => {
+            let extra_space_pt = (height_pt - content_height_pt).max(0.0);
+            ascent_pt + extra_space_pt / 2.0
+        }
     };
     Ok(LineMetrics {
         height_pt,
@@ -205,16 +212,20 @@ mod tests {
     }
 
     fn object(height_pt: f32) -> InlineObjectMetrics {
+        object_with_ascent_descent(height_pt * 0.8, height_pt * 0.2)
+    }
+
+    fn object_with_ascent_descent(ascent_pt: f32, descent_pt: f32) -> InlineObjectMetrics {
         InlineObjectMetrics {
             source_bytes: Range { start: 0, end: 1 },
-            advance_pt: height_pt,
-            ascent_pt: height_pt * 0.8,
-            descent_pt: height_pt * 0.2,
+            advance_pt: ascent_pt + descent_pt,
+            ascent_pt,
+            descent_pt,
             ink_bounds: InkBounds {
                 left: 0.0,
-                top: -height_pt * 0.8,
-                right: height_pt,
-                bottom: 0.0,
+                top: -ascent_pt,
+                right: ascent_pt + descent_pt,
+                bottom: descent_pt,
             },
         }
     }
@@ -235,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_never_scales_an_inline_object_below_its_intrinsic_height() {
+    fn multiple_keeps_combined_text_and_object_metrics_from_overlapping() {
         let result = calculate_line_metrics(
             &[metrics(8.0, 2.0, 0.0)],
             &[object(20.0)],
@@ -246,6 +257,21 @@ mod tests {
 
         assert_eq!(result.height_pt, 20.0);
         assert_eq!(result.baseline_pt, 16.0);
+        assert!(!result.content_metrics_overflow_line_box);
+    }
+
+    #[test]
+    fn multiple_keeps_text_descenders_below_a_tall_inline_object() {
+        let result = calculate_line_metrics(
+            &[metrics(8.0, 5.0, 0.0)],
+            &[object_with_ascent_descent(20.0, 0.0)],
+            metrics(8.0, 5.0, 0.0),
+            LineSpacing::Multiple { percent: 115 },
+        )
+        .unwrap_or_else(|error| panic!("valid metrics rejected: {error}"));
+
+        assert_eq!(result.height_pt, 25.0);
+        assert_eq!(result.baseline_pt, 20.0);
         assert!(!result.content_metrics_overflow_line_box);
     }
 
@@ -314,7 +340,7 @@ mod tests {
         .unwrap_or_else(|error| panic!("valid metrics rejected: {error}"));
 
         assert_eq!(result.height_pt, 5.0);
-        assert_eq!(result.baseline_pt, 10.0);
+        assert_eq!(result.baseline_pt, 1.0);
         assert!(result.content_metrics_overflow_line_box);
     }
 

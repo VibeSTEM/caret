@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -130,6 +131,7 @@ impl Document {
             self.global_settings.default_math_font_family.as_deref(),
             "defaultMathFontFamily",
         )?;
+        self.global_settings.paragraph_layout.validate()?;
         validate_unique_script_keys(self.global_settings.script_font_families.keys())?;
         validate_unique_script_keys(self.global_settings.language_script_font_families.keys())?;
         for family in self.global_settings.script_font_families.values() {
@@ -157,6 +159,7 @@ impl Document {
 
     pub fn required_features(&self) -> Vec<String> {
         let mut features = std::collections::BTreeSet::new();
+        features.insert("caret.paragraph.layout-settings".to_owned());
         if self.global_settings.default_language.is_some()
             || self.body.iter().any(block_has_language)
         {
@@ -247,11 +250,116 @@ pub struct DocumentSettings {
     pub script_font_families: BTreeMap<String, String>,
     /// 实际脚本范围内按 BCP 47 语言选择的字体族覆盖。
     pub language_script_font_families: BTreeMap<String, BTreeMap<String, String>>,
+    /// 新文档与全局段落格式默认值；旧文件缺省时读取内置排版主题。
+    pub paragraph_layout: ParagraphLayoutStyle,
     pub default_styles: BTreeMap<String, Value>,
     pub format_overrides: BTreeMap<String, Value>,
     pub theme: Option<ThemeSnapshot>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// `.cdoc` 持久化的行距类型。长度单位为百分之一 pt。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ParagraphLineSpacing {
+    Natural {
+        #[serde(default, flatten)]
+        extra: BTreeMap<String, Value>,
+    },
+    Multiple {
+        percent: u16,
+        #[serde(default, flatten)]
+        extra: BTreeMap<String, Value>,
+    },
+    AtLeast {
+        min_centipoints: u32,
+        #[serde(default, flatten)]
+        extra: BTreeMap<String, Value>,
+    },
+    Exactly {
+        centipoints: u32,
+        #[serde(default, flatten)]
+        extra: BTreeMap<String, Value>,
+    },
+}
+
+/// 可全局配置的段落版式值，直接属性与命名样式可在此基础上覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParagraphLayoutStyle {
+    pub line_spacing: ParagraphLineSpacing,
+    pub space_before_centipoints: u32,
+    pub space_after_centipoints: u32,
+    pub widow_orphan_control: bool,
+    pub keep_with_next: bool,
+    pub keep_lines_together: bool,
+    pub page_break_before: bool,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+static DEFAULT_PARAGRAPH_LAYOUT: OnceLock<ParagraphLayoutStyle> = OnceLock::new();
+
+impl Default for ParagraphLayoutStyle {
+    fn default() -> Self {
+        DEFAULT_PARAGRAPH_LAYOUT
+            .get_or_init(|| {
+                let profile: BundledLayoutTheme =
+                    serde_json::from_str(include_str!("../resources/layout-themes/default.json"))
+                        .unwrap_or_else(|error| {
+                            panic!("bundled default layout theme is invalid: {error}")
+                        });
+                assert_eq!(profile.profile_id, "default");
+                assert_eq!(profile.format_version, 1);
+                profile.paragraph_layout
+            })
+            .clone()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledLayoutTheme {
+    profile_id: String,
+    format_version: u32,
+    paragraph_layout: ParagraphLayoutStyle,
+}
+
+impl ParagraphLayoutStyle {
+    fn validate(&self) -> Result<(), ModelError> {
+        validate_line_spacing(&self.line_spacing)?;
+        Ok(())
+    }
+}
+
+impl ParagraphLayoutOverrides {
+    fn validate(&self) -> Result<(), ModelError> {
+        if let Some(spacing) = &self.line_spacing {
+            validate_line_spacing(spacing)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_line_spacing(spacing: &ParagraphLineSpacing) -> Result<(), ModelError> {
+    match spacing {
+        ParagraphLineSpacing::Multiple { percent: 0, .. }
+        | ParagraphLineSpacing::AtLeast {
+            min_centipoints: 0, ..
+        }
+        | ParagraphLineSpacing::Exactly { centipoints: 0, .. } => {
+            return Err(ModelError::InvalidDocument(
+                "paragraph line spacing must be positive".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -303,6 +411,8 @@ pub struct Paragraph {
     #[serde(default)]
     pub language: Option<String>,
     #[serde(default)]
+    pub layout: Option<ParagraphLayoutOverrides>,
+    #[serde(default)]
     pub inlines: Vec<InlineNode>,
     #[serde(default)]
     pub mark_style: BTreeMap<String, Value>,
@@ -317,12 +427,28 @@ impl Paragraph {
         Self {
             id,
             language: None,
+            layout: None,
             inlines: Vec::new(),
             mark_style: BTreeMap::new(),
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }
     }
+}
+
+/// 段落级可选覆盖；未设置的属性继承文档全局段落样式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ParagraphLayoutOverrides {
+    pub line_spacing: Option<ParagraphLineSpacing>,
+    pub space_before_centipoints: Option<u32>,
+    pub space_after_centipoints: Option<u32>,
+    pub widow_orphan_control: Option<bool>,
+    pub keep_with_next: Option<bool>,
+    pub keep_lines_together: Option<bool>,
+    pub page_break_before: Option<bool>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -455,6 +581,9 @@ fn validate_paragraph<'a>(
     insert_id(ids, &paragraph.id)?;
     if let Some(language) = &paragraph.language {
         validate_language_tag(language)?;
+    }
+    if let Some(layout) = &paragraph.layout {
+        layout.validate()?;
     }
     for property in ["fontFamily", "bold", "italic"] {
         if paragraph.props.contains_key(property) {
@@ -1127,7 +1256,7 @@ impl<'de> Deserialize<'de> for InlineNode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Document, DocumentSettings};
+    use super::{Block, Document, DocumentSettings};
     use std::collections::BTreeMap;
 
     #[test]
@@ -1164,5 +1293,113 @@ mod tests {
         };
 
         assert!(document.validate().is_ok());
+    }
+
+    #[test]
+    fn missing_paragraph_settings_use_bundled_defaults() {
+        let settings: DocumentSettings = serde_json::from_str("{}")
+            .unwrap_or_else(|error| panic!("legacy settings should use defaults: {error}"));
+        let default = super::ParagraphLayoutStyle::default();
+
+        assert_eq!(settings.paragraph_layout, default);
+        assert_eq!(settings.paragraph_layout.space_before_centipoints, 0);
+        assert_eq!(settings.paragraph_layout.space_after_centipoints, 1000);
+        assert!(settings.paragraph_layout.widow_orphan_control);
+    }
+
+    #[test]
+    fn documents_declare_paragraph_layout_semantics() {
+        let document = Document::blank();
+        assert!(
+            document
+                .required_features()
+                .iter()
+                .any(|feature| feature == "caret.paragraph.layout-settings")
+        );
+    }
+
+    #[test]
+    fn invalid_paragraph_line_spacing_is_rejected() {
+        let mut document = Document::blank();
+        document.global_settings.paragraph_layout.line_spacing =
+            super::ParagraphLineSpacing::Multiple {
+                percent: 0,
+                extra: BTreeMap::new(),
+            };
+        assert!(document.validate().is_err());
+
+        let mut document = Document::blank();
+        if let Some(super::Block::Paragraph(paragraph)) = document.body.first_mut() {
+            paragraph.layout = Some(super::ParagraphLayoutOverrides {
+                line_spacing: Some(super::ParagraphLineSpacing::Exactly {
+                    centipoints: 0,
+                    extra: BTreeMap::new(),
+                }),
+                ..super::ParagraphLayoutOverrides::default()
+            });
+        }
+        assert!(document.validate().is_err());
+    }
+
+    #[test]
+    fn paragraph_layout_keeps_unknown_optional_fields_on_round_trip() {
+        let mut document = Document::blank();
+        document.global_settings.paragraph_layout.line_spacing =
+            super::ParagraphLineSpacing::Multiple {
+                percent: 115,
+                extra: BTreeMap::from([(
+                    "futureLineSpacingValue".to_owned(),
+                    serde_json::json!("kept"),
+                )]),
+            };
+        document.global_settings.paragraph_layout.extra.insert(
+            "futureProfileValue".to_owned(),
+            serde_json::json!({"enabled": true}),
+        );
+        if let Some(Block::Paragraph(paragraph)) = document.body.first_mut() {
+            let mut overrides = super::ParagraphLayoutOverrides::default();
+            overrides
+                .extra
+                .insert("futureParagraphValue".to_owned(), serde_json::json!(42));
+            paragraph.layout = Some(overrides);
+        }
+
+        let encoded = serde_json::to_value(&document)
+            .unwrap_or_else(|error| panic!("document serialization failed: {error}"));
+        let decoded: Document = serde_json::from_value(encoded)
+            .unwrap_or_else(|error| panic!("document parsing failed: {error}"));
+
+        assert_eq!(
+            decoded.global_settings.paragraph_layout.extra["futureProfileValue"],
+            serde_json::json!({"enabled": true})
+        );
+        let super::ParagraphLineSpacing::Multiple { extra, .. } =
+            &decoded.global_settings.paragraph_layout.line_spacing
+        else {
+            panic!("line spacing kind changed unexpectedly");
+        };
+        assert_eq!(extra["futureLineSpacingValue"], serde_json::json!("kept"));
+        let Some(Block::Paragraph(paragraph)) = decoded.body.first() else {
+            panic!("blank document paragraph missing");
+        };
+        assert_eq!(
+            paragraph
+                .layout
+                .as_ref()
+                .map(|layout| &layout.extra["futureParagraphValue"]),
+            Some(&serde_json::json!(42))
+        );
+    }
+
+    #[test]
+    fn line_spacing_fields_serialize_as_camel_case() {
+        let encoded = serde_json::to_value(super::ParagraphLineSpacing::AtLeast {
+            min_centipoints: 1200,
+            extra: BTreeMap::new(),
+        })
+        .unwrap_or_else(|error| panic!("line spacing serialization failed: {error}"));
+
+        assert_eq!(encoded["kind"], "atLeast");
+        assert_eq!(encoded["minCentipoints"], 1200);
     }
 }

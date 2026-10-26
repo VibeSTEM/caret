@@ -49,23 +49,25 @@ Caret 现在**没有以 OOXML 作为存储格式或直接扩展 OOXML schema**�
 | 行距模型 | auto/atLeast/exact 及线性倍数 | Natural/Multiple/AtLeast/Exactly，固定长度用整数百分之一 pt | 可保留内部整数模型；若需 OOXML 互操作，在边界转换单位。明确 Multiple 的参考“单倍行高”定义。 |
 | AtLeast | 最小行距，需适配最大字体或图形 | 不小于字体/对象组合度量 | 语义基本一致。 |
 | Exactly 高于内容高度 | 内容垂直居中 | 内容居中 | 一致。 |
-| Exactly 低于内容高度 | 行框底部对齐，顶部裁切 | baseline 放在行框顶部加最大 ascent，允许上下溢出，页面边缘裁切 | **不一致**。Word 默认 profile 需要采用行框底对齐/裁切语义，并调整旧溢出测试。 |
+| Exactly 低于内容高度 | 行框底部对齐，顶部裁切 | baseline 按行框高度减最大 descent 定位，使内容底边对齐；行内溢出范围由行框提供给绘制裁切 | 基线规则已接近；待渲染器接入时验证裁切范围。 |
 | 相邻段距 | 取两段的 inter-line spacing、前段 after、后段 before 中最大值 | 每行按 line box advance 推进，再额外增加 max(after, before) | **需 fixture 核对**。先明确标准 inter-line spacing 与 Caret 行框推进、基线距离、净空白之间的对应关系；在同一测量口径下比较，不从字段名直接断言重复累加或行为不一致。 |
 | 新页首段 | OOXML 还受段距属性、分页规则及 Word 兼容行为影响；不能据 UI 摘要推断所有场景都清零 | 忽略新页首段 before | 属于 Caret 明确简化规则；需要用 Word fixture 验证目标行为后再决定是否保留。 |
 | 默认样式 | 当前 Word Normal 常见默认是 1.15 行距与 10 pt 段后距 | 新文档采用 Word Normal 数值配置 | 这是 Caret 的默认模板决定，不是 ECMA-376 强制值；数值应保存于 `.cdoc` 并允许期刊模板覆盖。 |
-| 分页约束 | 可设置 widow/orphan、keep lines、keep with next、page break before | 支持自动分页和显式分页事件；上述段落约束尚未实现 | 应列为后续功能；当前不要宣称 Word 分页兼容。 |
+| 分页约束 | 可设置 widow/orphan、keep lines、keep with next、page break before | 分页器消费这些独立段落标记，并对无法满足的孤行约束放宽后按页高推进 | 已有 M0 规则实现；仍需 fixture 对照具体兼容行为，不宣称完整 Word 分页兼容。 |
 
 ## 建议实施边界
 
 1. 将 OOXML 的 `w:spacing` 规则作为 Caret 行距/段距的互操作基线，而不是承诺 DOCX 整页逐像素一致。字体、shaping、分页例外仍会造成差异。
-2. 在采用标准前更新已确认的 Exactly 溢出策略：标准采用底对齐且从顶部裁切，不是内容自由越出行框并只在页面边缘裁切。两者必须择一并固定测试。
+2. Exactly 短行框采用底对齐、顶部裁切；基线计算已有测试，渲染器接入时仍需确认按行框裁切。
 3. 为段落间距建立 Word/OOXML 对照 fixture，覆盖两段行距不同、仅设置前段 after、仅设置后段 before、两者均设置及跨页等情形。先分别记录 line box advance、baseline 距离和段落间净空白，再按标准解释结果；确认语义映射后才调整分页公式。
-4. 新建 `.cdoc` 使用 Word Normal 数值配置（1.15 倍、段前 0 pt、段后 10 pt、孤行/寡行控制开启），将其作为版本化的 Caret 默认样式保存；已有文档不随应用预设升级而静默变化。
+4. 新建 `.cdoc` 使用选定的数值配置（1.15 倍、段前 0 pt、段后 10 pt、孤行/寡行控制开启），配置保存在独立的 `crates/caret-doc/resources/layout-themes/default.json`；已保存文档会保存完整配置快照。
 5. 将 widow/orphan、keep-with-next、keep-lines-together、page-break-before 设计成独立段落分页约束，避免把它们编码成额外空段或硬分页符。
 6. 中文断行仍由 Unicode UAX #14 与 CLREQ tailoring 管理；OOXML 行距/分页标准不替代 CJK 断行规则。
 7. 不定义通用 LaTeX 排版配置；后续期刊模板按其明确文档类、字号、字体和分页规则映射到 Caret 的自有样式模型。
 
 ## 公开资料
+
+Caret 仅把公开资料用作数值和语义参考；实现使用 Caret 自有的 `.cdoc` 字段、Rust 类型和布局代码，不导入产品代码或图标，也不实现 OOXML 存储。产品代码、资源和配置文件使用 Caret 自有命名；第三方产品名只出现在本研究的出处说明中。此工程边界不能替代对特定司法辖区版权、专利或商标问题的法律审查。
 
 - [Ecma International：ECMA-376 Office Open XML](https://ecma-international.org/publications-and-standards/standards/ecma-376/)：官方标准目录与 Part 1 下载入口。
 - [Microsoft Learn：SpacingBetweenLines.Line](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.spacingbetweenlines.line)：引用 ECMA-376 对 auto、atLeast、exact 的单位与垂直定位规则。

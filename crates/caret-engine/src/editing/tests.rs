@@ -219,6 +219,7 @@ fn section_title_enter_moves_suffix_to_new_first_body_paragraph() {
     let existing = Paragraph {
         id: NodeId::generate(),
         language: None,
+        layout: None,
         inlines: vec![run("body")],
         mark_style: Default::default(),
         props: Default::default(),
@@ -232,6 +233,7 @@ fn section_title_enter_moves_suffix_to_new_first_body_paragraph() {
         title: Some(Paragraph {
             id: title_id.clone(),
             language: None,
+            layout: None,
             inlines: vec![run("ab")],
             mark_style: Default::default(),
             props: Default::default(),
@@ -291,6 +293,7 @@ fn section_title_enter_at_end_keeps_nested_body_order_and_creates_empty_paragrap
     let nested_paragraph = Paragraph {
         id: NodeId::generate(),
         language: None,
+        layout: None,
         inlines: vec![run("nested body")],
         mark_style: Default::default(),
         props: Default::default(),
@@ -304,6 +307,7 @@ fn section_title_enter_at_end_keeps_nested_body_order_and_creates_empty_paragrap
         title: Some(Paragraph {
             id: title_id.clone(),
             language: None,
+            layout: None,
             inlines: vec![run("end")],
             mark_style: Default::default(),
             props: Default::default(),
@@ -368,6 +372,7 @@ fn enter_rejects_cross_title_body_selection_atomically() {
         title: Some(Paragraph {
             id: title_id.clone(),
             language: None,
+            layout: None,
             inlines: vec![run("title")],
             mark_style: Default::default(),
             props: Default::default(),
@@ -376,6 +381,7 @@ fn enter_rejects_cross_title_body_selection_atomically() {
         children: vec![Block::Paragraph(Paragraph {
             id: body_id.clone(),
             language: None,
+            layout: None,
             inlines: vec![run("body")],
             mark_style: Default::default(),
             props: Default::default(),
@@ -506,6 +512,7 @@ fn grapheme_boundaries_are_transparent_to_runs_and_environments() {
     let paragraph = Paragraph {
         id: NodeId::generate(),
         language: None,
+        layout: None,
         inlines: vec![
             run("👩"),
             InlineNode::Environment(InlineEnvironment {
@@ -1041,6 +1048,7 @@ fn paragraph_merge_snaps_caret_when_text_joins_into_a_grapheme() {
         Block::Paragraph(Paragraph {
             id,
             language: None,
+            layout: None,
             inlines: vec![run(text)],
             mark_style: Default::default(),
             props: Default::default(),
@@ -1429,7 +1437,10 @@ fn invalid_selection_and_incompatible_merge_preserve_the_session() -> Result<(),
     let first_id = first.id.clone();
     let mut second = Paragraph::empty(NodeId::generate());
     second.inlines = vec![run("right")];
-    second.language = Some("en".to_owned());
+    second.layout = Some(caret_doc::ParagraphLayoutOverrides {
+        space_after_centipoints: Some(500),
+        ..caret_doc::ParagraphLayoutOverrides::default()
+    });
     document.body.push(Block::Paragraph(second));
     let mut session = Session::new(document)?;
     let before_document = session.document().clone();

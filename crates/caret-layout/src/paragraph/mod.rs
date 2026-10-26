@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use crate::{
     FontLineMetrics, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
-    ShapedParagraph, calculate_line_metrics,
+    ResolvedParagraphStyle, ShapedParagraph, calculate_line_metrics,
 };
 use icu_properties::{CodePointMapData, props::LineBreak as LineBreakClass};
 
@@ -215,6 +215,25 @@ pub fn layout_shaped_paragraph(
         lines,
         total_height_pt,
     })
+}
+
+/// 使用已从 `.cdoc` 全局段落样式和段落覆盖解析的行距布局一段文本。
+pub fn layout_shaped_paragraph_with_style(
+    text: &str,
+    shaped: &ShapedParagraph,
+    available_width_pt: f32,
+    style: ResolvedParagraphStyle,
+    empty_mark_metrics: FontLineMetrics,
+    objects: &[InlineObjectMetrics],
+) -> Result<ParagraphLayout, ParagraphLayoutError> {
+    layout_shaped_paragraph(
+        text,
+        shaped,
+        available_width_pt,
+        style.line_spacing,
+        empty_mark_metrics,
+        objects,
+    )
 }
 
 fn validate_cluster_order(text: &str, clusters: &[Cluster]) -> Result<(), ParagraphLayoutError> {

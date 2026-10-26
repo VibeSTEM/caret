@@ -100,7 +100,7 @@ pub struct ShapedParagraph {
     pub actual_families: Vec<String>,
     /// 目录代际，供布局缓存键使用。
     pub font_generation: u64,
-    /// 完整段落解析出的基方向；重塑软换行后的片段时必须沿用。
+    /// 完整段落解析出的基方向。它不包含完整 UBA 双向状态，不能单独用于软换行后的行重塑。
     pub base_direction: BaseDirection,
 }
 
@@ -137,7 +137,7 @@ impl TextShaper {
         )
     }
 
-    /// 使用已解析段落方向塑形文字片段，供软换行后的行重塑复用。
+    /// 使用段落基方向塑形片段；基方向不等于完整 UBA 状态，因此不能用于软换行后的行重塑。
     pub fn shape_with_direction(
         &mut self,
         catalog: &mut FontCatalog,
