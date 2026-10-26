@@ -478,7 +478,7 @@ fn empty_and_trailing_break_lines_keep_positive_metrics() {
     assert_eq!(empty_layout.paragraph.lines.len(), 1);
     assert!(empty_layout.paragraph.total_height_pt > 0.0);
     let empty_cursor = empty_layout
-        .cursor_at(0, parley::Affinity::Downstream)
+        .cursor_at(0, crate::VisualAffinity::Downstream)
         .unwrap_or_else(|| panic!("empty paragraph start is not a valid cursor"));
     let empty_cursor_geometry = empty_layout.cursor_geometry(empty_cursor, 1.0);
     assert_eq!(empty_cursor_geometry.x0, 0.0);
@@ -540,8 +540,6 @@ fn paragraph_empty_line_scan_handles_split_crlf_without_copying_text() {
 
 #[test]
 fn parley_visual_cursor_moves_through_utf8_and_bidi_grapheme_boundaries() {
-    use parley::editing::Cursor;
-
     let mut catalog = font_catalog();
     let settings = document_settings();
     let mut layouter = ParagraphLayouter::new();
@@ -556,20 +554,24 @@ fn parley_visual_cursor_moves_through_utf8_and_bidi_grapheme_boundaries() {
             layout_options(320.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
-    let mut cursor = Cursor::from_byte_index(&result.layout, 0, parley::Affinity::Downstream);
+    let mut cursor = result
+        .cursor_at(0, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("paragraph start is not a visual cursor"));
     let mut visited = Vec::new();
     for _ in 0..text.len() * 4 {
         assert!(
             result
                 .grapheme_boundaries
-                .binary_search(&cursor.index())
+                .binary_search(&cursor.byte_index())
                 .is_ok()
         );
-        if visited.contains(&(cursor.index(), cursor.affinity())) {
+        if visited.contains(&(cursor.byte_index(), cursor.affinity())) {
             break;
         }
-        visited.push((cursor.index(), cursor.affinity()));
-        let next = cursor.next_visual(&result.layout);
+        visited.push((cursor.byte_index(), cursor.affinity()));
+        let Some(next) = result.move_visual(cursor, true) else {
+            break;
+        };
         if next == cursor {
             break;
         }
@@ -595,10 +597,14 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
 
-    assert!(result.cursor_at(1, parley::Affinity::Downstream).is_none());
     assert!(
         result
-            .cursor_at("e\u{301}".len(), parley::Affinity::Downstream)
+            .cursor_at(1, crate::VisualAffinity::Downstream)
+            .is_none()
+    );
+    assert!(
+        result
+            .cursor_at("e\u{301}".len(), crate::VisualAffinity::Downstream)
             .is_some()
     );
     let snapped = result
@@ -617,18 +623,218 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
         .unwrap_or_else(|| panic!("nonempty paragraph has no layout line"));
     let y = line.metrics().block_min_coord + line.metrics().line_height / 2.0;
     for x in (0..240).step_by(3) {
-        let cursor = result
+        let hit = result
             .cursor_from_point(x as f32, y)
             .unwrap_or_else(|| panic!("hit at x={x} did not resolve to a cursor"));
         assert!(
             result
                 .grapheme_boundaries
-                .binary_search(&cursor.index())
+                .binary_search(&hit.cursor.byte_index())
                 .is_ok(),
             "hit returned a non-grapheme byte offset {}",
-            cursor.index()
+            hit.cursor.byte_index()
         );
     }
+}
+
+#[test]
+fn exact_ltr_cluster_boundary_prefers_logical_downstream() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("ab", Some("en")),
+            &settings,
+            &ShapingStyle::default(),
+            layout_options(160.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    let upstream = result
+        .cursor_at(1, crate::VisualAffinity::Upstream)
+        .unwrap_or_else(|| panic!("upstream boundary cursor missing"));
+    let downstream = result
+        .cursor_at(1, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("downstream boundary cursor missing"));
+    let upstream_rect = result.cursor_geometry(upstream, 1.0);
+    let downstream_rect = result.cursor_geometry(downstream, 1.0);
+    assert_eq!(upstream_rect.x0, downstream_rect.x0);
+    let hit = result
+        .cursor_from_point_on_line(upstream_rect.x0 as f32, 0)
+        .unwrap_or_else(|| panic!("exact boundary hit did not resolve"));
+    assert_eq!(hit.cursor.byte_index(), 1);
+    assert_eq!(hit.cursor.affinity(), crate::VisualAffinity::Downstream);
+    assert_eq!(hit.logical_affinity, crate::HitAffinity::Downstream);
+}
+
+#[test]
+fn hit_testing_preserves_logical_cluster_side_for_ltr_and_rtl_at_small_sizes() {
+    for font_size_centipoints in [50, 1200] {
+        let mut catalog = font_catalog();
+        let settings = document_settings();
+        let style = ShapingStyle {
+            font_size_centipoints,
+            ..ShapingStyle::default()
+        };
+        let mut layouter = ParagraphLayouter::new();
+        for (text, language, expected_left, expected_right) in [
+            (
+                "abc",
+                "en",
+                crate::HitAffinity::Upstream,
+                crate::HitAffinity::Downstream,
+            ),
+            (
+                "אבג",
+                "he",
+                crate::HitAffinity::Downstream,
+                crate::HitAffinity::Upstream,
+            ),
+        ] {
+            let (_, result) = layouter
+                .layout(
+                    &mut catalog,
+                    &paragraph(text, Some(language)),
+                    &settings,
+                    &style,
+                    layout_options(160.0),
+                )
+                .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+            let upstream = result
+                .cursor_at(2, crate::VisualAffinity::Upstream)
+                .unwrap_or_else(|| panic!("upstream boundary cursor missing"));
+            let downstream = result
+                .cursor_at(2, crate::VisualAffinity::Downstream)
+                .unwrap_or_else(|| panic!("downstream boundary cursor missing"));
+            let upstream_x = result.cursor_geometry(upstream, 0.0).x0;
+            let downstream_x = result.cursor_geometry(downstream, 0.0).x0;
+            assert_eq!(upstream_x, downstream_x);
+            let epsilon = f32::from(font_size_centipoints) * 0.0001;
+            let cases = [
+                ((upstream_x - f64::from(epsilon)) as f32, expected_left),
+                ((upstream_x + f64::from(epsilon)) as f32, expected_right),
+                (upstream_x as f32, crate::HitAffinity::Downstream),
+            ];
+            for (x, expected_affinity) in cases {
+                let hit = result
+                    .cursor_from_point_on_line(x, 0)
+                    .unwrap_or_else(|| panic!("hit at x={x} did not resolve"));
+                assert_eq!(
+                    hit.cursor.byte_index(),
+                    2,
+                    "text={text:?}, size={font_size_centipoints}"
+                );
+                assert_eq!(
+                    hit.logical_affinity, expected_affinity,
+                    "text={text:?}, size={font_size_centipoints}, x={x}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn hit_testing_keeps_visual_sides_at_bidi_boundaries() {
+    for font_size_centipoints in [50, 1200] {
+        let mut catalog = font_catalog();
+        let settings = document_settings();
+        let style = ShapingStyle {
+            font_size_centipoints,
+            ..ShapingStyle::default()
+        };
+        let mut layouter = ParagraphLayouter::new();
+        let (_, result) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph("aאבb", Some("en")),
+                &settings,
+                &style,
+                layout_options(160.0),
+            )
+            .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+        let upstream = result
+            .cursor_at(1, crate::VisualAffinity::Upstream)
+            .unwrap_or_else(|| panic!("upstream bidi cursor missing"));
+        let downstream = result
+            .cursor_at(1, crate::VisualAffinity::Downstream)
+            .unwrap_or_else(|| panic!("downstream bidi cursor missing"));
+        let upstream_x = result.cursor_geometry(upstream, 0.0).x0;
+        let downstream_x = result.cursor_geometry(downstream, 0.0).x0;
+        assert_ne!(upstream_x, downstream_x);
+        let epsilon = f32::from(font_size_centipoints) * 0.0001;
+        for (x, expected_visual) in [
+            (
+                (upstream_x - f64::from(epsilon)) as f32,
+                crate::VisualAffinity::Upstream,
+            ),
+            (
+                (downstream_x - f64::from(epsilon)) as f32,
+                crate::VisualAffinity::Downstream,
+            ),
+        ] {
+            let hit = result
+                .cursor_from_point_on_line(x, 0)
+                .unwrap_or_else(|| panic!("bidi hit at x={x} did not resolve"));
+            assert_eq!(hit.cursor.byte_index(), 1);
+            assert_eq!(hit.cursor.affinity(), expected_visual);
+        }
+    }
+}
+
+#[test]
+fn hit_testing_snaps_combining_cluster_to_its_logical_edges() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let text = "e\u{301}";
+    let mut split = paragraph("", Some("en"));
+    split.inlines = vec![
+        InlineNode::Run(Run {
+            text: "e".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "\u{301}".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut layouter = ParagraphLayouter::new();
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &split,
+            &settings,
+            &ShapingStyle {
+                font_size_centipoints: 50,
+                ..ShapingStyle::default()
+            },
+            layout_options(160.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    assert_eq!(text, "e\u{301}");
+    let start = result
+        .cursor_at(0, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("cluster start cursor missing"));
+    let end = result
+        .cursor_at(text.len(), crate::VisualAffinity::Upstream)
+        .unwrap_or_else(|| panic!("cluster end cursor missing"));
+    let start_x = result.cursor_geometry(start, 0.0).x0;
+    let end_x = result.cursor_geometry(end, 0.0).x0;
+    let epsilon = (end_x - start_x).abs() * 0.1;
+    let start_hit = result
+        .cursor_from_point_on_line((start_x + epsilon) as f32, 0)
+        .unwrap_or_else(|| panic!("cluster start hit did not resolve"));
+    let end_hit = result
+        .cursor_from_point_on_line((end_x - epsilon) as f32, 0)
+        .unwrap_or_else(|| panic!("cluster end hit did not resolve"));
+    assert_eq!(start_hit.cursor.byte_index(), 0);
+    assert_eq!(start_hit.logical_affinity, crate::HitAffinity::Downstream);
+    assert_eq!(end_hit.cursor.byte_index(), text.len());
+    assert_eq!(end_hit.logical_affinity, crate::HitAffinity::Upstream);
 }
 
 #[test]
@@ -669,7 +875,11 @@ fn grapheme_boundaries_cross_run_and_environment_boundaries() {
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
     assert_eq!(text, "e\u{301}");
     assert_eq!(result.grapheme_boundaries, vec![0, text.len()]);
-    assert!(result.cursor_at(1, parley::Affinity::Downstream).is_none());
+    assert!(
+        result
+            .cursor_at(1, crate::VisualAffinity::Downstream)
+            .is_none()
+    );
     assert_eq!(result.paragraph.lines.len(), 1);
 }
 

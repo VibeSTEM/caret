@@ -9,6 +9,8 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中和跨页选区几何。正文 glyph 尚未接入 Qt scene graph，FFI/ViewModel 仍未消费文档布局快照，真实窗口编辑交互未实现；因此 027 仍处于进行中。
+
 ## 必读
 
 - [界面外壳](../architecture/interface/ui-shell.md)、[页面与段落排版](../architecture/editor/page-layout.md)、[文字塑形](../architecture/editor/text-shaping.md)
@@ -56,31 +58,28 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 ## 验证计划与结果
 
-| 日期 | 环境 / 检查 | 预期 | 实际结果 |
+| 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-10-26 | `cargo test --offline --locked --workspace` | Rust 与 native 聚合测试通过 | 通过；native CTest 4/4 |
-| 2026-10-26 | `cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 无 lint 警告 | 通过 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine` | 段落与文档布局、跨页选区/命中回归通过 | 通过；caret-layout 59 项、caret-engine 42 项 |
+| 2026-10-26 | `cargo fmt --all -- --check` | Rust 格式符合规范 | 通过 |
 | 2026-10-26 | `cargo clippy --offline --locked -p caret-engine -p caret-layout --all-targets -- -D warnings` | 新的 Rust 快照组合层无 lint 警告 | 通过 |
-| 2026-10-26 | `cargo fmt --all -- --check`、`cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 全工作区格式、测试与 lint 通过 | 通过；包含 native CTest 4/4 |
+| 2026-10-26 | `cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 全工作区测试和 lint 通过 | 通过；native CTest 4/4 |
 | 2026-10-26 | 画布坐标与缩放边界 C++/QML 用例 | 多页 pt 映射、hit-test 往返及缩小后的滚动范围正确 | 通过；真实窗口跨页编辑仍未实现 |
 | 2026-10-26 | `cmake --build target/native/debug --parallel 4` | ViewModel 页边距解析、版心坐标映射及 QML 绑定可编译 | 通过；链接器有既存 macOS LTO 路径与 deployment-target 警告；未运行测试 |
+| 2026-10-26 | 独立复核分页选区 y 偏移、页末命中和命中 affinity | 分页片段选区、页末命中和 RTL/LTR 字素边缘映射正确 | 这些问题已修复并通过复核；另发现多行 bidi 下 Parley caret 几何可能落到错误行，待处理 |
 
 ## 风险与回退
 
-屏幕像素与文档 pt 混算会造成 DPR 下的换行或命中漂移。转换集中实现并测试往返。
+屏幕像素与文档 pt 混算会造成 DPR 下的换行或命中漂移。转换集中实现并测试往返。Parley 0.12 的 `Cursor::geometry` 在多行 bidi 文本中可能返回错误行的光标几何；须增加回归并修复或提供适配后再验收视觉光标。
 
 ## 决策与工作记录
 
 - 2026-10-25：从原 008 拆出画布与命中职责。
-- 2026-10-26：完成首个 C++/QML 页面几何切片。Rust 空白文档页几何经 FFI 到 ViewModel；Canvas 和 ViewModel 使用独立 QML 模块。页面点坐标映射、hit-test、缩放锚点和 scene graph 纸张绘制已落地。完整 LayoutResult、文字/字素命中、selection/caret 几何、generation 丢弃、环境高亮、输入预览和真实窗口交互仍待 027 后续实现。
-- 2026-10-26：新增 `caret-engine::DocumentLayoutService`，组合文档级字体偏好、段落 shaping、行布局和分页，快照携带文档/字体代际、正文原文与 shaping 结果、页尺寸/边距及段落行片段。当前不透明块、环境样式/Section 编号和带 `markStyle` 的空段或尾随软换行会明确拒绝生成快照；只接受空 kind 或 `page` 显式分页。该服务尚未连接 FFI/ViewModel，命中映射、选择/光标几何、绘制和旧代际结果丢弃仍待实现。
-- 2026-10-26：初始页面快照新增 `marginsPt`；ViewModel 在完整快照安装时校验边距并提供给 Canvas。页面命中结果同时返回页面 pt 与版心相对 pt 坐标，边距未安装时不伪造版心坐标；Canvas setter 只校验自身输入，避免页面尺寸与边距分步更新时受旧值阻挡。独立复核通过；Rust/C++/QML 构建通过，尚未运行 native 测试。
-- 2026-10-26：Session 新增异步布局 token：`sessionId + documentGeneration`。成功文档/页面几何命令递增 revision；选区和 IME 预编辑不递增；Session 被替换或克隆分叉时换 ID。`layout_session` 同步捕获同一 Session 的文档与 token，避免调用方误配；revision 溢出时轮换 ID 并重置计数。独立复核确认命令语义和身份隔离。
-- 2026-10-26：库审查发现 Parley 0.12 高层 `Layout` 提供 caret/hit-test/selection 几何，并可设置自定义断行机会；初始原型发现它不能消费现有 `ShapedParagraph`，且跨 Run 字素有边界限制。
-- 2026-10-26：受限 Parley 高层 Layout 原型验证了 ICU 断点回调、英文/中文样例行范围和普通混合 bidi 光标/命中；不同样式 Run 中的 `e + combining acute` 会暴露字素内部停靠点。该问题作为生产适配要求保留，不再据此否决高层布局。
-- 2026-10-26：修正后的 10 MiB Criterion 单段落对照把双方的 ICU 断点生成、塑形和排版都计入；计时前验证逐行 UTF-8 范围完全一致。Parley 为 1.8044 s，Caret 为 2.4026 s，快约 24.9%。据此更新决策：后续统一段落布局与交互几何采用 Parley 高层 Layout，Caret 保留 ICU 断点、字体规则、行距和分页领域逻辑。该样本只覆盖单个长英文段落，不覆盖多段文档分页、内存或跨平台；实施仍需补齐跨 Run 字素、显式字体/fallback 和 selection 几何验证。先前复用预计算断点的样本因计时不对等而作废。临时对比 harness 与产物已删除；Criterion 复用 workspace 既有依赖，`target/criterion` 已忽略。`FontCatalog` 与高层布局共用同一 `FontContext`，避免重复字体扫描/缓存。
-- 2026-10-26：生产段落布局已切换到 Parley 高层 `Layout`，删除自研 `TextShaper`、`CatalogSelector` 与探针；Caret 保留 ICU 断点、字体偏好、行距/分页领域逻辑。增加跨 Run/环境字素边界、字素安全光标/选区/命中、字体刷新重建 context 和 `DocumentLayoutService` 端到端测试；恢复完整 bidi levels/visual-order corpus，补回多语言 fallback、0.5/12.25 pt 字号、Emoji generic 优先、emoji/ZWJ 和相同样式 Run 保持 glyph 的测试。正文只展平一次；断点覆盖用位集存储，脚本分类线性处理，行命中二分定位。`caret-layout` 55 项、`caret-engine` 41 项，workspace 测试、Clippy、格式检查均通过，native CTest 4/4。Parley glyph runs 尚未接入 Qt scene graph/FFI，027 的端到端绘制、可视光标/选区和用户交互验收仍未完成。
+- 2026-10-26：完成首个 C++/QML 页面几何切片。Rust 空白文档页几何经 FFI 到 ViewModel；Canvas 和 ViewModel 使用独立 QML 模块。页面点坐标映射、hit-test、缩放锚点和 scene graph 纸张绘制已落地。真实窗口跨页编辑仍未实现。
+- 2026-10-26：Session 布局代际与 `DocumentLayoutService` 已实现；服务生成包含正文文本、段落布局、分页和字体代际的只读快照。未知块及暂不支持的环境样式会拒绝整份布局，尚未连接 FFI/ViewModel。
+- 2026-10-26：段落布局改用 Parley 高层 Layout；Caret 保留 ICU 断点、字体偏好、行距和分页。一次 10 MiB 英文长段落对照中，双方计入断点生成、塑形和排版后，Parley 为 1.8044 秒，原实现为 2.4026 秒。该样本仅用于实现选型，不代表多段分页、内存或跨平台性能结论。
+- 2026-10-26：`DocumentLayoutSnapshot` 增加页面局部命中、跨页选区矩形及会话/文档/字体代际校验。独立复核发现并修复分页片段选区 y 偏移、固定/自然行高导致的页末误命中、小字号下光标矩形造成的命中偏差，以及按 Parley 命中字素侧生成逻辑 affinity。新增 0.5/12 pt 的 LTR、RTL、bidi 与跨 Run combining mark 回归测试。复核另发现 Parley 多行 bidi 光标几何错误行问题，未纳入本次修复。
 
 ## 完成摘要
 
-未完成。
+未完成。Rust 段落布局和页面命中/选区几何已具备；FFI 快照接入、Qt 正文绘制、命中返回文档位置、环境高亮与真实窗口交互仍未完成。

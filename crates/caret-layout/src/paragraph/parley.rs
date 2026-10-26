@@ -24,6 +24,44 @@ use crate::{
 
 use crate::shaping::paragraph_style_spans;
 
+/// 视觉光标停靠点的逻辑侧，与文档环境亲和性相互独立。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualAffinity {
+    Upstream,
+    Downstream,
+}
+
+/// 与具体布局无关的稳定视觉光标停靠点描述。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualCursor {
+    byte_index: usize,
+    affinity: VisualAffinity,
+}
+
+/// 文本命中落在逻辑字素簇前侧或后侧的语义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitAffinity {
+    Upstream,
+    Downstream,
+}
+
+/// 同时保留视觉光标位置和文档输入继承侧的文本命中结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParagraphHit {
+    pub cursor: VisualCursor,
+    pub logical_affinity: HitAffinity,
+}
+
+impl VisualCursor {
+    pub const fn byte_index(self) -> usize {
+        self.byte_index
+    }
+
+    pub const fn affinity(self) -> VisualAffinity {
+        self.affinity
+    }
+}
+
 /// Parley 的完整段落布局及 Caret 行框/Unicode 映射。
 #[derive(Debug, Clone)]
 pub struct ParleyParagraphLayout {
@@ -39,6 +77,8 @@ pub struct ParleyParagraphLayout {
     pub line_box_tops_pt: Vec<f32>,
     /// Parley 原始行顶端，用于快速映射光标矩形。
     pub parley_line_tops_pt: Vec<f32>,
+    /// Parley 原始行高；将点击采样限制在目标原始行内部。
+    pub parley_line_heights_pt: Vec<f32>,
     /// 每条行框的 Caret baseline 相对 Parley baseline 的调整量。
     pub baseline_adjustments_pt: Vec<f32>,
     /// 文档字体偏好中至少一个候选族未安装。
@@ -241,6 +281,7 @@ impl ParagraphLayouter {
             line_top_offsets_pt,
             line_box_tops_pt,
             parley_line_tops_pt,
+            parley_line_heights_pt,
             baseline_adjustments_pt,
         } = make_paragraph_lines(&text, &layout, spacing, empty_mark_metrics)?;
         Ok((
@@ -252,6 +293,7 @@ impl ParagraphLayouter {
                 line_top_offsets_pt,
                 line_box_tops_pt,
                 parley_line_tops_pt,
+                parley_line_heights_pt,
                 baseline_adjustments_pt,
                 requested_family_missing,
             },
@@ -318,31 +360,26 @@ fn font_families(names: &[String], emoji: bool) -> Vec<FontFamilyName<'_>> {
 
 impl ParleyParagraphLayout {
     /// 字节偏移必须恰好落在扩展字素簇边界；非法位置不静默吸附。
-    pub fn cursor_at(
-        &self,
-        byte_index: usize,
-        affinity: parley::Affinity,
-    ) -> Option<parley::editing::Cursor> {
+    pub fn cursor_at(&self, byte_index: usize, affinity: VisualAffinity) -> Option<VisualCursor> {
         self.grapheme_boundaries
             .binary_search(&byte_index)
             .ok()
-            .map(|_| parley::editing::Cursor::from_byte_index(&self.layout, byte_index, affinity))
+            .map(|_| VisualCursor {
+                byte_index,
+                affinity,
+            })
     }
 
     /// 按视觉顺序移动，并跳过 Parley 在 Run 内部暴露的字素停靠点。
-    pub fn move_visual(
-        &self,
-        cursor: parley::editing::Cursor,
-        forward: bool,
-    ) -> Option<parley::editing::Cursor> {
-        let mut candidate = cursor;
+    pub fn move_visual(&self, cursor: VisualCursor, forward: bool) -> Option<VisualCursor> {
+        let mut candidate = self.to_parley_cursor(cursor);
         for _ in 0..=self.layout.text_len().saturating_add(1) {
             candidate = if forward {
                 candidate.next_visual(&self.layout)
             } else {
                 candidate.previous_visual(&self.layout)
             };
-            if candidate == cursor {
+            if candidate == self.to_parley_cursor(cursor) {
                 return None;
             }
             if self
@@ -350,78 +387,101 @@ impl ParleyParagraphLayout {
                 .binary_search(&candidate.index())
                 .is_ok()
             {
-                return Some(candidate);
+                return Some(Self::from_parley_cursor(candidate));
             }
         }
         None
     }
 
     /// 点击命中时将内部字素停靠点吸附到视觉距离最近的完整字素边缘。
-    pub fn cursor_from_point(&self, x: f32, y: f32) -> Option<parley::editing::Cursor> {
+    pub fn cursor_from_point(&self, x: f32, y: f32) -> Option<ParagraphHit> {
+        if self.layout.text_len() == 0 {
+            return self
+                .cursor_at(0, VisualAffinity::Downstream)
+                .map(|cursor| ParagraphHit {
+                    cursor,
+                    logical_affinity: HitAffinity::Downstream,
+                });
+        }
+        let (line_index, _) = self.raw_line_y(y)?;
+        self.cursor_from_point_on_line(x, line_index)
+    }
+
+    /// 在已选定的 Caret 行内按 x 坐标命中，避免行高差异将命中带到相邻 Parley 行。
+    pub fn cursor_from_point_on_line(&self, x: f32, line_index: usize) -> Option<ParagraphHit> {
         use parley::editing::Cursor;
 
+        if !x.is_finite() {
+            return None;
+        }
         if self.layout.text_len() == 0 {
-            return Some(Cursor::from_byte_index(
-                &self.layout,
-                0,
-                parley::Affinity::Downstream,
-            ));
+            return self
+                .cursor_at(0, VisualAffinity::Downstream)
+                .map(|cursor| ParagraphHit {
+                    cursor,
+                    logical_affinity: HitAffinity::Downstream,
+                });
         }
-        let (_, raw_y) = self.raw_line_y(y)?;
+        let raw_top = *self.parley_line_tops_pt.get(line_index)?;
+        let raw_height = *self.parley_line_heights_pt.get(line_index)?;
+        if !raw_top.is_finite() || !raw_height.is_finite() || raw_height <= 0.0 {
+            return None;
+        }
+        let raw_y = raw_top + raw_height / 2.0;
         let raw = Cursor::from_point(&self.layout, x, raw_y);
-        if self.grapheme_boundaries.binary_search(&raw.index()).is_ok() {
-            return Some(raw);
-        }
-        let mut previous = raw;
-        let mut next = raw;
-        for _ in 0..=self.layout.text_len().saturating_add(1) {
-            previous = previous.previous_visual(&self.layout);
-            if self
-                .grapheme_boundaries
-                .binary_search(&previous.index())
-                .is_ok()
-            {
-                break;
-            }
-            if previous == raw {
-                break;
-            }
-        }
-        for _ in 0..=self.layout.text_len().saturating_add(1) {
-            next = next.next_visual(&self.layout);
-            if self
-                .grapheme_boundaries
-                .binary_search(&next.index())
-                .is_ok()
-            {
-                break;
-            }
-            if next == raw {
-                break;
-            }
-        }
-        let previous_valid = self
-            .grapheme_boundaries
-            .binary_search(&previous.index())
-            .is_ok();
-        let next_valid = self
-            .grapheme_boundaries
-            .binary_search(&next.index())
-            .is_ok();
-        match (previous_valid, next_valid) {
-            (true, true) => Some(
-                if cursor_distance(previous, &self.layout, x, raw_y)
-                    <= cursor_distance(next, &self.layout, x, raw_y)
-                {
-                    previous
+        let raw_index = raw.index();
+        let (byte_index, logical_affinity) = match (
+            self.grapheme_boundaries.binary_search(&raw_index),
+            raw.affinity(),
+        ) {
+            (Ok(_), affinity) => {
+                let cursor = Self::from_parley_cursor(raw);
+                let bounds = self.cursor_geometry(cursor, 0.0);
+                let same_position = [parley::Affinity::Upstream, parley::Affinity::Downstream]
+                    .into_iter()
+                    .filter(|candidate_affinity| *candidate_affinity != affinity)
+                    .any(|candidate_affinity| {
+                        let other =
+                            Cursor::from_byte_index(&self.layout, raw_index, candidate_affinity);
+                        let other_bounds = other.geometry(&self.layout, 0.0);
+                        (bounds.x0 - other_bounds.x0).abs() <= 0.0001
+                    });
+                let logical_affinity =
+                    if same_position && (f64::from(x) - bounds.x0).abs() <= 0.0001 {
+                        HitAffinity::Downstream
+                    } else {
+                        hit_affinity(affinity)
+                    };
+                let visual_cursor = if same_position && (f64::from(x) - bounds.x0).abs() <= 0.0001 {
+                    Self::from_parley_cursor(Cursor::from_byte_index(
+                        &self.layout,
+                        raw_index,
+                        parley::Affinity::Downstream,
+                    ))
                 } else {
-                    next
-                },
+                    cursor
+                };
+                return Some(ParagraphHit {
+                    cursor: visual_cursor,
+                    logical_affinity,
+                });
+            }
+            (Err(index), parley::Affinity::Downstream) => (
+                *self.grapheme_boundaries.get(index.saturating_sub(1))?,
+                HitAffinity::Downstream,
             ),
-            (true, false) => Some(previous),
-            (false, true) => Some(next),
-            (false, false) => None,
-        }
+            (Err(index), parley::Affinity::Upstream) => {
+                (*self.grapheme_boundaries.get(index)?, HitAffinity::Upstream)
+            }
+        };
+        let affinity = match raw.affinity() {
+            parley::Affinity::Upstream => VisualAffinity::Upstream,
+            parley::Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        Some(ParagraphHit {
+            cursor: self.cursor_at(byte_index, affinity)?,
+            logical_affinity,
+        })
     }
 
     /// 返回字素安全的 Parley selection 几何，并映射到 Caret 自定义行框。
@@ -470,11 +530,8 @@ impl ParleyParagraphLayout {
     }
 
     /// 返回与自定义行框 baseline/溢出语义对齐的插入点矩形。
-    pub fn cursor_geometry(
-        &self,
-        cursor: parley::editing::Cursor,
-        width_pt: f32,
-    ) -> parley::BoundingBox {
+    pub fn cursor_geometry(&self, cursor: VisualCursor, width_pt: f32) -> parley::BoundingBox {
+        let cursor = self.to_parley_cursor(cursor);
         if self.layout.text_len() == 0
             && let Some(line) = self.paragraph.lines.first()
         {
@@ -514,6 +571,27 @@ impl ParleyParagraphLayout {
         bounds
     }
 
+    fn to_parley_cursor(&self, cursor: VisualCursor) -> parley::editing::Cursor {
+        parley::editing::Cursor::from_byte_index(
+            &self.layout,
+            cursor.byte_index,
+            match cursor.affinity {
+                VisualAffinity::Upstream => parley::Affinity::Upstream,
+                VisualAffinity::Downstream => parley::Affinity::Downstream,
+            },
+        )
+    }
+
+    fn from_parley_cursor(cursor: parley::editing::Cursor) -> VisualCursor {
+        VisualCursor {
+            byte_index: cursor.index(),
+            affinity: match cursor.affinity() {
+                parley::Affinity::Upstream => VisualAffinity::Upstream,
+                parley::Affinity::Downstream => VisualAffinity::Downstream,
+            },
+        }
+    }
+
     fn raw_line_y(&self, y: f32) -> Option<(usize, f32)> {
         if !y.is_finite() {
             return None;
@@ -525,35 +603,23 @@ impl ParleyParagraphLayout {
             .min(self.line_box_tops_pt.len().checked_sub(1)?);
         let top = *self.line_box_tops_pt.get(line_index)?;
         let bottom = top + self.paragraph.lines.get(line_index)?.metrics.height_pt;
-        let offset = *self.line_top_offsets_pt.get(line_index)?;
-        Some((line_index, y.clamp(top, bottom) - offset))
+        if y < top || y > bottom {
+            return None;
+        }
+        let raw_top = *self.parley_line_tops_pt.get(line_index)?;
+        let raw_height = *self.parley_line_heights_pt.get(line_index)?;
+        if !raw_top.is_finite() || !raw_height.is_finite() || raw_height <= 0.0 {
+            return None;
+        }
+        Some((line_index, raw_top + raw_height / 2.0))
     }
 }
 
-fn cursor_distance(
-    cursor: parley::editing::Cursor,
-    layout: &Layout<[u8; 4]>,
-    x: f32,
-    y: f32,
-) -> f64 {
-    let bounds = cursor.geometry(layout, 1.0);
-    let x = f64::from(x);
-    let y = f64::from(y);
-    let dx = if x < bounds.x0 {
-        bounds.x0 - x
-    } else if x > bounds.x1 {
-        x - bounds.x1
-    } else {
-        0.0
-    };
-    let dy = if y < bounds.y0 {
-        bounds.y0 - y
-    } else if y > bounds.y1 {
-        y - bounds.y1
-    } else {
-        0.0
-    };
-    dx.mul_add(dx, dy * dy)
+fn hit_affinity(affinity: parley::Affinity) -> HitAffinity {
+    match affinity {
+        parley::Affinity::Upstream => HitAffinity::Upstream,
+        parley::Affinity::Downstream => HitAffinity::Downstream,
+    }
 }
 
 fn font_line_metrics(metrics: parley::FontMetrics) -> FontLineMetrics {
@@ -676,6 +742,7 @@ struct ParagraphLineMapping {
     line_top_offsets_pt: Vec<f32>,
     line_box_tops_pt: Vec<f32>,
     parley_line_tops_pt: Vec<f32>,
+    parley_line_heights_pt: Vec<f32>,
     baseline_adjustments_pt: Vec<f32>,
 }
 
@@ -701,6 +768,7 @@ fn make_paragraph_lines(
             line_top_offsets_pt: vec![0.0],
             line_box_tops_pt: vec![0.0],
             parley_line_tops_pt: vec![0.0],
+            parley_line_heights_pt: vec![0.0],
             baseline_adjustments_pt: vec![0.0],
         });
     }
@@ -712,6 +780,7 @@ fn make_paragraph_lines(
     let mut line_top_offsets_pt = Vec::with_capacity(lines.len());
     let mut line_box_tops_pt = Vec::with_capacity(lines.len());
     let mut parley_line_tops_pt = Vec::with_capacity(lines.len());
+    let mut parley_line_heights_pt = Vec::with_capacity(lines.len());
     let mut baseline_adjustments_pt = Vec::with_capacity(lines.len());
     let mut font_metrics = Vec::new();
     let mut top_pt = 0.0f32;
@@ -724,6 +793,7 @@ fn make_paragraph_lines(
             || !text.is_char_boundary(source_bytes.end)
             || !metrics.advance.is_finite()
             || !metrics.line_height.is_finite()
+            || metrics.line_height <= 0.0
         {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
@@ -754,6 +824,7 @@ fn make_paragraph_lines(
         line_top_offsets_pt.push(top_pt - raw_top);
         line_box_tops_pt.push(top_pt);
         parley_line_tops_pt.push(raw_top);
+        parley_line_heights_pt.push(metrics.line_height);
         baseline_adjustments_pt.push(line_metrics.baseline_pt - raw_baseline_from_top);
         paragraph_lines.push(ParagraphLine {
             source_bytes: source_bytes.clone(),
@@ -772,6 +843,7 @@ fn make_paragraph_lines(
         line_top_offsets_pt,
         line_box_tops_pt,
         parley_line_tops_pt,
+        parley_line_heights_pt,
         baseline_adjustments_pt,
     })
 }

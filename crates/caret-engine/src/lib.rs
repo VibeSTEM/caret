@@ -8,6 +8,6 @@ pub use editing::{
     Session, StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
-    DocumentLayoutError, DocumentLayoutService, DocumentLayoutSnapshot, LaidOutParagraph,
-    PageLayoutSnapshot,
+    DocumentLayoutError, DocumentLayoutService, DocumentLayoutSnapshot, LaidOutParagraph, PageHit,
+    PageLayoutSnapshot, PageSelectionRect,
 };
