@@ -9,7 +9,7 @@ use std::{
 };
 
 use icu_properties::{CodePointMapData, props::LineBreak as LineBreakClass};
-use parley::{FontContext, LayoutContext, StyleProperty, editing::Cursor};
+use parley::{FontContext, GenericFamily, Language, LayoutContext, StyleProperty, editing::Cursor};
 
 use crate::{
     FontCatalog, FontLineMetrics, LineSpacing, ShapingStyle, TextShaper, UnicodeBoundaries,
@@ -70,8 +70,12 @@ fn build_layout(
     };
     let mut font_context = font_context(catalog);
     let mut layout_context = LayoutContext::new();
-    let mut builder = layout_context.ranged_builder(&mut font_context, text, 1.0, true);
+    let mut builder = layout_context.ranged_builder(&mut font_context, text, 1.0, false);
+    builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
     builder.push_default(StyleProperty::FontSize(12.0));
+    builder.push_default(StyleProperty::Locale(
+        language.and_then(|tag| Language::parse(tag).ok()),
+    ));
     if let Some(range) = style_range {
         builder.push(StyleProperty::FontSize(14.0), range);
     }
