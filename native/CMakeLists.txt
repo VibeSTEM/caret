@@ -52,7 +52,9 @@ if(BUILD_TESTING)
 endif()
 find_package(Qt6 6.11 REQUIRED COMPONENTS ${_caret_qt_components} PATHS "${QT_STAGING}"
                                           NO_DEFAULT_PATH)
-if(CARET_ENABLE_APP AND UNIX AND NOT APPLE)
+if(CARET_ENABLE_APP
+   AND UNIX
+   AND NOT APPLE)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
 endif()
