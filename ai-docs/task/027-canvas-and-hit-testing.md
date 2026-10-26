@@ -75,6 +75,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：新增 `caret-engine::DocumentLayoutService`，组合文档级字体偏好、段落 shaping、行布局和分页，快照携带文档/字体代际、正文原文与 shaping 结果、页尺寸/边距及段落行片段。当前不透明块、环境样式/Section 编号和带 `markStyle` 的空段或尾随软换行会明确拒绝生成快照；只接受空 kind 或 `page` 显式分页。该服务尚未连接 FFI/ViewModel，命中映射、选择/光标几何、绘制和旧代际结果丢弃仍待实现。
 - 2026-10-26：初始页面快照新增 `marginsPt`；ViewModel 在完整快照安装时校验边距并提供给 Canvas。页面命中结果同时返回页面 pt 与版心相对 pt 坐标，边距未安装时不伪造版心坐标；Canvas setter 只校验自身输入，避免页面尺寸与边距分步更新时受旧值阻挡。独立复核通过；Rust/C++/QML 构建通过，尚未运行 native 测试。
 - 2026-10-26：Session 新增异步布局 token：`sessionId + documentGeneration`。成功文档/页面几何命令递增 revision；选区和 IME 预编辑不递增；Session 被替换或克隆分叉时换 ID。`layout_session` 同步捕获同一 Session 的文档与 token，避免调用方误配；revision 溢出时轮换 ID 并重置计数。独立复核确认命令语义和身份隔离。
+- 2026-10-26：库审查发现 Parley 0.12 高层 `Layout` 提供 caret/hit-test/selection 几何，并可设置自定义断行机会；它无法直接消费当前 `ShapedParagraph`，还会重做 shaping，且跨 Run 字素有边界限制。详见 [Rust 库审查](../research/005-rust-library-audit.md)。后续先做受限原型，确认完全复用 Caret ICU 断点、字体选择和实际行范围后，再决定是否把它作为统一视觉布局实现。
 
 ## 完成摘要
 

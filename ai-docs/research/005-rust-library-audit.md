@@ -21,6 +21,7 @@
 - 021 的 Base64 手写校验已在完成后的依赖审查中替换为严格流式解码；锁文件和 workspace manifest 一并更新。
 - 对 `langtag` 1.1.0 的坏输入测试触发库内 panic，故没有引入该依赖；恢复 021 原有验证器。Unicode/排版依赖的选择需要对应固定语料和平台验证，不能为消除手写代码而引入版本不一致或未经验证的新栈。实施入口分别记在 021 与 024。
 - 2026-10-25：024 实现确认 Parley Engine 0.12 + fontique 0.12；锁定的 API、字体目录与 Unicode 17 conformance 在 macOS/CoreText 本机通过。Parley Engine 的公开说明明确提示任意断行后的 reshaping 尚未完成，行布局应限制到 Atom/ShapedCluster 安全边界。Linux/Windows 字体 smoke 留待平台 CI。
+- 2026-10-26：027 的下一阶段评估 Parley 0.12 高层 `Layout`。本仓库当前只直接依赖 `parley_engine`；本机缓存的 `parley` 提供 UTF-8 byte offset 的 `Cursor::from_point`、视觉方向移动、caret 与 selection geometry。可用 `LineBreakOverrideFn` 强制 Caret ICU 17 的软断点，再以 `BreakLines::break_next_with_length` 按 Unicode scalar 数尝试复现 Caret 已有行范围；但回调没有 byte offset，需按顺序构造决策表，且断行会扩展到 Parley Atom。高层 Layout 不能导入现有低层 `ShapedParagraph`，会重新解析字体、样式并 shaping；跨 Run 的 combining grapheme 也可能被分簇。因此**推荐做受限原型**，先验证既有 Unicode 断点、Caret 行范围、字体选择及混排 bidi caret 完全对齐，再决定迁移成单一 shaping/layout 管线；原型未证实前不新增生产依赖，也不让两套 shaping 长期并存。
 
 ## 参考资料
 

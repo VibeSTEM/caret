@@ -6,6 +6,7 @@
 
 - `caret-engine` 持有光标、锚点、活动端、逻辑环境亲和性和文档位置；这些状态不由 QML 或画布复制维护。
 - `caret-layout` 根据文档与字体生成视觉 caret 候选和 selection 几何，包括换行、分页及双向文本的映射。
+- 布局结果使用 `(sessionId, documentGeneration)` 标识输入版本；替换或克隆 Session 会生成新 ID，成功文档变更递增 generation，选区和 IME 预编辑不改变文档代际。
 - Qt 画布接收同一 generation 的布局结果，绘制 caret 和选区；拖动期间的预览可在 C++ 本地暂存，释放时提交最终位置。
 - 文字插入、删除、格式继承、逻辑亲和性和位置映射由 Rust 命令处理。像素坐标与 Rust UTF-8 位置的转换只在适配边界发生。
 
