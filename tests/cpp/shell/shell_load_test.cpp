@@ -9,6 +9,7 @@
 #include "document_runtime.hpp"
 #endif
 #include <QByteArray>
+#include <QChar>
 #include <QColor>
 #include <QDir>
 #include <QFile>
@@ -16,21 +17,37 @@
 #include <QHash>
 #include <QImage>
 #include <QKeyEvent>
+#include <QList>
 #include <QObject>
+#include <QPointF>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
 #include <QQuickWindow>
+#include <QRect>
+#include <QRectF>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QSize>
 #include <QString>
 #include <QStyleHints>
+#include <QVariantList>
 #include <QVariantMap>
+#include <QWindow>
+#include <Qt>
+#include <QtCore/qglobal.h>
+#include <QtCore/qobject.h>
+#include <QtCore/qobjectdefs.h>
+#include <QtCore/qvariant.h>
 #include <QtMath>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
+#include <QtTest/QTest>
 #include <QtTest/qtest.h>
+#include <QtTest/qtestcase.h>
+#include <QtTest/qtestkeyboard.h>
+#include <QtTest/qtestmouse.h>
 #include <algorithm>
 #include <limits>
 #include <qcontainerfwd.h>
@@ -399,11 +416,14 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                           "}\n"),
         QUrl());
     QVERIFY2(render_component.isReady(), qPrintable(render_component.errorString()));
-    auto* rendered_canvas = qobject_cast<QQuickItem*>(render_component.create());
+    auto* rendered_canvas = qobject_cast<QQuickItem*>( // NOLINT(misc-include-cleaner): qobject_cast
+                                                       // 由 Qt 元对象头提供。
+        render_component.create());
     QVERIFY(rendered_canvas != nullptr);
     QCOMPARE(rendered_canvas->property("caretWidthCentipixels").toInt(), 125);
-    QByteArray glyph_pixels(8 * 8 * 4, '\0');
-    for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
+    constexpr qsizetype glyph_pixel_count = qsizetype{8} * 8;
+    QByteArray glyph_pixels(glyph_pixel_count * 4, '\0');
+    for (qsizetype pixel = 0; pixel < glyph_pixel_count; ++pixel) {
         const qsizetype x = pixel % 8;
         glyph_pixels[pixel * 4 + (x < 4 ? 0 : 1)] = static_cast<char>(255);
         glyph_pixels[pixel * 4 + 3] = static_cast<char>(255);
@@ -501,6 +521,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                               kTestBlinkTransitionTimeoutMs);
     rendered_canvas->setProperty("caretBlinkEnabled", false);
     QTRY_COMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
+    // NOLINTNEXTLINE(misc-include-cleaner): QtTest 聚合头提供 qWait，include-cleaner 无法追踪。
     QTest::qWait(kDisabledBlinkObservationMs);
     QCOMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
     rendered_canvas->setProperty("caretBlinkEnabled", true);
@@ -527,7 +548,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
              QColor(Qt::white));
 
     QByteArray changed_glyph_pixels = glyph_pixels;
-    for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
+    for (qsizetype pixel = 0; pixel < glyph_pixel_count; ++pixel) {
         const qsizetype x = pixel % 8;
         if (x < 4) {
             changed_glyph_pixels[pixel * 4 + 0] = '\0';
@@ -742,8 +763,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             return false;
         }
         const QVariantMap placement = placements.at(placement_index).toMap();
-        const uint image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
-        if (image_index >= static_cast<uint>(images.size())) {
+        const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
+        if (image_index >= static_cast<quint32>(images.size())) {
             return false;
         }
         const QVariantMap image = images.at(static_cast<qsizetype>(image_index)).toMap();

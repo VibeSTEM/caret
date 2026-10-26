@@ -1,6 +1,11 @@
 // 将 Qt 键盘事件转换为文档输入命令。
 #include "document_canvas.hpp"
+#include <QChar>
 #include <QKeyEvent>
+#include <QQuickItem>
+#include <QString>
+#include <Qt>
+#include <QtCore/qobjectdefs.h>
 #include <algorithm>
 
 namespace caret {
@@ -10,9 +15,9 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
     const Qt::KeyboardModifiers semantic_modifiers = modifiers & ~Qt::KeypadModifier;
     if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
         (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier)) {
-        emit editingCommandRequested(semantic_modifiers == Qt::ShiftModifier
-                                         ? QStringLiteral("text.soft_break")
-                                         : QStringLiteral("text.split_paragraph"));
+        emit editingCommandRequested( // NOLINT(misc-include-cleaner): Qt 元对象系统提供 emit 宏。
+            semantic_modifiers == Qt::ShiftModifier ? QStringLiteral("text.soft_break")
+                                                    : QStringLiteral("text.split_paragraph"));
         event->accept();
         return;
     }

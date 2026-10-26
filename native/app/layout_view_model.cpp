@@ -2,6 +2,7 @@
 #include "layout_view_model.hpp"
 
 #ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
 #include "document_runtime.hpp"
 #endif
 
@@ -12,11 +13,19 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QMap>
+#include <QObject>
 #include <QSizeF>
+#include <QString>
 #include <QThread>
 #include <QVariant>
+#include <QVariantList>
+#include <QVariantMap>
+#include <QtCore/qobjectdefs.h>
+#include <QtCore/qvariant.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -36,7 +45,7 @@ std::optional<rust::Box<ffi::DocumentRuntime>>& installed_runtime() {
     return value;
 }
 
-QVariantMap hit_result_from_json(const rust::String& response) {
+QMap<QString, QVariant> hit_result_from_json(const rust::String& response) {
     const QByteArray json(response.data(), static_cast<qsizetype>(response.size()));
     if (json.startsWith("error:")) {
         return {{QStringLiteral("valid"), false},
@@ -52,7 +61,7 @@ QVariantMap hit_result_from_json(const rust::String& response) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
     }
-    QVariantMap result = document.object().toVariantMap();
+    QMap<QString, QVariant> result = document.object().toVariantMap();
     result.insert(QStringLiteral("valid"), true);
     return result;
 }
@@ -101,10 +110,17 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
     return (static_cast<unsigned char>(text.at(offset)) & 0xC0U) != 0x80U;
 }
 
-bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_sizes,
-                           QVariantList& page_layouts, QVariantMap& page_margins,
-                           QVariantList& paragraph_layouts, qulonglong& document_generation,
-                           qulonglong& font_generation, QString& error) {
+struct ParsedLayoutSnapshot {
+    QVariantList page_sizes;
+    QVariantList page_layouts;
+    QVariantMap page_margins; // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
+    QVariantList paragraph_layouts;
+    qulonglong document_generation = 0;
+    qulonglong font_generation = 0;
+};
+
+bool parse_layout_snapshot(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot,
+                           QString& error) {
     QJsonParseError parse_error;
     const QJsonDocument document = QJsonDocument::fromJson(snapshot_json.toUtf8(), &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
@@ -149,7 +165,7 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
     parsed_paragraphs.reserve(paragraphs.size());
     QHash<QString, qsizetype> paragraph_line_counts;
     QHash<QString, bool> paragraph_ids;
-    for (const QJsonValue& paragraph_value : paragraphs) {
+    for (const auto& paragraph_value : paragraphs) {
         if (!paragraph_value.isObject()) {
             error = QStringLiteral("layout.invalid_paragraph");
             return false;
@@ -180,7 +196,7 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
         parsed_lines.reserve(lines.size());
         qsizetype consumed_cursor = 0;
         double expected_top_pt = 0.0;
-        for (const QJsonValue& line_value : lines) {
+        for (const auto& line_value : lines) {
             if (!line_value.isObject()) {
                 error = QStringLiteral("layout.invalid_line");
                 return false;
@@ -245,7 +261,7 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
     const QJsonArray pages = pages_value.toArray();
     parsed_sizes.reserve(pages.size());
     parsed_page_layouts.reserve(pages.size());
-    for (const QJsonValue& page_value : pages) {
+    for (const auto& page_value : pages) {
         if (!page_value.isObject()) {
             error = QStringLiteral("layout.invalid_page");
             return false;
@@ -272,7 +288,8 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
         const double content_height = height_pt -
                                       parsed_margins.value(QStringLiteral("top")).toDouble() -
                                       parsed_margins.value(QStringLiteral("bottom")).toDouble();
-        for (const QJsonValue& fragment_value : fragments_value.toArray()) {
+        const QJsonArray fragments = fragments_value.toArray();
+        for (const auto& fragment_value : fragments) {
             if (!fragment_value.isObject()) {
                 error = QStringLiteral("layout.invalid_fragment");
                 return false;
@@ -296,12 +313,12 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
         parsed_sizes.push_back(QVariant::fromValue(QSizeF(width_pt, height_pt)));
         parsed_page_layouts.push_back(page.toVariantMap());
     }
-    page_sizes = std::move(parsed_sizes);
-    page_layouts = std::move(parsed_page_layouts);
-    page_margins = std::move(parsed_margins);
-    paragraph_layouts = std::move(parsed_paragraphs);
-    document_generation = parsed_document_generation;
-    font_generation = parsed_font_generation;
+    parsed_snapshot.page_sizes = std::move(parsed_sizes);
+    parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
+    parsed_snapshot.page_margins = std::move(parsed_margins);
+    parsed_snapshot.paragraph_layouts = std::move(parsed_paragraphs);
+    parsed_snapshot.document_generation = parsed_document_generation;
+    parsed_snapshot.font_generation = parsed_font_generation;
     error.clear();
     return true;
 }
@@ -309,16 +326,9 @@ bool parse_layout_snapshot(const QString& snapshot_json, QVariantList& page_size
 } // namespace
 
 bool install_layout_snapshot(QString snapshot_json) {
-    QVariantList ignored_pages;
-    QVariantList ignored_page_layouts;
-    QVariantMap ignored_margins;
-    QVariantList ignored_paragraphs;
-    qulonglong ignored_document_generation = 0;
-    qulonglong ignored_font_generation = 0;
+    ParsedLayoutSnapshot parsed_snapshot;
     QString error;
-    if (!parse_layout_snapshot(snapshot_json, ignored_pages, ignored_page_layouts, ignored_margins,
-                               ignored_paragraphs, ignored_document_generation,
-                               ignored_font_generation, error)) {
+    if (!parse_layout_snapshot(snapshot_json, parsed_snapshot, error)) {
         return false;
     }
     installed_snapshot() = std::move(snapshot_json);
@@ -330,33 +340,33 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
         m_error = QStringLiteral("layout.snapshot_unavailable");
         return;
     }
-    (void)parse_layout_snapshot(installed_snapshot(), m_page_sizes_pt, m_page_layouts,
-                                m_page_margins_pt, m_paragraph_layouts, m_document_generation,
-                                m_font_generation, m_error);
+    ParsedLayoutSnapshot parsed_snapshot;
+    if (parse_layout_snapshot(installed_snapshot(), parsed_snapshot, m_error)) {
+        m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
+        m_page_layouts = std::move(parsed_snapshot.page_layouts);
+        m_page_margins_pt = std::move(parsed_snapshot.page_margins);
+        m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
+        m_document_generation = parsed_snapshot.document_generation;
+        m_font_generation = parsed_snapshot.font_generation;
+    }
 }
 
 bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
-    QVariantList page_sizes;
-    QVariantList page_layouts;
-    QVariantMap page_margins;
-    QVariantList paragraph_layouts;
-    qulonglong document_generation = 0;
-    qulonglong font_generation = 0;
+    ParsedLayoutSnapshot parsed_snapshot;
     QString error;
-    if (!parse_layout_snapshot(snapshot_json, page_sizes, page_layouts, page_margins,
-                               paragraph_layouts, document_generation, font_generation, error)) {
+    if (!parse_layout_snapshot(snapshot_json, parsed_snapshot, error)) {
         m_error = std::move(error);
         return false;
     }
-    m_page_sizes_pt = std::move(page_sizes);
-    m_page_layouts = std::move(page_layouts);
-    m_page_margins_pt = std::move(page_margins);
-    m_paragraph_layouts = std::move(paragraph_layouts);
-    m_document_generation = document_generation;
-    m_font_generation = font_generation;
+    m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
+    m_page_layouts = std::move(parsed_snapshot.page_layouts);
+    m_page_margins_pt = std::move(parsed_snapshot.page_margins);
+    m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
+    m_document_generation = parsed_snapshot.document_generation;
+    m_font_generation = parsed_snapshot.font_generation;
     m_error.clear();
     installed_snapshot() = snapshot_json;
-    emit layoutChanged();
+    emit layoutChanged(); // NOLINT(misc-include-cleaner): Qt 元对象系统提供 emit 宏。
     return true;
 }
 

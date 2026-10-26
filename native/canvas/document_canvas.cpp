@@ -4,19 +4,36 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QImage>
+#include <QList>
+#include <QMap>
 #include <QMetaType>
+#include <QPointF>
+#include <QQuickItem>
 #include <QQuickWindow>
+#include <QRect>
 #include <QRectF>
 #include <QSGImageNode>
 #include <QSGSimpleRectNode>
 #include <QSGTexture>
 #include <QSet>
+#include <QSize>
+#include <QString>
 #include <QStyleHints>
+#include <QVariant>
+#include <QVariantList>
 #include <QVariantMap>
+#include <Qt>
 #include <QtAlgorithms>
+#include <QtCore/qglobal.h>
+#include <QtCore/qobjectdefs.h>
+#include <QtCore/qvariant.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <iterator>
 #include <limits>
+#include <utility>
 
 namespace caret {
 namespace {
@@ -50,7 +67,7 @@ class PageGlyphNode final : public QSGNode {
         textures.clear();
     }
 
-    QVariantMap frame;
+    QMap<QString, QVariant> frame;
     QVector<QSGTexture*> textures;
 };
 
@@ -68,9 +85,14 @@ class CanvasRootNode final : public QSGNode {
     quint64 glyph_geometry_revision = std::numeric_limits<quint64>::max();
 };
 
-QSGImageNode* make_glyph_node(QQuickWindow* window, QSGTexture* texture, const QRectF& rect,
-                              const QRectF& source_rect) {
-    if (window == nullptr || texture == nullptr || rect.isEmpty()) {
+struct GlyphRectangles {
+    QRectF target;
+    QRectF source;
+};
+
+QSGImageNode* make_glyph_node(QQuickWindow* window, QSGTexture* texture,
+                              const GlyphRectangles& rectangles) {
+    if (window == nullptr || texture == nullptr || rectangles.target.isEmpty()) {
         return nullptr;
     }
     QSGImageNode* node = window->createImageNode();
@@ -79,22 +101,24 @@ QSGImageNode* make_glyph_node(QQuickWindow* window, QSGTexture* texture, const Q
     }
     node->setTexture(texture);
     node->setOwnsTexture(false);
-    node->setSourceRect(source_rect);
+    node->setSourceRect(rectangles.source);
     node->setFiltering(QSGTexture::Linear);
-    node->setRect(rect);
+    node->setRect(rectangles.target);
     return node;
 }
 
-void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVariantMap& frame,
-                       const std::function<QRectF(int)>& page_rect,
-                       const std::function<QPointF(int, const QPointF&)>& document_to_content,
-                       qreal logical_scale, bool create_textures) {
+void build_glyph_frame(
+    PageGlyphNode* group, QQuickWindow* window,
+    const QVariantMap& frame, // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
+    const std::function<QRectF(int)>& page_rect,
+    const std::function<QPointF(int, const QPointF&)>& document_to_content, qreal logical_scale,
+    bool create_textures) {
     if (window == nullptr || !frame.value(QStringLiteral("valid")).toBool()) {
         return;
     }
     const int page_index = frame.value(QStringLiteral("pageIndex")).toInt();
-    const QVariantList image_values = frame.value(QStringLiteral("images")).toList();
-    const QVariantList placement_values = frame.value(QStringLiteral("placements")).toList();
+    const QList<QVariant> image_values = frame.value(QStringLiteral("images")).toList();
+    const QList<QVariant> placement_values = frame.value(QStringLiteral("placements")).toList();
     const qreal dpr = window->effectiveDevicePixelRatio();
     const qreal raster_pixels_per_point = frame.value(QStringLiteral("rasterPxPerPt")).toReal();
     const QRectF page_clip_rect = page_rect(page_index);
@@ -119,7 +143,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                 continue;
             }
             const QImage image_data(reinterpret_cast<const uchar*>(pixels.constData()), width,
-                                    height, width * 4, QImage::Format_RGBA8888_Premultiplied);
+                                    height, static_cast<qsizetype>(width) * 4,
+                                    QImage::Format_RGBA8888_Premultiplied);
             QSGTexture* texture =
                 window->createTextureFromImage(image_data.copy(), QQuickWindow::TextureCanUseAtlas);
             group->textures.push_back(texture);
@@ -128,8 +153,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
 
     for (const QVariant& value : placement_values) {
         const QVariantMap placement = value.toMap();
-        const uint image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
-        if (image_index >= static_cast<uint>(group->textures.size()) ||
+        const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
+        if (image_index >= static_cast<quint32>(group->textures.size()) ||
             group->textures[static_cast<int>(image_index)] == nullptr) {
             continue;
         }
@@ -178,17 +203,19 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         const QRectF source_rect(u0 * width_px, v0 * height_px, (u1 - u0) * width_px,
                                  (v1 - v0) * height_px);
         QSGImageNode* glyph_node = make_glyph_node(
-            window, group->textures[static_cast<int>(image_index)], visible_rect, source_rect);
+            window, group->textures[static_cast<int>(image_index)], {visible_rect, source_rect});
         if (glyph_node != nullptr) {
             group->appendChildNode(glyph_node);
         }
     }
 }
 
-void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVariantList& frames,
-                        const std::function<QRectF(int)>& page_rect,
-                        const std::function<QPointF(int, const QPointF&)>& document_to_content,
-                        qreal logical_scale, bool frames_changed, bool geometry_changed) {
+void build_glyph_frames(
+    GlyphGroupNode* group, QQuickWindow* window,
+    const QVariantList& frames, // NOLINT(misc-include-cleaner): Qt 容器别名由 qvariant.h 提供。
+    const std::function<QRectF(int)>& page_rect,
+    const std::function<QPointF(int, const QPointF&)>& document_to_content, qreal logical_scale,
+    bool frames_changed, bool geometry_changed) {
     QSet<int> visible_pages;
     for (const QVariant& value : frames) {
         const QVariantMap frame = value.toMap();
@@ -251,7 +278,10 @@ DocumentCanvas::DocumentCanvas(QQuickItem* parent) : QQuickItem(parent) {
         if (target_window == nullptr) {
             return;
         }
-        const auto notify_raster_metrics = [this]() { emit glyphRasterMetricsChanged(); };
+        const auto notify_raster_metrics = [this]() {
+            emit glyphRasterMetricsChanged(); // NOLINT(misc-include-cleaner): Qt 元对象系统提供
+                                              // emit 宏。
+        };
         connect(target_window, &QWindow::screenChanged, this, notify_raster_metrics);
         connect(target_window, &QWindow::xChanged, this, notify_raster_metrics);
         connect(target_window, &QWindow::yChanged, this, notify_raster_metrics);
@@ -488,16 +518,20 @@ void DocumentCanvas::setGlyphFrames(const QVariantList& frames) {
             const double clip_y0 = placement.value(QStringLiteral("clipY0Pt")).toDouble();
             const double clip_y1 = placement.value(QStringLiteral("clipY1Pt")).toDouble();
             if (!image_index_valid || !std::isfinite(image_index_value) ||
-                image_index_value < 0.0 || image_index_value >= images.size() ||
+                image_index_value < 0.0 ||
+                image_index_value >= static_cast<double>(images.size()) ||
                 std::floor(image_index_value) != image_index_value || !x_valid || !baseline_valid ||
                 !phase_x_valid || !phase_y_valid || !std::isfinite(x_pt) ||
                 !std::isfinite(baseline_y_pt) || !std::isfinite(phase_x) ||
                 !std::isfinite(phase_y) || phase_x < 0.0 || phase_x >= 1.0 || phase_y < 0.0 ||
                 phase_y >= 1.0 || !is_boolean_variant(phase_applied_value) ||
                 !is_boolean_variant(clip_enabled_value) ||
-                phase_applied_value.toBool() != image_phase_applied[image_index_value] ||
                 (clip_enabled && (!std::isfinite(clip_y0) || !std::isfinite(clip_y1) ||
                                   clip_y0 < 0.0 || clip_y1 <= clip_y0))) {
+                return;
+            }
+            const qsizetype image_index = static_cast<qsizetype>(image_index_value);
+            if (phase_applied_value.toBool() != image_phase_applied[image_index]) {
                 return;
             }
         }
@@ -717,7 +751,12 @@ void DocumentCanvas::itemChange(ItemChange change, const ItemChangeData& data) {
 
 QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) {
     auto* root = static_cast<CanvasRootNode*>(old_node);
-    const int page_count = m_page_sizes_pt.size();
+    const qsizetype page_count_size = m_page_sizes_pt.size();
+    if (page_count_size > std::numeric_limits<int>::max()) {
+        delete old_node;
+        return nullptr;
+    }
+    const int page_count = static_cast<int>(page_count_size);
     if (root == nullptr || root->page_count != page_count) {
         GlyphGroupNode* glyph_group = root != nullptr ? root->glyph_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;

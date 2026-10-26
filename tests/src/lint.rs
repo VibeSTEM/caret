@@ -398,6 +398,8 @@ fn scan_cppcheck() -> Result<(), Box<dyn Error>> {
             "--suppress=missingIncludeSystem",
             // CXX Slice 迭代器的类型擦除被 Cppcheck 误判；仅排除其固定生成头。
             "--suppress=eraseDereference:*cxxbridge/include/rust/cxx.h",
+            // CXX 生成的 Rust bridge 迭代器也触发同一误报；只忽略生成源码中的该诊断。
+            "--suppress=eraseDereference:*cxxbridge/sources/caret-ffi/src/lib.rs.cc",
         ]);
     command.arg(format!(
         "--library=qt,googletest,{}",
