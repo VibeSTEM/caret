@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
 namespace caret {
@@ -16,16 +17,19 @@ class LayoutViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(QVariantList pageSizesPt READ pageSizesPt CONSTANT)
+    Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt CONSTANT)
     Q_PROPERTY(QString error READ error CONSTANT)
 
   public:
     explicit LayoutViewModel(QObject* parent = nullptr);
 
     [[nodiscard]] const QVariantList& pageSizesPt() const { return m_page_sizes_pt; }
+    [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
     [[nodiscard]] const QString& error() const { return m_error; }
 
   private:
     QVariantList m_page_sizes_pt;
+    QVariantMap m_page_margins_pt;
     QString m_error;
 };
 

@@ -46,6 +46,26 @@ void DocumentCanvas::setPageSizesPt(const QVariantList& page_sizes) {
     updateGeometry();
 }
 
+QVariantMap DocumentCanvas::pageMarginsPt() const { return m_page_margins_pt; }
+
+void DocumentCanvas::setPageMarginsPt(const QVariantMap& margins) {
+    QVariantMap valid_margins;
+    for (const QString& name : {QStringLiteral("top"), QStringLiteral("right"),
+                                QStringLiteral("bottom"), QStringLiteral("left")}) {
+        bool converted = false;
+        const qreal value = margins.value(name).toDouble(&converted);
+        if (!converted || !is_finite_non_negative(value)) {
+            return;
+        }
+        valid_margins.insert(name, value);
+    }
+    if (m_page_margins_pt == valid_margins) {
+        return;
+    }
+    m_page_margins_pt = std::move(valid_margins);
+    emit pageMarginsPtChanged();
+}
+
 qreal DocumentCanvas::zoom() const { return m_zoom; }
 
 void DocumentCanvas::setZoom(qreal zoom) {
@@ -158,9 +178,16 @@ QVariantMap DocumentCanvas::hitTestPage(const QPointF& point_px) const {
     const QRectF rect = pageRect(index);
     if (rect.contains(point_px)) {
         const QPointF point_pt = (point_px - rect.topLeft()) / scale();
-        return {{QStringLiteral("pageIndex"), index},
-                {QStringLiteral("xPt"), point_pt.x()},
-                {QStringLiteral("yPt"), point_pt.y()}};
+        QVariantMap hit{{QStringLiteral("pageIndex"), index},
+                        {QStringLiteral("xPt"), point_pt.x()},
+                        {QStringLiteral("yPt"), point_pt.y()}};
+        if (m_page_margins_pt.size() == 4) {
+            hit.insert(QStringLiteral("contentXPt"),
+                       point_pt.x() - m_page_margins_pt.value(QStringLiteral("left")).toDouble());
+            hit.insert(QStringLiteral("contentYPt"),
+                       point_pt.y() - m_page_margins_pt.value(QStringLiteral("top")).toDouble());
+        }
+        return hit;
     }
     return {{QStringLiteral("pageIndex"), -1}};
 }

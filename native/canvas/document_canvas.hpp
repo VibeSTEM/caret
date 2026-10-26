@@ -20,6 +20,8 @@ class DocumentCanvas : public QQuickItem {
     QML_ELEMENT
     Q_PROPERTY(
         QVariantList pageSizesPt READ pageSizesPt WRITE setPageSizesPt NOTIFY pageSizesPtChanged)
+    Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt WRITE setPageMarginsPt NOTIFY
+                   pageMarginsPtChanged)
     Q_PROPERTY(qreal zoom READ zoom WRITE setZoom NOTIFY zoomChanged)
     Q_PROPERTY(QColor pageColor READ pageColor WRITE setPageColor NOTIFY appearanceChanged)
     Q_PROPERTY(QColor pageBorderColor READ pageBorderColor WRITE setPageBorderColor NOTIFY
@@ -34,6 +36,8 @@ class DocumentCanvas : public QQuickItem {
 
     [[nodiscard]] QVariantList pageSizesPt() const;
     void setPageSizesPt(const QVariantList& page_sizes);
+    [[nodiscard]] QVariantMap pageMarginsPt() const;
+    void setPageMarginsPt(const QVariantMap& margins);
     [[nodiscard]] qreal zoom() const;
     void setZoom(qreal zoom);
     [[nodiscard]] QColor pageColor() const;
@@ -57,6 +61,7 @@ class DocumentCanvas : public QQuickItem {
 
   signals:
     void pageSizesPtChanged();
+    void pageMarginsPtChanged();
     void zoomChanged();
     void pageGapPtChanged();
     void pageMarginPtChanged();
@@ -71,6 +76,7 @@ class DocumentCanvas : public QQuickItem {
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
 
     QVariantList m_page_sizes_pt;
+    QVariantMap m_page_margins_pt;
     qreal m_zoom = 1.0;
     qreal m_page_gap_pt = 24.0;
     qreal m_page_margin_pt = 24.0;

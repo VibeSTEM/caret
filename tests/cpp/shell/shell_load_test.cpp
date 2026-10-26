@@ -193,8 +193,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     themes.insert(QStringLiteral("light"),
                   snapshot_from_theme_facade(theme_path, QColor(Qt::white), 16));
     caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
-    QVERIFY(caret::install_layout_snapshot(
-        QStringLiteral(R"({"pages":[{"widthPt":600,"heightPt":800}]})")));
+    QVERIFY(caret::install_layout_snapshot(QStringLiteral(
+        R"({"marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800}]})")));
     QVERIFY(!caret::install_layout_snapshot(QStringLiteral("{invalid")));
     QQmlEngine engine;
     engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));

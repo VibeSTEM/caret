@@ -28,6 +28,7 @@ Item {
             pageColor: Theme.colorPanel
             pageBorderColor: Theme.colorPanelLine
             pageSizesPt: LayoutViewModel.pageSizesPt
+            pageMarginsPt: LayoutViewModel.pageMarginsPt
         }
     }
 

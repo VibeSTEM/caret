@@ -12,6 +12,12 @@ pub fn blank_document_page_geometry_snapshot() -> Result<String, String> {
     let geometry = section.geometry().map_err(|error| error.to_string())?;
     let (width_pt, height_pt) = geometry.page_size_pt();
     Ok(serde_json::json!({
+        "marginsPt": {
+            "top": geometry.margins.top,
+            "right": geometry.margins.right,
+            "bottom": geometry.margins.bottom,
+            "left": geometry.margins.left
+        },
         "pages": [{ "widthPt": width_pt, "heightPt": height_pt }]
     })
     .to_string())
