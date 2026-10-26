@@ -8,6 +8,31 @@ use crate::{
 };
 use icu_properties::{CodePointMapData, props::LineBreak as LineBreakClass};
 
+/// 判断源文本是否会产生需要段落标记度量的空行，包含开头/连续/结尾 mandatory break。
+pub fn has_empty_line(text: &str) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    let mut characters = text.chars().peekable();
+    let mut line_has_content = false;
+    let mut saw_break = false;
+    while let Some(character) = characters.next() {
+        if !is_mandatory_break_character(character) {
+            line_has_content = true;
+            continue;
+        }
+        if !line_has_content {
+            return true;
+        }
+        saw_break = true;
+        line_has_content = false;
+        if character == '\r' && characters.peek() == Some(&'\n') {
+            characters.next();
+        }
+    }
+    saw_break && !line_has_content
+}
+
 /// 一条段落行对原文的引用和行框数据。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParagraphLine {

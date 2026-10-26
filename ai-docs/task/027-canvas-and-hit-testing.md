@@ -60,6 +60,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 | --- | --- | --- | --- |
 | 2026-10-26 | `cargo test --offline --locked --workspace` | Rust 与 native 聚合测试通过 | 通过；native CTest 4/4 |
 | 2026-10-26 | `cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 无 lint 警告 | 通过 |
+| 2026-10-26 | `cargo clippy --offline --locked -p caret-engine -p caret-layout --all-targets -- -D warnings` | 新的 Rust 快照组合层无 lint 警告 | 通过 |
 | 2026-10-26 | 画布坐标与缩放边界 C++/QML 用例 | 多页 pt 映射、hit-test 往返及缩小后的滚动范围正确 | 通过；真实窗口跨页编辑仍未实现 |
 
 ## 风险与回退
@@ -70,6 +71,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 - 2026-10-25：从原 008 拆出画布与命中职责。
 - 2026-10-26：完成首个 C++/QML 页面几何切片。Rust 空白文档页几何经 FFI 到 ViewModel；Canvas 和 ViewModel 使用独立 QML 模块。页面点坐标映射、hit-test、缩放锚点和 scene graph 纸张绘制已落地。完整 LayoutResult、文字/字素命中、selection/caret 几何、generation 丢弃、环境高亮、输入预览和真实窗口交互仍待 027 后续实现。
+- 2026-10-26：新增 `caret-engine::DocumentLayoutService`，组合文档级字体偏好、段落 shaping、行布局和分页，快照携带文档/字体代际、正文原文与 shaping 结果、页尺寸/边距及段落行片段。当前不透明块、环境样式/Section 编号和带 `markStyle` 的空段或尾随软换行会明确拒绝生成快照；只接受空 kind 或 `page` 显式分页。该服务尚未连接 FFI/ViewModel，命中映射、选择/光标几何、绘制和旧代际结果丢弃仍待实现。
 
 ## 完成摘要
 

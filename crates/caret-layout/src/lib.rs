@@ -19,11 +19,13 @@ pub use pagination::{
     paginate_paragraphs,
 };
 pub use paragraph::{
-    ParagraphLayout, ParagraphLayoutError, ParagraphLine, layout_shaped_paragraph,
+    ParagraphLayout, ParagraphLayoutError, ParagraphLine, has_empty_line, layout_shaped_paragraph,
     layout_shaped_paragraph_with_style,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
-pub use shaping::{ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries};
+pub use shaping::{
+    ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries, paragraph_text,
+};
 
 #[cfg(test)]
 mod tests;

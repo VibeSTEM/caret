@@ -140,6 +140,7 @@ name = "caret-engine"
 version = "0.1.0"
 dependencies = [
  "caret-doc",
+ "caret-layout",
  "serde_json",
  "unicode-segmentation",
 ]

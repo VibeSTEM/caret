@@ -137,6 +137,28 @@ impl TextShaper {
         )
     }
 
+    /// 使用文档级语言与字体偏好塑形独立文本，例如空段落标记的度量探针。
+    pub fn shape_with_resolved_settings(
+        &mut self,
+        catalog: &mut FontCatalog,
+        text: &str,
+        settings: &ResolvedDocumentTextSettings,
+        language_override: Option<&str>,
+        base_style: &ShapingStyle,
+    ) -> Result<&ShapedParagraph, ShapingError> {
+        let mut style = base_style.clone();
+        style.language = language_override
+            .map(str::to_owned)
+            .or_else(|| settings.default_language().map(str::to_owned))
+            .or_else(|| base_style.language.clone());
+        self.shape_spans_with_preferences(
+            catalog,
+            &[StyledSpan { text, style }],
+            None,
+            Some(settings.font_preferences()),
+        )
+    }
+
     /// 使用段落基方向塑形片段；基方向不等于完整 UBA 状态，因此不能用于软换行后的行重塑。
     pub fn shape_with_direction(
         &mut self,
@@ -483,6 +505,23 @@ fn spans_char_boundary(spans: &[StyledSpan<'_>], offset: usize) -> bool {
         span_start = span_end;
     }
     false
+}
+
+/// 返回段落的逻辑 UTF-8 文本；Run 和环境边界不插入字符，软换行与不透明节点各映射为一个占位码点。
+pub fn paragraph_text(paragraph: &Paragraph) -> String {
+    fn append(nodes: &[InlineNode], text: &mut String) {
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => text.push_str(&run.text),
+                InlineNode::Environment(environment) => append(&environment.children, text),
+                InlineNode::SoftBreak(_) => text.push('\n'),
+                InlineNode::Opaque(_) => text.push('\u{fffc}'),
+            }
+        }
+    }
+    let mut text = String::new();
+    append(&paragraph.inlines, &mut text);
+    text
 }
 
 fn append_inlines<'a>(
