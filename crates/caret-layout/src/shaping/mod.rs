@@ -15,11 +15,12 @@ pub struct ShapingStyle {
     pub language: Option<String>,
 }
 
-impl Default for ShapingStyle {
-    fn default() -> Self {
+impl ShapingStyle {
+    /// 创建基础排版样式；默认字号由文档设置提供，必须显式传入。
+    pub const fn new(font_size_centipoints: u16) -> Self {
         Self {
             requested_family: None,
-            font_size_centipoints: 1200,
+            font_size_centipoints,
             bold: false,
             italic: false,
             language: None,

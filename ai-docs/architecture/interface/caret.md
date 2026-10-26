@@ -13,8 +13,9 @@
 ## 外观
 
 - 纸张、页边框、光标、选区和选区文字等 Canvas 颜色由 `qml/Themes/` 中的主题值定义，经 `Themes/Theme.qml` 暴露并传给画布；C++ 不硬编码产品颜色，Rust 文档也不保存界面颜色。
-- 主题 token 使用独立的 `color-caret`、`color-selection` 和 `color-selection-text`。新增 token 时同步更新默认、浅色和深色主题及主题校验测试。当前已实现 `color-caret` 和 `caret-width-px`，宽度以逻辑像素传给画布。
-- 闪烁周期、焦点/失焦表现、选区透明度和高对比度替代色仍待设计；这些是视图参数，不属于 `.cdoc`。
+- 主题 token 使用独立的 `color-caret`、`color-selection` 和 `color-selection-text`。新增 token 时同步更新默认、浅色和深色主题及主题校验测试。光标宽度以整数百分之一逻辑像素保存在 `caret-width-centipixels`，`Theme.qml` 转换为逻辑像素后传给画布。
+- 插入点仅在画布获得活动焦点且 Rust 已提交插入位置时显示；失焦时隐藏。获得焦点或位置变化时立即显示。Settings 的 Preferences 分类应提供光标闪烁开关，由 Rust `PreferencesService` 持有；开启时按 Qt 平台周期闪烁，关闭时常亮，平台周期设为 0 时也常亮。ViewModel 将值传给 `DocumentCanvas.caretBlinkEnabled`；QML 只呈现和提交设置，画布不持久化偏好。当前仓库尚无 `PreferencesService` 和这条设置桥接，后续集成时应复用 Rust 偏好服务，不再并行新增 QML/C++ 状态。键盘编辑和 IME 状态仍由后续集成接入，不能由画布自行维护第二份文档状态。
+- 选区透明度和高对比度替代色仍待设计；这些是视图参数，不属于 `.cdoc`。
 - 环境背景高亮是独立的临时视图叠加，不与文本选区或 caret 颜色合并。
 
 ## 绘制和性能
@@ -29,4 +30,4 @@
 - [022：文本编辑、选择与 IME](../../task/022-text-editing-and-ime.md)
 - [027：页面画布、命中与布局快照](../../task/027-canvas-and-hit-testing.md)
 
-具体粗细、闪烁及各状态颜色仍待界面设计确认；本页不预设具体视觉数值。
+具体粗细和各状态颜色仍待界面设计确认；本页不预设具体视觉数值。

@@ -138,51 +138,107 @@ impl DocumentLayoutSnapshot {
             return None;
         }
         let content_y = y_pt - page.margin_top_pt;
-        if content_y < 0.0 {
+        let mut closest_line: Option<(f64, usize, usize, f64)> = None;
+        for fragment in &page.layout.fragments {
+            let Some(&paragraph_index) = self.paragraph_lookup.get(&fragment.paragraph_id) else {
+                continue;
+            };
+            let Some(paragraph) = self.paragraphs.get(paragraph_index) else {
+                continue;
+            };
+            let mut line_top = f64::from(fragment.y_offset_pt);
+            for line_index in fragment.line_range.clone() {
+                let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
+                    continue;
+                };
+                let line_bottom = line_top + f64::from(line.metrics.height_pt);
+                let vertical_distance = if content_y < line_top {
+                    line_top - content_y
+                } else if content_y > line_bottom {
+                    content_y - line_bottom
+                } else {
+                    0.0
+                };
+                if closest_line
+                    .as_ref()
+                    .is_none_or(|(distance, _, _, _)| vertical_distance < *distance)
+                {
+                    closest_line = Some((vertical_distance, paragraph_index, line_index, line_top));
+                }
+                line_top = line_bottom;
+            }
+        }
+        let (_, paragraph_index, line_index, line_top) = closest_line?;
+        let paragraph = self.paragraphs.get(paragraph_index)?;
+        let cursor = paragraph
+            .layout
+            .cursor_from_point_on_line((x_pt - page.margin_left_pt) as f32, line_index)?;
+        let cursor_bounds = paragraph.layout.cursor_geometry(cursor.cursor, 0.0);
+        let line = paragraph.layout.paragraph.lines.get(line_index)?;
+        let caret_y0 = page.margin_top_pt + line_top;
+        Some(PageHit {
+            position: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph.id.clone(),
+                offset: cursor.cursor.byte_index(),
+                affinity: match cursor.logical_affinity {
+                    caret_layout::HitAffinity::Upstream => Affinity::Upstream,
+                    caret_layout::HitAffinity::Downstream => Affinity::Downstream,
+                },
+            },
+            visual_affinity: cursor.cursor.affinity(),
+            caret: PageCaretGeometry {
+                page_index,
+                x_pt: cursor_bounds.x0 + page.margin_left_pt,
+                y0_pt: caret_y0,
+                y1_pt: caret_y0 + f64::from(line.metrics.height_pt),
+            },
+        })
+    }
+
+    /// 根据已提交的 Rust 光标位置返回插入点几何，覆盖分页片段和自定义行框。
+    pub fn caret_geometry(
+        &self,
+        position: &Pos,
+        visual_affinity: VisualAffinity,
+    ) -> Option<PageCaretGeometry> {
+        if position.story != StoryId::Body {
             return None;
         }
-
-        let fragment_index = page
+        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
+        let cursor = paragraph
             .layout
-            .fragments
-            .partition_point(|fragment| f64::from(fragment.y_offset_pt) <= content_y)
-            .checked_sub(1)?;
-        let fragment = page.layout.fragments.get(fragment_index)?;
-        let paragraph_index = *self.paragraph_lookup.get(&fragment.paragraph_id)?;
-        let paragraph = self.paragraphs.get(paragraph_index)?;
-        let mut fragment_line_top = f64::from(fragment.y_offset_pt);
-        for line_index in fragment.line_range.clone() {
-            let line = paragraph.layout.paragraph.lines.get(line_index)?;
-            let line_bottom = fragment_line_top + f64::from(line.metrics.height_pt);
-            if content_y < line_bottom
-                || (line_index + 1 == fragment.line_range.end && content_y <= line_bottom)
-            {
-                let cursor = paragraph
-                    .layout
-                    .cursor_from_point_on_line((x_pt - page.margin_left_pt) as f32, line_index)?;
-                let cursor_bounds = paragraph.layout.cursor_geometry(cursor.cursor, 0.0);
+            .cursor_at(position.offset, visual_affinity)?;
+        let (bounds, line_index) = paragraph.layout.cursor_geometry_with_line(cursor, 0.0)?;
+
+        for (page_index, page) in self.pages.iter().enumerate() {
+            for fragment in &page.layout.fragments {
+                if fragment.paragraph_id != position.paragraph_id
+                    || !fragment.line_range.contains(&line_index)
+                {
+                    continue;
+                }
+                let mut fragment_line_top = f64::from(fragment.y_offset_pt);
+                for preceding_line in fragment.line_range.start..line_index {
+                    fragment_line_top += f64::from(
+                        paragraph
+                            .layout
+                            .paragraph
+                            .lines
+                            .get(preceding_line)?
+                            .metrics
+                            .height_pt,
+                    );
+                }
                 let line = paragraph.layout.paragraph.lines.get(line_index)?;
-                let caret_y0 = page.margin_top_pt + fragment_line_top;
-                return Some(PageHit {
-                    position: Pos {
-                        story: StoryId::Body,
-                        paragraph_id: paragraph.id.clone(),
-                        offset: cursor.cursor.byte_index(),
-                        affinity: match cursor.logical_affinity {
-                            caret_layout::HitAffinity::Upstream => Affinity::Upstream,
-                            caret_layout::HitAffinity::Downstream => Affinity::Downstream,
-                        },
-                    },
-                    visual_affinity: cursor.cursor.affinity(),
-                    caret: PageCaretGeometry {
-                        page_index,
-                        x_pt: cursor_bounds.x0 + page.margin_left_pt,
-                        y0_pt: caret_y0,
-                        y1_pt: caret_y0 + f64::from(line.metrics.height_pt),
-                    },
+                let y0_pt = page.margin_top_pt + fragment_line_top;
+                return Some(PageCaretGeometry {
+                    page_index,
+                    x_pt: page.margin_left_pt + bounds.x0,
+                    y0_pt,
+                    y1_pt: y0_pt + f64::from(line.metrics.height_pt),
                 });
             }
-            fragment_line_top = line_bottom;
         }
         None
     }
@@ -464,7 +520,6 @@ impl DocumentLayoutService {
 pub struct DocumentLayoutRuntime {
     catalog: FontCatalog,
     service: DocumentLayoutService,
-    base_style: ShapingStyle,
 }
 
 impl DocumentLayoutRuntime {
@@ -473,7 +528,6 @@ impl DocumentLayoutRuntime {
         Ok(Self {
             catalog: FontCatalog::system()?,
             service: DocumentLayoutService::new(),
-            base_style: ShapingStyle::default(),
         })
     }
 
@@ -482,8 +536,14 @@ impl DocumentLayoutRuntime {
         &mut self,
         session: &Session,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let base_style = ShapingStyle::new(
+            session
+                .document()
+                .global_settings
+                .default_font_size_centipoints,
+        );
         self.service
-            .layout_session(session, &mut self.catalog, &self.base_style)
+            .layout_session(session, &mut self.catalog, &base_style)
     }
 
     /// 当前字体目录代际，用于丢弃过期异步结果。
@@ -531,6 +591,27 @@ mod tests {
     use super::DocumentLayoutService;
 
     #[test]
+    fn blank_page_click_uses_nearest_line_for_caret_placement() {
+        let document = Document::blank();
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let page = &snapshot.pages[0];
+
+        let hit = snapshot
+            .hit_test(0, page.width_pt / 2.0, page.height_pt / 2.0)
+            .unwrap_or_else(|| panic!("blank page click did not find a caret stop"));
+
+        assert_eq!(hit.position.offset, 0);
+        assert_eq!(hit.position.paragraph_id, snapshot.paragraphs[0].id);
+        assert_eq!(hit.caret.page_index, 0);
+        assert_eq!(hit.caret.y0_pt, page.margin_top_pt);
+    }
+
+    #[test]
     fn document_layout_snapshot_uses_parley_lines_and_pagination() {
         let mut document = Document::blank();
         let text = "A mixed run sequence: e\u{301}, family 👩‍👩‍👧‍👦, and text that wraps. ".repeat(64);
@@ -549,7 +630,7 @@ mod tests {
         let mut catalog =
             FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
         let snapshot = service
-            .layout(&document, 7, &mut catalog, &ShapingStyle::default())
+            .layout(&document, 7, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("document layout failed: {error}"));
 
         assert_eq!(snapshot.document_generation, 7);
@@ -754,7 +835,7 @@ mod tests {
         let mut catalog =
             FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
         let snapshot = service
-            .layout_session(&session, &mut catalog, &ShapingStyle::default())
+            .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("document layout failed: {error}"));
 
         assert!(snapshot.is_current_for(&session, catalog.generation()));

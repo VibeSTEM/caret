@@ -21,6 +21,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.templates",
     "caret.font.family-preferences",
     "caret.paragraph.layout-settings",
+    "caret.text.default-font-size",
     "caret.text.language-tags",
     "caret.theme.snapshot",
 ];

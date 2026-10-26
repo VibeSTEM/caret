@@ -76,11 +76,11 @@ pub(crate) const THEME_TOKEN_SPECS: &[ThemeTokenSpec] = &[
         maximum: 0.0,
     },
     ThemeTokenSpec {
-        dsl_key: "caret-width-px",
-        qml_name: "caretWidthPx",
-        kind: ThemeTokenKind::Real,
-        minimum: 0.5,
-        maximum: 4.0,
+        dsl_key: "caret-width-centipixels",
+        qml_name: "caretWidthCentipixels",
+        kind: ThemeTokenKind::Integer,
+        minimum: 50.0,
+        maximum: 400.0,
     },
     ThemeTokenSpec {
         dsl_key: "color-status",

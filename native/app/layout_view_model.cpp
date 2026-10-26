@@ -335,6 +335,39 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
                                 m_font_generation, m_error);
 }
 
+bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
+    QVariantList page_sizes;
+    QVariantList page_layouts;
+    QVariantMap page_margins;
+    QVariantList paragraph_layouts;
+    qulonglong document_generation = 0;
+    qulonglong font_generation = 0;
+    QString error;
+    if (!parse_layout_snapshot(snapshot_json, page_sizes, page_layouts, page_margins,
+                               paragraph_layouts, document_generation, font_generation, error)) {
+        m_error = std::move(error);
+        return false;
+    }
+    m_page_sizes_pt = std::move(page_sizes);
+    m_page_layouts = std::move(page_layouts);
+    m_page_margins_pt = std::move(page_margins);
+    m_paragraph_layouts = std::move(paragraph_layouts);
+    m_document_generation = document_generation;
+    m_font_generation = font_generation;
+    m_error.clear();
+    installed_snapshot() = snapshot_json;
+    emit layoutChanged();
+    return true;
+}
+
+void LayoutViewModel::installCaretGeometry(const QVariantMap& geometry) {
+    if (m_caret_geometry == geometry) {
+        return;
+    }
+    m_caret_geometry = geometry;
+    emit caretGeometryChanged();
+}
+
 #ifdef CARET_ENABLE_APP
 bool install_document_runtime(rust::Box<ffi::DocumentRuntime> runtime) {
     installed_runtime() = std::move(runtime);
@@ -378,12 +411,68 @@ QVariantMap LayoutViewModel::placeCaretAtPage(int page_index, qreal x_pt, qreal 
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
     }
-    return hit_result_from_json(ffi::place_caret_at_page_json(
+    QVariantMap result = hit_result_from_json(ffi::place_caret_at_page_json(
         **runtime, page_index, static_cast<double>(x_pt), static_cast<double>(y_pt)));
+    if (result.value(QStringLiteral("valid")).toBool()) {
+        installCaretGeometry(result.value(QStringLiteral("caret")).toMap());
+    }
+    return result;
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(x_pt)
     Q_UNUSED(y_pt)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::insertText(const QString& text) {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("text.insert_wrong_thread")}};
+    }
+    if (text.isEmpty()) {
+        return {{QStringLiteral("valid"), true}};
+    }
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+    const QByteArray utf8 = text.toUtf8();
+    const rust::String input(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())));
+    const rust::String response = ffi::insert_text_json(**runtime, input);
+    const QByteArray response_bytes(response.data(), static_cast<qsizetype>(response.size()));
+    if (response_bytes.startsWith("error:")) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"),
+                 QString::fromUtf8(response_bytes.constData(), response_bytes.size())}};
+    }
+    const QString snapshot = QString::fromUtf8(response_bytes.constData(), response_bytes.size());
+    if (!installSnapshot(snapshot)) {
+        return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
+    }
+    const rust::String caret_response = ffi::current_caret_json(**runtime);
+    const QByteArray caret_bytes(caret_response.data(),
+                                 static_cast<qsizetype>(caret_response.size()));
+    if (caret_bytes.startsWith("error:")) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"),
+                 QString::fromUtf8(caret_bytes.constData(), caret_bytes.size())}};
+    }
+    QJsonParseError parse_error;
+    const QJsonDocument caret_document = QJsonDocument::fromJson(caret_bytes, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.invalid_caret_geometry")}};
+    }
+    installCaretGeometry(caret_document.object().toVariantMap());
+    return {{QStringLiteral("valid"), true},
+            {QStringLiteral("documentGeneration"), documentGeneration()}};
+#else
+    Q_UNUSED(text)
     return {{QStringLiteral("valid"), false},
             {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
 #endif

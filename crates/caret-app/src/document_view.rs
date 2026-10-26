@@ -2,8 +2,8 @@
 
 use caret_doc::Document;
 use caret_engine::{
-    DocumentLayoutRuntime, DocumentLayoutSnapshot, PageGlyphRasterizer, RasterizedPageGlyphs,
-    Selection, Session,
+    Command, DocumentLayoutRuntime, DocumentLayoutSnapshot, PageCaretView, PageGlyphRasterizer,
+    RasterizedPageGlyphs, Selection, Session,
 };
 use std::convert::TryFrom;
 
@@ -37,6 +37,25 @@ impl DocumentViewRuntime {
         let snapshot = self.current_snapshot()?;
         serde_json::to_string(&caret_engine::DocumentLayoutView::from(snapshot))
             .map_err(|error| format!("layout.serialize: {error}"))
+    }
+
+    /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。
+    pub fn insert_text_json(&mut self, text: String) -> Result<String, String> {
+        self.session
+            .run(Command::InsertText(text))
+            .map_err(|error| format!("text.insert: {error}"))?;
+        self.layout_snapshot_json()
+    }
+
+    /// 返回当前 Rust 光标位置在最新布局中的页面几何。
+    pub fn current_caret_json(&mut self) -> Result<String, String> {
+        let position = self.session.selection().focus.clone();
+        let visual_affinity = self.session.selection_visual_affinity();
+        let caret = self
+            .current_snapshot()?
+            .caret_geometry(&position, visual_affinity)
+            .map(PageCaretView::from);
+        serde_json::to_string(&caret).map_err(|error| format!("layout.caret_serialize: {error}"))
     }
 
     /// 栅格化指定页；调用方只请求当前可见页，并提供页面原点的设备像素坐标。
@@ -170,6 +189,30 @@ mod tests {
                 .unwrap_or_else(|error| panic!("invalid page hit test failed: {error}")),
             "null"
         );
+    }
+
+    #[test]
+    fn keyboard_text_insertion_updates_rust_document_and_caret_geometry() {
+        let mut runtime = DocumentViewRuntime::new_blank()
+            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+
+        let json = runtime
+            .insert_text_json("Aλ".to_owned())
+            .unwrap_or_else(|error| panic!("keyboard text insertion failed: {error}"));
+        let snapshot: Value = serde_json::from_str(&json)
+            .unwrap_or_else(|error| panic!("layout snapshot JSON failed: {error}"));
+        assert_eq!(snapshot["documentGeneration"], "1");
+        assert_eq!(snapshot["paragraphs"][0]["text"], "Aλ");
+        assert_eq!(runtime.session.selection().focus.offset, "Aλ".len());
+
+        let caret_json = runtime
+            .current_caret_json()
+            .unwrap_or_else(|error| panic!("caret geometry failed: {error}"));
+        let caret: Value = serde_json::from_str(&caret_json)
+            .unwrap_or_else(|error| panic!("caret JSON failed: {error}"));
+        assert_eq!(caret["pageIndex"], 0);
+        assert!(caret["xPt"].as_f64().is_some());
+        assert!(caret["y1Pt"].as_f64().is_some());
     }
 
     #[test]

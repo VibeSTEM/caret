@@ -124,7 +124,7 @@ fn parley_layout_matches_icu_line_ranges_for_english_chinese_and_bidi() {
                 &mut catalog,
                 &paragraph,
                 &settings,
-                &ShapingStyle::default(),
+                &ShapingStyle::new(1200),
                 layout_options(48.0),
             )
             .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -164,7 +164,7 @@ fn swash_rasterizes_the_font_face_and_glyph_selected_by_parley() {
             &mut catalog,
             &paragraph("Raster", Some("en")),
             &document_settings(),
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(240.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -259,7 +259,7 @@ fn run_language_and_paragraph_environment_styles_reach_parley() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(120.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -282,7 +282,7 @@ fn missing_font_falls_back_for_mixed_scripts_and_emoji() {
     let text = "Caret 文稿 العربية Русский Ελληνικά 😀 👩‍👩‍👧‍👦";
     let style = ShapingStyle {
         requested_family: Some("Caret Missing Test Family 8D5A".to_owned()),
-        ..ShapingStyle::default()
+        ..ShapingStyle::new(1200)
     };
     let (_, result) = layouter
         .layout(
@@ -342,7 +342,7 @@ fn half_point_font_sizes_and_cyrillic_greek_keep_finite_layout_metrics() {
     let text = "Русский текст · Ελληνικά";
     let half_point = ShapingStyle {
         font_size_centipoints: 50,
-        ..ShapingStyle::default()
+        ..ShapingStyle::new(1200)
     };
     let (_, half_point_layout) = layouter
         .layout(
@@ -371,7 +371,7 @@ fn half_point_font_sizes_and_cyrillic_greek_keep_finite_layout_metrics() {
 
     let fractional_point = ShapingStyle {
         font_size_centipoints: 1225,
-        ..ShapingStyle::default()
+        ..ShapingStyle::new(1200)
     };
     let (_, fractional_layout) = layouter
         .layout(
@@ -417,7 +417,7 @@ fn same_style_run_boundaries_preserve_positioned_glyphs() {
             &mut catalog,
             &paragraph(text, None),
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(480.0),
         )
         .unwrap_or_else(|error| panic!("flat paragraph layout failed: {error}"));
@@ -426,7 +426,7 @@ fn same_style_run_boundaries_preserve_positioned_glyphs() {
             &mut catalog,
             &split,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(480.0),
         )
         .unwrap_or_else(|error| panic!("split-run paragraph layout failed: {error}"));
@@ -488,7 +488,7 @@ fn font_environment_and_nested_bold_reach_parley_style_ranges() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(240.0),
         )
         .unwrap_or_else(|error| panic!("nested style layout failed: {error}"));
@@ -517,7 +517,7 @@ fn paragraph_layouter_rebuilds_parley_context_after_font_refresh() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             options,
         )
         .unwrap_or_else(|error| panic!("initial Parley layout failed: {error}"));
@@ -531,7 +531,7 @@ fn paragraph_layouter_rebuilds_parley_context_after_font_refresh() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             options,
         )
         .unwrap_or_else(|error| panic!("Parley layout after refresh failed: {error}"));
@@ -549,7 +549,7 @@ fn empty_and_trailing_break_lines_keep_positive_metrics() {
             &mut catalog,
             &empty,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(240.0),
         )
         .unwrap_or_else(|error| panic!("empty paragraph layout failed: {error}"));
@@ -572,7 +572,7 @@ fn empty_and_trailing_break_lines_keep_positive_metrics() {
             &mut catalog,
             &trailing,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(240.0),
         )
         .unwrap_or_else(|error| panic!("trailing break layout failed: {error}"));
@@ -629,7 +629,7 @@ fn parley_visual_cursor_moves_through_utf8_and_bidi_grapheme_boundaries() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(320.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -671,7 +671,7 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(240.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -726,7 +726,7 @@ fn exact_ltr_cluster_boundary_prefers_logical_downstream() {
             &mut catalog,
             &paragraph("ab", Some("en")),
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(160.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -754,7 +754,7 @@ fn hit_testing_preserves_logical_cluster_side_for_ltr_and_rtl_at_small_sizes() {
         let settings = document_settings();
         let style = ShapingStyle {
             font_size_centipoints,
-            ..ShapingStyle::default()
+            ..ShapingStyle::new(1200)
         };
         let mut layouter = ParagraphLayouter::new();
         for (text, language, expected_left, expected_right) in [
@@ -820,7 +820,7 @@ fn hit_testing_keeps_visual_sides_at_bidi_boundaries() {
         let settings = document_settings();
         let style = ShapingStyle {
             font_size_centipoints,
-            ..ShapingStyle::default()
+            ..ShapingStyle::new(1200)
         };
         let mut layouter = ParagraphLayouter::new();
         let (_, result) = layouter
@@ -871,7 +871,7 @@ fn multiline_bidi_hit_and_cursor_geometry_stay_on_the_selected_line() {
             &mut catalog,
             &paragraph("abc אבג def", Some("en")),
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(24.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
@@ -912,7 +912,7 @@ fn hard_line_break_caret_geometry_moves_to_the_following_or_trailing_line() {
                 &mut catalog,
                 &paragraph(text, Some("en")),
                 &settings,
-                &ShapingStyle::default(),
+                &ShapingStyle::new(1200),
                 layout_options(160.0),
             )
             .unwrap_or_else(|error| panic!("Parley layout failed for {text:?}: {error}"));
@@ -972,7 +972,7 @@ fn hit_testing_snaps_combining_cluster_to_its_logical_edges() {
             &settings,
             &ShapingStyle {
                 font_size_centipoints: 50,
-                ..ShapingStyle::default()
+                ..ShapingStyle::new(1200)
             },
             layout_options(160.0),
         )
@@ -1031,7 +1031,7 @@ fn grapheme_boundaries_cross_run_and_environment_boundaries() {
             &mut catalog,
             &paragraph,
             &settings,
-            &ShapingStyle::default(),
+            &ShapingStyle::new(1200),
             layout_options(160.0),
         )
         .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));

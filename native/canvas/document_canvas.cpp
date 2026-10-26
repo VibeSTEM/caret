@@ -1,8 +1,10 @@
 // 多页纸张绘制与页面坐标映射实现。
 #include "document_canvas.hpp"
 
+#include <QGuiApplication>
 #include <QHash>
 #include <QImage>
+#include <QKeyEvent>
 #include <QMetaType>
 #include <QQuickWindow>
 #include <QRectF>
@@ -10,6 +12,7 @@
 #include <QSGSimpleRectNode>
 #include <QSGTexture>
 #include <QSet>
+#include <QStyleHints>
 #include <QVariantMap>
 #include <QtAlgorithms>
 #include <algorithm>
@@ -22,6 +25,9 @@ namespace {
 constexpr qreal kPointsToLogicalPixels = 96.0 / 72.0;
 constexpr qreal kMinimumZoom = 0.1;
 constexpr qreal kMaximumZoom = 8.0;
+constexpr int kCaretBlinkPhasesPerCycle = 2;
+constexpr int kMinimumCaretBlinkIntervalMs = 1;
+constexpr int kCentipixelsPerLogicalPixel = 100;
 
 bool is_finite_positive(qreal value) { return std::isfinite(value) && value > 0.0; }
 bool is_finite_non_negative(qreal value) { return std::isfinite(value) && value >= 0.0; }
@@ -230,6 +236,14 @@ void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVari
 
 DocumentCanvas::DocumentCanvas(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
+    setFlag(ItemIsFocusScope, true);
+    m_caret_blink_timer.setTimerType(Qt::CoarseTimer);
+    connect(&m_caret_blink_timer, &QTimer::timeout, this, &DocumentCanvas::toggleCaretVisibility);
+    connect(this, &QQuickItem::activeFocusChanged, this, &DocumentCanvas::refreshCaretBlink);
+    if (const QStyleHints* style_hints = QGuiApplication::styleHints()) {
+        connect(style_hints, &QStyleHints::cursorFlashTimeChanged, this,
+                [this](int) { refreshCaretBlink(); });
+    }
     connect(this, &QQuickItem::widthChanged, this, [this]() {
         ++m_glyph_geometry_revision;
         update();
@@ -336,6 +350,7 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
             return;
         }
         m_caret_geometry.clear();
+        refreshCaretBlink();
         emit caretGeometryChanged();
         update();
         return;
@@ -368,8 +383,20 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
         return;
     }
     m_caret_geometry = std::move(normalized_geometry);
+    refreshCaretBlink();
     emit caretGeometryChanged();
     update();
+}
+
+bool DocumentCanvas::caretBlinkEnabled() const { return m_caret_blink_enabled; }
+
+void DocumentCanvas::setCaretBlinkEnabled(bool enabled) {
+    if (m_caret_blink_enabled == enabled) {
+        return;
+    }
+    m_caret_blink_enabled = enabled;
+    refreshCaretBlink();
+    emit caretBlinkEnabledChanged();
 }
 
 QVariantList DocumentCanvas::glyphFrames() const { return m_glyph_frames; }
@@ -497,15 +524,59 @@ void DocumentCanvas::setCaretColor(const QColor& color) {
     update();
 }
 
-qreal DocumentCanvas::caretWidthPx() const { return m_caret_width_px; }
+int DocumentCanvas::caretWidthCentipixels() const { return m_caret_width_centipixels; }
 
-void DocumentCanvas::setCaretWidthPx(qreal width_px) {
-    if (!is_finite_positive(width_px) || qFuzzyCompare(m_caret_width_px, width_px)) {
+void DocumentCanvas::setCaretWidthCentipixels(int width_centipixels) {
+    if (width_centipixels <= 0 || m_caret_width_centipixels == width_centipixels) {
         return;
     }
-    m_caret_width_px = width_px;
-    emit caretWidthPxChanged();
+    m_caret_width_centipixels = width_centipixels;
+    emit caretWidthCentipixelsChanged();
     update();
+}
+
+void DocumentCanvas::refreshCaretBlink() {
+    m_caret_blink_timer.stop();
+    m_caret_visible = hasActiveFocus() && !m_caret_geometry.isEmpty();
+    if (m_caret_visible && m_caret_blink_enabled) {
+        const QStyleHints* style_hints = QGuiApplication::styleHints();
+        const int flash_time = style_hints != nullptr ? style_hints->cursorFlashTime() : 0;
+        if (flash_time > 0) {
+            m_caret_blink_timer.start(
+                std::max(kMinimumCaretBlinkIntervalMs, flash_time / kCaretBlinkPhasesPerCycle));
+        }
+    }
+    update();
+}
+
+void DocumentCanvas::toggleCaretVisibility() {
+    if (!m_caret_blink_enabled || !hasActiveFocus() || m_caret_geometry.isEmpty()) {
+        refreshCaretBlink();
+        return;
+    }
+    m_caret_visible = !m_caret_visible;
+    update();
+}
+
+void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
+    const Qt::KeyboardModifiers modifiers = event->modifiers();
+    const bool group_switch = modifiers.testFlag(Qt::GroupSwitchModifier);
+    const QString text = event->text();
+    const bool contains_control_character =
+        std::any_of(text.cbegin(), text.cend(),
+                    [](QChar character) { return character.category() == QChar::Other_Control; });
+    const bool altgr_text = modifiers.testFlag(Qt::ControlModifier) &&
+                            modifiers.testFlag(Qt::AltModifier) && !text.isEmpty() &&
+                            !contains_control_character;
+    const bool has_command_modifier =
+        modifiers.testFlag(Qt::MetaModifier) ||
+        (modifiers.testFlag(Qt::ControlModifier) && !group_switch && !altgr_text);
+    if (!has_command_modifier && !text.isEmpty() && !contains_control_character) {
+        emit textInputRequested(text);
+        event->accept();
+        return;
+    }
+    QQuickItem::keyPressEvent(event);
 }
 
 qreal DocumentCanvas::pageGapPt() const { return m_page_gap_pt; }
@@ -716,13 +787,15 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->glyph_geometry_revision = m_glyph_geometry_revision;
     }
     node = root->caret_node;
-    if (!m_caret_geometry.isEmpty()) {
+    if (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty()) {
         const int page_index = m_caret_geometry.value(QStringLiteral("pageIndex")).toInt();
         const qreal x_pt = m_caret_geometry.value(QStringLiteral("xPt")).toReal();
         const qreal y0_pt = m_caret_geometry.value(QStringLiteral("y0Pt")).toReal();
         const qreal y1_pt = m_caret_geometry.value(QStringLiteral("y1Pt")).toReal();
         const QPointF top_left = documentToContent(page_index, QPointF(x_pt, y0_pt));
-        const QRectF caret_rect(top_left.x(), top_left.y(), m_caret_width_px,
+        const qreal caret_width_px =
+            static_cast<qreal>(m_caret_width_centipixels) / kCentipixelsPerLogicalPixel;
+        const QRectF caret_rect(top_left.x(), top_left.y(), caret_width_px,
                                 (y1_pt - y0_pt) * scale());
         node->setRect(caret_rect.intersected(pageRect(page_index)));
         node->setColor(m_caret_color.isValid() ? m_caret_color : QColor(Qt::transparent));

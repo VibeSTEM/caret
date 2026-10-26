@@ -106,6 +106,14 @@ Item {
         }
     }
 
+    Connections {
+        target: LayoutViewModel
+        function onLayoutChanged() {
+            surface.lastGlyphRasterKey = "";
+            surface.scheduleGlyphRasterization();
+        }
+    }
+
     Flickable {
         id: scroller
         objectName: "documentScroller"
@@ -128,18 +136,25 @@ Item {
             pageColor: Theme.colorPanel
             pageBorderColor: Theme.colorPanelLine
             caretColor: Theme.colorCaret
-            caretWidthPx: Theme.caretWidthPx
+            caretWidthCentipixels: Theme.caretWidthCentipixels
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
+            caretGeometry: LayoutViewModel.caretGeometry
+
+            onTextInputRequested: function (text) {
+                const result = LayoutViewModel.insertText(text);
+                if (!result.valid)
+                    console.warn("Document text input failed:", result.error);
+            }
 
             TapHandler {
                 onTapped: function (eventPoint) {
+                    pageCanvas.forceActiveFocus(Qt.MouseFocusReason);
                     const pageHit = pageCanvas.hitTestPage(eventPoint.position);
                     if (pageHit.pageIndex < 0)
                         return;
                     const result = LayoutViewModel.placeCaretAtPage(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
                     if (result.valid) {
-                        pageCanvas.caretGeometry = result.caret;
                         surface.documentPositionHit(result);
                     }
                 }

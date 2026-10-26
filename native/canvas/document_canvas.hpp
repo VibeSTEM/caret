@@ -5,12 +5,14 @@
 #include <QPointF>
 #include <QQuickItem>
 #include <QSizeF>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
 #include <QtQml/qqmlregistration.h>
 
 class QSGNode;
+class QKeyEvent;
 
 namespace caret {
 
@@ -28,11 +30,13 @@ class DocumentCanvas : public QQuickItem {
                    appearanceChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
                    caretGeometryChanged)
+    Q_PROPERTY(bool caretBlinkEnabled READ caretBlinkEnabled WRITE setCaretBlinkEnabled NOTIFY
+                   caretBlinkEnabledChanged)
     Q_PROPERTY(
         QVariantList glyphFrames READ glyphFrames WRITE setGlyphFrames NOTIFY glyphFramesChanged)
     Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
-    Q_PROPERTY(
-        qreal caretWidthPx READ caretWidthPx WRITE setCaretWidthPx NOTIFY caretWidthPxChanged)
+    Q_PROPERTY(int caretWidthCentipixels READ caretWidthCentipixels WRITE setCaretWidthCentipixels
+                   NOTIFY caretWidthCentipixelsChanged)
     Q_PROPERTY(qreal pageGapPt READ pageGapPt WRITE setPageGapPt NOTIFY pageGapPtChanged)
     Q_PROPERTY(
         qreal pageMarginPt READ pageMarginPt WRITE setPageMarginPt NOTIFY pageMarginPtChanged)
@@ -53,12 +57,14 @@ class DocumentCanvas : public QQuickItem {
     void setPageBorderColor(const QColor& color);
     [[nodiscard]] QVariantMap caretGeometry() const;
     void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] bool caretBlinkEnabled() const;
+    void setCaretBlinkEnabled(bool enabled);
     [[nodiscard]] QVariantList glyphFrames() const;
     void setGlyphFrames(const QVariantList& frames);
     [[nodiscard]] QColor caretColor() const;
     void setCaretColor(const QColor& color);
-    [[nodiscard]] qreal caretWidthPx() const;
-    void setCaretWidthPx(qreal width_px);
+    [[nodiscard]] int caretWidthCentipixels() const;
+    void setCaretWidthCentipixels(int width_centipixels);
     [[nodiscard]] qreal pageGapPt() const;
     void setPageGapPt(qreal gap_pt);
     [[nodiscard]] qreal pageMarginPt() const;
@@ -77,15 +83,17 @@ class DocumentCanvas : public QQuickItem {
     Q_INVOKABLE QVariantMap glyphRasterRequest(int page_index) const;
 
   signals:
+    void textInputRequested(const QString& text);
     void pageSizesPtChanged();
     void pageMarginsPtChanged();
     void zoomChanged();
     void pageGapPtChanged();
     void pageMarginPtChanged();
     void caretGeometryChanged();
+    void caretBlinkEnabledChanged();
     void glyphFramesChanged();
     void glyphRasterMetricsChanged();
-    void caretWidthPxChanged();
+    void caretWidthCentipixelsChanged();
     void appearanceChanged();
     void geometryChanged();
 
@@ -94,6 +102,9 @@ class DocumentCanvas : public QQuickItem {
     [[nodiscard]] QSizeF pageSizePt(int page_index) const;
     [[nodiscard]] QRectF pageRect(int page_index) const;
     void updateGeometry();
+    void refreshCaretBlink();
+    void toggleCaretVisibility();
+    void keyPressEvent(QKeyEvent* event) override;
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
     void itemChange(ItemChange change, const ItemChangeData& data) override;
 
@@ -109,7 +120,10 @@ class DocumentCanvas : public QQuickItem {
     quint64 m_glyph_frame_revision = 0;
     quint64 m_glyph_geometry_revision = 0;
     QColor m_caret_color;
-    qreal m_caret_width_px = 1.0;
+    int m_caret_width_centipixels = 0;
+    bool m_caret_blink_enabled = true;
+    QTimer m_caret_blink_timer;
+    bool m_caret_visible = false;
     qreal m_widest_page_pt = 0.0;
     qreal m_pages_height_pt = 0.0;
     QVector<qreal> m_page_y_origins_pt;

@@ -370,7 +370,7 @@ mod tests {
         let mut catalog =
             FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
         DocumentLayoutService::new()
-            .layout(document, 17, &mut catalog, &ShapingStyle::default())
+            .layout(document, 17, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("document layout failed: {error}"))
     }
 

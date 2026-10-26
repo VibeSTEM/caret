@@ -15,14 +15,17 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QImage>
+#include <QKeyEvent>
 #include <QObject>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QString>
+#include <QStyleHints>
 #include <QVariantMap>
 #include <QtMath>
 #include <QtQml/qqmlextensionplugin.h>
@@ -70,7 +73,7 @@ QVariantMap snapshot_from_theme_facade(const QString& path, const QColor& backgr
     tokens.insert(QStringLiteral("colorPanel"), background);
     tokens.insert(QStringLiteral("colorPanelLine"), QColor(QStringLiteral("#c9c9c9")));
     tokens.insert(QStringLiteral("colorCaret"), QColor(QStringLiteral("#1c1c1c")));
-    tokens.insert(QStringLiteral("caretWidthPx"), 1.0);
+    tokens.insert(QStringLiteral("caretWidthCentipixels"), 100);
     tokens.insert(QStringLiteral("fontBody"), body);
     return tokens;
 }
@@ -199,6 +202,10 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
 }
 
 void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
+    constexpr int kTestCursorFlashPeriodMs = 100;
+    constexpr int kTestBlinkTransitionTimeoutMs = 500;
+    constexpr int kDisabledBlinkObservationMs = 250;
+
     const QString theme_path =
         QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
     QHash<QString, QVariantMap> themes;
@@ -294,6 +301,22 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY(root != nullptr);
     auto* canvas = root->findChild<caret::DocumentCanvas*>(QStringLiteral("canvas"));
     QVERIFY(canvas != nullptr);
+    QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
+    QVERIFY(text_input_spy.isValid());
+    QKeyEvent altgr_input(QEvent::KeyPress, Qt::Key_Q,
+                          Qt::ControlModifier | Qt::AltModifier | Qt::GroupSwitchModifier,
+                          QStringLiteral("@"));
+    QCoreApplication::sendEvent(canvas, &altgr_input);
+    QCOMPARE(text_input_spy.size(), 1);
+    QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("@"));
+    QKeyEvent altgr_without_group_switch(
+        QEvent::KeyPress, Qt::Key_Q, Qt::ControlModifier | Qt::AltModifier, QStringLiteral("@"));
+    QCoreApplication::sendEvent(canvas, &altgr_without_group_switch);
+    QCOMPARE(text_input_spy.size(), 1);
+    QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("@"));
+    QKeyEvent shortcut_input(QEvent::KeyPress, Qt::Key_X, Qt::ControlModifier, QStringLiteral("x"));
+    QCoreApplication::sendEvent(canvas, &shortcut_input);
+    QCOMPARE(text_input_spy.size(), 0);
 
     const QSizeF natural_size = canvas->naturalContentSize();
     QCOMPARE(natural_size.width(), 1296.0);
@@ -351,7 +374,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(bound_canvas->pageColor(), QColor(Qt::white));
     QCOMPARE(bound_canvas->pageBorderColor(), QColor(QStringLiteral("#c9c9c9")));
     QCOMPARE(bound_canvas->caretColor(), QColor(QStringLiteral("#1c1c1c")));
-    QCOMPARE(bound_canvas->caretWidthPx(), 1.0);
+    QCOMPARE(bound_canvas->caretWidthCentipixels(), 100);
 
     QQmlComponent render_component(&engine);
     render_component.setData(
@@ -362,7 +385,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                           "    pageColor: \"#ffffff\"\n"
                           "    pageBorderColor: \"#c8c8c8\"\n"
                           "    caretColor: \"#ff0000\"\n"
-                          "    caretWidthPx: 2\n"
+                          "    caretWidthCentipixels: 125\n"
                           "    pageSizesPt: [Qt.size(60, 60), Qt.size(60, 60)]\n"
                           "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
                           "    pageMarginPt: 12; pageGapPt: 0\n"
@@ -371,6 +394,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY2(render_component.isReady(), qPrintable(render_component.errorString()));
     auto* rendered_canvas = qobject_cast<QQuickItem*>(render_component.create());
     QVERIFY(rendered_canvas != nullptr);
+    QCOMPARE(rendered_canvas->property("caretWidthCentipixels").toInt(), 125);
     QByteArray glyph_pixels(8 * 8 * 4, '\0');
     for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
         const qsizetype x = pixel % 8;
@@ -423,6 +447,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     rendered_canvas->setParentItem(render_window.contentItem());
     render_window.show();
     QTRY_VERIFY_WITH_TIMEOUT(render_window.isExposed(), 3000);
+    rendered_canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY(rendered_canvas->hasActiveFocus());
     const QImage frame = render_window.grabWindow();
     QVERIFY(!frame.isNull());
     const auto pixel_at_logical_point = [&frame, &render_window](qreal x, qreal y) {
@@ -435,10 +461,63 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(pixel_at_logical_point(88.5, 55.0), QColor(Qt::red));
     QCOMPARE(pixel_at_logical_point(92.5, 55.0), QColor(Qt::green));
     QCOMPARE(pixel_at_logical_point(92.0, 51.0), QColor(Qt::white));
-    QCOMPARE(pixel_at_logical_point(101.0, 50.0), QColor(QStringLiteral("#ff0000")));
-    QCOMPARE(pixel_at_logical_point(101.0, 95.5), QColor(QStringLiteral("#ff0000")));
+    QVERIFY(pixel_at_logical_point(101.0, 50.0) != QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(101.5, 50.0), QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(100.5, 95.5), QColor(QStringLiteral("#ff0000")));
     QCOMPARE(pixel_at_logical_point(101.0, 180.0), QColor(Qt::green));
     QCOMPARE(pixel_at_logical_point(88.5, 134.5), QColor(Qt::red));
+
+    const auto current_caret_pixel = [&render_window]() {
+        const QImage current_frame = render_window.grabWindow();
+        return current_frame.pixelColor(
+            qFloor(100.5 * current_frame.width() / render_window.width()),
+            qFloor(50.0 * current_frame.height() / render_window.height()));
+    };
+    const int cursor_flash_time = QGuiApplication::styleHints()->cursorFlashTime();
+    if (cursor_flash_time > 0) {
+        QTRY_VERIFY_WITH_TIMEOUT(current_caret_pixel() != QColor(QStringLiteral("#ff0000")),
+                                 cursor_flash_time + 500);
+        QTRY_COMPARE_WITH_TIMEOUT(current_caret_pixel(), QColor(QStringLiteral("#ff0000")),
+                                  cursor_flash_time + 500);
+    }
+
+    QStyleHints* style_hints = QGuiApplication::styleHints();
+    const int original_cursor_flash_time = style_hints->cursorFlashTime();
+    [[maybe_unused]] const auto restore_cursor_flash_time =
+        qScopeGuard([style_hints, original_cursor_flash_time]() {
+            style_hints->setCursorFlashTime(original_cursor_flash_time);
+        });
+    style_hints->setCursorFlashTime(kTestCursorFlashPeriodMs);
+    QTRY_VERIFY_WITH_TIMEOUT(current_caret_pixel() != QColor(QStringLiteral("#ff0000")),
+                             kTestBlinkTransitionTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(current_caret_pixel(), QColor(QStringLiteral("#ff0000")),
+                              kTestBlinkTransitionTimeoutMs);
+    rendered_canvas->setProperty("caretBlinkEnabled", false);
+    QTRY_COMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
+    QTest::qWait(kDisabledBlinkObservationMs);
+    QCOMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
+    rendered_canvas->setProperty("caretBlinkEnabled", true);
+    QTRY_VERIFY_WITH_TIMEOUT(current_caret_pixel() != QColor(QStringLiteral("#ff0000")),
+                             kTestBlinkTransitionTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(current_caret_pixel(), QColor(QStringLiteral("#ff0000")),
+                              kTestBlinkTransitionTimeoutMs);
+    style_hints->setCursorFlashTime(0);
+    QTRY_COMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
+    QTest::qWait(kDisabledBlinkObservationMs);
+    QCOMPARE(current_caret_pixel(), QColor(QStringLiteral("#ff0000")));
+    style_hints->setCursorFlashTime(kTestCursorFlashPeriodMs);
+    QTRY_VERIFY_WITH_TIMEOUT(current_caret_pixel() != QColor(QStringLiteral("#ff0000")),
+                             kTestBlinkTransitionTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(current_caret_pixel(), QColor(QStringLiteral("#ff0000")),
+                              kTestBlinkTransitionTimeoutMs);
+
+    rendered_canvas->setFocus(false);
+    QTRY_VERIFY(!rendered_canvas->hasActiveFocus());
+    const QImage unfocused_frame = render_window.grabWindow();
+    QVERIFY(!unfocused_frame.isNull());
+    QCOMPARE(unfocused_frame.pixelColor(qFloor(101.0 * frame.width() / render_window.width()),
+                                        qFloor(50.0 * frame.height() / render_window.height())),
+             QColor(Qt::white));
 
     QByteArray changed_glyph_pixels = glyph_pixels;
     for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
@@ -587,14 +666,60 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QVERIFY(position_spy.isValid());
     window.show();
     QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
-    const QPointF content_point = canvas->documentToContent(0, QPointF(73.0, 73.0));
+    const QSizeF page_size = canvas->pageSizesPt().front().toSizeF();
+    const QPointF page_center(std::min(100.0, page_size.width()), 140.0);
+    const QPointF content_point = canvas->documentToContent(0, page_center);
+    const QVariantMap page_hit = canvas->hitTestPage(content_point);
+    QCOMPARE(page_hit.value(QStringLiteral("pageIndex")).toInt(), 0);
+    auto* layout_view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(layout_view_model != nullptr);
+    const QVariantMap rust_hit =
+        layout_view_model->hitTestDocument(page_hit.value(QStringLiteral("pageIndex")).toInt(),
+                                           page_hit.value(QStringLiteral("xPt")).toReal(),
+                                           page_hit.value(QStringLiteral("yPt")).toReal());
+    QVERIFY2(rust_hit.value(QStringLiteral("valid")).toBool(),
+             qPrintable(rust_hit.value(QStringLiteral("error")).toString()));
     const QPointF window_point = canvas->mapToItem(window.contentItem(), content_point);
     QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, window_point.toPoint());
     QTRY_COMPARE_WITH_TIMEOUT(position_spy.size(), 1, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
     const QVariantMap clicked_hit = position_spy.takeFirst().at(0).toMap();
     QVERIFY(clicked_hit.value(QStringLiteral("valid")).toBool());
     QCOMPARE(clicked_hit.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("0"));
+    const qreal initial_caret_x = canvas->caretGeometry().value(QStringLiteral("xPt")).toReal();
+    QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
+    QVERIFY(text_input_spy.isValid());
+    QTest::keyClick(&window, Qt::Key_X);
+    QTRY_COMPARE_WITH_TIMEOUT(text_input_spy.size(), 1, 3000);
+    QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("x"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("1"), 3000);
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("x"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        canvas->caretGeometry().value(QStringLiteral("xPt")).toReal() > initial_caret_x, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty() &&
+                                 canvas->glyphFrames()
+                                         .first()
+                                         .toMap()
+                                         .value(QStringLiteral("documentGeneration"))
+                                         .toString() == QStringLiteral("1") &&
+                                 !canvas->glyphFrames()
+                                      .first()
+                                      .toMap()
+                                      .value(QStringLiteral("placements"))
+                                      .toList()
+                                      .isEmpty(),
+                             3000);
+    const QVariantMap updated_glyph_frame = canvas->glyphFrames().first().toMap();
+    QCOMPARE(updated_glyph_frame.value(QStringLiteral("documentGeneration")).toString(),
+             QStringLiteral("1"));
+    QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
     delete surface;
 }
 #endif

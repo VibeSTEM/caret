@@ -16,13 +16,14 @@ class LayoutViewModel final : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    Q_PROPERTY(QVariantList pageSizesPt READ pageSizesPt CONSTANT)
-    Q_PROPERTY(QVariantList pageLayouts READ pageLayouts CONSTANT)
-    Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt CONSTANT)
-    Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts CONSTANT)
-    Q_PROPERTY(QString documentGeneration READ documentGeneration CONSTANT)
-    Q_PROPERTY(QString fontGeneration READ fontGeneration CONSTANT)
+    Q_PROPERTY(QVariantList pageSizesPt READ pageSizesPt NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
+    Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
+    Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString error READ error CONSTANT)
+    Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry NOTIFY caretGeometryChanged)
 
   public:
     explicit LayoutViewModel(QObject* parent = nullptr);
@@ -36,17 +37,28 @@ class LayoutViewModel final : public QObject {
     }
     [[nodiscard]] QString fontGeneration() const { return QString::number(m_font_generation); }
     [[nodiscard]] const QString& error() const { return m_error; }
+    [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
 
     /// 将页面局部 pt 坐标交给 Rust 布局快照，返回带文档位置的命中结果。
     Q_INVOKABLE QVariantMap hitTestDocument(int page_index, qreal x_pt, qreal y_pt);
     /// 在 Rust 会话中将页面命中位置设为当前插入点。
     Q_INVOKABLE QVariantMap placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt);
+    /// 将 Qt 键盘输入文本提交给 Rust 会话并安装新布局快照。
+    Q_INVOKABLE QVariantMap insertText(const QString& text);
     /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
     Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
                                                 qreal page_origin_device_x_px,
                                                 qreal page_origin_device_y_px, int foreground_red,
                                                 int foreground_green, int foreground_blue,
                                                 int foreground_alpha);
+
+  private:
+    bool installSnapshot(const QString& snapshot_json);
+    void installCaretGeometry(const QVariantMap& geometry);
+
+  signals:
+    void layoutChanged();
+    void caretGeometryChanged();
 
   private:
     QVariantList m_page_sizes_pt;
@@ -56,6 +68,7 @@ class LayoutViewModel final : public QObject {
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     QString m_error;
+    QVariantMap m_caret_geometry;
 };
 
 } // namespace caret

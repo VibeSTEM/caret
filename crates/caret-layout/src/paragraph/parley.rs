@@ -531,16 +531,33 @@ impl ParleyParagraphLayout {
 
     /// 返回与自定义行框 baseline/溢出语义对齐的插入点矩形。
     pub fn cursor_geometry(&self, cursor: VisualCursor, width_pt: f32) -> parley::BoundingBox {
+        self.cursor_geometry_with_line(cursor, width_pt)
+            .map(|(bounds, _)| bounds)
+            .unwrap_or_else(|| {
+                self.to_parley_cursor(cursor)
+                    .geometry(&self.layout, width_pt)
+            })
+    }
+
+    /// 返回插入点矩形和所属的 Caret 行索引。
+    pub fn cursor_geometry_with_line(
+        &self,
+        cursor: VisualCursor,
+        width_pt: f32,
+    ) -> Option<(parley::BoundingBox, usize)> {
         let cursor = self.to_parley_cursor(cursor);
         if self.layout.text_len() == 0
             && let Some(line) = self.paragraph.lines.first()
         {
-            return parley::BoundingBox::new(
-                0.0,
-                0.0,
-                f64::from(width_pt),
-                f64::from(line.metrics.height_pt),
-            );
+            return Some((
+                parley::BoundingBox::new(
+                    0.0,
+                    0.0,
+                    f64::from(width_pt),
+                    f64::from(line.metrics.height_pt),
+                ),
+                0,
+            ));
         }
         let (mut bounds, line_index) =
             cursor_geometry_on_logical_cluster(&self.layout, cursor, width_pt).unwrap_or_else(
@@ -557,14 +574,17 @@ impl ParleyParagraphLayout {
             );
         if self.parley_line_tops_pt.is_empty() {
             if let Some(line) = self.paragraph.lines.first() {
-                return parley::BoundingBox::new(
-                    0.0,
-                    0.0,
-                    f64::from(width_pt),
-                    f64::from(line.metrics.height_pt),
-                );
+                return Some((
+                    parley::BoundingBox::new(
+                        0.0,
+                        0.0,
+                        f64::from(width_pt),
+                        f64::from(line.metrics.height_pt),
+                    ),
+                    0,
+                ));
             }
-            return bounds;
+            return Some((bounds, line_index));
         }
         if let (Some(top_offset), Some(baseline_adjustment)) = (
             self.line_top_offsets_pt.get(line_index),
@@ -574,7 +594,7 @@ impl ParleyParagraphLayout {
             bounds.y0 += offset;
             bounds.y1 += offset;
         }
-        bounds
+        Some((bounds, line_index))
     }
 
     fn to_parley_cursor(&self, cursor: VisualCursor) -> parley::editing::Cursor {

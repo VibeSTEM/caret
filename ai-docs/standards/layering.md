@@ -127,5 +127,6 @@ QML 表达意图并装配画布公开项。它不解析 `.pa`，不读写文档�
 - 可恢复的 C++ 异常在适配器变成结构化错误。panic 不是可恢复错误。
 - 手写 unsafe 只留在已登记的崩溃模块。CXX 生成代码的 unsafe 按 [FFI](ffi.md) 审查，不扩散到业务调用方。
 - 逻辑路径的宿主是 Qt 适配器；Rust 路径服务不包含 Qt 类型。
+- 用户设置和 Preferences 的权威状态、校验与持久化由 `caret-app` 的 Rust 服务负责。QML 只展示和提交意图，ViewModel 只做类型转换与信号桥接；C++ 组件只接收当前操作所需的值，不保存持久化副本。
 
 新增仓库内依赖时先改上面的图和分级表，再改 manifest 或 `target_link_libraries`。`cargo lint` 的 layering 检查读取 Cargo metadata，并配置专用 CMake 夹具核对 native 依赖边；评审仍以本页分级表为准。
