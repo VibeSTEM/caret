@@ -19,16 +19,12 @@ pub use pagination::{
     paginate_paragraphs,
 };
 pub use paragraph::{
-    ParagraphLayout, ParagraphLayoutError, ParagraphLine, has_empty_line, layout_shaped_paragraph,
-    layout_shaped_paragraph_with_style,
+    ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions, ParagraphLayouter,
+    ParagraphLine, ParleyParagraphLayout, has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
-pub use shaping::{
-    ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries, paragraph_text,
-};
+pub use shaping::{ShapingStyle, UnicodeBoundaries, paragraph_text};
 
-#[cfg(test)]
-mod parley_probe;
 #[cfg(test)]
 mod tests;
 

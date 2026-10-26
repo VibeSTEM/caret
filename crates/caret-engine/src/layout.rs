@@ -3,10 +3,9 @@
 use crate::Session;
 use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
-    FontCatalog, FontLineMetrics, PageLayout, PaginationItem, ParagraphLayout,
-    ParagraphPaginationInput, ResolvedDocumentTextSettings, ShapingStyle, TextShaper,
-    has_empty_line, layout_shaped_paragraph, paginate_paragraphs, paragraph_text,
-    resolve_paragraph_style,
+    FontCatalog, PageLayout, PaginationItem, ParagraphLayoutOptions, ParagraphLayouter,
+    ParagraphPaginationInput, ParleyParagraphLayout, ResolvedDocumentTextSettings, ShapingStyle,
+    paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
 use std::collections::HashMap;
 
@@ -49,12 +48,11 @@ impl std::fmt::Display for DocumentLayoutError {
 impl std::error::Error for DocumentLayoutError {}
 
 /// 已排版段落的源 ID、原文與行框；正文文本只在快照里保留一份。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct LaidOutParagraph {
     pub id: NodeId,
     pub text: String,
-    pub shaped: caret_layout::ShapedParagraph,
-    pub layout: ParagraphLayout,
+    pub layout: ParleyParagraphLayout,
 }
 
 /// 一页的文档坐标和段落行片段。
@@ -68,7 +66,7 @@ pub struct PageLayoutSnapshot {
 }
 
 /// 单代文档布局结果。页面和段落位置共用同一分页输出。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DocumentLayoutSnapshot {
     pub session_id: Option<NodeId>,
     pub document_generation: u64,
@@ -78,9 +76,9 @@ pub struct DocumentLayoutSnapshot {
 }
 
 /// 可复用塑形器；调用方跨文档代际复用字体目录，避免按段落扫描系统字体。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct DocumentLayoutService {
-    shaper: TextShaper,
+    layouter: ParagraphLayouter,
 }
 
 impl DocumentLayoutService {
@@ -145,52 +143,54 @@ impl DocumentLayoutService {
             let LayoutInput::Paragraph(paragraph) = item else {
                 continue;
             };
-            let text = paragraph_text(paragraph);
-            let shaped = self
-                .shaper
-                .shape_paragraph_with_resolved_settings(
-                    catalog,
-                    paragraph,
-                    &text_settings,
-                    base_style,
-                )
-                .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?
-                .clone();
             let style =
                 resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
                     .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
-            let needs_mark_metrics = has_empty_line(&text);
+            let placeholder_metrics = caret_layout::FontLineMetrics {
+                ascent_pt: 9.6,
+                descent_pt: 2.4,
+                leading_pt: 0.0,
+            };
+            let needs_mark_metrics = paragraph_has_empty_line(paragraph);
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
             let language_key = paragraph.language.clone();
-            let empty_mark_metrics =
-                if let Some(metrics) = empty_mark_metrics_by_language.get(&language_key) {
-                    *metrics
-                } else {
-                    let metrics = self.empty_mark_metrics(
+            let empty_mark_metrics = if !needs_mark_metrics {
+                placeholder_metrics
+            } else if let Some(metrics) = empty_mark_metrics_by_language.get(&language_key) {
+                *metrics
+            } else {
+                let metrics = self
+                    .layouter
+                    .measure_empty_mark_metrics(
                         catalog,
-                        base_style,
                         &text_settings,
+                        base_style,
                         paragraph.language.as_deref(),
-                    )?;
-                    empty_mark_metrics_by_language.insert(language_key, metrics);
-                    metrics
-                };
-            let layout = layout_shaped_paragraph(
-                &text,
-                &shaped,
-                content_width_pt as f32,
-                style.line_spacing,
-                empty_mark_metrics,
-                &[],
-            )
-            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+                    )
+                    .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
+                empty_mark_metrics_by_language.insert(language_key, metrics);
+                metrics
+            };
+            let (text, layout) = self
+                .layouter
+                .layout(
+                    catalog,
+                    paragraph,
+                    &text_settings,
+                    base_style,
+                    ParagraphLayoutOptions {
+                        width_pt: content_width_pt as f32,
+                        spacing: style.line_spacing,
+                        empty_mark_metrics,
+                    },
+                )
+                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             resolved_styles.push(style);
             paragraphs.push(LaidOutParagraph {
                 id: paragraph.id.clone(),
                 text,
-                shaped,
                 layout,
             });
         }
@@ -212,7 +212,7 @@ impl DocumentLayoutService {
                     pagination_items.push(PaginationItem::Paragraph(
                         ParagraphPaginationInput::with_style(
                             &paragraph.id,
-                            &paragraph.layout,
+                            &paragraph.layout.paragraph,
                             *style,
                         ),
                     ));
@@ -239,31 +239,6 @@ impl DocumentLayoutService {
             paragraphs,
             pages,
         })
-    }
-
-    fn empty_mark_metrics(
-        &mut self,
-        catalog: &mut FontCatalog,
-        base_style: &ShapingStyle,
-        text_settings: &ResolvedDocumentTextSettings,
-        language_override: Option<&str>,
-    ) -> Result<FontLineMetrics, DocumentLayoutError> {
-        let shaped = self
-            .shaper
-            .shape_with_resolved_settings(
-                catalog,
-                " ",
-                text_settings,
-                language_override,
-                base_style,
-            )
-            .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
-        shaped
-            .text
-            .runs()
-            .first()
-            .map(|run| FontLineMetrics::from(run.font_metrics))
-            .ok_or_else(|| DocumentLayoutError::Shaping("missing empty mark metrics".into()))
     }
 }
 
@@ -294,4 +269,47 @@ fn collect_blocks<'a>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use caret_doc::{Block, Document, InlineNode, Run};
+    use caret_layout::{FontCatalog, ShapingStyle};
+    use std::collections::BTreeMap;
+
+    use super::DocumentLayoutService;
+
+    #[test]
+    fn document_layout_snapshot_uses_parley_lines_and_pagination() {
+        let mut document = Document::blank();
+        let text = "A mixed run sequence: e\u{301}, family 👩‍👩‍👧‍👦, and text that wraps. ".repeat(16);
+        let Block::Paragraph(paragraph) = &mut document.body[0] else {
+            panic!("blank document should start with a paragraph");
+        };
+        paragraph.language = Some("en".to_owned());
+        paragraph.inlines = vec![InlineNode::Run(Run {
+            text: text.clone(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })];
+
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 7, &mut catalog, &ShapingStyle::default())
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+
+        assert_eq!(snapshot.document_generation, 7);
+        assert_eq!(snapshot.font_generation, catalog.generation());
+        assert_eq!(snapshot.paragraphs.len(), 1);
+        assert_eq!(snapshot.paragraphs[0].text, text);
+        assert!(snapshot.paragraphs[0].layout.paragraph.lines.len() > 1);
+        assert!(!snapshot.pages.is_empty());
+        assert_eq!(
+            snapshot.pages[0].layout.fragments[0].paragraph_id,
+            snapshot.paragraphs[0].id
+        );
+    }
 }

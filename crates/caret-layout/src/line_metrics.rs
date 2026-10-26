@@ -38,16 +38,6 @@ pub struct FontLineMetrics {
     pub leading_pt: f32,
 }
 
-impl From<parley_engine::FontMetrics> for FontLineMetrics {
-    fn from(metrics: parley_engine::FontMetrics) -> Self {
-        Self {
-            ascent_pt: metrics.ascent,
-            descent_pt: metrics.descent,
-            leading_pt: metrics.leading,
-        }
-    }
-}
-
 /// 已解析的行框与 baseline 度量。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineMetrics {

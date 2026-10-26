@@ -1,5 +1,6 @@
 # Cargo workspace outputs; keep Cargo.lock and .cargo/config.toml tracked.
 /target/
+**/target/criterion/
 
 # Downloaded tools, Qt, SDKs, archives and locks. cargo clean must not remove these.
 /.toolchain/

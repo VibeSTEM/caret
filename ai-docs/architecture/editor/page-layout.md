@@ -47,10 +47,11 @@
 | 模块 | 职责 | 不负责 |
 |---|---|---|
 | `font_selection` | 预编译 `.cdoc` 的默认字体、CJK、脚本及脚本内语言偏好；对已分析的 Script/BCP 47 语言上下文给出候选字体族 | 扫描字体目录、分析 Unicode 字符、替代 Fontique 的字形覆盖率查询 |
-| `shaping` | 用 Parley Engine 和 Fontique 完成段落文本展平、脚本分析、字体回退、塑形与 cluster 到 UTF-8 范围映射；Run 边界不打断相同有效样式的 shaping | 行距、分页或文档属性持久化 |
+| `shaping` | 展平段落行内结构、按 Run/Paragraph 语言生成 ICU 边界，并提供 Parley 样式范围输入 | 自行做字体选择、glyph shaping、cluster 生成、行断或分页 |
 | `shaping/unicode.rs` | 复用 ICU4X 与 `unicode-segmentation` 生成固定数据版本的断行/字素边界，应用 Caret 选择的语言 tailoring | 字体查询和字形塑形 |
-| `paragraph` | 消费完整段落的 clusters、Unicode 边界和对象度量，产生行范围、行推进宽度与行框 | 重新展平整个段落或逐字符扫描本机字体 |
+| `paragraph/parley.rs` | 构建并保留唯一 Parley 高层 `Layout`；提供字素安全的光标、命中和选区适配，并把 Parley 行结果映射到 Caret 行框 | 文档属性持久化、字体文件目录扫描或分页 |
+| `line_metrics` | 按文档行距规则从 Parley 字体度量计算 Caret 行框和 baseline | 重复执行字体 shaping |
 | `pagination` | 消费段落行与 `PageSection` 可用高度，应用段间距/显式分页，输出稳定 Paragraph ID、行范围和页内偏移 | 复制正文、改写文档树或拥有长期缓存 |
 | 增量缓存 | 后续由 013 定义缓存键和脏范围传播；字体目录代际与文档 revision 是输入版本 | 混入上述纯计算阶段的隐式全局可变状态 |
 
-段落先完整塑形一次，再按行断机会切分 clusters。禁止每个候选行重新展平并分析整段，否则多 Run 段落会产生重复工作，也会令子串分析丢失原段落 bidi 上下文。绘制适配器必须使用完整段落的脚本、双向级别和 glyph/cluster 映射；不能将 UTF-8 字节顺序当作视觉左右顺序。Parley Engine 当前对复杂文本的逐行重塑及 UAX #9 行末规则仍有限制，Caret 不宣称已完成视觉行重排；将完整视觉行结果接入 UI 前需要单独验证混合 RTL、行尾空白和行内对象，并优先复用 Parley 高层 Layout 能力或上游修复，不在 Caret 中重复造字体 shaping 引擎。
+段落只构建一次 Parley `Layout`，由它同时提供分页行范围、绘制所需 glyph runs 以及双向视觉交互几何。不能把 UTF-8 字节顺序当作视觉左右顺序。Caret 在 Parley Layout 外保留其文档行距和页级分页策略；Qt scene graph 绘制适配应复用该 Layout 的字体实例、glyph ID 和位置，不能再把正文送入 Qt 文本引擎独立换行。Unicode grapheme、bidi 和 line-break conformance 由固定 corpus 覆盖；集成阶段还需对平台字体差异、行尾空白和未来行内对象作专项验证。
