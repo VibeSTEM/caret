@@ -1,6 +1,5 @@
 // 管理插入点几何、外观和平台闪烁周期，状态只属于当前画布。
 #include "document_canvas.hpp"
-
 #include "document_units.hpp"
 #include <QGuiApplication>
 #include <QStyleHints>

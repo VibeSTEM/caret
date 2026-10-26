@@ -12,7 +12,8 @@ qint64 DocumentUnits::pointsToLogicalCentipixels(qreal points, int zoom_percent)
     }
     const qreal scaled = points * zoom_percent * document_units::kLogicalPixelsPerInch /
                          document_units::kPointsPerInch;
-    if (!std::isfinite(scaled) || scaled >= static_cast<qreal>(std::numeric_limits<qint64>::max())) {
+    if (!std::isfinite(scaled) ||
+        scaled >= static_cast<qreal>(std::numeric_limits<qint64>::max())) {
         return std::numeric_limits<qint64>::max();
     }
     return qRound64(scaled);

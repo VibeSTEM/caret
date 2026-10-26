@@ -1,6 +1,5 @@
 // 原子校验并安装页面字形帧，不创建场景图或纹理资源。
 #include "document_canvas.hpp"
-
 #include "value_validation.hpp"
 #include <QByteArray>
 #include <QList>

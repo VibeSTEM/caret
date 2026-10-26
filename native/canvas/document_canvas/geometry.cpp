@@ -1,7 +1,6 @@
 // 维护页面前缀几何、坐标转换、页面命中和设备像素栅格请求。
-#include "document_canvas.hpp"
-
 #include "canvas_policy.hpp"
+#include "document_canvas.hpp"
 #include "document_units.hpp"
 #include "value_validation.hpp"
 #include <QQuickWindow>
@@ -94,10 +93,9 @@ void DocumentCanvas::setZoom(qreal zoom) {
     if (!is_finite_positive(zoom)) {
         return;
     }
-    const qreal bounded = std::clamp(
-        zoom,
-        document_units::percent_to_factor(canvas_policy::kMinimumZoomPercent),
-        document_units::percent_to_factor(canvas_policy::kMaximumZoomPercent));
+    const qreal bounded =
+        std::clamp(zoom, document_units::percent_to_factor(canvas_policy::kMinimumZoomPercent),
+                   document_units::percent_to_factor(canvas_policy::kMaximumZoomPercent));
     if (qFuzzyCompare(m_zoom, bounded)) {
         return;
     }

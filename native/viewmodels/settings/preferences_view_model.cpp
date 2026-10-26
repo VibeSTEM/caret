@@ -44,9 +44,8 @@ PreferencesViewModel::PreferencesViewModel(QObject* parent) : QObject(parent) {
         return;
     }
     log_persistence_warning(snapshot);
-    installSnapshot(snapshot.caret_blink_enabled,
-                    QSize(static_cast<int>(snapshot.window_width),
-                          static_cast<int>(snapshot.window_height)));
+    installSnapshot(snapshot.caret_blink_enabled, QSize(static_cast<int>(snapshot.window_width),
+                                                        static_cast<int>(snapshot.window_height)));
     const ffi::SettingsConstraints constraints = ffi::settings_constraints();
     m_minimum_window_width = static_cast<int>(constraints.minimum_window_width);
     m_minimum_window_height = static_cast<int>(constraints.minimum_window_height);
@@ -71,9 +70,8 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
         return false;
     }
     log_persistence_warning(snapshot);
-    installSnapshot(snapshot.caret_blink_enabled,
-                    QSize(static_cast<int>(snapshot.window_width),
-                          static_cast<int>(snapshot.window_height)));
+    installSnapshot(snapshot.caret_blink_enabled, QSize(static_cast<int>(snapshot.window_width),
+                                                        static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
     return true;

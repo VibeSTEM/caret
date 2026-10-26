@@ -22,9 +22,9 @@ target_link_libraries(caret_shellplugin INTERFACE "$<LINK_ONLY:caret::shell>")
 target_link_libraries(caret_adaptersplugin INTERFACE caret_adapters)
 target_link_libraries(caret_shell INTERFACE caret::adapters)
 target_link_libraries(caret_shellplugin INTERFACE caret_adaptersplugin)
-target_link_libraries(caret_native_app INTERFACE caret::shell caret_shellplugin caret::adapters
-                                                 caret_adaptersplugin caret::i18n
-                                                 "${CARET_FFI_STATIC_LIB}")
+target_link_libraries(
+  caret_native_app INTERFACE caret::shell caret_shellplugin caret::adapters caret_adaptersplugin
+                             caret::i18n "${CARET_FFI_STATIC_LIB}")
 
 if(CARET_FIXTURE_ILLEGAL)
   target_link_libraries(caret_shell INTERFACE caret_i18n)

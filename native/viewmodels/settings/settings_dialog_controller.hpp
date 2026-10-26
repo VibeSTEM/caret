@@ -7,7 +7,6 @@
 #include <QStateMachine>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
-
 #include <cstdint>
 
 namespace caret {

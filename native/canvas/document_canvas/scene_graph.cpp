@@ -1,6 +1,5 @@
 // 在场景图线程维护纸张、字形纹理和插入点节点，并复用未变化页面。
 #include "document_canvas.hpp"
-
 #include "value_validation.hpp"
 #include <QByteArray>
 #include <QHash>

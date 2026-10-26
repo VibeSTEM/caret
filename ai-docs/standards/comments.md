@@ -12,7 +12,7 @@
 
 - Rust 公共 API 用 `///`。公开 unsafe 必须有 `# Safety`。每个 unsafe 块用 `// SAFETY:` 说明前提为何成立。
 - C++ 公共头用简短的文档注释，契约写在声明处。实现文件只用 `//` 补充局部原因。
-- `#include` 由 `.clang-format` 和 `.clang-tidy` 排序：主头单独成块，其余按字母序。include-cleaner 用来找直接依赖。不能拆开的系统伞头才在该行登记例外，并写明原因。
+- `#include` 的排序与分组以 `.clang-format` 实际配置为准，不手工添加 formatter 会移除的空行或分组；include-cleaner 用来找直接依赖。不能拆开的系统伞头才在该行登记例外，并写明原因。
 - QML 的公共属性和信号旁写输入和绑定约束。不必给每个布局属性加注释。
 - CMake 注释说明非默认选项和生成步骤的原因。生成的 CXX 和 Qt 文件不手工加注释。
 
