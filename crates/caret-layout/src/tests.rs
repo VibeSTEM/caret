@@ -8,10 +8,9 @@ use caret_doc::{
 use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 
 use crate::{
-    FontCatalog, FontLineMetrics, GlyphPixelFormat, GlyphRasterOptions, GlyphRasterizer,
-    LineSpacing, ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings,
-    ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line,
-    paragraph_has_empty_line,
+    FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, LineSpacing,
+    ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings, ShapingStyle,
+    UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line, paragraph_has_empty_line,
 };
 
 fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
@@ -197,7 +196,7 @@ fn swash_rasterizes_the_font_face_and_glyph_selected_by_parley() {
                 pixel_phase: [0.0, 0.0],
                 normalized_coords: &normalized_coords,
                 synthesis: run.run().synthesis(),
-                foreground: run.style().brush,
+                foreground: [28, 28, 28, 255],
             },
         )
         .unwrap_or_else(|| panic!("Swash should rasterize Parley's glyph"));
@@ -210,22 +209,29 @@ fn swash_rasterizes_the_font_face_and_glyph_selected_by_parley() {
                 pixel_phase: [0.0, 0.0],
                 normalized_coords: &normalized_coords,
                 synthesis: run.run().synthesis(),
-                foreground: run.style().brush,
+                foreground: [28, 28, 28, 255],
             },
         )
         .unwrap_or_else(|| panic!("cached glyph should remain available"));
     assert!(std::sync::Arc::ptr_eq(&bitmap, &cached_bitmap));
     assert!(bitmap.width > 0);
     assert!(bitmap.height > 0);
-    match bitmap.format {
-        GlyphPixelFormat::Alpha8 => {
-            assert_eq!(bitmap.pixels.len(), (bitmap.width * bitmap.height) as usize)
-        }
-        GlyphPixelFormat::Rgba8Premultiplied => assert_eq!(
-            bitmap.pixels.len(),
-            (bitmap.width * bitmap.height * 4) as usize
-        ),
-    }
+    assert!(
+        bitmap
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] > 0)
+    );
+    let pixel_count = usize::try_from(bitmap.width)
+        .unwrap_or_else(|error| panic!("glyph width is invalid: {error}"))
+        .checked_mul(
+            usize::try_from(bitmap.height)
+                .unwrap_or_else(|error| panic!("glyph height is invalid: {error}")),
+        )
+        .unwrap_or_else(|| panic!("glyph size overflows"));
+    assert_eq!(bitmap.pixels.len(), pixel_count * 4);
 }
 
 #[test]

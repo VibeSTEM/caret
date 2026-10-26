@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；页面点击可在 Rust 会话中设置命中位置，并返回稳定文档位置与页面局部插入点几何。插入点已通过主题 token 在 Qt scene graph 呈现；正文 glyph、选区绘制和真实窗口编辑交互仍未实现，因此 027 继续进行中。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，Qt scene graph 管理纹理图集并绘制，避免 Qt 重新塑形或重新匹配字体。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；页面点击可在 Rust 会话中设置命中位置，并返回稳定文档位置与页面局部插入点几何。插入点已通过主题 token 在 Qt scene graph 呈现；Rust 已能提取页面 glyph 数据并按精确字体面栅格化，正文的 Qt 图集绘制、选区绘制和真实窗口编辑交互仍未实现，因此 027 继续进行中。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，Qt scene graph 管理纹理图集并绘制，避免 Qt 重新塑形或重新匹配字体。
 
 ## 必读
 
@@ -82,6 +82,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 | 2026-10-26 | `cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 全工作区 Rust、native CTest、QML 格式和静态检查通过 | 通过；native CTest 4/4，workspace Clippy 无警告 |
 | 2026-10-26 | `cargo test --offline --locked -p caret-layout`、`cargo clippy --offline --locked -p caret-layout --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 精确字体面栅格化、TTC face 缓存隔离、合成斜体、彩色 alpha、位图亚像素放置和缓存复用符合预期 | 通过；caret-layout 67 项。macOS TTC face 0/1 输出与独立 rasterizer 一致；Apple Color Emoji 位图相位由调用方保留，Apple Symbols 轮廓字形设备 y 质心按 +0.25 px 移动。Qt 图集绘制尚未接入 |
 | 2026-10-26 | 独立评审 Swash 字体面、alpha 混合、合成样式、缓存键及设备像素相位 | 不同 TTC face 不串缓存；轮廓与位图在 Qt 合成时保留正确颜色和设备坐标 | 无阻塞；评审期间发现并修复预乘 alpha、synthetic italic 轴向、TTC face 缓存键和设备 y 相位问题；独立重跑 5 项栅格化定向测试通过。实际 QSG atlas 合成验收仍待后续 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine`、`cargo fmt --all -- --check`、`cargo clippy --offline --locked -p caret-layout -p caret-engine --all-targets -- -D warnings`、`git diff --check` | 页面 glyph 快照保留准确字体面、glyph ID、视觉顺序、variation/synthesis、页局部坐标和 Exactly 行框裁切；超长段落组合附标不丢失局部偏移 | 通过；caret-layout 68 项、caret-engine 49 项。独立复核无阻塞；Qt atlas 绘制和真实窗口像素验收仍待后续 |
 
 ## 风险与回退
 
@@ -101,8 +102,9 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：页面命中结果现在携带同一 LayoutResult 计算的插入点 x 和行框 y 范围，按页局部 pt 坐标返回给 FFI/ViewModel；光标宽度、颜色与闪烁仍由界面主题和后续呈现逻辑决定。首末页坐标及 JSON 投影已加入回归断言，Qt 绘制尚未接入。
 - 2026-10-26：长文档独立复核发现段落全局 `line_box_tops_pt` 差分与命中时按页面片段累加会产生约 0.11 pt 漂移。插入点 y 现复用命中循环的片段局部行顶，200,000 行样本末 50 页抽查偏差为 0；Rust/Qt 分层和 DTO 投影复核无其他阻塞问题。
 - 2026-10-26：`DocumentCanvas` 接收点击结果里的 caret DTO，使用 QSG 矩形节点绘制页面局部插入点；`color-caret` 与 `caret-width-px` 由 Rust theme schema 校验后经 QML 传入。Caret 绘制按纸张范围裁切，超高行仍可显示页内部分；pageIndex 严格校验，非法更新不会替换当前几何。QQuickWindow 像素测试覆盖缩放坐标、底边裁切和非法 pageIndex。Blink/focus 状态、键盘光标移动及编辑后几何刷新尚未接入。
-- 2026-10-26：选择正文渲染路径为 Parley glyph ID/位置 → Swash 同字体面栅格化 → Qt scene graph 纹理图集。Qt 的 QRawFont 公共构造接口不能精确指定字体集合索引，也不能完整表达 Parley 的 variation/synthesis；按字体族重新匹配无法保证 glyph ID 一致。`caret-layout` 已有栅格化器，键包含 Blob 唯一 ID、集合索引、glyph ID、字号、轴坐标、合成提示、亚像素相位和前景色；图片缓存上限 16 MiB，单字形上限 4096 px/em。Swash 输出统一为 Alpha8 或预乘 RGBA8，彩色位图转换为预乘格式，COLR 前景层采用 run 颜色。设备坐标的 y 相位转换为字体坐标时反向；结果标明位图源未应用相位，Qt 绘制必须保留对应小数放置。按可见页请求和 Qt 图集绘制尚未实现；后续需明确不支持字形/颜色来源时向界面返回可见错误，不能静默略过。
+- 2026-10-26：选择正文渲染路径为 Parley glyph ID/位置 → Swash 同字体面栅格化 → Qt scene graph 纹理图集。Qt 的 QRawFont 公共构造接口不能精确指定字体集合索引，也不能完整表达 Parley 的 variation/synthesis；按字体族重新匹配无法保证 glyph ID 一致。`caret-layout` 已有栅格化器，键包含 Blob 唯一 ID、集合索引、glyph ID、字号、轴坐标、合成提示、亚像素相位和前景色；图片缓存上限 16 MiB、8192 项，单字形上限 4096 px/em。Swash 输出统一为预乘 RGBA8；alpha mask 使用前景色着色，彩色位图转换为预乘格式，COLR 前景层采用 run 颜色。设备坐标的 y 相位转换为字体坐标时反向；结果标明位图源未应用相位，Qt 绘制必须保留对应小数放置。按可见页请求和 Qt 图集绘制尚未实现；后续需明确不支持字形/颜色来源时向界面返回可见错误，不能静默略过。
+- 2026-10-26：`DocumentLayoutSnapshot::page_glyphs()` 只访问页面片段引用的 Parley 行，按视觉顺序提取字体 Blob、集合索引、variation 坐标、synthesis、glyph ID 与页面局部 pt 坐标。长段落坐标逐行在 f64 累加，并把局部 glyph y 在 f64 中加入，避免组合附标受全局 f32 baseline 精度影响。Exactly 行距同时传出逐行裁切 y 范围，Natural 不额外裁切；非法页面、片段或字形源整页拒绝，inline box 返回明确错误。页面 glyph 的 FFI、栅格缓存接入运行时和 QSG atlas 绘制尚未完成。
 
 ## 完成摘要
 
-未完成。Rust 段落布局、页面命中/插入点/选区几何、点击更新 Rust Session 选区与独立视觉侧、Caret scene graph 绘制及稳定文档位置的 FFI/ViewModel/QML 链路已具备；Qt 正文绘制、选区呈现、键盘与 IME 编辑、环境高亮及完整窗口编辑交互仍未完成。
+未完成。Rust 段落布局、按页 glyph 提取与 Swash 栅格化、页面命中/插入点/选区几何、点击更新 Rust Session 选区与独立视觉侧、Caret scene graph 绘制及稳定文档位置的 FFI/ViewModel/QML 链路已具备；Qt 正文图集绘制、选区呈现、键盘与 IME 编辑、环境高亮及完整窗口编辑交互仍未完成。

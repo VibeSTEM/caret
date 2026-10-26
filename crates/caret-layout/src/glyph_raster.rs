@@ -11,19 +11,9 @@ use swash::{
     zeno::{Angle, Transform, Vector},
 };
 
-/// Swash 输出图像的像素格式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GlyphPixelFormat {
-    /// 每像素一个覆盖率字节，由 Qt 使用 run 颜色着色。
-    Alpha8,
-    /// 每像素按 RGBA 顺序存储且 RGB 已乘 alpha 的彩色图像。
-    Rgba8Premultiplied,
-}
-
 /// 已栅格化字形；位置是相对基线的像素偏移，像素大小由请求方决定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RasterizedGlyph {
-    pub format: GlyphPixelFormat,
     pub width: u32,
     pub height: u32,
     pub left: i32,
@@ -44,7 +34,7 @@ pub struct GlyphRasterOptions<'a> {
     pub normalized_coords: &'a [i16],
     /// Parley 为当前字体面选择的合成提示。
     pub synthesis: fontique::Synthesis,
-    /// 用于 COLR 前景层的 RGBA 颜色；普通 Alpha8 字形由 Qt 着色。
+    /// 用于 COLR 前景层和普通轮廓字形的 RGBA 前景色。
     pub foreground: [u8; 4],
 }
 
@@ -58,6 +48,7 @@ pub struct GlyphRasterizer {
 }
 
 const MAX_GLYPH_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_GLYPH_CACHE_ENTRIES: usize = 8192;
 const MAX_PIXELS_PER_EM: f32 = 4096.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -147,14 +138,10 @@ impl GlyphRasterizer {
         let image = render.render(&mut scaler, glyph_id)?;
         let source = image.source;
         let pixel_phase_applied = !matches!(source, Source::ColorBitmap(_) | Source::Bitmap(_));
-        let format = match image.content {
-            swash::scale::image::Content::Mask => GlyphPixelFormat::Alpha8,
-            swash::scale::image::Content::Color => GlyphPixelFormat::Rgba8Premultiplied,
+        let channels = match image.content {
+            swash::scale::image::Content::Mask => 1usize,
+            swash::scale::image::Content::Color => 4usize,
             swash::scale::image::Content::SubpixelMask => return None,
-        };
-        let channels = match format {
-            GlyphPixelFormat::Alpha8 => 1usize,
-            GlyphPixelFormat::Rgba8Premultiplied => 4usize,
         };
         let expected_size = usize::try_from(image.placement.width)
             .ok()?
@@ -163,12 +150,18 @@ impl GlyphRasterizer {
         if expected_size != image.data.len() {
             return None;
         }
-        let mut pixels = image.data;
-        if matches!(source, Source::ColorBitmap(_)) {
-            premultiply_rgba(&mut pixels);
-        }
+        let pixels = match image.content {
+            swash::scale::image::Content::Mask => colorize_alpha(&image.data, foreground)?,
+            swash::scale::image::Content::Color => {
+                let mut pixels = image.data;
+                if matches!(source, Source::ColorBitmap(_)) {
+                    premultiply_rgba(&mut pixels);
+                }
+                pixels
+            }
+            swash::scale::image::Content::SubpixelMask => return None,
+        };
         let image = Arc::new(RasterizedGlyph {
-            format,
             width: image.placement.width,
             height: image.placement.height,
             left: image.placement.left,
@@ -177,7 +170,9 @@ impl GlyphRasterizer {
             pixels,
         });
         if image.pixels.len() <= MAX_GLYPH_CACHE_BYTES {
-            while self.cache_bytes.saturating_add(image.pixels.len()) > MAX_GLYPH_CACHE_BYTES {
+            while self.cache_bytes.saturating_add(image.pixels.len()) > MAX_GLYPH_CACHE_BYTES
+                || self.cache.len() >= MAX_GLYPH_CACHE_ENTRIES
+            {
                 let Some(oldest) = self.insertion_order.pop_front() else {
                     break;
                 };
@@ -207,6 +202,18 @@ fn premultiply_rgba(pixels: &mut [u8]) {
     }
 }
 
+fn colorize_alpha(coverage: &[u8], foreground: [u8; 4]) -> Option<Vec<u8>> {
+    let mut pixels = Vec::with_capacity(coverage.len().checked_mul(4)?);
+    for coverage in coverage {
+        let alpha = (u16::from(*coverage) * u16::from(foreground[3]) + 127) / 255;
+        for channel in &foreground[..3] {
+            pixels.push(u8::try_from((u16::from(*channel) * alpha + 127) / 255).ok()?);
+        }
+        pixels.push(u8::try_from(alpha).ok()?);
+    }
+    Some(pixels)
+}
+
 fn synthesis_skew(degrees: f32) -> Transform {
     Transform::skew(Angle::from_degrees(degrees), Angle::ZERO)
 }
@@ -214,7 +221,7 @@ fn synthesis_skew(degrees: f32) -> Transform {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlyphPixelFormat, GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, premultiply_rgba,
+        GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, colorize_alpha, premultiply_rgba,
         synthesis_skew,
     };
     use linebender_resource_handle::Blob;
@@ -233,6 +240,13 @@ mod tests {
         let mut pixels = [200, 100, 50, 128, 255, 32, 16, 0];
         premultiply_rgba(&mut pixels);
         assert_eq!(pixels, [100, 50, 25, 128, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn alpha_mask_is_tinted_into_premultiplied_rgba() {
+        let pixels = colorize_alpha(&[255, 128, 0], [200, 100, 50, 128])
+            .unwrap_or_else(|| panic!("alpha mask should colorize"));
+        assert_eq!(pixels, [100, 50, 25, 128, 50, 25, 13, 64, 0, 0, 0, 0]);
     }
 
     #[cfg(target_os = "macos")]
@@ -335,17 +349,16 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn device_y_centroid(glyph: &RasterizedGlyph) -> f64 {
-        assert_eq!(glyph.format, GlyphPixelFormat::Alpha8);
         let width = usize::try_from(glyph.width)
             .unwrap_or_else(|error| panic!("glyph width is invalid: {error}"));
         let mut alpha_sum = 0.0;
         let mut y_sum = 0.0;
-        for (index, alpha) in glyph.pixels.iter().copied().enumerate() {
+        for (index, pixel) in glyph.pixels.as_chunks::<4>().0.iter().enumerate() {
             let y = index / width;
-            let alpha = f64::from(alpha);
-            alpha_sum += alpha;
             let y =
                 u32::try_from(y).unwrap_or_else(|error| panic!("glyph row is invalid: {error}"));
+            let alpha = f64::from(pixel[3]);
+            alpha_sum += alpha;
             y_sum += f64::from(y) * alpha;
         }
         assert!(alpha_sum > 0.0);

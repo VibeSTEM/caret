@@ -115,6 +115,10 @@ pub struct PageHit {
 }
 
 impl DocumentLayoutSnapshot {
+    pub(crate) fn paragraph_by_id(&self, id: &NodeId) -> Option<&LaidOutParagraph> {
+        self.paragraphs.get(*self.paragraph_lookup.get(id)?)
+    }
+
     /// 判断此布局结果是否仍对应当前文档与字体输入。
     ///
     /// 异步调用方应在安装布局前调用，避免已替换的会话、已编辑的文档或已刷新的字体目录发布过期几何。

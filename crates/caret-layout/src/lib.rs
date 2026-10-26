@@ -10,8 +10,9 @@ mod paragraph_style;
 mod shaping;
 
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
+pub use fontique::Synthesis as GlyphSynthesis;
 pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
-pub use glyph_raster::{GlyphPixelFormat, GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
+pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics,
@@ -26,6 +27,7 @@ pub use paragraph::{
     has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
+pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
 pub use shaping::{ShapingStyle, UnicodeBoundaries, paragraph_text};
 
 #[cfg(test)]
