@@ -3,6 +3,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import QtQuick.Layouts
 
 Rectangle {

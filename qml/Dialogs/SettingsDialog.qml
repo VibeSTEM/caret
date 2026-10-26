@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Caret.ViewModels
 
 DialogWindow {
     id: dialog
@@ -11,26 +12,18 @@ DialogWindow {
     objectName: "settingsPageDialog"
     property var pages: []
     property string activeRouteId: "preferences"
-    property bool intentionalClose: false
+    required property SettingsDialogController controller
 
     signal routeSelected(string routeId)
-    signal acceptRequested
-    signal accepted
-    signal cancelled
-
-    function completeAccept() {
-        intentionalClose = true;
-        accepted();
-        close();
-    }
-
     width: Theme.settingsDialogWidth
     height: Theme.settingsDialogHeight
     title: qsTranslate("SettingsDialog", "Settings")
-    onClosing: {
-        if (!intentionalClose)
-            cancelled();
-        intentionalClose = false;
+    escapeEnabled: !controller.busy
+    onClosing: close => {
+        if (controller.state !== SettingsDialogController.Closed) {
+            close.accepted = false;
+            controller.cancel();
+        }
     }
 
     function open() {
@@ -121,21 +114,18 @@ DialogWindow {
                     ThemedButton {
                         objectName: "settingsCancelButton"
                         text: qsTranslate("DialogAction", "Cancel")
-                        onClicked: {
-                            dialog.intentionalClose = true;
-                            dialog.cancelled();
-                            dialog.close();
-                        }
+                        enabled: !dialog.controller.busy
+                        onClicked: dialog.controller.cancel()
                     }
                     ThemedButton {
                         objectName: "settingsOkButton"
                         text: qsTranslate("DialogAction", "OK")
                         primaryAction: true
-                        onClicked: dialog.acceptRequested()
+                        enabled: !dialog.controller.busy
+                        onClicked: dialog.controller.apply()
                     }
                 }
             }
         }
     }
-
 }

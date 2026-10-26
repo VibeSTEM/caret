@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 use caret_dsl_core::{EvaluatedValue, EvaluatedVariables, evaluate_theme, evaluate_variables};
 
-#[path = "theme_schema.rs"]
 mod schema;
 
 use schema::{THEME_TOKEN_SPECS, ThemeTokenSpec};
@@ -64,7 +64,7 @@ impl std::error::Error for ThemeError {}
 /// 主题服务持有基线与已验证主题，不读写文件，也不拥有用户偏好。
 #[derive(Debug, Clone)]
 pub struct ThemeService {
-    themes: BTreeMap<String, ThemeSnapshot>,
+    themes: Arc<BTreeMap<String, ThemeSnapshot>>,
     active_theme_id: String,
 }
 
@@ -119,7 +119,7 @@ impl ThemeService {
             });
         }
         Ok(Self {
-            themes,
+            themes: Arc::new(themes),
             active_theme_id: default_theme_id.to_owned(),
         })
     }
@@ -155,7 +155,7 @@ impl ThemeService {
     /// 给桌面入口的快照。键是 QML 属性名，值带 kind，便于原样放进 `QVariant`。
     pub(crate) fn bridge_json(&self) -> Result<String, ThemeError> {
         let mut themes = serde_json::Map::new();
-        for (id, snapshot) in &self.themes {
+        for (id, snapshot) in self.themes.iter() {
             let mut tokens = serde_json::Map::new();
             for token in &snapshot.tokens {
                 let kind = match token.kind {
@@ -314,15 +314,15 @@ fn validate_value(
 /// 用仓库里的基线和 light/dark 主题构造服务。源文件就是 QML 资源，不另写默认值。
 pub fn builtin_theme_service() -> Result<ThemeService, ThemeError> {
     ThemeService::new(
-        include_str!("../../../../qml/Themes/gui-default.pa"),
+        include_str!("../../../../../qml/Themes/gui-default.pa"),
         [
             (
                 "light".to_owned(),
-                include_str!("../../../../qml/Themes/light.pa").to_owned(),
+                include_str!("../../../../../qml/Themes/light.pa").to_owned(),
             ),
             (
                 "dark".to_owned(),
-                include_str!("../../../../qml/Themes/dark.pa").to_owned(),
+                include_str!("../../../../../qml/Themes/dark.pa").to_owned(),
             ),
         ],
         DEFAULT_THEME_ID,
@@ -349,9 +349,9 @@ fn valid_color(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    const GUI: &str = include_str!("../../../../qml/Themes/gui-default.pa");
-    const LIGHT: &str = include_str!("../../../../qml/Themes/light.pa");
-    const DARK: &str = include_str!("../../../../qml/Themes/dark.pa");
+    const GUI: &str = include_str!("../../../../../qml/Themes/gui-default.pa");
+    const LIGHT: &str = include_str!("../../../../../qml/Themes/light.pa");
+    const DARK: &str = include_str!("../../../../../qml/Themes/dark.pa");
 
     fn service() -> Result<ThemeService, ThemeError> {
         ThemeService::new(

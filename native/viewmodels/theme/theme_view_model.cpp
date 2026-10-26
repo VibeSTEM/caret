@@ -6,7 +6,6 @@
 #include <QStringList>
 #include <QVariantMap>
 #include <qcontainerfwd.h>
-#include <qtmetamacros.h>
 #include <utility>
 
 namespace caret {
@@ -38,36 +37,6 @@ ThemeViewModel::ThemeViewModel(QObject* parent) : QObject(parent) {
     m_availableThemes.sort();
     m_activeTheme = source.active;
     m_tokens = source.themes.value(m_activeTheme);
-}
-
-bool ThemeViewModel::selectTheme(const QString& id) {
-    const Catalog& source = catalog();
-    if (!source.themes.contains(id)) {
-        setError(QStringLiteral("theme.unknown_id"));
-        return false;
-    }
-    if (id == m_activeTheme) {
-        setError({});
-        return true;
-    }
-    const QVariantMap next = source.themes.value(id);
-    const bool tokens_changed = next != m_tokens;
-    m_tokens = next;
-    m_activeTheme = id;
-    setError({});
-    if (tokens_changed) {
-        emit tokensChanged();
-    }
-    emit activeThemeChanged();
-    return true;
-}
-
-void ThemeViewModel::setError(QString error) {
-    if (m_error == error) {
-        return;
-    }
-    m_error = std::move(error);
-    emit errorChanged();
 }
 
 } // namespace caret

@@ -2,7 +2,7 @@
 pragma Singleton
 
 import QtQuick
-import Caret.Shell
+import Caret.ViewModels
 
 QtObject {
     // 界面色彩

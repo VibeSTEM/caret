@@ -46,7 +46,8 @@ set(_caret_qt_components
     Quick
     QuickControls2
     QuickDialogs2
-    Svg)
+    Svg
+    StateMachine)
 if(BUILD_TESTING)
   list(APPEND _caret_qt_components Test)
 endif()
@@ -67,6 +68,7 @@ if(CARET_I18N_TS_DIR)
   add_subdirectory(i18n)
 endif()
 
+add_subdirectory(adapters)
 add_subdirectory(canvas)
 add_subdirectory(viewmodels)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml" qml)

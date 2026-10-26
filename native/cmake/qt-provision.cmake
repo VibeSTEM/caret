@@ -5,7 +5,7 @@
 # 供给目录是仓库根 .toolchain/qt（或 CARET_TOOLCHAIN_ROOT/qt），各 profile 共用。
 # caret-build::ensure_qt 与 CMake include 共用本脚本。
 # 模块：qtbase、qtdeclarative、qttools（lrelease）、qtsvg、qtscxml。
-# StateMachine 只在以后的界面桥里查找，本骨架不链接它。
+# StateMachine 由设置窗口交互控制器使用。
 
 if(NOT DEFINED QT_PROVISION_DIR)
   get_filename_component(_caret_repo_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)

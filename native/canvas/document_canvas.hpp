@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QPointF>
 #include <QQuickItem>
+#include <QRectF>
 #include <QSizeF>
 #include <QTimer>
 #include <QVariantList>
@@ -103,6 +104,9 @@ class DocumentCanvas : public QQuickItem {
     [[nodiscard]] QSizeF pageSizePt(int page_index) const;
     [[nodiscard]] QRectF pageRect(int page_index) const;
     void updateGeometry();
+    void initializeGeometryNotifications();
+    void initializeCaretBlink();
+    [[nodiscard]] QRectF caretRect() const;
     void refreshCaretBlink();
     void toggleCaretVisibility();
     void keyPressEvent(QKeyEvent* event) override;

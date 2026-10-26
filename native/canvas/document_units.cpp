@@ -19,7 +19,7 @@ qint64 DocumentUnits::pointsToLogicalCentipixels(qreal points, int zoom_percent)
 }
 
 qreal DocumentUnits::percentToFactor(int value) const {
-    return static_cast<qreal>(value) / document_units::kPercentPerFactor;
+    return document_units::percent_to_factor(value);
 }
 
 int DocumentUnits::factorToPercent(qreal value) const {
@@ -35,7 +35,7 @@ int DocumentUnits::factorToPercent(qreal value) const {
 }
 
 qreal DocumentUnits::centipixelsToLogicalPixels(qint64 value) const {
-    return static_cast<qreal>(value) / document_units::kCentipixelsPerLogicalPixel;
+    return document_units::centipixels_to_logical_pixels(value);
 }
 
 } // namespace caret

@@ -5,13 +5,13 @@
 /// 交给 QGuiApplication。
 
 #include "caret_ffi.h"
-#include "document_runtime.hpp"
+#include "document_runtime_bridge.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
-#include "preferences_view_model.hpp"
+#include "settings_runtime_bridge.hpp"
 #include "theme_catalog.hpp"
-#include <QCoreApplication>
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDir>
 #include <QGuiApplication>
 #include <QObject>
@@ -21,14 +21,15 @@
 #include <QWindow>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
+#include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <cstddef>
 #include <qnamespace.h>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+Q_IMPORT_QML_PLUGIN(Caret_AdaptersPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_CanvasPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_ViewModelsPlugin)
@@ -115,7 +116,7 @@ int main(int argc, char* argv[]) try {
     if (!caret::install_document_runtime(std::move(layout_runtime))) {
         return kExitUnavailable;
     }
-    if (!caret::install_preferences_runtime(std::move(settings_runtime))) {
+    if (!caret::install_settings_runtime(std::move(settings_runtime))) {
         return kExitUnavailable;
     }
 

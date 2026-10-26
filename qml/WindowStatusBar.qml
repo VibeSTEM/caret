@@ -5,7 +5,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Caret.Canvas
-import Caret.ViewModels
 
 Rectangle {
     id: statusBar
@@ -82,9 +81,9 @@ Rectangle {
             Layout.preferredHeight: statusBar.sliderHeight
             Layout.maximumHeight: statusBar.sliderHeight
             padding: 0
-            from: DocumentUnits.percentToFactor(DocumentUnits.minimumZoomPercent)
-            to: DocumentUnits.percentToFactor(DocumentUnits.maximumZoomPercent)
-            stepSize: DocumentUnits.percentToFactor(DocumentUnits.zoomStepPercent)
+            from: DocumentUnits.percentToFactor(CanvasPolicy.minimumZoomPercent)
+            to: DocumentUnits.percentToFactor(CanvasPolicy.maximumZoomPercent)
+            stepSize: DocumentUnits.percentToFactor(CanvasPolicy.zoomStepPercent)
             value: 1
             onValueChanged: statusBar.zoomEdited(value)
 

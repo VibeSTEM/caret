@@ -104,7 +104,7 @@ function(_caret_validate_link_output source expression link output_operator outp
 endfunction()
 
 function(caret_verify_layering)
-  set(_production_targets caret_shell caret_shellplugin)
+  set(_production_targets caret_shell caret_shellplugin caret_adapters caret_adaptersplugin)
   if(TARGET caret_canvas)
     list(APPEND _production_targets caret_canvas)
   endif()
@@ -143,12 +143,12 @@ function(caret_verify_layering)
     endif()
     if(_target MATCHES "(_test|_benchmark)(_other_files)?$"
        OR _target STREQUAL "caret_performance_fixture"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling)$"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)plugin_init$"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_other_files$"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_qml[a-zA-Z0-9_]*$"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_.*_qml$"
-       OR _target MATCHES "^caret_(shell|canvas|viewmodels)_copy_(qml|res)$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)(_resources_[0-9]+|_tooling)$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)plugin_init$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)_other_files$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)_qml[a-zA-Z0-9_]*$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)_.*_qml$"
+       OR _target MATCHES "^caret_(shell|canvas|viewmodels|adapters)_copy_(qml|res)$"
        OR _target MATCHES
           "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$"
        OR _target MATCHES "^(caret_native_app_tooling|caret_benchmark_moc)$")
@@ -180,11 +180,14 @@ function(caret_verify_layering)
     set(_allowed_dependencies)
     set(_allowed_aliases)
     if(_source STREQUAL "caret_shell")
-      set(_allowed_dependencies caret_canvas caret_viewmodels)
-      set(_allowed_aliases caret::canvas caret::viewmodels)
+      set(_allowed_dependencies caret_canvas caret_viewmodels caret_adapters caret_adaptersplugin)
+      set(_allowed_aliases caret::canvas caret::viewmodels caret::adapters)
     elseif(_source STREQUAL "caret_shellplugin")
-      set(_allowed_dependencies caret_shell)
+      # Qt 为 Shell 使用的静态 QML 适配模块生成传递插件依赖。
+      set(_allowed_dependencies caret_shell caret_adaptersplugin)
       set(_allowed_aliases caret::shell)
+    elseif(_source STREQUAL "caret_adaptersplugin")
+      set(_allowed_dependencies caret_adapters)
     elseif(_source STREQUAL "caret_canvasplugin")
       set(_allowed_dependencies caret_canvas)
     elseif(_source STREQUAL "caret_viewmodelsplugin")
@@ -193,6 +196,8 @@ function(caret_verify_layering)
       set(_allowed_dependencies caret_ffi)
     elseif(_source STREQUAL "caret_native_app")
       set(_allowed_dependencies
+          caret_adapters
+          caret_adaptersplugin
           caret_shell
           caret_shellplugin
           caret_canvas
@@ -201,7 +206,7 @@ function(caret_verify_layering)
           caret_viewmodelsplugin
           caret_i18n
           caret_ffi)
-      set(_allowed_aliases caret::shell caret::canvas caret::viewmodels caret::i18n)
+      set(_allowed_aliases caret::adapters caret::shell caret::canvas caret::viewmodels caret::i18n)
     endif()
 
     set(_links)
@@ -245,7 +250,7 @@ function(caret_verify_layering)
           endif()
           if(_dependency
              MATCHES
-             "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
+             "^caret_(shell|canvas|viewmodels|adapters)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
              OR _dependency MATCHES
                 "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$")
             continue()
@@ -271,7 +276,7 @@ function(caret_verify_layering)
           if(_resolved_target IN_LIST _allowed_dependencies
              OR _resolved_target
                 MATCHES
-                "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
+                "^caret_(shell|canvas|viewmodels|adapters)(_resources_[0-9]+|_tooling|_other_files|_qml[a-zA-Z0-9_]*|_.*_qml|_copy_(qml|res)|plugin_init)$"
              OR _resolved_target MATCHES
                 "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$")
             continue()
@@ -300,11 +305,11 @@ function(caret_verify_layering)
       endif()
 
       if(_dependency MATCHES
-         "^caret_(shell|canvas|viewmodels)(_resources_[0-9]+|_tooling|plugin_init)$"
-         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_other_files$"
-         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_qml[a-zA-Z0-9_]*$"
-         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_.*_qml$"
-         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels)_copy_(qml|res)$"
+         "^caret_(shell|canvas|viewmodels|adapters)(_resources_[0-9]+|_tooling|plugin_init)$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels|adapters)_other_files$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels|adapters)_qml[a-zA-Z0-9_]*$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels|adapters)_.*_qml$"
+         OR _dependency MATCHES "^caret_(shell|canvas|viewmodels|adapters)_copy_(qml|res)$"
          OR _dependency MATCHES
             "^caret_native_app_(qml[a-zA-Z0-9_]*|.*_qml|copy_(qml|res)|other_files|tooling)$"
          OR _dependency STREQUAL "caret_native_app_tooling")

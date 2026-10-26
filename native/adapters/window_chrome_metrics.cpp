@@ -5,9 +5,6 @@
 #include <QQuickWindow>
 #include <QWindow>
 #include <qnamespace.h>
-#ifndef Q_OS_MACOS
-#include <QtCore/qnamespace.h>
-#endif
 #include <QtCore/qtmetamacros.h>
 #ifdef Q_OS_WIN
 #include <QtCore/qt_windows.h>

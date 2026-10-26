@@ -40,7 +40,7 @@
 
 ## 预计改动
 
-`native/canvas/` 键盘与 IME 事件适配、`native/app/layout_view_model.*` 命令桥接、`qml/Canvas/` 输入组件、`qml/PageSurface.qml` 选区叠加、`caret-engine` 跨段事务、`caret-app`/`caret-ffi` 编辑入口及 C++/QML 集成测试。必要时补充架构接口和快捷键文档。不得把编辑语义迁入 Qt。
+`native/canvas/document_canvas/input.cpp` 键盘与 IME 事件适配、`native/viewmodels/document/` 命令桥接和布局快照适配、`qml/Canvas/` 输入组件、`qml/PageSurface.qml` 选区叠加、`caret-engine` `editing/session/` 子模块事务、`caret-app`/`caret-ffi` 编辑入口及 C++/QML 集成测试。必要时补充架构接口和快捷键文档。不得把编辑语义迁入 Qt。
 
 ## 验收标准
 

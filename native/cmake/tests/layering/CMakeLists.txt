@@ -5,7 +5,7 @@ set(CARET_ENABLE_APP ON)
 set(CARET_FFI_STATIC_LIB "${CMAKE_BINARY_DIR}/libcaret_ffi.a")
 include("${CMAKE_CURRENT_LIST_DIR}/../../layering.cmake")
 
-foreach(_target IN ITEMS i18n shell shellplugin native_app)
+foreach(_target IN ITEMS i18n shell shellplugin adapters adaptersplugin native_app)
   add_library("caret_${_target}" INTERFACE)
 endforeach()
 
@@ -16,9 +16,14 @@ endforeach()
 
 add_library(caret::i18n ALIAS caret_i18n)
 add_library(caret::shell ALIAS caret_shell)
+add_library(caret::adapters ALIAS caret_adapters)
 target_link_libraries(caret_shellplugin INTERFACE caret::shell)
 target_link_libraries(caret_shellplugin INTERFACE "$<LINK_ONLY:caret::shell>")
-target_link_libraries(caret_native_app INTERFACE caret::shell caret_shellplugin caret::i18n
+target_link_libraries(caret_adaptersplugin INTERFACE caret_adapters)
+target_link_libraries(caret_shell INTERFACE caret::adapters)
+target_link_libraries(caret_shellplugin INTERFACE caret_adaptersplugin)
+target_link_libraries(caret_native_app INTERFACE caret::shell caret_shellplugin caret::adapters
+                                                 caret_adaptersplugin caret::i18n
                                                  "${CARET_FFI_STATIC_LIB}")
 
 if(CARET_FIXTURE_ILLEGAL)

@@ -4,7 +4,6 @@
 #include <QObject>
 #include <QtGlobal>
 #include <QtQml/qqmlregistration.h>
-#include "canvas_limits.hpp"
 
 namespace caret {
 
@@ -17,6 +16,12 @@ inline constexpr int kPercentPerFactor = 100;
 constexpr qreal logical_pixels_per_point() {
     return static_cast<qreal>(kLogicalPixelsPerInch) / kPointsPerInch;
 }
+constexpr qreal centipixels_to_logical_pixels(qint64 value) {
+    return static_cast<qreal>(value) / kCentipixelsPerLogicalPixel;
+}
+constexpr qreal percent_to_factor(int value) {
+    return static_cast<qreal>(value) / kPercentPerFactor;
+}
 } // namespace document_units
 
 /// 为 QML 和 C++ 提供相同的 pt 到整数百分之一逻辑像素换算。
@@ -24,16 +29,9 @@ class DocumentUnits final : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    Q_PROPERTY(int minimumZoomPercent READ minimumZoomPercent CONSTANT)
-    Q_PROPERTY(int maximumZoomPercent READ maximumZoomPercent CONSTANT)
-    Q_PROPERTY(int zoomStepPercent READ zoomStepPercent CONSTANT)
 
   public:
     using QObject::QObject;
-
-    [[nodiscard]] int minimumZoomPercent() const { return canvas_limits::kMinimumZoomPercent; }
-    [[nodiscard]] int maximumZoomPercent() const { return canvas_limits::kMaximumZoomPercent; }
-    [[nodiscard]] int zoomStepPercent() const { return canvas_limits::kZoomStepPercent; }
 
     /// zoom_percent 以 100 表示 100%；无效输入返回 0。
     Q_INVOKABLE qint64 pointsToLogicalCentipixels(qreal points, int zoom_percent) const;

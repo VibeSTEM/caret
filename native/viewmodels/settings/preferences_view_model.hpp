@@ -2,18 +2,11 @@
 #pragma once
 
 #include <QObject>
+#include <QSize>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
-#ifdef CARET_ENABLE_APP
-#include "caret_ffi.h"
-#endif
 
 namespace caret {
-
-#ifdef CARET_ENABLE_APP
-/// 在 QML 引擎创建前安装由 Rust SettingsService 管理的运行时。
-bool install_preferences_runtime(rust::Box<ffi::SettingsRuntime> runtime);
-#endif
 
 class PreferencesViewModel final : public QObject {
     Q_OBJECT
@@ -37,14 +30,14 @@ class PreferencesViewModel final : public QObject {
     [[nodiscard]] const QString& error() const { return m_error; }
 
     /// 校验并持久化开关候选；失败时保留最后有效快照。
-    Q_INVOKABLE bool setCaretBlinkEnabled(bool enabled);
+    bool setCaretBlinkEnabled(bool enabled);
 
   signals:
     void snapshotChanged();
     void errorChanged();
 
   private:
-    void installSnapshot(bool caret_blink_enabled, int window_width, int window_height);
+    void installSnapshot(bool caret_blink_enabled, QSize window_size);
     void setError(QString error);
 
     bool m_caret_blink_enabled = true;

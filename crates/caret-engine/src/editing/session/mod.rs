@@ -1,0 +1,233 @@
+//! 管理编辑 Session 状态并执行输入、选区和 IME 命令。
+
+mod composition;
+mod navigation;
+mod text_edit;
+
+use super::paragraph_ops::{
+    ParagraphIndex, build_paragraph_index, first_paragraph, paragraph_at_location,
+    paragraph_at_location_mut,
+};
+use super::text_map::TextMap;
+use super::{Affinity, Command, EditError, Effect, InputComposition, Pos, Selection, StoryId};
+use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
+use caret_layout::VisualAffinity;
+
+#[derive(Debug)]
+pub struct Session {
+    pub(super) document: Document,
+    pub(super) selection: Selection,
+    selection_visual_affinity: VisualAffinity,
+    session_id: NodeId,
+    document_generation: u64,
+    composition: Option<InputComposition>,
+    last_committed_composition: Option<u64>,
+    text_map_cache: Option<(NodeId, StoryId, TextMap)>,
+    paragraph_index: ParagraphIndex,
+}
+
+impl Session {
+    pub fn new(document: Document) -> Result<Self, EditError> {
+        document
+            .validate()
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        let (paragraph, story) = first_paragraph(&document.body)
+            .ok_or_else(|| EditError::InvalidDocument("document has no paragraph".to_owned()))?;
+        let pos = Pos {
+            story,
+            paragraph_id: paragraph.id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        };
+        Ok(Self {
+            paragraph_index: build_paragraph_index(&document.body),
+            document,
+            selection: Selection {
+                anchor: pos.clone(),
+                focus: pos,
+            },
+            selection_visual_affinity: VisualAffinity::Downstream,
+            session_id: NodeId::generate(),
+            document_generation: 0,
+            composition: None,
+            last_committed_composition: None,
+            text_map_cache: None,
+        })
+    }
+
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// 当前打开会话的唯一标识，用于区分被新 Session 替换的同代文档快照。
+    pub fn session_id(&self) -> &NodeId {
+        &self.session_id
+    }
+
+    /// 文档内容或页面几何每成功变更一次便递增；异步布局结果用它拒绝过时代际。
+    pub fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    /// 当前焦点的视觉侧；不属于 UTF-8 逻辑位置，也不改变文档 generation。
+    pub fn selection_visual_affinity(&self) -> VisualAffinity {
+        self.selection_visual_affinity
+    }
+
+    /// 将布局命中得到的视觉侧与同一 Rust 选区一起提交。
+    pub fn set_selection_with_visual_affinity(
+        &mut self,
+        selection: Option<Selection>,
+        visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        let previous_visual_affinity = self.selection_visual_affinity;
+        let mut effect = self.run(Command::SetSelection(selection))?;
+        effect.selection_changed |= previous_visual_affinity != visual_affinity;
+        self.selection_visual_affinity = visual_affinity;
+        Ok(effect)
+    }
+
+    pub fn composition(&self) -> Option<&InputComposition> {
+        self.composition.as_ref()
+    }
+
+    /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
+    pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        let effect = match command {
+            Command::InsertText(text) => self.insert_text(&text),
+            Command::InsertSoftBreak => self.insert_soft_break(),
+            Command::SplitParagraph => self.split_paragraph(),
+            Command::Delete(direction) => self.delete(direction),
+            Command::MoveCaret(direction) => self.move_caret(direction),
+            Command::SetSelection(selection) => self.set_selection(selection),
+            Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
+            Command::CommitComposition { id, text } => self.commit_composition(id, &text),
+            Command::CancelComposition { id } => self.cancel_composition(id),
+            Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
+        }?;
+        if effect.selection_changed {
+            self.selection_visual_affinity = match self.selection.focus.affinity {
+                Affinity::Upstream => VisualAffinity::Upstream,
+                Affinity::Downstream => VisualAffinity::Downstream,
+            };
+        }
+        if effect.document_changed {
+            if let Some(next) = self.document_generation.checked_add(1) {
+                self.document_generation = next;
+            } else {
+                self.session_id = NodeId::generate();
+                self.document_generation = 0;
+            }
+        }
+        Ok(effect)
+    }
+
+    fn set_page_geometry(&mut self, geometry: PageGeometry) -> Result<Effect, EditError> {
+        geometry
+            .validate()
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        let section =
+            self.document.page_sections.first_mut().ok_or_else(|| {
+                EditError::InvalidDocument("document has no PageSection".to_owned())
+            })?;
+        let current = section
+            .geometry()
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        if current == geometry {
+            return Ok(Effect::default());
+        }
+        section
+            .set_geometry(geometry)
+            .map_err(|error| EditError::InvalidPageGeometry(error.to_string()))?;
+        Ok(Effect {
+            document_changed: true,
+            ..Effect::default()
+        })
+    }
+
+    fn edit_range(&self) -> Result<(Pos, Pos), EditError> {
+        let selection = &self.selection;
+        if selection.anchor.paragraph_id != selection.focus.paragraph_id
+            || selection.anchor.story != selection.focus.story
+        {
+            return Err(EditError::CrossParagraphSelection);
+        }
+        Ok((selection.anchor.clone(), selection.focus.clone()))
+    }
+
+    pub(super) fn paragraph_for(&self, pos: &Pos) -> Result<&Paragraph, EditError> {
+        let location = self
+            .paragraph_index
+            .get(&pos.paragraph_id)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
+        if location.story != pos.story {
+            return Err(EditError::WrongStory);
+        }
+        paragraph_at_location(&self.document.body, location)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))
+    }
+
+    fn paragraph_for_mut(&mut self, pos: &Pos) -> Result<&mut Paragraph, EditError> {
+        let location = self
+            .paragraph_index
+            .get(&pos.paragraph_id)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
+        if location.story != pos.story {
+            return Err(EditError::WrongStory);
+        }
+        paragraph_at_location_mut(&mut self.document.body, location)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))
+    }
+
+    fn text_map_for(&mut self, pos: &Pos) -> Result<&TextMap, EditError> {
+        let cache_miss = self
+            .text_map_cache
+            .as_ref()
+            .is_none_or(|(paragraph_id, story, _)| {
+                paragraph_id != &pos.paragraph_id || story != &pos.story
+            });
+        if cache_miss {
+            let paragraph = self.paragraph_for(pos)?;
+            let map = TextMap::new(paragraph)?;
+            self.text_map_cache = Some((pos.paragraph_id.clone(), pos.story.clone(), map));
+        }
+        self.text_map_cache
+            .as_ref()
+            .map(|(_, _, map)| map)
+            .ok_or(EditError::InvalidPosition)
+    }
+
+    fn replace_paragraph(&mut self, pos: &Pos, paragraph: Paragraph) -> Result<(), EditError> {
+        let location = self
+            .paragraph_index
+            .get(&pos.paragraph_id)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
+        if location.story != pos.story {
+            return Err(EditError::WrongStory);
+        }
+        *paragraph_at_location_mut(&mut self.document.body, location)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))? = paragraph;
+        Ok(())
+    }
+}
+
+/// 克隆创建独立编辑会话，异步布局身份与文档代际从新会话重新开始。
+impl Clone for Session {
+    fn clone(&self) -> Self {
+        Self {
+            document: self.document.clone(),
+            selection: self.selection.clone(),
+            selection_visual_affinity: self.selection_visual_affinity,
+            session_id: NodeId::generate(),
+            document_generation: 0,
+            composition: self.composition.clone(),
+            last_committed_composition: self.last_committed_composition,
+            text_map_cache: self.text_map_cache.clone(),
+            paragraph_index: self.paragraph_index.clone(),
+        }
+    }
+}

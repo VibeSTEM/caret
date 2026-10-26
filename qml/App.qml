@@ -2,6 +2,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import Caret.Shell
@@ -26,7 +27,6 @@ Window {
     property url documentFileUrl: ""
     property url pendingSaveFileUrl: ""
     property url suggestedSaveFileUrl: ""
-    property bool pendingCaretBlinkEnabled: PreferencesViewModel.caretBlinkEnabled
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
 
@@ -46,10 +46,7 @@ Window {
                 window: window
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
-                onSettingsRequested: {
-                    window.pendingCaretBlinkEnabled = PreferencesViewModel.caretBlinkEnabled;
-                    settingsDialog.open();
-                }
+                onSettingsRequested: settingsController.open()
                 documentName: window.documentName
                 onSaveRequested: {
                     if (window.documentFileUrl.toString().length === 0)
@@ -81,30 +78,36 @@ Window {
         }
     }
 
+    SettingsDialogController {
+        id: settingsController
+        preferences: PreferencesViewModel
+        onOpened: settingsDialog.open()
+        onClosed: settingsDialog.close()
+    }
+
     SettingsDialog {
         id: settingsDialog
         objectName: "settingsDialog"
         ownerWindow: window
-        pages: [{
+        controller: settingsController
+        pages: [
+            {
                 routeId: "preferences",
                 title: qsTranslate("SettingsDialog", "Preferences"),
                 iconName: "settings",
                 pageComponent: preferencesSettingsPage
-            }]
-        onAcceptRequested: {
-            if (window.pendingCaretBlinkEnabled === PreferencesViewModel.caretBlinkEnabled ||
-                    PreferencesViewModel.setCaretBlinkEnabled(window.pendingCaretBlinkEnabled))
-                settingsDialog.completeAccept();
-        }
-        onCancelled: window.pendingCaretBlinkEnabled = PreferencesViewModel.caretBlinkEnabled
+            }
+        ]
     }
 
     Component {
         id: preferencesSettingsPage
 
         PreferencesSettingsPage {
-            caretBlinkEnabled: window.pendingCaretBlinkEnabled
-            onCaretBlinkEnabledEdited: enabled => window.pendingCaretBlinkEnabled = enabled
+            caretBlinkEnabled: settingsController.draftCaretBlinkEnabled
+            errorText: settingsController.error
+            enabled: !settingsController.busy
+            onCaretBlinkEnabledEdited: enabled => settingsController.editCaretBlinkEnabled(enabled)
         }
     }
 

@@ -1,5 +1,6 @@
 // 将 Qt 键盘事件转换为文档输入命令。
 #include "document_canvas.hpp"
+
 #include <QChar>
 #include <QKeyEvent>
 #include <QQuickItem>

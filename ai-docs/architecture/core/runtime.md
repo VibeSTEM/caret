@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-26。`caret-engine` 已开始实现 `Session`、UTF-8 位置和基础文本/IME 命令；历史、布局缓存、结构索引与 FFI 接入仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
+更新日期：2026-10-27。`caret-engine` 已实现 `Session`、UTF-8 位置和基础文本/IME 命令；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。历史、布局缓存和结构索引仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
 
 ## 权威与派生
 
@@ -22,9 +22,9 @@
 
 `Session` 放在 `caret-engine`。界面经 `caret-ffi` 进入，`caret-cli` 经 `caret-app` 进入，测试可以直接调用。修改都走 `Session::run`。
 
-应用设置的权威状态与持久化属于 Rust `caret-app`，QML 和 C++ 不保存平行副本。Settings 是设置界面的总入口；用户可调偏好归入 Preferences，由 Rust 偏好服务验证、提交和持久化，再通过 ViewModel 发布只读快照。QML 仅显示控件值并提交用户意图；ViewModel 转换 Qt 参数和信号，不实现或持久化设置。画布等 C++ 组件只接收绘制所需的当前值，例如光标闪烁开关。现有 `SettingsService` 尚未接入界面；按此边界接入 Preferences 时，统一由 Rust 服务持有，不在 QML、C++ 或 Theme DSL 重复存储。
+应用设置的权威状态与持久化属于 Rust `caret-app::settings`，QML 和 C++ 不保存平行的已提交副本。Settings 是设置界面的总入口；Preferences、Theme、Language 是分类服务。`SettingsService` 组合这些服务，`SettingsRuntime` 管理加载恢复、`Ready/ReadOnly/Unavailable` 状态、持久化和诊断。PreferencesViewModel 只发布偏好投影；专用 Qt runtime bridge 持有唯一 Rust 设置运行时。设置窗口的 `SettingsDialogController` 用 `QStateMachine` 管理临时草稿、确认、取消和失败阶段，提交成功与否只由 Rust 结果决定。
 
-界面主题的颜色、间距和控件外观属于 Theme，不属于 Preferences。`Theme.qml` 是 QML 只读 token 门面，内置主题数据位于 `qml/Themes/*.pa`，由 Rust `ThemeService` 校验、合并并经 ThemeViewModel 发布快照。用户选择的主题 ID 属于 Rust Preferences。若开放外部自定义主题，定义仍作为主题数据文件交给 Rust ThemeService 校验；不把可变 token 写进 `Theme.qml`。切换主题只发布一份新的 token 快照，QML 控件从本地绑定读取，不按属性、控件或帧回调 Rust。当前 ThemeService 支持内置主题快照，外部用户主题加载尚未实现。
+界面主题的颜色、间距和控件外观属于 Theme，不属于 Preferences。`Theme.qml` 是 QML 只读 token 门面，内置主题数据位于 `qml/Themes/*.pa`，由 Rust `ThemeService` 校验、合并并经 ThemeViewModel 发布快照。当前 `themeId` 是完整 `UserSettings` 的主题分类选择值，由总设置服务持有；PreferencesViewModel 不读取或修改它。若开放外部自定义主题，定义仍作为主题数据文件交给 Rust ThemeService 校验；不把可变 token 写进 `Theme.qml`。QML 不直接修改 ThemeViewModel 的投影。当前 ThemeService 支持内置主题快照，外部用户主题加载和主题切换 UI 尚未实现。
 
 ```text
 Session

@@ -2,15 +2,14 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
-import Caret.ViewModels
 
 Item {
     id: page
 
     objectName: "preferencesSettingsPage"
     property bool caretBlinkEnabled: true
+    property string errorText: ""
 
     signal caretBlinkEnabledEdited(bool enabled)
 
@@ -36,8 +35,8 @@ Item {
         ThemedLabel {
             objectName: "preferencesSettingsError"
             Layout.fillWidth: true
-            visible: PreferencesViewModel.error.length > 0
-            text: PreferencesViewModel.error
+            visible: page.errorText.length > 0
+            text: page.errorText
             textColor: Theme.colorError
             textSize: Theme.fontSmall
             wrapMode: Text.WordWrap

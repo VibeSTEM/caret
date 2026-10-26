@@ -2,72 +2,78 @@
 #include "preferences_view_model.hpp"
 
 #include <QString>
+#include <qlogging.h>
+#include <qobject.h>
+#include <qtmetamacros.h>
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
-#include <memory>
+#include "caret_ffi.h"
+#include "settings_runtime_bridge.hpp"
+#endif
+
+#ifdef CARET_ENABLE_APP
+#include <QDebug>
 #endif
 
 namespace caret {
 #ifdef CARET_ENABLE_APP
 namespace {
 
-std::unique_ptr<rust::Box<ffi::SettingsRuntime>>& installed_runtime() {
-    static std::unique_ptr<rust::Box<ffi::SettingsRuntime>> runtime;
-    return runtime;
-}
-
-QString from_rust(const rust::String& value) {
-    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+void log_persistence_warning(const ffi::SettingsSnapshot& snapshot) {
+    if (!snapshot.warning.empty()) {
+        qWarning().noquote() << QStringLiteral("settings.persistence_warning:")
+                             << QString::fromUtf8(snapshot.warning.data(),
+                                                  static_cast<qsizetype>(snapshot.warning.size()));
+    }
 }
 
 } // namespace
-
-bool install_preferences_runtime(rust::Box<ffi::SettingsRuntime> runtime) {
-    installed_runtime() = std::make_unique<rust::Box<ffi::SettingsRuntime>>(std::move(runtime));
-    return true;
-}
 #endif
 
 PreferencesViewModel::PreferencesViewModel(QObject* parent) : QObject(parent) {
 #ifdef CARET_ENABLE_APP
-    if (!installed_runtime()) {
+    if (settings_runtime() == nullptr) {
         setError(QStringLiteral("settings.runtime_unavailable"));
         return;
     }
-    const ffi::SettingsSnapshot snapshot = ffi::settings_snapshot(**installed_runtime());
+    const ffi::SettingsSnapshot snapshot = ffi::settings_snapshot(*settings_runtime());
     if (!snapshot.error.empty()) {
         setError(QString::fromUtf8(snapshot.error.data(),
                                    static_cast<qsizetype>(snapshot.error.size())));
         return;
     }
-    installSnapshot(snapshot.caret_blink_enabled, static_cast<int>(snapshot.window_width),
-                    static_cast<int>(snapshot.window_height));
+    log_persistence_warning(snapshot);
+    installSnapshot(snapshot.caret_blink_enabled,
+                    QSize(static_cast<int>(snapshot.window_width),
+                          static_cast<int>(snapshot.window_height)));
     const ffi::SettingsConstraints constraints = ffi::settings_constraints();
     m_minimum_window_width = static_cast<int>(constraints.minimum_window_width);
     m_minimum_window_height = static_cast<int>(constraints.minimum_window_height);
-    const rust::String warning = ffi::settings_load_warning(**installed_runtime());
+    const rust::String warning = ffi::settings_load_warning(*settings_runtime());
     if (!warning.empty()) {
-        setError(from_rust(warning));
+        setError(QString::fromUtf8(warning.data(), static_cast<qsizetype>(warning.size())));
     }
 #endif
 }
 
 bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
 #ifdef CARET_ENABLE_APP
-    if (!installed_runtime()) {
+    if (settings_runtime() == nullptr) {
         setError(QStringLiteral("settings.runtime_unavailable"));
         return false;
     }
     const ffi::SettingsSnapshot snapshot =
-        ffi::set_caret_blink_enabled(**installed_runtime(), enabled);
+        ffi::set_caret_blink_enabled(*settings_runtime(), enabled);
     if (!snapshot.error.empty()) {
         setError(QString::fromUtf8(snapshot.error.data(),
                                    static_cast<qsizetype>(snapshot.error.size())));
         return false;
     }
-    installSnapshot(snapshot.caret_blink_enabled, static_cast<int>(snapshot.window_width),
-                    static_cast<int>(snapshot.window_height));
+    log_persistence_warning(snapshot);
+    installSnapshot(snapshot.caret_blink_enabled,
+                    QSize(static_cast<int>(snapshot.window_width),
+                          static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
     return true;
@@ -78,11 +84,10 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
 #endif
 }
 
-void PreferencesViewModel::installSnapshot(bool caret_blink_enabled, int window_width,
-                                           int window_height) {
+void PreferencesViewModel::installSnapshot(bool caret_blink_enabled, QSize window_size) {
     m_caret_blink_enabled = caret_blink_enabled;
-    m_window_width = window_width;
-    m_window_height = window_height;
+    m_window_width = window_size.width();
+    m_window_height = window_size.height();
 }
 
 void PreferencesViewModel::setError(QString error) {

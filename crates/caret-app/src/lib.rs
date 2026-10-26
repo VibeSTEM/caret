@@ -8,3 +8,4 @@ pub mod document_view;
 pub mod path;
 pub mod runtime;
 pub mod settings;
+mod storage;
