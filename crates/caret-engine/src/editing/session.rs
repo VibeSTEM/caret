@@ -13,10 +13,12 @@ use super::{
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Session {
     pub(super) document: Document,
     pub(super) selection: Selection,
+    session_id: NodeId,
+    document_generation: u64,
     composition: Option<InputComposition>,
     last_committed_composition: Option<u64>,
     text_map_cache: Option<(NodeId, StoryId, TextMap)>,
@@ -43,6 +45,8 @@ impl Session {
                 anchor: pos.clone(),
                 focus: pos,
             },
+            session_id: NodeId::generate(),
+            document_generation: 0,
             composition: None,
             last_committed_composition: None,
             text_map_cache: None,
@@ -51,6 +55,16 @@ impl Session {
 
     pub fn document(&self) -> &Document {
         &self.document
+    }
+
+    /// 当前打开会话的唯一标识，用于区分被新 Session 替换的同代文档快照。
+    pub fn session_id(&self) -> &NodeId {
+        &self.session_id
+    }
+
+    /// 文档内容或页面几何每成功变更一次便递增；异步布局结果用它拒绝过时代际。
+    pub fn document_generation(&self) -> u64 {
+        self.document_generation
     }
 
     pub fn selection(&self) -> &Selection {
@@ -63,7 +77,7 @@ impl Session {
 
     /// Executes one command. All validation that may fail is done before replacing document data.
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
-        match command {
+        let effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::SplitParagraph => self.split_paragraph(),
@@ -74,7 +88,16 @@ impl Session {
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),
             Command::CancelComposition { id } => self.cancel_composition(id),
             Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
+        }?;
+        if effect.document_changed {
+            if let Some(next) = self.document_generation.checked_add(1) {
+                self.document_generation = next;
+            } else {
+                self.session_id = NodeId::generate();
+                self.document_generation = 0;
+            }
         }
+        Ok(effect)
     }
 
     fn set_page_geometry(&mut self, geometry: PageGeometry) -> Result<Effect, EditError> {
@@ -738,5 +761,21 @@ impl Session {
         *paragraph_at_location_mut(&mut self.document.body, location)
             .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))? = paragraph;
         Ok(())
+    }
+}
+
+/// Clone forks an independent editor session, so its async-layout identity and revision restart.
+impl Clone for Session {
+    fn clone(&self) -> Self {
+        Self {
+            document: self.document.clone(),
+            selection: self.selection.clone(),
+            session_id: NodeId::generate(),
+            document_generation: 0,
+            composition: self.composition.clone(),
+            last_committed_composition: self.last_committed_composition,
+            text_map_cache: self.text_map_cache.clone(),
+            paragraph_index: self.paragraph_index.clone(),
+        }
     }
 }

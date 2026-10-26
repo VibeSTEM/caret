@@ -1,5 +1,6 @@
 //! 组合文档、字体塑形、段落行布局与分页，生成供视图消费的只读快照。
 
+use crate::Session;
 use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
     FontCatalog, FontLineMetrics, PageLayout, PaginationItem, ParagraphLayout,
@@ -69,6 +70,7 @@ pub struct PageLayoutSnapshot {
 /// 单代文档布局结果。页面和段落位置共用同一分页输出。
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentLayoutSnapshot {
+    pub session_id: Option<NodeId>,
     pub document_generation: u64,
     pub font_generation: u64,
     pub paragraphs: Vec<LaidOutParagraph>,
@@ -84,6 +86,23 @@ pub struct DocumentLayoutService {
 impl DocumentLayoutService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 从 Session 同步读取文档与代际，避免调用方把旧/新文档与错误 generation 配对。
+    pub fn layout_session(
+        &mut self,
+        session: &Session,
+        catalog: &mut FontCatalog,
+        base_style: &ShapingStyle,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let mut snapshot = self.layout(
+            session.document(),
+            session.document_generation(),
+            catalog,
+            base_style,
+        )?;
+        snapshot.session_id = Some(session.session_id().clone());
+        Ok(snapshot)
     }
 
     /// 根据单一 PageSection 布局正文。未知块先拒绝整次布局，避免静默漏画内容。
@@ -214,6 +233,7 @@ impl DocumentLayoutService {
             })
             .collect();
         Ok(DocumentLayoutSnapshot {
+            session_id: None,
             document_generation,
             font_generation: catalog.generation(),
             paragraphs,

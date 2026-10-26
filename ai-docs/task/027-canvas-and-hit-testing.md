@@ -74,6 +74,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：完成首个 C++/QML 页面几何切片。Rust 空白文档页几何经 FFI 到 ViewModel；Canvas 和 ViewModel 使用独立 QML 模块。页面点坐标映射、hit-test、缩放锚点和 scene graph 纸张绘制已落地。完整 LayoutResult、文字/字素命中、selection/caret 几何、generation 丢弃、环境高亮、输入预览和真实窗口交互仍待 027 后续实现。
 - 2026-10-26：新增 `caret-engine::DocumentLayoutService`，组合文档级字体偏好、段落 shaping、行布局和分页，快照携带文档/字体代际、正文原文与 shaping 结果、页尺寸/边距及段落行片段。当前不透明块、环境样式/Section 编号和带 `markStyle` 的空段或尾随软换行会明确拒绝生成快照；只接受空 kind 或 `page` 显式分页。该服务尚未连接 FFI/ViewModel，命中映射、选择/光标几何、绘制和旧代际结果丢弃仍待实现。
 - 2026-10-26：初始页面快照新增 `marginsPt`；ViewModel 在完整快照安装时校验边距并提供给 Canvas。页面命中结果同时返回页面 pt 与版心相对 pt 坐标，边距未安装时不伪造版心坐标；Canvas setter 只校验自身输入，避免页面尺寸与边距分步更新时受旧值阻挡。独立复核通过；Rust/C++/QML 构建通过，尚未运行 native 测试。
+- 2026-10-26：Session 新增异步布局 token：`sessionId + documentGeneration`。成功文档/页面几何命令递增 revision；选区和 IME 预编辑不递增；Session 被替换或克隆分叉时换 ID。`layout_session` 同步捕获同一 Session 的文档与 token，避免调用方误配；revision 溢出时轮换 ID 并重置计数。独立复核确认命令语义和身份隔离。
 
 ## 完成摘要
 
