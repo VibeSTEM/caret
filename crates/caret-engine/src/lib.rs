@@ -19,4 +19,7 @@ pub use layout_view::{
     DocumentLayoutView, DocumentPositionView, LayoutLineView, PageCaretView, PageFragmentView,
     PageHitView, PageLayoutView, PageMarginsView, ParagraphLayoutView, StoryView,
 };
-pub use page_glyphs::{PageGlyph, PageGlyphError, PageGlyphRun, PageGlyphSnapshot};
+pub use page_glyphs::{
+    PageGlyph, PageGlyphError, PageGlyphImage, PageGlyphPlacement, PageGlyphRasterizer,
+    PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
+};

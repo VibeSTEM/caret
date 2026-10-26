@@ -12,6 +12,100 @@ Item {
 
     property real pageScale: 1
 
+    function scheduleGlyphRasterization() {
+        glyphRasterTimer.restart();
+    }
+
+    function rasterizeVisiblePages() {
+        if (scroller.width <= 0 || scroller.height <= 0)
+            return;
+        const pageSizes = pageCanvas.pageSizesPt;
+        const visibleTop = scroller.contentY;
+        const visibleBottom = visibleTop + scroller.height;
+        let low = 0;
+        let high = pageSizes.length;
+        while (low < high) {
+            const middle = low + Math.floor((high - low) / 2);
+            const pageTop = pageCanvas.pageOrigin(middle).y;
+            const pageBottom = pageTop + pageSizes[middle].height * pageCanvas.zoom * 96 / 72;
+            if (pageBottom <= visibleTop)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+
+        const frames = [];
+        const keys = [];
+        const requests = [];
+        const color = Theme.colorText;
+        for (let pageIndex = low; pageIndex < pageSizes.length; ++pageIndex) {
+            const origin = pageCanvas.pageOrigin(pageIndex);
+            if (origin.y >= visibleBottom)
+                break;
+            const pageBottom = origin.y + pageSizes[pageIndex].height * pageCanvas.zoom * 96 / 72;
+            if (pageBottom <= visibleTop)
+                continue;
+            const request = pageCanvas.glyphRasterRequest(pageIndex);
+            if (!request.valid) {
+                pageCanvas.glyphFrames = [];
+                lastGlyphRasterKey = "";
+                return;
+            }
+            const phaseX = request.pageOriginDeviceXPx - Math.floor(request.pageOriginDeviceXPx);
+            const phaseY = request.pageOriginDeviceYPx - Math.floor(request.pageOriginDeviceYPx);
+            keys.push([pageIndex, LayoutViewModel.documentGeneration, LayoutViewModel.fontGeneration, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":"));
+            requests.push({
+                pageIndex: pageIndex,
+                raster: request
+            });
+        }
+        const key = "visible:" + keys.join("|");
+        if (key === lastGlyphRasterKey)
+            return;
+        for (let index = 0; index < requests.length; ++index) {
+            const raster = requests[index].raster;
+            frames.push(LayoutViewModel.rasterizePageGlyphs(requests[index].pageIndex, raster.pxPerPt, raster.pageOriginDeviceXPx, raster.pageOriginDeviceYPx, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)));
+        }
+        for (let index = 0; index < frames.length; ++index) {
+            if (!frames[index].valid) {
+                pageCanvas.glyphFrames = [];
+                lastGlyphRasterKey = "";
+                return;
+            }
+        }
+        pageCanvas.glyphFrames = frames;
+        lastGlyphRasterKey = key;
+    }
+
+    property string lastGlyphRasterKey: ""
+
+    Timer {
+        id: glyphRasterTimer
+        interval: 40
+        repeat: false
+        onTriggered: surface.rasterizeVisiblePages()
+    }
+
+    Connections {
+        target: pageCanvas
+        function onGeometryChanged() {
+            surface.lastGlyphRasterKey = "";
+            surface.scheduleGlyphRasterization();
+        }
+        function onGlyphRasterMetricsChanged() {
+            surface.lastGlyphRasterKey = "";
+            surface.scheduleGlyphRasterization();
+        }
+    }
+
+    Connections {
+        target: Theme
+        function onColorTextChanged() {
+            surface.lastGlyphRasterKey = "";
+            surface.scheduleGlyphRasterization();
+        }
+    }
+
     Flickable {
         id: scroller
         objectName: "documentScroller"
@@ -20,6 +114,10 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         contentWidth: Math.max(width, pageCanvas.implicitWidth)
         contentHeight: Math.max(height, pageCanvas.implicitHeight)
+        onContentYChanged: surface.scheduleGlyphRasterization()
+        onContentXChanged: surface.scheduleGlyphRasterization()
+        onWidthChanged: surface.scheduleGlyphRasterization()
+        onHeightChanged: surface.scheduleGlyphRasterization()
 
         DocumentCanvas {
             id: pageCanvas
@@ -48,6 +146,12 @@ Item {
             }
         }
     }
+
+    onPageScaleChanged: {
+        lastGlyphRasterKey = "";
+        scheduleGlyphRasterization();
+    }
+    Component.onCompleted: scheduleGlyphRasterization()
 
     function setZoomAtViewportCenter(value) {
         const center = Qt.point(scroller.width / 2, scroller.height / 2);

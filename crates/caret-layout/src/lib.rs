@@ -12,7 +12,7 @@ mod shaping;
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
 pub use fontique::Synthesis as GlyphSynthesis;
 pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
-pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
+pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, RasterizedGlyphKey};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics,

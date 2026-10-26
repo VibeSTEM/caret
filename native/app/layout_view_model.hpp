@@ -41,6 +41,12 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap hitTestDocument(int page_index, qreal x_pt, qreal y_pt);
     /// 在 Rust 会话中将页面命中位置设为当前插入点。
     Q_INVOKABLE QVariantMap placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt);
+    /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
+    Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
+                                                qreal page_origin_device_x_px,
+                                                qreal page_origin_device_y_px, int foreground_red,
+                                                int foreground_green, int foreground_blue,
+                                                int foreground_alpha);
 
   private:
     QVariantList m_page_sizes_pt;

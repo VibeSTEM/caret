@@ -28,8 +28,11 @@ class DocumentCanvas : public QQuickItem {
                    appearanceChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
                    caretGeometryChanged)
+    Q_PROPERTY(
+        QVariantList glyphFrames READ glyphFrames WRITE setGlyphFrames NOTIFY glyphFramesChanged)
     Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
-    Q_PROPERTY(qreal caretWidthPx READ caretWidthPx WRITE setCaretWidthPx NOTIFY caretWidthPxChanged)
+    Q_PROPERTY(
+        qreal caretWidthPx READ caretWidthPx WRITE setCaretWidthPx NOTIFY caretWidthPxChanged)
     Q_PROPERTY(qreal pageGapPt READ pageGapPt WRITE setPageGapPt NOTIFY pageGapPtChanged)
     Q_PROPERTY(
         qreal pageMarginPt READ pageMarginPt WRITE setPageMarginPt NOTIFY pageMarginPtChanged)
@@ -50,6 +53,8 @@ class DocumentCanvas : public QQuickItem {
     void setPageBorderColor(const QColor& color);
     [[nodiscard]] QVariantMap caretGeometry() const;
     void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] QVariantList glyphFrames() const;
+    void setGlyphFrames(const QVariantList& frames);
     [[nodiscard]] QColor caretColor() const;
     void setCaretColor(const QColor& color);
     [[nodiscard]] qreal caretWidthPx() const;
@@ -68,6 +73,8 @@ class DocumentCanvas : public QQuickItem {
     Q_INVOKABLE QPointF contentToDocument(int page_index, const QPointF& point_px) const;
     /// 页面矩形内返回页索引及 pt 坐标；页面外返回 pageIndex = -1。
     Q_INVOKABLE QVariantMap hitTestPage(const QPointF& point_px) const;
+    /// 返回视图变换和 DPR 后的页面 raster 请求参数。
+    Q_INVOKABLE QVariantMap glyphRasterRequest(int page_index) const;
 
   signals:
     void pageSizesPtChanged();
@@ -76,6 +83,8 @@ class DocumentCanvas : public QQuickItem {
     void pageGapPtChanged();
     void pageMarginPtChanged();
     void caretGeometryChanged();
+    void glyphFramesChanged();
+    void glyphRasterMetricsChanged();
     void caretWidthPxChanged();
     void appearanceChanged();
     void geometryChanged();
@@ -86,6 +95,7 @@ class DocumentCanvas : public QQuickItem {
     [[nodiscard]] QRectF pageRect(int page_index) const;
     void updateGeometry();
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
+    void itemChange(ItemChange change, const ItemChangeData& data) override;
 
     QVariantList m_page_sizes_pt;
     QVariantMap m_page_margins_pt;
@@ -95,6 +105,9 @@ class DocumentCanvas : public QQuickItem {
     QColor m_page_color;
     QColor m_page_border_color;
     QVariantMap m_caret_geometry;
+    QVariantList m_glyph_frames;
+    quint64 m_glyph_frame_revision = 0;
+    quint64 m_glyph_geometry_revision = 0;
     QColor m_caret_color;
     qreal m_caret_width_px = 1.0;
     qreal m_widest_page_pt = 0.0;

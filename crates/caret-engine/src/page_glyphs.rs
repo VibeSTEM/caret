@@ -1,7 +1,11 @@
 //! 按分页片段提取同一 Parley 布局的字形资源和页面局部基线坐标。
 
 use caret_doc::NodeId;
-use caret_layout::{GlyphFontData, GlyphSynthesis, PositionedGlyphLayoutItem};
+use caret_layout::{
+    GlyphFontData, GlyphRasterOptions, GlyphRasterizer, GlyphSynthesis, PositionedGlyphLayoutItem,
+    RasterizedGlyph, RasterizedGlyphKey,
+};
+use std::collections::HashMap;
 
 use crate::DocumentLayoutSnapshot;
 
@@ -13,6 +17,133 @@ pub struct PageGlyphSnapshot {
     pub font_generation: u64,
     pub page_index: usize,
     pub runs: Vec<PageGlyphRun>,
+}
+
+/// 同一页的唯一栅格图片；同字形重复使用时只传输一份像素数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageGlyphImage {
+    pub width: u32,
+    pub height: u32,
+    pub left: i32,
+    pub top: i32,
+    pub pixel_phase_applied: bool,
+    pub pixels: Vec<u8>,
+}
+
+/// 页面中某个 glyph 图片的放置位置和可选行框裁切范围。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageGlyphPlacement {
+    pub image_index: usize,
+    pub x_pt: f64,
+    pub baseline_y_pt: f64,
+    pub pixel_phase: [f32; 2],
+    pub line_clip_y_pt: Option<[f64; 2]>,
+}
+
+/// 页面栅格快照；图片去重，文本顺序保留在 placements 中。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RasterizedPageGlyphs {
+    pub session_id: Option<NodeId>,
+    pub document_generation: u64,
+    pub font_generation: u64,
+    pub page_index: usize,
+    pub images: Vec<PageGlyphImage>,
+    pub placements: Vec<PageGlyphPlacement>,
+}
+
+/// 持有有界 glyph 缓存的页面栅格化入口。
+#[derive(Default)]
+pub struct PageGlyphRasterizer {
+    glyphs: GlyphRasterizer,
+}
+
+impl PageGlyphRasterizer {
+    /// 栅格化一页，px_per_pt 含 zoom 与设备像素比，页面原点用窗口设备像素表示。
+    pub fn rasterize(
+        &mut self,
+        page: &PageGlyphSnapshot,
+        px_per_pt: f64,
+        page_origin_device_px: [f64; 2],
+        default_foreground: [u8; 4],
+    ) -> Result<RasterizedPageGlyphs, PageGlyphError> {
+        if !px_per_pt.is_finite()
+            || px_per_pt <= 0.0
+            || page_origin_device_px.iter().any(|value| !value.is_finite())
+        {
+            return Err(PageGlyphError::InvalidRasterGeometry);
+        }
+        let pixels_per_pt = px_per_pt as f32;
+        if !pixels_per_pt.is_finite() || pixels_per_pt <= 0.0 {
+            return Err(PageGlyphError::InvalidRasterGeometry);
+        }
+        let mut images = Vec::new();
+        let mut placements = Vec::new();
+        let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
+        for run in &page.runs {
+            let pixels_per_em = run.font_size_pt * pixels_per_pt;
+            let foreground = run.foreground.unwrap_or(default_foreground);
+            for glyph in &run.glyphs {
+                let device_x = page_origin_device_px[0] + glyph.x_pt * px_per_pt;
+                let device_y = page_origin_device_px[1] + glyph.baseline_y_pt * px_per_pt;
+                if !device_x.is_finite() || !device_y.is_finite() {
+                    return Err(PageGlyphError::InvalidRasterGeometry);
+                }
+                let phase = [device_phase(device_x), device_phase(device_y)];
+                let options = GlyphRasterOptions {
+                    pixels_per_em,
+                    pixel_phase: phase,
+                    normalized_coords: &run.normalized_coords,
+                    synthesis: run.synthesis,
+                    foreground,
+                };
+                let key = RasterizedGlyphKey::new(&run.font, glyph.glyph_id, options)
+                    .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
+                let image_index = if let Some(index) = image_indexes.get(&key) {
+                    *index
+                } else {
+                    let (key, image) = self
+                        .glyphs
+                        .rasterize_with_key(&run.font, glyph.glyph_id, options)
+                        .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
+                    let index = images.len();
+                    images.push(page_glyph_image(&image));
+                    image_indexes.insert(key, index);
+                    index
+                };
+                placements.push(PageGlyphPlacement {
+                    image_index,
+                    x_pt: glyph.x_pt,
+                    baseline_y_pt: glyph.baseline_y_pt,
+                    pixel_phase: phase,
+                    line_clip_y_pt: run.line_clip_y_pt,
+                });
+            }
+        }
+        Ok(RasterizedPageGlyphs {
+            session_id: page.session_id.clone(),
+            document_generation: page.document_generation,
+            font_generation: page.font_generation,
+            page_index: page.page_index,
+            images,
+            placements,
+        })
+    }
+}
+
+fn device_phase(position: f64) -> f32 {
+    let phase = position.rem_euclid(1.0) as f32;
+    phase.min(f32::from_bits(1.0_f32.to_bits() - 1))
+}
+
+fn page_glyph_image(image: &RasterizedGlyph) -> PageGlyphImage {
+    PageGlyphImage {
+        width: image.width,
+        height: image.height,
+        left: image.left,
+        top: image.top,
+        pixel_phase_applied: image.pixel_phase_applied,
+        pixels: image.pixels.clone(),
+    }
 }
 
 /// 同一字体实例与绘制样式的视觉字形序列。
@@ -49,6 +180,8 @@ pub enum PageGlyphError {
     InvalidLineRange,
     InvalidLineGeometry,
     InvalidGlyphSource,
+    InvalidRasterGeometry,
+    GlyphRasterizationFailed,
     UnsupportedInlineBox,
 }
 
@@ -60,6 +193,8 @@ impl std::fmt::Display for PageGlyphError {
             Self::InvalidLineRange => "layout.glyphs.invalid_line_range",
             Self::InvalidLineGeometry => "layout.glyphs.invalid_line_geometry",
             Self::InvalidGlyphSource => "layout.glyphs.invalid_source",
+            Self::InvalidRasterGeometry => "layout.glyphs.invalid_raster_geometry",
+            Self::GlyphRasterizationFailed => "layout.glyphs.rasterization_failed",
             Self::UnsupportedInlineBox => "layout.glyphs.unsupported_inline_box",
         })
     }
@@ -211,7 +346,7 @@ mod tests {
 
     use crate::{DocumentLayoutService, DocumentLayoutSnapshot};
 
-    use super::PageGlyphError;
+    use super::{PageGlyphError, PageGlyphRasterizer};
 
     fn text_run(text: &str, language: Option<&str>) -> InlineNode {
         InlineNode::Run(Run {
@@ -264,6 +399,100 @@ mod tests {
             .unwrap_or_else(|error| panic!("natural line glyphs failed: {error}"));
         assert!(!page.runs.is_empty());
         assert!(page.runs.iter().all(|run| run.line_clip_y_pt.is_none()));
+    }
+
+    #[test]
+    fn rasterized_page_deduplicates_images_and_preserves_device_phase() {
+        let snapshot = layout(&document_with_text("A"));
+        let mut page = snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("glyph extraction failed: {error}"));
+        let repeated = page.runs[0].glyphs[0];
+        page.runs[0].glyphs.push(repeated);
+        let page_origin = [0.25, 0.75];
+        let px_per_pt = 1.25;
+        let mut rasterizer = PageGlyphRasterizer::default();
+        let rasterized = rasterizer
+            .rasterize(&page, px_per_pt, page_origin, [32, 32, 32, 255])
+            .unwrap_or_else(|error| panic!("page glyph rasterization failed: {error}"));
+
+        assert_eq!(rasterized.images.len(), 1);
+        assert_eq!(rasterized.placements.len(), 2);
+        assert_eq!(rasterized.placements[0].image_index, 0);
+        assert_eq!(rasterized.placements[1].image_index, 0);
+        assert_eq!(
+            rasterized.placements[0].pixel_phase,
+            rasterized.placements[1].pixel_phase
+        );
+        assert_eq!(
+            rasterized.placements[0].pixel_phase[0],
+            (page_origin[0] + repeated.x_pt * px_per_pt).rem_euclid(1.0) as f32
+        );
+        assert!(rasterized.images[0].pixels.len() > 4);
+        assert!(rasterized.images[0].pixels.as_chunks::<4>().1.is_empty());
+        assert_eq!(rasterized.document_generation, page.document_generation);
+        assert_eq!(rasterized.font_generation, page.font_generation);
+        assert_eq!(rasterized.page_index, page.page_index);
+
+        assert_eq!(
+            rasterizer.rasterize(&page, f64::NAN, page_origin, [0, 0, 0, 255]),
+            Err(PageGlyphError::InvalidRasterGeometry)
+        );
+    }
+
+    #[test]
+    fn near_integer_device_origins_keep_phases_inside_the_valid_interval() {
+        let snapshot = layout(&document_with_text("A"));
+        let page = snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("glyph extraction failed: {error}"));
+        let mut rasterizer = PageGlyphRasterizer::default();
+        for origin_x in [-1.0e-9, 1.0e-9, -1.000_000_001, 1.000_000_001] {
+            let rasterized = rasterizer
+                .rasterize(&page, 1.0, [origin_x, 0.0], [32, 32, 32, 255])
+                .unwrap_or_else(|error| panic!("near integer phase failed: {error}"));
+            assert!(!rasterized.placements.is_empty());
+            assert!(rasterized.placements.iter().all(|placement| {
+                placement
+                    .pixel_phase
+                    .iter()
+                    .all(|phase| (0.0..1.0).contains(phase))
+            }));
+        }
+    }
+
+    #[test]
+    fn page_deduplication_survives_global_raster_cache_eviction() {
+        let snapshot = layout(&document_with_text("A"));
+        let mut page = snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("glyph extraction failed: {error}"));
+        let first = page.runs[0].glyphs[0];
+        let mut glyphs = Vec::with_capacity(8194);
+        for phase_index in 0..8193 {
+            let mut glyph = first;
+            glyph.x_pt = f64::from(phase_index) / 8193.0;
+            glyphs.push(glyph);
+        }
+        glyphs.push(first);
+        page.runs[0].glyphs = glyphs;
+        let mut rasterizer = PageGlyphRasterizer::default();
+        let rasterized = rasterizer
+            .rasterize(&page, 1.0, [0.0, 0.0], [32, 32, 32, 255])
+            .unwrap_or_else(|error| panic!("page glyph rasterization failed: {error}"));
+
+        assert_eq!(rasterized.placements.len(), 8194);
+        assert_eq!(rasterized.images.len(), 8193);
+        assert_eq!(
+            rasterized
+                .placements
+                .first()
+                .map(|placement| placement.image_index),
+            rasterized
+                .placements
+                .last()
+                .map(|placement| placement.image_index)
+        );
     }
 
     #[test]

@@ -64,6 +64,37 @@ struct GlyphRasterKey {
     skew_degrees: Option<u32>,
 }
 
+/// 字形栅格身份；调用方可在一页范围内按此键去重，不依赖缓存驻留状态。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RasterizedGlyphKey(GlyphRasterKey);
+
+impl RasterizedGlyphKey {
+    /// 为准确字体实例和渲染参数构造稳定栅格键；参数非法时返回 `None`。
+    pub fn new(font: &FontData, glyph_id: u32, options: GlyphRasterOptions<'_>) -> Option<Self> {
+        if !options.pixels_per_em.is_finite()
+            || options.pixels_per_em <= 0.0
+            || options.pixels_per_em > MAX_PIXELS_PER_EM
+            || options
+                .pixel_phase
+                .iter()
+                .any(|phase| !phase.is_finite() || !(0.0..1.0).contains(phase))
+        {
+            return None;
+        }
+        Some(Self(GlyphRasterKey {
+            font_resource_id: font.data.id(),
+            font_index: font.index,
+            glyph_id: u16::try_from(glyph_id).ok()?,
+            pixels_per_em: options.pixels_per_em.to_bits(),
+            pixel_phase: options.pixel_phase.map(f32::to_bits),
+            normalized_coords: options.normalized_coords.to_vec(),
+            foreground: options.foreground,
+            embolden: options.synthesis.embolden(),
+            skew_degrees: options.synthesis.skew().map(f32::to_bits),
+        }))
+    }
+}
+
 struct CachedGlyph {
     image: Arc<RasterizedGlyph>,
 }
@@ -79,6 +110,18 @@ impl GlyphRasterizer {
         glyph_id: u32,
         options: GlyphRasterOptions<'_>,
     ) -> Option<Arc<RasterizedGlyph>> {
+        self.rasterize_with_key(font, glyph_id, options)
+            .map(|(_, image)| image)
+    }
+
+    /// 返回与实际栅格缓存相同的稳定键和图片，供页面快照跨缓存淘汰去重。
+    pub fn rasterize_with_key(
+        &mut self,
+        font: &FontData,
+        glyph_id: u32,
+        options: GlyphRasterOptions<'_>,
+    ) -> Option<(RasterizedGlyphKey, Arc<RasterizedGlyph>)> {
+        let key = RasterizedGlyphKey::new(font, glyph_id, options)?;
         let GlyphRasterOptions {
             pixels_per_em,
             pixel_phase,
@@ -86,30 +129,10 @@ impl GlyphRasterizer {
             synthesis,
             foreground,
         } = options;
-        if !pixels_per_em.is_finite()
-            || pixels_per_em <= 0.0
-            || pixels_per_em > MAX_PIXELS_PER_EM
-            || pixel_phase
-                .iter()
-                .any(|phase| !phase.is_finite() || !(0.0..1.0).contains(phase))
-        {
-            return None;
-        }
         let glyph_id = u16::try_from(glyph_id).ok()?;
         let bytes = font.data.as_ref();
-        let key = GlyphRasterKey {
-            font_resource_id: font.data.id(),
-            font_index: font.index,
-            glyph_id,
-            pixels_per_em: pixels_per_em.to_bits(),
-            pixel_phase: pixel_phase.map(f32::to_bits),
-            normalized_coords: normalized_coords.to_vec(),
-            foreground,
-            embolden: synthesis.embolden(),
-            skew_degrees: synthesis.skew().map(f32::to_bits),
-        };
-        if let Some(cached) = self.cache.get(&key) {
-            return Some(Arc::clone(&cached.image));
+        if let Some(cached) = self.cache.get(&key.0) {
+            return Some((key, Arc::clone(&cached.image)));
         }
         let index = usize::try_from(font.index).ok()?;
         let font_ref = FontRef::from_index(bytes, index)?;
@@ -181,15 +204,15 @@ impl GlyphRasterizer {
                 }
             }
             self.cache_bytes = self.cache_bytes.saturating_add(image.pixels.len());
-            self.insertion_order.push_back(key.clone());
+            self.insertion_order.push_back(key.0.clone());
             self.cache.insert(
-                key,
+                key.0.clone(),
                 CachedGlyph {
                     image: Arc::clone(&image),
                 },
             );
         }
-        Some(image)
+        Some((key, image))
     }
 }
 

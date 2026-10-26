@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；页面点击可在 Rust 会话中设置命中位置，并返回稳定文档位置与页面局部插入点几何。插入点已通过主题 token 在 Qt scene graph 呈现；Rust 已能提取页面 glyph 数据并按精确字体面栅格化，正文的 Qt 图集绘制、选区绘制和真实窗口编辑交互仍未实现，因此 027 继续进行中。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，Qt scene graph 管理纹理图集并绘制，避免 Qt 重新塑形或重新匹配字体。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面 glyph 数据经 CXX 二进制 DTO 到 Qt，Canvas 使用 Qt 管理的纹理图集绘制；行框与页面裁切及设备像素相位已接通，当前视口内所有页面按需请求。插入点已通过主题 token 在 Qt scene graph 呈现；选区绘制、键盘与 IME 编辑、真实文档文字的端到端窗口验收仍未实现，因此 027 继续进行中。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，避免 Qt 重新塑形或重新匹配字体。
 
 ## 必读
 
@@ -83,6 +83,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 | 2026-10-26 | `cargo test --offline --locked -p caret-layout`、`cargo clippy --offline --locked -p caret-layout --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 精确字体面栅格化、TTC face 缓存隔离、合成斜体、彩色 alpha、位图亚像素放置和缓存复用符合预期 | 通过；caret-layout 67 项。macOS TTC face 0/1 输出与独立 rasterizer 一致；Apple Color Emoji 位图相位由调用方保留，Apple Symbols 轮廓字形设备 y 质心按 +0.25 px 移动。Qt 图集绘制尚未接入 |
 | 2026-10-26 | 独立评审 Swash 字体面、alpha 混合、合成样式、缓存键及设备像素相位 | 不同 TTC face 不串缓存；轮廓与位图在 Qt 合成时保留正确颜色和设备坐标 | 无阻塞；评审期间发现并修复预乘 alpha、synthetic italic 轴向、TTC face 缓存键和设备 y 相位问题；独立重跑 5 项栅格化定向测试通过。实际 QSG atlas 合成验收仍待后续 |
 | 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine`、`cargo fmt --all -- --check`、`cargo clippy --offline --locked -p caret-layout -p caret-engine --all-targets -- -D warnings`、`git diff --check` | 页面 glyph 快照保留准确字体面、glyph ID、视觉顺序、variation/synthesis、页局部坐标和 Exactly 行框裁切；超长段落组合附标不丢失局部偏移 | 通过；caret-layout 68 项、caret-engine 49 项。独立复核无阻塞；Qt atlas 绘制和真实窗口像素验收仍待后续 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine -p caret-app -p caret-ffi`、workspace 定向 Clippy/fmt、`cmake --build target/native/debug --parallel 4`、`ctest --test-dir target/native/debug --output-on-failure` | CXX 二进制像素 DTO、当前页 atlas 绘制、设备像素放置和 Exactly 行框裁切在 Qt 窗口中工作 | 通过；Rust 相关 crate 全部测试通过，native CTest 4/4；QQuickWindow 像素测试确认行框外像素被裁切。该窗口测试用合成图像验证 QSG 合成；真实字体从 Parley 到窗口的端到端像素比对仍待后续 |
 
 ## 风险与回退
 
@@ -104,7 +105,9 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：`DocumentCanvas` 接收点击结果里的 caret DTO，使用 QSG 矩形节点绘制页面局部插入点；`color-caret` 与 `caret-width-px` 由 Rust theme schema 校验后经 QML 传入。Caret 绘制按纸张范围裁切，超高行仍可显示页内部分；pageIndex 严格校验，非法更新不会替换当前几何。QQuickWindow 像素测试覆盖缩放坐标、底边裁切和非法 pageIndex。Blink/focus 状态、键盘光标移动及编辑后几何刷新尚未接入。
 - 2026-10-26：选择正文渲染路径为 Parley glyph ID/位置 → Swash 同字体面栅格化 → Qt scene graph 纹理图集。Qt 的 QRawFont 公共构造接口不能精确指定字体集合索引，也不能完整表达 Parley 的 variation/synthesis；按字体族重新匹配无法保证 glyph ID 一致。`caret-layout` 已有栅格化器，键包含 Blob 唯一 ID、集合索引、glyph ID、字号、轴坐标、合成提示、亚像素相位和前景色；图片缓存上限 16 MiB、8192 项，单字形上限 4096 px/em。Swash 输出统一为预乘 RGBA8；alpha mask 使用前景色着色，彩色位图转换为预乘格式，COLR 前景层采用 run 颜色。设备坐标的 y 相位转换为字体坐标时反向；结果标明位图源未应用相位，Qt 绘制必须保留对应小数放置。按可见页请求和 Qt 图集绘制尚未实现；后续需明确不支持字形/颜色来源时向界面返回可见错误，不能静默略过。
 - 2026-10-26：`DocumentLayoutSnapshot::page_glyphs()` 只访问页面片段引用的 Parley 行，按视觉顺序提取字体 Blob、集合索引、variation 坐标、synthesis、glyph ID 与页面局部 pt 坐标。长段落坐标逐行在 f64 累加，并把局部 glyph y 在 f64 中加入，避免组合附标受全局 f32 baseline 精度影响。Exactly 行距同时传出逐行裁切 y 范围，Natural 不额外裁切；非法页面、片段或字形源整页拒绝，inline box 返回明确错误。页面 glyph 的 FFI、栅格缓存接入运行时和 QSG atlas 绘制尚未完成。
+- 2026-10-26：应用运行时持有有界 `PageGlyphRasterizer`，只对请求页生成 RGBA 字节与 placement；页内先按 Swash 使用的完整稳定 raster key 去重，确保全局缓存淘汰不破坏索引，也不额外 pin 整页原图。CXX 传递 `Vec<u8>` 和 placement DTO，不将像素编码到 JSON；ViewModel 校验像素长度、索引、相位和行框范围后转换为 QByteArray。Canvas 只创建一次当前帧纹理，允许 Qt 将小 glyph 放入 atlas，并在 scene graph 线程构造图像节点；字形矩形按页面与行框裁切后同步缩小 atlas source rect。QML 以 40ms debounce 请求 viewport 中心页，缩放、滚动、窗口移动和 DPR 变化后按新的设备像素相位刷新。Qt 窗口像素测试覆盖 atlas-backed image node 与 Exactly 行框裁切；真实 Parley 字体端到端像素对照、滚动大页耗时和异步栅格化仍待后续。
+- 2026-10-26：渲染复核修正 `QSGImageNode::setSourceRect` 坐标：调用方传纹理像素坐标，由 Qt 负责 atlas 子矩形映射，避免重复归一化。双色合成像素测试验证裁切后仍采样到正确颜色。QML 用页 y 范围二分查找可见页，再只迭代视口相交页，避免低缩放多页视口缺字或遍历整份文档；QSG 按页保留纹理和节点，只有帧实际变化的页面重建纹理，居中平移只更新 glyph 节点几何。像素测试覆盖两页同时绘制、只更新第二页、第一页面纹理视觉保持、宽度居中与缩放旧帧临时适配。颜色、DPR、缩放、窗口设备相位进入刷新路径。当前 QML 仍请求全部可见页并在 UI 线程同步栅格化；更细的行/字形脏区需要 Rust 布局层提供受影响页范围，避免分页重排造成漏绘。QML raster 调用经 40ms debounce；真实 Parley 字体到窗口的端到端比对与大页性能采样待后续。
 
 ## 完成摘要
 
-未完成。Rust 段落布局、按页 glyph 提取与 Swash 栅格化、页面命中/插入点/选区几何、点击更新 Rust Session 选区与独立视觉侧、Caret scene graph 绘制及稳定文档位置的 FFI/ViewModel/QML 链路已具备；Qt 正文图集绘制、选区呈现、键盘与 IME 编辑、环境高亮及完整窗口编辑交互仍未完成。
+未完成。Rust 段落布局、按页 glyph 提取与 Swash 栅格化、CXX 二进制字形帧、可见多页的 Qt atlas 正文绘制、页面命中/插入点/选区几何、点击更新 Rust Session 选区与独立视觉侧，以及稳定文档位置的 FFI/ViewModel/QML 链路已具备；选区呈现、键盘与 IME 编辑、环境高亮及真实文档文字的完整窗口编辑交互仍未完成。

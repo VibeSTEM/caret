@@ -1,13 +1,17 @@
 //! 为界面提供由 Rust 文档会话生成的只读布局快照。
 
 use caret_doc::Document;
-use caret_engine::{DocumentLayoutRuntime, DocumentLayoutSnapshot, Selection, Session};
+use caret_engine::{
+    DocumentLayoutRuntime, DocumentLayoutSnapshot, PageGlyphRasterizer, RasterizedPageGlyphs,
+    Selection, Session,
+};
 use std::convert::TryFrom;
 
 /// 当前文档会话与可复用的字体/布局运行时。
 pub struct DocumentViewRuntime {
     session: Session,
     layout: DocumentLayoutRuntime,
+    glyph_rasterizer: PageGlyphRasterizer,
     last_snapshot: Option<DocumentLayoutSnapshot>,
 }
 
@@ -23,6 +27,7 @@ impl DocumentViewRuntime {
         Ok(Self {
             session,
             layout,
+            glyph_rasterizer: PageGlyphRasterizer::default(),
             last_snapshot: None,
         })
     }
@@ -32,6 +37,23 @@ impl DocumentViewRuntime {
         let snapshot = self.current_snapshot()?;
         serde_json::to_string(&caret_engine::DocumentLayoutView::from(snapshot))
             .map_err(|error| format!("layout.serialize: {error}"))
+    }
+
+    /// 栅格化指定页；调用方只请求当前可见页，并提供页面原点的设备像素坐标。
+    pub fn rasterize_page_glyphs(
+        &mut self,
+        page_index: usize,
+        px_per_pt: f64,
+        page_origin_device_px: [f64; 2],
+        default_foreground: [u8; 4],
+    ) -> Result<RasterizedPageGlyphs, String> {
+        let page = self
+            .current_snapshot()?
+            .page_glyphs(page_index)
+            .map_err(|error| error.to_string())?;
+        self.glyph_rasterizer
+            .rasterize(&page, px_per_pt, page_origin_device_px, default_foreground)
+            .map_err(|error| error.to_string())
     }
 
     /// 在当前已发布或惰性重建的快照中命中，并返回稳定的 Rust 文档位置。
@@ -148,6 +170,34 @@ mod tests {
                 .unwrap_or_else(|error| panic!("invalid page hit test failed: {error}")),
             "null"
         );
+    }
+
+    #[test]
+    fn visible_page_rasterization_returns_binary_glyph_images() {
+        let mut document = Document::blank();
+        let Block::Paragraph(paragraph) = &mut document.body[0] else {
+            panic!("blank document should contain a paragraph");
+        };
+        paragraph.inlines = vec![InlineNode::Run(Run {
+            text: "A".to_owned(),
+            language: Some("en".to_owned()),
+            props: Default::default(),
+            extra: Default::default(),
+        })];
+        let mut runtime = DocumentViewRuntime::new(document)
+            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+
+        let page = runtime
+            .rasterize_page_glyphs(0, 1.0, [0.25, 0.75], [32, 32, 32, 255])
+            .unwrap_or_else(|error| panic!("page rasterization failed: {error}"));
+        assert_eq!(page.page_index, 0);
+        assert_eq!(page.document_generation, 0);
+        assert_eq!(page.font_generation, 1);
+        assert_eq!(page.images.len(), 1);
+        assert_eq!(page.placements.len(), 1);
+        assert_eq!(page.placements[0].image_index, 0);
+        assert!(page.images[0].pixels.len() > 4);
+        assert!(page.images[0].pixels.as_chunks::<4>().1.is_empty());
     }
 
     #[test]

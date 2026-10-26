@@ -354,25 +354,72 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(bound_canvas->caretWidthPx(), 1.0);
 
     QQmlComponent render_component(&engine);
-    render_component.setData(QByteArrayLiteral("import QtQuick\n"
-                                               "import Caret.Canvas\n"
-                                               "DocumentCanvas {\n"
-                                               "    width: 200; height: 120\n"
-                                               "    pageColor: \"#ffffff\"\n"
-                                               "    pageBorderColor: \"#c8c8c8\"\n"
-                                               "    caretColor: \"#ff0000\"\n"
-                                               "    caretWidthPx: 2\n"
-                                               "    pageSizesPt: [Qt.size(60, 60)]\n"
-                                               "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
-                                               "    pageMarginPt: 12; pageGapPt: 0\n"
-                                               "}\n"),
-                             QUrl());
+    render_component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Canvas\n"
+                          "DocumentCanvas {\n"
+                          "    width: 200; height: 200\n"
+                          "    pageColor: \"#ffffff\"\n"
+                          "    pageBorderColor: \"#c8c8c8\"\n"
+                          "    caretColor: \"#ff0000\"\n"
+                          "    caretWidthPx: 2\n"
+                          "    pageSizesPt: [Qt.size(60, 60), Qt.size(60, 60)]\n"
+                          "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
+                          "    pageMarginPt: 12; pageGapPt: 0\n"
+                          "}\n"),
+        QUrl());
     QVERIFY2(render_component.isReady(), qPrintable(render_component.errorString()));
     auto* rendered_canvas = qobject_cast<QQuickItem*>(render_component.create());
     QVERIFY(rendered_canvas != nullptr);
+    QByteArray glyph_pixels(8 * 8 * 4, '\0');
+    for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
+        const qsizetype x = pixel % 8;
+        glyph_pixels[pixel * 4 + (x < 4 ? 0 : 1)] = static_cast<char>(255);
+        glyph_pixels[pixel * 4 + 3] = static_cast<char>(255);
+    }
+    const QVariantMap glyph_frame{
+        {QStringLiteral("valid"), true},
+        {QStringLiteral("rasterPxPerPt"), 96.0 / 72.0},
+        {QStringLiteral("pageIndex"), 0},
+        {QStringLiteral("images"),
+         QVariantList{QVariantMap{{QStringLiteral("width"), 8},
+                                  {QStringLiteral("height"), 8},
+                                  {QStringLiteral("left"), 0},
+                                  {QStringLiteral("top"), 8},
+                                  {QStringLiteral("pixelPhaseApplied"), false},
+                                  {QStringLiteral("pixels"), glyph_pixels}},
+                      QVariantMap{{QStringLiteral("width"), 0},
+                                  {QStringLiteral("height"), 1},
+                                  {QStringLiteral("left"), 0},
+                                  {QStringLiteral("top"), 0},
+                                  {QStringLiteral("pixelPhaseApplied"), false},
+                                  {QStringLiteral("pixels"), QByteArray{}}}}},
+        {QStringLiteral("placements"),
+         QVariantList{QVariantMap{{QStringLiteral("imageIndex"), 0},
+                                  {QStringLiteral("xPt"), 20.0},
+                                  {QStringLiteral("baselineYPt"), 32.0},
+                                  {QStringLiteral("pixelPhaseX"), 0.0},
+                                  {QStringLiteral("pixelPhaseY"), 0.0},
+                                  {QStringLiteral("pixelPhaseApplied"), false},
+                                  {QStringLiteral("clipEnabled"), true},
+                                  {QStringLiteral("clipY0Pt"), 28.0},
+                                  {QStringLiteral("clipY1Pt"), 31.0}},
+                      QVariantMap{{QStringLiteral("imageIndex"), 1},
+                                  {QStringLiteral("xPt"), 30.0},
+                                  {QStringLiteral("baselineYPt"), 32.0},
+                                  {QStringLiteral("pixelPhaseX"), 0.0},
+                                  {QStringLiteral("pixelPhaseY"), 0.0},
+                                  {QStringLiteral("pixelPhaseApplied"), false},
+                                  {QStringLiteral("clipEnabled"), false}}}},
+    };
+    QVariantMap second_glyph_frame = glyph_frame;
+    second_glyph_frame.insert(QStringLiteral("pageIndex"), 1);
+    QVERIFY(
+        rendered_canvas->setProperty("glyphFrames", QVariantList{glyph_frame, second_glyph_frame}));
     QQuickWindow render_window;
     render_window.setColor(Qt::green);
-    render_window.resize(200, 120);
+    render_window.resize(200, 200);
+    rendered_canvas->setParent(&render_window);
     rendered_canvas->setParentItem(render_window.contentItem());
     render_window.show();
     QTRY_VERIFY_WITH_TIMEOUT(render_window.isExposed(), 3000);
@@ -385,11 +432,88 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     };
     QCOMPARE(pixel_at_logical_point(60.5, 50.0), QColor(QStringLiteral("#c8c8c8")));
     QCOMPARE(pixel_at_logical_point(90.0, 50.0), QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(88.5, 55.0), QColor(Qt::red));
+    QCOMPARE(pixel_at_logical_point(92.5, 55.0), QColor(Qt::green));
+    QCOMPARE(pixel_at_logical_point(92.0, 51.0), QColor(Qt::white));
     QCOMPARE(pixel_at_logical_point(101.0, 50.0), QColor(QStringLiteral("#ff0000")));
     QCOMPARE(pixel_at_logical_point(101.0, 95.5), QColor(QStringLiteral("#ff0000")));
-    QCOMPARE(pixel_at_logical_point(101.0, 96.5), QColor(Qt::green));
-    delete rendered_canvas;
+    QCOMPARE(pixel_at_logical_point(101.0, 180.0), QColor(Qt::green));
+    QCOMPARE(pixel_at_logical_point(88.5, 134.5), QColor(Qt::red));
 
+    QByteArray changed_glyph_pixels = glyph_pixels;
+    for (qsizetype pixel = 0; pixel < 8 * 8; ++pixel) {
+        const qsizetype x = pixel % 8;
+        if (x < 4) {
+            changed_glyph_pixels[pixel * 4 + 0] = '\0';
+            changed_glyph_pixels[pixel * 4 + 2] = static_cast<char>(255);
+        }
+    }
+    QVariantMap changed_second_image =
+        second_glyph_frame.value(QStringLiteral("images")).toList().front().toMap();
+    changed_second_image.insert(QStringLiteral("pixels"), changed_glyph_pixels);
+    QVariantMap changed_second_frame = second_glyph_frame;
+    const QVariantList changed_images{
+        changed_second_image,
+        second_glyph_frame.value(QStringLiteral("images")).toList().at(1),
+    };
+    changed_second_frame.insert(QStringLiteral("images"), changed_images);
+    const QVariantList partially_changed_frames{glyph_frame, changed_second_frame};
+    QVERIFY(rendered_canvas->setProperty("glyphFrames", partially_changed_frames));
+    QCOMPARE(rendered_canvas->property("glyphFrames").toList(), partially_changed_frames);
+    QVariantMap fractional_width_image = changed_second_image;
+    fractional_width_image.insert(QStringLiteral("width"), 8.5);
+    QVariantMap malformed_second_frame = changed_second_frame;
+    QVariantList malformed_images = changed_images;
+    malformed_images[0] = fractional_width_image;
+    malformed_second_frame.insert(QStringLiteral("images"), malformed_images);
+    QVERIFY(rendered_canvas->setProperty("glyphFrames",
+                                         QVariantList{glyph_frame, malformed_second_frame}));
+    QCOMPARE(rendered_canvas->property("glyphFrames").toList(), partially_changed_frames);
+    QImage partial_update_frame;
+    const auto partial_update_pixel = [&partial_update_frame, &render_window](qreal x, qreal y) {
+        const qreal scale_x =
+            static_cast<qreal>(partial_update_frame.width()) / render_window.width();
+        const qreal scale_y =
+            static_cast<qreal>(partial_update_frame.height()) / render_window.height();
+        return partial_update_frame.pixelColor(qFloor(x * scale_x), qFloor(y * scale_y));
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(([&]() {
+                                 partial_update_frame = render_window.grabWindow();
+                                 return !partial_update_frame.isNull() &&
+                                        partial_update_pixel(88.5, 134.5) == QColor(Qt::blue);
+                             }()),
+                             3000);
+    QCOMPARE(partial_update_pixel(88.5, 55.0), QColor(Qt::red));
+    QCOMPARE(partial_update_pixel(88.5, 134.5), QColor(Qt::blue));
+
+    rendered_canvas->setWidth(240);
+    QTRY_COMPARE_WITH_TIMEOUT(rendered_canvas->width(), 240.0, 3000);
+    const QImage recentered_frame = render_window.grabWindow();
+    QVERIFY(!recentered_frame.isNull());
+    const auto recentered_pixel = [&recentered_frame, &render_window](qreal x, qreal y) {
+        const qreal scale_x = static_cast<qreal>(recentered_frame.width()) / render_window.width();
+        const qreal scale_y =
+            static_cast<qreal>(recentered_frame.height()) / render_window.height();
+        return recentered_frame.pixelColor(qFloor(x * scale_x), qFloor(y * scale_y));
+    };
+    QCOMPARE(recentered_pixel(88.5, 55.0), QColor(Qt::white));
+    QCOMPARE(recentered_pixel(108.5, 55.0), QColor(Qt::red));
+    QCOMPARE(recentered_pixel(88.5, 134.5), QColor(Qt::white));
+    QCOMPARE(recentered_pixel(108.5, 134.5), QColor(Qt::blue));
+
+    rendered_canvas->setWidth(300);
+    rendered_canvas->setProperty("zoom", 2.0);
+    render_window.resize(300, 200);
+    QTRY_COMPARE_WITH_TIMEOUT(rendered_canvas->width(), 300.0, 3000);
+    const QImage zoomed_frame = render_window.grabWindow();
+    QVERIFY(!zoomed_frame.isNull());
+    const auto zoomed_pixel = [&zoomed_frame, &render_window](qreal x, qreal y) {
+        const qreal scale_x = static_cast<qreal>(zoomed_frame.width()) / render_window.width();
+        const qreal scale_y = static_cast<qreal>(zoomed_frame.height()) / render_window.height();
+        return zoomed_frame.pixelColor(qFloor(x * scale_x), qFloor(y * scale_y));
+    };
+    QCOMPARE(zoomed_pixel(126.0, 109.0), QColor(Qt::red));
+    QCOMPARE(zoomed_pixel(134.0, 109.0), QColor(Qt::green));
     QObject* scroller = surface->findChild<QObject*>(QStringLiteral("documentScroller"));
     QVERIFY(scroller != nullptr);
     bound_canvas->setZoom(2.0);
