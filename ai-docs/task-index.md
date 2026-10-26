@@ -26,7 +26,7 @@
 
 ## 执行顺序
 
-基础设施已接入，QML 窗口外壳按 007 当前形态冻结。编辑先从 020 文档模型、021 存储和 022 基础文本输入开始，再补齐 023/024/026/027 的最小编辑布局和画布能力，由 008 集成输入、保存、重开；025 格式命令不阻塞 M0，先实现默认字体设置与局部 Font 环境命令，不新增字体选择窗口或环境工具按钮。009 建立 `\` 命令入口，010 通过命令和快捷键创建、嵌套与操作环境。只有编辑纵向切片确实需要时才改动 QML 外观，并先写静态原型再落成 QML。
+基础设施已接入，QML 窗口外壳按 007 当前形态冻结。编辑先从 020 文档模型、021 存储和 022 基础文本输入开始，再补齐 023/024/026/027 的最小编辑布局和画布能力；030 补齐 Qt IME、导航与选区交互，最后由 008 集成输入、保存、重开并完成 M0 验收。025 格式命令不阻塞 M0，先实现默认字体设置与局部 Font 环境命令，不新增字体选择窗口或环境工具按钮。009 建立 `\` 命令入口，010 通过命令和快捷键创建、嵌套与操作环境。只有编辑纵向切片确实需要时才改动 QML 外观，并先写静态原型再落成 QML。
 
 来源是 [panta](https://github.com/Yuki-Nagori/panta) `ee84d95`。移植提交写明实际复制的 commit。不移植几何、网格、VTK、求解协议，以及只服务于这些领域的 crate 和对话框。
 
@@ -43,7 +43,7 @@
 | 005 | 桌面入口 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
 | 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
 | 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | implemented |
-| 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027 | M | planned |
+| 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | planned |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | planned |
 | 010 | 结构导航 | [M2：结构导航与环境命令](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
 | 011 | 数学排版 | [M3：公式](task/011-impl-math.md) | P2 | 010 | L | planned |
@@ -62,9 +62,13 @@
 | 024 | 字体塑形 | [字体回退与文字塑形](task/024-text-shaping.md) | P2 | 022、023 | L | done |
 | 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 009、021、022、024 | M | planned |
 | 026 | 段落排版 | [行距、段间距与分页](task/026-paragraph-layout.md) | P2 | 023、024 | L | done |
-| 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | in-progress |
+| 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | done |
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | planned |
+| 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | ready |
+| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 027 | M | ready |
+| 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
+| 033 | 排版基线 | [OpenType BASE 脚本基线与行框溢出](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | ready |
 
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 

@@ -730,18 +730,107 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              QStringLiteral("1"));
     QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
 
+    const auto rendered_glyph_has_ink = [&](qsizetype placement_index) {
+        const QImage frame = window.grabWindow();
+        if (frame.isNull()) {
+            return false;
+        }
+        const QVariantMap current_frame = canvas->glyphFrames().first().toMap();
+        const QVariantList images = current_frame.value(QStringLiteral("images")).toList();
+        const QVariantList placements = current_frame.value(QStringLiteral("placements")).toList();
+        if (images.isEmpty() || placement_index < 0 || placement_index >= placements.size()) {
+            return false;
+        }
+        const QVariantMap placement = placements.at(placement_index).toMap();
+        const uint image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
+        if (image_index >= static_cast<uint>(images.size())) {
+            return false;
+        }
+        const QVariantMap image = images.at(static_cast<qsizetype>(image_index)).toMap();
+        const bool phase_applied = placement.value(QStringLiteral("pixelPhaseApplied")).toBool();
+        const qreal phase_x =
+            phase_applied ? placement.value(QStringLiteral("pixelPhaseX")).toReal() : 0.0;
+        const qreal phase_y =
+            phase_applied ? placement.value(QStringLiteral("pixelPhaseY")).toReal() : 0.0;
+        const qreal image_scale = canvas->zoom() * 96.0 / 72.0 /
+                                  current_frame.value(QStringLiteral("rasterPxPerPt")).toReal();
+        const QPointF baseline = canvas->mapToItem(
+            window.contentItem(),
+            canvas->documentToContent(
+                0, QPointF(placement.value(QStringLiteral("xPt")).toReal(),
+                           placement.value(QStringLiteral("baselineYPt")).toReal())));
+        const QRectF glyph_rect(
+            baseline.x() + (image.value(QStringLiteral("left")).toReal() - phase_x) * image_scale,
+            baseline.y() + (-image.value(QStringLiteral("top")).toReal() - phase_y) * image_scale,
+            image.value(QStringLiteral("width")).toReal() * image_scale,
+            image.value(QStringLiteral("height")).toReal() * image_scale);
+        const qreal pixels_per_x = static_cast<qreal>(frame.width()) / window.width();
+        const qreal pixels_per_y = static_cast<qreal>(frame.height()) / window.height();
+        const QRect pixel_rect(
+            qFloor(glyph_rect.left() * pixels_per_x), qFloor(glyph_rect.top() * pixels_per_y),
+            qCeil(glyph_rect.width() * pixels_per_x), qCeil(glyph_rect.height() * pixels_per_y));
+        const QRect clipped = pixel_rect.intersected(frame.rect());
+        if (clipped.isEmpty()) {
+            return false;
+        }
+        for (int y = clipped.top(); y <= clipped.bottom(); ++y) {
+            for (int x = clipped.left(); x <= clipped.right(); ++x) {
+                if (frame.pixelColor(x, y).lightness() < 240) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(0), 3000);
+
+    const qreal latin_baseline_before_fallback =
+        updated_glyph_frame.value(QStringLiteral("placements"))
+            .toList()
+            .first()
+            .toMap()
+            .value(QStringLiteral("baselineYPt"))
+            .toReal();
+    const QVariantMap fullwidth_insert = layout_view_model->insertText(QStringLiteral("！"));
+    QVERIFY2(fullwidth_insert.value(QStringLiteral("valid")).toBool(),
+             qPrintable(fullwidth_insert.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("2"), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->glyphFrames().isEmpty() &&
+                                 canvas->glyphFrames()
+                                         .first()
+                                         .toMap()
+                                         .value(QStringLiteral("documentGeneration"))
+                                         .toString() == QStringLiteral("2") &&
+                                 canvas->glyphFrames()
+                                         .first()
+                                         .toMap()
+                                         .value(QStringLiteral("placements"))
+                                         .toList()
+                                         .size() >= 2,
+                             3000);
+    const QVariantMap mixed_glyph_frame = canvas->glyphFrames().first().toMap();
+    const qreal latin_baseline_after_fallback =
+        mixed_glyph_frame.value(QStringLiteral("placements"))
+            .toList()
+            .first()
+            .toMap()
+            .value(QStringLiteral("baselineYPt"))
+            .toReal();
+    QCOMPARE(latin_baseline_after_fallback, latin_baseline_before_fallback);
+    QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(1), 3000);
+
     QTest::keyClick(&window, Qt::Key_Return);
     QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
     QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
              QStringLiteral("text.split_paragraph"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("2"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("3"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts().size(), 2);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .at(0)
                  .toMap()
                  .value(QStringLiteral("text"))
                  .toString(),
-             QStringLiteral("x"));
+             QStringLiteral("x！"));
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
@@ -753,8 +842,20 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
     QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
              QStringLiteral("text.delete_backward"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("3"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("4"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts().size(), 1);
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("x！"));
+
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
+             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("5"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
@@ -766,7 +867,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
     QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
              QStringLiteral("text.delete_backward"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("4"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("6"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .first()
                  .toMap()
@@ -777,7 +878,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTest::keyClick(&window, Qt::Key_Return, Qt::ShiftModifier);
     QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
     QCOMPARE(editing_command_spy.takeFirst().at(0).toString(), QStringLiteral("text.soft_break"));
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("5"), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("7"), 3000);
     delete surface;
 }
 #endif

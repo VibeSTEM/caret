@@ -11,9 +11,18 @@ Item {
     signal documentPositionHit(var result)
 
     property real pageScale: 1
+    property bool glyphRasterizationPending: false
 
     function scheduleGlyphRasterization() {
-        glyphRasterTimer.restart();
+        if (glyphRasterizationPending)
+            return;
+        glyphRasterizationPending = true;
+        Qt.callLater(surface.rasterizeScheduledGlyphs);
+    }
+
+    function rasterizeScheduledGlyphs() {
+        glyphRasterizationPending = false;
+        rasterizeVisiblePages();
     }
 
     function rasterizeVisiblePages() {
@@ -78,13 +87,6 @@ Item {
     }
 
     property string lastGlyphRasterKey: ""
-
-    Timer {
-        id: glyphRasterTimer
-        interval: 40
-        repeat: false
-        onTriggered: surface.rasterizeVisiblePages()
-    }
 
     Connections {
         target: pageCanvas

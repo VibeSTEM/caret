@@ -1,6 +1,6 @@
 # 027 — 页面画布、命中与布局快照
 
-- 状态：in-progress
+- 状态：done
 - 依赖：022、024、026
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-26
@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面 glyph 数据经 CXX 二进制 DTO 到 Qt，Canvas 使用 Qt 管理的纹理图集绘制；行框与页面裁切及设备像素相位已接通，当前视口内所有页面按需请求。插入点已通过主题 token 在 Qt scene graph 呈现。基础键盘输入已接入 Rust Session：文本输入、Enter 拆段、Shift+Enter 软换行、Backspace 字素删除与段首合并；IME、键盘导航、选区呈现和真实文档文字的完整窗口交互仍未实现，因此 027 继续进行中。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，避免 Qt 重新塑形或重新匹配字体。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面 glyph 数据经 CXX 二进制 DTO 到 Qt，Canvas 使用 Qt 管理的纹理图集绘制；行框与页面裁切及设备像素相位已接通，当前视口内所有页面按需请求。插入点已通过主题 token 在 Qt scene graph 呈现。基础键盘输入已接入 Rust Session：文本输入、Enter 拆段、Shift+Enter 软换行、Backspace 字素删除与段首合并；IME、键盘导航和选区交互由 030 承接。027 剩余真实文档文字的完整窗口验收。环境高亮和未知节点安全预览分别由 031、032 承接。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，避免 Qt 重新塑形或重新匹配字体。OpenType BASE 脚本基线和稳定行推进由 033 单独处理，不作为 027 的验收范围。
 
 ## 必读
 
@@ -19,7 +19,7 @@
 
 ## 范围与非目标
 
-实现滚动工作区、纸张绘制、布局快照、文本命中、选区/光标几何、当前环境背景高亮，以及 zoom。高亮由光标位置派生，作用于最内层 EnvironmentNode：块级环境高亮容器，行内环境高亮文字范围；它只属于视图叠加，不序列化。异步结果携带文档 generation，过期结果不能覆盖新版本。跨页选区仍是一条逻辑选区。
+实现滚动工作区、纸张绘制、布局快照、文本命中、选区/光标几何和 zoom。异步结果携带文档 generation，过期结果不能覆盖新版本。跨页选区仍是一条逻辑选区。本任务提供选区几何和布局命中能力；键盘导航、拖选交互及选区呈现由 030 验收；当前环境背景高亮由 031 验收；未知节点安全预览由 032 验收。
 
 光标与选区状态由 Rust 提供，页面内几何由 LayoutResult 提供，Canvas 只绘制。纸张、边框、光标和选区颜色来自 `qml/Themes/` token 并由 QML 注入；闪烁、粗细和焦点状态等视觉细节以[独立设计](../architecture/interface/caret.md)为准。
 
@@ -34,7 +34,7 @@
 1. 定义 LayoutResult 到画布快照的最小 DTO。
 2. 统一页面变换、命中、选区和绘制坐标。
 3. 接入 generation 过期结果丢弃和视口优先绘制。
-4. 验证跨页拖选、锚点 zoom 和异步过期。
+4. 验证跨页选区几何、锚点 zoom 和异步过期；不在本任务接入键盘导航或拖选交互。
 5. 独立评审并复验。
 
 ## 预计改动
@@ -43,25 +43,27 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 
 ## 验收标准
 
-- [ ] 页面没有独立正文或 Undo 栈；跨页命中返回同一文档位置。
-- [ ] 绘制、选择、光标和 hit-testing 用同版 LayoutResult。
-- [ ] 视觉左右键按 bidi/line layout 选择目标 caret；逻辑边界 affinity 只决定输入继承，混合方向文本的同一逻辑位置可由独立 visual affinity 区分。
-- [ ] 命中测试将点击映射到实际命中的相邻字素簇侧；精确边界歧义按逻辑 downstream 确定。LTR 单一行内环境方向键按文档模型的边界转移表操作：向外时同一偏移切换 affinity、更新当前环境高亮/格式状态；从外侧反向移入时跨过相邻字素簇并将目标设为内侧 affinity。RTL、混排和换行处按相邻视觉 caret 候选直接移动并映射 affinity，不套用 LTR 同位置转换表。测试确认不存在无反馈的额外按键，且不以屏幕左右推断 upstream/downstream。
-- [ ] hover 和拖选预览由 C++ 画布本地更新，鼠标释放时才向 Rust 提交最终插入点或选区。
-- [ ] 光标进入不同嵌套环境时，高亮跟随最内层环境；块级高亮容器、行内高亮文字范围，并在退出时清除旧高亮。
-- [ ] 高亮在缩放、分页和选区操作中位置正确，且不写入文档格式；环境内容仍可绘制字符高亮和底纹。
-- [ ] DPR/zoom 只改变显示映射，不改文档字号和排版输入。
-- [ ] 旧 generation 的异步结果不覆盖新结果。
-- [ ] 对 021 提供的安全预览，未知节点在原位置显示占位和不支持能力提示；无法安全编辑的内容不可修改，可能遗漏不透明数据的整篇复制/导出不可用。
-- [ ] 插入点仅在画布获得活动焦点时显示，失焦时隐藏；焦点或 Rust 插入点变化时立即显示，按 Qt 平台周期闪烁。`caretBlinkEnabled=false` 时常亮，平台周期为 0 时也常亮；视图状态不复制 Rust 文档或选区状态。
-- [ ] 键盘导航、选区和辅助功能能识别正文、焦点和选择。基础文本输入及 Enter/Backspace 编辑已接入。
-- [ ] 独立评审和真实窗口验证通过。
+- [x] 页面没有独立正文或 Undo 栈；跨页命中返回同一文档位置。
+- [x] 绘制、选择、光标和 hit-testing 用同版 LayoutResult。
+- [x] 命中测试将点击映射到实际命中的相邻字素簇侧；精确边界歧义按逻辑 downstream 确定。逻辑和视觉亲和性分离，不以屏幕左右推断 upstream/downstream；完整视觉方向键规则由 030 验收。
+- [x] DPR/zoom 只改变显示映射，不改文档字号和排版输入。
+- [x] 旧 generation 的异步结果不覆盖新结果。
+- [x] 插入点仅在画布获得活动焦点时显示，失焦时隐藏；焦点或 Rust 插入点变化时立即显示，按 Qt 平台周期闪烁。`caretBlinkEnabled=false` 时常亮，平台周期为 0 时也常亮；视图状态不复制 Rust 文档或选区状态。
+- [x] 页面命中与布局快照为后续输入提供稳定的位置、caret 和选区几何 API。基础文本输入及 Enter/Backspace 编辑已接入；IME、方向键导航、拖选交互和选区绘制由 030 验收。
+- [x] 滚动/几何变化在当前事件循环合并刷新；文档编辑不等待定时器，最新 glyph frame 在输入后尽快可见。旧帧不能让 caret 超前于正文，最新 generation 持续可见。
+- [x] 通过真实窗口验证 Rust 文档输入、布局、glyph 栅格化和 Qt Canvas 绘制形成完整链路。
+- [x] 独立评审和真实窗口验证通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine` | 段落与文档布局、跨页选区/命中回归通过 | 通过；caret-layout 61 项、caret-engine 42 项 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine` | 编辑/布局与 glyph snapshot 回归通过 | 通过；caret-engine 54 项、caret-layout 68 项 |
+| 2026-10-26 | `cmake --build target/native/debug --target caret_shell_load_test -j2`、`ctest --test-dir target/native/debug -R '^Qml\.ShellLoad$' --output-on-failure` | 真实窗口可见 Rust 输入 glyph；插入全角 `！` 后最新 generation、glyph placement 和实际窗口像素更新；Enter/Backspace/软换行继续工作 | 通过；`Qml.ShellLoad` 1/1；构建只有既存 macOS LTO/deployment-target 警告 |
+| 2026-10-26 | `cargo clippy --offline --locked -p caret-layout -p caret-engine --all-targets -- -D warnings`、`cargo format --changed --check`、`git diff --check` | Rust lint、变更格式和补丁空白检查通过 | 通过；clang-format 已修正真实窗口测试中的 8 处格式差异 |
+| 2026-10-26 | subagent 只读独立评审完整相关 diff | 画布 glyph 生命周期、像素断言、任务拆分与架构行距规则无高/中风险问题 | 通过；修复了全角 glyph 像素断言、任务归属引用和行距规则遗漏后复核通过 |
+| 2026-10-26 | `cmake --build target/native/debug --target caret_shell_load_test -j2`、`ctest --test-dir target/native/debug -R '^Qml.ShellLoad$' --output-on-failure` | 键入后 glyph frame 在事件循环合并刷新中更新；Enter/Backspace/软换行仍工作 | 通过；单字符本地窗口用例中，Rust/layout generation 更新与 glyph frame 属性均在按键事件返回前可观察 |
 | 2026-10-26 | `cargo fmt --all -- --check` | Rust 格式符合规范 | 通过 |
 | 2026-10-26 | `cargo clippy --offline --locked -p caret-engine -p caret-layout --all-targets -- -D warnings` | 新的 Rust 快照组合层无 lint 警告 | 通过 |
 | 2026-10-26 | `cargo test --offline --locked --workspace`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | 全工作区测试和 lint 通过 | 通过；native CTest 4/4 |
@@ -110,7 +112,11 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：`DocumentLayoutSnapshot::page_glyphs()` 只访问页面片段引用的 Parley 行，按视觉顺序提取字体 Blob、集合索引、variation 坐标、synthesis、glyph ID 与页面局部 pt 坐标。长段落坐标逐行在 f64 累加，并把局部 glyph y 在 f64 中加入，避免组合附标受全局 f32 baseline 精度影响。Exactly 行距同时传出逐行裁切 y 范围，Natural 不额外裁切；非法页面、片段或字形源整页拒绝，inline box 返回明确错误。页面 glyph 的 FFI、栅格缓存接入运行时和 QSG atlas 绘制尚未完成。
 - 2026-10-26：应用运行时持有有界 `PageGlyphRasterizer`，只对请求页生成 RGBA 字节与 placement；页内先按 Swash 使用的完整稳定 raster key 去重，确保全局缓存淘汰不破坏索引，也不额外 pin 整页原图。CXX 传递 `Vec<u8>` 和 placement DTO，不将像素编码到 JSON；ViewModel 校验像素长度、索引、相位和行框范围后转换为 QByteArray。Canvas 只创建一次当前帧纹理，允许 Qt 将小 glyph 放入 atlas，并在 scene graph 线程构造图像节点；字形矩形按页面与行框裁切后同步缩小 atlas source rect。QML 以 40ms debounce 请求 viewport 中心页，缩放、滚动、窗口移动和 DPR 变化后按新的设备像素相位刷新。Qt 窗口像素测试覆盖 atlas-backed image node 与 Exactly 行框裁切；真实 Parley 字体端到端像素对照、滚动大页耗时和异步栅格化仍待后续。
 - 2026-10-26：渲染复核修正 `QSGImageNode::setSourceRect` 坐标：调用方传纹理像素坐标，由 Qt 负责 atlas 子矩形映射，避免重复归一化。双色合成像素测试验证裁切后仍采样到正确颜色。QML 用页 y 范围二分查找可见页，再只迭代视口相交页，避免低缩放多页视口缺字或遍历整份文档；QSG 按页保留纹理和节点，只有帧实际变化的页面重建纹理，居中平移只更新 glyph 节点几何。像素测试覆盖两页同时绘制、只更新第二页、第一页面纹理视觉保持、宽度居中与缩放旧帧临时适配。颜色、DPR、缩放、窗口设备相位进入刷新路径。当前 QML 仍请求全部可见页并在 UI 线程同步栅格化；更细的行/字形脏区需要 Rust 布局层提供受影响页范围，避免分页重排造成漏绘。QML raster 调用经 40ms debounce；真实 Parley 字体到窗口的端到端比对与大页性能采样待后续。
+- 2026-10-26：输入延迟复核发现固定间隔刷新会让编辑正文等待，也不能证明 UI 线程栅格耗时可接受。已移除 40ms QML Timer；布局、滚动、缩放和主题事件通过 `Qt.callLater` 与 pending 标志在当前事件循环合并，空闲时不轮询。窗口测试验证输入后最新 glyph frame 可见；真实长文档栅格耗时仍需按 013 的性能计划测量。
+- 2026-10-26：`cargo test --offline --locked -p caret-app visible_page_rasterization_returns_binary_glyph_images`、`cmake --build target/native/debug --target caret_shell_load_test -j2`、`ctest --test-dir target/native/debug -R '^Qml\\.ShellLoad$' --output-on-failure` 均通过。Rust 定向测试与真实 Qt 窗口用例覆盖 glyph 栅格化、输入后的文档 generation 和非空 glyph placements；未做真实字体像素截图对照。
+- 2026-10-26：`cargo test --offline --locked -p caret-layout -p caret-engine` 通过；caret-layout 68 项、caret-engine 54 项。全角中文 `！`、混排和阿拉伯用例验证了当时的全局锚点实现；脚本基线与稳定行推进现拆至 033，这些测试不构成 033 的验收证据。
+- 2026-10-26：真实 Qt 窗口测试新增 glyph ink 像素检查，并在 Rust 文档中插入全角 `！` 后确认画布展示新代际字形；定向 CTest、Rust 布局/引擎测试、Clippy、变更格式与 diff 检查通过。脚本基线与大字号/回退字体行框溢出明确交由 033，不阻塞 027。
 
 ## 完成摘要
 
-未完成。Rust 段落布局、按页 glyph 提取与 Swash 栅格化、CXX 二进制字形帧、可见多页的 Qt atlas 正文绘制、页面命中/插入点/选区几何、点击更新 Rust Session 选区与独立视觉侧，以及稳定文档位置的 FFI/ViewModel/QML 链路已具备；焦点显隐和插入点闪烁、文本输入、Enter 拆段、Shift+Enter 软换行、Backspace 字素删除与段首合并已接入。IME、键盘导航、选区呈现、环境高亮及完整窗口编辑交互仍未完成。
+027 已完成 Rust 页面布局与 glyph 生成、Swash 栅格化、Qt Canvas 图集绘制、页面命中/插入点/选区几何、焦点与闪烁、基础键盘编辑和事件驱动的画布更新。真实窗口测试确认 Rust 文档插入英文字符和全角 `！` 后，新 glyph 可见于 Qt 窗口像素。定向 Rust 测试、Clippy、格式检查、CTest 与独立评审通过。IME/导航/完整选区交互由 030 承接；环境高亮和未知节点安全预览由 031/032 承接；OpenType BASE 脚本基线与大字号/回退字体行框溢出由单独的 033 处理，不属于 027。

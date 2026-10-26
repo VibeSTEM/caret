@@ -346,11 +346,47 @@ impl DocumentLayoutSnapshot {
 #[derive(Default)]
 pub struct DocumentLayoutService {
     layouter: ParagraphLayouter,
+    baseline_anchor_cache: Option<BaselineAnchorCache>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BaselineAnchorCache {
+    font_generation: u64,
+    settings: ResolvedDocumentTextSettings,
+    style: ShapingStyle,
+    metrics: caret_layout::FontLineMetrics,
 }
 
 impl DocumentLayoutService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn resolve_baseline_anchor_metrics(
+        &mut self,
+        catalog: &mut FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        style: &ShapingStyle,
+    ) -> Result<caret_layout::FontLineMetrics, DocumentLayoutError> {
+        let font_generation = catalog.generation();
+        if let Some(cache) = &self.baseline_anchor_cache
+            && cache.font_generation == font_generation
+            && cache.settings == *settings
+            && cache.style == *style
+        {
+            return Ok(cache.metrics);
+        }
+        let metrics = self
+            .layouter
+            .measure_font_metrics(catalog, settings, style, settings.default_language())
+            .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
+        self.baseline_anchor_cache = Some(BaselineAnchorCache {
+            font_generation,
+            settings: settings.clone(),
+            style: style.clone(),
+            metrics,
+        });
+        Ok(metrics)
     }
 
     /// 从 Session 同步读取文档与代际，避免调用方把旧/新文档与错误 generation 配对。
@@ -395,11 +431,17 @@ impl DocumentLayoutService {
         let text_settings =
             ResolvedDocumentTextSettings::from_document_settings(&document.global_settings)
                 .map_err(|error| DocumentLayoutError::FontPreferences(error.to_string()))?;
+        let baseline_anchor_metrics =
+            self.resolve_baseline_anchor_metrics(catalog, &text_settings, base_style)?;
 
         let mut ordered_inputs = Vec::new();
         collect_blocks(&document.body, &mut ordered_inputs)?;
 
         let mut empty_mark_metrics_by_language = HashMap::new();
+        empty_mark_metrics_by_language.insert(
+            text_settings.default_language().map(str::to_owned),
+            baseline_anchor_metrics,
+        );
         let paragraph_count = ordered_inputs
             .iter()
             .filter(|item| matches!(item, LayoutInput::Paragraph(_)))
@@ -430,7 +472,7 @@ impl DocumentLayoutService {
             } else {
                 let metrics = self
                     .layouter
-                    .measure_empty_mark_metrics(
+                    .measure_font_metrics(
                         catalog,
                         &text_settings,
                         base_style,
@@ -451,6 +493,7 @@ impl DocumentLayoutService {
                         width_pt: content_width_pt as f32,
                         spacing: style.line_spacing,
                         empty_mark_metrics,
+                        baseline_anchor_metrics,
                     },
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;

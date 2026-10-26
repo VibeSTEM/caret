@@ -339,7 +339,7 @@ impl DocumentLayoutSnapshot {
 #[cfg(test)]
 mod tests {
     use caret_doc::{
-        Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId,
+        Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph,
         ParagraphLineSpacing, Run,
     };
     use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
@@ -366,12 +366,67 @@ mod tests {
         document
     }
 
+    fn document_with_multilingual_paragraphs() -> Document {
+        let mut document = Document::blank();
+        let Block::Paragraph(english) = document.body.remove(0) else {
+            panic!("blank document should contain a paragraph");
+        };
+        let mut arabic = Paragraph::empty(NodeId::generate());
+        arabic.language = Some("ar".to_owned());
+        arabic.inlines = vec![text_run("العربية", None)];
+        document.body = vec![Block::Paragraph(english), Block::Paragraph(arabic)];
+        document
+    }
+
     fn layout(document: &Document) -> DocumentLayoutSnapshot {
         let mut catalog =
             FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
         DocumentLayoutService::new()
             .layout(document, 17, &mut catalog, &ShapingStyle::new(1200))
             .unwrap_or_else(|error| panic!("document layout failed: {error}"))
+    }
+
+    #[test]
+    fn paragraph_scripts_share_the_document_baseline_anchor() {
+        let reference = layout(&document_with_text("English"));
+        let reference_baseline = reference
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("reference glyphs failed: {error}"))
+            .runs
+            .first()
+            .and_then(|run| run.glyphs.first())
+            .unwrap_or_else(|| panic!("reference run is empty"))
+            .baseline_y_pt;
+
+        for text in [
+            "English！",
+            "！English",
+            "English中文",
+            "中文English",
+            "العربية",
+        ] {
+            let snapshot = layout(&document_with_text(text));
+            let page = snapshot
+                .page_glyphs(0)
+                .unwrap_or_else(|error| panic!("glyph extraction failed for {text:?}: {error}"));
+            assert!(
+                page.runs
+                    .iter()
+                    .flat_map(|run| &run.glyphs)
+                    .all(|glyph| { glyph.baseline_y_pt == reference_baseline }),
+                "script changed the document baseline for {text:?}"
+            );
+        }
+
+        let multilingual = layout(&document_with_multilingual_paragraphs());
+        assert_eq!(
+            multilingual.paragraphs[0].layout.paragraph.lines[0]
+                .metrics
+                .baseline_pt,
+            multilingual.paragraphs[1].layout.paragraph.lines[0]
+                .metrics
+                .baseline_pt
+        );
     }
 
     #[test]

@@ -79,18 +79,20 @@ pub struct ParleyParagraphLayout {
     pub parley_line_tops_pt: Vec<f32>,
     /// Parley 原始行高；将点击采样限制在目标原始行内部。
     pub parley_line_heights_pt: Vec<f32>,
-    /// 每条行框的 Caret baseline 相对 Parley baseline 的调整量。
+    /// 每条行框的文档级基线锚点相对 Parley baseline 的调整量。
     pub baseline_adjustments_pt: Vec<f32>,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
 }
 
-/// 段落布局的版心宽度、行距策略和空段段落标记度量。
+/// 段落布局的版心宽度、行距、空段度量和文档级基线锚点。
 #[derive(Debug, Clone, Copy)]
 pub struct ParagraphLayoutOptions {
     pub width_pt: f32,
     pub spacing: LineSpacing,
     pub empty_mark_metrics: FontLineMetrics,
+    /// 由文档默认语言和默认字体测得；各段落、脚本和字体回退共享同一基线。
+    pub baseline_anchor_metrics: FontLineMetrics,
 }
 
 /// 可复用 Parley LayoutContext；字体目录和字体数据由 FontCatalog 共享。
@@ -123,6 +125,7 @@ impl ParagraphLayouter {
             width_pt,
             spacing,
             empty_mark_metrics,
+            baseline_anchor_metrics,
         } = options;
         if !width_pt.is_finite() || width_pt <= 0.0 {
             return Err(ParagraphLayoutError::InvalidWidth);
@@ -283,7 +286,13 @@ impl ParagraphLayouter {
             parley_line_tops_pt,
             parley_line_heights_pt,
             baseline_adjustments_pt,
-        } = make_paragraph_lines(&text, &layout, spacing, empty_mark_metrics)?;
+        } = make_paragraph_lines(
+            &text,
+            &layout,
+            spacing,
+            empty_mark_metrics,
+            baseline_anchor_metrics,
+        )?;
         Ok((
             text,
             ParleyParagraphLayout {
@@ -300,8 +309,8 @@ impl ParagraphLayouter {
         ))
     }
 
-    /// 用 Parley 生成不可见段落标记的字体度量；测量空格不进入正文。
-    pub fn measure_empty_mark_metrics(
+    /// 用 Parley 测量指定语言和字体样式的度量；测量空格不进入正文。
+    pub fn measure_font_metrics(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
@@ -336,6 +345,7 @@ impl ParagraphLayouter {
                 width_pt: 1000.0,
                 spacing: LineSpacing::Natural,
                 empty_mark_metrics: fallback,
+                baseline_anchor_metrics: fallback,
             },
         )?;
         result
@@ -833,9 +843,13 @@ fn make_paragraph_lines(
     layout: &Layout<[u8; 4]>,
     spacing: LineSpacing,
     empty_mark_metrics: FontLineMetrics,
+    baseline_anchor_metrics: FontLineMetrics,
 ) -> Result<ParagraphLineMapping, ParagraphLayoutError> {
+    let baseline_anchor =
+        calculate_line_metrics(&[baseline_anchor_metrics], &[], empty_mark_metrics, spacing)?;
     if text.is_empty() {
-        let metrics = calculate_line_metrics(&[], &[], empty_mark_metrics, spacing)?;
+        let mut metrics = calculate_line_metrics(&[], &[], empty_mark_metrics, spacing)?;
+        metrics.baseline_pt = baseline_anchor.baseline_pt;
         return Ok(ParagraphLineMapping {
             paragraph: ParagraphLayout {
                 lines: vec![ParagraphLine {
@@ -890,19 +904,22 @@ fn make_paragraph_lines(
             line.runs()
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
-        let line_metrics = calculate_line_metrics(&font_metrics, &[], empty_mark_metrics, spacing)
-            .map_err(|error| match error {
-                LineMetricsError::InvalidFontMetrics
-                | LineMetricsError::InvalidObjectMetrics
-                | LineMetricsError::InvalidLineSpacing => {
-                    ParagraphLayoutError::InvalidLineMetrics(error)
-                }
-            })?;
+        let mut line_metrics =
+            calculate_line_metrics(&font_metrics, &[], empty_mark_metrics, spacing).map_err(
+                |error| match error {
+                    LineMetricsError::InvalidFontMetrics
+                    | LineMetricsError::InvalidObjectMetrics
+                    | LineMetricsError::InvalidLineSpacing => {
+                        ParagraphLayoutError::InvalidLineMetrics(error)
+                    }
+                },
+            )?;
         let raw_top = metrics.block_min_coord;
         let raw_baseline_from_top = metrics.baseline - raw_top;
         if !raw_top.is_finite() || !raw_baseline_from_top.is_finite() {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
+        line_metrics.baseline_pt = baseline_anchor.baseline_pt;
         line_top_offsets_pt.push(top_pt - raw_top);
         line_box_tops_pt.push(top_pt);
         parley_line_tops_pt.push(raw_top);

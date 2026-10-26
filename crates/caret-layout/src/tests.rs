@@ -52,6 +52,7 @@ fn layout_options(width_pt: f32) -> ParagraphLayoutOptions {
         width_pt,
         spacing: LineSpacing::Natural,
         empty_mark_metrics: empty_metrics(),
+        baseline_anchor_metrics: empty_metrics(),
     }
 }
 

@@ -1,13 +1,13 @@
 # 008 — M0：基础文本编辑纵向切片
 
 - 状态：planned
-- 依赖：021–024、026、027
+- 依赖：021–024、026、027、030
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-25
 
 ## 目标与背景
 
-本任务先完成最小编辑纵向切片：用户能打开空文档、输入和删除文本、移动插入点、编辑段落、保存并重开同一份 `.cdoc`。它是[需求](../architecture/requirements.md)的 M0 集成验收。模型、存储、输入、几何、塑形、基础段落排版和画布能力分别由 020–027 提供；不把格式命令或 EnvironmentNode 操作塞进基础编辑集成。
+本任务完成最小编辑纵向切片：用户能打开空文档、输入和删除文本、移动插入点、编辑段落、保存并重开同一份 `.cdoc`。它是[需求](../architecture/requirements.md)的 M0 集成验收。模型、存储、输入、几何、塑形、基础段落排版和画布能力分别由 020–027 提供；Qt 的 IME、导航与选区交互由 030 补齐。本任务负责端到端集成，不把格式命令或 EnvironmentNode 操作塞进基础编辑集成。
 
 ## 必读
 
@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-组合 021–024、026、027 的最小能力并接通 FFI 与 ViewModel。`caret-app` 解析路径后交给引擎；画布消费页面快照。打开和保存的原子文件语义遵循[文档模型](../architecture/editor/document-model.md)。沿用当前 QML 外壳，只做承载编辑所必需的连接，不扩展视觉控件。行距、段间距与分页如需对齐 Word/OOXML，参考[Office Open XML 调查](../research/008-office-open-xml-spacing-pagination.md)；底层排版语义仍由 026 维护。
+组合 021–024、026、027、030 的最小能力并接通 FFI 与 ViewModel。`caret-app` 解析路径后交给引擎；画布消费页面快照。打开和保存的原子文件语义遵循[文档模型](../architecture/editor/document-model.md)。沿用当前 QML 外壳，只做承载编辑所必需的连接，不扩展视觉控件。行距、段间距与分页如需对齐 Word/OOXML，参考[Office Open XML 调查](../research/008-office-open-xml-spacing-pagination.md)；底层排版语义仍由 026 维护。
 
 不包含：格式工具栏、环境工具按钮、EnvironmentNode 创建/嵌套、`\` 命令、结构导航、公式、表格、增量排版和命令行进程。布局缓存可以先整篇失效。
 
