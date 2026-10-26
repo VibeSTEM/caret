@@ -178,12 +178,17 @@ impl DocumentLayoutSnapshot {
     /// 将页面点坐标命中结果投影为可通过 FFI 传输的稳定文档位置。
     pub fn hit_test_view(&self, page_index: usize, x_pt: f64, y_pt: f64) -> Option<PageHitView> {
         let hit = self.hit_test(page_index, x_pt, y_pt)?;
-        Some(PageHitView {
+        Some(self.view_for_hit(&hit))
+    }
+
+    /// 将已有的 Rust 页面命中转换为界面 DTO。
+    pub fn view_for_hit(&self, hit: &PageHit) -> PageHitView {
+        PageHitView {
             session_id: self.session_id.as_ref().map(ToString::to_string),
             document_generation: self.document_generation.to_string(),
-            position: DocumentPositionView::from(&hit),
+            position: DocumentPositionView::from(hit),
             visual_affinity: visual_affinity_name(hit.visual_affinity).to_owned(),
-        })
+        }
     }
 }
 

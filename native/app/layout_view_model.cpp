@@ -34,6 +34,27 @@ std::optional<rust::Box<ffi::DocumentRuntime>>& installed_runtime() {
     static std::optional<rust::Box<ffi::DocumentRuntime>> value;
     return value;
 }
+
+QVariantMap hit_result_from_json(const rust::String& response) {
+    const QByteArray json(response.data(), static_cast<qsizetype>(response.size()));
+    if (json.startsWith("error:")) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QString::fromUtf8(json.sliced(6))}};
+    }
+    if (json == "null") {
+        return {{QStringLiteral("valid"), false}};
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(json, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
+    }
+    QVariantMap result = document.object().toVariantMap();
+    result.insert(QStringLiteral("valid"), true);
+    return result;
+}
 #endif
 
 bool nonnegative_index(const QJsonValue& value, qsizetype& result) {
@@ -333,30 +354,31 @@ QVariantMap LayoutViewModel::hitTestDocument(int page_index, qreal x_pt, qreal y
                 {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
     }
 
-    const rust::String response = ffi::document_hit_test_json(
-        **runtime, page_index, static_cast<double>(x_pt), static_cast<double>(y_pt));
-    const QByteArray json(response.data(), static_cast<qsizetype>(response.size()));
-    if (json.startsWith("error:")) {
-        return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QString::fromUtf8(json.sliced(6))}};
-    }
-    if (json == "null") {
-        return {{QStringLiteral("valid"), false}};
-    }
+    return hit_result_from_json(ffi::document_hit_test_json(
+        **runtime, page_index, static_cast<double>(x_pt), static_cast<double>(y_pt)));
+#else
+    Q_UNUSED(page_index)
+    Q_UNUSED(x_pt)
+    Q_UNUSED(y_pt)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
 
-    QJsonParseError parse_error;
-    const QJsonDocument document = QJsonDocument::fromJson(json, &parse_error);
-    if (parse_error.error != QJsonParseError::NoError) {
+QVariantMap LayoutViewModel::placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt) {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
         return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
+                {QStringLiteral("error"), QStringLiteral("layout.hit_test_wrong_thread")}};
     }
-    if (!document.isObject()) {
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
         return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("layout.invalid_hit_result")}};
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
     }
-    QVariantMap result = document.object().toVariantMap();
-    result.insert(QStringLiteral("valid"), true);
-    return result;
+    return hit_result_from_json(ffi::place_caret_at_page_json(
+        **runtime, page_index, static_cast<double>(x_pt), static_cast<double>(y_pt)));
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(x_pt)

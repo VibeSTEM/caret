@@ -37,7 +37,7 @@ Item {
                     const pageHit = pageCanvas.hitTestPage(eventPoint.position);
                     if (pageHit.pageIndex < 0)
                         return;
-                    const result = LayoutViewModel.hitTestDocument(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
+                    const result = LayoutViewModel.placeCaretAtPage(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
                     if (result.valid)
                         surface.documentPositionHit(result);
                 }

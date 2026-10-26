@@ -39,6 +39,8 @@ class LayoutViewModel final : public QObject {
 
     /// 将页面局部 pt 坐标交给 Rust 布局快照，返回带文档位置的命中结果。
     Q_INVOKABLE QVariantMap hitTestDocument(int page_index, qreal x_pt, qreal y_pt);
+    /// 在 Rust 会话中将页面命中位置设为当前插入点。
+    Q_INVOKABLE QVariantMap placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt);
 
   private:
     QVariantList m_page_sizes_pt;

@@ -21,6 +21,13 @@ mod generated {
                 x_pt: f64,
                 y_pt: f64,
             ) -> String;
+            /// 在命中位置设置 Rust 会话插入点；无位置返回 JSON null。
+            fn place_caret_at_page_json(
+                runtime: &mut DocumentRuntime,
+                page_index: i32,
+                x_pt: f64,
+                y_pt: f64,
+            ) -> String;
         }
     }
 
@@ -75,11 +82,27 @@ mod generated {
         }
     }
 
+    /// 在同一布局命中结果上更新会话选区，不跨越 FFI 暴露文档节点。
+    fn place_caret_at_page_json(
+        runtime: &mut DocumentRuntime,
+        page_index: i32,
+        x_pt: f64,
+        y_pt: f64,
+    ) -> String {
+        match &mut runtime.runtime {
+            Ok(runtime) => match runtime.place_caret_at_page_json(page_index, x_pt, y_pt) {
+                Ok(json) => json,
+                Err(error) => format!("error:{error}"),
+            },
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::{
             builtin_theme_catalog, document_hit_test_json, layout_snapshot_json,
-            new_blank_document_runtime, version,
+            new_blank_document_runtime, place_caret_at_page_json, version,
         };
 
         #[test]
@@ -109,6 +132,14 @@ mod generated {
             let hit = document_hit_test_json(&mut runtime, 0, 73.0, 73.0);
             assert!(hit.contains("\"offsetUtf8\":\"0\""));
             assert_eq!(document_hit_test_json(&mut runtime, -1, 73.0, 73.0), "null");
+            assert!(
+                place_caret_at_page_json(&mut runtime, 0, 73.0, 73.0)
+                    .contains("\"offsetUtf8\":\"0\"")
+            );
+            assert_eq!(
+                place_caret_at_page_json(&mut runtime, -1, 73.0, 73.0),
+                "null"
+            );
         }
     }
 }

@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；页面点击现在可经 ViewModel 调用 Rust 命中并发出稳定文档位置。正文 glyph 尚未接入 Qt scene graph，真实窗口编辑交互未实现，因此 027 仍处于进行中。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；页面点击可在 Rust 会话中设置命中位置并返回稳定文档位置。正文 glyph 尚未接入 Qt scene graph，真实窗口编辑交互未实现，因此 027 仍处于进行中。
 
 ## 必读
 
@@ -73,6 +73,8 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 | 2026-10-26 | 独立评审持久 FFI 运行时的生命周期、分层与错误边界 | C++ Box 析构、同步 UI 线程调用和会话缓存生命周期明确 | 无阻塞问题；按建议补充所有权、有效期、线程和 UTF-8 错误约定 |
 | 2026-10-26 | `cargo test --locked --workspace`：Rust 页面命中 → FFI JSON → ViewModel → QML `TapHandler` | 点击页面返回稳定故事、段落 ID、UTF-8 偏移、逻辑/视觉 affinity 和文档 generation；页面外不产生命中 | 通过；C++/QML 用例验证实际窗口点击发出位置事件，页面外命中无效，CTest 4/4 |
 | 2026-10-26 | 独立复核本次完整 diff 与真实 QML 点击链路 | 查缓存、所有权、分层、坐标与返回值边界 | 无阻塞问题；复核者独立重跑 `Qml.ShellLoad` 通过；跨页/缩放和双向文本端到端输入仍待覆盖 |
+| 2026-10-26 | Rust 页面点选更新 Session 折叠选区与独立 visual affinity | 命中后提交稳定 UTF-8 位置和视觉侧；miss 不改状态，选区变更不递增文档 generation | 通过；`caret-engine` 验证视觉侧与逻辑 Pos 分离、失败原子性和 Session fork；`caret-app` 验证页面点选；workspace CTest 4/4 |
+| 2026-10-26 | 独立复核页面点选、视觉 affinity 与 Effect 语义 | 检查失败原子性、状态重置、fork、缓存代际和 FFI/ViewModel 分层 | 无阻塞问题；复核者独立重跑 `caret-engine` 与 `caret-app` 定向用例通过 |
 
 ## 风险与回退
 
@@ -88,8 +90,8 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：后续复核确认 Parley 自身在多行 bidi 的 `Cursor::geometry` 可能选错行；适配层现按逻辑 affinity 对应的相邻字素簇计算 caret 几何，并新增第二行命中与光标几何一致性测试。补充处理硬换行后的下一行及尾随空行光标位置，覆盖 LF、CRLF、连续换行和 RTL。独立复核通过；`caret-layout` 61 项、`caret-engine` 42 项，格式、Clippy 和定向测试通过。
 - 2026-10-26：应用层新增会话级布局运行时，持有系统字体目录和可复用布局器；FFI 传递携带 session/document/font generation、页面片段及段落 UTF-8 行范围的只读 JSON，ViewModel 校验并暴露页面、段落和代际属性。generation 以十进制字符串通过 JSON 和 QML，避免 JavaScript 双精度舍入；ViewModel 拒绝无效 UTF-8 偏移、行范围、重复段落 ID、非连续行框、负度量及超出版心的片段，失败快照不覆盖已安装结果。glyph 数据、Qt 绘制及异步旧代际丢弃仍未接入。
 - 2026-10-26：FFI 新增不透明 Rust 文档运行时句柄，由桌面入口持有到窗口退出，复用 Session、系统字体目录和布局缓存；初始快照由该句柄生成。后续命令与异步布局将接在同一运行时生命周期上。glyph 数据、Qt 绘制及异步旧代际丢弃仍未接入。
-- 2026-10-26：命中请求复用上述运行时的当前布局快照，返回十进制字符串形式的文档 generation 和 UTF-8 偏移、稳定故事/段落 ID、逻辑及视觉 affinity。ViewModel 限制同步调用在 UI 线程；页面 TapHandler 在释放时调用 Rust 并发出 `documentPositionHit` 信号。命令编辑、glyph 绘制、光标/选区及环境高亮仍未接入。
+- 2026-10-26：命中请求复用上述运行时的当前布局快照，返回十进制字符串形式的文档 generation 和 UTF-8 偏移、稳定故事/段落 ID、逻辑及视觉 affinity。ViewModel 限制同步调用在 UI 线程；页面 TapHandler 在释放时调用 Rust，将点选位置和独立 visual affinity 一起写入 Session 的折叠选区，再发出 `documentPositionHit` 信号。视觉侧不塞进逻辑 Pos；其他会改变焦点位置的命令按新逻辑位置重置视觉侧。选区变更不递增文档 generation；命令编辑、glyph 绘制、光标/选区呈现及环境高亮仍未接入。
 
 ## 完成摘要
 
-未完成。Rust 段落布局、页面命中/选区几何及命中到稳定文档位置的 FFI/ViewModel/QML 链路已具备；Qt 正文绘制、点击位置接入 Rust 编辑会话、光标/选区、环境高亮与真实窗口编辑交互仍未完成。
+未完成。Rust 段落布局、页面命中/选区几何、点击更新 Rust Session 选区与独立视觉侧及稳定文档位置的 FFI/ViewModel/QML 链路已具备；Qt 正文绘制、Rust 光标/选区几何呈现、键盘与 IME 编辑、环境高亮及完整窗口编辑交互仍未完成。

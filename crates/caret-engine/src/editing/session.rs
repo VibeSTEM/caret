@@ -12,11 +12,13 @@ use super::{
     StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
+use caret_layout::VisualAffinity;
 
 #[derive(Debug)]
 pub struct Session {
     pub(super) document: Document,
     pub(super) selection: Selection,
+    selection_visual_affinity: VisualAffinity,
     session_id: NodeId,
     document_generation: u64,
     composition: Option<InputComposition>,
@@ -45,6 +47,7 @@ impl Session {
                 anchor: pos.clone(),
                 focus: pos,
             },
+            selection_visual_affinity: VisualAffinity::Downstream,
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: None,
@@ -71,6 +74,24 @@ impl Session {
         &self.selection
     }
 
+    /// 当前焦点的视觉侧；不属于 UTF-8 逻辑位置，也不改变文档 generation。
+    pub fn selection_visual_affinity(&self) -> VisualAffinity {
+        self.selection_visual_affinity
+    }
+
+    /// 将布局命中得到的视觉侧与同一 Rust 选区一起提交。
+    pub fn set_selection_with_visual_affinity(
+        &mut self,
+        selection: Option<Selection>,
+        visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        let previous_visual_affinity = self.selection_visual_affinity;
+        let mut effect = self.run(Command::SetSelection(selection))?;
+        effect.selection_changed |= previous_visual_affinity != visual_affinity;
+        self.selection_visual_affinity = visual_affinity;
+        Ok(effect)
+    }
+
     pub fn composition(&self) -> Option<&InputComposition> {
         self.composition.as_ref()
     }
@@ -89,6 +110,12 @@ impl Session {
             Command::CancelComposition { id } => self.cancel_composition(id),
             Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
         }?;
+        if effect.selection_changed {
+            self.selection_visual_affinity = match self.selection.focus.affinity {
+                Affinity::Upstream => VisualAffinity::Upstream,
+                Affinity::Downstream => VisualAffinity::Downstream,
+            };
+        }
         if effect.document_changed {
             if let Some(next) = self.document_generation.checked_add(1) {
                 self.document_generation = next;
@@ -770,6 +797,7 @@ impl Clone for Session {
         Self {
             document: self.document.clone(),
             selection: self.selection.clone(),
+            selection_visual_affinity: self.selection_visual_affinity,
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: self.composition.clone(),
