@@ -8,9 +8,10 @@ use caret_doc::{
 use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 
 use crate::{
-    FontCatalog, FontLineMetrics, LineSpacing, ParagraphLayoutOptions, ParagraphLayouter,
-    ResolvedDocumentTextSettings, ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries,
-    has_empty_line, paragraph_has_empty_line,
+    FontCatalog, FontLineMetrics, GlyphPixelFormat, GlyphRasterOptions, GlyphRasterizer,
+    LineSpacing, ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings,
+    ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line,
+    paragraph_has_empty_line,
 };
 
 fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
@@ -152,6 +153,78 @@ fn parley_layout_matches_icu_line_ranges_for_english_chinese_and_bidi() {
                 .windows(2)
                 .all(|lines| { lines[0].consumed_bytes.end == lines[1].source_bytes.start })
         );
+    }
+}
+
+#[test]
+fn swash_rasterizes_the_font_face_and_glyph_selected_by_parley() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let (_, layout) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("Raster", Some("en")),
+            &document_settings(),
+            &ShapingStyle::default(),
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    let (run, glyph) = layout
+        .layout
+        .lines()
+        .flat_map(|line| line.items())
+        .find_map(|item| match item {
+            parley::PositionedLayoutItem::GlyphRun(run) => {
+                let glyph = run.clone().positioned_glyphs().next();
+                glyph.map(|glyph| (run, glyph))
+            }
+            parley::PositionedLayoutItem::InlineBox(_) => None,
+        })
+        .unwrap_or_else(|| panic!("Parley layout should contain a glyph"));
+    let normalized_coords: Vec<_> = run
+        .run()
+        .normalized_coords()
+        .iter()
+        .map(|coordinate| coordinate.to_bits())
+        .collect();
+    let mut rasterizer = GlyphRasterizer::default();
+    let bitmap = rasterizer
+        .rasterize(
+            run.run().font(),
+            glyph.id,
+            GlyphRasterOptions {
+                pixels_per_em: run.run().font_size() * 96.0 / 72.0,
+                pixel_phase: [0.0, 0.0],
+                normalized_coords: &normalized_coords,
+                synthesis: run.run().synthesis(),
+                foreground: run.style().brush,
+            },
+        )
+        .unwrap_or_else(|| panic!("Swash should rasterize Parley's glyph"));
+    let cached_bitmap = rasterizer
+        .rasterize(
+            run.run().font(),
+            glyph.id,
+            GlyphRasterOptions {
+                pixels_per_em: run.run().font_size() * 96.0 / 72.0,
+                pixel_phase: [0.0, 0.0],
+                normalized_coords: &normalized_coords,
+                synthesis: run.run().synthesis(),
+                foreground: run.style().brush,
+            },
+        )
+        .unwrap_or_else(|| panic!("cached glyph should remain available"));
+    assert!(std::sync::Arc::ptr_eq(&bitmap, &cached_bitmap));
+    assert!(bitmap.width > 0);
+    assert!(bitmap.height > 0);
+    match bitmap.format {
+        GlyphPixelFormat::Alpha8 => {
+            assert_eq!(bitmap.pixels.len(), (bitmap.width * bitmap.height) as usize)
+        }
+        GlyphPixelFormat::Rgba8Premultiplied => assert_eq!(
+            bitmap.pixels.len(),
+            (bitmap.width * bitmap.height * 4) as usize
+        ),
     }
 }
 

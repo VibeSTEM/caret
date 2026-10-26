@@ -14,10 +14,12 @@ icu_segmenter.workspace = true
 icu_locale_core.workspace = true
 icu_properties.workspace = true
 parley.workspace = true
+swash.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
+linebender_resource_handle.workspace = true
 parley_engine.workspace = true
 
 [lints]

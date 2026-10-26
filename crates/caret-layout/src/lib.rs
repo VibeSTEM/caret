@@ -2,6 +2,7 @@
 
 pub mod font_selection;
 mod fonts;
+mod glyph_raster;
 mod line_metrics;
 pub mod pagination;
 mod paragraph;
@@ -10,6 +11,7 @@ mod shaping;
 
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
 pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
+pub use glyph_raster::{GlyphPixelFormat, GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics,
