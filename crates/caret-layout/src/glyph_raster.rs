@@ -243,11 +243,12 @@ fn synthesis_skew(degrees: f32) -> Transform {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, colorize_alpha, premultiply_rgba,
-        synthesis_skew,
-    };
+    #[cfg(target_os = "macos")]
+    use super::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
+    use super::{colorize_alpha, premultiply_rgba, synthesis_skew};
+    #[cfg(target_os = "macos")]
     use linebender_resource_handle::Blob;
+    #[cfg(target_os = "macos")]
     use parley::FontData;
 
     #[test]
@@ -331,6 +332,7 @@ mod tests {
         assert_eq!(integral.pixels, fractional.pixels);
     }
 
+    #[cfg(target_os = "macos")]
     fn glyph_options() -> GlyphRasterOptions<'static> {
         GlyphRasterOptions {
             pixels_per_em: 16.0,

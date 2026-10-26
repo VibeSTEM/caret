@@ -219,15 +219,15 @@ fn replace_complex_context_for_line_break(text: &str) -> Cow<'_, str> {
 }
 
 pub(super) fn uses_dictionary(language: &str) -> bool {
-    matches!(
-        language
-            .split('-')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "th" | "lo" | "km" | "my"
-    )
+    dictionary_language(language).is_some()
+}
+
+pub(super) fn dictionary_language(language: &str) -> Option<&str> {
+    let primary = language.split('-').next()?;
+    ["th", "lo", "km", "my"]
+        .into_iter()
+        .any(|candidate| primary.eq_ignore_ascii_case(candidate))
+        .then_some(primary)
 }
 
 pub(super) fn is_chinese(language: &str) -> bool {

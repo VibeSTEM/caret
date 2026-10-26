@@ -316,24 +316,27 @@ impl DocumentLayoutSnapshot {
                 let line_rectangles = paragraph
                     .layout
                     .selection_geometry(range_start..range_end)?;
+                let mut fragment_line_tops = Vec::with_capacity(fragment.line_range.len());
+                let mut fragment_line_top_pt = f64::from(fragment.y_offset_pt);
+                for line_index in fragment.line_range.clone() {
+                    let line = paragraph.layout.paragraph.lines.get(line_index)?;
+                    fragment_line_tops.push(fragment_line_top_pt);
+                    fragment_line_top_pt += f64::from(line.metrics.height_pt);
+                }
                 for (bounds, line_index) in line_rectangles {
                     if !fragment.line_range.contains(&line_index) {
                         continue;
                     }
-                    let fragment_top = f64::from(
-                        *paragraph
-                            .layout
-                            .line_box_tops_pt
-                            .get(fragment.line_range.start)?,
-                    );
-                    let y_offset =
-                        f64::from(fragment.y_offset_pt) + page.margin_top_pt - fragment_top;
+                    let local_line_index = line_index.checked_sub(fragment.line_range.start)?;
+                    let line_top =
+                        page.margin_top_pt + *fragment_line_tops.get(local_line_index)?;
+                    let line = paragraph.layout.paragraph.lines.get(line_index)?;
                     rectangles.push(PageSelectionRect {
                         page_index,
                         x0_pt: bounds.x0 + page.margin_left_pt,
-                        y0_pt: bounds.y0 + y_offset,
+                        y0_pt: line_top,
                         x1_pt: bounds.x1 + page.margin_left_pt,
-                        y1_pt: bounds.y1 + y_offset,
+                        y1_pt: line_top + f64::from(line.metrics.height_pt),
                     });
                 }
             }
@@ -868,6 +871,68 @@ mod tests {
             .map(|rect| rect.y0_pt)
             .fold(f64::NEG_INFINITY, f64::max);
         assert!(max_first_page_y > min_first_page_y);
+    }
+
+    #[test]
+    fn long_paragraph_selection_uses_page_local_line_positions() {
+        let mut document = Document::blank();
+        let text = "a\n".repeat(20_000);
+        let Block::Paragraph(paragraph) = &mut document.body[0] else {
+            panic!("blank document should start with a paragraph");
+        };
+        paragraph.inlines = vec![InlineNode::Run(Run {
+            text: text.clone(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })];
+
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let paragraph = &snapshot.paragraphs[0];
+        let line_index = paragraph.layout.paragraph.lines.len() - 20;
+        let line = &paragraph.layout.paragraph.lines[line_index];
+        let page_index = snapshot
+            .pages
+            .iter()
+            .position(|page| {
+                page.layout.fragments.iter().any(|fragment| {
+                    fragment.paragraph_id == paragraph.id
+                        && fragment.line_range.contains(&line_index)
+                })
+            })
+            .unwrap_or_else(|| panic!("late paragraph line has no page"));
+        let position = Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph.id.clone(),
+            offset: line.source_bytes.start,
+            affinity: Affinity::Downstream,
+        };
+        let caret = snapshot
+            .caret_geometry(&position, VisualAffinity::Downstream)
+            .unwrap_or_else(|| panic!("late paragraph caret geometry failed"));
+        let selection = Selection {
+            anchor: position.clone(),
+            focus: Pos {
+                offset: line.consumed_bytes.end,
+                affinity: Affinity::Upstream,
+                ..position
+            },
+        };
+        let selected = snapshot
+            .selection_geometry(&selection)
+            .unwrap_or_else(|| panic!("late paragraph selection geometry failed"));
+        let rect = selected
+            .iter()
+            .find(|rect| rect.page_index == page_index)
+            .unwrap_or_else(|| panic!("late paragraph selection has no page-local rect"));
+
+        assert!((rect.y0_pt - caret.y0_pt).abs() < 0.000_001);
+        assert!((rect.y1_pt - caret.y1_pt).abs() < 0.000_001);
     }
 
     #[test]

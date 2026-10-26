@@ -54,26 +54,42 @@ pub(crate) fn paragraph_style_spans<'a>(
 pub(crate) fn boundaries_for_spans(text: &str, spans: &[StyledSpan<'_>]) -> UnicodeBoundaries {
     let mut dictionary_ranges = Vec::new();
     let mut chinese_ranges = Vec::new();
+    let mut previous_dictionary_language: Option<&str> = None;
+    let mut previous_span_is_chinese = false;
     let mut byte_offset = 0usize;
     for span in spans {
         let end = byte_offset + span.text.len();
-        if !span.text.is_empty()
-            && span
+        if !span.text.is_empty() {
+            let dictionary_language = span
                 .style
                 .language
                 .as_deref()
-                .is_some_and(unicode::uses_dictionary)
-        {
-            dictionary_ranges.push(byte_offset..end);
-        }
-        if !span.text.is_empty()
-            && span
+                .and_then(unicode::dictionary_language);
+            if let Some(language) = dictionary_language {
+                append_coalesced_range(
+                    &mut dictionary_ranges,
+                    byte_offset,
+                    end,
+                    previous_dictionary_language
+                        .is_some_and(|previous| previous.eq_ignore_ascii_case(language)),
+                );
+            }
+            previous_dictionary_language = dictionary_language;
+
+            let span_is_chinese = span
                 .style
                 .language
                 .as_deref()
-                .is_some_and(unicode::is_chinese)
-        {
-            chinese_ranges.push(byte_offset..end);
+                .is_some_and(unicode::is_chinese);
+            if span_is_chinese {
+                append_coalesced_range(
+                    &mut chinese_ranges,
+                    byte_offset,
+                    end,
+                    previous_span_is_chinese,
+                );
+            }
+            previous_span_is_chinese = span_is_chinese;
         }
         byte_offset = end;
     }
@@ -92,6 +108,22 @@ pub(crate) fn boundaries_for_spans(text: &str, spans: &[StyledSpan<'_>]) -> Unic
         &chinese_ranges,
     );
     result
+}
+
+fn append_coalesced_range(
+    ranges: &mut Vec<std::ops::Range<usize>>,
+    start: usize,
+    end: usize,
+    merge: bool,
+) {
+    if merge
+        && let Some(previous) = ranges.last_mut()
+        && previous.end == start
+    {
+        previous.end = end;
+    } else {
+        ranges.push(start..end);
+    }
 }
 
 /// 返回段落逻辑 UTF-8 文本；格式环境不插入字符，软换行和不透明节点各占一个码点。

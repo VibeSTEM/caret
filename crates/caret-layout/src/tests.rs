@@ -7,6 +7,7 @@ use caret_doc::{
 };
 use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 
+use crate::shaping::{StyledSpan, boundaries_for_spans};
 use crate::{
     FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, LineSpacing,
     ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings, ShapingStyle,
@@ -95,6 +96,60 @@ fn locale_tailoring_keeps_english_chinese_and_dictionary_break_rules() {
     assert!(thai_boundaries.line_break.len() > 2);
     assert_eq!(thai_boundaries.line_break.first(), Some(&0));
     assert_eq!(thai_boundaries.line_break.last(), Some(&thai.len()));
+}
+
+#[test]
+fn language_tailoring_ignores_same_language_run_boundaries() {
+    let text = "ภาษาไทยภาษาไทย";
+    let style = ShapingStyle {
+        language: Some("th-TH".to_owned()),
+        ..ShapingStyle::new(1200)
+    };
+    let flat = [StyledSpan {
+        text,
+        style: style.clone(),
+    }];
+    let split_at = 12;
+    let split = [
+        StyledSpan {
+            text: &text[..split_at],
+            style: style.clone(),
+        },
+        StyledSpan {
+            text: &text[split_at..],
+            style,
+        },
+    ];
+
+    let flat_boundaries = boundaries_for_spans(text, &flat);
+    let split_boundaries = boundaries_for_spans(text, &split);
+
+    assert_eq!(split_boundaries, flat_boundaries);
+
+    let chinese_text = "你好，世界。再见！";
+    let chinese_style = ShapingStyle {
+        language: Some("zh-Hans".to_owned()),
+        ..ShapingStyle::new(1200)
+    };
+    let flat_chinese = [StyledSpan {
+        text: chinese_text,
+        style: chinese_style.clone(),
+    }];
+    let split_at = "你好".len();
+    let split_chinese = [
+        StyledSpan {
+            text: &chinese_text[..split_at],
+            style: chinese_style.clone(),
+        },
+        StyledSpan {
+            text: &chinese_text[split_at..],
+            style: chinese_style,
+        },
+    ];
+    assert_eq!(
+        boundaries_for_spans(chinese_text, &split_chinese),
+        boundaries_for_spans(chinese_text, &flat_chinese)
+    );
 }
 
 #[test]
