@@ -10,7 +10,8 @@ mod storage_format;
 pub use model::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentSettings, ExplicitBreak,
     InlineEnvironment, InlineEnvironmentKind, InlineNode, Media, ModelError, NodeId, OpaqueNode,
-    PageSection, Paragraph, Run, SoftBreak, ThemeSnapshot,
+    PageSection, Paragraph, ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing,
+    Run, SoftBreak, ThemeSnapshot,
 };
 pub use page_geometry::{
     Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,

@@ -1,9 +1,28 @@
 //! 提供 Unicode 文字分析、系统字体目录、字体回退与 glyph/cluster 位置映射。
 
+pub mod font_selection;
 mod fonts;
+mod line_metrics;
+pub mod pagination;
+mod paragraph;
+mod paragraph_style;
 mod shaping;
 
+pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
 pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
+pub use line_metrics::{
+    FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
+    calculate_line_metrics,
+};
+pub use pagination::{
+    PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
+    paginate_paragraphs,
+};
+pub use paragraph::{
+    ParagraphLayout, ParagraphLayoutError, ParagraphLine, layout_shaped_paragraph,
+    layout_shaped_paragraph_with_style,
+};
+pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use shaping::{ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries};
 
 #[cfg(test)]

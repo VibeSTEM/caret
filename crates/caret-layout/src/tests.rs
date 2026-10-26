@@ -1,7 +1,13 @@
 //! 验证 Unicode 边界、段落塑形、字体回退与目录刷新。
 
-use crate::{FontCatalog, ShapingStyle, TextShaper, UNICODE_DATA_VERSION, UnicodeBoundaries};
-use caret_doc::{InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run};
+use crate::{
+    FontCatalog, FontLineMetrics, InkBounds, InlineObjectMetrics, LineSpacing,
+    ResolvedDocumentTextSettings, ShapingStyle, TextShaper, UNICODE_DATA_VERSION,
+    UnicodeBoundaries, layout_shaped_paragraph,
+};
+use caret_doc::{
+    DocumentSettings, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+};
 use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 use std::collections::BTreeMap;
 
@@ -30,6 +36,262 @@ fn unicode_line_breaks_include_complex_script_dictionary_opportunities() {
 }
 
 #[test]
+fn unicode_line_breaks_apply_english_default_and_chinese_locale_rules() {
+    let english = "A short scientific paper.";
+    let english_boundaries = UnicodeBoundaries::new_with_language(english, Some("en-US"));
+    assert!(english_boundaries.line_break.contains(&"A ".len()));
+    assert!(english_boundaries.line_break.contains(&english.len()));
+
+    let chinese = "你好，世界。";
+    let chinese_boundaries = UnicodeBoundaries::new_with_language(chinese, Some("zh-Hans"));
+    let before_comma = "你好".len();
+    let after_comma = "你好，".len();
+    let before_period = "你好，世界".len();
+    assert!(!chinese_boundaries.line_break.contains(&before_comma));
+    assert!(chinese_boundaries.line_break.contains(&after_comma));
+    assert!(!chinese_boundaries.line_break.contains(&before_period));
+    assert!(chinese_boundaries.line_break.contains(&chinese.len()));
+
+    let opening_punctuation = "甲（乙";
+    let after_opening = "甲（".len();
+    let opening_boundaries =
+        UnicodeBoundaries::new_with_language(opening_punctuation, Some("zh-CN"));
+    assert!(!opening_boundaries.line_break.contains(&after_opening));
+}
+
+#[test]
+fn chinese_kinsoku_keeps_mandatory_unicode_breaks() {
+    let text = "a\u{2028}，b";
+    let boundary_after_line_separator = "a\u{2028}".len();
+    let boundaries = UnicodeBoundaries::new_with_language(text, Some("zh"));
+
+    assert!(
+        boundaries
+            .line_break
+            .contains(&boundary_after_line_separator)
+    );
+}
+
+#[test]
+fn paragraph_layout_wraps_at_unicode_breaks_and_keeps_source_ranges_contiguous() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let mut shaper = TextShaper::new();
+    let source = "one two three four";
+    let shaped = match shaper.shape(&mut catalog, source, &ShapingStyle::default()) {
+        Ok(shaped) => shaped.clone(),
+        Err(error) => panic!("paragraph shaping failed: {error}"),
+    };
+    let width = shaped
+        .text
+        .runs()
+        .iter()
+        .map(|run| run.advance)
+        .sum::<f32>()
+        * 0.55;
+    let layout = match layout_shaped_paragraph(
+        source,
+        &shaped,
+        width,
+        LineSpacing::Natural,
+        FontLineMetrics {
+            ascent_pt: 9.6,
+            descent_pt: 2.4,
+            leading_pt: 0.0,
+        },
+        &[],
+    ) {
+        Ok(layout) => layout,
+        Err(error) => panic!("paragraph layout failed: {error}"),
+    };
+
+    assert!(layout.lines.len() > 1);
+    assert!(layout.lines.iter().all(|line| !line.overflows_width));
+    assert_eq!(
+        layout.lines.first().map(|line| line.source_bytes.start),
+        Some(0)
+    );
+    assert_eq!(
+        layout.lines.last().map(|line| line.source_bytes.end),
+        Some(source.len())
+    );
+    assert!(layout.lines.windows(2).all(|lines| {
+        lines[0].consumed_bytes.end == lines[1].source_bytes.start
+            && shaped
+                .line_breaks
+                .binary_search(&lines[0].source_bytes.end)
+                .is_ok()
+            && shaped
+                .grapheme_boundaries
+                .binary_search(&lines[0].source_bytes.end)
+                .is_ok()
+    }));
+}
+
+#[test]
+fn paragraph_layout_keeps_a_trailing_soft_break_as_an_empty_line() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let mut shaper = TextShaper::new();
+    let source = "line\n";
+    let shaped = match shaper.shape(&mut catalog, source, &ShapingStyle::default()) {
+        Ok(shaped) => shaped.clone(),
+        Err(error) => panic!("paragraph shaping failed: {error}"),
+    };
+    let layout = match layout_shaped_paragraph(
+        source,
+        &shaped,
+        500.0,
+        LineSpacing::Natural,
+        FontLineMetrics {
+            ascent_pt: 9.6,
+            descent_pt: 2.4,
+            leading_pt: 0.0,
+        },
+        &[],
+    ) {
+        Ok(layout) => layout,
+        Err(error) => panic!("paragraph layout failed: {error}"),
+    };
+
+    assert_eq!(layout.lines.len(), 2);
+    assert_eq!(layout.lines[0].source_bytes, 0..4);
+    assert_eq!(layout.lines[0].consumed_bytes, 0..5);
+    assert_eq!(layout.lines[1].source_bytes, 5..5);
+    assert_eq!(layout.lines[1].consumed_bytes, 5..5);
+}
+
+#[test]
+fn empty_space_and_tab_only_lines_keep_finite_positive_metrics() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let mut shaper = TextShaper::new();
+    let empty_mark_metrics = FontLineMetrics {
+        ascent_pt: 9.6,
+        descent_pt: 2.4,
+        leading_pt: 0.0,
+    };
+
+    for source in ["", "   ", "\t\t"] {
+        let shaped = match shaper.shape(&mut catalog, source, &ShapingStyle::default()) {
+            Ok(shaped) => shaped.clone(),
+            Err(error) => panic!("paragraph shaping failed for {source:?}: {error}"),
+        };
+        let layout = match layout_shaped_paragraph(
+            source,
+            &shaped,
+            500.0,
+            LineSpacing::Natural,
+            empty_mark_metrics,
+            &[],
+        ) {
+            Ok(layout) => layout,
+            Err(error) => panic!("paragraph layout failed for {source:?}: {error}"),
+        };
+
+        assert!(!layout.lines.is_empty(), "source {source:?}");
+        assert!(layout.total_height_pt.is_finite() && layout.total_height_pt > 0.0);
+        assert!(
+            layout
+                .lines
+                .iter()
+                .all(|line| line.metrics.height_pt.is_finite() && line.metrics.height_pt > 0.0)
+        );
+    }
+}
+
+#[test]
+fn inline_object_metrics_replace_placeholder_cluster_advance_and_font_height() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let mut shaper = TextShaper::new();
+    let source = "x";
+    let shaped = match shaper.shape(&mut catalog, source, &ShapingStyle::default()) {
+        Ok(shaped) => shaped.clone(),
+        Err(error) => panic!("paragraph shaping failed: {error}"),
+    };
+    let object = InlineObjectMetrics {
+        source_bytes: 0..1,
+        advance_pt: 30.0,
+        ascent_pt: 16.0,
+        descent_pt: 4.0,
+        ink_bounds: InkBounds {
+            left: 0.0,
+            top: -16.0,
+            right: 30.0,
+            bottom: 4.0,
+        },
+    };
+    let layout = match layout_shaped_paragraph(
+        source,
+        &shaped,
+        10.0,
+        LineSpacing::Natural,
+        FontLineMetrics {
+            ascent_pt: 9.6,
+            descent_pt: 2.4,
+            leading_pt: 0.0,
+        },
+        &[object],
+    ) {
+        Ok(layout) => layout,
+        Err(error) => panic!("paragraph layout failed: {error}"),
+    };
+
+    assert_eq!(layout.lines[0].advance_pt, 30.0);
+    assert!(layout.lines[0].overflows_width);
+    assert!(layout.lines[0].metrics.height_pt >= 20.0);
+}
+
+#[test]
+fn paragraph_layout_honors_unicode_mandatory_breaks() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let mut shaper = TextShaper::new();
+    let empty_mark_metrics = FontLineMetrics {
+        ascent_pt: 9.6,
+        descent_pt: 2.4,
+        leading_pt: 0.0,
+    };
+
+    for separator in ["\n", "\r\n", "\u{000c}", "\u{2028}", "\u{2029}"] {
+        let source = format!("left{separator}right");
+        let break_start = "left".len();
+        let break_end = break_start + separator.len();
+        let shaped = match shaper.shape(&mut catalog, &source, &ShapingStyle::default()) {
+            Ok(shaped) => shaped.clone(),
+            Err(error) => panic!("paragraph shaping failed for {separator:?}: {error}"),
+        };
+        let layout = match layout_shaped_paragraph(
+            &source,
+            &shaped,
+            500.0,
+            LineSpacing::Natural,
+            empty_mark_metrics,
+            &[],
+        ) {
+            Ok(layout) => layout,
+            Err(error) => panic!("paragraph layout failed for {separator:?}: {error}"),
+        };
+
+        assert_eq!(layout.lines.len(), 2, "separator {separator:?}");
+        assert_eq!(layout.lines[0].source_bytes, 0..break_start);
+        assert_eq!(layout.lines[0].consumed_bytes, 0..break_end);
+        assert_eq!(layout.lines[1].source_bytes, break_end..source.len());
+    }
+}
+
+#[test]
 fn dictionary_line_breaks_do_not_split_an_extended_grapheme() {
     let text = "\u{0e31}\u{0308}\u{0e31}";
     let boundaries = UnicodeBoundaries::new_with_language(text, Some("th"));
@@ -47,6 +309,7 @@ fn run_language_enables_dictionary_breaks_over_paragraph_language() {
     let paragraph = Paragraph {
         id: node_id("localized-run-paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![InlineNode::Run(Run {
             text: "ภาษาไทยภาษาไทย".to_owned(),
             language: Some("th-TH".to_owned()),
@@ -74,6 +337,127 @@ fn run_language_enables_dictionary_breaks_over_paragraph_language() {
 }
 
 #[test]
+fn document_language_is_used_when_paragraph_has_no_override() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let paragraph = Paragraph {
+        id: node_id("document-language-paragraph"),
+        language: None,
+        layout: None,
+        inlines: vec![InlineNode::Run(Run {
+            text: "ภาษาไทยภาษาไทย".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })],
+        mark_style: BTreeMap::new(),
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    let settings = DocumentSettings {
+        default_language: Some("th-TH".to_owned()),
+        default_font_family: Some("Caret Missing Preference Font".to_owned()),
+        ..DocumentSettings::default()
+    };
+    let resolved_settings = ResolvedDocumentTextSettings::from_document_settings(&settings)
+        .unwrap_or_else(|error| panic!("document settings should resolve: {error}"));
+    let mut shaper = TextShaper::new();
+    let output = match shaper.shape_paragraph_with_resolved_settings(
+        &mut catalog,
+        &paragraph,
+        &resolved_settings,
+        &ShapingStyle::default(),
+    ) {
+        Ok(output) => output,
+        Err(error) => panic!("document-language shaping failed: {error}"),
+    };
+
+    assert!(output.line_breaks.len() > 2);
+    assert!(output.requested_family_missing);
+    assert!(!output.actual_families.is_empty());
+}
+
+#[test]
+fn font_preferences_use_full_run_language_even_when_shaping_language_is_narrower() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let paragraph = Paragraph {
+        id: node_id("variant-language-font-preference"),
+        language: None,
+        layout: None,
+        inlines: vec![InlineNode::Run(Run {
+            text: "Slovenščina".to_owned(),
+            language: Some("sl-rozaj".to_owned()),
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })],
+        mark_style: BTreeMap::new(),
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    let settings = DocumentSettings {
+        language_script_font_families: BTreeMap::from([(
+            "Latn".to_owned(),
+            BTreeMap::from([("sl-rozaj".to_owned(), "Missing Slovenian Font".to_owned())]),
+        )]),
+        ..DocumentSettings::default()
+    };
+    let resolved_settings = ResolvedDocumentTextSettings::from_document_settings(&settings)
+        .unwrap_or_else(|error| panic!("document settings should resolve: {error}"));
+    let mut shaper = TextShaper::new();
+    let output = match shaper.shape_paragraph_with_resolved_settings(
+        &mut catalog,
+        &paragraph,
+        &resolved_settings,
+        &ShapingStyle::default(),
+    ) {
+        Ok(output) => output,
+        Err(error) => panic!("language-specific font preference failed: {error}"),
+    };
+
+    assert!(output.requested_family_missing);
+    assert!(!output.actual_families.is_empty());
+}
+
+#[test]
+fn paragraph_reshaping_rejects_empty_ranges_inside_utf8_characters() {
+    let mut catalog = match FontCatalog::system() {
+        Ok(catalog) => catalog,
+        Err(error) => panic!("font enumeration failed: {error}"),
+    };
+    let paragraph = Paragraph {
+        id: node_id("utf8-range-paragraph"),
+        language: None,
+        layout: None,
+        inlines: vec![InlineNode::Run(Run {
+            text: "中".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })],
+        mark_style: BTreeMap::new(),
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    let mut shaper = TextShaper::new();
+
+    assert!(matches!(
+        shaper.shape_paragraph_range(
+            &mut catalog,
+            &paragraph,
+            &ShapingStyle::default(),
+            1..1,
+            BaseDirection::Ltr,
+        ),
+        Err(crate::ShapingError::InvalidTextRange)
+    ));
+}
+
+#[test]
 fn dictionary_breaks_stay_inside_runs_with_the_matching_language() {
     let mut catalog = match FontCatalog::system() {
         Ok(catalog) => catalog,
@@ -86,6 +470,7 @@ fn dictionary_breaks_stay_inside_runs_with_the_matching_language() {
     let paragraph = Paragraph {
         id: node_id("mixed-language-break-paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: first_run.to_owned(),
@@ -470,6 +855,7 @@ fn paragraph_shaping_resolves_nested_bold_and_font_environments() {
     let paragraph = Paragraph {
         id: node_id("paragraph"),
         language: Some("en".to_owned()),
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: "plain ".to_owned(),
@@ -536,6 +922,7 @@ fn same_style_run_boundaries_do_not_change_shaping() {
     let paragraph = Paragraph {
         id: node_id("split-run-paragraph"),
         language: None,
+        layout: None,
         inlines: vec![
             InlineNode::Run(Run {
                 text: "office العربية e".to_owned(),

@@ -19,6 +19,8 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.section",
     "caret.env.showcase",
     "caret.env.templates",
+    "caret.font.family-preferences",
+    "caret.paragraph.layout-settings",
     "caret.text.language-tags",
     "caret.theme.snapshot",
 ];

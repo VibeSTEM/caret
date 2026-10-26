@@ -1,18 +1,18 @@
 # 文字塑形与位置
 
-更新日期：2026-10-25。文字运行和格式来源见[格式语义](text-formatting.md)。文本分析、字体目录与 shaping 由 Rust `caret-layout` 管理，Qt 只暴露平台默认文本字体等宿主信息。
+更新日期：2026-10-26。文字运行和格式来源见[格式语义](text-formatting.md)；文档全局字体选择见[多文字体系字体选择](font-selection.md)。文本分析、字体目录与 shaping 由 Rust `caret-layout` 管理，Qt 只暴露平台默认文本字体等宿主信息。
 
 ## 跨平台与多语言契约
 
-Windows、macOS 和 Linux 共用同一 Unicode 数据版本及字素、双向和断行规则；版本在构建配置中集中锁定，升级必须显式进行，并运行相同的 conformance corpus。不能让光标边界、删除单位或行断机会因操作系统 API 默认值而变化。规范依据：[UAX #29 文本分段](https://www.unicode.org/reports/tr29/)、[UAX #9 双向算法](https://www.unicode.org/reports/tr9/) 和 [UAX #14 行断算法](https://www.unicode.org/reports/tr14/)。光标与退格/删除使用 UAX #29 extended grapheme cluster 边界；RTL 重排在段落内进行；断行先确定 Unicode 允许的断行机会，再由段落排版器选取实际断点。语言按 Run → Paragraph → 文档默认 BCP 47 标签回退；泰语等无空格语言可据此接入词典断行，不按平台或未经确认的自动检测猜测。
+Windows、macOS 和 Linux 共用同一 Unicode 数据版本及字素、双向和断行规则；版本在构建配置中集中锁定，升级必须显式进行，并运行相同的 conformance corpus。不能让光标边界、删除单位或行断机会因操作系统 API 默认值而变化。规范依据：[UAX #29 文本分段](https://www.unicode.org/reports/tr29/)、[UAX #9 双向算法](https://www.unicode.org/reports/tr9/) 和 [UAX #14 行断算法](https://www.unicode.org/reports/tr14/)。光标与退格/删除使用 UAX #29 extended grapheme cluster 边界；RTL 重排在段落内进行；断行先按 UAX #14 及 ICU4X locale tailoring 确定语言范围内的允许断点，再由段落排版器选取实际断点。M0 首先验证英语默认规则和中文横排禁则；CLREQ 的采用范围见[调查记录](../../research/006-cjk-and-academic-layout.md)。语言按 Run → Paragraph → 文档默认 BCP 47 标签回退；不按平台或未经确认的自动检测猜测。
 
 一致性目标是相同的文档内容、编辑操作和 Unicode 边界行为，不承诺系统字体不同情况下逐像素相同或完全相同的分页。测试几何时使用固定测试字体；真实默认字体按平台和脚本回退。请求字体名和实际匹配字体分开保存/报告。
 
 ## 塑形流程
 
-实现流程：Parley Engine 0.12 做段落脚本/双向分析、字体选择、HarfRust shaping 和 glyph/cluster 映射；fontique 0.12 通过 CoreText、DirectWrite、Fontconfig 等平台后端发现字体并匹配覆盖；`icu_segmenter` 2.3.0 的 Unicode 17 UAX #14 行断机会独立传给后续行布局。字素边界由 `unicode-segmentation` 1.13.3 提供。依赖精确版本和数据均由 Cargo.lock 固定，Windows、macOS、Linux 运行同一份 Unicode 17 UCD grapheme、bidi-character 和 line-break corpus。
+实现流程：Parley Engine 0.12 做段落脚本/双向分析、字体选择、HarfRust shaping 和 glyph/cluster 映射；fontique 0.12 通过 CoreText、DirectWrite、Fontconfig 等平台后端发现字体并匹配覆盖；`icu_segmenter` 2.3.0 的 Unicode 17 UAX #14 行断机会按 BCP 47 语言范围计算后交给段落布局。M0 启用英语默认规则与中文 `zh` locale tailoring，混合语言 Run 按自身语言替换对应范围内断点；`zh` tailoring 不等于完整 CLREQ 支持。字素边界由 `unicode-segmentation` 1.13.3 提供。依赖精确版本和数据均由 Cargo.lock 固定，Windows、macOS、Linux 运行同一份 Unicode 17 UCD grapheme、bidi-character 和 line-break corpus。
 
-文档排版器传入已按格式优先级解析的 `ShapingStyle`；`caret-layout` 再应用 Paragraph/Run 语言与嵌套 Font/Bold/Italic 环境。粗体、斜体和字体环境的有效值进入 shaping items；相邻同有效样式 Run 合并为同一塑形范围，避免文档分段改变连字、字形连接或组合字符塑形。无显式请求族时，Fontique 的 SystemUi generic family 作为主族，缺字再按脚本和语言回退；emoji cluster 优先查询 Emoji generic family。请求族缺失时保留并报告请求名与实际族，不回写文档。系统及用户字体列表在 FontCatalog 创建或显式 refresh 时读取，字体 blob 与引擎状态缓存，不在编辑热路径扫描磁盘。Windows 额外扫描系统 Fonts 与当前用户 Fonts 标准目录，以绕过 Fontique 0.12 对 DirectWrite 缓存集合不检查更新的问题；不承诺检测非标准路径注册及删除项，待 Windows 平台 smoke 复核。
+文档排版器传入已按格式优先级解析的 `ShapingStyle`；`caret-layout` 再应用 Paragraph/Run 语言与嵌套 Font/Bold/Italic 环境。粗体、斜体和字体环境的有效值进入 shaping items；相邻同有效样式 Run 合并为同一塑形范围，避免文档分段改变连字、字形连接或组合字符塑形。全局字体族按[多文字体系字体选择](font-selection.md)解析成脚本/语言上下文候选，由 Parley 段落分析和 Fontique 覆盖查询决定实际族；emoji cluster 优先查询 Emoji generic family。请求族缺失时保留并报告请求名与实际族，不回写文档。系统及用户字体列表在 FontCatalog 创建或显式 refresh 时读取，字体 blob 与引擎状态缓存，不在编辑热路径扫描磁盘。Windows 额外扫描系统 Fonts 与当前用户 Fonts 标准目录，以绕过 Fontique 0.12 对 DirectWrite 缓存集合不检查更新的问题；不承诺检测非标准路径注册及删除项，待 Windows 平台 smoke 复核。
 
 Parley Engine 目前尚未实现任意断点后的逐行 reshaping，且其内部 soft-wrap 标记使用的 LineBreak API 不作为 Caret 的规范断点来源。026 的行布局必须将实际断点限制在引擎安全的 Atom/ShapedCluster 边界；需要跨 boundary 重塑时要在对应 task 中设计和验证，不能假定本 task 已支持。
 

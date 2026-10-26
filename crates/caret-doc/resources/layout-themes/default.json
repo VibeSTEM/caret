@@ -1,0 +1,16 @@
+{
+  "profileId": "default",
+  "formatVersion": 1,
+  "paragraphLayout": {
+    "lineSpacing": {
+      "kind": "multiple",
+      "percent": 115
+    },
+    "spaceBeforeCentipoints": 0,
+    "spaceAfterCentipoints": 1000,
+    "widowOrphanControl": true,
+    "keepWithNext": false,
+    "keepLinesTogether": false,
+    "pageBreakBefore": false
+  }
+}

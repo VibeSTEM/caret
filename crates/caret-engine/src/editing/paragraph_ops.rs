@@ -341,6 +341,7 @@ pub(super) fn merge_adjacent_paragraph(
         return Ok(None);
     };
     if left.language != right.language
+        || left.layout != right.layout
         || left.mark_style != right.mark_style
         || left.props != right.props
         || !left.extra.is_empty()
