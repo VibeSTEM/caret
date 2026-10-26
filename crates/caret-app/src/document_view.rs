@@ -28,11 +28,6 @@ impl DocumentViewRuntime {
     }
 }
 
-/// 为启动窗口生成空白文档的完整初始布局快照。
-pub fn blank_document_layout_snapshot() -> Result<String, String> {
-    DocumentViewRuntime::new_blank()?.layout_snapshot_json()
-}
-
 #[cfg(test)]
 mod tests {
     use super::DocumentViewRuntime;

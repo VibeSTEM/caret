@@ -80,7 +80,8 @@ int main(int argc, char* argv[]) try {
     if (!caret::install_builtin_theme_catalog()) {
         return kExitUnavailable;
     }
-    const rust::String layout_snapshot = caret::ffi::blank_document_layout_snapshot();
+    auto layout_runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String layout_snapshot = caret::ffi::layout_snapshot_json(*layout_runtime);
     const std::string_view layout_snapshot_text(layout_snapshot.data(), layout_snapshot.size());
     if (layout_snapshot_text.starts_with("error:") ||
         !caret::install_layout_snapshot(QString::fromUtf8(
