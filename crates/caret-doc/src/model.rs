@@ -118,6 +118,32 @@ impl Document {
         if let Some(language) = &self.global_settings.default_language {
             validate_language_tag(language)?;
         }
+        validate_font_family(
+            self.global_settings.default_font_family.as_deref(),
+            "defaultFontFamily",
+        )?;
+        validate_font_family(
+            self.global_settings.default_cjk_font_family.as_deref(),
+            "defaultCjkFontFamily",
+        )?;
+        validate_font_family(
+            self.global_settings.default_math_font_family.as_deref(),
+            "defaultMathFontFamily",
+        )?;
+        validate_unique_script_keys(self.global_settings.script_font_families.keys())?;
+        validate_unique_script_keys(self.global_settings.language_script_font_families.keys())?;
+        for family in self.global_settings.script_font_families.values() {
+            validate_font_family(Some(family), "scriptFontFamilies")?;
+        }
+        for languages in self.global_settings.language_script_font_families.values() {
+            validate_unique_language_keys(languages.keys())?;
+            for family in languages.values() {
+                validate_font_family(Some(family), "languageScriptFontFamilies")?;
+            }
+            for language in languages.keys() {
+                validate_language_tag(language)?;
+            }
+        }
         for section in &self.page_sections {
             insert_id(&mut ids, &section.id)?;
             section.geometry().map_err(ModelError::from)?;
@@ -139,6 +165,17 @@ impl Document {
         if self.global_settings.theme.is_some() {
             features.insert("caret.theme.snapshot".to_owned());
         }
+        if self.global_settings.default_font_family.is_some()
+            || self.global_settings.default_cjk_font_family.is_some()
+            || self.global_settings.default_math_font_family.is_some()
+            || !self.global_settings.script_font_families.is_empty()
+            || !self
+                .global_settings
+                .language_script_font_families
+                .is_empty()
+        {
+            features.insert("caret.font.family-preferences".to_owned());
+        }
         if self
             .global_settings
             .theme
@@ -154,11 +191,62 @@ impl Document {
     }
 }
 
+fn validate_font_family(family: Option<&str>, field: &str) -> Result<(), ModelError> {
+    if family.is_some_and(|family| family.trim().is_empty()) {
+        return Err(ModelError::InvalidDocument(format!(
+            "font family in {field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_unique_script_keys<'a>(
+    keys: impl Iterator<Item = &'a String>,
+) -> Result<(), ModelError> {
+    let mut normalized = HashSet::new();
+    for key in keys {
+        if key.len() != 4 || !key.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+            return Err(ModelError::InvalidDocument(format!(
+                "invalid Unicode Script key: {key}"
+            )));
+        }
+        if !normalized.insert(key.to_ascii_lowercase()) {
+            return Err(ModelError::InvalidDocument(format!(
+                "duplicate Unicode Script key: {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_unique_language_keys<'a>(
+    keys: impl Iterator<Item = &'a String>,
+) -> Result<(), ModelError> {
+    let mut normalized = HashSet::new();
+    for key in keys {
+        if !normalized.insert(key.to_ascii_lowercase()) {
+            return Err(ModelError::InvalidDocument(format!(
+                "duplicate BCP 47 language key: {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DocumentSettings {
     pub default_language: Option<String>,
+    /// 默认拉丁字体族，也是未配置脚本的文档级最终回退。
     pub default_font_family: Option<String>,
+    /// CJK 文字体系共用默认值；脚本和语言覆盖可继续收紧范围。
+    pub default_cjk_font_family: Option<String>,
+    /// 公式上下文使用的默认数学字体族。
+    pub default_math_font_family: Option<String>,
+    /// Unicode Script 短标签（常见值与 ISO 15924 短码一致）到字体族的可选覆盖。
+    pub script_font_families: BTreeMap<String, String>,
+    /// 实际脚本范围内按 BCP 47 语言选择的字体族覆盖。
+    pub language_script_font_families: BTreeMap<String, BTreeMap<String, String>>,
     pub default_styles: BTreeMap<String, Value>,
     pub format_overrides: BTreeMap<String, Value>,
     pub theme: Option<ThemeSnapshot>,
@@ -1034,5 +1122,47 @@ impl<'de> Deserialize<'de> for InlineNode {
     {
         let value = Value::deserialize(deserializer)?;
         inline_from_value(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Document, DocumentSettings};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn document_validation_rejects_empty_font_names_and_malformed_script_keys() {
+        let mut document = Document::blank();
+        document.global_settings = DocumentSettings {
+            default_font_family: Some("  ".to_owned()),
+            ..DocumentSettings::default()
+        };
+        assert!(document.validate().is_err());
+
+        document.global_settings = DocumentSettings {
+            script_font_families: BTreeMap::from([("Cyrillic".to_owned(), "Font".to_owned())]),
+            ..DocumentSettings::default()
+        };
+        assert!(document.validate().is_err());
+
+        document.global_settings = DocumentSettings {
+            script_font_families: BTreeMap::from([
+                ("Cyrl".to_owned(), "Font A".to_owned()),
+                ("cyrl".to_owned(), "Font B".to_owned()),
+            ]),
+            ..DocumentSettings::default()
+        };
+        assert!(document.validate().is_err());
+    }
+
+    #[test]
+    fn document_validation_retains_well_formed_unknown_script_keys() {
+        let mut document = Document::blank();
+        document.global_settings = DocumentSettings {
+            script_font_families: BTreeMap::from([("Qaaa".to_owned(), "Future Font".to_owned())]),
+            ..DocumentSettings::default()
+        };
+
+        assert!(document.validate().is_ok());
     }
 }

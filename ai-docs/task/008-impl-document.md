@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-组合 021–024、026、027 的最小能力并接通 FFI 与 ViewModel。`caret-app` 解析路径后交给引擎；画布消费页面快照。打开和保存的原子文件语义遵循[文档模型](../architecture/editor/document-model.md)。沿用当前 QML 外壳，只做承载编辑所必需的连接，不扩展视觉控件。
+组合 021–024、026、027 的最小能力并接通 FFI 与 ViewModel。`caret-app` 解析路径后交给引擎；画布消费页面快照。打开和保存的原子文件语义遵循[文档模型](../architecture/editor/document-model.md)。沿用当前 QML 外壳，只做承载编辑所必需的连接，不扩展视觉控件。行距、段间距与分页如需对齐 Word/OOXML，参考[Office Open XML 调查](../research/008-office-open-xml-spacing-pagination.md)；底层排版语义仍由 026 维护。
 
 不包含：格式工具栏、环境工具按钮、EnvironmentNode 创建/嵌套、`\` 命令、结构导航、公式、表格、增量排版和命令行进程。布局缓存可以先整篇失效。
 
