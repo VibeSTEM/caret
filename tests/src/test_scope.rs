@@ -10,7 +10,13 @@ use std::process::Command;
 use serde_json::Value;
 
 // 只登记当前 native 模块和真实 CTest 标签。未知模块回退全量。
-const NATIVE_LABELS: &[(&str, &[&str])] = &[("i18n", &["cpp", "i18n", "qml"]), ("app", &["qml"])];
+const NATIVE_LABELS: &[(&str, &[&str])] = &[
+    ("i18n", &["cpp", "i18n", "qml"]),
+    ("app", &["qml"]),
+    ("adapters", &["qml"]),
+    ("viewmodels", &["qml"]),
+    ("canvas", &["qml"]),
+];
 
 // Rust package 的直接消费端可能跨过 CXX/构建脚本进入 native 测试。
 // 新增此类边时同步扩展此表和下面的回归用例。
@@ -769,10 +775,7 @@ fn package_path_affects_qml_bridge(package: &str, path: &str) -> bool {
     match package {
         "caret-ffi" | "caret-build" => true,
         "caret-launcher" => path.ends_with("/build.rs"),
-        "caret-app" => matches!(
-            path,
-            "crates/caret-app/src/theme.rs" | "crates/caret-app/src/theme_schema.rs"
-        ),
+        "caret-app" => path.starts_with("crates/caret-app/src/settings/theme"),
         _ => false,
     }
 }
@@ -780,20 +783,23 @@ fn package_path_affects_qml_bridge(package: &str, path: &str) -> bool {
 fn native_header_affects_qml_typeinfo(path: &str) -> bool {
     matches!(
         path,
-        "native/app/document_path_adapter.hpp"
-            | "native/app/platform_fonts.hpp"
-            | "native/app/theme_view_model.hpp"
-            | "native/app/window_chrome_metrics.hpp"
+        "native/adapters/document_path_adapter.hpp"
+            | "native/adapters/platform_fonts.hpp"
+            | "native/adapters/window_chrome_metrics.hpp"
+            | "native/viewmodels/theme/theme_view_model.hpp"
+            | "native/viewmodels/settings/preferences_view_model.hpp"
+            | "native/viewmodels/settings/settings_dialog_controller.hpp"
+            | "native/viewmodels/document/layout_view_model.hpp"
+            | "native/canvas/document_canvas.hpp"
+            | "native/canvas/document_units.hpp"
+            | "native/canvas/canvas_policy.hpp"
     )
 }
 
 fn package_path_requires_native_tests(package: &str, path: &str) -> bool {
     match package {
         "caret-ffi" | "caret-dsl-core" | "caret-build" | "caret-launcher" => true,
-        "caret-app" => matches!(
-            path,
-            "crates/caret-app/src/theme.rs" | "crates/caret-app/src/theme_schema.rs"
-        ),
+        "caret-app" => path.starts_with("crates/caret-app/src/settings/"),
         _ => false,
     }
 }
@@ -1108,12 +1114,15 @@ mod tests {
                 assert_eq!(scope, NativeLintScope::All, "{input}");
             }
         }
-        let source = "native/app/window_chrome_metrics_mac.mm";
+        let source = "native/adapters/window_chrome_metrics_mac.mm";
         assert_eq!(
             native_scope_for_paths(&[source.into()]),
             NativeLintScope::Sources(BTreeSet::from([source.into()]))
         );
-        assert!(native_scope_for_paths(&["crates/caret-app/src/theme.rs".into()]).is_empty());
+        assert!(
+            native_scope_for_paths(&["crates/caret-app/src/settings/theme/mod.rs".into()])
+                .is_empty()
+        );
         assert!(native_scope_for_paths(&["qml/App.qml".into()]).is_empty());
     }
 
@@ -1140,8 +1149,8 @@ mod tests {
     fn qml_lint_follows_direct_and_mixed_qml_bridge_changes() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
         for path in [
-            "crates/caret-app/src/theme.rs",
-            "crates/caret-app/src/theme_schema.rs",
+            "crates/caret-app/src/settings/theme/mod.rs",
+            "crates/caret-app/src/settings/theme/schema.rs",
             "crates/caret-ffi/src/lib.rs",
         ] {
             assert!(make_plan(&[path.into()], &root)?.qml_lint, "{path}");
@@ -1149,7 +1158,10 @@ mod tests {
         let storage = make_plan(&["crates/caret-app/src/document_storage.rs".into()], &root)?;
         assert!(!storage.qml_lint, "{storage:?}");
         assert!(!storage.native, "{storage:?}");
-        let theme = make_plan(&["crates/caret-app/src/theme.rs".into()], &root)?;
+        let theme = make_plan(
+            &["crates/caret-app/src/settings/theme/mod.rs".into()],
+            &root,
+        )?;
         assert!(theme.native && theme.qml, "{theme:?}");
 
         let mixed = make_plan(
@@ -1405,15 +1417,15 @@ mod tests {
             plan.native_labels,
             BTreeSet::from(["cpp".into(), "i18n".into(), "qml".into()])
         );
-        let app = make_plan(&["native/app/theme_catalog.cpp".into()], &root)?;
+        let app = make_plan(&["native/viewmodels/theme/theme_catalog.cpp".into()], &root)?;
         assert!(!app.full);
         assert_eq!(app.native_labels, BTreeSet::from(["qml".into()]));
         assert!(!app.qml_lint, "{app:?}");
         for header in [
-            "native/app/document_path_adapter.hpp",
-            "native/app/platform_fonts.hpp",
-            "native/app/theme_view_model.hpp",
-            "native/app/window_chrome_metrics.hpp",
+            "native/adapters/document_path_adapter.hpp",
+            "native/adapters/platform_fonts.hpp",
+            "native/viewmodels/theme/theme_view_model.hpp",
+            "native/adapters/window_chrome_metrics.hpp",
         ] {
             assert!(make_plan(&[header.into()], &root)?.qml_lint, "{header}");
         }

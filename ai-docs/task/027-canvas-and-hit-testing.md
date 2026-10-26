@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：022、024、026
 - 优先级：P2
-- 创建 / 更新：2026-10-25 / 2026-10-26
+- 创建 / 更新：2026-10-25 / 2026-10-27
 
 ## 目标与背景
 
@@ -116,6 +116,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：`cargo test --offline --locked -p caret-app visible_page_rasterization_returns_binary_glyph_images`、`cmake --build target/native/debug --target caret_shell_load_test -j2`、`ctest --test-dir target/native/debug -R '^Qml\\.ShellLoad$' --output-on-failure` 均通过。Rust 定向测试与真实 Qt 窗口用例覆盖 glyph 栅格化、输入后的文档 generation 和非空 glyph placements；未做真实字体像素截图对照。
 - 2026-10-26：`cargo test --offline --locked -p caret-layout -p caret-engine` 通过；caret-layout 68 项、caret-engine 54 项。全角中文 `！`、混排和阿拉伯用例验证了当时的全局锚点实现；脚本基线与稳定行推进现拆至 033，这些测试不构成 033 的验收证据。
 - 2026-10-26：真实 Qt 窗口测试新增 glyph ink 像素检查，并在 Rust 文档中插入全角 `！` 后确认画布展示新代际字形；定向 CTest、Rust 布局/引擎测试、Clippy、变更格式与 diff 检查通过。脚本基线与大字号/回退字体行框溢出明确交由 033，不阻塞 027。
+- 2026-10-27：029 将 `DocumentCanvas` 按 scene graph、glyph frames、几何/命中、caret 和输入拆到 `native/canvas/document_canvas/`，保留单一 `caret_canvas` target 与原 QML API。缩放范围/步进归 `CanvasPolicy`，pt/逻辑像素、centipixels 和百分比/倍率换算归 `DocumentUnits`；可见页边界直接使用实际 zoom 的 `documentToContent()`，不再经整数百分比近似。此结构调整不重开 027 的产品验收；本次集成 CMake/CTest 与 workspace 结果记在 029。
 
 ## 完成摘要
 

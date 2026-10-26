@@ -1,6 +1,6 @@
 //! Theme token 单一 schema：键、QML 属性名、类型和允许范围。
 
-use crate::theme::ThemeTokenKind;
+use crate::settings::theme::ThemeTokenKind;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ThemeTokenSpec {

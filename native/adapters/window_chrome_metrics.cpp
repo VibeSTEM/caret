@@ -4,11 +4,8 @@
 #include <QObject>
 #include <QQuickWindow>
 #include <QWindow>
-#include <qnamespace.h>
-#ifndef Q_OS_MACOS
-#include <QtCore/qnamespace.h>
-#endif
 #include <QtCore/qtmetamacros.h>
+#include <qnamespace.h>
 #ifdef Q_OS_WIN
 #include <QtCore/qt_windows.h>
 #endif

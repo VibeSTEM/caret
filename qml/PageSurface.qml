@@ -35,8 +35,7 @@ Item {
         let high = pageSizes.length;
         while (low < high) {
             const middle = low + Math.floor((high - low) / 2);
-            const pageTop = pageCanvas.pageOrigin(middle).y;
-            const pageBottom = pageTop + pageSizes[middle].height * pageCanvas.zoom * 96 / 72;
+            const pageBottom = pageCanvas.documentToContent(middle, Qt.point(0, pageSizes[middle].height)).y;
             if (pageBottom <= visibleTop)
                 low = middle + 1;
             else
@@ -51,7 +50,7 @@ Item {
             const origin = pageCanvas.pageOrigin(pageIndex);
             if (origin.y >= visibleBottom)
                 break;
-            const pageBottom = origin.y + pageSizes[pageIndex].height * pageCanvas.zoom * 96 / 72;
+            const pageBottom = pageCanvas.documentToContent(pageIndex, Qt.point(0, pageSizes[pageIndex].height)).y;
             if (pageBottom <= visibleTop)
                 continue;
             const request = pageCanvas.glyphRasterRequest(pageIndex);
@@ -138,6 +137,7 @@ Item {
             pageColor: Theme.colorPanel
             pageBorderColor: Theme.colorPanelLine
             caretColor: Theme.colorCaret
+            caretBlinkEnabled: PreferencesViewModel.caretBlinkEnabled
             caretWidthCentipixels: Theme.caretWidthCentipixels
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt

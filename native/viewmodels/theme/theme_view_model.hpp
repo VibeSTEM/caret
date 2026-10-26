@@ -18,8 +18,7 @@ class ThemeViewModel final : public QObject {
     QML_SINGLETON
     Q_PROPERTY(QVariantMap tokens READ tokens NOTIFY tokensChanged)
     Q_PROPERTY(QStringList availableThemes READ availableThemes CONSTANT)
-    Q_PROPERTY(QString activeTheme READ activeTheme NOTIFY activeThemeChanged)
-    Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+    Q_PROPERTY(QString activeTheme READ activeTheme CONSTANT)
 
   public:
     explicit ThemeViewModel(QObject* parent = nullptr);
@@ -27,23 +26,14 @@ class ThemeViewModel final : public QObject {
     [[nodiscard]] const QVariantMap& tokens() const { return m_tokens; }
     [[nodiscard]] const QStringList& availableThemes() const { return m_availableThemes; }
     [[nodiscard]] const QString& activeTheme() const { return m_activeTheme; }
-    [[nodiscard]] const QString& error() const { return m_error; }
-
-    /// 切换已注入的主题。未知 ID 不替换当前快照。
-    Q_INVOKABLE bool selectTheme(const QString& id);
 
   signals:
     void tokensChanged();
-    void activeThemeChanged();
-    void errorChanged();
 
   private:
-    void setError(QString error);
-
     QVariantMap m_tokens;
     QStringList m_availableThemes;
     QString m_activeTheme;
-    QString m_error;
 };
 
 } // namespace caret

@@ -43,7 +43,8 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/FormSection.qml
     Dialogs/NewProjectDialog.qml
     Dialogs/SettingsDialog.qml
-    Dialogs/LanguageSettingsPage.qml)
+    Dialogs/LanguageSettingsPage.qml
+    Dialogs/PreferencesSettingsPage.qml)
 
 if(UNIX AND NOT APPLE)
   # Linux 上 qtpaths 与 ICU 73 的 qmlls 辅助文件可以跳过，不影响资源和 typeinfo。
@@ -58,32 +59,18 @@ qt_add_qml_module(
   VERSION
   1.0
   DEPENDENCIES
+  Caret.Adapters
   Caret.Canvas
   Caret.ViewModels
   RESOURCE_PREFIX
   /qt/qml
   ${CARET_QML_MODULE_OPTIONS}
   QML_FILES
-  ${CARET_SHELL_QML_FILES}
-  SOURCES
-  ../native/app/platform_fonts.hpp
-  ../native/app/platform_fonts.cpp
-  ../native/app/document_path_adapter.hpp
-  ../native/app/document_path_adapter.cpp
-  ../native/app/theme_view_model.hpp
-  ../native/app/theme_view_model.cpp)
+  ${CARET_SHELL_QML_FILES})
 set_target_properties(caret_shell PROPERTIES EXPORT_NAME shell)
 caret_native_defaults(caret_shell)
 add_library(caret::shell ALIAS caret_shell)
-target_sources(
-  caret_shell
-  PRIVATE ../native/app/icon_provider.cpp ../native/app/icon_provider.hpp
-          ../native/app/window_chrome_metrics.cpp ../native/app/window_chrome_metrics.hpp)
-if(APPLE)
-  target_sources(caret_shell PRIVATE ../native/app/window_chrome_metrics_mac.mm)
-endif()
-target_include_directories(caret_shell PUBLIC ../native/app)
-target_link_libraries(caret_shell PRIVATE Qt6::Svg Qt6::Quick Qt6::QuickDialogs2)
+target_link_libraries(caret_shell PRIVATE caret::adapters Qt6::QuickDialogs2)
 
 qt_add_resources(
   caret_shell
@@ -124,7 +111,9 @@ if(BUILD_TESTING)
                                   "CARET_QML_IMPORT_PATH=\"${QT_QML_OUTPUT_DIRECTORY}\"")
   target_link_libraries(
     caret_shell_load_test
-    PRIVATE caret_shell
+    PRIVATE caret_adapters
+            caret_adaptersplugin
+            caret_shell
             caret_shellplugin
             caret_canvas
             caret_canvasplugin

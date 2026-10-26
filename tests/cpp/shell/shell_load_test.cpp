@@ -1,12 +1,17 @@
 /// 不链接 launcher、FFI 或应用服务。注入快照后确认 Caret.Shell 可导入，
 /// 验证主题切换绑定、未知图标拒绝着色，以及新建文档窗口的字段边界。
 #include "document_canvas.hpp"
+#include "document_units.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
+#include "preferences_view_model.hpp"
+#include "settings_dialog_controller.hpp"
 #include "theme_view_model.hpp"
+#include <cstddef>
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
-#include "document_runtime.hpp"
+#include "document_runtime_bridge.hpp"
+#include "settings_runtime_bridge.hpp"
 #endif
 #include <QByteArray>
 #include <QChar>
@@ -33,6 +38,7 @@
 #include <QSize>
 #include <QString>
 #include <QStyleHints>
+#include <QTemporaryDir>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QWindow>
@@ -58,6 +64,7 @@
 #include <string_view>
 #include <utility>
 
+Q_IMPORT_QML_PLUGIN(Caret_AdaptersPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_CanvasPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_ViewModelsPlugin)
@@ -108,6 +115,11 @@ class ShellLoadTest : public QObject {
     void unknownIconRefusesColoring();
     void newDocumentDialogHasNoProcessFields();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
+    void documentUnitsConvertThroughIntegerCentipixels();
+    void settingsDialogDraftCancelAndFailure();
+#ifdef CARET_ENABLE_APP
+    void settingsDialogCommitsPreferencesThroughRust();
+#endif
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
 #endif
@@ -147,17 +159,73 @@ void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
     QCOMPARE(probe->property("body").toInt(), 16);
 
     auto* view_model =
-        engine.singletonInstance<caret::ThemeViewModel*>("Caret.Shell", "ThemeViewModel");
+        engine.singletonInstance<caret::ThemeViewModel*>("Caret.ViewModels", "ThemeViewModel");
     QVERIFY(view_model != nullptr);
-    QVERIFY(view_model->selectTheme(QStringLiteral("dark")));
-    QCOMPARE(probe->property("background").value<QColor>(), QColor(QStringLiteral("#111111")));
-    QCOMPARE(probe->property("body").toInt(), 18);
-    QVERIFY(view_model->selectTheme(QStringLiteral("light")));
-    QCOMPARE(probe->property("background").value<QColor>(), QColor(QStringLiteral("#ffffff")));
-    QVERIFY(!view_model->selectTheme(QStringLiteral("missing")));
+    QCOMPARE(view_model->activeTheme(), QStringLiteral("light"));
+    QVERIFY(view_model->availableThemes().contains(QStringLiteral("dark")));
     QCOMPARE(probe->property("background").value<QColor>(), QColor(QStringLiteral("#ffffff")));
     delete probe;
 }
+
+void ShellLoadTest::settingsDialogDraftCancelAndFailure() {
+    caret::PreferencesViewModel preferences;
+    caret::SettingsDialogController controller;
+    controller.setPreferences(&preferences);
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    const bool original = preferences.caretBlinkEnabled();
+    controller.editCaretBlinkEnabled(!original);
+    QCOMPARE(controller.draftCaretBlinkEnabled(), !original);
+    QCOMPARE(preferences.caretBlinkEnabled(), original);
+    controller.cancel();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    QCOMPARE(controller.draftCaretBlinkEnabled(), original);
+    controller.cancel();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+
+    caret::SettingsDialogController unavailable;
+    unavailable.open();
+    QTRY_COMPARE(unavailable.state(), caret::SettingsDialogController::Editing);
+    unavailable.editCaretBlinkEnabled(false);
+    unavailable.apply();
+    QTRY_COMPARE(unavailable.state(), caret::SettingsDialogController::Failed);
+    QVERIFY(!unavailable.draftCaretBlinkEnabled());
+    QVERIFY(!unavailable.error().isEmpty());
+    unavailable.editCaretBlinkEnabled(true);
+    QTRY_COMPARE(unavailable.state(), caret::SettingsDialogController::Editing);
+    QVERIFY(unavailable.error().isEmpty());
+    unavailable.cancel();
+    QTRY_COMPARE(unavailable.state(), caret::SettingsDialogController::Closed);
+}
+
+#ifdef CARET_ENABLE_APP
+void ShellLoadTest::settingsDialogCommitsPreferencesThroughRust() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath(QStringLiteral("settings.json")).toUtf8();
+    auto runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(runtime)));
+    caret::PreferencesViewModel preferences;
+    QVERIFY(preferences.error().isEmpty());
+    caret::SettingsDialogController controller;
+    controller.setPreferences(&preferences);
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    controller.editCaretBlinkEnabled(false);
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+    QVERIFY(!preferences.caretBlinkEnabled());
+    QVERIFY(QFile::exists(QString::fromUtf8(path)));
+    auto reloaded_runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(reloaded_runtime)));
+    caret::PreferencesViewModel reloaded;
+    QVERIFY(!reloaded.caretBlinkEnabled());
+}
+#endif
 
 void ShellLoadTest::unknownIconRefusesColoring() {
     QQmlEngine engine;
@@ -186,6 +254,7 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
         dialogs.entryList(QStringList{QStringLiteral("*.qml")}, QDir::Files, QDir::Name);
     QCOMPARE(names, QStringList({QStringLiteral("LanguageSettingsPage.qml"),
                                  QStringLiteral("NewProjectDialog.qml"),
+                                 QStringLiteral("PreferencesSettingsPage.qml"),
                                  QStringLiteral("SettingsDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
@@ -637,6 +706,16 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     delete surface;
     delete view_model;
     delete root;
+}
+
+void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
+    caret::DocumentUnits units;
+    QCOMPARE(units.pointsToLogicalCentipixels(72.0, 100), qint64{9600});
+    QCOMPARE(units.centipixelsToLogicalPixels(125), qreal{1.25});
+    QCOMPARE(units.percentToFactor(125), qreal{1.25});
+    QCOMPARE(units.factorToPercent(1.25), 125);
+    QCOMPARE(units.pointsToLogicalCentipixels(-1.0, 100), qint64{0});
+    QCOMPARE(units.pointsToLogicalCentipixels(12.0, -1), qint64{0});
 }
 
 #ifdef CARET_ENABLE_APP

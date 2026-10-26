@@ -1,15 +1,10 @@
 //! `.cdoc` 文件 I/O。领域模型与 JSON 编解码由 `caret-doc` 提供。
 
+use crate::storage::atomic_file::{self, AtomicFileError};
 use caret_doc::{CdocFile, DocumentError, OpenedDocument, open};
-use std::ffi::OsString;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+use std::fs;
+use std::path::Path;
 
 /// 文档文件访问失败。解码/校验错误与本地 I/O 错误分开报告。
 #[derive(Debug)]
@@ -53,183 +48,19 @@ impl DocumentStorage {
     /// 先写入同目录临时文件并同步，再原子替换目标。
     pub fn save_file(&self, path: &Path, document: &CdocFile) -> Result<(), DocumentStorageError> {
         let payload = document.to_bytes()?;
-        write_atomically(path, &payload, |file, payload| file.write_all(payload))
+        // 目录同步采用最佳努力；成功返回表示文件已替换，与 Settings 共用同一提交点。
+        atomic_file::write(path, &payload)
+            .map(|_| ())
+            .map_err(DocumentStorageError::from)
     }
 }
 
-fn write_atomically(
-    path: &Path,
-    payload: &[u8],
-    write_payload: impl FnOnce(&mut fs::File, &[u8]) -> std::io::Result<()>,
-) -> Result<(), DocumentStorageError> {
-    let parent = path
-        .parent()
-        .filter(|value| !value.as_os_str().is_empty())
-        .ok_or(DocumentStorageError::MissingParent)?;
-    let file_name = path
-        .file_name()
-        .ok_or(DocumentStorageError::MissingFileName)?;
-    fs::create_dir_all(parent).map_err(DocumentStorageError::Io)?;
-
-    let (temporary, mut file) = create_temp_file(parent, file_name)?;
-    let write_result = write_payload(&mut file, payload).and_then(|()| file.sync_all());
-    drop(file);
-    let result = write_result
-        .map_err(DocumentStorageError::Io)
-        .and_then(|()| fs::rename(&temporary, path).map_err(DocumentStorageError::Io));
-    if result.is_ok() {
-        sync_parent_best_effort(parent);
-    } else {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-fn create_temp_file(
-    parent: &Path,
-    file_name: &std::ffi::OsStr,
-) -> Result<(PathBuf, fs::File), DocumentStorageError> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    for _ in 0..128 {
-        let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let mut name = OsString::from(".");
-        name.push(file_name);
-        name.push(format!(
-            ".{}.{timestamp:x}.{sequence:x}.tmp",
-            std::process::id()
-        ));
-        let path = parent.join(name);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(DocumentStorageError::Io(error)),
+impl From<AtomicFileError> for DocumentStorageError {
+    fn from(error: AtomicFileError) -> Self {
+        match error {
+            AtomicFileError::Io(error) => Self::Io(error),
+            AtomicFileError::MissingParent => Self::MissingParent,
+            AtomicFileError::MissingFileName => Self::MissingFileName,
         }
-    }
-    Err(DocumentStorageError::Io(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "temporary file names exhausted",
-    )))
-}
-
-fn sync_parent_best_effort(parent: &Path) {
-    #[cfg(unix)]
-    if let Ok(directory) = fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = parent;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{DocumentStorageError, write_atomically};
-    use std::cell::Cell;
-    use std::fs;
-    use std::io::{Error, ErrorKind, Write};
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TempDir {
-        root: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(label: &str) -> std::io::Result<Self> {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos());
-            let root = std::env::temp_dir().join(format!(
-                "caret-atomic-save-{}-{label}-{nonce}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&root)?;
-            Ok(Self { root })
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
-
-    #[test]
-    fn failed_temporary_write_preserves_existing_file() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = TempDir::new("write-failure")?;
-        let target = directory.root.join("document.cdoc");
-        fs::write(&target, b"previous document")?;
-
-        let result = write_atomically(&target, b"replacement document", |file, payload| {
-            file.write_all(&payload[..5])?;
-            Err(Error::new(ErrorKind::WriteZero, "injected write failure"))
-        });
-
-        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
-        assert_eq!(fs::read(&target)?, b"previous document");
-        let entries = fs::read_dir(&directory.root)?.count();
-        assert_eq!(entries, 1, "failed save must remove its temporary file");
-        Ok(())
-    }
-
-    #[test]
-    fn missing_path_components_are_rejected_before_writing() {
-        for (target, diagnostic) in [
-            (
-                Path::new("document.cdoc"),
-                "document.storage_missing_parent",
-            ),
-            (Path::new("parent/.."), "document.storage_missing_filename"),
-        ] {
-            let wrote = Cell::new(false);
-            let result = write_atomically(target, b"replacement", |_, _| {
-                wrote.set(true);
-                Ok(())
-            });
-            let Err(error) = result else {
-                panic!("invalid target must be rejected");
-            };
-            assert_eq!(error.to_string(), diagnostic);
-            assert!(!wrote.get(), "invalid target must not reach the writer");
-        }
-    }
-
-    #[test]
-    fn file_in_parent_path_is_preserved_without_writing() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let directory = TempDir::new("blocked-parent")?;
-        let blocker = directory.root.join("blocked");
-        fs::write(&blocker, b"existing file")?;
-        let wrote = Cell::new(false);
-        let result = write_atomically(&blocker.join("document.cdoc"), b"replacement", |_, _| {
-            wrote.set(true);
-            Ok(())
-        });
-
-        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
-        assert!(!wrote.get(), "parent failure must not reach the writer");
-        assert_eq!(fs::read(&blocker)?, b"existing file");
-        assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn failed_replacement_preserves_target_directory_and_removes_temporary_file()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let directory = TempDir::new("rename-failure")?;
-        let target = directory.root.join("document.cdoc");
-        fs::create_dir(&target)?;
-        let previous = target.join("previous.txt");
-        fs::write(&previous, b"previous contents")?;
-
-        let result = write_atomically(&target, b"replacement document", |file, payload| {
-            file.write_all(payload)
-        });
-
-        assert!(matches!(result, Err(DocumentStorageError::Io(_))));
-        assert_eq!(fs::read(previous)?, b"previous contents");
-        assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
-        Ok(())
     }
 }

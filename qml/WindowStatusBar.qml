@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Caret.Canvas
 
 Rectangle {
     id: statusBar
@@ -68,7 +69,7 @@ Rectangle {
             iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom out")
             contentColor: Theme.colorText
-            onClicked: zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - 0.1)
+            onClicked: zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - zoomSlider.stepSize)
         }
 
         Slider {
@@ -80,8 +81,9 @@ Rectangle {
             Layout.preferredHeight: statusBar.sliderHeight
             Layout.maximumHeight: statusBar.sliderHeight
             padding: 0
-            from: 0.5
-            to: 2
+            from: DocumentUnits.percentToFactor(CanvasPolicy.minimumZoomPercent)
+            to: DocumentUnits.percentToFactor(CanvasPolicy.maximumZoomPercent)
+            stepSize: DocumentUnits.percentToFactor(CanvasPolicy.zoomStepPercent)
             value: 1
             onValueChanged: statusBar.zoomEdited(value)
 
@@ -129,7 +131,7 @@ Rectangle {
             iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom in")
             contentColor: Theme.colorText
-            onClicked: zoomSlider.value = Math.min(zoomSlider.to, zoomSlider.value + 0.1)
+            onClicked: zoomSlider.value = Math.min(zoomSlider.to, zoomSlider.value + zoomSlider.stepSize)
         }
 
         ThemedLabel {
@@ -137,7 +139,7 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
             Layout.preferredWidth: 42
             horizontalAlignment: Text.AlignRight
-            text: Math.round(zoomSlider.value * 100) + "%"
+            text: DocumentUnits.factorToPercent(zoomSlider.value) + "%"
             textSize: Theme.fontSmall
             textColor: Theme.colorText
         }

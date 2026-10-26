@@ -15,9 +15,17 @@ qt_add_qml_module(
   RESOURCE_PREFIX
   /qt/qml
   SOURCES
+  canvas_policy.hpp
+  document_units.hpp
+  document_units.cpp
   document_canvas.hpp
   document_canvas.cpp
-  document_canvas_input.cpp)
+  document_canvas/caret.cpp
+  document_canvas/geometry.cpp
+  document_canvas/glyph_frames.cpp
+  document_canvas/input.cpp
+  document_canvas/scene_graph.cpp
+  document_canvas/value_validation.hpp)
 set_target_properties(caret_canvas PROPERTIES EXPORT_NAME canvas)
 caret_native_defaults(caret_canvas)
 add_library(caret::canvas ALIAS caret_canvas)

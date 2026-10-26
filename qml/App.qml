@@ -2,19 +2,21 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import Caret.Shell
+import Caret.ViewModels
 
 Window {
     id: window
 
     objectName: "caretWindow"
     visible: true
-    width: 1120
-    height: 760
-    minimumWidth: 880
-    minimumHeight: 560
+    width: PreferencesViewModel.windowWidth
+    height: PreferencesViewModel.windowHeight
+    minimumWidth: PreferencesViewModel.minimumWindowWidth
+    minimumHeight: PreferencesViewModel.minimumWindowHeight
     // Linux XCB 会把空标题换成应用名。零宽字符保留窗口按钮，同时不显示文字。
     title: Qt.platform.os === "linux" ? "\u200B" : ""
     color: Theme.colorChrome
@@ -44,7 +46,7 @@ Window {
                 window: window
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
-                onSettingsRequested: settingsDialog.open()
+                onSettingsRequested: settingsController.open()
                 documentName: window.documentName
                 onSaveRequested: {
                     if (window.documentFileUrl.toString().length === 0)
@@ -76,11 +78,37 @@ Window {
         }
     }
 
+    SettingsDialogController {
+        id: settingsController
+        preferences: PreferencesViewModel
+        onOpened: settingsDialog.open()
+        onClosed: settingsDialog.close()
+    }
+
     SettingsDialog {
         id: settingsDialog
         objectName: "settingsDialog"
         ownerWindow: window
-        onAcceptRequested: settingsDialog.completeAccept()
+        controller: settingsController
+        pages: [
+            {
+                routeId: "preferences",
+                title: qsTranslate("SettingsDialog", "Preferences"),
+                iconName: "settings",
+                pageComponent: preferencesSettingsPage
+            }
+        ]
+    }
+
+    Component {
+        id: preferencesSettingsPage
+
+        PreferencesSettingsPage {
+            caretBlinkEnabled: settingsController.draftCaretBlinkEnabled
+            errorText: settingsController.error
+            enabled: !settingsController.busy
+            onCaretBlinkEnabledEdited: enabled => settingsController.editCaretBlinkEnabled(enabled)
+        }
     }
 
     FileDialog {

@@ -1,10 +1,41 @@
-//! native 与 Rust 的边界。导出应用版本、主题目录和持久的文档布局运行时。
+//! native 与 Rust 的类型桥接入口；手写转发按文档和设置分类。
 
-// cxx 展开的桥在子模块里。allow 只覆盖生成胶水，手写代码不写 unsafe。
+mod document;
+mod settings;
+#[cfg(test)]
+mod tests;
+
+fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
+// 宏展开允许生成胶水使用 unsafe；手写运行时和转发保持普通 workspace lint。
 #[allow(unsafe_code, clippy::all)]
 mod generated {
+    use crate::document::{
+        DocumentRuntime, current_caret_json, delete_backward_json, document_hit_test_json,
+        insert_soft_break_json, insert_text_json, layout_snapshot_json, new_blank_document_runtime,
+        place_caret_at_page_json, rasterize_page_glyphs, split_paragraph_json,
+    };
+    use crate::settings::{
+        SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_caret_blink_enabled,
+        settings_constraints, settings_load_warning, settings_snapshot, settings_theme_catalog,
+    };
+    use crate::version;
+
     #[cxx::bridge(namespace = "caret::ffi")]
-    mod bridge {
+    pub(crate) mod bridge {
+        struct GlyphRasterRequest {
+            page_index: u32,
+            px_per_pt: f64,
+            page_origin_device_x_px: f64,
+            page_origin_device_y_px: f64,
+            foreground_red: u8,
+            foreground_green: u8,
+            foreground_blue: u8,
+            foreground_alpha: u8,
+        }
+
         struct GlyphImage {
             width: u32,
             height: u32,
@@ -34,13 +65,44 @@ mod generated {
             placements: Vec<GlyphPlacement>,
         }
 
+        struct SettingsSnapshot {
+            caret_blink_enabled: bool,
+            window_width: u32,
+            window_height: u32,
+            theme_id: String,
+            language: String,
+            error: String,
+            warning: String,
+        }
+
+        struct SettingsConstraints {
+            minimum_window_width: u32,
+            minimum_window_height: u32,
+        }
+
         extern "Rust" {
             type DocumentRuntime;
+            type SettingsRuntime;
 
             fn version() -> String;
             fn builtin_theme_catalog() -> String;
             /// Rust 分配运行时；C++ 通过 rust::Box 持有并负责析构，句柄有效期随 Box。
             fn new_blank_document_runtime() -> Box<DocumentRuntime>;
+            /// 从宿主给定的配置路径载入 Rust 偏好服务；无效文件会按服务规则隔离并回退默认值。
+            fn new_settings_runtime(settings_path: String) -> Box<SettingsRuntime>;
+            /// 获取 Rust SettingsService 派生的界面快照。
+            fn settings_snapshot(runtime: &mut SettingsRuntime) -> SettingsSnapshot;
+            /// 获取当前 SettingsService 中活动主题对应的完整主题目录。
+            fn settings_theme_catalog(runtime: &mut SettingsRuntime) -> String;
+            /// 返回由 Rust Preferences 校验的窗口尺寸约束。
+            fn settings_constraints() -> SettingsConstraints;
+            /// 返回启动时设置加载的非致命诊断；无诊断时为空。
+            fn settings_load_warning(runtime: &mut SettingsRuntime) -> String;
+            /// 更新单项偏好；校验或持久化失败时保留当前内存快照。
+            fn set_caret_blink_enabled(
+                runtime: &mut SettingsRuntime,
+                enabled: bool,
+            ) -> SettingsSnapshot;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;
             /// 仅在持有句柄的 UI 线程同步调用，不保留借用；无位置返回 JSON null，错误以 error: 开头。
@@ -70,297 +132,8 @@ mod generated {
             /// 只栅格化请求页，图像字节走二进制向量，不经 JSON/Base64。
             fn rasterize_page_glyphs(
                 runtime: &mut DocumentRuntime,
-                page_index: u32,
-                px_per_pt: f64,
-                page_origin_device_x_px: f64,
-                page_origin_device_y_px: f64,
-                foreground_red: u8,
-                foreground_green: u8,
-                foreground_blue: u8,
-                foreground_alpha: u8,
+                request: &GlyphRasterRequest,
             ) -> PageGlyphFrame;
-        }
-    }
-
-    /// 持有文档会话、字体目录与布局缓存的 Rust 应用运行时。
-    pub struct DocumentRuntime {
-        runtime: Result<caret_app::document_view::DocumentViewRuntime, String>,
-    }
-
-    fn version() -> String {
-        env!("CARGO_PKG_VERSION").to_owned()
-    }
-
-    /// 成功时是 JSON。失败时以 `error:` 开头，调用方不要把它当成快照。
-    fn builtin_theme_catalog() -> String {
-        match caret_app::theme::builtin_theme_catalog() {
-            Ok(json) => json,
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    /// 创建空白文档运行时；初始化错误由首次快照请求返回。
-    fn new_blank_document_runtime() -> Box<DocumentRuntime> {
-        Box::new(DocumentRuntime {
-            runtime: caret_app::document_view::DocumentViewRuntime::new_blank(),
-        })
-    }
-
-    /// 返回页面/段落布局 JSON；错误以 `error:` 开头，调用方不可当作快照消费。
-    fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.layout_snapshot_json() {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    /// 将页面内命中委托给与快照相同的 Rust 布局结果。
-    fn document_hit_test_json(
-        runtime: &mut DocumentRuntime,
-        page_index: i32,
-        x_pt: f64,
-        y_pt: f64,
-    ) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.hit_test_json(page_index, x_pt, y_pt) {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    /// 在同一布局命中结果上更新会话选区，不跨越 FFI 暴露文档节点。
-    fn place_caret_at_page_json(
-        runtime: &mut DocumentRuntime,
-        page_index: i32,
-        x_pt: f64,
-        y_pt: f64,
-    ) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.place_caret_at_page_json(page_index, x_pt, y_pt) {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.insert_text_json(text) {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    fn split_paragraph_json(runtime: &mut DocumentRuntime) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.split_paragraph_json() {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    fn delete_backward_json(runtime: &mut DocumentRuntime) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.delete_backward_json() {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    fn insert_soft_break_json(runtime: &mut DocumentRuntime) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.insert_soft_break_json() {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    fn current_caret_json(runtime: &mut DocumentRuntime) -> String {
-        match &mut runtime.runtime {
-            Ok(runtime) => match runtime.current_caret_json() {
-                Ok(json) => json,
-                Err(error) => format!("error:{error}"),
-            },
-            Err(error) => format!("error:{error}"),
-        }
-    }
-
-    /// 将 Rust 页面布局和 glyph 栅格结果转换为紧凑 CXX 二进制 DTO。
-    fn rasterize_page_glyphs(
-        runtime: &mut DocumentRuntime,
-        page_index: u32,
-        px_per_pt: f64,
-        page_origin_device_x_px: f64,
-        page_origin_device_y_px: f64,
-        foreground_red: u8,
-        foreground_green: u8,
-        foreground_blue: u8,
-        foreground_alpha: u8,
-    ) -> bridge::PageGlyphFrame {
-        let runtime = match &mut runtime.runtime {
-            Ok(runtime) => runtime,
-            Err(error) => return empty_glyph_frame(page_index, error.clone()),
-        };
-        let rasterized = match runtime.rasterize_page_glyphs(
-            usize::try_from(page_index).unwrap_or(usize::MAX),
-            px_per_pt,
-            [page_origin_device_x_px, page_origin_device_y_px],
-            [
-                foreground_red,
-                foreground_green,
-                foreground_blue,
-                foreground_alpha,
-            ],
-        ) {
-            Ok(result) => result,
-            Err(error) => return empty_glyph_frame(page_index, error),
-        };
-        let mut images = Vec::with_capacity(rasterized.images.len());
-        for image in rasterized.images {
-            images.push(bridge::GlyphImage {
-                width: image.width,
-                height: image.height,
-                left: image.left,
-                top: image.top,
-                pixel_phase_applied: image.pixel_phase_applied,
-                pixels: image.pixels,
-            });
-        }
-        let mut placements = Vec::with_capacity(rasterized.placements.len());
-        for placement in rasterized.placements {
-            let Ok(image_index) = u32::try_from(placement.image_index) else {
-                return empty_glyph_frame(page_index, "layout.glyphs.too_many_images".to_owned());
-            };
-            let (clip_enabled, clip_y0_pt, clip_y1_pt) = placement
-                .line_clip_y_pt
-                .map(|clip| (true, clip[0], clip[1]))
-                .unwrap_or((false, 0.0, 0.0));
-            placements.push(bridge::GlyphPlacement {
-                image_index,
-                x_pt: placement.x_pt,
-                baseline_y_pt: placement.baseline_y_pt,
-                pixel_phase_x: placement.pixel_phase[0],
-                pixel_phase_y: placement.pixel_phase[1],
-                clip_enabled,
-                clip_y0_pt,
-                clip_y1_pt,
-            });
-        }
-        bridge::PageGlyphFrame {
-            document_generation: rasterized.document_generation,
-            font_generation: rasterized.font_generation,
-            page_index,
-            error: String::new(),
-            images,
-            placements,
-        }
-    }
-
-    fn empty_glyph_frame(page_index: u32, error: String) -> bridge::PageGlyphFrame {
-        bridge::PageGlyphFrame {
-            document_generation: 0,
-            font_generation: 0,
-            page_index,
-            error,
-            images: Vec::new(),
-            placements: Vec::new(),
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{
-            builtin_theme_catalog, current_caret_json, delete_backward_json,
-            document_hit_test_json, insert_soft_break_json, insert_text_json, layout_snapshot_json,
-            new_blank_document_runtime, place_caret_at_page_json, rasterize_page_glyphs,
-            split_paragraph_json, version,
-        };
-
-        #[test]
-        fn ffi_version_matches_package_metadata() {
-            assert_eq!(version(), env!("CARGO_PKG_VERSION"));
-        }
-
-        #[test]
-        fn ffi_theme_catalog_contains_the_builtin_theme_snapshots() {
-            let catalog = builtin_theme_catalog();
-            assert!(!catalog.starts_with("error:"));
-            assert!(catalog.contains("\"light\""));
-            assert!(catalog.contains("\"dark\""));
-            assert!(catalog.contains("\"colorBackground\""));
-        }
-
-        #[test]
-        fn ffi_layout_snapshot_contains_rust_page_and_paragraph_layout() {
-            let mut runtime = new_blank_document_runtime();
-            let snapshot = layout_snapshot_json(&mut runtime);
-            assert!(!snapshot.starts_with("error:"));
-            assert!(snapshot.contains("\"widthPt\":595."));
-            assert!(snapshot.contains("\"heightPt\":841."));
-            assert!(snapshot.contains("\"paragraphs\":["));
-            assert!(snapshot.contains("\"fontGeneration\":\"1\""));
-            assert_eq!(layout_snapshot_json(&mut runtime), snapshot);
-            let hit = document_hit_test_json(&mut runtime, 0, 73.0, 73.0);
-            assert!(hit.contains("\"offsetUtf8\":\"0\""));
-            assert_eq!(document_hit_test_json(&mut runtime, -1, 73.0, 73.0), "null");
-            assert!(
-                place_caret_at_page_json(&mut runtime, 0, 73.0, 73.0)
-                    .contains("\"offsetUtf8\":\"0\"")
-            );
-            assert_eq!(
-                place_caret_at_page_json(&mut runtime, -1, 73.0, 73.0),
-                "null"
-            );
-            let inserted = insert_text_json(&mut runtime, "xλ".to_owned());
-            assert!(!inserted.starts_with("error:"));
-            assert!(inserted.contains("\"documentGeneration\":\"1\""));
-            assert!(inserted.contains("\"text\":\"xλ\""));
-            let caret = current_caret_json(&mut runtime);
-            assert!(caret.contains("\"pageIndex\":0"));
-            assert!(caret.contains("\"xPt\":"));
-
-            let split = split_paragraph_json(&mut runtime);
-            assert!(!split.starts_with("error:"));
-            assert!(split.contains("\"documentGeneration\":\"2\""));
-            assert!(split.contains("\"text\":\"xλ\""));
-            let soft_break = insert_soft_break_json(&mut runtime);
-            assert!(!soft_break.starts_with("error:"));
-            assert!(soft_break.contains("\"documentGeneration\":\"3\""));
-            let deleted = delete_backward_json(&mut runtime);
-            assert!(!deleted.starts_with("error:"));
-            assert!(deleted.contains("\"documentGeneration\":\"4\""));
-        }
-
-        #[test]
-        fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
-            let mut runtime = new_blank_document_runtime();
-            let frame = rasterize_page_glyphs(&mut runtime, 0, 1.0, 0.0, 0.0, 32, 32, 32, 255);
-            assert!(frame.error.is_empty());
-            assert_eq!(frame.page_index, 0);
-            assert_eq!(frame.document_generation, 0);
-            assert_eq!(frame.font_generation, 1);
-            assert!(frame.images.is_empty());
-            assert!(frame.placements.is_empty());
-
-            let invalid =
-                rasterize_page_glyphs(&mut runtime, 0, f64::NAN, 0.0, 0.0, 32, 32, 32, 255);
-            assert_eq!(invalid.error, "layout.glyphs.invalid_raster_geometry");
-            assert!(invalid.images.is_empty());
-            assert!(invalid.placements.is_empty());
         }
     }
 }

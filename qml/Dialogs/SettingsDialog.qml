@@ -4,33 +4,26 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Caret.ViewModels
 
 DialogWindow {
     id: dialog
 
     objectName: "settingsPageDialog"
     property var pages: []
-    property string activeRouteId: "general"
-    property bool intentionalClose: false
+    property string activeRouteId: "preferences"
+    required property SettingsDialogController controller
 
     signal routeSelected(string routeId)
-    signal acceptRequested
-    signal accepted
-    signal cancelled
-
-    function completeAccept() {
-        intentionalClose = true;
-        accepted();
-        close();
-    }
-
     width: Theme.settingsDialogWidth
     height: Theme.settingsDialogHeight
     title: qsTranslate("SettingsDialog", "Settings")
-    onClosing: {
-        if (!intentionalClose)
-            cancelled();
-        intentionalClose = false;
+    escapeEnabled: !controller.busy
+    onClosing: close => {
+        if (controller.state !== SettingsDialogController.Closed) {
+            close.accepted = false;
+            controller.cancel();
+        }
     }
 
     function open() {
@@ -67,7 +60,10 @@ DialogWindow {
                             highlighted: pageDelegate.modelData.routeId === dialog.activeRouteId
                             focus: highlighted
                             text: pageDelegate.modelData.title
-                            onClicked: dialog.routeSelected(pageDelegate.modelData.routeId)
+                            onClicked: {
+                                dialog.activeRouteId = pageDelegate.modelData.routeId;
+                                dialog.routeSelected(pageDelegate.modelData.routeId);
+                            }
 
                             contentItem: RowLayout {
                                 spacing: Theme.spacingSmall
@@ -110,7 +106,7 @@ DialogWindow {
                     objectName: "settingsPageLoader"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    sourceComponent: dialog.pages.find(page => page.routeId === dialog.activeRouteId)?.pageComponent || unavailablePage
+                    sourceComponent: dialog.pages.find(page => page.routeId === dialog.activeRouteId)?.pageComponent || null
                 }
 
                 DialogButtonRow {
@@ -118,57 +114,15 @@ DialogWindow {
                     ThemedButton {
                         objectName: "settingsCancelButton"
                         text: qsTranslate("DialogAction", "Cancel")
-                        onClicked: {
-                            dialog.intentionalClose = true;
-                            dialog.cancelled();
-                            dialog.close();
-                        }
+                        enabled: !dialog.controller.busy
+                        onClicked: dialog.controller.cancel()
                     }
                     ThemedButton {
                         objectName: "settingsOkButton"
                         text: qsTranslate("DialogAction", "OK")
                         primaryAction: true
-                        onClicked: dialog.acceptRequested()
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: unavailablePage
-
-        ColumnLayout {
-            spacing: Theme.spacingMedium
-
-            ThemedLabel {
-                Layout.fillWidth: true
-                text: qsTranslate("SettingsDialog", "Common application preferences are managed here.")
-                textColor: Theme.colorTextMuted
-                textSize: Theme.fontBody
-                wrapMode: Text.WordWrap
-            }
-
-            PanelSurface {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Theme.applicationMenuHeight / 4
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.spacingMedium
-                    spacing: Theme.spacingSmall
-
-                    ThemedLabel {
-                        Layout.fillWidth: true
-                        text: qsTranslate("SettingsDialog", "Preferences")
-                        textSize: Theme.fontBody
-                    }
-                    ThemedLabel {
-                        Layout.fillWidth: true
-                        text: qsTranslate("SettingsDialog", "Settings pages can be registered in this shared dialog on Windows, Linux, and macOS.")
-                        textColor: Theme.colorTextMuted
-                        textSize: Theme.fontSmall
-                        wrapMode: Text.WordWrap
+                        enabled: !dialog.controller.busy
+                        onClicked: dialog.controller.apply()
                     }
                 }
             }

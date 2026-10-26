@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：001、002
 - 优先级：P0
-- 创建 / 更新：2026-10-25 / 2026-10-25
+- 创建 / 更新：2026-10-25 / 2026-10-27
 
 ## 目标与背景
 
@@ -79,6 +79,7 @@
 - 2026-10-25：从 panta `ee84d95` 复制 `path`、`language`、`settings`、`runtime`。运行时测试不再依赖来源工程夹具。设置文件读写在 Rust：同目录临时文件、fsync、改名；损坏或校验失败的原字节改存为 `<文件名>.isolated`，内存快照不替换。工艺设置没有复制。
 - 2026-10-25：独立评审发现 `C:secret` 这种盘符相对片段只在带斜杠时被拒绝。`validate_relative` 改为拒绝任意以「字母 + 冒号」开头的组件，并补了 `C:secret` 与 `notes/C:secret` 两条测试。评审里的其余项没有改代码。
 - 2026-10-25：主题 schema 保留来源界面的 token 名，其中有工艺对话框尺寸。设置键没有工艺项。改这些 token 名留给后续界面任务。
+- 2026-10-27：后续任务 029 将 `settings.rs` 归并为 `settings/` 模块：SettingsService 协调 Preferences、Theme、Language，SettingsRuntime 管理文件生命周期和 Ready/ReadOnly/Unavailable 状态；共享原子替换工具放在 `caret-app::storage`。此整理不改变 003 的路径语义或配置 JSON 兼容规则。
 
 ## 完成摘要
 
