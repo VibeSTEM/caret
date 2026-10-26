@@ -25,6 +25,7 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedIcon.qml
     Components/Atoms/PanelSurface.qml
     Components/Atoms/RibbonComboBox.qml
+    Canvas/DocumentCanvasPointerHandler.qml
     Components/Composites/ToolGroup.qml
     Components/Composites/ApplicationBackstageCommand.qml
     Components/Composites/RibbonTile.qml
@@ -56,6 +57,9 @@ qt_add_qml_module(
   Caret.Shell
   VERSION
   1.0
+  DEPENDENCIES
+  Caret.Canvas
+  Caret.ViewModels
   RESOURCE_PREFIX
   /qt/qml
   ${CARET_QML_MODULE_OPTIONS}
@@ -122,11 +126,29 @@ if(BUILD_TESTING)
     caret_shell_load_test
     PRIVATE caret_shell
             caret_shellplugin
+            caret_canvas
+            caret_canvasplugin
+            caret_viewmodels
+            caret_viewmodelsplugin
             Qt6::Gui
             Qt6::Qml
             Qt6::Quick
             Qt6::QuickControls2
             Qt6::Test)
+  if(CARET_ENABLE_APP)
+    target_compile_definitions(caret_shell_load_test PRIVATE CARET_ENABLE_APP=1)
+    target_include_directories(caret_shell_load_test PRIVATE "${CARET_FFI_INCLUDE_DIR}")
+    target_link_libraries(caret_shell_load_test PRIVATE "${CARET_FFI_STATIC_LIB}")
+    if(UNIX)
+      find_package(Threads REQUIRED)
+      target_link_libraries(caret_shell_load_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+      if(TARGET PkgConfig::Fontconfig)
+        target_link_libraries(caret_shell_load_test PRIVATE PkgConfig::Fontconfig)
+      endif()
+    elseif(WIN32)
+      target_link_libraries(caret_shell_load_test PRIVATE ws2_32 userenv ntdll)
+    endif()
+  endif()
   caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
 
   find_program(

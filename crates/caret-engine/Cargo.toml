@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 caret-doc.workspace = true
+caret-layout.workspace = true
+serde.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]

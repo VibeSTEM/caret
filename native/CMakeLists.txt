@@ -52,6 +52,12 @@ if(BUILD_TESTING)
 endif()
 find_package(Qt6 6.11 REQUIRED COMPONENTS ${_caret_qt_components} PATHS "${QT_STAGING}"
                                           NO_DEFAULT_PATH)
+if(CARET_ENABLE_APP
+   AND UNIX
+   AND NOT APPLE)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
+endif()
 qt_standard_project_setup()
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
@@ -61,6 +67,8 @@ if(CARET_I18N_TS_DIR)
   add_subdirectory(i18n)
 endif()
 
+add_subdirectory(canvas)
+add_subdirectory(viewmodels)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../qml" qml)
 
 if(CARET_ENABLE_APP)
@@ -72,6 +80,9 @@ if(CARET_ENABLE_APP)
         "CARET_ENABLE_APP requires CARET_FFI_INCLUDE_DIR/caret_ffi.h and CARET_FFI_STATIC_LIB; build via Cargo"
     )
   endif()
+  target_compile_definitions(caret_viewmodels PRIVATE CARET_ENABLE_APP=1)
+  target_include_directories(caret_viewmodels PRIVATE "${CARET_FFI_INCLUDE_DIR}")
+  target_link_libraries(caret_viewmodels PRIVATE "${CARET_FFI_STATIC_LIB}")
   add_subdirectory(app)
 endif()
 

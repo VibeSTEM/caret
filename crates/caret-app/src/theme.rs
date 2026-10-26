@@ -415,7 +415,7 @@ mod tests {
     fn themes_can_override_typed_layout_tokens() -> Result<(), ThemeError> {
         let layout_overrides = LIGHT.replace(
             "kind: theme\n",
-            "kind: theme\n\nvalues:\n  control-height: int = 48\n  font-body: int = 15\n",
+            "kind: theme\n\nvalues:\n  control-height: int = 48\n  font-body: int = 15\n  caret-width-centipixels: int = 125\n",
         );
         let mut service = ThemeService::new(
             GUI,
@@ -441,6 +441,14 @@ mod tests {
                 .find(|token| token.qml_name == "fontBody")
                 .map(|token| &token.value),
             Some(&ThemeTokenValue::Integer(15))
+        );
+        assert_eq!(
+            light
+                .tokens
+                .iter()
+                .find(|token| token.qml_name == "caretWidthCentipixels")
+                .map(|token| &token.value),
+            Some(&ThemeTokenValue::Integer(125))
         );
         Ok(())
     }

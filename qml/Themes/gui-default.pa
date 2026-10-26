@@ -10,6 +10,7 @@ values:
   color-chrome-pressed: string = "#c9c9c9"
   color-chrome-line: string = "#d0d0d0"
   color-panel-line: string = "#c9c9c9"
+  color-caret: string = "#1c1c1c"
   color-status: string = "#efefef"
   color-text: string = "#1c1c1c"
   color-text-muted: string = "#5a5a5a"
@@ -28,6 +29,7 @@ values:
   color-document-close-pressed: string = "#d5e3ef"
   color-dialog-primary: string = "#e5f1fb"
   color-dialog-primary-border: string = "#5d9fc7"
+  caret-width-centipixels: int = 100
   font-title: int = 13
   font-body: int = 13
   font-small: int = 12

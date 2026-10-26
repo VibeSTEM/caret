@@ -1,6 +1,9 @@
 {
   "profileId": "default",
   "formatVersion": 1,
+  "textStyle": {
+    "fontSizeCentipoints": 1200
+  },
   "paragraphLayout": {
     "lineSpacing": {
       "kind": "multiple",

@@ -119,6 +119,11 @@ impl Document {
         if let Some(language) = &self.global_settings.default_language {
             validate_language_tag(language)?;
         }
+        if self.global_settings.default_font_size_centipoints == 0 {
+            return Err(ModelError::InvalidDocument(
+                "default font size must be positive".to_owned(),
+            ));
+        }
         validate_font_family(
             self.global_settings.default_font_family.as_deref(),
             "defaultFontFamily",
@@ -160,6 +165,7 @@ impl Document {
     pub fn required_features(&self) -> Vec<String> {
         let mut features = std::collections::BTreeSet::new();
         features.insert("caret.paragraph.layout-settings".to_owned());
+        features.insert("caret.text.default-font-size".to_owned());
         if self.global_settings.default_language.is_some()
             || self.body.iter().any(block_has_language)
         {
@@ -236,7 +242,7 @@ fn validate_unique_language_keys<'a>(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DocumentSettings {
     pub default_language: Option<String>,
@@ -246,6 +252,9 @@ pub struct DocumentSettings {
     pub default_cjk_font_family: Option<String>,
     /// 公式上下文使用的默认数学字体族。
     pub default_math_font_family: Option<String>,
+    /// 全局正文默认字号，单位为百分之一 pt。
+    #[serde(default = "default_font_size_centipoints")]
+    pub default_font_size_centipoints: u16,
     /// Unicode Script 短标签（常见值与 ISO 15924 短码一致）到字体族的可选覆盖。
     pub script_font_families: BTreeMap<String, String>,
     /// 实际脚本范围内按 BCP 47 语言选择的字体族覆盖。
@@ -257,6 +266,25 @@ pub struct DocumentSettings {
     pub theme: Option<ThemeSnapshot>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Default for DocumentSettings {
+    fn default() -> Self {
+        Self {
+            default_language: None,
+            default_font_family: None,
+            default_cjk_font_family: None,
+            default_math_font_family: None,
+            default_font_size_centipoints: default_font_size_centipoints(),
+            script_font_families: BTreeMap::new(),
+            language_script_font_families: BTreeMap::new(),
+            paragraph_layout: ParagraphLayoutStyle::default(),
+            default_styles: BTreeMap::new(),
+            format_overrides: BTreeMap::new(),
+            theme: None,
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// `.cdoc` 持久化的行距类型。长度单位为百分之一 pt。
@@ -304,6 +332,20 @@ pub struct ParagraphLayoutStyle {
 }
 
 static DEFAULT_PARAGRAPH_LAYOUT: OnceLock<ParagraphLayoutStyle> = OnceLock::new();
+static DEFAULT_FONT_SIZE_CENTIPOINTS: OnceLock<u16> = OnceLock::new();
+
+/// 返回默认排版主题中的正文默认字号，单位为百分之一 pt。
+pub fn default_font_size_centipoints() -> u16 {
+    *DEFAULT_FONT_SIZE_CENTIPOINTS.get_or_init(|| {
+        let profile: BundledLayoutTheme =
+            serde_json::from_str(include_str!("../resources/layout-themes/default.json"))
+                .unwrap_or_else(|error| panic!("bundled default layout theme is invalid: {error}"));
+        assert_eq!(profile.profile_id, "default");
+        assert_eq!(profile.format_version, 1);
+        assert!(profile.text_style.font_size_centipoints > 0);
+        profile.text_style.font_size_centipoints
+    })
+}
 
 impl Default for ParagraphLayoutStyle {
     fn default() -> Self {
@@ -327,7 +369,14 @@ impl Default for ParagraphLayoutStyle {
 struct BundledLayoutTheme {
     profile_id: String,
     format_version: u32,
+    text_style: BundledDefaultTextStyle,
     paragraph_layout: ParagraphLayoutStyle,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BundledDefaultTextStyle {
+    font_size_centipoints: u16,
 }
 
 impl ParagraphLayoutStyle {
@@ -1296,12 +1345,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_paragraph_settings_use_bundled_defaults() {
+    fn missing_global_text_and_paragraph_settings_use_bundled_defaults() {
         let settings: DocumentSettings = serde_json::from_str("{}")
             .unwrap_or_else(|error| panic!("legacy settings should use defaults: {error}"));
         let default = super::ParagraphLayoutStyle::default();
 
         assert_eq!(settings.paragraph_layout, default);
+        assert_eq!(settings.default_font_size_centipoints, 1200);
         assert_eq!(settings.paragraph_layout.space_before_centipoints, 0);
         assert_eq!(settings.paragraph_layout.space_after_centipoints, 1000);
         assert!(settings.paragraph_layout.widow_orphan_control);
@@ -1315,6 +1365,24 @@ mod tests {
                 .required_features()
                 .iter()
                 .any(|feature| feature == "caret.paragraph.layout-settings")
+        );
+        assert!(
+            document
+                .required_features()
+                .iter()
+                .any(|feature| feature == "caret.text.default-font-size")
+        );
+    }
+
+    #[test]
+    fn custom_default_font_size_declares_its_required_capability() {
+        let mut document = Document::blank();
+        document.global_settings.default_font_size_centipoints = 1450;
+        assert!(
+            document
+                .required_features()
+                .iter()
+                .any(|feature| feature == "caret.text.default-font-size")
         );
     }
 

@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 caret-doc.workspace = true
 caret-dsl-core.workspace = true
+caret-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

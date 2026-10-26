@@ -14,6 +14,7 @@ QtObject {
     readonly property color colorChromePressed: ThemeViewModel.tokens.colorChromePressed
     readonly property color colorChromeLine: ThemeViewModel.tokens.colorChromeLine
     readonly property color colorPanelLine: ThemeViewModel.tokens.colorPanelLine
+    readonly property color colorCaret: ThemeViewModel.tokens.colorCaret
     readonly property color colorStatus: ThemeViewModel.tokens.colorStatus
     readonly property color colorText: ThemeViewModel.tokens.colorText
     readonly property color colorTextMuted: ThemeViewModel.tokens.colorTextMuted
@@ -32,6 +33,9 @@ QtObject {
     readonly property color colorDocumentClosePressed: ThemeViewModel.tokens.colorDocumentClosePressed
     readonly property color colorDialogPrimary: ThemeViewModel.tokens.colorDialogPrimary
     readonly property color colorDialogPrimaryBorder: ThemeViewModel.tokens.colorDialogPrimaryBorder
+
+    // 光标几何
+    readonly property int caretWidthCentipixels: ThemeViewModel.tokens.caretWidthCentipixels
 
     // 字体与字号
     readonly property int fontTitle: ThemeViewModel.tokens.fontTitle

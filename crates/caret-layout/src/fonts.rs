@@ -1,7 +1,7 @@
 //! 枚举、缓存和显式刷新系统及当前用户可用字体。
 
 use fontique::{Collection, CollectionOptions, SourceCache};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 #[cfg(windows)]
 use std::{env, fs, path::PathBuf};
@@ -32,11 +32,9 @@ impl std::error::Error for FontCatalogError {}
 
 /// 缓存系统字体和已加载字体数据；输入/塑形路径不会扫描目录。
 pub struct FontCatalog {
-    pub(crate) collection: Collection,
-    pub(crate) source_cache: SourceCache,
+    pub(crate) font_context: parley::FontContext,
     generation: u64,
     families: Vec<FontFamily>,
-    pub(crate) family_names_by_id: Arc<HashMap<fontique::FamilyId, String>>,
     pub(crate) family_names_lowercase: Arc<HashSet<String>>,
 }
 
@@ -64,6 +62,11 @@ impl FontCatalog {
         &self.families
     }
 
+    /// 借用由此目录拥有的 Parley 字体上下文；塑形和高层布局共享同一字体集合与缓存。
+    pub(crate) fn parley_context(&mut self) -> &mut parley::FontContext {
+        &mut self.font_context
+    }
+
     fn build(generation: u64) -> Result<Self, FontCatalogError> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
@@ -72,7 +75,12 @@ impl FontCatalog {
         collection.load_system_fonts();
         #[cfg(windows)]
         collection.load_fonts_from_paths(installed_font_paths());
-        let mut families: Vec<_> = collection
+        let mut font_context = parley::FontContext {
+            collection,
+            source_cache: SourceCache::new(Default::default()),
+        };
+        let mut families: Vec<_> = font_context
+            .collection
             .family_names()
             .map(|name| FontFamily {
                 name: name.to_owned(),
@@ -83,21 +91,14 @@ impl FontCatalog {
         if families.is_empty() {
             return Err(FontCatalogError::Empty);
         }
-        let family_ids: Vec<_> = collection.family_ids().collect();
-        let family_names_by_id = family_ids
-            .into_iter()
-            .filter_map(|id| collection.family_name(id).map(|name| (id, name.to_owned())))
-            .collect();
         let family_names_lowercase = families
             .iter()
             .map(|family| family.name.to_lowercase())
             .collect();
         Ok(Self {
-            collection,
-            source_cache: SourceCache::new(Default::default()),
+            font_context,
             generation,
             families,
-            family_names_by_id: Arc::new(family_names_by_id),
             family_names_lowercase: Arc::new(family_names_lowercase),
         })
     }

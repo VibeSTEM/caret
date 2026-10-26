@@ -80,6 +80,9 @@ jobs:
 
       - uses: ./.github/actions/caret-toolchain
 
+      # caret-tests 选择器依赖 caret-app，Ubuntu 的 Fontique 构建需要 Fontconfig。
+      - uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
         with:
           tools_deps: "false"
@@ -97,6 +100,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: ./.github/actions/caret-toolchain
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
 
       - uses: ./.github/actions/caret-cache-restore
         with:
@@ -183,6 +189,9 @@ jobs:
 
       - uses: ./.github/actions/caret-toolchain
 
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
         with:
           tools_deps: "false"
@@ -213,6 +222,9 @@ jobs:
 
       - uses: ./.github/actions/caret-toolchain
 
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
 
       - name: Run cmake lint
@@ -232,7 +244,8 @@ jobs:
 
       - uses: ./.github/actions/caret-toolchain
 
-      - uses: ./.github/actions/linux-gl-prereqs
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
 
       - uses: ./.github/actions/caret-cache-restore
 
@@ -274,6 +287,9 @@ jobs:
         with:
           components: "rustfmt"
 
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
       - uses: ./.github/actions/caret-cache-restore
 
       - name: Run changed-file format checks (Rust, C++/Objective-C++/CXX, CMake and QML)
@@ -285,13 +301,16 @@ jobs:
   runner-tests:
     name: caret-tests selector self-test (ubuntu)
     needs: [changes]
-    if: needs.changes.outputs.runner_tests == 'true' && !contains(fromJSON(needs.changes.outputs.test_packages_l1), 'caret-tests')
+    if: needs.changes.outputs.runner_tests == 'true' && !contains(fromJSON(needs.changes.outputs.test_packages), 'caret-tests')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
       - uses: ./.github/actions/caret-toolchain
+
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
 
       - uses: ./.github/actions/caret-cache-restore
         with:

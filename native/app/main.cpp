@@ -5,7 +5,9 @@
 /// 交给 QGuiApplication。
 
 #include "caret_ffi.h"
+#include "document_runtime.hpp"
 #include "icon_provider.hpp"
+#include "layout_view_model.hpp"
 #include "theme_catalog.hpp"
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -19,9 +21,12 @@
 #include <exception>
 #include <qnamespace.h>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
+Q_IMPORT_QML_PLUGIN(Caret_CanvasPlugin)
+Q_IMPORT_QML_PLUGIN(Caret_ViewModelsPlugin)
 
 namespace {
 
@@ -75,6 +80,17 @@ int main(int argc, char* argv[]) try {
 #endif
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     if (!caret::install_builtin_theme_catalog()) {
+        return kExitUnavailable;
+    }
+    auto layout_runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String layout_snapshot = caret::ffi::layout_snapshot_json(*layout_runtime);
+    const std::string_view layout_snapshot_text(layout_snapshot.data(), layout_snapshot.size());
+    if (layout_snapshot_text.starts_with("error:") ||
+        !caret::install_layout_snapshot(QString::fromUtf8(
+            layout_snapshot.data(), static_cast<qsizetype>(layout_snapshot.size())))) {
+        return kExitUnavailable;
+    }
+    if (!caret::install_document_runtime(std::move(layout_runtime))) {
         return kExitUnavailable;
     }
 

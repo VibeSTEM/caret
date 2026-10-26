@@ -1428,6 +1428,53 @@ fn cross_paragraph_selection_collapses_in_document_order() -> Result<(), EditErr
 }
 
 #[test]
+fn visual_affinity_is_session_state_outside_the_logical_position() -> Result<(), EditError> {
+    let mut session = session_with(vec![run("a")]);
+    let selection = session.selection().clone();
+    assert_eq!(session.document_generation(), 0);
+
+    let effect = session.set_selection_with_visual_affinity(
+        Some(selection.clone()),
+        caret_layout::VisualAffinity::Upstream,
+    )?;
+    assert!(effect.selection_changed);
+    assert_eq!(session.selection(), &selection);
+    assert_eq!(
+        session.selection_visual_affinity(),
+        caret_layout::VisualAffinity::Upstream
+    );
+    assert_eq!(session.document_generation(), 0);
+    let fork = session.clone();
+    assert_eq!(
+        fork.selection_visual_affinity(),
+        caret_layout::VisualAffinity::Upstream
+    );
+    assert_ne!(fork.session_id(), session.session_id());
+
+    let invalid = Selection {
+        focus: Pos {
+            offset: 2,
+            ..selection.focus.clone()
+        },
+        ..selection.clone()
+    };
+    assert!(
+        session
+            .set_selection_with_visual_affinity(
+                Some(invalid),
+                caret_layout::VisualAffinity::Downstream
+            )
+            .is_err()
+    );
+    assert_eq!(session.selection(), &selection);
+    assert_eq!(
+        session.selection_visual_affinity(),
+        caret_layout::VisualAffinity::Upstream
+    );
+    Ok(())
+}
+
+#[test]
 fn invalid_selection_and_incompatible_merge_preserve_the_session() -> Result<(), EditError> {
     let mut document = Document::blank();
     let Block::Paragraph(first) = &mut document.body[0] else {

@@ -18,6 +18,10 @@ target_link_libraries(
   caret_native_app
   PRIVATE caret::shell
           caret_shellplugin
+          caret::canvas
+          caret_canvasplugin
+          caret::viewmodels
+          caret_viewmodelsplugin
           "${CARET_FFI_STATIC_LIB}"
           Qt6::Gui
           Qt6::Qml
@@ -30,6 +34,9 @@ endif()
 if(UNIX)
   find_package(Threads REQUIRED)
   target_link_libraries(caret_native_app PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+  if(TARGET PkgConfig::Fontconfig)
+    target_link_libraries(caret_native_app PRIVATE PkgConfig::Fontconfig)
+  endif()
 elseif(WIN32)
   target_link_libraries(caret_native_app PRIVATE ws2_32 userenv ntdll)
 endif()

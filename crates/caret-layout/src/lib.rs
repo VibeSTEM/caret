@@ -2,6 +2,7 @@
 
 pub mod font_selection;
 mod fonts;
+mod glyph_raster;
 mod line_metrics;
 pub mod pagination;
 mod paragraph;
@@ -9,7 +10,9 @@ mod paragraph_style;
 mod shaping;
 
 pub use font_selection::{FontPreferenceError, FontPreferenceRules, ResolvedDocumentTextSettings};
+pub use fontique::Synthesis as GlyphSynthesis;
 pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
+pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, RasterizedGlyphKey};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics,
@@ -19,11 +22,13 @@ pub use pagination::{
     paginate_paragraphs,
 };
 pub use paragraph::{
-    ParagraphLayout, ParagraphLayoutError, ParagraphLine, layout_shaped_paragraph,
-    layout_shaped_paragraph_with_style,
+    HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
+    ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
+    has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
-pub use shaping::{ShapedParagraph, ShapingError, ShapingStyle, TextShaper, UnicodeBoundaries};
+pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
+pub use shaping::{ShapingStyle, UnicodeBoundaries, paragraph_text};
 
 #[cfg(test)]
 mod tests;
