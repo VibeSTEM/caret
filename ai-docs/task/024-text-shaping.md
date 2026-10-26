@@ -55,7 +55,7 @@ caret-layout 字体/shaping 模块、Windows 系统字体刷新适配、缓存�
 | 日期 | 环境 / 检查 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-10-25 | `cargo test --locked -p caret-layout` | Unicode 17 官方 UCD corpus 与 shaping/fallback fixtures 通过 | 15 项通过；三份完整 corpus、Run 分片一致、0.5/12.25 pt、Cyrillic/Greek、emoji/ZWJ 非零 glyph、词典字素边界与 Run 语言范围泰语均通过 |
-| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine`、Clippy 与变更格式检查 | 相邻同语言 Run/环境边界不影响词典/中文 tailoring 断点 | 通过；caret-layout 69 项、caret-engine 54 项；新增泰语词典断行与中文行首禁则分片回归 |
+| 2026-10-26 | `cargo test --offline --locked -p caret-layout -p caret-engine`、Clippy 与变更格式检查 | 相邻同语言 Run/环境边界不影响词典/中文 tailoring 断点，长段落分页后的选区 y 与光标一致 | 通过；caret-layout 69 项、caret-engine 55 项；新增泰语/中文分片断行及长段落选区页内坐标回归 |
 | 2026-10-25 | `cargo clippy --locked -p caret-layout --all-targets -- -D warnings` | 新 crate 无 lint 告警 | 通过 |
 | 2026-10-25 | macOS 字体 smoke | 请求字体和 fallback 行为一致 | 本机 aarch64/CoreText 测试通过；Windows/Linux 待平台 CI |
 | 2026-10-26 | [Nightly run 40212431385](https://github.com/VibeSTEM/caret/actions/runs/40212431385)，Linux/Windows workspace tests | 两个平台均读取系统字体并显式刷新目录成功 | `caret-layout::tests::explicit_font_refresh_replaces_catalog_generation` 在 Ubuntu 和 Windows 2022 均通过；该用例断言系统族非空、刷新代际递增且目录替换成功。整轮 Nightly 12/12 job 通过 |
@@ -71,6 +71,7 @@ caret-layout 字体/shaping 模块、Windows 系统字体刷新适配、缓存�
 - 2026-10-25：实现 `caret-layout`、平台字体目录显式刷新、嵌套 Run/Font/Bold/Italic 样式展平和 Unicode 17 全量 grapheme/bidi-character/line-break conformance。
 - 2026-10-25：根据独立评审合并相同有效样式 Run、按 LB1 映射 SA、缓存字体别名和样式索引、支持按 Run 语言范围的词典断行、emoji 专用字体回退，并拒绝不完整塑形结果。词典断点限定完整字素边界，语言范围匹配以二分查找避免断点数乘范围数增长。
 - 2026-10-26：修复词典/中文行断 tailoring 在同语言 Run 边界漏应用的问题；相邻的同 primary dictionary language 范围及连续中文范围合并，新增泰语词典断点和中文行首标点跨 Run 回归。
+- 2026-10-26：选区矩形改用页面片段内的 `f64` 行高累加定位，不再通过段落全局 `f32` 行顶相减；增加 20,000 行段落的光标/选区对齐回归。
 - 2026-10-25：字号 API 使用整数百分之一 pt（界面仍显示/输入 pt），支持 0.5 pt 与更细的 0.01 pt 精度；Parley 与布局输出保持 pt，视图边界才转换 logical px。
 - 2026-10-26：Nightly run 40212431385 在 Ubuntu 和 Windows 2022 实际运行并通过系统字体目录刷新测试；本任务所有验收项完成，状态改为 done。
 
