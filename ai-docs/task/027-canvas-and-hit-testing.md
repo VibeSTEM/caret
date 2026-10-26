@@ -76,6 +76,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：初始页面快照新增 `marginsPt`；ViewModel 在完整快照安装时校验边距并提供给 Canvas。页面命中结果同时返回页面 pt 与版心相对 pt 坐标，边距未安装时不伪造版心坐标；Canvas setter 只校验自身输入，避免页面尺寸与边距分步更新时受旧值阻挡。独立复核通过；Rust/C++/QML 构建通过，尚未运行 native 测试。
 - 2026-10-26：Session 新增异步布局 token：`sessionId + documentGeneration`。成功文档/页面几何命令递增 revision；选区和 IME 预编辑不递增；Session 被替换或克隆分叉时换 ID。`layout_session` 同步捕获同一 Session 的文档与 token，避免调用方误配；revision 溢出时轮换 ID 并重置计数。独立复核确认命令语义和身份隔离。
 - 2026-10-26：库审查发现 Parley 0.12 高层 `Layout` 提供 caret/hit-test/selection 几何，并可设置自定义断行机会；它无法直接消费当前 `ShapedParagraph`，还会重做 shaping，且跨 Run 字素有边界限制。详见 [Rust 库审查](../research/005-rust-library-audit.md)。后续先做受限原型，确认完全复用 Caret ICU 断点、字体选择和实际行范围后，再决定是否把它作为统一视觉布局实现。
+- 2026-10-26：受限 Parley 高层 Layout 原型验证了 ICU 断点回调和英文/中文样例行范围一致，也验证普通混合 bidi 光标/命中返回 UTF-8 字素边界；但不同样式 Run 中的 `e + combining acute` 会暴露字素内部停靠点。保留 dev-only 探针，生产路径暂不接入高层 Layout，直到跨 Run 字素适配、显式字体选择、selection 几何及过期快照安装验证完成。完整结果见 [Rust 库审查](../research/005-rust-library-audit.md)。
 
 ## 完成摘要
 

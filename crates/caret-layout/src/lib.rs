@@ -28,6 +28,8 @@ pub use shaping::{
 };
 
 #[cfg(test)]
+mod parley_probe;
+#[cfg(test)]
 mod tests;
 
 /// Caret 固定使用的 Unicode 数据版本。

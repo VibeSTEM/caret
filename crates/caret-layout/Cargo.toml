@@ -17,5 +17,8 @@ parley_engine.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
 
+[dev-dependencies]
+parley.workspace = true
+
 [lints]
 workspace = true
