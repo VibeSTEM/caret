@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
-use crate::settings::DEFAULT_THEME_ID;
 use caret_dsl_core::{EvaluatedValue, EvaluatedVariables, evaluate_theme, evaluate_variables};
 
 #[path = "theme_schema.rs"]
@@ -12,6 +11,7 @@ mod schema;
 use schema::{THEME_TOKEN_SPECS, ThemeTokenSpec};
 
 const MINIMUM_THEME_COUNT: usize = 2;
+pub const DEFAULT_THEME_ID: &str = "light";
 
 /// QML token 在桥接快照中的值类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +135,11 @@ impl ThemeService {
         self.themes.keys().map(String::as_str)
     }
 
+    /// 只读检查主题目录，不克隆或切换主题快照。
+    pub fn contains(&self, id: &str) -> bool {
+        self.themes.contains_key(id)
+    }
+
     /// 选择已预校验的主题；未知 ID 不改变活动快照。
     pub fn select(&mut self, id: &str) -> Result<&ThemeSnapshot, ThemeError> {
         if !self.themes.contains_key(id) {
@@ -148,7 +153,7 @@ impl ThemeService {
     }
 
     /// 给桌面入口的快照。键是 QML 属性名，值带 kind，便于原样放进 `QVariant`。
-    fn bridge_json(&self) -> Result<String, ThemeError> {
+    pub(crate) fn bridge_json(&self) -> Result<String, ThemeError> {
         let mut themes = serde_json::Map::new();
         for (id, snapshot) in &self.themes {
             let mut tokens = serde_json::Map::new();
@@ -307,21 +312,26 @@ fn validate_value(
 }
 
 /// 用仓库里的基线和 light/dark 主题构造服务。源文件就是 QML 资源，不另写默认值。
-pub fn builtin_theme_catalog() -> Result<String, ThemeError> {
-    let service = ThemeService::new(
-        include_str!("../../../qml/Themes/gui-default.pa"),
+pub fn builtin_theme_service() -> Result<ThemeService, ThemeError> {
+    ThemeService::new(
+        include_str!("../../../../qml/Themes/gui-default.pa"),
         [
             (
                 "light".to_owned(),
-                include_str!("../../../qml/Themes/light.pa").to_owned(),
+                include_str!("../../../../qml/Themes/light.pa").to_owned(),
             ),
             (
                 "dark".to_owned(),
-                include_str!("../../../qml/Themes/dark.pa").to_owned(),
+                include_str!("../../../../qml/Themes/dark.pa").to_owned(),
             ),
         ],
         DEFAULT_THEME_ID,
-    )?;
+    )
+}
+
+/// 返回供桌面入口注入 QML 的完整主题目录快照。
+pub fn builtin_theme_catalog() -> Result<String, ThemeError> {
+    let service = builtin_theme_service()?;
     service.bridge_json()
 }
 
@@ -339,9 +349,9 @@ fn valid_color(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    const GUI: &str = include_str!("../../../qml/Themes/gui-default.pa");
-    const LIGHT: &str = include_str!("../../../qml/Themes/light.pa");
-    const DARK: &str = include_str!("../../../qml/Themes/dark.pa");
+    const GUI: &str = include_str!("../../../../qml/Themes/gui-default.pa");
+    const LIGHT: &str = include_str!("../../../../qml/Themes/light.pa");
+    const DARK: &str = include_str!("../../../../qml/Themes/dark.pa");
 
     fn service() -> Result<ThemeService, ThemeError> {
         ThemeService::new(

@@ -5,16 +5,17 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import Caret.Shell
+import Caret.ViewModels
 
 Window {
     id: window
 
     objectName: "caretWindow"
     visible: true
-    width: 1120
-    height: 760
-    minimumWidth: 880
-    minimumHeight: 560
+    width: PreferencesViewModel.windowWidth
+    height: PreferencesViewModel.windowHeight
+    minimumWidth: PreferencesViewModel.minimumWindowWidth
+    minimumHeight: PreferencesViewModel.minimumWindowHeight
     // Linux XCB 会把空标题换成应用名。零宽字符保留窗口按钮，同时不显示文字。
     title: Qt.platform.os === "linux" ? "\u200B" : ""
     color: Theme.colorChrome
@@ -25,6 +26,7 @@ Window {
     property url documentFileUrl: ""
     property url pendingSaveFileUrl: ""
     property url suggestedSaveFileUrl: ""
+    property bool pendingCaretBlinkEnabled: PreferencesViewModel.caretBlinkEnabled
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
 
@@ -44,7 +46,10 @@ Window {
                 window: window
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
-                onSettingsRequested: settingsDialog.open()
+                onSettingsRequested: {
+                    window.pendingCaretBlinkEnabled = PreferencesViewModel.caretBlinkEnabled;
+                    settingsDialog.open();
+                }
                 documentName: window.documentName
                 onSaveRequested: {
                     if (window.documentFileUrl.toString().length === 0)
@@ -80,7 +85,27 @@ Window {
         id: settingsDialog
         objectName: "settingsDialog"
         ownerWindow: window
-        onAcceptRequested: settingsDialog.completeAccept()
+        pages: [{
+                routeId: "preferences",
+                title: qsTranslate("SettingsDialog", "Preferences"),
+                iconName: "settings",
+                pageComponent: preferencesSettingsPage
+            }]
+        onAcceptRequested: {
+            if (window.pendingCaretBlinkEnabled === PreferencesViewModel.caretBlinkEnabled ||
+                    PreferencesViewModel.setCaretBlinkEnabled(window.pendingCaretBlinkEnabled))
+                settingsDialog.completeAccept();
+        }
+        onCancelled: window.pendingCaretBlinkEnabled = PreferencesViewModel.caretBlinkEnabled
+    }
+
+    Component {
+        id: preferencesSettingsPage
+
+        PreferencesSettingsPage {
+            caretBlinkEnabled: window.pendingCaretBlinkEnabled
+            onCaretBlinkEnabledEdited: enabled => window.pendingCaretBlinkEnabled = enabled
+        }
     }
 
     FileDialog {

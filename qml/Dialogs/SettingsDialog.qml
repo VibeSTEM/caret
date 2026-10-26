@@ -10,7 +10,7 @@ DialogWindow {
 
     objectName: "settingsPageDialog"
     property var pages: []
-    property string activeRouteId: "general"
+    property string activeRouteId: "preferences"
     property bool intentionalClose: false
 
     signal routeSelected(string routeId)
@@ -67,7 +67,10 @@ DialogWindow {
                             highlighted: pageDelegate.modelData.routeId === dialog.activeRouteId
                             focus: highlighted
                             text: pageDelegate.modelData.title
-                            onClicked: dialog.routeSelected(pageDelegate.modelData.routeId)
+                            onClicked: {
+                                dialog.activeRouteId = pageDelegate.modelData.routeId;
+                                dialog.routeSelected(pageDelegate.modelData.routeId);
+                            }
 
                             contentItem: RowLayout {
                                 spacing: Theme.spacingSmall
@@ -110,7 +113,7 @@ DialogWindow {
                     objectName: "settingsPageLoader"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    sourceComponent: dialog.pages.find(page => page.routeId === dialog.activeRouteId)?.pageComponent || unavailablePage
+                    sourceComponent: dialog.pages.find(page => page.routeId === dialog.activeRouteId)?.pageComponent || null
                 }
 
                 DialogButtonRow {
@@ -135,43 +138,4 @@ DialogWindow {
         }
     }
 
-    Component {
-        id: unavailablePage
-
-        ColumnLayout {
-            spacing: Theme.spacingMedium
-
-            ThemedLabel {
-                Layout.fillWidth: true
-                text: qsTranslate("SettingsDialog", "Common application preferences are managed here.")
-                textColor: Theme.colorTextMuted
-                textSize: Theme.fontBody
-                wrapMode: Text.WordWrap
-            }
-
-            PanelSurface {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Theme.applicationMenuHeight / 4
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.spacingMedium
-                    spacing: Theme.spacingSmall
-
-                    ThemedLabel {
-                        Layout.fillWidth: true
-                        text: qsTranslate("SettingsDialog", "Preferences")
-                        textSize: Theme.fontBody
-                    }
-                    ThemedLabel {
-                        Layout.fillWidth: true
-                        text: qsTranslate("SettingsDialog", "Settings pages can be registered in this shared dialog on Windows, Linux, and macOS.")
-                        textColor: Theme.colorTextMuted
-                        textSize: Theme.fontSmall
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-        }
-    }
 }

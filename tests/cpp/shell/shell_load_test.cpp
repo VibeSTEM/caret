@@ -1,6 +1,7 @@
 /// 不链接 launcher、FFI 或应用服务。注入快照后确认 Caret.Shell 可导入，
 /// 验证主题切换绑定、未知图标拒绝着色，以及新建文档窗口的字段边界。
 #include "document_canvas.hpp"
+#include "document_units.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "theme_view_model.hpp"
@@ -108,6 +109,7 @@ class ShellLoadTest : public QObject {
     void unknownIconRefusesColoring();
     void newDocumentDialogHasNoProcessFields();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
+    void documentUnitsConvertThroughIntegerCentipixels();
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
 #endif
@@ -186,6 +188,7 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
         dialogs.entryList(QStringList{QStringLiteral("*.qml")}, QDir::Files, QDir::Name);
     QCOMPARE(names, QStringList({QStringLiteral("LanguageSettingsPage.qml"),
                                  QStringLiteral("NewProjectDialog.qml"),
+                                 QStringLiteral("PreferencesSettingsPage.qml"),
                                  QStringLiteral("SettingsDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
@@ -637,6 +640,16 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     delete surface;
     delete view_model;
     delete root;
+}
+
+void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
+    caret::DocumentUnits units;
+    QCOMPARE(units.pointsToLogicalCentipixels(72.0, 100), qint64{9600});
+    QCOMPARE(units.centipixelsToLogicalPixels(125), qreal{1.25});
+    QCOMPARE(units.percentToFactor(125), qreal{1.25});
+    QCOMPARE(units.factorToPercent(1.25), 125);
+    QCOMPARE(units.pointsToLogicalCentipixels(-1.0, 100), qint64{0});
+    QCOMPARE(units.pointsToLogicalCentipixels(12.0, -1), qint64{0});
 }
 
 #ifdef CARET_ENABLE_APP

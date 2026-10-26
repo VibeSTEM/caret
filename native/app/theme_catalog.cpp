@@ -1,6 +1,5 @@
 #include "theme_catalog.hpp"
 
-#include "caret_ffi.h"
 #include "theme_view_model.hpp"
 #include <QByteArray>
 #include <QColor>
@@ -64,10 +63,7 @@ bool insert_token(const QString& name, const QJsonObject& spec, QVariantMap& tok
 
 } // namespace
 
-bool install_builtin_theme_catalog() {
-    const rust::String payload = caret::ffi::builtin_theme_catalog();
-    const auto size = static_cast<qsizetype>(payload.size());
-    const QByteArray bytes(payload.data(), size);
+bool install_theme_catalog(const QByteArray& bytes) {
     if (bytes.startsWith("error:")) {
         std::fprintf(stderr, "caret: 主题目录不可用：%s\n", bytes.constData());
         return false;

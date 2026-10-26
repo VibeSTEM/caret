@@ -15,6 +15,8 @@ qt_add_qml_module(
   RESOURCE_PREFIX
   /qt/qml
   SOURCES
+  document_units.hpp
+  document_units.cpp
   document_canvas.hpp
   document_canvas.cpp
   document_canvas_input.cpp)

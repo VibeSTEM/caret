@@ -1,5 +1,6 @@
 # 桌面入口。链接已经生成的 caret-ffi staticlib，不回调 Cargo。
 qt_add_executable(caret_native_app MANUAL_FINALIZATION main.cpp theme_catalog.cpp)
+target_compile_definitions(caret_native_app PRIVATE CARET_ENABLE_APP=1)
 set_target_properties(caret_native_app PROPERTIES OUTPUT_NAME caret EXPORT_NAME native-app)
 if(WIN32)
   set_target_properties(

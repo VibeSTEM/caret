@@ -34,13 +34,43 @@ mod generated {
             placements: Vec<GlyphPlacement>,
         }
 
+        struct SettingsSnapshot {
+            caret_blink_enabled: bool,
+            window_width: u32,
+            window_height: u32,
+            theme_id: String,
+            language: String,
+            error: String,
+        }
+
+        struct SettingsConstraints {
+            minimum_window_width: u32,
+            minimum_window_height: u32,
+        }
+
         extern "Rust" {
             type DocumentRuntime;
+            type SettingsRuntime;
 
             fn version() -> String;
             fn builtin_theme_catalog() -> String;
             /// Rust 分配运行时；C++ 通过 rust::Box 持有并负责析构，句柄有效期随 Box。
             fn new_blank_document_runtime() -> Box<DocumentRuntime>;
+            /// 从宿主给定的配置路径载入 Rust 偏好服务；无效文件会按服务规则隔离并回退默认值。
+            fn new_settings_runtime(settings_path: String) -> Box<SettingsRuntime>;
+            /// 获取 Rust SettingsService 派生的界面快照。
+            fn settings_snapshot(runtime: &mut SettingsRuntime) -> SettingsSnapshot;
+            /// 获取当前 SettingsService 中活动主题对应的完整主题目录。
+            fn settings_theme_catalog(runtime: &mut SettingsRuntime) -> String;
+            /// 返回由 Rust Preferences 校验的窗口尺寸约束。
+            fn settings_constraints() -> SettingsConstraints;
+            /// 返回启动时设置加载的非致命诊断；无诊断时为空。
+            fn settings_load_warning(runtime: &mut SettingsRuntime) -> String;
+            /// 更新单项偏好；校验或持久化失败时保留当前内存快照。
+            fn set_caret_blink_enabled(
+                runtime: &mut SettingsRuntime,
+                enabled: bool,
+            ) -> SettingsSnapshot;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;
             /// 仅在持有句柄的 UI 线程同步调用，不保留借用；无位置返回 JSON null，错误以 error: 开头。
@@ -87,13 +117,18 @@ mod generated {
         runtime: Result<caret_app::document_view::DocumentViewRuntime, String>,
     }
 
+    /// Settings 组合服务及其宿主注入的持久化路径。
+    pub struct SettingsRuntime {
+        runtime: caret_app::settings::SettingsRuntime,
+    }
+
     fn version() -> String {
         env!("CARGO_PKG_VERSION").to_owned()
     }
 
     /// 成功时是 JSON。失败时以 `error:` 开头，调用方不要把它当成快照。
     fn builtin_theme_catalog() -> String {
-        match caret_app::theme::builtin_theme_catalog() {
+        match caret_app::settings::theme::builtin_theme_catalog() {
             Ok(json) => json,
             Err(error) => format!("error:{error}"),
         }
@@ -104,6 +139,71 @@ mod generated {
         Box::new(DocumentRuntime {
             runtime: caret_app::document_view::DocumentViewRuntime::new_blank(),
         })
+    }
+
+    fn new_settings_runtime(settings_path: String) -> Box<SettingsRuntime> {
+        Box::new(SettingsRuntime {
+            runtime: caret_app::settings::SettingsRuntime::open(std::path::PathBuf::from(
+                settings_path,
+            )),
+        })
+    }
+
+    fn settings_snapshot(runtime: &mut SettingsRuntime) -> bridge::SettingsSnapshot {
+        match runtime.runtime.snapshot() {
+            Ok(snapshot) => bridge::SettingsSnapshot {
+                caret_blink_enabled: snapshot.preferences.caret_blink_enabled,
+                window_width: snapshot.preferences.window_width,
+                window_height: snapshot.preferences.window_height,
+                theme_id: snapshot.theme_id,
+                language: snapshot.language,
+                error: String::new(),
+            },
+            Err(error) => {
+                return bridge::SettingsSnapshot {
+                    caret_blink_enabled: true,
+                    window_width: 0,
+                    window_height: 0,
+                    theme_id: String::new(),
+                    language: String::new(),
+                    error: format!("settings.initialize: {error}"),
+                };
+            }
+        }
+    }
+
+    fn settings_theme_catalog(runtime: &mut SettingsRuntime) -> String {
+        match runtime.runtime.theme_catalog_json() {
+            Ok(json) => json,
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
+    fn settings_constraints() -> bridge::SettingsConstraints {
+        bridge::SettingsConstraints {
+            minimum_window_width: caret_app::settings::preferences::MINIMUM_WINDOW_WIDTH,
+            minimum_window_height: caret_app::settings::preferences::MINIMUM_WINDOW_HEIGHT,
+        }
+    }
+
+    fn settings_load_warning(runtime: &mut SettingsRuntime) -> String {
+        runtime
+            .runtime
+            .load_warning()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    fn set_caret_blink_enabled(
+        runtime: &mut SettingsRuntime,
+        enabled: bool,
+    ) -> bridge::SettingsSnapshot {
+        if let Err(error) = runtime.runtime.set_caret_blink_enabled(enabled) {
+            let mut snapshot = settings_snapshot(runtime);
+            snapshot.error = error;
+            return snapshot;
+        }
+        settings_snapshot(runtime)
     }
 
     /// 返回页面/段落布局 JSON；错误以 `error:` 开头，调用方不可当作快照消费。

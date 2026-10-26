@@ -43,7 +43,8 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/FormSection.qml
     Dialogs/NewProjectDialog.qml
     Dialogs/SettingsDialog.qml
-    Dialogs/LanguageSettingsPage.qml)
+    Dialogs/LanguageSettingsPage.qml
+    Dialogs/PreferencesSettingsPage.qml)
 
 if(UNIX AND NOT APPLE)
   # Linux 上 qtpaths 与 ICU 73 的 qmlls 辅助文件可以跳过，不影响资源和 typeinfo。

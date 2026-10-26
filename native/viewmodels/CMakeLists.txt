@@ -16,7 +16,9 @@ qt_add_qml_module(
   /qt/qml
   SOURCES
   ../app/layout_view_model.hpp
-  ../app/layout_view_model.cpp)
+  ../app/layout_view_model.cpp
+  ../app/preferences_view_model.hpp
+  ../app/preferences_view_model.cpp)
 set_target_properties(caret_viewmodels PROPERTIES EXPORT_NAME viewmodels)
 caret_native_defaults(caret_viewmodels)
 add_library(caret::viewmodels ALIAS caret_viewmodels)

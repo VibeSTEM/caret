@@ -5,8 +5,6 @@
 
 pub mod document_storage;
 pub mod document_view;
-pub mod language;
 pub mod path;
 pub mod runtime;
 pub mod settings;
-pub mod theme;

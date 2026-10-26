@@ -8,17 +8,22 @@
 #include "document_runtime.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
+#include "preferences_view_model.hpp"
 #include "theme_catalog.hpp"
 #include <QCoreApplication>
+#include <QByteArray>
+#include <QDir>
 #include <QGuiApplication>
 #include <QObject>
 #include <QQmlApplicationEngine>
+#include <QStandardPaths>
 #include <QString>
 #include <QWindow>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <cstdio>
 #include <exception>
+#include <cstddef>
 #include <qnamespace.h>
 #include <string_view>
 #include <utility>
@@ -75,11 +80,28 @@ int main(int argc, char* argv[]) try {
     const QGuiApplication app(forwarded_argc, forwarded.data());
     QGuiApplication::setApplicationVersion(
         QString::fromUtf8(linked_version.data(), static_cast<qsizetype>(linked_version.size())));
+    QCoreApplication::setOrganizationName(QStringLiteral("VibeSTEM"));
+    QCoreApplication::setApplicationName(QStringLiteral("Caret"));
 #ifdef Q_OS_LINUX
     QGuiApplication::setApplicationDisplayName(QString{});
 #endif
     QQuickStyle::setStyle(QStringLiteral("Basic"));
-    if (!caret::install_builtin_theme_catalog()) {
+    const QString settings_directory =
+        QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    if (settings_directory.isEmpty() || !QDir().mkpath(settings_directory)) {
+        return kExitUnavailable;
+    }
+    const QByteArray settings_path =
+        QDir(settings_directory).filePath(QStringLiteral("settings.json")).toUtf8();
+    auto settings_runtime = caret::ffi::new_settings_runtime(
+        rust::String(settings_path.constData(), static_cast<std::size_t>(settings_path.size())));
+    const caret::ffi::SettingsSnapshot settings_snapshot =
+        caret::ffi::settings_snapshot(*settings_runtime);
+    const rust::String theme_catalog = caret::ffi::settings_theme_catalog(*settings_runtime);
+    const QByteArray theme_catalog_bytes(theme_catalog.data(),
+                                         static_cast<qsizetype>(theme_catalog.size()));
+    if (!settings_snapshot.error.empty() || theme_catalog_bytes.startsWith("error:") ||
+        !caret::install_theme_catalog(theme_catalog_bytes)) {
         return kExitUnavailable;
     }
     auto layout_runtime = caret::ffi::new_blank_document_runtime();
@@ -91,6 +113,9 @@ int main(int argc, char* argv[]) try {
         return kExitUnavailable;
     }
     if (!caret::install_document_runtime(std::move(layout_runtime))) {
+        return kExitUnavailable;
+    }
+    if (!caret::install_preferences_runtime(std::move(settings_runtime))) {
         return kExitUnavailable;
     }
 

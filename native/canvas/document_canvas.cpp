@@ -1,5 +1,7 @@
 // 多页纸张绘制与页面坐标映射实现。
 #include "document_canvas.hpp"
+#include "canvas_limits.hpp"
+#include "document_units.hpp"
 
 #include <QGuiApplication>
 #include <QHash>
@@ -40,12 +42,8 @@
 namespace caret {
 namespace {
 
-constexpr qreal kPointsToLogicalPixels = 96.0 / 72.0;
-constexpr qreal kMinimumZoom = 0.1;
-constexpr qreal kMaximumZoom = 8.0;
 constexpr int kCaretBlinkPhasesPerCycle = 2;
 constexpr int kMinimumCaretBlinkIntervalMs = 1;
-constexpr int kCentipixelsPerLogicalPixel = 100;
 
 bool is_finite_positive(qreal value) { return std::isfinite(value) && value > 0.0; }
 bool is_finite_non_negative(qreal value) { return std::isfinite(value) && value >= 0.0; }
@@ -335,7 +333,12 @@ void DocumentCanvas::setZoom(qreal zoom) {
     if (!is_finite_positive(zoom)) {
         return;
     }
-    const qreal bounded = std::clamp(zoom, kMinimumZoom, kMaximumZoom);
+    const qreal bounded = std::clamp(
+        zoom,
+        static_cast<qreal>(canvas_limits::kMinimumZoomPercent) /
+            document_units::kPercentPerFactor,
+        static_cast<qreal>(canvas_limits::kMaximumZoomPercent) /
+            document_units::kPercentPerFactor);
     if (qFuzzyCompare(m_zoom, bounded)) {
         return;
     }
@@ -697,7 +700,9 @@ QVariantMap DocumentCanvas::glyphRasterRequest(int page_index) const {
             {QStringLiteral("pageOriginDeviceYPx"), window_origin.y() * dpr}};
 }
 
-qreal DocumentCanvas::scale() const { return kPointsToLogicalPixels * m_zoom; }
+qreal DocumentCanvas::scale() const {
+    return document_units::logical_pixels_per_point() * m_zoom;
+}
 
 QSizeF DocumentCanvas::pageSizePt(int page_index) const {
     if (page_index < 0 || page_index >= m_page_sizes_pt.size()) {
@@ -806,7 +811,8 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         const qreal y1_pt = m_caret_geometry.value(QStringLiteral("y1Pt")).toReal();
         const QPointF top_left = documentToContent(page_index, QPointF(x_pt, y0_pt));
         const qreal caret_width_px =
-            static_cast<qreal>(m_caret_width_centipixels) / kCentipixelsPerLogicalPixel;
+            static_cast<qreal>(m_caret_width_centipixels) /
+            document_units::kCentipixelsPerLogicalPixel;
         const QRectF caret_rect(top_left.x(), top_left.y(), caret_width_px,
                                 (y1_pt - y0_pt) * scale());
         node->setRect(caret_rect.intersected(pageRect(page_index)));
