@@ -10,6 +10,8 @@ values:
   color-chrome-pressed: string = "#c9c9c9"
   color-chrome-line: string = "#d0d0d0"
   color-panel-line: string = "#c9c9c9"
+  color-caret: string = "#1c1c1c"
+  caret-width-px: real = 1.0
   color-status: string = "#efefef"
   color-text: string = "#1c1c1c"
   color-text-muted: string = "#5a5a5a"

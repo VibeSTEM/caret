@@ -26,6 +26,10 @@ class DocumentCanvas : public QQuickItem {
     Q_PROPERTY(QColor pageColor READ pageColor WRITE setPageColor NOTIFY appearanceChanged)
     Q_PROPERTY(QColor pageBorderColor READ pageBorderColor WRITE setPageBorderColor NOTIFY
                    appearanceChanged)
+    Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
+                   caretGeometryChanged)
+    Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
+    Q_PROPERTY(qreal caretWidthPx READ caretWidthPx WRITE setCaretWidthPx NOTIFY caretWidthPxChanged)
     Q_PROPERTY(qreal pageGapPt READ pageGapPt WRITE setPageGapPt NOTIFY pageGapPtChanged)
     Q_PROPERTY(
         qreal pageMarginPt READ pageMarginPt WRITE setPageMarginPt NOTIFY pageMarginPtChanged)
@@ -44,6 +48,12 @@ class DocumentCanvas : public QQuickItem {
     void setPageColor(const QColor& color);
     [[nodiscard]] QColor pageBorderColor() const;
     void setPageBorderColor(const QColor& color);
+    [[nodiscard]] QVariantMap caretGeometry() const;
+    void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] QColor caretColor() const;
+    void setCaretColor(const QColor& color);
+    [[nodiscard]] qreal caretWidthPx() const;
+    void setCaretWidthPx(qreal width_px);
     [[nodiscard]] qreal pageGapPt() const;
     void setPageGapPt(qreal gap_pt);
     [[nodiscard]] qreal pageMarginPt() const;
@@ -65,6 +75,8 @@ class DocumentCanvas : public QQuickItem {
     void zoomChanged();
     void pageGapPtChanged();
     void pageMarginPtChanged();
+    void caretGeometryChanged();
+    void caretWidthPxChanged();
     void appearanceChanged();
     void geometryChanged();
 
@@ -82,6 +94,9 @@ class DocumentCanvas : public QQuickItem {
     qreal m_page_margin_pt = 24.0;
     QColor m_page_color;
     QColor m_page_border_color;
+    QVariantMap m_caret_geometry;
+    QColor m_caret_color;
+    qreal m_caret_width_px = 1.0;
     qreal m_widest_page_pt = 0.0;
     qreal m_pages_height_pt = 0.0;
     QVector<qreal> m_page_y_origins_pt;

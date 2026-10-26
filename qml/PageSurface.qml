@@ -29,6 +29,8 @@ Item {
             zoom: surface.pageScale
             pageColor: Theme.colorPanel
             pageBorderColor: Theme.colorPanelLine
+            caretColor: Theme.colorCaret
+            caretWidthPx: Theme.caretWidthPx
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
 
@@ -38,8 +40,10 @@ Item {
                     if (pageHit.pageIndex < 0)
                         return;
                     const result = LayoutViewModel.placeCaretAtPage(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
-                    if (result.valid)
+                    if (result.valid) {
+                        pageCanvas.caretGeometry = result.caret;
                         surface.documentPositionHit(result);
+                    }
                 }
             }
         }

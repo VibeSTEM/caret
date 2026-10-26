@@ -13,13 +13,13 @@
 ## 外观
 
 - 纸张、页边框、光标、选区和选区文字等 Canvas 颜色由 `qml/Themes/` 中的主题值定义，经 `Themes/Theme.qml` 暴露并传给画布；C++ 不硬编码产品颜色，Rust 文档也不保存界面颜色。
-- 主题 token 使用独立的 `color-caret`、`color-selection` 和 `color-selection-text`。新增 token 时同步更新默认、浅色和深色主题及主题校验测试。
-- 光标粗细、闪烁周期、焦点/失焦表现、选区透明度和高对比度替代色需要在实际绘制前确定；这些是视图参数，不属于 `.cdoc`。
+- 主题 token 使用独立的 `color-caret`、`color-selection` 和 `color-selection-text`。新增 token 时同步更新默认、浅色和深色主题及主题校验测试。当前已实现 `color-caret` 和 `caret-width-px`，宽度以逻辑像素传给画布。
+- 闪烁周期、焦点/失焦表现、选区透明度和高对比度替代色仍待设计；这些是视图参数，不属于 `.cdoc`。
 - 环境背景高亮是独立的临时视图叠加，不与文本选区或 caret 颜色合并。
 
 ## 绘制和性能
 
-- 布局结果提供 caret 和 selection 的页面内几何；画布使用页面坐标与 zoom 映射绘制，不重新排版文本。
+- 布局结果提供 caret 和 selection 的页面内几何；画布使用页面坐标与 zoom 映射绘制，不重新排版文本。Caret 几何来自 Rust 命中结果，`DocumentCanvas` 负责 scene graph 绘制并裁切到纸张范围。
 - 拖选预览只更新画布局部几何；布局未改变时不触发 Rust 往返或整页排版。
 - 跨页选区仍是一份 Rust 逻辑范围，视图按可见页面裁剪几何。
 - QML 负责主题绑定和焦点/无障碍语义；不在 QML 中重建 Rust 的选区或键盘移动规则。

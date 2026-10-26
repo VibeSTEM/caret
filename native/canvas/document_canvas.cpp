@@ -42,6 +42,10 @@ void DocumentCanvas::setPageSizesPt(const QVariantList& page_sizes) {
         return;
     }
     m_page_sizes_pt = std::move(valid_sizes);
+    if (!m_caret_geometry.isEmpty()) {
+        m_caret_geometry.clear();
+        emit caretGeometryChanged();
+    }
     emit pageSizesPtChanged();
     updateGeometry();
 }
@@ -100,6 +104,72 @@ void DocumentCanvas::setPageBorderColor(const QColor& color) {
     }
     m_page_border_color = color;
     emit appearanceChanged();
+    update();
+}
+
+QVariantMap DocumentCanvas::caretGeometry() const { return m_caret_geometry; }
+
+void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
+    if (geometry.isEmpty()) {
+        if (m_caret_geometry.isEmpty()) {
+            return;
+        }
+        m_caret_geometry.clear();
+        emit caretGeometryChanged();
+        update();
+        return;
+    }
+
+    bool page_valid = false;
+    bool x_valid = false;
+    bool y0_valid = false;
+    bool y1_valid = false;
+    const double page_index_number =
+        geometry.value(QStringLiteral("pageIndex")).toDouble(&page_valid);
+    const qreal x_pt = geometry.value(QStringLiteral("xPt")).toDouble(&x_valid);
+    const qreal y0_pt = geometry.value(QStringLiteral("y0Pt")).toDouble(&y0_valid);
+    const qreal y1_pt = geometry.value(QStringLiteral("y1Pt")).toDouble(&y1_valid);
+    if (!page_valid || !std::isfinite(page_index_number) || page_index_number < 0.0 ||
+        page_index_number > std::numeric_limits<int>::max() ||
+        std::floor(page_index_number) != page_index_number) {
+        return;
+    }
+    const int page_index = static_cast<int>(page_index_number);
+    const QSizeF page_size = pageSizePt(page_index);
+    if (!page_valid || !x_valid || !y0_valid || !y1_valid || page_size.isEmpty() ||
+        !std::isfinite(x_pt) || !std::isfinite(y0_pt) || !std::isfinite(y1_pt) || x_pt < 0.0 ||
+        x_pt > page_size.width() || y0_pt < 0.0 || y1_pt <= y0_pt) {
+        return;
+    }
+    QVariantMap normalized_geometry = geometry;
+    normalized_geometry.insert(QStringLiteral("pageIndex"), page_index);
+    if (m_caret_geometry == normalized_geometry) {
+        return;
+    }
+    m_caret_geometry = std::move(normalized_geometry);
+    emit caretGeometryChanged();
+    update();
+}
+
+QColor DocumentCanvas::caretColor() const { return m_caret_color; }
+
+void DocumentCanvas::setCaretColor(const QColor& color) {
+    if (m_caret_color == color) {
+        return;
+    }
+    m_caret_color = color;
+    emit appearanceChanged();
+    update();
+}
+
+qreal DocumentCanvas::caretWidthPx() const { return m_caret_width_px; }
+
+void DocumentCanvas::setCaretWidthPx(qreal width_px) {
+    if (!is_finite_positive(width_px) || qFuzzyCompare(m_caret_width_px, width_px)) {
+        return;
+    }
+    m_caret_width_px = width_px;
+    emit caretWidthPxChanged();
     update();
 }
 
@@ -235,7 +305,8 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root = new QSGNode();
     }
     const int page_count = m_page_sizes_pt.size();
-    const int required_nodes = page_count * 2;
+    const bool has_caret = !m_caret_geometry.isEmpty();
+    const int required_nodes = page_count * 2 + (has_caret ? 1 : 0);
     int node_count = root->childCount();
     while (node_count > required_nodes) {
         delete root->lastChild();
@@ -256,6 +327,17 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         node->setRect(page.adjusted(1.0, 1.0, -1.0, -1.0));
         node->setColor(m_page_color.isValid() ? m_page_color : QColor(Qt::transparent));
         node = static_cast<QSGSimpleRectNode*>(node->nextSibling());
+    }
+    if (has_caret) {
+        const int page_index = m_caret_geometry.value(QStringLiteral("pageIndex")).toInt();
+        const qreal x_pt = m_caret_geometry.value(QStringLiteral("xPt")).toReal();
+        const qreal y0_pt = m_caret_geometry.value(QStringLiteral("y0Pt")).toReal();
+        const qreal y1_pt = m_caret_geometry.value(QStringLiteral("y1Pt")).toReal();
+        const QPointF top_left = documentToContent(page_index, QPointF(x_pt, y0_pt));
+        const QRectF caret_rect(top_left.x(), top_left.y(), m_caret_width_px,
+                                (y1_pt - y0_pt) * scale());
+        node->setRect(caret_rect.intersected(pageRect(page_index)));
+        node->setColor(m_caret_color.isValid() ? m_caret_color : QColor(Qt::transparent));
     }
     return root;
 }

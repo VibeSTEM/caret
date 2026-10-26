@@ -69,6 +69,8 @@ QVariantMap snapshot_from_theme_facade(const QString& path, const QColor& backgr
     tokens.insert(QStringLiteral("colorBackground"), background);
     tokens.insert(QStringLiteral("colorPanel"), background);
     tokens.insert(QStringLiteral("colorPanelLine"), QColor(QStringLiteral("#c9c9c9")));
+    tokens.insert(QStringLiteral("colorCaret"), QColor(QStringLiteral("#1c1c1c")));
+    tokens.insert(QStringLiteral("caretWidthPx"), 1.0);
     tokens.insert(QStringLiteral("fontBody"), body);
     return tokens;
 }
@@ -310,6 +312,22 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(canvas->hitTestPage(QPointF(-1.0, -1.0)).value(QStringLiteral("pageIndex")).toInt(),
              -1);
 
+    const QVariantMap caret_geometry{{QStringLiteral("pageIndex"), 1},
+                                     {QStringLiteral("xPt"), 12.0},
+                                     {QStringLiteral("y0Pt"), 20.0},
+                                     {QStringLiteral("y1Pt"), 30.0}};
+    canvas->setCaretGeometry(caret_geometry);
+    const QVariantMap installed_caret = canvas->caretGeometry();
+    QCOMPARE(installed_caret.value(QStringLiteral("pageIndex")).toInt(), 1);
+    QVariantMap invalid_caret = caret_geometry;
+    invalid_caret.insert(QStringLiteral("pageIndex"), 0.5);
+    canvas->setCaretGeometry(invalid_caret);
+    QCOMPARE(canvas->caretGeometry(), installed_caret);
+    invalid_caret.insert(QStringLiteral("pageIndex"),
+                         QVariant::fromValue<qulonglong>(4294967296ULL));
+    canvas->setCaretGeometry(invalid_caret);
+    QCOMPARE(canvas->caretGeometry(), installed_caret);
+
     // QQuickItem 输入坐标是逻辑像素，pt 映射不接收 DPR。
     for (const qreal zoom : {0.5, 1.0, 2.0}) {
         canvas->setZoom(zoom);
@@ -332,6 +350,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(bound_canvas->pageSizesPt().front().toSizeF(), QSizeF(600.0, 800.0));
     QCOMPARE(bound_canvas->pageColor(), QColor(Qt::white));
     QCOMPARE(bound_canvas->pageBorderColor(), QColor(QStringLiteral("#c9c9c9")));
+    QCOMPARE(bound_canvas->caretColor(), QColor(QStringLiteral("#1c1c1c")));
+    QCOMPARE(bound_canvas->caretWidthPx(), 1.0);
 
     QQmlComponent render_component(&engine);
     render_component.setData(QByteArrayLiteral("import QtQuick\n"
@@ -340,7 +360,10 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                                "    width: 200; height: 120\n"
                                                "    pageColor: \"#ffffff\"\n"
                                                "    pageBorderColor: \"#c8c8c8\"\n"
+                                               "    caretColor: \"#ff0000\"\n"
+                                               "    caretWidthPx: 2\n"
                                                "    pageSizesPt: [Qt.size(60, 60)]\n"
+                                               "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
                                                "    pageMarginPt: 12; pageGapPt: 0\n"
                                                "}\n"),
                              QUrl());
@@ -361,7 +384,10 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
         return frame.pixelColor(qFloor(x * scale_x), qFloor(y * scale_y));
     };
     QCOMPARE(pixel_at_logical_point(60.5, 50.0), QColor(QStringLiteral("#c8c8c8")));
-    QCOMPARE(pixel_at_logical_point(100.0, 50.0), QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(90.0, 50.0), QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(101.0, 50.0), QColor(QStringLiteral("#ff0000")));
+    QCOMPARE(pixel_at_logical_point(101.0, 95.5), QColor(QStringLiteral("#ff0000")));
+    QCOMPARE(pixel_at_logical_point(101.0, 96.5), QColor(Qt::green));
     delete rendered_canvas;
 
     QObject* scroller = surface->findChild<QObject*>(QStringLiteral("documentScroller"));

@@ -14,6 +14,8 @@ QtObject {
     readonly property color colorChromePressed: ThemeViewModel.tokens.colorChromePressed
     readonly property color colorChromeLine: ThemeViewModel.tokens.colorChromeLine
     readonly property color colorPanelLine: ThemeViewModel.tokens.colorPanelLine
+    readonly property color colorCaret: ThemeViewModel.tokens.colorCaret
+    readonly property real caretWidthPx: ThemeViewModel.tokens.caretWidthPx
     readonly property color colorStatus: ThemeViewModel.tokens.colorStatus
     readonly property color colorText: ThemeViewModel.tokens.colorText
     readonly property color colorTextMuted: ThemeViewModel.tokens.colorTextMuted
