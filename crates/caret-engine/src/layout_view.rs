@@ -1,6 +1,6 @@
 //! 将 Rust 内部布局结果投影为供 FFI 与界面消费的稳定只读数据。
 
-use crate::{Affinity, DocumentLayoutSnapshot, PageHit, StoryId};
+use crate::{Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageHit, StoryId};
 use caret_layout::VisualAffinity;
 use serde::Serialize;
 
@@ -91,13 +91,24 @@ pub enum StoryView {
 }
 
 /// 文字命中位置，同时保留逻辑亲和性、视觉亲和性和输入代际。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageHitView {
     pub session_id: Option<String>,
     pub document_generation: String,
     pub position: DocumentPositionView,
     pub visual_affinity: String,
+    pub caret: PageCaretView,
+}
+
+/// 页面局部坐标中的插入点；宽度由界面主题决定。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageCaretView {
+    pub page_index: usize,
+    pub x_pt: f64,
+    pub y0_pt: f64,
+    pub y1_pt: f64,
 }
 
 impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
@@ -188,6 +199,18 @@ impl DocumentLayoutSnapshot {
             document_generation: self.document_generation.to_string(),
             position: DocumentPositionView::from(hit),
             visual_affinity: visual_affinity_name(hit.visual_affinity).to_owned(),
+            caret: PageCaretView::from(hit.caret),
+        }
+    }
+}
+
+impl From<PageCaretGeometry> for PageCaretView {
+    fn from(caret: PageCaretGeometry) -> Self {
+        Self {
+            page_index: caret.page_index,
+            x_pt: caret.x_pt,
+            y0_pt: caret.y0_pt,
+            y1_pt: caret.y1_pt,
         }
     }
 }

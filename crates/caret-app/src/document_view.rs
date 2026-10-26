@@ -138,6 +138,10 @@ mod tests {
         assert_eq!(hit["position"]["offsetUtf8"], "0");
         assert_eq!(hit["position"]["affinity"], "downstream");
         assert_eq!(hit["visualAffinity"], "downstream");
+        assert_eq!(hit["caret"]["pageIndex"], 0);
+        assert!(hit["caret"]["xPt"].as_f64().is_some());
+        assert!(hit["caret"]["y0Pt"].as_f64().is_some());
+        assert!(hit["caret"]["y1Pt"].as_f64().is_some());
         assert_eq!(
             runtime
                 .hit_test_json(-1, 73.0, 73.0)

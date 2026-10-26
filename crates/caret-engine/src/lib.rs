@@ -12,9 +12,9 @@ pub use editing::{
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
-    LaidOutParagraph, PageHit, PageLayoutSnapshot, PageSelectionRect,
+    LaidOutParagraph, PageCaretGeometry, PageHit, PageLayoutSnapshot, PageSelectionRect,
 };
 pub use layout_view::{
-    DocumentLayoutView, DocumentPositionView, LayoutLineView, PageFragmentView, PageHitView,
-    PageLayoutView, PageMarginsView, ParagraphLayoutView, StoryView,
+    DocumentLayoutView, DocumentPositionView, LayoutLineView, PageCaretView, PageFragmentView,
+    PageHitView, PageLayoutView, PageMarginsView, ParagraphLayoutView, StoryView,
 };

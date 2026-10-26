@@ -97,11 +97,21 @@ pub struct PageSelectionRect {
     pub y1_pt: f64,
 }
 
+/// 页面局部坐标中的插入点几何；宽度由界面主题决定。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageCaretGeometry {
+    pub page_index: usize,
+    pub x_pt: f64,
+    pub y0_pt: f64,
+    pub y1_pt: f64,
+}
+
 /// 页面命中结果；文档环境亲和性与视觉光标侧分别记录。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageHit {
     pub position: Pos,
     pub visual_affinity: VisualAffinity,
+    pub caret: PageCaretGeometry,
 }
 
 impl DocumentLayoutSnapshot {
@@ -146,6 +156,9 @@ impl DocumentLayoutSnapshot {
                 let cursor = paragraph
                     .layout
                     .cursor_from_point_on_line((x_pt - page.margin_left_pt) as f32, line_index)?;
+                let cursor_bounds = paragraph.layout.cursor_geometry(cursor.cursor, 0.0);
+                let line = paragraph.layout.paragraph.lines.get(line_index)?;
+                let caret_y0 = page.margin_top_pt + fragment_line_top;
                 return Some(PageHit {
                     position: Pos {
                         story: StoryId::Body,
@@ -157,6 +170,12 @@ impl DocumentLayoutSnapshot {
                         },
                     },
                     visual_affinity: cursor.cursor.affinity(),
+                    caret: PageCaretGeometry {
+                        page_index,
+                        x_pt: cursor_bounds.x0 + page.margin_left_pt,
+                        y0_pt: caret_y0,
+                        y1_pt: caret_y0 + f64::from(line.metrics.height_pt),
+                    },
                 });
             }
             fragment_line_top = line_bottom;
@@ -559,6 +578,78 @@ mod tests {
         assert_eq!(hit.position.paragraph_id, snapshot.paragraphs[0].id);
         assert_eq!(hit.position.offset, first_line.source_bytes.start);
         assert_eq!(hit.position.affinity, Affinity::Downstream);
+        assert_eq!(hit.caret.page_index, 0);
+        assert!(
+            (hit.caret.x_pt - (snapshot.pages[0].margin_left_pt + cursor_rect.x0)).abs() < 0.01
+        );
+        assert!((hit.caret.y0_pt - snapshot.pages[0].margin_top_pt).abs() < 0.01);
+        assert!(
+            (hit.caret.y1_pt - hit.caret.y0_pt - f64::from(first_line.metrics.height_pt)).abs()
+                < 0.01
+        );
+        let hit_view = snapshot.view_for_hit(&hit);
+        assert_eq!(hit_view.caret.page_index, 0);
+        assert!((hit_view.caret.x_pt - hit.caret.x_pt).abs() < f64::EPSILON);
+
+        let first_fragment = &snapshot.pages[0].layout.fragments[0];
+        let fragment_line_index = first_fragment.line_range.start
+            + (first_fragment.line_range.len().saturating_sub(1) / 2);
+        let fragment_line = &snapshot.paragraphs[0].layout.paragraph.lines[fragment_line_index];
+        let line_offset = snapshot.paragraphs[0].layout.paragraph.lines
+            [first_fragment.line_range.start..fragment_line_index]
+            .iter()
+            .map(|line| f64::from(line.metrics.height_pt))
+            .sum::<f64>();
+        let fragment_line_cursor = snapshot.paragraphs[0]
+            .layout
+            .cursor_at(fragment_line.source_bytes.start, VisualAffinity::Downstream)
+            .unwrap_or_else(|| panic!("fragment line start is not a cursor stop"));
+        let fragment_line_cursor_rect = snapshot.paragraphs[0]
+            .layout
+            .cursor_geometry(fragment_line_cursor, 0.0);
+        let fragment_line_hit = snapshot
+            .hit_test(
+                0,
+                snapshot.pages[0].margin_left_pt + fragment_line_cursor_rect.x0,
+                snapshot.pages[0].margin_top_pt
+                    + f64::from(first_fragment.y_offset_pt)
+                    + line_offset
+                    + f64::from(fragment_line.metrics.height_pt) / 2.0,
+            )
+            .unwrap_or_else(|| panic!("fragment line hit did not resolve"));
+        assert_eq!(fragment_line_hit.caret.page_index, 0);
+        assert!(
+            (fragment_line_hit.caret.y0_pt
+                - (snapshot.pages[0].margin_top_pt
+                    + f64::from(first_fragment.y_offset_pt)
+                    + line_offset))
+                .abs()
+                < 0.01
+        );
+
+        let last_page_index = snapshot.pages.len() - 1;
+        let last_page = &snapshot.pages[last_page_index];
+        let last_fragment = &last_page.layout.fragments[0];
+        let last_line_index = last_fragment.line_range.start;
+        let last_line = &snapshot.paragraphs[0].layout.paragraph.lines[last_line_index];
+        let last_line_cursor = snapshot.paragraphs[0]
+            .layout
+            .cursor_at(last_line.source_bytes.start, VisualAffinity::Downstream)
+            .unwrap_or_else(|| panic!("last page line start is not a cursor stop"));
+        let last_line_cursor_rect = snapshot.paragraphs[0]
+            .layout
+            .cursor_geometry(last_line_cursor, 0.0);
+        let last_page_hit = snapshot
+            .hit_test(
+                last_page_index,
+                last_page.margin_left_pt + last_line_cursor_rect.x0,
+                last_page.margin_top_pt
+                    + f64::from(last_fragment.y_offset_pt + last_line.metrics.height_pt / 2.0),
+            )
+            .unwrap_or_else(|| panic!("last page hit did not resolve"));
+        assert_eq!(last_page_hit.caret.page_index, last_page_index);
+        assert!(last_page_hit.caret.y0_pt >= last_page.margin_top_pt);
+        assert!(last_page_hit.caret.y1_pt <= last_page.height_pt - last_page.margin_bottom_pt);
 
         let boundary_cursor = snapshot.paragraphs[0]
             .layout
