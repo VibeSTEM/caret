@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中和跨页选区几何。正文 glyph 尚未接入 Qt scene graph，FFI/ViewModel 仍未消费文档布局快照，真实窗口编辑交互未实现；因此 027 仍处于进行中。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中和跨页选区几何。Rust 页面/段落行范围快照已传到 FFI/ViewModel；正文 glyph 尚未接入 Qt scene graph，真实窗口编辑交互未实现，因此 027 仍处于进行中。
 
 ## 必读
 
@@ -67,6 +67,8 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 | 2026-10-26 | 画布坐标与缩放边界 C++/QML 用例 | 多页 pt 映射、hit-test 往返及缩小后的滚动范围正确 | 通过；真实窗口跨页编辑仍未实现 |
 | 2026-10-26 | `cmake --build target/native/debug --parallel 4` | ViewModel 页边距解析、版心坐标映射及 QML 绑定可编译 | 通过；链接器有既存 macOS LTO 路径与 deployment-target 警告；未运行测试 |
 | 2026-10-26 | 独立复核分页选区 y 偏移、页末命中和命中 affinity | 分页片段选区、页末命中和 RTL/LTR 字素边缘映射正确 | 通过；多行 bidi、硬换行和 LTR/RTL 起始边缘问题均修复并复验 |
+| 2026-10-26 | `cargo test --workspace --locked`、`cargo format --changed --check`、`cargo clippy --offline --locked --workspace --all-targets -- -D warnings` | Rust、C++/QML、格式和 lint 验证通过 | 通过；workspace/native 聚合测试及 CTest 4/4 通过；clippy 与变更文件格式检查通过 |
+| 2026-10-26 | 独立复核布局 JSON 数值边界和结构校验 | 拒绝不精确代际、越界字节偏移和非法行/片段几何，错误快照不替换已安装快照 | 已按复核修复；新增 JSON→C++→QML 全 `u64` 代际、UTF-8 边界和非法行框回归用例 |
 
 ## 风险与回退
 
@@ -80,6 +82,7 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：段落布局改用 Parley 高层 Layout；Caret 保留 ICU 断点、字体偏好、行距和分页。一次 10 MiB 英文长段落对照中，双方计入断点生成、塑形和排版后，Parley 为 1.8044 秒，原实现为 2.4026 秒。该样本仅用于实现选型，不代表多段分页、内存或跨平台性能结论。
 - 2026-10-26：`DocumentLayoutSnapshot` 增加页面局部命中、跨页选区矩形及会话/文档/字体代际校验。独立复核发现并修复分页片段选区 y 偏移、固定/自然行高导致的页末误命中、小字号下光标矩形造成的命中偏差，以及按 Parley 命中字素侧生成逻辑 affinity。新增 0.5/12 pt 的 LTR、RTL、bidi 与跨 Run combining mark 回归测试。复核另发现 Parley 多行 bidi 光标几何错误行问题，未纳入本次修复。
 - 2026-10-26：后续复核确认 Parley 自身在多行 bidi 的 `Cursor::geometry` 可能选错行；适配层现按逻辑 affinity 对应的相邻字素簇计算 caret 几何，并新增第二行命中与光标几何一致性测试。补充处理硬换行后的下一行及尾随空行光标位置，覆盖 LF、CRLF、连续换行和 RTL。独立复核通过；`caret-layout` 61 项、`caret-engine` 42 项，格式、Clippy 和定向测试通过。
+- 2026-10-26：应用层新增会话级布局运行时，持有系统字体目录和可复用布局器；FFI 传递携带 session/document/font generation、页面片段及段落 UTF-8 行范围的只读 JSON，ViewModel 校验并暴露页面、段落和代际属性。generation 以十进制字符串通过 JSON 和 QML，避免 JavaScript 双精度舍入；ViewModel 拒绝无效 UTF-8 偏移、行范围、重复段落 ID、非连续行框、负度量及超出版心的片段，失败快照不覆盖已安装结果。glyph 数据、Qt 绘制及异步旧代际丢弃仍未接入。
 
 ## 完成摘要
 

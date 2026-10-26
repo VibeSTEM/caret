@@ -24,6 +24,7 @@
 #include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/qtest.h>
 #include <algorithm>
+#include <limits>
 #include <qcontainerfwd.h>
 #include <qtestcase.h>
 #include <qtmetamacros.h>
@@ -193,16 +194,66 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     themes.insert(QStringLiteral("light"),
                   snapshot_from_theme_facade(theme_path, QColor(Qt::white), 16));
     caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
-    QVERIFY(caret::install_layout_snapshot(QStringLiteral(
-        R"({"marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800}]})")));
+    const QString empty_snapshot = QStringLiteral(
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}]})");
+    QString max_generation_snapshot = empty_snapshot;
+    max_generation_snapshot.replace(
+        QStringLiteral("\"documentGeneration\":\"0\""),
+        QStringLiteral("\"documentGeneration\":\"18446744073709551615\""));
+    QVERIFY(caret::install_layout_snapshot(max_generation_snapshot));
+    const caret::LayoutViewModel max_generation_model;
+    const QString max_generation = QString::number(std::numeric_limits<qulonglong>::max());
+    QCOMPARE(max_generation_model.documentGeneration(), max_generation);
+    QQmlEngine generation_engine;
+    generation_engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent generation_component(&generation_engine);
+    generation_component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.ViewModels\n"
+                          "Item { property var generation: LayoutViewModel.documentGeneration }\n"),
+        QUrl());
+    QVERIFY2(generation_component.isReady(), qPrintable(generation_component.errorString()));
+    QObject* generation_object = generation_component.create();
+    QVERIFY(generation_object != nullptr);
+    QCOMPARE(generation_object->property("generation").toString(), max_generation);
+    delete generation_object;
+    QVERIFY(caret::install_layout_snapshot(empty_snapshot));
+
     QVERIFY(!caret::install_layout_snapshot(QStringLiteral("{invalid")));
+    QString unsafe_index_snapshot = empty_snapshot;
+    unsafe_index_snapshot.replace(QStringLiteral("\"sourceStart\":0"),
+                                  QStringLiteral("\"sourceStart\":9223372036854775808"));
+    QVERIFY(!caret::install_layout_snapshot(unsafe_index_snapshot));
+    const QString split_utf8_snapshot = QStringLiteral(
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"éx","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":3,"consumedStart":1,"consumedEnd":3,"topPt":12,"baselinePt":21,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}]})");
+    QVERIFY(!caret::install_layout_snapshot(split_utf8_snapshot));
+    const QString overlapping_lines_snapshot = QStringLiteral(
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[],"paragraphs":[{"paragraphId":"p1","text":"ab","lines":[{"sourceStart":0,"sourceEnd":1,"consumedStart":0,"consumedEnd":1,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false},{"sourceStart":1,"sourceEnd":2,"consumedStart":1,"consumedEnd":2,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":6,"overflowsWidth":false}]}]})");
+    QVERIFY(!caret::install_layout_snapshot(overlapping_lines_snapshot));
+    QString negative_line_top = empty_snapshot;
+    negative_line_top.replace(QStringLiteral("\"topPt\":0"), QStringLiteral("\"topPt\":-1"));
+    QVERIFY(!caret::install_layout_snapshot(negative_line_top));
+    QString outside_page_fragment = empty_snapshot;
+    outside_page_fragment.replace(QStringLiteral("\"yOffsetPt\":0"),
+                                  QStringLiteral("\"yOffsetPt\":1e300"));
+    QVERIFY(!caret::install_layout_snapshot(outside_page_fragment));
+    const caret::LayoutViewModel retained_snapshot_model;
+    QCOMPARE(retained_snapshot_model.documentGeneration(), QStringLiteral("0"));
+    QCOMPARE(retained_snapshot_model.fontGeneration(), QStringLiteral("1"));
     QQmlEngine engine;
     engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     QQmlComponent view_model_component(&engine);
     view_model_component.setData(
-        QByteArrayLiteral("import QtQuick\n"
-                          "import Caret.ViewModels\n"
-                          "Item { property var pageSizes: LayoutViewModel.pageSizesPt }\n"),
+        QByteArrayLiteral(
+            "import QtQuick\n"
+            "import Caret.ViewModels\n"
+            "Item {\n"
+            "    property var pageSizes: LayoutViewModel.pageSizesPt\n"
+            "    property var pages: LayoutViewModel.pageLayouts\n"
+            "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
+            "    property string documentGeneration: LayoutViewModel.documentGeneration\n"
+            "    property string fontGeneration: LayoutViewModel.fontGeneration\n"
+            "}\n"),
         QUrl());
     QVERIFY2(view_model_component.isReady(), qPrintable(view_model_component.errorString()));
     QObject* view_model = view_model_component.create();
@@ -210,6 +261,10 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     const QVariantList page_sizes = view_model->property("pageSizes").toList();
     QCOMPARE(page_sizes.size(), 1);
     QCOMPARE(page_sizes.front().toSizeF(), QSizeF(600.0, 800.0));
+    QCOMPARE(view_model->property("pages").toList().size(), 1);
+    QCOMPARE(view_model->property("paragraphs").toList().size(), 1);
+    QCOMPARE(view_model->property("documentGeneration").toString(), QStringLiteral("0"));
+    QCOMPARE(view_model->property("fontGeneration").toString(), QStringLiteral("1"));
     QQmlComponent component(&engine);
     component.setData(
         QByteArrayLiteral("import QtQuick\n"

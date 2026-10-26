@@ -3,9 +3,10 @@
 use crate::{Affinity, Pos, Selection, Session, StoryId};
 use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
-    FontCatalog, PageLayout, PaginationItem, ParagraphLayoutOptions, ParagraphLayouter,
-    ParagraphPaginationInput, ParleyParagraphLayout, ResolvedDocumentTextSettings, ShapingStyle,
-    VisualAffinity, paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
+    FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
+    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout,
+    ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
+    paragraph_has_empty_line, resolve_paragraph_style,
 };
 use std::collections::HashMap;
 
@@ -14,6 +15,7 @@ use std::collections::HashMap;
 pub enum DocumentLayoutError {
     InvalidDocument(String),
     FontPreferences(String),
+    FontCatalog(String),
     Shaping(String),
     Paragraph(String),
     Pagination(String),
@@ -28,6 +30,7 @@ impl std::fmt::Display for DocumentLayoutError {
         match self {
             Self::InvalidDocument(error) => write!(formatter, "layout.invalid_document: {error}"),
             Self::FontPreferences(error) => write!(formatter, "layout.font_preferences: {error}"),
+            Self::FontCatalog(error) => write!(formatter, "layout.font_catalog: {error}"),
             Self::Shaping(error) => write!(formatter, "layout.shaping: {error}"),
             Self::Paragraph(error) => write!(formatter, "layout.paragraph: {error}"),
             Self::Pagination(error) => write!(formatter, "layout.pagination: {error}"),
@@ -47,6 +50,12 @@ impl std::fmt::Display for DocumentLayoutError {
 
 impl std::error::Error for DocumentLayoutError {}
 
+impl From<FontCatalogError> for DocumentLayoutError {
+    fn from(error: FontCatalogError) -> Self {
+        Self::FontCatalog(error.to_string())
+    }
+}
+
 /// 已排版段落的源 ID、原文與行框；正文文本只在快照里保留一份。
 #[derive(Debug, Clone)]
 pub struct LaidOutParagraph {
@@ -62,6 +71,8 @@ pub struct PageLayoutSnapshot {
     pub height_pt: f64,
     pub margin_left_pt: f64,
     pub margin_top_pt: f64,
+    pub margin_right_pt: f64,
+    pub margin_bottom_pt: f64,
     pub layout: PageLayout,
 }
 
@@ -406,6 +417,8 @@ impl DocumentLayoutService {
                 height_pt: page_height_pt,
                 margin_left_pt: geometry.margins.left,
                 margin_top_pt: geometry.margins.top,
+                margin_right_pt: geometry.margins.right,
+                margin_bottom_pt: geometry.margins.bottom,
                 layout,
             })
             .collect();
@@ -421,6 +434,38 @@ impl DocumentLayoutService {
             paragraphs,
             pages,
         })
+    }
+}
+
+/// 持有系统字体目录与复用布局器的会话级布局运行时。
+pub struct DocumentLayoutRuntime {
+    catalog: FontCatalog,
+    service: DocumentLayoutService,
+    base_style: ShapingStyle,
+}
+
+impl DocumentLayoutRuntime {
+    /// 扫描系统字体一次，并复用目录与布局器处理后续文档修订。
+    pub fn new_system() -> Result<Self, DocumentLayoutError> {
+        Ok(Self {
+            catalog: FontCatalog::system()?,
+            service: DocumentLayoutService::new(),
+            base_style: ShapingStyle::default(),
+        })
+    }
+
+    /// 使用当前文档和字体代际生成布局快照。
+    pub fn layout_session(
+        &mut self,
+        session: &Session,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        self.service
+            .layout_session(session, &mut self.catalog, &self.base_style)
+    }
+
+    /// 当前字体目录代际，用于丢弃过期异步结果。
+    pub const fn font_generation(&self) -> u64 {
+        self.catalog.generation()
     }
 }
 

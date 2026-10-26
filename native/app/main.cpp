@@ -80,13 +80,11 @@ int main(int argc, char* argv[]) try {
     if (!caret::install_builtin_theme_catalog()) {
         return kExitUnavailable;
     }
-    const rust::String page_geometry_snapshot = caret::ffi::blank_document_page_geometry_snapshot();
-    const std::string_view page_geometry_snapshot_text(page_geometry_snapshot.data(),
-                                                       page_geometry_snapshot.size());
-    if (page_geometry_snapshot_text.starts_with("error:") ||
-        !caret::install_layout_snapshot(
-            QString::fromUtf8(page_geometry_snapshot.data(),
-                              static_cast<qsizetype>(page_geometry_snapshot.size())))) {
+    const rust::String layout_snapshot = caret::ffi::blank_document_layout_snapshot();
+    const std::string_view layout_snapshot_text(layout_snapshot.data(), layout_snapshot.size());
+    if (layout_snapshot_text.starts_with("error:") ||
+        !caret::install_layout_snapshot(QString::fromUtf8(
+            layout_snapshot.data(), static_cast<qsizetype>(layout_snapshot.size())))) {
         return kExitUnavailable;
     }
 
