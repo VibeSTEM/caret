@@ -9,7 +9,6 @@
 #include <cmath>
 #include <iterator>
 #include <qcontainerfwd.h>
-#include <qhashfunctions.h>
 #include <qobject.h>
 #include <qpoint.h>
 #include <qquickitem.h>
