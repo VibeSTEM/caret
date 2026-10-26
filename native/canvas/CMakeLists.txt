@@ -16,7 +16,8 @@ qt_add_qml_module(
   /qt/qml
   SOURCES
   document_canvas.hpp
-  document_canvas.cpp)
+  document_canvas.cpp
+  document_canvas_input.cpp)
 set_target_properties(caret_canvas PROPERTIES EXPORT_NAME canvas)
 caret_native_defaults(caret_canvas)
 add_library(caret::canvas ALIAS caret_canvas)

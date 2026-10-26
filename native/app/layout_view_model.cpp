@@ -444,7 +444,85 @@ QVariantMap LayoutViewModel::insertText(const QString& text) {
     const QByteArray utf8 = text.toUtf8();
     const rust::String input(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())));
     const rust::String response = ffi::insert_text_json(**runtime, input);
-    const QByteArray response_bytes(response.data(), static_cast<qsizetype>(response.size()));
+    return installEditResponse(
+        QByteArray(response.data(), static_cast<qsizetype>(response.size())));
+#else
+    Q_UNUSED(text)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::splitParagraph() {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("text.split_paragraph_wrong_thread")}};
+    }
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+    const rust::String response = ffi::split_paragraph_json(**runtime);
+    return installEditResponse(
+        QByteArray(response.data(), static_cast<qsizetype>(response.size())));
+#else
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::deleteBackward() {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("text.delete_wrong_thread")}};
+    }
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+    const rust::String response = ffi::delete_backward_json(**runtime);
+    return installEditResponse(
+        QByteArray(response.data(), static_cast<qsizetype>(response.size())));
+#else
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::insertSoftBreak() {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("text.soft_break_wrong_thread")}};
+    }
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+    const rust::String response = ffi::insert_soft_break_json(**runtime);
+    return installEditResponse(
+        QByteArray(response.data(), static_cast<qsizetype>(response.size())));
+#else
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_bytes) {
+#ifdef CARET_ENABLE_APP
+    auto& runtime = installed_runtime();
+    if (!runtime.has_value()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
     if (response_bytes.startsWith("error:")) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"),
@@ -472,7 +550,7 @@ QVariantMap LayoutViewModel::insertText(const QString& text) {
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), documentGeneration()}};
 #else
-    Q_UNUSED(text)
+    Q_UNUSED(response_bytes)
     return {{QStringLiteral("valid"), false},
             {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
 #endif

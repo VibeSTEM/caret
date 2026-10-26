@@ -84,6 +84,7 @@ class DocumentCanvas : public QQuickItem {
 
   signals:
     void textInputRequested(const QString& text);
+    void editingCommandRequested(const QString& command_id);
     void pageSizesPtChanged();
     void pageMarginsPtChanged();
     void zoomChanged();

@@ -25,6 +25,7 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedIcon.qml
     Components/Atoms/PanelSurface.qml
     Components/Atoms/RibbonComboBox.qml
+    Canvas/DocumentCanvasPointerHandler.qml
     Components/Composites/ToolGroup.qml
     Components/Composites/ApplicationBackstageCommand.qml
     Components/Composites/RibbonTile.qml

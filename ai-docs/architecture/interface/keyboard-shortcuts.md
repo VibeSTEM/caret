@@ -1,6 +1,6 @@
 # 快捷键
 
-更新日期：2026-10-25。仓库里还没有键位实现。这里是目标绑定。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-10-26。当前已接入正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行和 Backspace 删除/段落合并；本表其余键位仍是目标绑定。命令 id 见[命令](../editor/commands.md)。
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 

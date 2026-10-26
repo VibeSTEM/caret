@@ -4,7 +4,6 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QImage>
-#include <QKeyEvent>
 #include <QMetaType>
 #include <QQuickWindow>
 #include <QRectF>
@@ -556,27 +555,6 @@ void DocumentCanvas::toggleCaretVisibility() {
     }
     m_caret_visible = !m_caret_visible;
     update();
-}
-
-void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
-    const Qt::KeyboardModifiers modifiers = event->modifiers();
-    const bool group_switch = modifiers.testFlag(Qt::GroupSwitchModifier);
-    const QString text = event->text();
-    const bool contains_control_character =
-        std::any_of(text.cbegin(), text.cend(),
-                    [](QChar character) { return character.category() == QChar::Other_Control; });
-    const bool altgr_text = modifiers.testFlag(Qt::ControlModifier) &&
-                            modifiers.testFlag(Qt::AltModifier) && !text.isEmpty() &&
-                            !contains_control_character;
-    const bool has_command_modifier =
-        modifiers.testFlag(Qt::MetaModifier) ||
-        (modifiers.testFlag(Qt::ControlModifier) && !group_switch && !altgr_text);
-    if (!has_command_modifier && !text.isEmpty() && !contains_control_character) {
-        emit textInputRequested(text);
-        event->accept();
-        return;
-    }
-    QQuickItem::keyPressEvent(event);
 }
 
 qreal DocumentCanvas::pageGapPt() const { return m_page_gap_pt; }

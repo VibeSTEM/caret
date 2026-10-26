@@ -2,8 +2,8 @@
 
 use caret_doc::Document;
 use caret_engine::{
-    Command, DocumentLayoutRuntime, DocumentLayoutSnapshot, PageCaretView, PageGlyphRasterizer,
-    RasterizedPageGlyphs, Selection, Session,
+    Command, Direction, DocumentLayoutRuntime, DocumentLayoutSnapshot, PageCaretView,
+    PageGlyphRasterizer, RasterizedPageGlyphs, Selection, Session,
 };
 use std::convert::TryFrom;
 
@@ -41,9 +41,32 @@ impl DocumentViewRuntime {
 
     /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。
     pub fn insert_text_json(&mut self, text: String) -> Result<String, String> {
+        self.run_edit_command(Command::InsertText(text), "text.insert")
+    }
+
+    /// 在 Rust Session 中拆分当前段落并返回新布局。
+    pub fn split_paragraph_json(&mut self) -> Result<String, String> {
+        self.run_edit_command(Command::SplitParagraph, "text.split_paragraph")
+    }
+
+    /// 在当前插入点删除前一个字素；位于段首时与前一段合并。
+    pub fn delete_backward_json(&mut self) -> Result<String, String> {
+        self.run_edit_command(Command::Delete(Direction::Backward), "text.delete_backward")
+    }
+
+    /// 在当前段落内插入软换行，不创建新段落。
+    pub fn insert_soft_break_json(&mut self) -> Result<String, String> {
+        self.run_edit_command(Command::InsertSoftBreak, "text.soft_break")
+    }
+
+    fn run_edit_command(
+        &mut self,
+        command: Command,
+        error_context: &str,
+    ) -> Result<String, String> {
         self.session
-            .run(Command::InsertText(text))
-            .map_err(|error| format!("text.insert: {error}"))?;
+            .run(command)
+            .map_err(|error| format!("{error_context}: {error}"))?;
         self.layout_snapshot_json()
     }
 
@@ -213,6 +236,50 @@ mod tests {
         assert_eq!(caret["pageIndex"], 0);
         assert!(caret["xPt"].as_f64().is_some());
         assert!(caret["y1Pt"].as_f64().is_some());
+    }
+
+    #[test]
+    fn keyboard_commands_split_and_merge_paragraphs_and_delete_text() {
+        let mut runtime = DocumentViewRuntime::new_blank()
+            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+
+        let inserted = runtime
+            .insert_text_json("Aλ".to_owned())
+            .unwrap_or_else(|error| panic!("keyboard text insertion failed: {error}"));
+        assert!(inserted.contains("\"documentGeneration\":\"1\""));
+
+        let split = runtime
+            .split_paragraph_json()
+            .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
+        let split_snapshot: Value = serde_json::from_str(&split)
+            .unwrap_or_else(|error| panic!("split snapshot JSON failed: {error}"));
+        assert_eq!(split_snapshot["documentGeneration"], "2");
+        assert_eq!(
+            split_snapshot["paragraphs"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(split_snapshot["paragraphs"][0]["text"], "Aλ");
+        assert_eq!(split_snapshot["paragraphs"][1]["text"], "");
+
+        let merged = runtime
+            .delete_backward_json()
+            .unwrap_or_else(|error| panic!("paragraph merge failed: {error}"));
+        let merged_snapshot: Value = serde_json::from_str(&merged)
+            .unwrap_or_else(|error| panic!("merged snapshot JSON failed: {error}"));
+        assert_eq!(merged_snapshot["documentGeneration"], "3");
+        assert_eq!(
+            merged_snapshot["paragraphs"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(merged_snapshot["paragraphs"][0]["text"], "Aλ");
+
+        let deleted = runtime
+            .delete_backward_json()
+            .unwrap_or_else(|error| panic!("grapheme deletion failed: {error}"));
+        let deleted_snapshot: Value = serde_json::from_str(&deleted)
+            .unwrap_or_else(|error| panic!("deleted snapshot JSON failed: {error}"));
+        assert_eq!(deleted_snapshot["documentGeneration"], "4");
+        assert_eq!(deleted_snapshot["paragraphs"][0]["text"], "A");
     }
 
     #[test]

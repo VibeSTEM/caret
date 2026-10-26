@@ -59,6 +59,12 @@ mod generated {
             ) -> String;
             /// 将 Qt 文本输入提交给 Rust Session，成功时返回新的布局快照。
             fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String;
+            /// 在 Rust Session 中执行 Enter 对应的段落拆分。
+            fn split_paragraph_json(runtime: &mut DocumentRuntime) -> String;
+            /// 在 Rust Session 中执行 Backspace，对向后删除与段首合并进行处理。
+            fn delete_backward_json(runtime: &mut DocumentRuntime) -> String;
+            /// 在 Rust Session 中插入段内软换行。
+            fn insert_soft_break_json(runtime: &mut DocumentRuntime) -> String;
             /// 返回当前 Session 插入点在最新布局中的页面几何。
             fn current_caret_json(runtime: &mut DocumentRuntime) -> String;
             /// 只栅格化请求页，图像字节走二进制向量，不经 JSON/Base64。
@@ -146,6 +152,36 @@ mod generated {
     fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String {
         match &mut runtime.runtime {
             Ok(runtime) => match runtime.insert_text_json(text) {
+                Ok(json) => json,
+                Err(error) => format!("error:{error}"),
+            },
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
+    fn split_paragraph_json(runtime: &mut DocumentRuntime) -> String {
+        match &mut runtime.runtime {
+            Ok(runtime) => match runtime.split_paragraph_json() {
+                Ok(json) => json,
+                Err(error) => format!("error:{error}"),
+            },
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
+    fn delete_backward_json(runtime: &mut DocumentRuntime) -> String {
+        match &mut runtime.runtime {
+            Ok(runtime) => match runtime.delete_backward_json() {
+                Ok(json) => json,
+                Err(error) => format!("error:{error}"),
+            },
+            Err(error) => format!("error:{error}"),
+        }
+    }
+
+    fn insert_soft_break_json(runtime: &mut DocumentRuntime) -> String {
+        match &mut runtime.runtime {
+            Ok(runtime) => match runtime.insert_soft_break_json() {
                 Ok(json) => json,
                 Err(error) => format!("error:{error}"),
             },
@@ -248,9 +284,10 @@ mod generated {
     #[cfg(test)]
     mod tests {
         use super::{
-            builtin_theme_catalog, current_caret_json, document_hit_test_json, insert_text_json,
-            layout_snapshot_json, new_blank_document_runtime, place_caret_at_page_json,
-            rasterize_page_glyphs, version,
+            builtin_theme_catalog, current_caret_json, delete_backward_json,
+            document_hit_test_json, insert_soft_break_json, insert_text_json, layout_snapshot_json,
+            new_blank_document_runtime, place_caret_at_page_json, rasterize_page_glyphs,
+            split_paragraph_json, version,
         };
 
         #[test]
@@ -295,6 +332,17 @@ mod generated {
             let caret = current_caret_json(&mut runtime);
             assert!(caret.contains("\"pageIndex\":0"));
             assert!(caret.contains("\"xPt\":"));
+
+            let split = split_paragraph_json(&mut runtime);
+            assert!(!split.starts_with("error:"));
+            assert!(split.contains("\"documentGeneration\":\"2\""));
+            assert!(split.contains("\"text\":\"xλ\""));
+            let soft_break = insert_soft_break_json(&mut runtime);
+            assert!(!soft_break.starts_with("error:"));
+            assert!(soft_break.contains("\"documentGeneration\":\"3\""));
+            let deleted = delete_backward_json(&mut runtime);
+            assert!(!deleted.starts_with("error:"));
+            assert!(deleted.contains("\"documentGeneration\":\"4\""));
         }
 
         #[test]

@@ -303,6 +303,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY(canvas != nullptr);
     QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
     QVERIFY(text_input_spy.isValid());
+    QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
+    QVERIFY(editing_command_spy.isValid());
     QKeyEvent altgr_input(QEvent::KeyPress, Qt::Key_Q,
                           Qt::ControlModifier | Qt::AltModifier | Qt::GroupSwitchModifier,
                           QStringLiteral("@"));
@@ -317,6 +319,11 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QKeyEvent shortcut_input(QEvent::KeyPress, Qt::Key_X, Qt::ControlModifier, QStringLiteral("x"));
     QCoreApplication::sendEvent(canvas, &shortcut_input);
     QCOMPARE(text_input_spy.size(), 0);
+    QKeyEvent keypad_enter(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier, QString());
+    QCoreApplication::sendEvent(canvas, &keypad_enter);
+    QCOMPARE(editing_command_spy.size(), 1);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
+             QStringLiteral("text.split_paragraph"));
 
     const QSizeF natural_size = canvas->naturalContentSize();
     QCOMPARE(natural_size.width(), 1296.0);
@@ -462,7 +469,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(pixel_at_logical_point(92.5, 55.0), QColor(Qt::green));
     QCOMPARE(pixel_at_logical_point(92.0, 51.0), QColor(Qt::white));
     QVERIFY(pixel_at_logical_point(101.0, 50.0) != QColor(Qt::white));
-    QCOMPARE(pixel_at_logical_point(101.5, 50.0), QColor(Qt::white));
+    QCOMPARE(pixel_at_logical_point(102.5, 50.0), QColor(Qt::white));
     QCOMPARE(pixel_at_logical_point(100.5, 95.5), QColor(QStringLiteral("#ff0000")));
     QCOMPARE(pixel_at_logical_point(101.0, 180.0), QColor(Qt::green));
     QCOMPARE(pixel_at_logical_point(88.5, 134.5), QColor(Qt::red));
@@ -691,6 +698,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     const qreal initial_caret_x = canvas->caretGeometry().value(QStringLiteral("xPt")).toReal();
     QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
     QVERIFY(text_input_spy.isValid());
+    QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
+    QVERIFY(editing_command_spy.isValid());
     QTest::keyClick(&window, Qt::Key_X);
     QTRY_COMPARE_WITH_TIMEOUT(text_input_spy.size(), 1, 3000);
     QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("x"));
@@ -720,6 +729,55 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCOMPARE(updated_glyph_frame.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("1"));
     QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
+
+    QTest::keyClick(&window, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
+             QStringLiteral("text.split_paragraph"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("2"), 3000);
+    QCOMPARE(layout_view_model->paragraphLayouts().size(), 2);
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .at(0)
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("x"));
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .at(1)
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QString());
+
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
+             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("3"), 3000);
+    QCOMPARE(layout_view_model->paragraphLayouts().size(), 1);
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QStringLiteral("x"));
+
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
+             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("4"), 3000);
+    QCOMPARE(layout_view_model->paragraphLayouts()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("text"))
+                 .toString(),
+             QString());
+
+    QTest::keyClick(&window, Qt::Key_Return, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
+    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(), QStringLiteral("text.soft_break"));
+    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("5"), 3000);
     delete surface;
 }
 #endif

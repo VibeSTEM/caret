@@ -1,6 +1,7 @@
 /// 把 Rust 生成的只读页面快照转换为 QML 可绑定的值。
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
@@ -45,6 +46,12 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt);
     /// 将 Qt 键盘输入文本提交给 Rust 会话并安装新布局快照。
     Q_INVOKABLE QVariantMap insertText(const QString& text);
+    /// 将 Return 提交给 Rust，并安装拆分后的页面快照。
+    Q_INVOKABLE QVariantMap splitParagraph();
+    /// 将 Backspace 提交给 Rust，并安装删除后的页面快照。
+    Q_INVOKABLE QVariantMap deleteBackward();
+    /// 将 Shift+Return 提交为段内软换行。
+    Q_INVOKABLE QVariantMap insertSoftBreak();
     /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
     Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
                                                 qreal page_origin_device_x_px,
@@ -54,6 +61,7 @@ class LayoutViewModel final : public QObject {
 
   private:
     bool installSnapshot(const QString& snapshot_json);
+    QVariantMap installEditResponse(const QByteArray& response_bytes);
     void installCaretGeometry(const QVariantMap& geometry);
 
   signals:

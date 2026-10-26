@@ -147,16 +147,23 @@ Item {
                     console.warn("Document text input failed:", result.error);
             }
 
-            TapHandler {
-                onTapped: function (eventPoint) {
-                    pageCanvas.forceActiveFocus(Qt.MouseFocusReason);
-                    const pageHit = pageCanvas.hitTestPage(eventPoint.position);
-                    if (pageHit.pageIndex < 0)
-                        return;
-                    const result = LayoutViewModel.placeCaretAtPage(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
-                    if (result.valid) {
-                        surface.documentPositionHit(result);
-                    }
+            onEditingCommandRequested: function (commandId) {
+                let result;
+                if (commandId === "text.split_paragraph")
+                    result = LayoutViewModel.splitParagraph();
+                else if (commandId === "text.soft_break")
+                    result = LayoutViewModel.insertSoftBreak();
+                else if (commandId === "text.delete_backward")
+                    result = LayoutViewModel.deleteBackward();
+                if (result && !result.valid)
+                    console.warn("Document editing command failed:", result.error);
+            }
+
+            DocumentCanvasPointerHandler {
+                anchors.fill: parent
+                canvas: pageCanvas
+                onDocumentPositionHit: function (result) {
+                    surface.documentPositionHit(result);
                 }
             }
         }
