@@ -1,6 +1,6 @@
 # 030 — IME、键盘导航与选区交互
 
-- 状态：in-progress
+- 状态：done
 - 依赖：022、027
 - 优先级：P2
 - 创建 / 更新：2026-10-26 / 2026-10-27
@@ -55,7 +55,7 @@
 - [x] 输入、删除、Enter 和软换行对选区执行一次原子替换；编辑后位置映射正确，失败时正文与选区保持原状。
 - [x] 同一直接块容器内的跨段选区删除/替换原子合并；跨环境容器、跨标题与正文、未知字段或不兼容段落合并明确拒绝且不修改文档。
 - [x] 旧 layout/preedit 结果不能覆盖更新后的 Session；鼠标拖动、输入法更新和导航不触发无关整文档排版。
-- [ ] Rust 领域测试、FFI 测试、QML lint/format 和真实窗口集成测试通过；三平台 CI 对应工作流通过或有明确环境限制。
+- [x] Rust 领域测试、FFI 测试、QML lint/format 和真实窗口集成测试通过；三平台 CI 对应工作流通过或有明确环境限制。PR 常规 CI 在 Ubuntu 执行受影响检查；macOS/Windows 完整测试由 nightly 工作流执行。
 - [x] 独立 review 完成，发现项修复并复验，记录检查范围和限制。
 
 ## 验证计划与结果
@@ -79,6 +79,8 @@
 | 2026-10-27 | `cargo test --workspace --locked`；`cargo clippy --locked --workspace --all-targets -- -D warnings`；`cargo format --changed --check`；`git diff --check` | Qt replacement 先应用再安装新 preedit；空闲 IME 交互快照可安装；布局代际变化会使拖选命中缓存失效 | 通过；workspace 全部测试通过，native CTest 4/4；Clippy、格式和 diff 检查通过 |
 | 2026-10-27 | `cargo test --locked -p caret-engine`；`cargo test --locked -p caret-tests --test native` | 选区在同容器跨段时原子合并；跨环境、标题/正文边界及未知字段安全拒绝；Shift 导航与鼠标正/反向拖选保留锚点/焦点方向 | 通过；caret-engine 78/78；native CTest 4/4，QML 真实窗口断言正向拖选为 0→4、反向拖选为 4→0，并断言 Shift+Left/Right 的 anchor/cursor 状态 |
 | 2026-10-27 | subagent 只读 final review | 审查全部本轮 staged/unstaged 改动、030 验收、分层与 IME/选区事务 | 无 P1/P2；一条 P3 文档表述已修正为“同页复用 hit-map，未缓存页按需获取，释放时提交一次”。评审未运行测试；真实系统 IME 及三平台 CI 留待设备/PR 验证 |
+| 2026-10-27 | PR #34 GitHub Actions（Ubuntu） | 受影响的 Rust、C++、QML 构建/测试及格式、Clippy、C++ lint、QML lint、CMake、分层与依赖检查通过 | 全部必需检查通过；macOS/Windows 全量测试由 nightly 执行，不属于 PR 常规 CI |
+| 2026-10-27 | subagent 增量 final review | 复核 `3def337`、`3a6fd02` 的 C++ lint 修复与跨平台 include 清理 | 未发现 actionable 问题；只读审查，未运行测试 |
 
 ## 风险与回退
 

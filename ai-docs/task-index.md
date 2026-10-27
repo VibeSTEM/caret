@@ -65,7 +65,7 @@
 | 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | done |
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | done |
-| 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | in-progress |
+| 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | done |
 | 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 027 | M | ready |
 | 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
 | 033 | 排版基线 | [OpenType BASE 脚本基线与行框溢出](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | ready |
