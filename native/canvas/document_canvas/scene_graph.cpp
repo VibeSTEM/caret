@@ -2,6 +2,7 @@
 #include "document_canvas.hpp"
 #include "value_validation.hpp"
 #include <QByteArray>
+#include <QColor>
 #include <QHash>
 #include <QImage>
 #include <QList>
