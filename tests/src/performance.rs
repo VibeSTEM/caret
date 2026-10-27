@@ -89,6 +89,10 @@ fn run_rust_cpu(samples: Option<u32>) -> Result<(), Box<dyn Error>> {
             "caret-engine",
             "--bench",
             "novel_document_criterion",
+            "--package",
+            "caret-app",
+            "--bench",
+            "document_view_input_criterion",
             "--target-dir",
         ])
         .arg(crate::paths::target_root())
@@ -138,6 +142,9 @@ fn run_qt(samples: Option<u32>, gpu: bool) -> Result<(), Box<dyn Error>> {
         .arg(if gpu { "gpu" } else { "cpu" })
         .envs(caret_build::native_test_env(env!("CARET_TEST_HOST"))?)
         .current_dir(repository_root);
+    if !gpu {
+        benchmark.env("QT_QPA_PLATFORM", "offscreen");
+    }
     if let Some(samples) = samples {
         benchmark.args(["--samples", &samples.to_string()]);
     }

@@ -28,7 +28,19 @@ QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_byte
     }
     const QString snapshot = QString::fromUtf8(response_bytes.constData(), response_bytes.size());
     if (!installSnapshot(snapshot)) {
-        return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
+        if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
+            return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
+        }
+        const rust::String full_snapshot = ffi::layout_snapshot_json(*runtime);
+        const QByteArray full_snapshot_bytes(full_snapshot.data(),
+                                             static_cast<qsizetype>(full_snapshot.size()));
+        if (full_snapshot_bytes.startsWith("error:")) {
+            return {{QStringLiteral("valid"), false},
+                    {QStringLiteral("error"), QString::fromUtf8(full_snapshot_bytes)}};
+        }
+        if (!installSnapshot(QString::fromUtf8(full_snapshot_bytes))) {
+            return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
+        }
     }
     const rust::String caret_response = ffi::current_caret_json(*runtime);
     const QByteArray caret_bytes(caret_response.data(),

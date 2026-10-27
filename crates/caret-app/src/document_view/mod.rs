@@ -1,9 +1,10 @@
 //! 为界面提供由 Rust 文档会话生成的只读布局快照。
 
 use caret_doc::Document;
+use caret_doc::NodeId;
 use caret_engine::{
-    Command, Direction, DocumentLayoutRuntime, DocumentLayoutSnapshot, PageCaretView,
-    PageGlyphRasterizer, RasterizedPageGlyphs, Selection, Session, VisualAffinity,
+    Command, Direction, DocumentLayoutDeltaView, DocumentLayoutRuntime, DocumentLayoutSnapshot,
+    PageCaretView, PageGlyphRasterizer, RasterizedPageGlyphs, Selection, Session, VisualAffinity,
 };
 
 mod composition;
@@ -57,6 +58,13 @@ impl DocumentViewRuntime {
 
     /// 按当前会话和字体代际生成界面快照 JSON。
     pub fn layout_snapshot_json(&mut self) -> Result<String, String> {
+        self.layout_snapshot_json_with_delta(None)
+    }
+
+    fn layout_snapshot_json_with_delta(
+        &mut self,
+        changed_paragraph: Option<(&NodeId, usize, u64)>,
+    ) -> Result<String, String> {
         if self.composition_snapshot.is_none() {
             self.base_snapshot()?;
         }
@@ -70,8 +78,19 @@ impl DocumentViewRuntime {
                 .as_ref()
                 .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?
         };
-        let mut view = serde_json::to_value(caret_engine::DocumentLayoutView::from(snapshot))
-            .map_err(|error| format!("layout.serialize: {error}"))?;
+        let mut view = match changed_paragraph.filter(|_| !composing) {
+            Some((paragraph_id, page_start_index, base_generation)) => serde_json::to_value(
+                DocumentLayoutDeltaView::for_paragraph(
+                    snapshot,
+                    paragraph_id,
+                    page_start_index,
+                    base_generation,
+                )
+                .ok_or_else(|| "layout.changed_paragraph_unavailable".to_owned())?,
+            ),
+            None => serde_json::to_value(caret_engine::DocumentLayoutView::from(snapshot)),
+        }
+        .map_err(|error| format!("layout.serialize: {error}"))?;
         let rectangles = if composing {
             Vec::new()
         } else {
@@ -227,7 +246,61 @@ impl DocumentViewRuntime {
 
     /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。
     pub fn insert_text_json(&mut self, text: String) -> Result<String, String> {
-        self.run_edit_command(Command::InsertText(text), "text.insert")
+        self.insert_text_with_response(text, false)
+    }
+
+    /// 为 Qt 普通单段输入返回完整分页和当前段落布局的增量快照。
+    pub fn insert_text_delta_json(&mut self, text: String) -> Result<String, String> {
+        self.insert_text_with_response(text, true)
+    }
+
+    fn insert_text_with_response(
+        &mut self,
+        text: String,
+        allow_delta: bool,
+    ) -> Result<String, String> {
+        self.base_snapshot()?;
+        let selection = self.session.selection();
+        let reusable_paragraph_id = (selection.anchor.paragraph_id == selection.focus.paragraph_id)
+            .then(|| selection.focus.paragraph_id.clone());
+        self.session
+            .run(Command::InsertText(text))
+            .map_err(|error| format!("text.insert: {error}"))?;
+        self.anchor_visual_affinity = self.session.selection_visual_affinity();
+        self.preferred_visual_x_pt = None;
+        let mut page_start_index = None;
+        let mut base_generation = None;
+        if let Some(paragraph_id) = reusable_paragraph_id.as_ref() {
+            let previous = self
+                .last_snapshot
+                .as_ref()
+                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            base_generation = Some(previous.document_generation);
+            let updated = self
+                .layout
+                .layout_session_reusing(&self.session, previous, paragraph_id)
+                .map_err(|error| error.to_string())?;
+            page_start_index = DocumentLayoutDeltaView::first_affected_page_index(
+                previous,
+                &updated,
+                paragraph_id,
+            );
+            if page_start_index.is_none() {
+                return Err("layout.changed_paragraph_page_unavailable".to_owned());
+            }
+            self.last_snapshot = Some(updated);
+        } else {
+            self.last_snapshot = None;
+        }
+        match reusable_paragraph_id.as_ref().filter(|_| allow_delta) {
+            Some(paragraph_id) => self.layout_snapshot_json_with_delta(Some((
+                paragraph_id,
+                page_start_index.ok_or_else(|| "layout.changed_page_unavailable".to_owned())?,
+                base_generation
+                    .ok_or_else(|| "layout.delta_base_generation_unavailable".to_owned())?,
+            ))),
+            None => self.layout_snapshot_json(),
+        }
     }
 
     /// 将纯文本剪贴板内容作为一次原子事务插入，换行会拆为段落。

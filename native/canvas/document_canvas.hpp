@@ -40,6 +40,8 @@ class DocumentCanvas : public QQuickItem {
                    caretBlinkEnabledChanged)
     Q_PROPERTY(
         QVariantList glyphFrames READ glyphFrames WRITE setGlyphFrames NOTIFY glyphFramesChanged)
+    Q_PROPERTY(QVariantList visiblePageRange READ visiblePageRange WRITE setVisiblePageRange NOTIFY
+                   visiblePageRangeChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects WRITE setSelectionRects NOTIFY
                    selectionRectsChanged)
     Q_PROPERTY(QVariantList selectionPreviewRects READ selectionPreviewRects WRITE
@@ -77,6 +79,9 @@ class DocumentCanvas : public QQuickItem {
     void setCaretBlinkEnabled(bool enabled);
     [[nodiscard]] QVariantList glyphFrames() const;
     void setGlyphFrames(const QVariantList& frames);
+    /// 页面背景保留半开可视区间，避免为整篇文档创建场景图节点。
+    [[nodiscard]] QVariantList visiblePageRange() const;
+    void setVisiblePageRange(const QVariantList& range);
     [[nodiscard]] QVariantList selectionRects() const;
     void setSelectionRects(const QVariantList& rectangles);
     [[nodiscard]] QVariantList selectionPreviewRects() const;
@@ -127,6 +132,7 @@ class DocumentCanvas : public QQuickItem {
     void inputMethodContextChanged();
     void caretBlinkEnabledChanged();
     void glyphFramesChanged();
+    void visiblePageRangeChanged();
     void selectionRectsChanged();
     void selectionPreviewRectsChanged();
     void glyphRasterMetricsChanged();
@@ -161,6 +167,8 @@ class DocumentCanvas : public QQuickItem {
     QString m_preedit_text;
     int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
+    int m_first_visible_page = 0;
+    int m_page_end_visible = -1;
     QVariantList m_selection_rects;
     QVariantList m_selection_preview_rects;
     quint64 m_glyph_frame_revision = 0;

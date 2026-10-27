@@ -1,6 +1,8 @@
 //! 将 Rust 内部布局结果投影为供 FFI 与界面消费的稳定只读数据。
 
-use crate::{Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageHit, StoryId};
+use crate::{
+    Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageHit, PageLayoutSnapshot, StoryId,
+};
 use caret_layout::VisualAffinity;
 use serde::Serialize;
 
@@ -12,6 +14,21 @@ pub struct DocumentLayoutView {
     pub document_generation: String,
     pub font_generation: String,
     pub margins_pt: PageMarginsView,
+    pub pages: Vec<PageLayoutView>,
+    pub paragraphs: Vec<ParagraphLayoutView>,
+}
+
+/// 单段编辑使用的增量投影；分页结果完整，段落内容只携带发生变化的段。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentLayoutDeltaView {
+    pub partial: bool,
+    pub session_id: Option<String>,
+    pub base_document_generation: String,
+    pub document_generation: String,
+    pub font_generation: String,
+    pub margins_pt: PageMarginsView,
+    pub page_start_index: usize,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
 }
@@ -113,75 +130,139 @@ pub struct PageCaretView {
 
 impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
     fn from(snapshot: &DocumentLayoutSnapshot) -> Self {
-        let first_page = snapshot.pages.first();
-        let margins_pt = first_page.map_or(
-            PageMarginsView {
-                top: 0.0,
-                right: 0.0,
-                bottom: 0.0,
-                left: 0.0,
-            },
-            |page| PageMarginsView {
-                top: page.margin_top_pt,
-                right: page.margin_right_pt,
-                bottom: page.margin_bottom_pt,
-                left: page.margin_left_pt,
-            },
-        );
-        let pages = snapshot
-            .pages
-            .iter()
-            .map(|page| PageLayoutView {
-                width_pt: page.width_pt,
-                height_pt: page.height_pt,
-                fragments: page
-                    .layout
-                    .fragments
-                    .iter()
-                    .map(|fragment| PageFragmentView {
-                        paragraph_id: fragment.paragraph_id.to_string(),
-                        first_line: fragment.line_range.start,
-                        line_end: fragment.line_range.end,
-                        y_offset_pt: f64::from(fragment.y_offset_pt),
-                    })
-                    .collect(),
-            })
-            .collect();
-        let paragraphs = snapshot
-            .paragraphs
-            .iter()
-            .map(|paragraph| ParagraphLayoutView {
-                paragraph_id: paragraph.id.to_string(),
-                text: paragraph.text.clone(),
-                lines: paragraph
-                    .layout
-                    .paragraph
-                    .lines
-                    .iter()
-                    .zip(&paragraph.layout.line_box_tops_pt)
-                    .map(|(line, &top_pt)| LayoutLineView {
-                        source_start: line.source_bytes.start,
-                        source_end: line.source_bytes.end,
-                        consumed_start: line.consumed_bytes.start,
-                        consumed_end: line.consumed_bytes.end,
-                        top_pt: f64::from(top_pt),
-                        baseline_pt: f64::from(top_pt + line.metrics.baseline_pt),
-                        height_pt: f64::from(line.metrics.height_pt),
-                        advance_pt: f64::from(line.advance_pt),
-                        overflows_width: line.overflows_width,
-                    })
-                    .collect(),
-            })
-            .collect();
-
         Self {
             session_id: snapshot.session_id.as_ref().map(ToString::to_string),
             document_generation: snapshot.document_generation.to_string(),
             font_generation: snapshot.font_generation.to_string(),
-            margins_pt,
-            pages,
-            paragraphs,
+            margins_pt: margins_view(snapshot),
+            pages: page_views(snapshot, 0),
+            paragraphs: snapshot.paragraphs.iter().map(paragraph_view).collect(),
         }
+    }
+}
+
+impl DocumentLayoutDeltaView {
+    /// 为一个已重排段落生成增量视图，并仅投影首个受影响页及其后的分页。
+    pub fn for_paragraph(
+        snapshot: &DocumentLayoutSnapshot,
+        paragraph_id: &caret_doc::NodeId,
+        page_start_index: usize,
+        base_document_generation: u64,
+    ) -> Option<Self> {
+        let paragraph = snapshot.paragraph_by_id(paragraph_id)?;
+        if page_start_index >= snapshot.pages.len() {
+            return None;
+        }
+        Some(Self {
+            partial: true,
+            session_id: snapshot.session_id.as_ref().map(ToString::to_string),
+            base_document_generation: base_document_generation.to_string(),
+            document_generation: snapshot.document_generation.to_string(),
+            font_generation: snapshot.font_generation.to_string(),
+            margins_pt: margins_view(snapshot),
+            page_start_index,
+            pages: page_views(snapshot, page_start_index),
+            paragraphs: vec![paragraph_view(paragraph)],
+        })
+    }
+
+    /// 找出段落重排后需要替换的最早分页；保留更早且未变化的页面。
+    pub fn first_affected_page_index(
+        previous: &DocumentLayoutSnapshot,
+        current: &DocumentLayoutSnapshot,
+        paragraph_id: &caret_doc::NodeId,
+    ) -> Option<usize> {
+        let paragraph_page = current.pages.iter().position(|page| {
+            page.layout
+                .fragments
+                .iter()
+                .any(|fragment| &fragment.paragraph_id == paragraph_id)
+        })?;
+        Some(page_delta_start_index(
+            &previous.pages,
+            &current.pages,
+            paragraph_page,
+        ))
+    }
+}
+
+fn page_delta_start_index(
+    previous_pages: &[PageLayoutSnapshot],
+    current_pages: &[PageLayoutSnapshot],
+    paragraph_page: usize,
+) -> usize {
+    let shared_page_count = previous_pages.len().min(current_pages.len());
+    let first_page_difference = previous_pages
+        .iter()
+        .zip(current_pages)
+        .position(|(old_page, new_page)| old_page != new_page)
+        .or_else(|| (previous_pages.len() != current_pages.len()).then_some(shared_page_count));
+    first_page_difference.map_or(paragraph_page, |index| index.min(paragraph_page))
+}
+
+fn margins_view(snapshot: &DocumentLayoutSnapshot) -> PageMarginsView {
+    let first_page = snapshot.pages.first();
+    first_page.map_or(
+        PageMarginsView {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        },
+        |page| PageMarginsView {
+            top: page.margin_top_pt,
+            right: page.margin_right_pt,
+            bottom: page.margin_bottom_pt,
+            left: page.margin_left_pt,
+        },
+    )
+}
+
+fn page_views(snapshot: &DocumentLayoutSnapshot, page_start_index: usize) -> Vec<PageLayoutView> {
+    snapshot
+        .pages
+        .iter()
+        .skip(page_start_index)
+        .map(|page| PageLayoutView {
+            width_pt: page.width_pt,
+            height_pt: page.height_pt,
+            fragments: page
+                .layout
+                .fragments
+                .iter()
+                .map(|fragment| PageFragmentView {
+                    paragraph_id: fragment.paragraph_id.to_string(),
+                    first_line: fragment.line_range.start,
+                    line_end: fragment.line_range.end,
+                    y_offset_pt: f64::from(fragment.y_offset_pt),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn paragraph_view(paragraph: &crate::LaidOutParagraph) -> ParagraphLayoutView {
+    ParagraphLayoutView {
+        paragraph_id: paragraph.id.to_string(),
+        text: paragraph.text.clone(),
+        lines: paragraph
+            .layout
+            .paragraph
+            .lines
+            .iter()
+            .zip(&paragraph.layout.line_box_tops_pt)
+            .map(|(line, &top_pt)| LayoutLineView {
+                source_start: line.source_bytes.start,
+                source_end: line.source_bytes.end,
+                consumed_start: line.consumed_bytes.start,
+                consumed_end: line.consumed_bytes.end,
+                top_pt: f64::from(top_pt),
+                baseline_pt: f64::from(top_pt + line.metrics.baseline_pt),
+                height_pt: f64::from(line.metrics.height_pt),
+                advance_pt: f64::from(line.advance_pt),
+                overflows_width: line.overflows_width,
+            })
+            .collect(),
     }
 }
 
@@ -300,6 +381,59 @@ mod tests {
                 .is_none()
         );
         Ok(())
+    }
+
+    #[test]
+    fn paragraph_delta_starts_at_the_first_page_changed_by_reflow() {
+        let target = NodeId::generate();
+        let predecessor = NodeId::generate();
+        let later = NodeId::generate();
+        let previous_pages = vec![
+            page_with_paragraphs(std::slice::from_ref(&target)),
+            page_with_paragraphs(std::slice::from_ref(&later)),
+        ];
+        let current_pages = vec![
+            page_with_paragraphs(std::slice::from_ref(&predecessor)),
+            page_with_paragraphs(std::slice::from_ref(&target)),
+        ];
+        assert_eq!(
+            page_delta_start_index(&previous_pages, &current_pages, 1),
+            0,
+            "前驱段落因孤行规则移页时，增量必须从旧页开始"
+        );
+    }
+
+    #[test]
+    fn paragraph_delta_reuses_unchanged_pages_before_the_edited_paragraph() {
+        let first = NodeId::generate();
+        let target = NodeId::generate();
+        let pages = vec![
+            page_with_paragraphs(std::slice::from_ref(&first)),
+            page_with_paragraphs(std::slice::from_ref(&target)),
+        ];
+        assert_eq!(page_delta_start_index(&pages, &pages, 1), 1);
+    }
+
+    fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
+        PageLayoutSnapshot {
+            width_pt: 600.0,
+            height_pt: 800.0,
+            margin_left_pt: 50.0,
+            margin_top_pt: 50.0,
+            margin_right_pt: 50.0,
+            margin_bottom_pt: 50.0,
+            layout: caret_layout::PageLayout {
+                fragments: paragraph_ids
+                    .iter()
+                    .map(|paragraph_id| caret_layout::ParagraphFragment {
+                        paragraph_id: paragraph_id.clone(),
+                        line_range: 0..1,
+                        y_offset_pt: 0.0,
+                    })
+                    .collect(),
+                used_height_pt: 12.0,
+            },
+        }
     }
 
     #[test]

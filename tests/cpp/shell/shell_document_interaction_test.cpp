@@ -52,7 +52,9 @@
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
 #include <algorithm>
+#include <cstddef>
 #include <qcontainerfwd.h>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -676,5 +678,65 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             return rectangle.toMap().value(QStringLiteral("pageIndex")).toInt() == 1;
         }));
     delete surface;
+}
+
+void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    QString source;
+    for (int index = 0; index < 100; ++index) {
+        if (index != 0) {
+            source.append(QLatin1Char('\n'));
+        }
+        source.append(QStringLiteral("Paragraph %1 contains enough words to fill the page. ")
+                          .arg(index)
+                          .repeated(3));
+    }
+    const QByteArray source_utf8 = source.toUtf8();
+    const rust::String prepared = caret::ffi::paste_text_json(
+        *runtime, rust::String(std::string(source_utf8.constData(),
+                                           static_cast<size_t>(source_utf8.size()))));
+    QVERIFY(!std::string_view(prepared.data(), prepared.size()).starts_with("error:"));
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.ViewModels\n"
+                          "Item {\n"
+                          "    property var result: LayoutViewModel.insertText(\"x\")\n"
+                          "    property var pageSizes: LayoutViewModel.pageSizesPt\n"
+                          "    property var pageLayouts: LayoutViewModel.pageLayouts\n"
+                          "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
+                          "}\n"),
+        QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY(probe != nullptr);
+    const QVariantMap result = probe->property("result").toMap();
+    QVERIFY2(result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toString()));
+    const QVariantList pages = probe->property("pageSizes").toList();
+    const QVariantList page_layouts = probe->property("pageLayouts").toList();
+    const QVariantList paragraphs = probe->property("paragraphs").toList();
+    QVERIFY(pages.size() > 1);
+    QCOMPARE(page_layouts.size(), pages.size());
+    QCOMPARE(paragraphs.size(), 100);
+    QVERIFY(paragraphs.first()
+                .toMap()
+                .value(QStringLiteral("text"))
+                .toString()
+                .startsWith(QStringLiteral("Paragraph 0")));
+    QVERIFY(paragraphs.last()
+                .toMap()
+                .value(QStringLiteral("text"))
+                .toString()
+                .endsWith(QLatin1Char('x')));
+    delete probe;
 }
 #endif

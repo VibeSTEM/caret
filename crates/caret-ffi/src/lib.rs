@@ -124,7 +124,7 @@ mod generated {
                 x_pt: f64,
                 y_pt: f64,
             ) -> String;
-            /// 将 Qt 文本输入提交给 Rust Session，成功时返回新的布局快照。
+            /// 将 Qt 文本输入提交给 Rust Session，返回完整分页和当前段落的布局增量。
             fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String;
             /// 原子插入剪贴板文本，换行拆段并以 Rust 快照返回结果。
             fn paste_text_json(runtime: &mut DocumentRuntime, text: String) -> String;

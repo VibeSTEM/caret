@@ -1295,6 +1295,10 @@ mod tests {
                 "tests/performance/rust/cpu/novel_document_criterion.rs",
                 "caret-engine",
             ),
+            (
+                "tests/performance/rust/cpu/document_view_input_criterion.rs",
+                "caret-app",
+            ),
         ] {
             assert!(is_rust_package_path(path), "{path}");
             let plan = make_plan(&[path.into()], &root)?;

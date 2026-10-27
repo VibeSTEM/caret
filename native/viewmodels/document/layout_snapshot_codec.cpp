@@ -99,7 +99,8 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 
 } // namespace
 
-bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error) {
+bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
+           const ParsedLayoutSnapshot* previous_snapshot) {
     QJsonParseError parse_error;
     const QJsonDocument document = QJsonDocument::fromJson(snapshot_json.toUtf8(), &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
@@ -107,6 +108,12 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         return false;
     }
     const QJsonObject root = document.object();
+    const QJsonValue partial_value = root.value(QStringLiteral("partial"));
+    const bool is_partial = partial_value.toBool(false);
+    if (!partial_value.isUndefined() && !partial_value.isBool()) {
+        error = QStringLiteral("layout.invalid_partial_snapshot");
+        return false;
+    }
     qulonglong parsed_document_generation = 0;
     qulonglong parsed_font_generation = 0;
     if (!nonnegative_generation(root.value(QStringLiteral("documentGeneration")),
@@ -114,6 +121,20 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         !nonnegative_generation(root.value(QStringLiteral("fontGeneration")),
                                 parsed_font_generation)) {
         error = QStringLiteral("layout.invalid_generation");
+        return false;
+    }
+    const QJsonValue session_value = root.value(QStringLiteral("sessionId"));
+    const QString parsed_session_id = session_value.isString() ? session_value.toString() : QString();
+    qulonglong base_document_generation = 0;
+    if (is_partial &&
+        (!nonnegative_generation(root.value(QStringLiteral("baseDocumentGeneration")),
+                                 base_document_generation) ||
+         previous_snapshot == nullptr ||
+         base_document_generation != previous_snapshot->document_generation ||
+         parsed_session_id.isEmpty() || parsed_session_id != previous_snapshot->session_id ||
+         parsed_document_generation <= previous_snapshot->document_generation ||
+         parsed_font_generation != previous_snapshot->font_generation)) {
+        error = QStringLiteral("layout.stale_partial_snapshot");
         return false;
     }
 
@@ -230,6 +251,40 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         parsed_paragraphs.push_back(parsed_paragraph);
     }
 
+    if (is_partial) {
+        QVariantList merged_paragraphs = previous_snapshot->paragraph_layouts;
+        for (const QVariant& updated_value : parsed_paragraphs) {
+            const QVariantMap updated = updated_value.toMap();
+            const QString updated_id = updated.value(QStringLiteral("paragraphId")).toString();
+            auto existing = std::find_if(
+                merged_paragraphs.begin(), merged_paragraphs.end(),
+                [&updated_id](const QVariant& value) {
+                    return value.toMap().value(QStringLiteral("paragraphId")).toString() ==
+                           updated_id;
+                });
+            if (existing == merged_paragraphs.end()) {
+                error = QStringLiteral("layout.unknown_partial_paragraph");
+                return false;
+            } else {
+                *existing = updated_value;
+            }
+        }
+        parsed_paragraphs = std::move(merged_paragraphs);
+        paragraph_line_counts.clear();
+        paragraph_ids.clear();
+        for (const QVariant& paragraph_value : parsed_paragraphs) {
+            const QVariantMap paragraph = paragraph_value.toMap();
+            const QString id = paragraph.value(QStringLiteral("paragraphId")).toString();
+            const qsizetype line_count = paragraph.value(QStringLiteral("lines")).toList().size();
+            if (id.isEmpty() || line_count <= 0 || paragraph_ids.contains(id)) {
+                error = QStringLiteral("layout.invalid_partial_paragraphs");
+                return false;
+            }
+            paragraph_ids.insert(id, true);
+            paragraph_line_counts.insert(id, line_count);
+        }
+    }
+
     const QJsonValue pages_value = root.value(QStringLiteral("pages"));
     if (!pages_value.isArray()) {
         error = QStringLiteral("layout.invalid_pages");
@@ -238,8 +293,25 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
     QVariantList parsed_sizes;
     QVariantList parsed_page_layouts;
     const QJsonArray pages = pages_value.toArray();
-    parsed_sizes.reserve(pages.size());
-    parsed_page_layouts.reserve(pages.size());
+    qsizetype page_start_index = 0;
+    if (is_partial) {
+        if (!nonnegative_index(root.value(QStringLiteral("pageStartIndex")), page_start_index) ||
+            page_start_index > previous_snapshot->page_sizes.size() ||
+            previous_snapshot->page_sizes.size() != previous_snapshot->page_layouts.size() ||
+            previous_snapshot->page_margins != parsed_margins) {
+            error = QStringLiteral("layout.invalid_partial_pages");
+            return false;
+        }
+        parsed_sizes.reserve(page_start_index + pages.size());
+        parsed_page_layouts.reserve(page_start_index + pages.size());
+        for (qsizetype index = 0; index < page_start_index; ++index) {
+            parsed_sizes.push_back(previous_snapshot->page_sizes.at(index));
+            parsed_page_layouts.push_back(previous_snapshot->page_layouts.at(index));
+        }
+    } else {
+        parsed_sizes.reserve(pages.size());
+        parsed_page_layouts.reserve(pages.size());
+    }
     for (const auto& page_value : pages) {
         if (!page_value.isObject()) {
             error = QStringLiteral("layout.invalid_page");
@@ -332,6 +404,7 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
     }
     parsed_snapshot.document_generation = parsed_document_generation;
     parsed_snapshot.font_generation = parsed_font_generation;
+    parsed_snapshot.session_id = parsed_session_id;
     error.clear();
     return true;
 }

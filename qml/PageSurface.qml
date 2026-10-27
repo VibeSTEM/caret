@@ -13,11 +13,53 @@ Item {
     property real pageScale: DocumentUnits.percentToFactor(CanvasPolicy.defaultZoomPercent)
     property bool glyphRasterizationPending: false
     property int canvasGeometryRevision: 0
+    property var activeGlyphPageRange: []
 
     function compositionPoint(pageIndex, x, y) {
         // C++ 坐标映射依赖 QML 无法直接读取的画布几何状态。
         const revision = canvasGeometryRevision;
         return pageCanvas.documentToContent(pageIndex, Qt.point(x, y));
+    }
+
+    function updateVisiblePageRange() {
+        if (scroller.width <= 0 || scroller.height <= 0)
+            return false;
+        const pageSizes = pageCanvas.pageSizesPt;
+        const visibleTop = scroller.contentY;
+        const visibleBottom = visibleTop + scroller.height;
+        let low = 0;
+        let high = pageSizes.length;
+        while (low < high) {
+            const middle = low + Math.floor((high - low) / 2);
+            const pageBottom = pageCanvas.documentToContent(middle, Qt.point(0, pageSizes[middle].height)).y;
+            if (pageBottom <= visibleTop)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        let lastVisiblePage = low - 1;
+        for (let pageIndex = low; pageIndex < pageSizes.length; ++pageIndex) {
+            const origin = pageCanvas.pageOrigin(pageIndex);
+            if (origin.y >= visibleBottom)
+                break;
+            const pageBottom = pageCanvas.documentToContent(pageIndex, Qt.point(0, pageSizes[pageIndex].height)).y;
+            if (pageBottom > visibleTop)
+                lastVisiblePage = pageIndex;
+        }
+        const nextRange = [Math.max(0, low - 1), Math.min(pageSizes.length, lastVisiblePage + 2)];
+        const nextGlyphRange = [low, lastVisiblePage + 1];
+        const currentRange = pageCanvas.visiblePageRange;
+        const backgroundRangeChanged = currentRange[0] !== nextRange[0] || currentRange[1] !== nextRange[1];
+        const glyphRangeChanged = activeGlyphPageRange[0] !== nextGlyphRange[0] || activeGlyphPageRange[1] !== nextGlyphRange[1];
+        if (!backgroundRangeChanged && !glyphRangeChanged)
+            return false;
+        if (backgroundRangeChanged)
+            pageCanvas.visiblePageRange = nextRange;
+        if (glyphRangeChanged) {
+            activeGlyphPageRange = nextGlyphRange;
+            lastGlyphRasterKey = "";
+        }
+        return true;
     }
 
     function scheduleGlyphRasterization() {
@@ -52,6 +94,7 @@ Item {
         const frames = [];
         const keys = [];
         const requests = [];
+        let lastVisiblePage = low - 1;
         const color = Theme.colorText;
         for (let pageIndex = low; pageIndex < pageSizes.length; ++pageIndex) {
             const origin = pageCanvas.pageOrigin(pageIndex);
@@ -60,6 +103,7 @@ Item {
             const pageBottom = pageCanvas.documentToContent(pageIndex, Qt.point(0, pageSizes[pageIndex].height)).y;
             if (pageBottom <= visibleTop)
                 continue;
+            lastVisiblePage = pageIndex;
             const request = pageCanvas.glyphRasterRequest(pageIndex);
             if (!request.valid) {
                 pageCanvas.glyphFrames = [];
@@ -74,6 +118,7 @@ Item {
                 raster: request
             });
         }
+        pageCanvas.visiblePageRange = [Math.max(0, low - 1), Math.min(pageSizes.length, lastVisiblePage + 2)];
         const key = "visible:" + keys.join("|");
         if (key === lastGlyphRasterKey)
             return;
@@ -121,6 +166,7 @@ Item {
     Connections {
         target: LayoutViewModel
         function onLayoutChanged() {
+            surface.updateVisiblePageRange();
             surface.scheduleGlyphRasterization();
         }
     }
@@ -134,15 +180,25 @@ Item {
         contentWidth: Math.max(width, pageCanvas.implicitWidth)
         contentHeight: Math.max(height, pageCanvas.implicitHeight)
         onContentYChanged: {
-            surface.scheduleGlyphRasterization();
+            const pageRangeChanged = surface.updateVisiblePageRange();
+            if (pageRangeChanged || !moving)
+                surface.scheduleGlyphRasterization();
             pageCanvas.updateInputMethodCursorRectangle();
         }
         onContentXChanged: {
-            surface.scheduleGlyphRasterization();
+            if (!moving)
+                surface.scheduleGlyphRasterization();
             pageCanvas.updateInputMethodCursorRectangle();
         }
-        onWidthChanged: surface.scheduleGlyphRasterization()
-        onHeightChanged: surface.scheduleGlyphRasterization()
+        onWidthChanged: {
+            surface.updateVisiblePageRange();
+            surface.scheduleGlyphRasterization();
+        }
+        onHeightChanged: {
+            surface.updateVisiblePageRange();
+            surface.scheduleGlyphRasterization();
+        }
+        onMovementEnded: surface.scheduleGlyphRasterization()
 
         DocumentCanvas {
             id: pageCanvas
@@ -247,7 +303,10 @@ Item {
         lastGlyphRasterKey = "";
         scheduleGlyphRasterization();
     }
-    Component.onCompleted: scheduleGlyphRasterization()
+    Component.onCompleted: {
+        updateVisiblePageRange();
+        scheduleGlyphRasterization();
+    }
 
     function setZoomAtViewportCenter(value) {
         const center = Qt.point(scroller.width / 2, scroller.height / 2);

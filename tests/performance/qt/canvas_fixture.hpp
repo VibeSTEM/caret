@@ -9,6 +9,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <algorithm>
 
 namespace caret::performance {
 inline constexpr QSize render_size{1280, 960};
@@ -18,6 +19,7 @@ inline constexpr int glyph_placements = 1000;
 inline constexpr int selection_rectangles_count = 12;
 inline constexpr int warmup_frames = 8;
 inline constexpr int default_samples = 31;
+inline constexpr int novel_page_count = 400;
 
 inline QByteArray image_pixels(int image_index) {
     constexpr int side = 16;
@@ -34,7 +36,7 @@ inline QByteArray image_pixels(int image_index) {
     return pixels;
 }
 
-inline QVariantMap glyph_frame() {
+inline QVariantMap glyph_frame(int page_index = 0) {
     QVariantList images;
     images.reserve(unique_glyph_images);
     for (int index = 0; index < unique_glyph_images; ++index) {
@@ -69,12 +71,25 @@ inline QVariantMap glyph_frame() {
             {QStringLiteral("documentGeneration"), QStringLiteral("1")},
             {QStringLiteral("fontGeneration"), QStringLiteral("1")},
             {QStringLiteral("rasterPxPerPt"), 96.0 / 72.0},
-            {QStringLiteral("pageIndex"), 0},
+            {QStringLiteral("pageIndex"), page_index},
             {QStringLiteral("images"), images},
             {QStringLiteral("placements"), placements}};
 }
 
-inline QVariantList selection_rectangles(int frame) {
+inline QVariantMap edited_glyph_frame(int page_index, int frame_index) {
+    QVariantMap frame = glyph_frame(page_index);
+    QVariantList placements = frame.value(QStringLiteral("placements")).toList();
+    if (!placements.isEmpty()) {
+        QVariantMap first = placements.front().toMap();
+        const double original_x = first.value(QStringLiteral("xPt")).toDouble();
+        first.insert(QStringLiteral("xPt"), original_x + (frame_index % 2 == 0 ? 0.25 : 0.0));
+        placements.front() = first;
+        frame.insert(QStringLiteral("placements"), placements);
+    }
+    return frame;
+}
+
+inline QVariantList selection_rectangles(int frame, int page_index = 0) {
     QVariantList rectangles;
     rectangles.reserve(selection_rectangles_count);
     const double offset = static_cast<double>(frame % 8);
@@ -82,7 +97,7 @@ inline QVariantList selection_rectangles(int frame) {
         const double y = 40.0 + static_cast<double>(index) * 28.0;
         const double x = 24.0 + offset;
         rectangles.push_back(QVariantMap{
-            {QStringLiteral("pageIndex"), 0},
+            {QStringLiteral("pageIndex"), page_index},
             {QStringLiteral("x0Pt"), x},
             {QStringLiteral("y0Pt"), y},
             {QStringLiteral("x1Pt"), x + 108.0},
@@ -92,8 +107,13 @@ inline QVariantList selection_rectangles(int frame) {
     return rectangles;
 }
 
-inline void set_up_canvas(caret::DocumentCanvas* canvas) {
-    canvas->setPageSizesPt({QVariant::fromValue(page_size_points)});
+inline void set_up_canvas(caret::DocumentCanvas* canvas, int page_count = 1) {
+    QVariantList page_sizes;
+    page_sizes.reserve(page_count);
+    for (int index = 0; index < page_count; ++index) {
+        page_sizes.push_back(QVariant::fromValue(page_size_points));
+    }
+    canvas->setPageSizesPt(page_sizes);
     canvas->setPageMarginsPt({{QStringLiteral("top"), 0.0},
                               {QStringLiteral("right"), 0.0},
                               {QStringLiteral("bottom"), 0.0},
@@ -101,12 +121,19 @@ inline void set_up_canvas(caret::DocumentCanvas* canvas) {
     canvas->setPageGapPt(0.0);
     canvas->setPageMarginPt(0.0);
     canvas->setWidth(render_size.width());
-    canvas->setHeight(render_size.height());
+    canvas->setHeight(page_count == 1 ? render_size.height()
+                                      : canvas->naturalContentSize().height());
+    const int visible_page = page_count == 1 ? 0 : page_count / 2;
+    if (page_count > 1) {
+        canvas->setY(-canvas->documentToContent(visible_page, QPointF(0.0, 0.0)).y());
+    }
+    canvas->setVisiblePageRange(
+        {std::max(0, visible_page - 1), std::min(page_count, visible_page + 2)});
     canvas->setPageColor(Qt::white);
     canvas->setPageBorderColor(QColor(QStringLiteral("#d0d0d0")));
     canvas->setSelectionColor(QColor(QStringLiteral("#badcf5")));
     canvas->setCaretBlinkEnabled(false);
-    canvas->setGlyphFrames({glyph_frame()});
-    canvas->setSelectionRects(selection_rectangles(0));
+    canvas->setGlyphFrames({glyph_frame(visible_page)});
+    canvas->setSelectionRects(selection_rectangles(0, visible_page));
 }
 } // namespace caret::performance

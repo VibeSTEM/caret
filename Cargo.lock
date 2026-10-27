@@ -92,6 +92,7 @@ dependencies = [
  "caret-doc",
  "caret-dsl-core",
  "caret-engine",
+ "criterion",
  "serde",
  "serde_json",
  "unicode-segmentation",

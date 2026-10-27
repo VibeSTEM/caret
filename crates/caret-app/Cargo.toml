@@ -15,5 +15,13 @@ serde.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "document_view_input_criterion"
+path = "../../tests/performance/rust/cpu/document_view_input_criterion.rs"
+harness = false
+
 [lints]
 workspace = true
