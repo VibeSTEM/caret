@@ -107,26 +107,4 @@ impl Session {
             ..Effect::default()
         })
     }
-
-    pub(super) fn set_selection(
-        &mut self,
-        selection: Option<Selection>,
-    ) -> Result<Effect, EditError> {
-        if self.composition.is_some() {
-            return Err(EditError::CompositionPending);
-        }
-        let next = selection.unwrap_or_else(|| Selection {
-            anchor: self.selection.focus.clone(),
-            focus: self.selection.focus.clone(),
-        });
-        self.text_map_for(&next.anchor)?
-            .validate_pos(&next.anchor)?;
-        self.text_map_for(&next.focus)?.validate_pos(&next.focus)?;
-        let changed = self.selection != next;
-        self.selection = next;
-        Ok(Effect {
-            selection_changed: changed,
-            ..Effect::default()
-        })
-    }
 }

@@ -733,11 +733,11 @@ fn parley_visual_cursor_moves_through_utf8_and_bidi_grapheme_boundaries() {
     let settings = document_settings();
     let mut layouter = ParagraphLayouter::new();
     let text = "abc אבג 中文 e\u{301} 👩‍👩‍👧‍👦";
-    let paragraph = paragraph(text, Some("en"));
+    let paragraph_model = paragraph(text, Some("en"));
     let (_, result) = layouter
         .layout(
             &mut catalog,
-            &paragraph,
+            &paragraph_model,
             &settings,
             &ShapingStyle::new(1200),
             layout_options(320.0),
@@ -770,16 +770,139 @@ fn parley_visual_cursor_moves_through_utf8_and_bidi_grapheme_boundaries() {
 }
 
 #[test]
+fn vertical_visual_movement_preserves_expected_x_and_line_edges_are_grapheme_safe() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let text = "alpha beta gamma delta";
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph(text, Some("en")),
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(38.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    assert!(result.paragraph.lines.len() > 1);
+    let start = result
+        .cursor_at(0, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("paragraph start is not a visual cursor"));
+
+    let (next, preferred_x) = result
+        .move_vertical(start, 1, Some(18.0))
+        .unwrap_or_else(|| panic!("vertical movement did not reach the next line"));
+    assert_eq!(preferred_x, 18.0);
+    let (bounds, line_index) = result
+        .cursor_geometry_with_line(next, 0.0)
+        .unwrap_or_else(|| panic!("vertical target has no line geometry"));
+    assert_eq!(line_index, 1);
+    assert!(bounds.x0.is_finite());
+    assert!(
+        result
+            .grapheme_boundaries
+            .binary_search(&next.byte_index())
+            .is_ok()
+    );
+
+    let line_end = result
+        .move_to_visual_line_edge(next, true)
+        .unwrap_or_else(|| panic!("visual line end is not a grapheme caret"));
+    assert!(
+        result
+            .grapheme_boundaries
+            .binary_search(&line_end.byte_index())
+            .is_ok()
+    );
+    assert!(result.move_vertical(start, 0, None).is_none());
+    assert!(result.move_vertical(start, 1, Some(f32::NAN)).is_none());
+}
+
+#[test]
+fn composition_underline_uses_each_mixed_script_run_and_wraps() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let text = "hello中文hello中文hello中文";
+    for width in [240.0, 35.0] {
+        let (_, layout) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph(text, Some("zh")),
+                &settings,
+                &ShapingStyle::new(1200),
+                layout_options(width),
+            )
+            .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+        let rectangles = layout
+            .composition_text_geometry(text, 0..text.len())
+            .unwrap_or_else(|| panic!("composition geometry failed"));
+        assert!(!rectangles.is_empty());
+        if width < 100.0 {
+            assert!(rectangles.iter().any(|(_, line_index)| *line_index > 0));
+        }
+        for (bounds, line_index) in rectangles {
+            let line = layout
+                .layout
+                .get(line_index)
+                .unwrap_or_else(|| panic!("underline references missing line {line_index}"));
+            let matching = line.items().any(|item| match item {
+                crate::PositionedGlyphLayoutItem::GlyphRun(run) => {
+                    let metrics = run.run().font_metrics();
+                    let expected = f64::from(run.baseline() - metrics.underline_offset)
+                        - f64::from(layout.parley_line_tops_pt[line_index])
+                        + f64::from(layout.baseline_adjustments_pt[line_index]);
+                    bounds.x0 >= f64::from(run.offset()) - 0.001
+                        && bounds.x1 <= f64::from(run.offset() + run.advance()) + 0.001
+                        && (bounds.y0 - expected).abs() < 0.001
+                }
+                _ => false,
+            });
+            assert!(matching, "underline does not match a shaped font run");
+            assert!(bounds.y1 > bounds.y0);
+        }
+    }
+}
+
+#[test]
+fn composition_underline_stays_at_same_height_when_chinese_joins_line() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let preedit = "as da s";
+    let texts = [preedit.to_owned(), format!("中文{preedit}")];
+    let mut underline_y = Vec::new();
+    for text in &texts {
+        let (_, layout) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph(text, Some("zh")),
+                &settings,
+                &ShapingStyle::new(1200),
+                layout_options(240.0),
+            )
+            .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+        let rectangles = layout
+            .composition_text_geometry(text, text.len() - preedit.len()..text.len())
+            .unwrap_or_else(|| panic!("composition geometry failed"));
+        assert_eq!(rectangles.len(), 1);
+        underline_y.push(rectangles[0].0.y0);
+    }
+    // 单位为 pt：同一字体的预编辑字形不应因同行已有中文而改变下划线高度。
+    assert!((underline_y[0] - underline_y[1]).abs() < 0.001);
+}
+
+#[test]
 fn caret_and_selection_geometry_never_split_extended_graphemes() {
     let mut catalog = font_catalog();
     let settings = document_settings();
     let mut layouter = ParagraphLayouter::new();
     let text = "e\u{301} 👩‍👩‍👧‍👦";
-    let paragraph = paragraph(text, Some("en"));
+    let paragraph_model = paragraph(text, Some("en"));
     let (_, result) = layouter
         .layout(
             &mut catalog,
-            &paragraph,
+            &paragraph_model,
             &settings,
             &ShapingStyle::new(1200),
             layout_options(240.0),
@@ -805,6 +928,26 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
     assert!(!snapped.is_empty());
     assert_eq!(snapped, full_cluster);
 
+    let cjk = paragraph("你好hello", Some("zh"));
+    let (_, cjk_layout) = layouter
+        .layout(
+            &mut catalog,
+            &cjk,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("CJK Parley layout failed: {error}"));
+    let first_cjk = cjk_layout
+        .selection_geometry(0.."你".len())
+        .unwrap_or_else(|| panic!("first CJK grapheme selection was rejected"));
+    let second_cjk = cjk_layout
+        .selection_geometry("你".len().."你好".len())
+        .unwrap_or_else(|| panic!("second CJK grapheme selection was rejected"));
+    assert_ne!(
+        first_cjk, second_cjk,
+        "adjacent CJK graphemes should have distinct selection geometry"
+    );
     let line = result
         .layout
         .lines()

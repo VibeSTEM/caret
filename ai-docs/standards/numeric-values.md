@@ -25,6 +25,8 @@
 
 外部库若要求浮点值，在调用边界转换；不得为了省一次转换而把浮点扩散到持久化 DTO、跨语言接口或缓存键。浮点测试必须说明单位和容差。
 
+UI 可以在布局和绘制过程中持有带明确单位的 `real` 倍率，例如画布的 logical scale；它应由整数百分比经 `DocumentUnits.percentToFactor()` 派生，默认百分比由缩放策略集中提供。不要在 QML 属性或控件中另写 `1` 作为 100% 的第二个来源。绘制 API 要求 `real` 时，在该边界使用派生倍率。
+
 ## 默认值和可调参数
 
 - 每个可调值只有一个权威来源。文档排版默认值放在 `crates/caret-doc/resources/layout-themes/`，GUI 外观 token 放在 `qml/Themes/*.pa` 并由 Rust schema 校验；QML `Theme.qml` 只提供只读门面。

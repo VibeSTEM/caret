@@ -2,7 +2,7 @@
 
 use super::text_map::{TextMap, inline_length};
 use super::{Affinity, Direction, EditError, Pos, StoryId};
-use caret_doc::{Block, NodeId, Paragraph};
+use caret_doc::{Block, InlineNode, NodeId, Paragraph};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -28,6 +28,14 @@ pub(super) struct ParagraphMergeResult {
     pub(super) left_id: NodeId,
     pub(super) right_id: NodeId,
     pub(super) left_len: usize,
+    pub(super) result_boundaries: Vec<usize>,
+}
+
+pub(super) struct ParagraphRangeMergeResult {
+    pub(super) paragraph_id: NodeId,
+    pub(super) removed_ids: Vec<NodeId>,
+    pub(super) start_offset: usize,
+    pub(super) end_offset: usize,
     pub(super) result_boundaries: Vec<usize>,
 }
 
@@ -283,6 +291,31 @@ pub(super) fn insert_paragraph_after(
     true
 }
 
+pub(super) fn replace_paragraph_with_many(
+    blocks: &mut Vec<Block>,
+    location: &ParagraphLocation,
+    paragraphs: &mut Vec<Paragraph>,
+) -> bool {
+    if location.is_title || paragraphs.is_empty() {
+        return false;
+    }
+    let Some((&target_index, parent_path)) = location.block_path.split_last() else {
+        return false;
+    };
+    let Some(parent) = block_list_at_path_mut(blocks, parent_path) else {
+        return false;
+    };
+    if !matches!(parent.get(target_index), Some(Block::Paragraph(_))) {
+        return false;
+    }
+    let replacements = std::mem::take(paragraphs)
+        .into_iter()
+        .map(Block::Paragraph)
+        .collect::<Vec<_>>();
+    parent.splice(target_index..=target_index, replacements);
+    true
+}
+
 pub(super) fn split_environment_title(
     blocks: &mut [Block],
     location: &ParagraphLocation,
@@ -368,6 +401,106 @@ pub(super) fn merge_adjacent_paragraph(
         left_len: caret_offset,
         result_boundaries: boundaries,
     }))
+}
+
+/// 在同一直接块容器内原子合并一个段落范围，并删除两端指定的文字。
+pub(super) fn merge_paragraph_range(
+    blocks: &mut Vec<Block>,
+    start: &ParagraphLocation,
+    start_offset: usize,
+    end: &ParagraphLocation,
+    end_offset: usize,
+) -> Result<ParagraphRangeMergeResult, EditError> {
+    if start.is_title || end.is_title || start.story != end.story {
+        return Err(EditError::CrossParagraphSelection);
+    }
+    let Some((&start_index, start_parent)) = start.block_path.split_last() else {
+        return Err(EditError::CrossParagraphSelection);
+    };
+    let Some((&end_index, end_parent)) = end.block_path.split_last() else {
+        return Err(EditError::CrossParagraphSelection);
+    };
+    if start_parent != end_parent || start_index >= end_index {
+        return Err(EditError::CrossParagraphSelection);
+    }
+    let siblings =
+        block_list_at_path(blocks, start_parent).ok_or(EditError::CrossParagraphSelection)?;
+    let selected = siblings
+        .get(start_index..=end_index)
+        .ok_or(EditError::CrossParagraphSelection)?;
+    let paragraphs = selected
+        .iter()
+        .map(|block| match block {
+            Block::Paragraph(paragraph) => Ok(paragraph),
+            _ => Err(EditError::CrossParagraphSelection),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = paragraphs
+        .first()
+        .ok_or(EditError::CrossParagraphSelection)?;
+    let last = paragraphs
+        .last()
+        .ok_or(EditError::CrossParagraphSelection)?;
+    if paragraphs.iter().any(|paragraph| {
+        paragraph.language != first.language
+            || paragraph.layout != first.layout
+            || paragraph.mark_style != first.mark_style
+            || paragraph.props != first.props
+    }) {
+        return Err(EditError::IncompatibleParagraphMerge);
+    }
+    if paragraphs.iter().any(|paragraph| {
+        !paragraph.extra.is_empty() || inline_tree_has_unknown_fields(&paragraph.inlines)
+    }) {
+        return Err(EditError::UnsupportedOpaqueContent);
+    }
+
+    let mut merged = (*first).clone();
+    let first_map = TextMap::new(&merged)?;
+    if start_offset > first_map.text.len() {
+        return Err(EditError::InvalidPosition);
+    }
+    if start_offset < first_map.text.len() {
+        first_map.delete_range(&mut merged, start_offset, first_map.text.len())?;
+    }
+    let mut suffix = (*last).clone();
+    let last_map = TextMap::new(&suffix)?;
+    if end_offset > last_map.text.len() {
+        return Err(EditError::InvalidPosition);
+    }
+    if end_offset > 0 {
+        last_map.delete_range(&mut suffix, 0, end_offset)?;
+    }
+    merged.inlines.extend(suffix.inlines);
+    let result_boundaries = TextMap::new(&merged)?.grapheme_boundaries;
+    let removed_ids = paragraphs
+        .iter()
+        .skip(1)
+        .map(|paragraph| paragraph.id.clone())
+        .collect();
+    let paragraph_id = merged.id.clone();
+
+    let siblings =
+        block_list_at_path_mut(blocks, start_parent).ok_or(EditError::CrossParagraphSelection)?;
+    siblings.splice(start_index..=end_index, [Block::Paragraph(merged)]);
+    Ok(ParagraphRangeMergeResult {
+        paragraph_id,
+        removed_ids,
+        start_offset,
+        end_offset,
+        result_boundaries,
+    })
+}
+
+fn inline_tree_has_unknown_fields(nodes: &[InlineNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        InlineNode::Run(run) => !run.extra.is_empty(),
+        InlineNode::Environment(environment) => {
+            !environment.extra.is_empty() || inline_tree_has_unknown_fields(&environment.children)
+        }
+        InlineNode::SoftBreak(value) => !value.extra.is_empty(),
+        InlineNode::Opaque(_) => true,
+    })
 }
 
 fn block_list_at_path_mut<'a>(

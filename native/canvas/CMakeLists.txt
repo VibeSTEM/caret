@@ -24,6 +24,7 @@ qt_add_qml_module(
   document_canvas/geometry.cpp
   document_canvas/glyph_frames.cpp
   document_canvas/input.cpp
+  document_canvas/selection.cpp
   document_canvas/scene_graph.cpp
   document_canvas/value_validation.hpp)
 set_target_properties(caret_canvas PROPERTIES EXPORT_NAME canvas)

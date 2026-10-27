@@ -77,6 +77,9 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
     refreshCaretBlink();
     emit caretGeometryChanged();
     update();
+    if (QGuiApplication::inputMethod() != nullptr) {
+        QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
+    }
 }
 
 bool DocumentCanvas::caretBlinkEnabled() const { return m_caret_blink_enabled; }

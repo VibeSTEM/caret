@@ -52,6 +52,15 @@ pub enum PositionMap {
         left_len: usize,
         result_boundaries: Vec<usize>,
     },
+    ParagraphRangeMerge {
+        paragraph_id: NodeId,
+        end_paragraph_id: NodeId,
+        removed_ids: Vec<NodeId>,
+        start_offset: usize,
+        end_offset: usize,
+        snap_graphemes: bool,
+        result_boundaries: Vec<usize>,
+    },
 }
 
 impl PositionMap {
@@ -128,6 +137,36 @@ impl PositionMap {
                     paragraph_id: left_id.clone(),
                     offset: snap_to_boundary(offset, position.affinity, result_boundaries),
                     story: StoryId::Body,
+                    ..position.clone()
+                }
+            }
+            Self::ParagraphRangeMerge {
+                paragraph_id,
+                end_paragraph_id,
+                removed_ids,
+                start_offset,
+                end_offset,
+                snap_graphemes,
+                result_boundaries,
+            } if &position.paragraph_id == paragraph_id
+                || removed_ids.contains(&position.paragraph_id) =>
+            {
+                let offset = if &position.paragraph_id == end_paragraph_id {
+                    start_offset + position.offset.saturating_sub(*end_offset)
+                } else if &position.paragraph_id == paragraph_id && position.offset <= *start_offset
+                {
+                    position.offset
+                } else {
+                    *start_offset
+                };
+                Pos {
+                    paragraph_id: paragraph_id.clone(),
+                    story: StoryId::Body,
+                    offset: if *snap_graphemes {
+                        snap_to_boundary(offset, position.affinity, result_boundaries)
+                    } else {
+                        offset
+                    },
                     ..position.clone()
                 }
             }

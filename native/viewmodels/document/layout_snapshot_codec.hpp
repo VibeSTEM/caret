@@ -12,6 +12,9 @@ struct ParsedLayoutSnapshot {
     QVariantList page_layouts;
     QVariantMap page_margins;
     QVariantList paragraph_layouts;
+    QVariantList selection_rects;
+    QVariantList composition_rects;
+    QVariantMap input_method_context;
     qulonglong document_generation = 0;
     qulonglong font_generation = 0;
 };

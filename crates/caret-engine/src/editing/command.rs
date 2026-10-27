@@ -13,6 +13,7 @@ pub enum Direction {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
+    PasteText(String),
     InsertSoftBreak,
     SplitParagraph,
     Delete(Direction),
@@ -28,6 +29,7 @@ impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
             Self::InsertText(_) => "text.insert",
+            Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
             Self::SplitParagraph => "text.split_paragraph",
             Self::Delete(_) => "text.delete",

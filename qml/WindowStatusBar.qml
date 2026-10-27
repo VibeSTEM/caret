@@ -84,7 +84,7 @@ Rectangle {
             from: DocumentUnits.percentToFactor(CanvasPolicy.minimumZoomPercent)
             to: DocumentUnits.percentToFactor(CanvasPolicy.maximumZoomPercent)
             stepSize: DocumentUnits.percentToFactor(CanvasPolicy.zoomStepPercent)
-            value: 1
+            value: DocumentUnits.percentToFactor(CanvasPolicy.defaultZoomPercent)
             onValueChanged: statusBar.zoomEdited(value)
 
             background: Rectangle {

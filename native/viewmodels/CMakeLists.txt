@@ -19,7 +19,12 @@ qt_add_qml_module(
   document/layout_view_model.cpp
   document/layout_snapshot_codec.hpp
   document/layout_snapshot_codec.cpp
-  document/layout_view_model_commands.cpp
+  document/layout_view_model_clipboard_commands.cpp
+  document/layout_view_model_edit_commands.cpp
+  document/layout_view_model_ime_commands.cpp
+  document/layout_view_model_navigation_commands.cpp
+  document/layout_view_model_response_commands.cpp
+  document/layout_view_model_selection_commands.cpp
   document/glyph_frame_adapter.cpp
   document/document_runtime_bridge.hpp
   document/document_runtime_bridge.cpp

@@ -1,8 +1,8 @@
 # 快捷键
 
-更新日期：2026-10-26。当前已接入正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行和 Backspace 删除/段落合并；本表其余键位仍是目标绑定。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-10-27。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航与复制粘贴已接入。其他结构快捷键仍是目标绑定。命令 id 见[命令](../editor/commands.md)。
 
-正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇；IME、方向键导航和选区键位由[030](../../task/030-ime-navigation-selection.md)接入。
+正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇。方向键按布局视觉位置移动，段落边界可跨段；Ctrl/Command+C 复制选中文本，Ctrl/Command+V 粘贴并替换选区。IME 与选区细节见[030](../../task/030-ime-navigation-selection.md)。
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
@@ -14,6 +14,10 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 
 | 动作 | Linux / Windows | macOS |
 | --- | --- | --- |
+| 复制 / 粘贴 | Ctrl+C / Ctrl+V | Command+C / Command+V |
+| 左右 / 上下移动插入点 | 方向键 | 方向键 |
+| 扩展选区 | Shift+方向键 | Shift+方向键 |
+| 移至视觉行首 / 行尾 | Home / End | Home / End |
 | 上一块 / 下一块 | Ctrl+↑ / ↓ | Option+↑ / ↓ |
 | 上一个 / 下一个同类结构 | Ctrl+PgUp / PgDn | Control+PgUp / PgDn |
 | 结构内移动 | Ctrl+Alt+方向键 | Command+Option+方向键 |

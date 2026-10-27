@@ -20,6 +20,11 @@ pub(crate) fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::layout_snapshot_json)
 }
 
+/// 返回不包含全文布局的 caret、选区与 IME 交互状态。
+pub(crate) fn interaction_state_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::interaction_state_json)
+}
+
 /// 将页面内命中委托给与快照相同的 Rust 布局结果。
 pub(crate) fn document_hit_test_json(
     runtime: &mut DocumentRuntime,
@@ -48,6 +53,10 @@ pub(crate) fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> S
     json_response(runtime, |runtime| runtime.insert_text_json(text))
 }
 
+pub(crate) fn paste_text_json(runtime: &mut DocumentRuntime, text: String) -> String {
+    json_response(runtime, |runtime| runtime.paste_text_json(text))
+}
+
 pub(crate) fn split_paragraph_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::split_paragraph_json)
 }
@@ -58,6 +67,71 @@ pub(crate) fn delete_backward_json(runtime: &mut DocumentRuntime) -> String {
 
 pub(crate) fn insert_soft_break_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::insert_soft_break_json)
+}
+
+pub(crate) fn input_method_event_json(
+    runtime: &mut DocumentRuntime,
+    preedit: String,
+    commit: String,
+    replacement_start: i32,
+    replacement_length: i32,
+    cursor_position_utf16: usize,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.input_method_event_json(
+            preedit,
+            commit,
+            replacement_start,
+            replacement_length,
+            cursor_position_utf16,
+        )
+    })
+}
+
+pub(crate) fn drag_hit_map_json(runtime: &mut DocumentRuntime, page_index: i32) -> String {
+    json_response(runtime, |runtime| runtime.drag_hit_map_json(page_index))
+}
+
+pub(crate) fn set_selection_json(runtime: &mut DocumentRuntime, selection: String) -> String {
+    json_response(runtime, |runtime| runtime.set_selection_json(&selection))
+}
+
+pub(crate) fn clear_selection_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::clear_selection_json)
+}
+
+pub(crate) fn selected_text_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::selected_text_json)
+}
+
+pub(crate) fn move_visual_caret_json(
+    runtime: &mut DocumentRuntime,
+    forward: bool,
+    extend: bool,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.move_visual_caret_json(forward, extend)
+    })
+}
+
+pub(crate) fn move_vertical_caret_json(
+    runtime: &mut DocumentRuntime,
+    line_delta: i32,
+    extend: bool,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.move_vertical_caret_json(line_delta as isize, extend)
+    })
+}
+
+pub(crate) fn move_to_visual_line_edge_json(
+    runtime: &mut DocumentRuntime,
+    end: bool,
+    extend: bool,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.move_to_visual_line_edge_json(end, extend)
+    })
 }
 
 pub(crate) fn current_caret_json(runtime: &mut DocumentRuntime) -> String {

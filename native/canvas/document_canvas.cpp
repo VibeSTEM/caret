@@ -10,6 +10,7 @@ namespace caret {
 DocumentCanvas::DocumentCanvas(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setFlag(ItemIsFocusScope, true);
+    setFlag(ItemAcceptsInputMethod, true);
     initializeCaretBlink();
     initializeGeometryNotifications();
     updateGeometry();

@@ -104,7 +104,11 @@ qt_add_resources(caret_shell "caret_shell_icons" PREFIX "/qt/qml/Caret/Shell" FI
                  ${CARET_SHELL_ICON_FILES})
 
 if(BUILD_TESTING)
-  add_executable(caret_shell_load_test ../tests/cpp/shell/shell_load_test.cpp)
+  add_executable(
+    caret_shell_load_test
+    ../tests/cpp/shell/shell_load_test.cpp ../tests/cpp/shell/shell_load_test.hpp
+    ../tests/cpp/shell/shell_document_canvas_test.cpp
+    ../tests/cpp/shell/shell_document_interaction_test.cpp)
   caret_native_defaults(caret_shell_load_test)
   target_compile_definitions(
     caret_shell_load_test PRIVATE "CARET_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\""

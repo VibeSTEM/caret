@@ -142,6 +142,104 @@ fn composition_update_is_transient_and_commit_is_idempotent() {
 }
 
 #[test]
+fn ime_replacement_maps_utf16_and_snaps_to_grapheme_boundaries() {
+    let mut session = session_with(vec![run("A😀B")]);
+    let end = Pos {
+        story: StoryId::Body,
+        paragraph_id: session.selection.focus.paragraph_id.clone(),
+        offset: "A😀B".len(),
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: end.clone(),
+                focus: end,
+            })))
+            .is_ok()
+    );
+    assert!(session.set_composition_replacement_range(-3, 2).is_ok());
+    assert_eq!(session.selection.anchor.offset, 1);
+    assert_eq!(session.selection.focus.offset, 5);
+
+    let before = session.selection.clone();
+    assert!(session.set_composition_replacement_range(-2, 1).is_err());
+    assert_eq!(session.selection, before);
+}
+
+#[test]
+fn multiline_paste_replaces_selection_and_splits_paragraphs_atomically() {
+    let mut session = session_with(vec![run("before after")]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let anchor = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 7,
+        affinity: Affinity::Downstream,
+    };
+    let focus = Pos {
+        offset: 12,
+        ..anchor.clone()
+    };
+    assert!(
+        session
+            .run(Command::SetSelection(Some(Selection { anchor, focus })))
+            .is_ok()
+    );
+
+    let effect = session.run(Command::PasteText("one\r\ntwo\n".to_owned()));
+    assert!(effect.is_ok());
+    assert!(effect.is_ok_and(|effect| effect.document_changed && effect.position_map.is_some()));
+    let paragraphs = session
+        .document()
+        .body
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph_text(paragraph)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(paragraphs, ["before one", "two", ""]);
+    assert_eq!(session.selection.focus.offset, 0);
+    assert_ne!(session.selection.focus.paragraph_id, paragraph_id);
+    assert_eq!(session.document_generation(), 1);
+}
+
+#[test]
+fn multiline_paste_rejects_unsafe_run_split_without_mutation() {
+    let mut session = session_with(vec![InlineNode::Run(Run {
+        text: "ab".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: std::collections::BTreeMap::from([("opaque".to_owned(), serde_json::json!(true))]),
+    })]);
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: session.selection.focus.paragraph_id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: position.clone(),
+                focus: position,
+            })))
+            .is_ok()
+    );
+    let document = session.document().clone();
+    let selection = session.selection.clone();
+
+    assert_eq!(
+        session.run(Command::PasteText("x\ny".to_owned())),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.selection, selection);
+    assert_eq!(session.document_generation(), 0);
+}
+
+#[test]
 fn page_geometry_command_is_atomic_and_idempotent() {
     let mut session = session_with(Vec::new());
     let target = PageGeometry {
@@ -409,11 +507,124 @@ fn enter_rejects_cross_title_body_selection_atomically() {
     };
     assert!(session.run(Command::SetSelection(Some(selection))).is_ok());
     let before = session.document.clone();
+    let before_selection = session.selection.clone();
+    for command in [
+        Command::SplitParagraph,
+        Command::Delete(Direction::Backward),
+        Command::InsertText("replacement".to_owned()),
+    ] {
+        assert_eq!(
+            session.run(command),
+            Err(EditError::CrossParagraphSelection)
+        );
+        assert_eq!(session.document, before);
+        assert_eq!(session.selection, before_selection);
+        assert_eq!(session.document_generation(), 0);
+    }
+}
+
+#[test]
+fn cross_environment_selection_rejects_delete_and_replacement_atomically() -> Result<(), EditError>
+{
+    let paragraph = |text: &str| Paragraph {
+        id: NodeId::generate(),
+        language: None,
+        layout: None,
+        inlines: vec![run(text)],
+        mark_style: Default::default(),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    let showcase = |paragraph: Paragraph| {
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Showcase,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph)],
+            extra: Default::default(),
+        })
+    };
+    let first = paragraph("first");
+    let second = paragraph("second");
+    let first_id = first.id.clone();
+    let second_id = second.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![showcase(first), showcase(second)];
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id,
+            offset: 1,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: second_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+    })))?;
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
+
+    for command in [
+        Command::Delete(Direction::Backward),
+        Command::InsertText("replacement".to_owned()),
+    ] {
+        assert_eq!(
+            session.run(command),
+            Err(EditError::CrossParagraphSelection)
+        );
+        assert_eq!(session.document(), &before_document);
+        assert_eq!(session.selection(), &before_selection);
+        assert_eq!(session.document_generation(), 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn paragraph_range_merge_rejects_unknown_fields_without_mutation() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("left")];
+    first
+        .extra
+        .insert("futureParagraphField".to_owned(), serde_json::json!(true));
+    let first_id = first.id.clone();
+    let mut second = Paragraph::empty(NodeId::generate());
+    second.inlines = vec![run("right")];
+    let second_id = second.id.clone();
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id,
+            offset: 2,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: second_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+    })))?;
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
     assert_eq!(
-        session.run(Command::SplitParagraph),
-        Err(EditError::CrossParagraphSelection)
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::UnsupportedOpaqueContent)
     );
-    assert_eq!(session.document, before);
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.selection(), &before_selection);
+    assert_eq!(session.document_generation(), 0);
+    Ok(())
 }
 
 #[test]
@@ -448,6 +659,44 @@ fn environment_end_affinity_has_a_visible_transition() {
     assert!(session.run(Command::MoveCaret(Direction::Forward)).is_ok());
     assert_eq!(session.selection.focus.offset, 2);
     assert_eq!(session.selection.focus.affinity, Affinity::Downstream);
+
+    let boundary = Pos {
+        offset: 2,
+        affinity: Affinity::Upstream,
+        ..session.selection.focus.clone()
+    };
+    assert!(
+        session
+            .set_navigation_selection(
+                Selection {
+                    anchor: boundary.clone(),
+                    focus: boundary,
+                },
+                caret_layout::VisualAffinity::Downstream,
+            )
+            .is_ok()
+    );
+    assert_eq!(session.selection.anchor, session.selection.focus);
+    assert_eq!(session.selection.focus.affinity, Affinity::Downstream);
+
+    let next = Pos {
+        offset: 3,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    assert!(
+        session
+            .set_navigation_selection(
+                Selection {
+                    anchor: next.clone(),
+                    focus: next,
+                },
+                caret_layout::VisualAffinity::Downstream,
+            )
+            .is_ok()
+    );
+    assert_eq!(session.selection.anchor, session.selection.focus);
+    assert_eq!(session.selection.focus.offset, 3);
 }
 
 #[test]
@@ -1265,6 +1514,7 @@ fn ime_cancel_is_transient_and_enter_is_rejected_while_composing() {
 fn public_command_ids_and_error_codes_remain_stable() {
     let commands = [
         (Command::InsertText("text".to_owned()), "text.insert"),
+        (Command::PasteText("text".to_owned()), "clipboard.paste"),
         (Command::InsertSoftBreak, "text.soft_break"),
         (Command::SplitParagraph, "text.split_paragraph"),
         (Command::Delete(Direction::Forward), "text.delete"),
@@ -1761,5 +2011,204 @@ fn selected_delete_and_forward_paragraph_merge_publish_position_maps() -> Result
         unreachable!();
     };
     assert_eq!(paragraph_text(paragraph), "ft");
+    Ok(())
+}
+
+#[test]
+fn selected_backspace_merges_paragraphs_and_keeps_unselected_text() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("你好")];
+    let first_id = first.id.clone();
+    let second_id = NodeId::generate();
+    let mut second = first.clone();
+    second.id = second_id.clone();
+    second.inlines = vec![run("世界")];
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    let anchor = Pos {
+        paragraph_id: first_id.clone(),
+        offset: "你".len(),
+        affinity: Affinity::Downstream,
+        ..session.selection().focus.clone()
+    };
+    let focus = Pos {
+        paragraph_id: second_id.clone(),
+        offset: "世界".len() - "界".len(),
+        affinity: Affinity::Upstream,
+        story: StoryId::Body,
+    };
+    session.run(Command::SetSelection(Some(Selection { anchor, focus })))?;
+
+    let effect = session.run(Command::Delete(Direction::Backward))?;
+    assert!(effect.document_changed);
+    assert_eq!(session.document.body.len(), 1);
+    let Block::Paragraph(merged) = &session.document.body[0] else {
+        unreachable!();
+    };
+    assert_eq!(paragraph_text(merged), "你界");
+    assert_eq!(merged.id, first_id);
+    assert_eq!(session.selection().focus.offset, "你".len());
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(
+        effect
+            .position_map
+            .as_ref()
+            .map(|map| map.map(&Pos {
+                story: StoryId::Body,
+                paragraph_id: second_id,
+                offset: "世界".len(),
+                affinity: Affinity::Downstream,
+            }))
+            .map(|mapped| (mapped.paragraph_id, mapped.offset)),
+        Some((first_id, "你界".len()))
+    );
+    Ok(())
+}
+
+#[test]
+fn selected_text_is_extracted_by_the_session_without_layout() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("你好")];
+    let first_id = first.id.clone();
+    let second_id = NodeId::generate();
+    let mut second = first.clone();
+    second.id = second_id.clone();
+    second.inlines = vec![run("world")];
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            paragraph_id: second_id,
+            offset: 2,
+            affinity: Affinity::Downstream,
+            story: StoryId::Body,
+        },
+        focus: Pos {
+            paragraph_id: first_id,
+            offset: "你".len(),
+            affinity: Affinity::Upstream,
+            story: StoryId::Body,
+        },
+    })))?;
+
+    assert_eq!(session.selected_text()?, "好\nwo");
+    Ok(())
+}
+
+#[test]
+fn cross_paragraph_selection_is_replaced_by_enter() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("abc")];
+    let first_id = first.id.clone();
+    let mut second = first.clone();
+    second.id = NodeId::generate();
+    second.inlines = vec![run("def")];
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    let first = Pos {
+        paragraph_id: first_id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+        ..session.selection().focus.clone()
+    };
+    let second = Pos {
+        paragraph_id: session
+            .document()
+            .body
+            .get(1)
+            .and_then(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+                _ => None,
+            })
+            .ok_or(EditError::InvalidPosition)?,
+        offset: 2,
+        affinity: Affinity::Upstream,
+        story: StoryId::Body,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: first,
+        focus: second,
+    })))?;
+
+    let effect = session.run(Command::SplitParagraph)?;
+    assert!(effect.document_changed);
+    assert_eq!(session.document().body.len(), 2);
+    let texts = session
+        .document()
+        .body
+        .iter()
+        .map(|block| match block {
+            Block::Paragraph(paragraph) => paragraph_text(paragraph),
+            _ => panic!("enter replacement should keep only paragraphs"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["a", "f"]);
+    let Block::Paragraph(left) = &session.document().body[0] else {
+        unreachable!();
+    };
+    let Block::Paragraph(right) = &session.document().body[1] else {
+        unreachable!();
+    };
+    assert_eq!(left.id, first_id);
+    assert_eq!(session.selection().focus.paragraph_id, right.id);
+    assert_eq!(session.selection().focus.offset, 0);
+    Ok(())
+}
+
+#[test]
+fn cross_paragraph_replacement_keeps_the_original_cut_when_graphemes_join() -> Result<(), EditError>
+{
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("a")];
+    let first_id = first.id.clone();
+    let mut second = first.clone();
+    second.id = NodeId::generate();
+    second.inlines = vec![run("\u{301}b")];
+    let second_id = second.id.clone();
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    let start = Pos {
+        paragraph_id: first_id,
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..session.selection().focus.clone()
+    };
+    let original_start = start.clone();
+    let end = Pos {
+        story: StoryId::Body,
+        paragraph_id: second_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: start,
+        focus: end,
+    })))?;
+
+    let effect = session.run(Command::InsertText("X".to_owned()))?;
+    let mapped_start = effect
+        .position_map
+        .as_ref()
+        .map(|position_map| position_map.map(&original_start))
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(mapped_start.offset, 1);
+    assert_eq!(session.document().body.len(), 1);
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        unreachable!();
+    };
+    assert_eq!(paragraph_text(paragraph), "aX\u{301}b");
+    assert_eq!(session.selection().focus.offset, "aX\u{301}".len());
     Ok(())
 }
