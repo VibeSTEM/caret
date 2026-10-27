@@ -84,6 +84,8 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
         return Err(format!("sanitizer 构建树不存在：{}", native.display()).into());
     }
     if profile == SanitizerProfile::Address && sanitizer_platform() == SanitizerPlatform::Windows {
+        let probe = windows_asan_probe_build_command(&native);
+        run("Windows ASan QML import-order probe build", probe)?;
         verify_windows_asan_import_order(&native, &caret_build::resolve_llvm_compilers()?.root)?;
     }
     // Linux Qt 6.11 的预编译 QML loader 在 TSan 下报告 QtCore 内部的分配/释放竞态
@@ -213,119 +215,15 @@ fn sanitizer_build_command(root: &Path, target: &Path, flags: &str) -> Command {
     build
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn profiles_preserve_platform_matrix() {
-        let expected = if sanitizer_platform() == SanitizerPlatform::Windows {
-            &[SanitizerProfile::Address][..]
-        } else {
-            &[SanitizerProfile::AddressUndefined, SanitizerProfile::Thread][..]
-        };
-        assert_eq!(sanitizer_profiles(sanitizer_platform()), expected);
-        assert_eq!(
-            sanitizer_profiles(SanitizerPlatform::Windows),
-            &[SanitizerProfile::Address]
-        );
-        assert_eq!(
-            sanitizer_profiles(SanitizerPlatform::Linux),
-            &[SanitizerProfile::AddressUndefined, SanitizerProfile::Thread]
-        );
-        assert_eq!(
-            sanitizer_profiles(SanitizerPlatform::MacOs),
-            &[SanitizerProfile::AddressUndefined, SanitizerProfile::Thread]
-        );
-    }
-
-    #[test]
-    fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_test() {
-        let root = Path::new("repository root");
-        for platform in [
-            SanitizerPlatform::Linux,
-            SanitizerPlatform::MacOs,
-            SanitizerPlatform::Windows,
-        ] {
-            for profile in sanitizer_profiles(platform) {
-                let options = sanitizer_runtime_options(*profile, platform, root);
-                for (name, value) in &options {
-                    if name == "LSAN_OPTIONS" {
-                        assert!(value.to_string_lossy().ends_with(
-                            "tests/fixtures/sanitizers/macos-system-frameworks-lsan.supp"
-                        ));
-                    }
-                }
-                if *profile == SanitizerProfile::Thread {
-                    assert!(options.iter().any(|(name, value)| name == "TSAN_OPTIONS"
-                        && value.to_string_lossy().starts_with("halt_on_error=1")));
-                }
-                if platform == SanitizerPlatform::Windows {
-                    assert!(options.is_empty());
-                } else {
-                    assert!(options.contains(&("ASAN_OPTIONS".into(), "detect_leaks=1".into())));
-                }
-                assert_eq!(
-                    ctest_exclusion(*profile, platform),
-                    (platform == SanitizerPlatform::Linux && *profile == SanitizerProfile::Thread)
-                        .then_some("^Qml\\.ShellLoad$")
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn build_command_preserves_locked_target_and_sanitizer_flags() {
-        let root = Path::new("repository with spaces");
-        let target = Path::new("target with spaces");
-        let command = sanitizer_build_command(root, target, "address,undefined");
-        assert_eq!(command.get_program(), "cargo");
-        assert_eq!(command.get_current_dir(), Some(root));
-        let args = command
-            .get_args()
-            .map(std::ffi::OsStr::to_os_string)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            args,
-            [
-                "build",
-                "--locked",
-                "-p",
-                "caret-launcher",
-                "--target-dir",
-                "target with spaces"
-            ]
-            .map(std::ffi::OsString::from)
-        );
-        assert_eq!(
-            command.get_envs().collect::<Vec<_>>(),
-            vec![(
-                std::ffi::OsStr::new("CARET_NATIVE_SANITIZER"),
-                Some(std::ffi::OsStr::new("address,undefined"))
-            )]
-        );
-    }
-
-    #[test]
-    fn windows_asan_import_must_precede_qt_core() {
-        let valid = vec![
-            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
-            "KERNEL32.dll".to_owned(),
-            "Qt6Core.dll".to_owned(),
-        ];
-        assert!(validate_windows_asan_imports(&valid).is_ok());
-
-        let late_runtime = vec![
-            "Qt6Core.dll".to_owned(),
-            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
-        ];
-        assert!(validate_windows_asan_imports(&late_runtime).is_err());
-
-        let runtime_after_system_import = vec![
-            "KERNEL32.dll".to_owned(),
-            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
-            "Qt6Core.dll".to_owned(),
-        ];
-        assert!(validate_windows_asan_imports(&runtime_after_system_import).is_err());
-    }
+/// 显式构建用于验证 ASan 与 Qt DLL 加载顺序的 QML 测试目标。
+fn windows_asan_probe_build_command(native: &Path) -> Command {
+    let mut build = Command::new("cmake");
+    build
+        .arg("--build")
+        .arg(native)
+        .args(["--target", "caret_shell_load_test"]);
+    build
 }
+
+#[cfg(test)]
+mod tests;

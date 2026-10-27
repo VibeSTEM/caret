@@ -1,10 +1,13 @@
 //! FFI 版本、主题、布局与栅格返回契约的行为测试。
 
 use crate::document::{
-    current_caret_json, delete_backward_json, document_hit_test_json, document_save_snapshot,
-    document_status_json, insert_soft_break_json, insert_text_json, install_prepared_document_json,
-    layout_snapshot_json, mark_document_saved_json, new_blank_document_runtime,
-    place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, split_paragraph_json,
+    clear_selection_json, current_caret_json, delete_backward_json, document_hit_test_json,
+    document_save_snapshot, document_status_json, drag_hit_map_json, input_method_event_json,
+    insert_soft_break_json, insert_text_json, install_prepared_document_json,
+    interaction_state_json, layout_snapshot_json, mark_document_saved_json,
+    move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
+    new_blank_document_runtime, paste_text_json, place_caret_at_page_json, prepare_document_file,
+    rasterize_page_glyphs, selected_text_json, set_selection_json, split_paragraph_json,
     write_document_file,
 };
 
@@ -123,6 +126,51 @@ fn ffi_layout_snapshot_contains_rust_page_and_paragraph_layout() {
 }
 
 #[test]
+fn ffi_navigation_selection_and_clipboard_forward_the_active_document() {
+    let mut runtime = new_blank_document_runtime();
+    let pasted = paste_text_json(&mut runtime, "alpha\nbeta".to_owned());
+    assert!(pasted.contains("\"text\":\"alpha\""));
+    assert!(pasted.contains("\"text\":\"beta\""));
+    assert!(drag_hit_map_json(&mut runtime, 0).contains("\"segments\":"));
+    assert_eq!(
+        drag_hit_map_json(&mut runtime, -1),
+        "error:selection.invalid_page_index"
+    );
+
+    assert!(!move_to_visual_line_edge_json(&mut runtime, false, false).starts_with("error:"));
+    assert!(!move_visual_caret_json(&mut runtime, true, true).starts_with("error:"));
+    assert_eq!(selected_text_json(&mut runtime), "{\"text\":\"b\"}");
+    assert!(interaction_state_json(&mut runtime).contains("\"selectionRects\":[{"));
+    assert!(!clear_selection_json(&mut runtime).starts_with("error:"));
+    assert_eq!(selected_text_json(&mut runtime), "{\"text\":\"\"}");
+
+    assert!(!move_to_visual_line_edge_json(&mut runtime, false, false).starts_with("error:"));
+    assert!(!move_vertical_caret_json(&mut runtime, -1, false).starts_with("error:"));
+    assert!(!move_visual_caret_json(&mut runtime, true, true).starts_with("error:"));
+    assert_eq!(selected_text_json(&mut runtime), "{\"text\":\"a\"}");
+    assert!(
+        set_selection_json(&mut runtime, "invalid".to_owned())
+            .starts_with("error:selection.invalid_payload:")
+    );
+    assert_eq!(selected_text_json(&mut runtime), "{\"text\":\"a\"}");
+}
+
+#[test]
+fn ffi_ime_preview_is_transient_until_commit() {
+    let mut runtime = new_blank_document_runtime();
+    let before = document_save_snapshot(&mut runtime);
+    let preview = input_method_event_json(&mut runtime, "ni".to_owned(), String::new(), 0, 0, 2);
+    assert!(preview.contains("\"compositionPreview\":true"));
+    assert_eq!(document_save_snapshot(&mut runtime).bytes, before.bytes);
+
+    let committed = input_method_event_json(&mut runtime, String::new(), "你".to_owned(), 0, 0, 0);
+    assert!(committed.contains("\"text\":\"你\""));
+    let saved = document_save_snapshot(&mut runtime);
+    assert_eq!(saved.document_generation, before.document_generation + 1);
+    assert!(String::from_utf8_lossy(&saved.bytes).contains("你"));
+}
+
+#[test]
 fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
     let mut runtime = new_blank_document_runtime();
     assert!(!insert_text_json(&mut runtime, "Caret".to_owned()).starts_with("error:"));
@@ -188,6 +236,10 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
     let reopened_snapshot = install_prepared_document_json(&mut reopened_runtime, opened.ticket);
     assert!(!reopened_snapshot.starts_with("error:"));
     assert!(reopened_snapshot.contains("Hello 世界"));
+    assert_eq!(
+        install_prepared_document_json(&mut reopened_runtime, opened.ticket),
+        "error:document.open_ticket_expired"
+    );
     let status = document_status_json(&mut reopened_runtime);
     assert!(status.contains("\"fileName\":\"edited.cdoc\""));
     assert!(status.contains("\"dirty\":false"));
@@ -209,6 +261,18 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
     );
     assert!(!saved_status.starts_with("error:"));
     assert!(saved_status.contains("\"dirty\":true"));
+    assert_eq!(
+        mark_document_saved_json(
+            &mut reopened_runtime,
+            captured.session_generation,
+            captured.document_generation,
+            path.clone(),
+        ),
+        "error:document.stale_save_completion"
+    );
+    let exhausted = prepare_document_file(path.clone(), u64::MAX, 0);
+    assert_eq!(exhausted.error, "document.session_generation_exhausted");
+    assert_eq!(exhausted.ticket, 0);
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

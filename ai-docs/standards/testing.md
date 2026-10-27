@@ -1,6 +1,6 @@
 # 测试目录与入口
 
-更新日期：2026-10-25。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
+更新日期：2026-10-28。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
 
 `caret-tests` 已接入。下面是测试目录约定，不因目录树而提前建立空文件。现有 native 聚合入口为 `tests/integration/native.rs`，`cargo test --workspace --locked` 会同时执行 Rust 测试、qmllint 和 CTest；Qt 相关用例使用 Qt Test。GoogleTest 的生产与消费见[依赖获取](dependency-acquisition.md#googletest-生产与消费)。
 
@@ -21,7 +21,7 @@ tests/
     └── qt/{cpu,gpu}/
 ```
 
-- 需要私有项的单元测试留在被测 `.rs` 的 `#[cfg(test)]` 模块。
+- 需要私有项的单元测试留在被测模块的 `#[cfg(test)]` 子模块；较大的测试集在 `module.rs` 中声明 `#[cfg(test)] mod tests;`，内容放到同级 `module/tests.rs`。这样保持私有访问与模块归属，也使覆盖率工具将测试源码排除在生产函数门槛之外。模块文件组织遵循[仓库文件结构](repository-hygiene.md#模块文件结构)。
 - 公共行为放 `tests/rust/`，由所属 crate 的 `[[test]]` 显式注册。
 - `integration/native.rs` 只检查构建树、qmllint 和 CTest 的退出码，不写领域断言。
 - C++ 和 QML 功能测试在 `BUILD_TESTING=ON` 时注册。源文件列表写在 CMake 里，不用宽泛的 `GLOB`。

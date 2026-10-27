@@ -381,3 +381,60 @@ fn empty_glyph_frame(page_index: u32, error: String) -> bridge::PageGlyphFrame {
         placements: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initialization_failure_is_reported_by_document_commands_and_binary_results() {
+        let mut runtime = DocumentRuntime {
+            runtime: Err("document.initialization_failed".to_owned()),
+        };
+        let expected = "error:document.initialization_failed";
+        let responses = [
+            document_status_json(&mut runtime),
+            mark_document_saved_json(&mut runtime, 1, 0, "test.cdoc".to_owned()),
+            layout_snapshot_json(&mut runtime),
+            interaction_state_json(&mut runtime),
+            document_hit_test_json(&mut runtime, 0, 1.0, 1.0),
+            place_caret_at_page_json(&mut runtime, 0, 1.0, 1.0),
+            insert_text_json(&mut runtime, "text".to_owned()),
+            paste_text_json(&mut runtime, "text".to_owned()),
+            split_paragraph_json(&mut runtime),
+            delete_backward_json(&mut runtime),
+            insert_soft_break_json(&mut runtime),
+            input_method_event_json(&mut runtime, "ni".to_owned(), String::new(), 0, 0, 2),
+            drag_hit_map_json(&mut runtime, 0),
+            set_selection_json(&mut runtime, "{}".to_owned()),
+            clear_selection_json(&mut runtime),
+            selected_text_json(&mut runtime),
+            move_visual_caret_json(&mut runtime, true, false),
+            move_vertical_caret_json(&mut runtime, 1, false),
+            move_to_visual_line_edge_json(&mut runtime, true, false),
+            current_caret_json(&mut runtime),
+        ];
+        assert!(responses.iter().all(|response| response == expected));
+
+        let snapshot = document_save_snapshot(&mut runtime);
+        assert_eq!(snapshot.error, "document.initialization_failed");
+        assert!(snapshot.bytes.is_empty());
+        let frame = rasterize_page_glyphs(
+            &mut runtime,
+            &bridge::GlyphRasterRequest {
+                page_index: 2,
+                px_per_pt: 1.0,
+                page_origin_device_x_px: 0.0,
+                page_origin_device_y_px: 0.0,
+                foreground_red: 0,
+                foreground_green: 0,
+                foreground_blue: 0,
+                foreground_alpha: 255,
+            },
+        );
+        assert_eq!(frame.error, "document.initialization_failed");
+        assert_eq!(frame.page_index, 2);
+        assert!(frame.images.is_empty());
+        assert!(frame.placements.is_empty());
+    }
+}

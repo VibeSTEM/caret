@@ -1,12 +1,13 @@
 # 仓库结构
 
-更新日期：2026-10-27。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
+更新日期：2026-10-28。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
 
 ```text
 当前仓库
 ├── crates/
 │   ├── caret-app/
 │   │   └── src/
+│   │       ├── settings.rs
 │   │       ├── settings/
 │   │       │   ├── model.rs
 │   │       │   ├── service.rs
@@ -14,7 +15,12 @@
 │   │       │   ├── storage.rs
 │   │       │   ├── preferences.rs
 │   │       │   ├── language.rs
-│   │       │   └── theme/{mod.rs,schema.rs}
+│   │       │   ├── theme.rs
+│   │       │   └── theme/{schema.rs,tests.rs}
+│   │       ├── document_view.rs
+│   │       ├── document_view/{composition.rs,editing.rs,hit_test.rs,layout.rs,navigation.rs,selection.rs,snapshot.rs}
+│   │       ├── document_view/tests/{ime.rs,keyboard.rs,layout.rs,navigation.rs}
+│   │       ├── storage.rs
 │   │       └── storage/atomic_file.rs
 │   ├── caret-build/
 │   ├── caret-dsl-core/
@@ -23,7 +29,32 @@
 │   ├── caret-ffi/
 │   │   └── src/{lib.rs,document.rs,settings.rs,tests.rs}
 │   ├── caret-engine/
-│   │   └── src/editing/session/{mod.rs,text_edit.rs,navigation.rs,composition.rs}
+│   │   └── src/
+│   │       ├── editing.rs
+│   │       ├── editing/
+│   │       │   ├── command.rs
+│   │       │   ├── error.rs
+│   │       │   ├── paragraph_ops.rs
+│   │       │   ├── position.rs
+│   │       │   ├── session.rs
+│   │       │   ├── session/
+│   │       │   │   ├── clipboard.rs
+│   │       │   │   ├── composition.rs
+│   │       │   │   ├── navigation.rs
+│   │       │   │   ├── paragraph_edit.rs
+│   │       │   │   ├── range_edit.rs
+│   │       │   │   ├── selection.rs
+│   │       │   │   ├── tests.rs
+│   │       │   │   └── text_edit.rs
+│   │       │   ├── tests.rs
+│   │       │   ├── text_map.rs
+│   │       │   └── types.rs
+│   │       ├── layout.rs
+│   │       ├── layout/tests.rs
+│   │       ├── layout_view.rs
+│   │       ├── layout_view/tests.rs
+│   │       ├── page_glyphs.rs
+│   │       └── page_glyphs/tests.rs
 │   ├── caret-foundation/
 │   ├── caret-layout/
 │   └── launcher/
@@ -48,7 +79,7 @@
     ├── fixtures/
     ├── integration/
     ├── performance/
-    ├── rust/
+    ├── rust/document.rs
     └── src/
 
 规划中的 crate
@@ -61,7 +92,7 @@ crate 的职责和允许依赖以[分层规范](../../standards/layering.md)为�
 ## 模块拆分原则
 
 - 按职责、状态所有权和变化原因拆分；文件行数本身不是拆分条件。拆分后仍由同一消费者构建的文件可以留在同一个 Cargo crate 或 CMake target 中，不为目录层级自动新建库。
-- Rust 模块由 `mod.rs` 汇总稳定入口，领域模型、服务协调、运行时生命周期、存储适配和分类规则各归其模块。共享低层机制仅在出现真实重复消费者后提取到所属应用层。
+- Rust 模块入口使用 `module.rs`，对应目录 `module/` 放子模块与较大的私有单元测试 `tests.rs`；crate 根单测位于 `src/tests.rs`。新建或重构时不使用 `mod.rs`，已有路径仅在模块重构时迁移。领域模型、服务协调、运行时生命周期、存储适配和分类规则各归其模块。共享低层机制仅在出现真实重复消费者后提取到所属应用层。
 - Qt ViewModel 按 Settings、Theme、Document 分类；Runtime bridge 单独持有对应 Rust runtime，分类 ViewModel 只投影自己的领域属性。平台 API 适配放在 `native/adapters/`，画布和 ViewModel 不互相依赖。
 - 大型会话、画布和布局桥按文本编辑/导航/IME、绘制/几何/光标/输入、快照/命令/glyph 适配等职责拆分；外部命令入口保持集中，子模块不各自建立并行状态机或第二套数据权威。
 
