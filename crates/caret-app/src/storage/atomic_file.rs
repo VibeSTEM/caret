@@ -145,7 +145,7 @@ mod tests {
                 file.write_all(&payload[..5])?;
                 Err(Error::new(ErrorKind::WriteZero, "injected write failure"))
             },
-            |_| Ok(()),
+            super::sync_parent,
         );
 
         assert!(matches!(result, Err(AtomicFileError::Io(_))));
@@ -169,7 +169,7 @@ mod tests {
                     wrote.set(true);
                     Ok(())
                 },
-                |_| Ok(()),
+                super::sync_parent,
             );
             assert!(match result {
                 Err(AtomicFileError::MissingParent) => missing_parent,
@@ -194,7 +194,7 @@ mod tests {
                 wrote.set(true);
                 Ok(())
             },
-            |_| Ok(()),
+            super::sync_parent,
         );
 
         assert!(matches!(result, Err(AtomicFileError::Io(_))));
@@ -216,8 +216,8 @@ mod tests {
         let result = write_with(
             &target,
             b"replacement document",
-            |file, payload| file.write_all(payload),
-            |_| Ok(()),
+            fs::File::write_all,
+            super::sync_parent,
         );
 
         assert!(matches!(result, Err(AtomicFileError::Io(_))));
@@ -246,6 +246,18 @@ mod tests {
         assert!(outcome.durability_warning.is_some());
         assert_eq!(fs::read(&target)?, b"committed");
         assert_eq!(fs::read_dir(&directory.root)?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn unusable_temporary_filename_preserves_the_directory()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new("long-filename")?;
+        let target = directory.root.join(format!("{}.cdoc", "a".repeat(512)));
+
+        let result = super::write(&target, b"replacement");
+        assert!(matches!(result, Err(AtomicFileError::Io(_))));
+        assert_eq!(fs::read_dir(&directory.root)?.count(), 0);
         Ok(())
     }
 }

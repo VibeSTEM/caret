@@ -83,6 +83,9 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
     if !native.is_dir() {
         return Err(format!("sanitizer 构建树不存在：{}", native.display()).into());
     }
+    if profile == SanitizerProfile::Address && sanitizer_platform() == SanitizerPlatform::Windows {
+        verify_windows_asan_import_order(&native, &caret_build::resolve_llvm_compilers()?.root)?;
+    }
     // Linux Qt 6.11 的预编译 QML loader 在 TSan 下报告 QtCore 内部的分配/释放竞态
     // （Nightly run 40206639630）；仅该平台的 TSan 排除此测试。升级托管 Qt 后复查。
     // 其他 sanitizer、平台和常规测试仍完整运行。
@@ -94,6 +97,58 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
         None,
         ctest_exclusion(profile, sanitizer_platform()),
     )
+}
+
+/// 确认 Windows 动态 ASan 在 Qt 模块之前初始化，避免未插桩 DLL 的启动期分配被误报。
+fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(), Box<dyn Error>> {
+    let binary = native
+        .join("qml")
+        .join(caret_build::exe_name("caret_shell_load_test"));
+    let readobj = llvm_root
+        .join("bin")
+        .join(caret_build::exe_name("llvm-readobj"));
+    let output = Command::new(readobj)
+        .arg("--coff-imports")
+        .arg(&binary)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "llvm-readobj 无法读取 Windows QML 测试导入表：{}\n{}",
+            binary.display(),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let imports = String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Name:").map(str::trim))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    validate_windows_asan_imports(&imports)?;
+    println!("Windows ASan import order: {}", imports.join(" -> "));
+    Ok(())
+}
+
+fn validate_windows_asan_imports(imports: &[String]) -> Result<(), String> {
+    let asan_index = imports
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case("clang_rt.asan_dynamic-x86_64.dll"));
+    let qt_index = imports
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case("Qt6Core.dll"));
+    let (Some(asan_index), Some(qt_index)) = (asan_index, qt_index) else {
+        return Err(format!(
+            "Windows QML 测试导入表缺少 ASan/Qt6Core：{}",
+            imports.join(", ")
+        ));
+    };
+    if asan_index != 0 || asan_index > qt_index {
+        return Err(format!(
+            "Windows ASan 必须是首个导入依赖并先于 Qt6Core.dll 初始化；当前导入顺序：{}",
+            imports.join(" -> ")
+        ));
+    }
+    Ok(())
 }
 
 fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
@@ -249,5 +304,28 @@ mod tests {
                 Some(std::ffi::OsStr::new("address,undefined"))
             )]
         );
+    }
+
+    #[test]
+    fn windows_asan_import_must_precede_qt_core() {
+        let valid = vec![
+            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
+            "KERNEL32.dll".to_owned(),
+            "Qt6Core.dll".to_owned(),
+        ];
+        assert!(validate_windows_asan_imports(&valid).is_ok());
+
+        let late_runtime = vec![
+            "Qt6Core.dll".to_owned(),
+            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
+        ];
+        assert!(validate_windows_asan_imports(&late_runtime).is_err());
+
+        let runtime_after_system_import = vec![
+            "KERNEL32.dll".to_owned(),
+            "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
+            "Qt6Core.dll".to_owned(),
+        ];
+        assert!(validate_windows_asan_imports(&runtime_after_system_import).is_err());
     }
 }

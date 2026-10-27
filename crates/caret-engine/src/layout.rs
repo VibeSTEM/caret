@@ -630,11 +630,27 @@ fn collect_blocks<'a>(
 #[cfg(test)]
 mod tests {
     use crate::{Affinity, Command, Pos, Selection, Session, StoryId};
-    use caret_doc::{Block, Document, InlineNode, Run};
-    use caret_layout::{FontCatalog, ShapingStyle, VisualAffinity};
+    use caret_doc::{
+        Block, BlockEnvironment, BlockEnvironmentKind, Document, ExplicitBreak, InlineNode, NodeId,
+        OpaqueNode, Paragraph, Run,
+    };
+    use caret_layout::{
+        FontCatalog, FontCatalogError, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
+    };
     use std::collections::BTreeMap;
 
-    use super::DocumentLayoutService;
+    use super::{DocumentLayoutError, DocumentLayoutService};
+
+    fn paragraph(text: &str) -> Paragraph {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![InlineNode::Run(Run {
+            text: text.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })];
+        paragraph
+    }
 
     #[test]
     fn blank_page_click_uses_nearest_line_for_caret_placement() {
@@ -954,5 +970,354 @@ mod tests {
             .run(Command::InsertText("changed".to_owned()))
             .unwrap_or_else(|error| panic!("document edit failed: {error}"));
         assert!(!snapshot.is_current_for(&edited, catalog.generation()));
+    }
+
+    #[test]
+    fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
+        let mut invalid_model = Document::blank();
+        invalid_model.page_sections.clear();
+        let mut unknown_break = Document::blank();
+        unknown_break.body.push(Block::ExplicitBreak(ExplicitBreak {
+            kind: "column".to_owned(),
+            extra: BTreeMap::new(),
+        }));
+        let mut opaque_block = Document::blank();
+        opaque_block.body.push(Block::Opaque(OpaqueNode {
+            raw: serde_json::json!({"type": "future_block", "content": "preserved"}),
+        }));
+        let mut environment = Document::blank();
+        environment.body.push(Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Showcase,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph("nested body"))],
+            extra: BTreeMap::new(),
+        }));
+        let mut unknown_empty_mark = Document::blank();
+        let Block::Paragraph(empty) = &mut unknown_empty_mark.body[0] else {
+            unreachable!();
+        };
+        empty
+            .mark_style
+            .insert("futureMetric".to_owned(), serde_json::json!(true));
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+
+        for (document, expected_prefix) in [
+            (invalid_model, "layout.invalid_document:"),
+            (unknown_break, "layout.unknown_break_kind: column"),
+            (opaque_block, "layout.unsupported_content"),
+            (environment, "layout.unsupported_environment_semantics"),
+            (
+                unknown_empty_mark,
+                "layout.unsupported_paragraph_mark_style",
+            ),
+        ] {
+            let Err(error) = service.layout(&document, 7, &mut catalog, &ShapingStyle::new(1200))
+            else {
+                panic!("unsupported input must not publish a partial snapshot");
+            };
+            assert!(error.to_string().starts_with(expected_prefix));
+            let valid = service
+                .layout(
+                    &Document::blank(),
+                    8,
+                    &mut catalog,
+                    &ShapingStyle::new(1200),
+                )
+                .unwrap_or_else(|error| panic!("service failed after rejected input: {error}"));
+            assert_eq!(valid.document_generation, 8);
+            assert_eq!(valid.paragraphs.len(), 1);
+            assert_eq!(valid.pages.len(), 1);
+        }
+    }
+
+    #[test]
+    fn unavailable_font_catalog_keeps_its_layout_error_category() {
+        let error = DocumentLayoutError::from(FontCatalogError::Empty);
+        assert!(
+            matches!(&error, DocumentLayoutError::FontCatalog(detail) if detail == "layout.font_catalog_empty")
+        );
+        assert_eq!(
+            error.to_string(),
+            "layout.font_catalog: layout.font_catalog_empty"
+        );
+    }
+
+    #[test]
+    fn failed_font_measurement_preserves_the_last_valid_baseline_cache() {
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let settings = ResolvedDocumentTextSettings::from_document_settings(
+            &Document::blank().global_settings,
+        )
+        .unwrap_or_else(|error| panic!("text settings rejected: {error}"));
+        let style = ShapingStyle::new(1200);
+        let valid = service
+            .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style)
+            .unwrap_or_else(|error| panic!("font measurement failed: {error}"));
+        let saved_cache = service.baseline_anchor_cache.clone();
+
+        let Err(error) =
+            service.resolve_baseline_anchor_metrics(&mut catalog, &settings, &ShapingStyle::new(0))
+        else {
+            panic!("zero-sized font must not produce baseline metrics");
+        };
+        assert!(matches!(error, DocumentLayoutError::Shaping(_)));
+        assert_eq!(
+            error.to_string(),
+            "layout.shaping: layout.invalid_font_size"
+        );
+        assert_eq!(service.baseline_anchor_cache, saved_cache);
+        assert_eq!(
+            service
+                .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style)
+                .unwrap_or_else(|error| panic!("valid cache was lost: {error}")),
+            valid
+        );
+    }
+
+    #[test]
+    fn baseline_cache_tracks_style_language_and_refreshed_font_generation() {
+        let mut document = Document::blank();
+        let session = Session::new(document.clone())
+            .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let style = ShapingStyle::new(1200);
+        let first = service
+            .layout_session(&session, &mut catalog, &style)
+            .unwrap_or_else(|error| panic!("first layout failed: {error}"));
+        let first_cache = service
+            .baseline_anchor_cache
+            .clone()
+            .unwrap_or_else(|| panic!("successful layout needs a baseline cache"));
+        let same = service
+            .layout_session(&session, &mut catalog, &style)
+            .unwrap_or_else(|error| panic!("repeated layout failed: {error}"));
+        assert_eq!(service.baseline_anchor_cache.as_ref(), Some(&first_cache));
+        assert_eq!(same.pages, first.pages);
+
+        document.global_settings.default_language = Some("ru".to_owned());
+        let changed_settings =
+            ResolvedDocumentTextSettings::from_document_settings(&document.global_settings)
+                .unwrap_or_else(|error| panic!("language settings rejected: {error}"));
+        let larger_style = ShapingStyle {
+            font_size_centipoints: 2400,
+            bold: true,
+            italic: true,
+            language: Some("el".to_owned()),
+            requested_family: Some("Caret Missing Baseline Font".to_owned()),
+        };
+        let larger_metrics = service
+            .resolve_baseline_anchor_metrics(&mut catalog, &changed_settings, &larger_style)
+            .unwrap_or_else(|error| panic!("changed baseline failed: {error}"));
+        let changed_cache = service
+            .baseline_anchor_cache
+            .as_ref()
+            .unwrap_or_else(|| panic!("changed style needs a new cache entry"));
+        assert_eq!(changed_cache.settings, changed_settings);
+        assert_eq!(changed_cache.style, larger_style);
+        assert!(larger_metrics.ascent_pt > first_cache.metrics.ascent_pt);
+        assert_eq!(changed_cache.font_generation, catalog.generation());
+
+        let refreshed_generation = catalog
+            .refresh()
+            .unwrap_or_else(|error| panic!("font refresh failed: {error}"));
+        assert!(!first.is_current_for(&session, refreshed_generation));
+        let refreshed = service
+            .layout_session(&session, &mut catalog, &style)
+            .unwrap_or_else(|error| panic!("layout after refresh failed: {error}"));
+        assert!(refreshed.is_current_for(&session, refreshed_generation));
+        assert_eq!(
+            service
+                .baseline_anchor_cache
+                .as_ref()
+                .map(|cache| cache.font_generation),
+            Some(refreshed_generation)
+        );
+    }
+
+    #[test]
+    fn page_hit_testing_rejects_nonfinite_and_outside_coordinates() {
+        let mut document = Document::blank();
+        document.body = vec![Block::Paragraph(paragraph("a"))];
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let page = &snapshot.pages[0];
+        for (x, y) in [
+            (f64::NAN, 0.0),
+            (0.0, f64::INFINITY),
+            (-1.0, 0.0),
+            (0.0, -1.0),
+            (page.width_pt + 1.0, 0.0),
+            (0.0, page.height_pt + 1.0),
+        ] {
+            assert!(snapshot.hit_test(0, x, y).is_none());
+        }
+        assert!(snapshot.hit_test(1, 0.0, 0.0).is_none());
+        for (x, y, offset) in [
+            (0.0, 0.0, 0),
+            (0.0, page.height_pt, 0),
+            (page.width_pt, 0.0, 1),
+            (page.width_pt, page.height_pt, 1),
+        ] {
+            let hit = snapshot
+                .hit_test(0, x, y)
+                .unwrap_or_else(|| panic!("page edge should select nearest text"));
+            assert_eq!(hit.position.offset, offset);
+            assert_eq!(hit.caret.y0_pt, page.margin_top_pt);
+        }
+    }
+
+    #[test]
+    fn reversed_cross_paragraph_selection_and_invalid_utf8_positions_are_handled() {
+        let mut document = Document::blank();
+        document.body = ["outside-before", "e\u{301}", "中", "outside-after"]
+            .into_iter()
+            .map(|text| Block::Paragraph(paragraph(text)))
+            .collect();
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let start = Pos {
+            story: StoryId::Body,
+            paragraph_id: snapshot.paragraphs[1].id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        };
+        let end = Pos {
+            paragraph_id: snapshot.paragraphs[2].id.clone(),
+            offset: "中".len(),
+            affinity: Affinity::Upstream,
+            ..start.clone()
+        };
+        let forward = snapshot
+            .selection_geometry(&Selection {
+                anchor: start.clone(),
+                focus: end.clone(),
+            })
+            .unwrap_or_else(|| panic!("cross-paragraph selection rejected"));
+        let reversed = snapshot
+            .selection_geometry(&Selection {
+                anchor: end.clone(),
+                focus: start.clone(),
+            })
+            .unwrap_or_else(|| panic!("reversed selection rejected"));
+        assert_eq!(forward, reversed);
+        assert_eq!(forward.len(), 2);
+        assert!(forward[0].y0_pt < forward[1].y0_pt);
+        assert!(forward.iter().all(|rect| rect.x1_pt > rect.x0_pt));
+
+        for invalid in [
+            Pos {
+                offset: 2,
+                ..start.clone()
+            },
+            Pos {
+                offset: 4,
+                ..start.clone()
+            },
+            Pos {
+                paragraph_id: NodeId::generate(),
+                ..start.clone()
+            },
+            Pos {
+                story: StoryId::EnvironmentTitle(NodeId::generate()),
+                ..start.clone()
+            },
+        ] {
+            assert!(
+                snapshot
+                    .caret_geometry(&invalid, VisualAffinity::Downstream)
+                    .is_none()
+            );
+            assert!(
+                snapshot
+                    .selection_geometry(&Selection {
+                        anchor: invalid,
+                        focus: end.clone(),
+                    })
+                    .is_none()
+            );
+        }
+        assert!(
+            snapshot
+                .caret_geometry(
+                    &Pos {
+                        offset: 1,
+                        ..start.clone()
+                    },
+                    VisualAffinity::Downstream
+                )
+                .is_none()
+        );
+        assert_eq!(
+            snapshot.selection_geometry(&Selection {
+                anchor: start.clone(),
+                focus: start
+            }),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn explicit_breaks_keep_empty_pages_without_inventing_text_hit_targets() {
+        let first = paragraph("a");
+        let last = paragraph("b");
+        let first_id = first.id.clone();
+        let last_id = last.id.clone();
+        let page_break = || Block::ExplicitBreak(ExplicitBreak::default());
+        let mut document = Document::blank();
+        document.body = vec![
+            page_break(),
+            Block::Paragraph(first),
+            page_break(),
+            page_break(),
+            Block::Paragraph(last),
+            page_break(),
+        ];
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        assert_eq!(snapshot.pages.len(), 5);
+        for page in [0, 2, 4] {
+            assert!(snapshot.pages[page].layout.fragments.is_empty());
+            assert!(snapshot.hit_test(page, 100.0, 100.0).is_none());
+        }
+        for (id, expected_page) in [(first_id, 1), (last_id, 3)] {
+            let caret = snapshot
+                .caret_geometry(
+                    &Pos {
+                        story: StoryId::Body,
+                        paragraph_id: id.clone(),
+                        offset: 0,
+                        affinity: Affinity::Downstream,
+                    },
+                    VisualAffinity::Downstream,
+                )
+                .unwrap_or_else(|| panic!("text after page break has no caret"));
+            assert_eq!(caret.page_index, expected_page);
+            let hit = snapshot
+                .hit_test(expected_page, caret.x_pt, caret.y0_pt)
+                .unwrap_or_else(|| panic!("text page has no hit target"));
+            assert_eq!(hit.position.paragraph_id, id);
+            assert_eq!(hit.position.offset, 0);
+        }
     }
 }

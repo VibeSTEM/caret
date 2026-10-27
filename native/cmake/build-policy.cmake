@@ -89,7 +89,6 @@ if(_caret_sanitizers)
   endif()
   string(REPLACE ";" "," _caret_sanitizer_flags "${_caret_sanitizers}")
   add_compile_options(-fno-omit-frame-pointer -fsanitize=${_caret_sanitizer_flags})
-  add_link_options(-fsanitize=${_caret_sanitizer_flags})
   if(NOT _caret_ubsan_index EQUAL -1)
     # UBSan 缺省只报告不失败；测试门禁要求错误即非零退出。
     add_compile_options(-fno-sanitize-recover=undefined)
@@ -124,12 +123,30 @@ if(_caret_sanitizers)
     # 关闭，Windows 矩阵失去容器溢出检测。
     add_compile_definitions(_DISABLE_STL_ANNOTATION)
     add_link_options("-debug" "-incremental:no")
-    add_link_options("SHELL:\"${_caret_asan_rt_dir}/clang_rt.asan_dynamic-x86_64.lib\"")
+    # Windows-MSVC 链接规则把 LINK_FLAGS 放在对象文件之后。把 ASan 导入库前置到
+    # 各链接规则的对象输入之前，确保进程启动时先加载 ASan，再加载 Qt 等依赖。
+    set(_caret_asan_import_lib "\"${_caret_asan_rt_dir}/clang_rt.asan_dynamic-x86_64.lib\"")
+    foreach(
+      _caret_link_rule IN
+      ITEMS CMAKE_C_LINK_EXECUTABLE CMAKE_CXX_LINK_EXECUTABLE CMAKE_C_CREATE_SHARED_LIBRARY
+            CMAKE_CXX_CREATE_SHARED_LIBRARY CMAKE_C_CREATE_SHARED_MODULE
+            CMAKE_CXX_CREATE_SHARED_MODULE)
+      if(DEFINED ${_caret_link_rule})
+        string(REPLACE "<OBJECTS>" "${_caret_asan_import_lib} <OBJECTS>" _caret_link_command
+                       "${${_caret_link_rule}}")
+        if(_caret_link_command STREQUAL "${${_caret_link_rule}}")
+          message(FATAL_ERROR "Windows ASan 无法将运行库前置到链接规则 ${_caret_link_rule}")
+        endif()
+        set(${_caret_link_rule} "${_caret_link_command}")
+      endif()
+    endforeach()
     add_link_options("-include:__asan_seh_interceptor")
     add_link_options(
       "SHELL:-wholearchive:\"${_caret_asan_rt_dir}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib\""
     )
   endif()
+  # 运行期检查 PE 导入表，确保 ASan 是首个导入依赖。
+  add_link_options(-fsanitize=${_caret_sanitizer_flags})
 endif()
 
 if(MSVC)

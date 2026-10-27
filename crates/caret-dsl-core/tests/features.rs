@@ -3,11 +3,160 @@
 
 use std::error::Error;
 
-use caret_dsl_core::{Kind, ValueType, emit_ts, format_source, parse, source_prefix};
+use caret_dsl_core::{
+    EvaluatedValue, Kind, ValueType, emit_ts, evaluate_theme, evaluate_variables, format_source,
+    parse, source_prefix,
+};
 
 const THEME_ALL_TYPES: &str = "version: 1\nkind: theme\n\nvalues:\n  color-bg: string = #1e1f22\n  spacing-small: int = 8\n  scale: real = 0.5\n  enable-shadows: bool = true\n  logo: resource = project:/assets/logo.svg\n";
 
 const LANGUAGE_FEATURES: &str = "version: 1\nkind: language\nlanguage: zh-CN\nsourcelanguage: en\n\n// a retained comment\n[Menu]\nopen:\n  src: \"A\\\\B\"\n  oldsrc: Open\n  tr: 打开\n  st: finished\n  comment: translators note\n  extra: max 10 chars\n\nitems:\n  src: \"%n item\"\n  numerus: true\n  tr: [\"%n 项\", \"%n 项目\"]\n\ngone:\n  src: Vanished text\n  tr: 已消失\n  st: vanished\n\nmissing:\n  src: Missing text\n";
+
+fn evaluation_error(source: &str) -> caret_dsl_core::Diagnostics {
+    match evaluate_variables(source) {
+        Err(error) => error,
+        Ok(_) => panic!("invalid expression was accepted: {source}"),
+    }
+}
+
+#[test]
+fn evaluated_snapshots_are_sorted_and_keep_original_utf8_expression_ranges()
+-> Result<(), Box<dyn Error>> {
+    let source = "version: 1\nkind: variables\n\nvalues:\n  zed: bool = false\n  label: string = \"中文\"\n  alpha: int = 2\n";
+    let result = evaluate_variables(source)?;
+    assert_eq!(result.len(), 3);
+    assert!(!result.is_empty());
+    assert_eq!(
+        result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        ["alpha", "label", "zed"]
+    );
+    assert_eq!(result.get("zed"), Some(&EvaluatedValue::Bool(false)));
+    let range = result
+        .source_range("label")
+        .ok_or("label range is missing")?;
+    assert_eq!(&source[range], "\"中文\"");
+    assert_eq!(result.source_range("missing"), None);
+
+    let empty = evaluate_theme("version: 1\nkind: theme\n")?;
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.iter().next(), None);
+    Ok(())
+}
+
+#[test]
+fn numeric_evaluation_preserves_precedence_and_promotes_mixed_operands()
+-> Result<(), Box<dyn Error>> {
+    let result = evaluate_variables(
+        "version: 1\nkind: variables\n\nvalues:\n  subtract: int = 8 - 3\n  multiply: int = 3 * 4\n  mixed-subtract: real = 8 - 0.5\n  mixed-multiply: real = 2.5 * 4\n  mixed-divide: real = 7 / 2.0\n  negative: real = -2.5\n  grouped: real = +(2 + 3) * 1e-1\n",
+    )?;
+    for (name, expected) in [
+        ("subtract", EvaluatedValue::Int(5)),
+        ("multiply", EvaluatedValue::Int(12)),
+        ("mixed-subtract", EvaluatedValue::Real(7.5)),
+        ("mixed-multiply", EvaluatedValue::Real(10.0)),
+        ("mixed-divide", EvaluatedValue::Real(3.5)),
+        ("negative", EvaluatedValue::Real(-2.5)),
+        ("grouped", EvaluatedValue::Real(0.5)),
+    ] {
+        assert_eq!(result.get(name), Some(&expected), "{name}");
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_failures_report_the_expression_and_propagate_to_dependents() {
+    for (expression, expected_code) in [
+        ("9223372036854775807 + 1", "variables.integer_overflow"),
+        ("-9223372036854775808 - 1", "variables.integer_overflow"),
+        ("9223372036854775807 * 2", "variables.integer_overflow"),
+        ("-(-9223372036854775808)", "variables.integer_overflow"),
+        ("1e308 * 1e308", "variables.non_finite"),
+    ] {
+        let source =
+            format!("version: 1\nkind: variables\n\nvalues:\n  result: real = {expression}\n");
+        let error = evaluation_error(&source);
+        let diagnostic = error
+            .diagnostics
+            .iter()
+            .find(|item| item.code == expected_code)
+            .unwrap_or_else(|| panic!("missing {expected_code}: {error}"));
+        let expression_start = source.find(expression).unwrap_or(usize::MAX);
+        assert_eq!(diagnostic.start_offset, expression_start);
+        assert!(diagnostic.end_offset > expression_start);
+        assert!(diagnostic.end_offset <= expression_start + expression.len());
+    }
+
+    let source = "version: 1\nkind: variables\n\nvalues:\n  broken: real = 1 / 0\n  dependent: real = broken + 1\n";
+    let error = evaluation_error(source);
+    assert!(
+        error
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "variables.division_by_zero")
+    );
+    let dependent = error
+        .diagnostics
+        .iter()
+        .find(|item| item.code == "variables.dependency_failed")
+        .unwrap_or_else(|| panic!("dependent failure was not reported: {error}"));
+    assert_eq!(
+        &source[dependent.start_offset..dependent.end_offset],
+        "broken"
+    );
+}
+
+#[test]
+fn invalid_numeric_tokens_and_incomplete_groups_keep_bounded_diagnostics() {
+    for expression in [
+        "",
+        ".",
+        "1e+",
+        "9223372036854775808",
+        "1e999",
+        "1 2",
+        "1 +",
+        "(1 + 2",
+        "1 + )",
+        "1-2",
+    ] {
+        let source =
+            format!("version: 1\nkind: variables\n\nvalues:\n  result: int = {expression}\n");
+        let error = evaluation_error(&source);
+        let diagnostic = error
+            .diagnostics
+            .iter()
+            .find(|item| item.code == "variables.expression_syntax")
+            .unwrap_or_else(|| panic!("missing syntax diagnostic for {expression:?}: {error}"));
+        assert!(diagnostic.start_offset <= diagnostic.end_offset);
+        assert!(diagnostic.end_offset <= source.len());
+        assert!(source.is_char_boundary(diagnostic.start_offset));
+        assert!(source.is_char_boundary(diagnostic.end_offset));
+    }
+}
+
+#[test]
+fn literal_validation_rejects_empty_resources_and_malformed_strings() {
+    for (value_type, expression, expected_code) in [
+        ("resource", "\"\"", "variables.invalid_resource"),
+        ("string", "\"unterminated", "variables.literal_syntax"),
+        ("string", "embedded\"quote", "variables.literal_syntax"),
+        ("string", "trailing\\", "variables.invalid_escape"),
+        ("resource", "project:/mesh\\q", "variables.invalid_escape"),
+    ] {
+        let source = format!(
+            "version: 1\nkind: variables\n\nvalues:\n  value: {value_type} = {expression}\n"
+        );
+        let error = evaluation_error(&source);
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|item| item.code == expected_code),
+            "missing {expected_code}: {error}"
+        );
+    }
+}
 
 #[test]
 fn theme_document_parses_all_value_types_and_formats_idempotently() -> Result<(), Box<dyn Error>> {
@@ -193,6 +342,30 @@ fn language_requires_locale_and_messages_and_rejects_bad_locales() -> Result<(),
         Err(ref diagnostics) if diagnostics.to_string().contains("pa.invalid_locale")
     ));
     Ok(())
+}
+
+#[test]
+fn invalid_locale_separators_are_reported_at_the_header() {
+    for locale in ["_en", "en__US", "en--US"] {
+        let source = format!(
+            "version: 1\nkind: language\nlanguage: {locale}\n\n[App]\ntitle:\n  src: Hi\n  tr: Hi\n"
+        );
+        let error = match parse(&source) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid locale was accepted: {locale}"),
+        };
+        let diagnostic = error
+            .diagnostics
+            .iter()
+            .find(|item| item.code == "pa.invalid_locale")
+            .unwrap_or_else(|| panic!("missing locale diagnostic: {error}"));
+        assert_eq!(diagnostic.line, 3);
+        assert_eq!(diagnostic.column, 1);
+        assert_eq!(
+            diagnostic.start_offset,
+            source.find("language:").unwrap_or(usize::MAX)
+        );
+    }
 }
 
 #[test]

@@ -202,3 +202,102 @@ fn append_inlines<'a>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use caret_doc::{DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, Run, SoftBreak};
+
+    use super::*;
+    use crate::ResolvedDocumentTextSettings;
+
+    fn run(text: &str, language: Option<&str>) -> InlineNode {
+        InlineNode::Run(Run {
+            text: text.to_owned(),
+            language: language.map(str::to_owned),
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn logical_text_keeps_breaks_and_opaque_placeholders_inside_nested_environments() {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![
+            run("e", None),
+            InlineNode::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Bold,
+                definition_id: None,
+                props: BTreeMap::new(),
+                children: vec![
+                    run("\u{301}", None),
+                    InlineNode::SoftBreak(SoftBreak::default()),
+                    InlineNode::Opaque(OpaqueNode {
+                        raw: serde_json::json!({"type": "future_object", "text": "hidden"}),
+                    }),
+                ],
+                extra: BTreeMap::new(),
+            }),
+        ];
+
+        assert_eq!(paragraph_text(&paragraph), "e\u{301}\n\u{fffc}");
+        assert!(!crate::paragraph_has_empty_line(&paragraph));
+    }
+
+    #[test]
+    fn nested_disabled_format_and_run_language_override_only_their_local_span() {
+        let settings = ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings {
+            default_language: Some("zh-Hant".to_owned()),
+            ..DocumentSettings::default()
+        })
+        .unwrap_or_else(|error| panic!("settings rejected: {error}"));
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![
+            run("outer", None),
+            InlineNode::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Italic,
+                definition_id: None,
+                props: BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]),
+                children: vec![run("local", Some("en-GB"))],
+                extra: BTreeMap::new(),
+            }),
+            run("restored", None),
+        ];
+        let spans = paragraph_style_spans(
+            &paragraph,
+            &settings,
+            &ShapingStyle {
+                italic: true,
+                bold: true,
+                language: Some("fr".to_owned()),
+                ..ShapingStyle::new(1200)
+            },
+        );
+
+        assert_eq!(spans.len(), 3);
+        assert!(spans.iter().all(|span| span.style.bold));
+        assert!(spans[0].style.italic);
+        assert!(!spans[1].style.italic);
+        assert!(spans[2].style.italic);
+        assert_eq!(spans[0].style.language.as_deref(), Some("zh-Hant"));
+        assert_eq!(spans[1].style.language.as_deref(), Some("en-GB"));
+        assert_eq!(spans[2].style.language.as_deref(), Some("zh-Hant"));
+    }
+
+    #[test]
+    fn inconsistent_span_lengths_fall_back_to_the_complete_logical_text() {
+        let text = "e\u{301}中文";
+        let spans = [StyledSpan {
+            text: "e",
+            style: ShapingStyle::new(1200),
+        }];
+
+        assert_eq!(
+            boundaries_for_spans(text, &spans),
+            UnicodeBoundaries::new(text)
+        );
+    }
+}

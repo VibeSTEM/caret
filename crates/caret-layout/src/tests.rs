@@ -35,6 +35,60 @@ fn font_catalog() -> FontCatalog {
     FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"))
 }
 
+#[test]
+fn invalid_layout_requests_leave_the_reusable_layouter_available() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let text = paragraph("still usable", Some("en"));
+    let settings = document_settings();
+    for width in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let Err(error) = layouter.layout(
+            &mut catalog,
+            &text,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(width),
+        ) else {
+            panic!("invalid width must be rejected");
+        };
+        assert_eq!(error.to_string(), "layout.invalid_width");
+    }
+    let Err(error) = layouter.layout(
+        &mut catalog,
+        &text,
+        &settings,
+        &ShapingStyle::new(0),
+        layout_options(120.0),
+    ) else {
+        panic!("zero font size must be rejected");
+    };
+    assert_eq!(error.to_string(), "layout.invalid_font_size");
+    let Err(error) = layouter.layout(
+        &mut catalog,
+        &text,
+        &settings,
+        &ShapingStyle::new(1200),
+        ParagraphLayoutOptions {
+            spacing: LineSpacing::Multiple { percent: 0 },
+            ..layout_options(120.0)
+        },
+    ) else {
+        panic!("invalid spacing must be rejected");
+    };
+    assert_eq!(error.to_string(), "layout.invalid_line_spacing");
+    let (source, result) = layouter
+        .layout(
+            &mut catalog,
+            &text,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(120.0),
+        )
+        .unwrap_or_else(|error| panic!("reusable layout failed after bad input: {error}"));
+    assert_eq!(source, "still usable");
+    assert!(!result.paragraph.lines.is_empty());
+}
+
 fn document_settings() -> ResolvedDocumentTextSettings {
     ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings::default())
         .unwrap_or_else(|error| panic!("document settings failed: {error}"))

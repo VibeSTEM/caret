@@ -68,6 +68,30 @@ fn name_conversions_are_stable() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn cycles_with_a_terminal_exit_remain_valid_even_when_the_exit_is_guarded()
+-> Result<(), Box<dyn Error>> {
+    let source = "version: 1\nkind: fsm\nname: retry\ninitial: Idle\n\nstates:\n  Idle: active\n  Retrying: active\n  Done: terminal\ntransitions:\n  begin:\n    from: Idle\n    on: retry\n    to: Retrying\n  repeat:\n    from: Retrying\n    on: retry\n    to: Idle\n  finish:\n    from: Retrying\n    on: ready\n    to: Done\n    guard: ready\n";
+    let document = parse(source)?;
+    assert_eq!(document.transitions.len(), 3);
+    let generated = generate_rust(&document);
+    assert!(generated.contains("EventKind::Ready"));
+    assert!(generated.contains("Guard::Ready"));
+    assert_eq!(parse(&fsm::format_source(source)?)?, document);
+    Ok(())
+}
+
+#[test]
+fn guard_names_have_their_own_collision_and_keyword_checks() -> Result<(), Box<dyn Error>> {
+    let source = "version: 1\nkind: fsm\nname: guarded\ninitial: Idle\n\nstates:\n  Idle: active\n  Done: terminal\ntransitions:\n  first:\n    from: Idle\n    on: first\n    to: Done\n    guard: a1\n  second:\n    from: Idle\n    on: second\n    to: Done\n    guard: a-1\n";
+    assert_rejected(source, "pa.fsm_name_collision")?;
+    assert_rejected(&source.replace("a-1", "self"), "pa.fsm_reserved_name")?;
+    assert_rejected(
+        &source.replace("a-1", "NotCanonical"),
+        "pa.fsm_invalid_name",
+    )
+}
+
+#[test]
 fn rejects_unknown_states_and_initial() -> Result<(), Box<dyn Error>> {
     assert_rejected(
         "version: 1\nkind: fsm\nname: bad\ninitial: Missing\n\nstates:\n  A: active\n  B: terminal\n\ntransitions:\n  go:\n    from: A\n    on: advance\n    to: B\n",

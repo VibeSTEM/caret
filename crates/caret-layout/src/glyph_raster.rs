@@ -244,12 +244,47 @@ fn synthesis_skew(degrees: f32) -> Transform {
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
-    use super::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph};
+    use super::RasterizedGlyph;
+    use super::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyphKey};
     use super::{colorize_alpha, premultiply_rgba, synthesis_skew};
-    #[cfg(target_os = "macos")]
     use linebender_resource_handle::Blob;
-    #[cfg(target_os = "macos")]
     use parley::FontData;
+
+    #[test]
+    fn invalid_raster_requests_are_rejected_without_allocating_bitmap_storage() {
+        let font = FontData::new(Blob::from(vec![0_u8]), 0);
+        for size in [0.0, -1.0, f32::NAN, f32::INFINITY, 4097.0] {
+            assert!(
+                RasterizedGlyphKey::new(
+                    &font,
+                    1,
+                    GlyphRasterOptions {
+                        pixels_per_em: size,
+                        ..glyph_options()
+                    }
+                )
+                .is_none()
+            );
+        }
+        for phase in [[-0.1, 0.0], [0.0, 1.0], [f32::NAN, 0.0]] {
+            assert!(
+                RasterizedGlyphKey::new(
+                    &font,
+                    1,
+                    GlyphRasterOptions {
+                        pixel_phase: phase,
+                        ..glyph_options()
+                    }
+                )
+                .is_none()
+            );
+        }
+        assert!(RasterizedGlyphKey::new(&font, 65_536, glyph_options()).is_none());
+        let mut rasterizer = GlyphRasterizer::default();
+        assert!(rasterizer.rasterize(&font, 1, glyph_options()).is_none());
+        assert_eq!(rasterizer.cache_bytes, 0);
+        assert!(rasterizer.cache.is_empty());
+    }
 
     #[test]
     fn synthetic_italic_shears_x_without_changing_baseline() {
@@ -332,7 +367,6 @@ mod tests {
         assert_eq!(integral.pixels, fractional.pixels);
     }
 
-    #[cfg(target_os = "macos")]
     fn glyph_options() -> GlyphRasterOptions<'static> {
         GlyphRasterOptions {
             pixels_per_em: 16.0,

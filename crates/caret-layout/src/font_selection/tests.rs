@@ -249,3 +249,75 @@ fn normalization_rejects_ambiguous_keys_and_keeps_one_duplicate_family() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].source, FontPreferenceSource::Math);
 }
+
+#[test]
+fn normalized_language_maps_reject_duplicate_script_and_language_keys() {
+    let duplicate_script = DocumentSettings {
+        language_script_font_families: BTreeMap::from([
+            (
+                "Cyrl".to_owned(),
+                BTreeMap::from([("sr".to_owned(), "A".to_owned())]),
+            ),
+            (
+                "cyrl".to_owned(),
+                BTreeMap::from([("ru".to_owned(), "B".to_owned())]),
+            ),
+        ]),
+        ..DocumentSettings::default()
+    };
+    let Err(error) = FontPreferenceRules::from_document_settings(&duplicate_script) else {
+        panic!("normalized duplicate script must be rejected");
+    };
+    assert_eq!(
+        error,
+        FontPreferenceError::DuplicateScriptTag("cyrl".to_owned())
+    );
+    assert_eq!(error.to_string(), "font.duplicate_script_tag: cyrl");
+
+    let duplicate_language = DocumentSettings {
+        language_script_font_families: BTreeMap::from([(
+            "Latn".to_owned(),
+            BTreeMap::from([
+                ("en-US".to_owned(), "A".to_owned()),
+                ("en-us".to_owned(), "B".to_owned()),
+            ]),
+        )]),
+        ..DocumentSettings::default()
+    };
+    let Err(error) = FontPreferenceRules::from_document_settings(&duplicate_language) else {
+        panic!("normalized duplicate language must be rejected");
+    };
+    assert_eq!(
+        error,
+        FontPreferenceError::DuplicateLanguageTag("en-us".to_owned())
+    );
+    assert_eq!(error.to_string(), "font.duplicate_language_tag: en-us");
+}
+
+#[test]
+fn empty_requested_families_are_rejected_and_grandfathered_languages_match_exactly() {
+    let empty = DocumentSettings {
+        default_font_family: Some(" \t".to_owned()),
+        ..DocumentSettings::default()
+    };
+    let Err(error) = FontPreferenceRules::from_document_settings(&empty) else {
+        panic!("blank requested family must be rejected");
+    };
+    assert_eq!(error, FontPreferenceError::EmptyFamily);
+    assert_eq!(error.to_string(), "font.empty_family");
+
+    let rules = compiled(&DocumentSettings {
+        language_script_font_families: BTreeMap::from([(
+            "Latn".to_owned(),
+            BTreeMap::from([("i-klingon".to_owned(), "Private Latin".to_owned())]),
+        )]),
+        ..DocumentSettings::default()
+    });
+    let candidates = rules.family_candidates(FontSelectionContext {
+        language: Some("I-KLINGON"),
+        ..context("Latn")
+    });
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].family, "Private Latin");
+    assert_eq!(candidates[0].source, FontPreferenceSource::LanguageScript);
+}

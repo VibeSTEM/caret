@@ -127,7 +127,7 @@ impl SettingsRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{SettingsRuntime, SettingsStatus};
+    use super::{SettingsRuntime, SettingsState, SettingsStatus};
     use std::fs;
 
     #[test]
@@ -173,5 +173,27 @@ mod tests {
         assert!(directory.is_dir());
         fs::remove_dir_all(directory)?;
         Ok(())
+    }
+
+    #[test]
+    fn unavailable_runtime_reports_initialization_failure_for_all_operations() {
+        let diagnostic = "settings.test_initialization_failed";
+        let mut runtime = SettingsRuntime {
+            state: SettingsState::Unavailable {
+                diagnostic: diagnostic.to_owned(),
+            },
+            settings_path: std::env::temp_dir().join("caret-unavailable-settings.json"),
+            persistence_warning: None,
+        };
+
+        assert_eq!(runtime.status(), SettingsStatus::Unavailable);
+        assert_eq!(runtime.snapshot(), Err(diagnostic.to_owned()));
+        assert_eq!(runtime.theme_catalog_json(), Err(diagnostic.to_owned()));
+        assert_eq!(runtime.load_warning(), Some(diagnostic));
+        assert_eq!(runtime.persistence_warning(), None);
+        assert_eq!(
+            runtime.set_caret_blink_enabled(false),
+            Err(diagnostic.to_owned())
+        );
     }
 }

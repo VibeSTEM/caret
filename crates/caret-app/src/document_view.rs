@@ -172,14 +172,11 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn blank_document_snapshot_contains_page_and_paragraph_layout() {
-        let mut runtime = DocumentViewRuntime::new_blank()
-            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
-        let json = runtime
-            .layout_snapshot_json()
-            .unwrap_or_else(|error| panic!("document layout snapshot failed: {error}"));
-        let snapshot: Value = serde_json::from_str(&json)
-            .unwrap_or_else(|error| panic!("layout snapshot JSON failed: {error}"));
+    fn blank_document_snapshot_contains_page_and_paragraph_layout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
+        let json = runtime.layout_snapshot_json()?;
+        let snapshot: Value = serde_json::from_str(&json)?;
 
         assert_eq!(snapshot["documentGeneration"], "0");
         assert_eq!(snapshot["fontGeneration"], "1");
@@ -194,11 +191,8 @@ mod tests {
                 .is_some_and(|height| height > 0.0)
         );
 
-        let hit_json = runtime
-            .hit_test_json(0, 73.0, 73.0)
-            .unwrap_or_else(|error| panic!("document hit test failed: {error}"));
-        let hit: Value = serde_json::from_str(&hit_json)
-            .unwrap_or_else(|error| panic!("document hit JSON failed: {error}"));
+        let hit_json = runtime.hit_test_json(0, 73.0, 73.0)?;
+        let hit: Value = serde_json::from_str(&hit_json)?;
         assert_eq!(hit["position"]["offsetUtf8"], "0");
         assert_eq!(hit["position"]["affinity"], "downstream");
         assert_eq!(hit["visualAffinity"], "downstream");
@@ -206,53 +200,39 @@ mod tests {
         assert!(hit["caret"]["xPt"].as_f64().is_some());
         assert!(hit["caret"]["y0Pt"].as_f64().is_some());
         assert!(hit["caret"]["y1Pt"].as_f64().is_some());
-        assert_eq!(
-            runtime
-                .hit_test_json(-1, 73.0, 73.0)
-                .unwrap_or_else(|error| panic!("invalid page hit test failed: {error}")),
-            "null"
-        );
+        assert_eq!(runtime.hit_test_json(-1, 73.0, 73.0)?, "null");
+        Ok(())
     }
 
     #[test]
-    fn keyboard_text_insertion_updates_rust_document_and_caret_geometry() {
-        let mut runtime = DocumentViewRuntime::new_blank()
-            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+    fn keyboard_text_insertion_updates_rust_document_and_caret_geometry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
 
-        let json = runtime
-            .insert_text_json("Aλ".to_owned())
-            .unwrap_or_else(|error| panic!("keyboard text insertion failed: {error}"));
-        let snapshot: Value = serde_json::from_str(&json)
-            .unwrap_or_else(|error| panic!("layout snapshot JSON failed: {error}"));
+        let json = runtime.insert_text_json("Aλ".to_owned())?;
+        let snapshot: Value = serde_json::from_str(&json)?;
         assert_eq!(snapshot["documentGeneration"], "1");
         assert_eq!(snapshot["paragraphs"][0]["text"], "Aλ");
         assert_eq!(runtime.session.selection().focus.offset, "Aλ".len());
 
-        let caret_json = runtime
-            .current_caret_json()
-            .unwrap_or_else(|error| panic!("caret geometry failed: {error}"));
-        let caret: Value = serde_json::from_str(&caret_json)
-            .unwrap_or_else(|error| panic!("caret JSON failed: {error}"));
+        let caret_json = runtime.current_caret_json()?;
+        let caret: Value = serde_json::from_str(&caret_json)?;
         assert_eq!(caret["pageIndex"], 0);
         assert!(caret["xPt"].as_f64().is_some());
         assert!(caret["y1Pt"].as_f64().is_some());
+        Ok(())
     }
 
     #[test]
-    fn keyboard_commands_split_and_merge_paragraphs_and_delete_text() {
-        let mut runtime = DocumentViewRuntime::new_blank()
-            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+    fn keyboard_commands_split_and_merge_paragraphs_and_delete_text()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
 
-        let inserted = runtime
-            .insert_text_json("Aλ".to_owned())
-            .unwrap_or_else(|error| panic!("keyboard text insertion failed: {error}"));
+        let inserted = runtime.insert_text_json("Aλ".to_owned())?;
         assert!(inserted.contains("\"documentGeneration\":\"1\""));
 
-        let split = runtime
-            .split_paragraph_json()
-            .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
-        let split_snapshot: Value = serde_json::from_str(&split)
-            .unwrap_or_else(|error| panic!("split snapshot JSON failed: {error}"));
+        let split = runtime.split_paragraph_json()?;
+        let split_snapshot: Value = serde_json::from_str(&split)?;
         assert_eq!(split_snapshot["documentGeneration"], "2");
         assert_eq!(
             split_snapshot["paragraphs"].as_array().map(Vec::len),
@@ -261,11 +241,8 @@ mod tests {
         assert_eq!(split_snapshot["paragraphs"][0]["text"], "Aλ");
         assert_eq!(split_snapshot["paragraphs"][1]["text"], "");
 
-        let merged = runtime
-            .delete_backward_json()
-            .unwrap_or_else(|error| panic!("paragraph merge failed: {error}"));
-        let merged_snapshot: Value = serde_json::from_str(&merged)
-            .unwrap_or_else(|error| panic!("merged snapshot JSON failed: {error}"));
+        let merged = runtime.delete_backward_json()?;
+        let merged_snapshot: Value = serde_json::from_str(&merged)?;
         assert_eq!(merged_snapshot["documentGeneration"], "3");
         assert_eq!(
             merged_snapshot["paragraphs"].as_array().map(Vec::len),
@@ -273,17 +250,16 @@ mod tests {
         );
         assert_eq!(merged_snapshot["paragraphs"][0]["text"], "Aλ");
 
-        let deleted = runtime
-            .delete_backward_json()
-            .unwrap_or_else(|error| panic!("grapheme deletion failed: {error}"));
-        let deleted_snapshot: Value = serde_json::from_str(&deleted)
-            .unwrap_or_else(|error| panic!("deleted snapshot JSON failed: {error}"));
+        let deleted = runtime.delete_backward_json()?;
+        let deleted_snapshot: Value = serde_json::from_str(&deleted)?;
         assert_eq!(deleted_snapshot["documentGeneration"], "4");
         assert_eq!(deleted_snapshot["paragraphs"][0]["text"], "A");
+        Ok(())
     }
 
     #[test]
-    fn visible_page_rasterization_returns_binary_glyph_images() {
+    fn visible_page_rasterization_returns_binary_glyph_images()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut document = Document::blank();
         let Block::Paragraph(paragraph) = &mut document.body[0] else {
             panic!("blank document should contain a paragraph");
@@ -294,12 +270,9 @@ mod tests {
             props: Default::default(),
             extra: Default::default(),
         })];
-        let mut runtime = DocumentViewRuntime::new(document)
-            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+        let mut runtime = DocumentViewRuntime::new(document)?;
 
-        let page = runtime
-            .rasterize_page_glyphs(0, 1.0, [0.25, 0.75], [32, 32, 32, 255])
-            .unwrap_or_else(|error| panic!("page rasterization failed: {error}"));
+        let page = runtime.rasterize_page_glyphs(0, 1.0, [0.25, 0.75], [32, 32, 32, 255])?;
         assert_eq!(page.page_index, 0);
         assert_eq!(page.document_generation, 0);
         assert_eq!(page.font_generation, 1);
@@ -308,10 +281,11 @@ mod tests {
         assert_eq!(page.placements[0].image_index, 0);
         assert!(page.images[0].pixels.len() > 4);
         assert!(page.images[0].pixels.as_chunks::<4>().1.is_empty());
+        Ok(())
     }
 
     #[test]
-    fn page_click_updates_the_rust_session_selection() {
+    fn page_click_updates_the_rust_session_selection() -> Result<(), Box<dyn std::error::Error>> {
         let mut document = Document::blank();
         if let Some(Block::Paragraph(paragraph)) = document.body.first_mut() {
             paragraph.inlines.push(InlineNode::Run(Run {
@@ -323,14 +297,10 @@ mod tests {
         } else {
             panic!("blank document should start with a paragraph");
         }
-        let mut runtime = DocumentViewRuntime::new(document)
-            .unwrap_or_else(|error| panic!("document view runtime failed: {error}"));
+        let mut runtime = DocumentViewRuntime::new(document)?;
 
-        let result = runtime
-            .place_caret_at_page_json(0, 550.0, 73.0)
-            .unwrap_or_else(|error| panic!("page caret placement failed: {error}"));
-        let hit: Value = serde_json::from_str(&result)
-            .unwrap_or_else(|error| panic!("page caret JSON failed: {error}"));
+        let result = runtime.place_caret_at_page_json(0, 550.0, 73.0)?;
+        let hit: Value = serde_json::from_str(&result)?;
         assert_eq!(hit["position"]["offsetUtf8"], "1");
         assert_eq!(runtime.session.selection().anchor.offset, 1);
         assert_eq!(runtime.session.selection().focus.offset, 1);
@@ -340,12 +310,57 @@ mod tests {
         );
         assert_eq!(runtime.session.document_generation(), 0);
 
-        assert_eq!(
-            runtime
-                .place_caret_at_page_json(-1, 550.0, 73.0)
-                .unwrap_or_else(|error| panic!("page miss placement failed: {error}")),
-            "null"
-        );
+        assert_eq!(runtime.place_caret_at_page_json(-1, 550.0, 73.0)?, "null");
         assert_eq!(runtime.session.selection().focus.offset, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_edit_and_invalid_page_requests_preserve_the_published_document()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
+        let snapshot = runtime.insert_text_json("valid".to_owned())?;
+        let selection = runtime.session.selection().clone();
+
+        assert_eq!(
+            runtime.insert_text_json("invalid\ninput".to_owned()),
+            Err("text.insert: edit.newline_requires_paragraph_command".to_owned())
+        );
+        assert_eq!(
+            runtime.rasterize_page_glyphs(usize::MAX, 1.0, [0.0, 0.0], [0, 0, 0, 255]),
+            Err("layout.glyphs.invalid_page_index".to_owned())
+        );
+        assert_eq!(
+            runtime.rasterize_page_glyphs(0, f64::NAN, [0.0, 0.0], [0, 0, 0, 255]),
+            Err("layout.glyphs.invalid_raster_geometry".to_owned())
+        );
+        assert_eq!(runtime.place_caret_at_page_json(0, f64::NAN, 73.0)?, "null");
+        assert_eq!(runtime.session.selection(), &selection);
+        assert_eq!(runtime.layout_snapshot_json()?, snapshot);
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_model_is_rejected_and_unknown_content_does_not_publish_a_partial_layout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut invalid = Document::blank();
+        invalid.page_sections.clear();
+        assert!(matches!(
+            DocumentViewRuntime::new(invalid),
+            Err(error) if error.starts_with("edit.invalid_document:")
+        ));
+
+        let mut future = Document::blank();
+        future.body.push(Block::Opaque(caret_doc::OpaqueNode {
+            raw: serde_json::json!({"type": "futureBlock", "payload": true}),
+        }));
+        let mut runtime = DocumentViewRuntime::new(future)?;
+        assert_eq!(
+            runtime.layout_snapshot_json(),
+            Err("layout.unsupported_content".to_owned())
+        );
+        assert!(runtime.last_snapshot.is_none());
+        assert_eq!(runtime.session.document_generation(), 0);
+        Ok(())
     }
 }

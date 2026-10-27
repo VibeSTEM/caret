@@ -15,6 +15,8 @@ fn miri_test(args: &[&str]) -> Result<(), Box<dyn Error>> {
         .args(["miri", "test", "--locked"])
         .args(args)
         .env("MIRIFLAGS", "-Zmiri-disable-isolation")
+        // Miri 测试不调用字体后端；使用 fontconfig 的动态加载模式，避免安装系统开发包。
+        .env("RUST_FONTCONFIG_DLOPEN", "1")
         .env("CARGO_TARGET_DIR", target_root().join("miri"))
         .current_dir(repository_root()?);
     run("cargo miri test", test)
@@ -33,7 +35,21 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
     ]);
     run("安装 Miri 工具链", install)?;
     // pest/stacker 使用 Miri 不支持的外部汇编栈指针；排除调用 DSL parser 的测试。
-    miri_test(&["-p", "caret-app", "--lib", "--", "--skip", "theme::tests::"])?;
+    // document_view 依赖 Fontique 的系统字体 FFI，Miri 不能解释 CoreText/Fontconfig 后端。
+    miri_test(&[
+        "-p",
+        "caret-app",
+        "--lib",
+        "--",
+        "--skip",
+        "theme::tests::",
+        "--skip",
+        "document_view::tests::",
+        "--skip",
+        "settings::tests::",
+        "--skip",
+        "settings::runtime::tests::",
+    ])?;
     // 保留诊断、文档格式化、TS 输出和 parser 前置限额等纯 Rust DSL 测试。
     for test in [
         "diagnostic::tests::",

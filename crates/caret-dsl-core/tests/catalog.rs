@@ -1,8 +1,42 @@
 #![allow(clippy::expect_used)]
 
-use caret_dsl_core::{ArtifactSource, emit_ts, parse, parse_artifacts, source_prefix};
+use caret_dsl_core::{ArtifactSource, Kind, emit_ts, parse, parse_artifacts, source_prefix};
 
 const CATALOG: &str = include_str!("fixtures/caret-cn.pa");
+
+#[test]
+fn artifact_metadata_matches_the_validated_payload_and_normalized_locale() {
+    let snapshot = parse_artifacts([
+        ArtifactSource {
+            source_id: "theme.pa",
+            source: "version: 1\nkind: theme\n",
+        },
+        ArtifactSource {
+            source_id: "language.pa",
+            source: "version: 1\nkind: language\nlanguage: cn\n\n[App]\nopen:\n  src: Open\n  tr: 打开\n",
+        },
+    ])
+    .expect("valid documents should aggregate");
+    let language = snapshot
+        .documents()
+        .iter()
+        .find(|document| document.source_id() == "language.pa")
+        .expect("language artifact is retained");
+    assert_eq!(language.version(), 1);
+    assert_eq!(language.kind(), Kind::Language);
+    assert_eq!(language.locale(), Some("zh-CN"));
+    assert_eq!(language.payload().language.as_deref(), language.locale());
+    assert_eq!(language.payload().messages.len(), 1);
+
+    let theme = snapshot
+        .documents()
+        .iter()
+        .find(|document| document.source_id() == "theme.pa")
+        .expect("theme artifact is retained");
+    assert_eq!(theme.kind(), Kind::Theme);
+    assert_eq!(theme.locale(), None);
+    assert!(theme.payload().values.is_empty());
+}
 
 #[test]
 fn fixture_is_a_locale_catalog() {

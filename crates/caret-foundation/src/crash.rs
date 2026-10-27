@@ -568,14 +568,26 @@ mod tests {
         std::fs::create_dir_all(&root)?;
         let blocking = root.join("not-a-directory");
         std::fs::File::create(&blocking)?;
-        let blocking_text = blocking.to_str().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "临时路径不是 UTF-8")
-        })?;
+        let blocking_text = blocking.to_str().ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "临时路径不是 UTF-8",
+        ))?;
         let failed = install_crash_handler(blocking_text);
         assert!(failed.is_err(), "{failed:?}");
 
         let installed = install_crash_handler("")?;
         assert!(installed.is_file(), "{}", installed.display());
+        assert_eq!(crash_log_path().as_deref(), Some(installed.as_path()));
+
+        let blocked_log_dir = root.join("blocked-log");
+        let blocked_log =
+            blocked_log_dir.join(format!("caret-native-crash-{}.log", std::process::id()));
+        std::fs::create_dir_all(blocked_log)?;
+        let blocked_log_dir_text = blocked_log_dir.to_str().ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "临时路径不是 UTF-8",
+        ))?;
+        assert!(install_crash_handler(blocked_log_dir_text).is_err());
         assert_eq!(crash_log_path().as_deref(), Some(installed.as_path()));
         for signal in CRASH_SIGNALS {
             // SAFETY: 测试结束恢复默认处置，避免后续用例继承本进程处理器。
