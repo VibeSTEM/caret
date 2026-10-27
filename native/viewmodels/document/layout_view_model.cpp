@@ -12,49 +12,57 @@
 
 namespace caret {
 namespace {
-QString& installed_snapshot() {
-    static QString value;
+layout_snapshot::ParsedLayoutSnapshot& installed_snapshot() {
+    static layout_snapshot::ParsedLayoutSnapshot value;
+    return value;
+}
+
+bool& has_installed_snapshot() {
+    static bool value = false;
     return value;
 }
 } // namespace
 
-bool install_layout_snapshot(QString snapshot_json) {
+bool install_layout_snapshot(const QString& snapshot_json) {
     layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
     QString error;
     if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error)) {
         return false;
     }
-    installed_snapshot() = std::move(snapshot_json);
+    installed_snapshot() = std::move(parsed_snapshot);
+    has_installed_snapshot() = true;
     return true;
 }
 
 LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
-    if (installed_snapshot().isEmpty()) {
+    if (!has_installed_snapshot()) {
         m_error = QStringLiteral("layout.snapshot_unavailable");
         return;
     }
-    layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
-    if (layout_snapshot::parse(installed_snapshot(), parsed_snapshot, m_error)) {
-        m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
-        m_page_layouts = std::move(parsed_snapshot.page_layouts);
-        m_page_margins_pt = std::move(parsed_snapshot.page_margins);
-        m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
-        m_selection_rects = std::move(parsed_snapshot.selection_rects);
-        m_input_method_context = std::move(parsed_snapshot.input_method_context);
-        m_document_generation = parsed_snapshot.document_generation;
-        m_font_generation = parsed_snapshot.font_generation;
-    }
+    const auto& parsed_snapshot = installed_snapshot();
+    m_page_sizes_pt = parsed_snapshot.page_sizes;
+    m_page_layouts = parsed_snapshot.page_layouts;
+    m_page_margins_pt = parsed_snapshot.page_margins;
+    m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
+    m_selection_rects = parsed_snapshot.selection_rects;
+    m_composition_rects = parsed_snapshot.composition_rects;
+    m_input_method_context = parsed_snapshot.input_method_context;
+    m_document_generation = parsed_snapshot.document_generation;
+    m_font_generation = parsed_snapshot.font_generation;
 }
 
 bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
     layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
     QString error;
-    if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error)) {
+    const auto* previous_snapshot = has_installed_snapshot() ? &installed_snapshot() : nullptr;
+    if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error, previous_snapshot)) {
         m_error = std::move(error);
         return false;
     }
     const bool interaction_changed = m_selection_rects != parsed_snapshot.selection_rects ||
                                      m_input_method_context != parsed_snapshot.input_method_context;
+    installed_snapshot() = parsed_snapshot;
+    has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
     m_page_layouts = std::move(parsed_snapshot.page_layouts);
     m_page_margins_pt = std::move(parsed_snapshot.page_margins);
@@ -66,7 +74,6 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
     m_font_generation = parsed_snapshot.font_generation;
     ++m_layout_revision;
     m_error.clear();
-    installed_snapshot() = snapshot_json;
     emit layoutChanged();
     if (interaction_changed) {
         emit interactionChanged();

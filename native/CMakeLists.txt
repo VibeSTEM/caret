@@ -7,6 +7,7 @@ project(
   LANGUAGES C CXX)
 
 option(CARET_ENABLE_APP "Link caret-ffi and build the blank desktop window" OFF)
+option(CARET_ENABLE_PERFORMANCE "Build manual native performance benchmarks" OFF)
 option(CARET_ENABLE_COVERAGE "Instrument native C++ targets for LLVM coverage" OFF)
 option(CARET_USE_SYSTEM_TOOLS "Use explicitly selected host tools instead of managed tools" OFF)
 set(CARET_LLVM_VERSION
@@ -50,6 +51,9 @@ set(_caret_qt_components
     StateMachine)
 if(BUILD_TESTING)
   list(APPEND _caret_qt_components Test)
+endif()
+if(CARET_ENABLE_PERFORMANCE)
+  list(APPEND _caret_qt_components GuiPrivate)
 endif()
 find_package(Qt6 6.11 REQUIRED COMPONENTS ${_caret_qt_components} PATHS "${QT_STAGING}"
                                           NO_DEFAULT_PATH)

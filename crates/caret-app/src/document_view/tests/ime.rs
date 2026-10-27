@@ -76,6 +76,263 @@ fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
 }
 
 #[test]
+fn ime_commit_reuses_unchanged_paragraph_layouts() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first paragraph".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("active paragraph".to_owned())?;
+    runtime.input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)?;
+
+    let committed = runtime.input_method_event_json(String::new(), "你好".to_owned(), 0, 0, 0)?;
+    let committed: Value = serde_json::from_str(&committed)?;
+    assert_eq!(committed["partial"], true);
+    assert_eq!(committed["paragraphs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(committed["paragraphs"][0]["text"], "active paragraph你好");
+
+    let reused = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or("IME commit did not install a layout snapshot")?;
+    let full = runtime.layout.layout_session(&runtime.session)?;
+    assert_eq!(
+        caret_engine::DocumentLayoutView::from(reused),
+        caret_engine::DocumentLayoutView::from(&full)
+    );
+    Ok(())
+}
+
+#[test]
+fn ime_preedit_updates_only_the_composition_paragraph() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first paragraph".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("active paragraph".to_owned())?;
+
+    let first: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "ni".to_owned(),
+        String::new(),
+        0,
+        0,
+        2,
+    )?)?;
+    assert_eq!(first["partial"], true);
+    assert_eq!(first["compositionPreview"], true);
+    assert_eq!(first["paragraphs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(first["paragraphs"][0]["text"], "active paragraphni");
+
+    let updated: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "ni hao".to_owned(),
+        String::new(),
+        0,
+        0,
+        5,
+    )?)?;
+    assert_eq!(updated["partial"], true);
+    assert_eq!(updated["compositionPreview"], true);
+    assert_eq!(updated["paragraphs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(updated["paragraphs"][0]["text"], "active paragraphni hao");
+    assert!(
+        updated["compositionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+
+    let reused = runtime
+        .composition_snapshot
+        .as_ref()
+        .ok_or("IME composition snapshot was not installed")?;
+    let preview_session = runtime
+        .composition_preview_session
+        .as_ref()
+        .ok_or("IME preview session was not installed")?;
+    let full = runtime.layout.layout_session(preview_session)?;
+    let reused_view = caret_engine::DocumentLayoutView::from(reused);
+    let full_view = caret_engine::DocumentLayoutView::from(&full);
+    assert_eq!(reused_view.pages, full_view.pages);
+    assert_eq!(reused_view.paragraphs, full_view.paragraphs);
+    Ok(())
+}
+
+#[test]
+fn ime_deltas_include_pages_changed_by_an_earlier_preview() -> Result<(), Box<dyn std::error::Error>>
+{
+    let text = "paragraph content that is long enough to wrap across two lines ".repeat(2);
+    let mut document = Document::blank();
+    document.body = (0..100)
+        .map(|_| {
+            let mut paragraph = caret_doc::Paragraph::empty(caret_doc::NodeId::generate());
+            paragraph.layout = Some(caret_doc::ParagraphLayoutOverrides {
+                keep_lines_together: Some(true),
+                ..Default::default()
+            });
+            paragraph
+                .inlines
+                .push(caret_doc::InlineNode::Run(caret_doc::Run {
+                    text: text.clone(),
+                    language: None,
+                    props: Default::default(),
+                    extra: Default::default(),
+                }));
+            Block::Paragraph(paragraph)
+        })
+        .collect();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    for paragraph_index in 0..100 {
+        let paragraph = match &runtime.session.document().body[paragraph_index] {
+            Block::Paragraph(paragraph) => paragraph,
+            _ => unreachable!("fixture only contains paragraphs"),
+        };
+        let paragraph_id = paragraph.id.clone();
+        runtime.set_selection_json(
+            &serde_json::json!({
+                "anchor": {
+                    "paragraphId": paragraph_id.to_string(),
+                    "offsetUtf8": "0",
+                    "affinity": "upstream",
+                    "visualAffinity": "upstream"
+                },
+                "focus": {
+                    "paragraphId": paragraph_id.to_string(),
+                    "offsetUtf8": text.len().to_string(),
+                    "affinity": "downstream",
+                    "visualAffinity": "downstream"
+                }
+            })
+            .to_string(),
+        )?;
+        let base = runtime
+            .last_snapshot
+            .as_ref()
+            .ok_or("base layout snapshot was not installed")?
+            .clone();
+        let first_preview: Value = serde_json::from_str(&runtime.input_method_event_json(
+            "x".to_owned(),
+            String::new(),
+            0,
+            0,
+            1,
+        )?)?;
+        let previous_preview = runtime
+            .composition_snapshot
+            .as_ref()
+            .ok_or("first composition preview was not installed")?
+            .clone();
+        let page_of = |snapshot: &caret_engine::DocumentLayoutSnapshot| {
+            snapshot.pages.iter().position(|page| {
+                page.layout
+                    .fragments
+                    .iter()
+                    .any(|fragment| fragment.paragraph_id == paragraph_id)
+            })
+        };
+        let base_page = page_of(&base).ok_or("paragraph was not paginated")?;
+        let preview_page = page_of(&previous_preview).ok_or("preview was not paginated")?;
+
+        if preview_page < base_page {
+            assert_eq!(first_preview["partial"], true);
+            let updated: Value = serde_json::from_str(&runtime.input_method_event_json(
+                text.clone(),
+                String::new(),
+                0,
+                0,
+                text.encode_utf16().count(),
+            )?)?;
+            let current_preview = runtime
+                .composition_snapshot
+                .as_ref()
+                .ok_or("updated composition preview was not installed")?;
+            let base_start = caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
+                &base,
+                current_preview,
+                &paragraph_id,
+            )
+            .ok_or("updated preview did not affect a base page")?;
+            let preview_start = caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
+                &previous_preview,
+                current_preview,
+                &paragraph_id,
+            )
+            .ok_or("updated preview did not affect its prior page")?;
+            let expected_start = base_start.min(preview_start);
+            assert!(expected_start < base_start);
+            assert_eq!(
+                updated["pageStartIndex"].as_u64(),
+                Some(expected_start as u64)
+            );
+
+            runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
+            let base_before_commit = runtime
+                .last_snapshot
+                .as_ref()
+                .ok_or("base layout was not restored after cancellation")?
+                .clone();
+            runtime.set_selection_json(
+                &serde_json::json!({
+                    "anchor": {
+                        "paragraphId": paragraph_id.to_string(),
+                        "offsetUtf8": "0",
+                        "affinity": "upstream",
+                        "visualAffinity": "upstream"
+                    },
+                    "focus": {
+                        "paragraphId": paragraph_id.to_string(),
+                        "offsetUtf8": text.len().to_string(),
+                        "affinity": "downstream",
+                        "visualAffinity": "downstream"
+                    }
+                })
+                .to_string(),
+            )?;
+            runtime.input_method_event_json("x".to_owned(), String::new(), 0, 0, 1)?;
+            let short_preview = runtime
+                .composition_snapshot
+                .as_ref()
+                .ok_or("short composition preview was not installed")?
+                .clone();
+            let committed: Value = serde_json::from_str(&runtime.input_method_event_json(
+                String::new(),
+                text.clone(),
+                0,
+                0,
+                0,
+            )?)?;
+            let committed_layout = runtime
+                .last_snapshot
+                .as_ref()
+                .ok_or("committed layout was not installed")?;
+            let committed_start = caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
+                &base_before_commit,
+                committed_layout,
+                &paragraph_id,
+            )
+            .ok_or("commit did not affect a base page")?;
+            let expected_commit_start = committed_start.min(
+                caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
+                    &base_before_commit,
+                    &short_preview,
+                    &paragraph_id,
+                )
+                .ok_or("initial preview did not affect a base page")?,
+            );
+            assert_eq!(committed["partial"], true);
+            assert_eq!(
+                committed["pageStartIndex"].as_u64(),
+                Some(expected_commit_start as u64)
+            );
+            return Ok(());
+        }
+
+        runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
+    }
+    Err(
+        std::io::Error::other("fixture did not move a paragraph with a one-line IME preview")
+            .into(),
+    )
+}
+
+#[test]
 fn failed_ime_commit_keeps_its_composition_id_cancellable() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -251,6 +508,8 @@ fn ime_reverse_cross_paragraph_selection_previews_from_the_retained_start()
 
     let response = runtime.input_method_event_json("X".to_owned(), String::new(), 0, 0, 1)?;
     let snapshot: Value = serde_json::from_str(&response)?;
+    assert!(snapshot.get("partial").is_none());
+    assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(snapshot["paragraphs"][0]["text"], "X");
     assert!(runtime.composition_preview_session.is_some());
     assert!(runtime.session.composition().is_some());

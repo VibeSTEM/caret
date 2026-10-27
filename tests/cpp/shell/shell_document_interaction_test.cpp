@@ -52,7 +52,9 @@
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
 #include <algorithm>
+#include <cstddef>
 #include <qcontainerfwd.h>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -676,5 +678,116 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             return rectangle.toMap().value(QStringLiteral("pageIndex")).toInt() == 1;
         }));
     delete surface;
+}
+
+void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    QString source;
+    for (int index = 0; index < 100; ++index) {
+        if (index != 0) {
+            source.append(QLatin1Char('\n'));
+        }
+        source.append(QStringLiteral("Paragraph %1 contains enough words to fill the page. ")
+                          .arg(index)
+                          .repeated(3));
+    }
+    const QByteArray source_utf8 = source.toUtf8();
+    const rust::String prepared = caret::ffi::paste_text_json(
+        *runtime, rust::String(std::string(source_utf8.constData(),
+                                           static_cast<size_t>(source_utf8.size()))));
+    QVERIFY(!std::string_view(prepared.data(), prepared.size()).starts_with("error:"));
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(
+        QByteArrayLiteral(
+            "import QtQuick\n"
+            "import Caret.ViewModels\n"
+            "Item {\n"
+            "    property var result: LayoutViewModel.insertText(\"x\")\n"
+            "    property var preeditResult\n"
+            "    property var updatedPreeditResult\n"
+            "    property var commitResult\n"
+            "    property var crossSelectionResult\n"
+            "    property var crossPreeditResult\n"
+            "    property var crossCancelResult\n"
+            "    property int preeditParagraphCount: 0\n"
+            "    property int preeditRectCount: 0\n"
+            "    property int crossPreeditParagraphCount: 0\n"
+            "    property int crossCancelParagraphCount: 0\n"
+            "    property var pageSizes: LayoutViewModel.pageSizesPt\n"
+            "    property var pageLayouts: LayoutViewModel.pageLayouts\n"
+            "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
+            "    Component.onCompleted: {\n"
+            "        preeditResult = LayoutViewModel.inputMethodEvent(\"n\", \"\", 0, 0, 1)\n"
+            "        preeditParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
+            "        preeditRectCount = LayoutViewModel.compositionRects.length\n"
+            "        updatedPreeditResult = LayoutViewModel.inputMethodEvent(\"ni\", \"\", 0, 0, "
+            "2)\n"
+            "        commitResult = LayoutViewModel.inputMethodEvent(\"\", \"你\", 0, 0, 0)\n"
+            "        const paragraphs = LayoutViewModel.paragraphLayouts\n"
+            "        crossSelectionResult = LayoutViewModel.setSelection(\n"
+            "            { position: { paragraphId: paragraphs[98].paragraphId, offsetUtf8: \"0\", "
+            "affinity: \"downstream\" }, visualAffinity: \"downstream\" },\n"
+            "            { position: { paragraphId: paragraphs[99].paragraphId, offsetUtf8: \"0\", "
+            "affinity: \"upstream\" }, visualAffinity: \"upstream\" })\n"
+            "        crossPreeditResult = LayoutViewModel.inputMethodEvent(\"x\", \"\", 0, 0, 1)\n"
+            "        crossPreeditParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
+            "        crossCancelResult = LayoutViewModel.inputMethodEvent(\"\", \"\", 0, 0, 0)\n"
+            "        crossCancelParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
+            "    }\n"
+            "}\n"),
+        QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY(probe != nullptr);
+    const QVariantMap result = probe->property("result").toMap();
+    QVERIFY2(result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(result.value(QStringLiteral("error")).toString()));
+    const QVariantMap preedit_result = probe->property("preeditResult").toMap();
+    QVERIFY2(preedit_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(preedit_result.value(QStringLiteral("error")).toString()));
+    QCOMPARE(probe->property("preeditParagraphCount").toInt(), 100);
+    QVERIFY(probe->property("preeditRectCount").toInt() > 0);
+    const QVariantMap updated_preedit_result = probe->property("updatedPreeditResult").toMap();
+    QVERIFY2(updated_preedit_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(updated_preedit_result.value(QStringLiteral("error")).toString()));
+    const QVariantMap commit_result = probe->property("commitResult").toMap();
+    QVERIFY2(commit_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(commit_result.value(QStringLiteral("error")).toString()));
+    const QVariantMap cross_selection_result = probe->property("crossSelectionResult").toMap();
+    QVERIFY2(cross_selection_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(cross_selection_result.value(QStringLiteral("error")).toString()));
+    const QVariantMap cross_preedit_result = probe->property("crossPreeditResult").toMap();
+    QVERIFY2(cross_preedit_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(cross_preedit_result.value(QStringLiteral("error")).toString()));
+    QCOMPARE(probe->property("crossPreeditParagraphCount").toInt(), 99);
+    const QVariantMap cross_cancel_result = probe->property("crossCancelResult").toMap();
+    QVERIFY2(cross_cancel_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(cross_cancel_result.value(QStringLiteral("error")).toString()));
+    QCOMPARE(probe->property("crossCancelParagraphCount").toInt(), 100);
+    const QVariantList pages = probe->property("pageSizes").toList();
+    const QVariantList page_layouts = probe->property("pageLayouts").toList();
+    const QVariantList paragraphs = probe->property("paragraphs").toList();
+    QVERIFY(pages.size() > 1);
+    QCOMPARE(page_layouts.size(), pages.size());
+    QCOMPARE(paragraphs.size(), 100);
+    QVERIFY(paragraphs.first()
+                .toMap()
+                .value(QStringLiteral("text"))
+                .toString()
+                .startsWith(QStringLiteral("Paragraph 0")));
+    QVERIFY(paragraphs.last()
+                .toMap()
+                .value(QStringLiteral("text"))
+                .toString()
+                .endsWith(QStringLiteral("x你")));
+    delete probe;
 }
 #endif

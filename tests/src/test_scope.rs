@@ -258,7 +258,7 @@ fn is_rust_package_path(path: &str) -> bool {
         || path.starts_with("tests/rust/")
         || path.starts_with("tests/src/")
         || path.starts_with("tests/integration/")
-        || (path.starts_with("tests/performance/cpu/") && path.ends_with(".rs"))
+        || (path.starts_with("tests/performance/rust/cpu/") && path.ends_with(".rs"))
         || matches!(
             path,
             "Cargo.toml" | "Cargo.lock" | "rust-toolchain.toml" | "rustfmt.toml" | ".rustfmt.toml"
@@ -547,7 +547,7 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
             }
             continue;
         }
-        if path.starts_with("tests/performance/cpu/") && path.ends_with(".rs") {
+        if path.starts_with("tests/performance/rust/cpu/") && path.ends_with(".rs") {
             plan.rust = true;
             if let Some(package) = package_for_path(path, &packages, root) {
                 plan.qml_lint |= package_path_affects_qml_bridge(&package, path);
@@ -573,6 +573,10 @@ fn make_plan(paths: &[String], root: &Path) -> Result<Plan, Box<dyn Error>> {
                 rust_source_packages.extend(all_packages.iter().cloned());
                 changed_packages.extend(all_packages.iter().cloned());
             }
+            continue;
+        }
+        if path.starts_with("tests/performance/qt/") {
+            // Qt 基准目标在 nightly 手动构建；日常 PR 仅格式化源码，不运行基准或 native 测试。
             continue;
         }
         if path.starts_with("tests/src/") {
@@ -932,6 +936,9 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn is_document_path(path: &str) -> bool {
+    if path.starts_with("tests/performance/") && path.ends_with(".md") {
+        return true;
+    }
     if ["crates/", "tests/", "native/", "qml/", "resources/"]
         .iter()
         .any(|prefix| path.starts_with(prefix))
@@ -1275,14 +1282,51 @@ mod tests {
     #[test]
     fn criterion_benches_select_their_registered_cargo_packages() -> Result<(), Box<dyn Error>> {
         let root = repository_root()?;
-        let path = "tests/performance/cpu/dsl_core_criterion.rs";
-        let package = "caret-dsl-core";
-        assert!(is_rust_package_path(path), "{path}");
-        let plan = make_plan(&[path.into()], &root)?;
-        assert!(plan.rust, "{path}");
-        assert!(plan.packages_l1.contains(package), "{plan:?}");
-        assert!(!plan.full, "{path} should stay package-scoped");
-        assert!(!is_rust_package_path("tests/performance/cpu/example.cpp"));
+        for (path, package) in [
+            (
+                "tests/performance/rust/cpu/dsl_core_criterion.rs",
+                "caret-dsl-core",
+            ),
+            (
+                "tests/performance/rust/cpu/layout_criterion.rs",
+                "caret-layout",
+            ),
+            (
+                "tests/performance/rust/cpu/novel_document_criterion.rs",
+                "caret-engine",
+            ),
+            (
+                "tests/performance/rust/cpu/document_view_input_criterion.rs",
+                "caret-app",
+            ),
+        ] {
+            assert!(is_rust_package_path(path), "{path}");
+            let plan = make_plan(&[path.into()], &root)?;
+            assert!(plan.rust, "{path}");
+            assert!(plan.packages_l1.contains(package), "{plan:?}");
+            assert!(!plan.full, "{path} should stay package-scoped");
+        }
+        assert!(!is_rust_package_path(
+            "tests/performance/qt/cpu/example.cpp"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn qt_performance_sources_do_not_select_performance_or_native_tests()
+    -> Result<(), Box<dyn Error>> {
+        let root = repository_root()?;
+        for path in [
+            "tests/performance/qt/cpu/software_canvas_benchmark.cpp",
+            "tests/performance/qt/gpu/headless_canvas_benchmark.cpp",
+            "tests/performance/qt/canvas_fixture.hpp",
+        ] {
+            let plan = make_plan(&[path.into()], &root)?;
+            assert!(!plan.full, "{path}");
+            assert!(!plan.native, "{path}");
+            assert!(!plan.cpp, "{path}");
+            assert!(!plan.qml, "{path}");
+        }
         Ok(())
     }
 

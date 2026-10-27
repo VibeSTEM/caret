@@ -50,7 +50,7 @@ pub(crate) fn place_caret_at_page_json(
 }
 
 pub(crate) fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String {
-    json_response(runtime, |runtime| runtime.insert_text_json(text))
+    json_response(runtime, |runtime| runtime.insert_text_delta_json(text))
 }
 
 pub(crate) fn paste_text_json(runtime: &mut DocumentRuntime, text: String) -> String {

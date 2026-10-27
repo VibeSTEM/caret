@@ -1,8 +1,10 @@
+//! 测量 Caret DSL 解析与格式化的 CPU 基线。
+
 use caret_dsl_core::{format_source, parse};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
-const SOURCE: &str = include_str!("../../../tests/fixtures/dsl/artifacts.pa");
+const SOURCE: &str = include_str!("../../../../tests/fixtures/dsl/artifacts.pa");
 
 fn benchmark_dsl_core(criterion: &mut Criterion) {
     let parsed = match parse(SOURCE) {

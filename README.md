@@ -1,5 +1,11 @@
 # Caret
 
+<p align="center">
+  <img alt="Written in Rust and Qt 6" src="https://img.shields.io/badge/written%20in-Rust%20%2B%20Qt%206-2b47b5?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Runs on macOS, Windows and Linux" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-3b5bdb?style=flat-square">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b47b5?style=flat-square"></a>
+</p>
+
 Caret 是轻量的所见即所得结构化编辑器，计划用 Rust 实现领域规则，用 Qt 6 / QML 实现桌面界面。产品目标和里程碑见[需求与范围](ai-docs/architecture/requirements.md)。
 
 仓库已建立 Cargo、CMake 和 QML 工程。`cargo run` 打开 M0 文档窗口，页面仍是占位，正文编辑和保存尚未实现。CI、夜间检查、桌面打包与 GoogleTest SDK 工作流已编写，远程验收状态见[任务 006](ai-docs/task/006-infra-ci.md)。

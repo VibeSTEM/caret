@@ -2,6 +2,7 @@
 #include "document_canvas.hpp"
 #include "value_validation.hpp"
 #include <QByteArray>
+#include <QColor>
 #include <QHash>
 #include <QImage>
 #include <QList>
@@ -22,6 +23,7 @@
 #include <qhashfunctions.h>
 #include <qnamespace.h>
 #include <qpoint.h>
+#include <utility>
 
 namespace caret {
 namespace {
@@ -43,15 +45,62 @@ class PageGlyphNode final : public QSGNode {
         clearGlyphNodes();
         qDeleteAll(textures);
         textures.clear();
+        images.clear();
     }
 
     QMap<QString, QVariant> frame;
+    QVariantList images;
     QVector<QSGTexture*> textures;
 };
 
 class GlyphGroupNode final : public QSGNode {
   public:
     QHash<int, PageGlyphNode*> pages;
+};
+
+bool has_retryable_missing_texture(const PageGlyphNode* page_node) {
+    const QVariantList& images = page_node->images;
+    for (qsizetype index = 0; index < images.size(); ++index) {
+        if (index < static_cast<qsizetype>(page_node->textures.size()) &&
+            page_node->textures.at(static_cast<int>(index)) != nullptr) {
+            continue;
+        }
+        const QVariantMap image = images.at(index).toMap();
+        const int width = image.value(QStringLiteral("width")).toInt();
+        const int height = image.value(QStringLiteral("height")).toInt();
+        const QByteArray pixels = image.value(QStringLiteral("pixels")).toByteArray();
+        const quint64 expected_size = static_cast<quint64>(std::max(width, 0)) *
+                                      static_cast<quint64>(std::max(height, 0)) * 4U;
+        if (width > 0 && height > 0 && width <= std::numeric_limits<int>::max() / 4 &&
+            expected_size == static_cast<quint64>(pixels.size())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_retryable_missing_texture(const GlyphGroupNode* group) {
+    return std::any_of(
+        group->pages.cbegin(), group->pages.cend(),
+        [](const PageGlyphNode* page_node) { return has_retryable_missing_texture(page_node); });
+}
+
+class PageBackgroundNode final : public QSGNode {
+  public:
+    PageBackgroundNode() {
+        border = new QSGSimpleRectNode();
+        page = new QSGSimpleRectNode();
+        appendChildNode(border);
+        appendChildNode(page);
+    }
+
+    QSGSimpleRectNode* border = nullptr;
+    QSGSimpleRectNode* page = nullptr;
+};
+
+class PageBackgroundGroupNode final : public QSGNode {
+  public:
+    QHash<int, PageBackgroundNode*> pages;
 };
 
 class SelectionGroupNode final : public QSGNode {
@@ -71,6 +120,7 @@ class SelectionGroupNode final : public QSGNode {
 class CanvasRootNode final : public QSGNode {
   public:
     int page_count = -1;
+    PageBackgroundGroupNode* page_background_group = nullptr;
     GlyphGroupNode* glyph_group = nullptr;
     SelectionGroupNode* selection_group = nullptr;
     QSGSimpleRectNode* caret_node = nullptr;
@@ -79,6 +129,37 @@ class CanvasRootNode final : public QSGNode {
     quint64 selection_revision = std::numeric_limits<quint64>::max();
     quint64 selection_geometry_revision = std::numeric_limits<quint64>::max();
 };
+
+void update_page_backgrounds(PageBackgroundGroupNode* group, int page_count, int first_page,
+                             int page_end, const std::function<QRectF(int)>& page_rect,
+                             const QColor& border_color, const QColor& page_color) {
+    first_page = std::clamp(first_page, 0, page_count);
+    page_end = std::clamp(page_end, first_page, page_count);
+
+    const QList<int> existing_pages = group->pages.keys();
+    for (const int page_index : existing_pages) {
+        if (page_index >= first_page && page_index < page_end) {
+            continue;
+        }
+        PageBackgroundNode* page_node = group->pages.take(page_index);
+        group->removeChildNode(page_node);
+        delete page_node;
+    }
+
+    for (int page_index = first_page; page_index < page_end; ++page_index) {
+        PageBackgroundNode* page_node = group->pages.value(page_index, nullptr);
+        if (page_node == nullptr) {
+            page_node = new PageBackgroundNode();
+            group->pages.insert(page_index, page_node);
+            group->appendChildNode(page_node);
+        }
+        const QRectF page = page_rect(page_index);
+        page_node->border->setRect(page);
+        page_node->border->setColor(border_color);
+        page_node->page->setRect(page.adjusted(1.0, 1.0, -1.0, -1.0));
+        page_node->page->setColor(page_color);
+    }
+}
 
 struct GlyphRectangles {
     QRectF target;
@@ -122,8 +203,22 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
     const qreal image_to_logical_scale = logical_scale / raster_pixels_per_point;
 
     if (create_textures) {
+        QVector<QSGTexture*> previous_textures = std::move(group->textures);
+        const QVariantList previous_images = std::move(group->images);
         group->textures.reserve(image_values.size());
-        for (const QVariant& value : image_values) {
+        group->images.reserve(image_values.size());
+        for (qsizetype index = 0; index < image_values.size(); ++index) {
+            const QVariant& value = image_values.at(index);
+            if (index < previous_images.size() &&
+                index < static_cast<qsizetype>(previous_textures.size()) &&
+                previous_images.at(index) == value &&
+                previous_textures[static_cast<int>(index)] != nullptr) {
+                const int texture_index = static_cast<int>(index);
+                group->textures.push_back(previous_textures[texture_index]);
+                previous_textures[texture_index] = nullptr;
+                group->images.push_back(value);
+                continue;
+            }
             const QVariantMap image = value.toMap();
             const int width = image.value(QStringLiteral("width")).toInt();
             const int height = image.value(QStringLiteral("height")).toInt();
@@ -133,6 +228,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
             if (width <= 0 || height <= 0 || expected_size != static_cast<quint64>(pixels.size()) ||
                 width > std::numeric_limits<int>::max() / 4) {
                 group->textures.push_back(nullptr);
+                group->images.push_back(value);
                 continue;
             }
             const QImage image_data(reinterpret_cast<const uchar*>(pixels.constData()), width,
@@ -141,7 +237,9 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
             QSGTexture* texture =
                 window->createTextureFromImage(image_data.copy(), QQuickWindow::TextureCanUseAtlas);
             group->textures.push_back(texture);
+            group->images.push_back(value);
         }
+        qDeleteAll(previous_textures);
     }
 
     for (const QVariant& value : placement_values) {
@@ -227,15 +325,21 @@ void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVari
         }
 
         const bool frame_changed = page_node->frame != frame_identity;
+        const bool missing_texture = has_retryable_missing_texture(page_node);
         if (frame_changed) {
-            page_node->clearGlyphResources();
+            const QVariantList next_images = frame.value(QStringLiteral("images")).toList();
+            if (next_images.isEmpty() && !page_node->images.isEmpty()) {
+                page_node->clearGlyphResources();
+            }
             page_node->frame = frame_identity;
-        } else if (frames_changed && !geometry_changed) {
+        } else if (frames_changed && !geometry_changed && !missing_texture) {
             continue;
         }
+        const bool images_changed =
+            page_node->images != frame.value(QStringLiteral("images")).toList();
         page_node->clearGlyphNodes();
         build_glyph_frame(page_node, window, frame, page_rect, document_to_content, logical_scale,
-                          frame_changed);
+                          images_changed || missing_texture);
     }
 
     const QList<int> existing_pages = group->pages.keys();
@@ -260,41 +364,39 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     }
     const int page_count = static_cast<int>(page_count_size);
     if (root == nullptr || root->page_count != page_count) {
+        PageBackgroundGroupNode* page_background_group =
+            root != nullptr ? root->page_background_group : nullptr;
         GlyphGroupNode* glyph_group = root != nullptr ? root->glyph_group : nullptr;
         SelectionGroupNode* selection_group = root != nullptr ? root->selection_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
+            root->removeChildNode(page_background_group);
             root->removeChildNode(glyph_group);
             root->removeChildNode(selection_group);
             root->removeChildNode(caret_node);
         }
         delete root;
         root = new CanvasRootNode();
-        for (int index = 0; index < page_count; ++index) {
-            root->appendChildNode(new QSGSimpleRectNode());
-            root->appendChildNode(new QSGSimpleRectNode());
-        }
+        root->page_background_group = page_background_group != nullptr
+                                          ? page_background_group
+                                          : new PageBackgroundGroupNode();
         root->selection_group =
             selection_group != nullptr ? selection_group : new SelectionGroupNode();
         root->glyph_group = glyph_group != nullptr ? glyph_group : new GlyphGroupNode();
         root->caret_node = caret_node != nullptr ? caret_node : new QSGSimpleRectNode();
+        root->appendChildNode(root->page_background_group);
         root->appendChildNode(root->selection_group);
         root->appendChildNode(root->glyph_group);
         root->appendChildNode(root->caret_node);
         root->page_count = page_count;
     }
 
-    auto* node = static_cast<QSGSimpleRectNode*>(root->firstChild());
-    for (int index = 0; index < page_count; ++index) {
-        const QRectF page = pageRect(index);
-        node->setRect(page);
-        node->setColor(m_page_border_color.isValid() ? m_page_border_color
-                                                     : QColor(Qt::transparent));
-        node = static_cast<QSGSimpleRectNode*>(node->nextSibling());
-        node->setRect(page.adjusted(1.0, 1.0, -1.0, -1.0));
-        node->setColor(m_page_color.isValid() ? m_page_color : QColor(Qt::transparent));
-        node = static_cast<QSGSimpleRectNode*>(node->nextSibling());
-    }
+    update_page_backgrounds(
+        root->page_background_group, page_count, m_first_visible_page,
+        m_page_end_visible < 0 ? page_count : m_page_end_visible,
+        [this](int page_index) { return pageRect(page_index); },
+        m_page_border_color.isValid() ? m_page_border_color : QColor(Qt::transparent),
+        m_page_color.isValid() ? m_page_color : QColor(Qt::transparent));
     if (root->selection_revision != m_selection_revision ||
         root->selection_geometry_revision != m_glyph_geometry_revision) {
         root->selection_group->clearRectangles();
@@ -326,8 +428,9 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         }
     }
     auto* glyph_group = root->glyph_group;
+    const bool missing_glyph_texture = has_retryable_missing_texture(glyph_group);
     if (root->glyph_revision != m_glyph_frame_revision ||
-        root->glyph_geometry_revision != m_glyph_geometry_revision) {
+        root->glyph_geometry_revision != m_glyph_geometry_revision || missing_glyph_texture) {
         const bool glyph_frames_changed = root->glyph_revision != m_glyph_frame_revision;
         build_glyph_frames(
             glyph_group, window(), m_glyph_frames,
@@ -340,7 +443,7 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->glyph_revision = m_glyph_frame_revision;
         root->glyph_geometry_revision = m_glyph_geometry_revision;
     }
-    node = root->caret_node;
+    auto* node = root->caret_node;
     if (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty()) {
         node->setRect(caretRect());
         node->setColor(m_caret_color.isValid() ? m_caret_color : QColor(Qt::transparent));

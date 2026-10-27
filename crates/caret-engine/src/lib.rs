@@ -16,8 +16,9 @@ pub use layout::{
     LaidOutParagraph, PageCaretGeometry, PageHit, PageLayoutSnapshot, PageSelectionRect,
 };
 pub use layout_view::{
-    DocumentLayoutView, DocumentPositionView, LayoutLineView, PageCaretView, PageFragmentView,
-    PageHitView, PageLayoutView, PageMarginsView, ParagraphLayoutView, StoryView,
+    DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, LayoutLineView,
+    PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
+    ParagraphLayoutView, StoryView,
 };
 pub use page_glyphs::{
     PageGlyph, PageGlyphError, PageGlyphImage, PageGlyphPlacement, PageGlyphRasterizer,

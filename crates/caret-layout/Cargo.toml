@@ -19,8 +19,14 @@ serde_json.workspace = true
 unicode-segmentation.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 linebender_resource_handle.workspace = true
 parley_engine.workspace = true
+
+[[bench]]
+name = "layout_criterion"
+path = "../../tests/performance/rust/cpu/layout_criterion.rs"
+harness = false
 
 [lints]
 workspace = true
