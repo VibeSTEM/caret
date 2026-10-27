@@ -427,6 +427,20 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QVERIFY2(drag_text.value(QStringLiteral("valid")).toBool(),
              qPrintable(drag_text.value(QStringLiteral("error")).toString()));
     QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("8"));
+    QTest::keyClick(&window, Qt::Key_Left, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 4,
+        3000);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 3,
+        3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
+    QTest::keyClick(&window, Qt::Key_Right, Qt::ShiftModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4,
+        3000);
+    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->selectionRects().isEmpty(), 3000);
+
     const QVariantMap hit_map = layout_view_model->dragHitMap(0);
     QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
              qPrintable(hit_map.value(QStringLiteral("error")).toString()));
@@ -509,6 +523,26 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QVERIFY(canvas->selectionPreviewRects().isEmpty());
     QCOMPARE(scroller->property("contentY").toReal(), drag_scroll_y);
     QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("8"));
+    QCOMPARE(
+        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 0);
+    QCOMPARE(
+        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4);
+
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
+    QMouseEvent reverse_drag_move(QEvent::MouseMove, drag_preview_start_window,
+                                  drag_preview_start_window,
+                                  window.mapToGlobal(drag_preview_start_window.toPoint()),
+                                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &reverse_drag_move);
+    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier,
+                        drag_preview_start_window.toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(
+        layout_view_model->inputMethodContext().value(QStringLiteral("anchorPosition")).toInt(), 4,
+        3000);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 0,
+        3000);
 
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("\nabc"));

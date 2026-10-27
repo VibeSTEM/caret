@@ -507,11 +507,124 @@ fn enter_rejects_cross_title_body_selection_atomically() {
     };
     assert!(session.run(Command::SetSelection(Some(selection))).is_ok());
     let before = session.document.clone();
+    let before_selection = session.selection.clone();
+    for command in [
+        Command::SplitParagraph,
+        Command::Delete(Direction::Backward),
+        Command::InsertText("replacement".to_owned()),
+    ] {
+        assert_eq!(
+            session.run(command),
+            Err(EditError::CrossParagraphSelection)
+        );
+        assert_eq!(session.document, before);
+        assert_eq!(session.selection, before_selection);
+        assert_eq!(session.document_generation(), 0);
+    }
+}
+
+#[test]
+fn cross_environment_selection_rejects_delete_and_replacement_atomically() -> Result<(), EditError>
+{
+    let paragraph = |text: &str| Paragraph {
+        id: NodeId::generate(),
+        language: None,
+        layout: None,
+        inlines: vec![run(text)],
+        mark_style: Default::default(),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    let showcase = |paragraph: Paragraph| {
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Showcase,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph)],
+            extra: Default::default(),
+        })
+    };
+    let first = paragraph("first");
+    let second = paragraph("second");
+    let first_id = first.id.clone();
+    let second_id = second.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![showcase(first), showcase(second)];
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id,
+            offset: 1,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: second_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+    })))?;
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
+
+    for command in [
+        Command::Delete(Direction::Backward),
+        Command::InsertText("replacement".to_owned()),
+    ] {
+        assert_eq!(
+            session.run(command),
+            Err(EditError::CrossParagraphSelection)
+        );
+        assert_eq!(session.document(), &before_document);
+        assert_eq!(session.selection(), &before_selection);
+        assert_eq!(session.document_generation(), 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn paragraph_range_merge_rejects_unknown_fields_without_mutation() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Paragraph(first) = &mut document.body[0] else {
+        unreachable!();
+    };
+    first.inlines = vec![run("left")];
+    first
+        .extra
+        .insert("futureParagraphField".to_owned(), serde_json::json!(true));
+    let first_id = first.id.clone();
+    let mut second = Paragraph::empty(NodeId::generate());
+    second.inlines = vec![run("right")];
+    let second_id = second.id.clone();
+    document.body.push(Block::Paragraph(second));
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id,
+            offset: 2,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: second_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+    })))?;
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
     assert_eq!(
-        session.run(Command::SplitParagraph),
-        Err(EditError::CrossParagraphSelection)
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::UnsupportedOpaqueContent)
     );
-    assert_eq!(session.document, before);
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.selection(), &before_selection);
+    assert_eq!(session.document_generation(), 0);
+    Ok(())
 }
 
 #[test]
