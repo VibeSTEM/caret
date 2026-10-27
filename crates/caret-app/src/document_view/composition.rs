@@ -38,7 +38,7 @@ impl DocumentViewRuntime {
         let previous_preview_page_start = previous_layout.as_ref().and_then(|previous| {
             let preview = self.composition_snapshot.as_ref()?;
             let paragraph_id = reusable_paragraph_id.as_ref()?;
-            super::first_changed_page_index(previous, preview, paragraph_id)
+            super::layout::first_changed_page_index(previous, preview, paragraph_id)
         });
         let mut committed_delta = None;
 
@@ -73,12 +73,14 @@ impl DocumentViewRuntime {
                 .last_snapshot
                 .as_ref()
                 .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
-            let page_start_index = super::first_changed_page_index(previous, updated, paragraph_id)
-                .map(|page_start_index| {
-                    previous_preview_page_start.map_or(page_start_index, |preview_start| {
-                        page_start_index.min(preview_start)
-                    })
-                });
+            let page_start_index =
+                super::layout::first_changed_page_index(previous, updated, paragraph_id).map(
+                    |page_start_index| {
+                        previous_preview_page_start.map_or(page_start_index, |preview_start| {
+                            page_start_index.min(preview_start)
+                        })
+                    },
+                );
             if let Some(page_start_index) = page_start_index {
                 committed_delta = Some((
                     paragraph_id.clone(),

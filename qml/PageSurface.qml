@@ -236,6 +236,7 @@ Item {
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
             caretGeometry: LayoutViewModel.caretGeometry
+            caretPreviewGeometry: pointerHandler.selectionDragActive ? pointerHandler.dragFocusCaretGeometry : ({})
             selectionRects: pointerHandler.selectionDragActive ? [] : LayoutViewModel.selectionRects
             selectionColor: Theme.colorSelected
             inputMethodContext: LayoutViewModel.inputMethodContext

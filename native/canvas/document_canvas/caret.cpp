@@ -43,10 +43,51 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
         m_caret_geometry.clear();
         refreshCaretBlink();
         emit caretGeometryChanged();
+        return;
+    }
+
+    QVariantMap normalized_geometry;
+    if (!normalizeCaretGeometry(geometry, normalized_geometry)) {
+        return;
+    }
+    if (m_caret_geometry == normalized_geometry) {
+        return;
+    }
+    m_caret_geometry = std::move(normalized_geometry);
+    refreshCaretBlink();
+    emit caretGeometryChanged();
+    if (QGuiApplication::inputMethod() != nullptr) {
+        QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
+    }
+}
+
+QVariantMap DocumentCanvas::caretPreviewGeometry() const { return m_caret_preview_geometry; }
+
+void DocumentCanvas::setCaretPreviewGeometry(const QVariantMap& geometry) {
+    if (geometry.isEmpty()) {
+        if (m_caret_preview_geometry.isEmpty()) {
+            return;
+        }
+        m_caret_preview_geometry.clear();
+        emit caretPreviewGeometryChanged();
         update();
         return;
     }
 
+    QVariantMap normalized_geometry;
+    if (!normalizeCaretGeometry(geometry, normalized_geometry)) {
+        return;
+    }
+    if (m_caret_preview_geometry == normalized_geometry) {
+        return;
+    }
+    m_caret_preview_geometry = std::move(normalized_geometry);
+    emit caretPreviewGeometryChanged();
+    update();
+}
+
+bool DocumentCanvas::normalizeCaretGeometry(const QVariantMap& geometry,
+                                            QVariantMap& normalized_geometry) const {
     bool page_valid = false;
     bool x_valid = false;
     bool y0_valid = false;
@@ -59,27 +100,18 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
     if (!page_valid || !std::isfinite(page_index_number) || page_index_number < 0.0 ||
         page_index_number > std::numeric_limits<int>::max() ||
         std::floor(page_index_number) != page_index_number) {
-        return;
+        return false;
     }
     const int page_index = static_cast<int>(page_index_number);
     const QSizeF page_size = pageSizePt(page_index);
-    if (!page_valid || !x_valid || !y0_valid || !y1_valid || page_size.isEmpty() ||
-        !std::isfinite(x_pt) || !std::isfinite(y0_pt) || !std::isfinite(y1_pt) || x_pt < 0.0 ||
-        x_pt > page_size.width() || y0_pt < 0.0 || y1_pt <= y0_pt) {
-        return;
+    if (!x_valid || !y0_valid || !y1_valid || page_size.isEmpty() || !std::isfinite(x_pt) ||
+        !std::isfinite(y0_pt) || !std::isfinite(y1_pt) || x_pt < 0.0 || x_pt > page_size.width() ||
+        y0_pt < 0.0 || y1_pt <= y0_pt) {
+        return false;
     }
-    QVariantMap normalized_geometry = geometry;
+    normalized_geometry = geometry;
     normalized_geometry.insert(QStringLiteral("pageIndex"), page_index);
-    if (m_caret_geometry == normalized_geometry) {
-        return;
-    }
-    m_caret_geometry = std::move(normalized_geometry);
-    refreshCaretBlink();
-    emit caretGeometryChanged();
-    update();
-    if (QGuiApplication::inputMethod() != nullptr) {
-        QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
-    }
+    return true;
 }
 
 bool DocumentCanvas::caretBlinkEnabled() const { return m_caret_blink_enabled; }
@@ -138,11 +170,11 @@ void DocumentCanvas::toggleCaretVisibility() {
     update();
 }
 
-QRectF DocumentCanvas::caretRect() const {
-    const int page_index = m_caret_geometry.value(QStringLiteral("pageIndex")).toInt();
-    const qreal x_pt = m_caret_geometry.value(QStringLiteral("xPt")).toReal();
-    const qreal y0_pt = m_caret_geometry.value(QStringLiteral("y0Pt")).toReal();
-    const qreal y1_pt = m_caret_geometry.value(QStringLiteral("y1Pt")).toReal();
+QRectF DocumentCanvas::caretRect(const QVariantMap& geometry) const {
+    const int page_index = geometry.value(QStringLiteral("pageIndex")).toInt();
+    const qreal x_pt = geometry.value(QStringLiteral("xPt")).toReal();
+    const qreal y0_pt = geometry.value(QStringLiteral("y0Pt")).toReal();
+    const qreal y1_pt = geometry.value(QStringLiteral("y1Pt")).toReal();
     const QPointF top_left = documentToContent(page_index, QPointF(x_pt, y0_pt));
     const qreal caret_width_px =
         document_units::centipixels_to_logical_pixels(m_caret_width_centipixels);

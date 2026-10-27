@@ -14,13 +14,26 @@ Item {
     property var dragMaps: ({})
     property var dragAnchor: null
     property var dragFocus: null
+    property var dragSnapshot: null
+    readonly property var dragFocusCaretGeometry: dragFocus === null ? ({}) : ({
+            pageIndex: dragFocus.pageIndex,
+            xPt: dragFocus.xPt,
+            y0Pt: dragFocus.y0Pt,
+            y1Pt: dragFocus.y1Pt
+        })
     property int dragAnchorPage: -1
     property bool selectionDragActive: false
-    property string dragDocumentGeneration: ""
-    property string dragFontGeneration: ""
-    property string dragLayoutRevision: ""
 
     signal documentPositionHit(var result)
+
+    Connections {
+        target: LayoutViewModel
+
+        function onLayoutChanged() {
+            if (inputHandler.selectionDragActive && !inputHandler.dragSnapshotIsCurrent())
+                inputHandler.resetDragPreview();
+        }
+    }
 
     TapHandler {
         onTapped: function (eventPoint) {
@@ -43,35 +56,28 @@ Item {
         objectName: "documentSelectionDrag"
         target: null
         acceptedButtons: Qt.LeftButton
-        property point dragStartPosition: Qt.point(0, 0)
         grabPermissions: PointerHandler.CanTakeOverFromItems | PointerHandler.CanTakeOverFromHandlersOfSameType
 
         onActiveChanged: {
             if (active) {
+                inputHandler.canvas.forceActiveFocus(Qt.MouseFocusReason);
                 inputHandler.selectionDragActive = true;
-                inputHandler.dragMaps = ({});
-                inputHandler.dragDocumentGeneration = LayoutViewModel.documentGeneration;
-                inputHandler.dragFontGeneration = LayoutViewModel.fontGeneration;
-                inputHandler.dragLayoutRevision = String(LayoutViewModel.layoutRevision);
-                inputHandler.dragAnchor = null;
-                inputHandler.dragFocus = null;
-                inputHandler.dragAnchorPage = -1;
-                dragStartPosition = centroid.pressPosition;
-                inputHandler.updateDragPreview(dragStartPosition, true);
+                inputHandler.resetDragPreview();
+                inputHandler.dragSnapshot = ({
+                        documentGeneration: LayoutViewModel.documentGeneration,
+                        fontGeneration: LayoutViewModel.fontGeneration,
+                        layoutRevision: String(LayoutViewModel.layoutRevision)
+                    });
+                inputHandler.updateDragPreview(centroid.pressPosition, true);
                 inputHandler.updateDragPreview(centroid.position, false);
             } else {
-                const hitMapIsCurrent = inputHandler.dragDocumentGeneration === LayoutViewModel.documentGeneration && inputHandler.dragFontGeneration === LayoutViewModel.fontGeneration && inputHandler.dragLayoutRevision === String(LayoutViewModel.layoutRevision);
-                if (hitMapIsCurrent && inputHandler.dragAnchor !== null && inputHandler.dragFocus !== null) {
+                if (inputHandler.dragSnapshotIsCurrent() && inputHandler.dragAnchor !== null && inputHandler.dragFocus !== null) {
                     const result = LayoutViewModel.setSelection(inputHandler.dragAnchor, inputHandler.dragFocus);
                     if (!result.valid)
                         console.warn("Document selection failed:", result.error);
                 }
                 inputHandler.selectionDragActive = false;
-                inputHandler.canvas.selectionPreviewRects = [];
-                inputHandler.dragMaps = ({});
-                inputHandler.dragAnchor = null;
-                inputHandler.dragFocus = null;
-                inputHandler.dragAnchorPage = -1;
+                inputHandler.resetDragPreview();
             }
         }
 
@@ -95,13 +101,22 @@ Item {
         return true;
     }
 
+    function dragSnapshotIsCurrent() {
+        return dragSnapshot !== null && dragSnapshot.documentGeneration === LayoutViewModel.documentGeneration && dragSnapshot.fontGeneration === LayoutViewModel.fontGeneration && dragSnapshot.layoutRevision === String(LayoutViewModel.layoutRevision);
+    }
+
+    function resetDragPreview() {
+        dragSnapshot = null;
+        dragMaps = ({});
+        dragAnchor = null;
+        dragFocus = null;
+        dragAnchorPage = -1;
+        canvas.selectionPreviewRects = [];
+    }
+
     function updateDragPreview(point, start) {
-        if (dragDocumentGeneration !== LayoutViewModel.documentGeneration || dragFontGeneration !== LayoutViewModel.fontGeneration || dragLayoutRevision !== String(LayoutViewModel.layoutRevision)) {
-            dragMaps = ({});
-            dragAnchor = null;
-            dragFocus = null;
-            dragAnchorPage = -1;
-            canvas.selectionPreviewRects = [];
+        if (!dragSnapshotIsCurrent()) {
+            resetDragPreview();
             return;
         }
 

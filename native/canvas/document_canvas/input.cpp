@@ -74,7 +74,7 @@ QVariant DocumentCanvas::inputMethodQuery(Qt::InputMethodQuery query) const {
     case Qt::ImEnabled:
         return true;
     case Qt::ImCursorRectangle:
-        return caretRect();
+        return caretRect(m_caret_geometry);
     case Qt::ImSurroundingText:
         return m_input_method_context.value(QStringLiteral("surroundingText"));
     case Qt::ImCursorPosition:

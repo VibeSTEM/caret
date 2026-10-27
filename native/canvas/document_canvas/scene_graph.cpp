@@ -444,8 +444,12 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->glyph_geometry_revision = m_glyph_geometry_revision;
     }
     auto* node = root->caret_node;
-    if (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty()) {
-        node->setRect(caretRect());
+    const bool preview_caret_visible = hasActiveFocus() && !m_caret_preview_geometry.isEmpty();
+    if (preview_caret_visible ||
+        (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty())) {
+        const QVariantMap& geometry =
+            preview_caret_visible ? m_caret_preview_geometry : m_caret_geometry;
+        node->setRect(caretRect(geometry));
         node->setColor(m_caret_color.isValid() ? m_caret_color : QColor(Qt::transparent));
     } else {
         node->setRect({});

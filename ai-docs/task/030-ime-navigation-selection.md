@@ -20,7 +20,7 @@
 - 接入 Qt `QInputMethodEvent` 的 preedit、commit 和 cancel；preedit 以临时 Session/布局快照显示，不写入正文或增加文档 generation，commit 通过 Rust Session 恰好提交一次。预编辑文字和正文使用同一 Parley 塑形、换行及字体回退，并返回预编辑范围的下划线几何。提供 `inputMethodQuery` 所需的光标矩形、surrounding text、cursor/anchor 信息，使候选窗定位和上下文查询使用 Rust 当前快照。
 - 按 [Qt 输入法事件顺序](https://doc.qt.io/qt-6/qinputmethodevent.html) 处理 `replacementStart`/`replacementLength`：替换范围相对预编辑起点，预编辑区域不计入被替换正文；空 commit 仍可携带删除范围。先将 UTF-16 相对范围转换为 Rust UTF-8 字节位置，再按 022 的扩展字素边界规则吸附，不允许把组合字符或 emoji 拆开。范围更新与 commit 为原子事务，失败保留当前正文和组字状态。
 - 接入左右、上下、Home/End 等正文 caret 导航。左右按 Parley 视觉候选移动并保留逻辑 affinity；上下按目标视觉行保留期望 x；跨双向文本、软换行、段落边界和扩展字素簇的规则需有测试。
-- 接入 Shift+方向键等键盘选区操作，以及鼠标拖选。拖动预览在 Qt 本地按当前布局更新，释放时将最终锚点/焦点位置一次提交 Rust；Rust Session 保存已提交的逻辑选区。
+- 接入 Shift+方向键等键盘选区操作，以及鼠标拖选。拖动预览在 Qt 本地按当前布局更新，活动端光标随 focus 命中位置移动；正向拖选显示在右/下端，反向拖选显示在左/上端。释放时将最终锚点/焦点位置一次提交 Rust；Rust Session 保存已提交的逻辑选区。
 - 绘制跨行、跨页选区背景与选区文字颜色，复用 Rust 布局提供的几何；焦点、代际和异步结果规则遵守 027。
 - 接入复制与粘贴：Rust 按文档顺序提取纯文本选区，Qt 负责系统剪贴板读写；粘贴仍通过 Rust 的插入/替换事务提交，不在 Qt 保存第二份正文。
 - 选区状态下的输入、Backspace、Enter 与软换行继续使用 Rust 命令事务。同一直接块容器内的 Body 段落选区应支持原子删除/替换和段落合并；跨不同 EnvironmentNode 容器、跨 EnvironmentTitle 与正文的选区按 020 规则拒绝且保持原状。未知字段或不兼容段落属性无法安全合并时拒绝整个事务，不丢失锚点、焦点或 preedit。
@@ -49,7 +49,7 @@
 - [x] 输入法查询返回当前光标矩形和正确的 surrounding text/cursor/anchor；replacement 范围经 UTF-16/UTF-8 转换并按字素边界安全应用。
 - [x] 左右移动遵循视觉 bidi caret；上下移动保持目标 x；所有导航停在扩展字素簇边界。
 - [x] 左右与上下方向键在段首/段尾可以进入相邻段落；有选区时方向键按移动方向折叠或扩展。
-- [x] Shift+方向键和鼠标拖动可生成方向稳定的 Rust 选区；拖动过程不对每个鼠标事件做 Rust 往返，释放时一次提交。
+- [x] Shift+方向键和鼠标拖动可生成方向稳定的 Rust 选区；拖动过程不对每个鼠标事件做 Rust 往返，活动端光标实时跟随 focus，释放时一次提交并与预览位置一致。
 - [x] 选中后点击页面正文或画布空白处会取消选区；Ctrl/Command+C 按文档顺序复制文本，Ctrl/Command+V 通过 Rust 事务替换选区。
 - [x] 选区高亮覆盖多行与多页并与文字绘制对齐；颜色来自 QML Theme token，Qt 不重建选区规则。
 - [x] 输入、删除、Enter 和软换行对选区执行一次原子替换；编辑后位置映射正确，失败时正文与选区保持原状。
@@ -81,6 +81,9 @@
 | 2026-10-27 | subagent 只读 final review | 审查全部本轮 staged/unstaged 改动、030 验收、分层与 IME/选区事务 | 无 P1/P2；一条 P3 文档表述已修正为“同页复用 hit-map，未缓存页按需获取，释放时提交一次”。评审未运行测试；真实系统 IME 及三平台 CI 留待设备/PR 验证 |
 | 2026-10-27 | PR #34 GitHub Actions（Ubuntu） | 受影响的 Rust、C++、QML 构建/测试及格式、Clippy、C++ lint、QML lint、CMake、分层与依赖检查通过 | 全部必需检查通过；macOS/Windows 全量测试由 nightly 执行，不属于 PR 常规 CI |
 | 2026-10-27 | subagent 增量 final review | 复核 `3def337`、`3a6fd02` 的 C++ lint 修复与跨平台 include 清理 | 未发现 actionable 问题；只读审查，未运行测试 |
+| 2026-10-27 | `cargo test --locked -p caret-app`；`cargo test --locked -p caret-tests --test native`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings`；`cargo lint qmllint --check`；`cargo lint clang-tidy --changed --check`；`cargo lint includes --changed --check`；`cargo lint cppcheck --changed --check`；`cargo format --changed --check`；`cargo machete`；`git diff --check` | 拖选活动端光标实时预览；布局变化使旧预览失效；清除重复扫描、不可达分支和冗余刷新；检查 Rust 依赖 | caret-app 94/94、native CTest 4/4、Clippy、QML/C++ lint、格式和 diff 检查通过；cargo-machete 未发现未使用 workspace 依赖。`cargo lint --changed` 聚合包装器无法绑定 TCP listener，故逐项运行相关检查。真实 IME 候选窗未目测 |
+| 2026-10-27 | `cargo test --locked -p caret-app`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings`；`cargo test --locked -p caret-tests --test native`；`cargo format --changed --check`；`git diff --check` | 拆分 document view 运行时职责；拖选期间布局更新即时清除旧预览 | 原 542 行 `mod.rs` 拆为 61 行模块入口及快照、编辑、命中测试、布局缓存四个文件；Rust 94/94、Clippy 通过，native CTest 4/4，新增布局变化时清除命中缓存、高亮和 caret 预览的集成断言通过 |
+| 2026-10-27 | subagent 独立 final review | 检查完整架构清理、模块拆分等价性、拖选失效和 IME 边界、死代码移除依据及规范更新 | 未发现 P1/P2/P3；23 个拆分前后函数体一致，未发现可安全删除的独立生产文件或公开 API |
 
 ## 风险与回退
 
@@ -100,6 +103,9 @@
 - 2026-10-27：第二轮独立评审发现，IME replacement 相对旧选区焦点计算，以及预编辑布局失败后留下 composition 状态的问题。提交事务现在先移除原选区，再按其折叠位置应用 Qt replacement range；预编辑先在候选 Session 上更新并完成布局预览，成功后才安装。另将接近 800 行的文档视图测试按 IME、键盘、导航和布局拆为独立文件；中文同行下划线加入高度不变回归测试。真实系统输入法画面仍需用户侧复验。
 - 2026-10-27：Final review 继续补齐 Qt 同事件含 commit 与新 preedit 时的失效边界：成功 commit 会立即清除旧显示状态；若新 preedit 无效，发布已提交正文的完整快照，避免 Qt 留在旧预览。无变化的 IME 事件走交互快照安装器。拖选命中缓存新增 `layoutRevision` 校验，组字、取消或布局变化时放弃过期预览；跨页拖选集成测试同步提供该 revision。
 - 2026-10-27：完成选区验收补测：Rust 逐一验证跨标题/正文、跨 Showcase 容器、未知段落字段以及不兼容段落合并均原子拒绝；Qt 真实窗口验证 Shift 扩展/折叠选区及正向、反向鼠标拖选的 anchor/focus 方向。布局调用目前在 Qt 所属线程同步执行，因此不存在后台旧 layout/preedit 回调覆盖新 Session 的路径；交互快照严格匹配 document/font generation，composition 只重塑目标段落并复用其他段落，同页拖动复用 hit-map，进入未缓存页时按需获取 hit-map，释放时只提交一次逻辑选区，导航复用当前布局快照。该同步调用约束是当前实现保证，不代表未来异步布局接口已有 session-token 防护。
+- 2026-10-27：拖动选区时，画布用 Rust hit-map 的活动端几何实时绘制 caret，方向反转后随 focus 移动；该预览不改 Rust 选区，也不改变 Qt 的 `ImCursorRectangle`，释放时再提交选区并清除预览。正向/反向拖选、预览清理和 IME 查询稳定性由真实 QML 窗口集成测试覆盖；独立评审未发现阻塞问题，未直接验证逐帧光栅输出或真实输入法候选窗。
+- 2026-10-27：本轮结构清理将 QML 拖选代际状态合并为一个快照，统一预览重置；布局变化在指针静止时也会使拖选预览失效。Rust 命中图在一次段落查找中同时取得段落顺序，移除重复边界扫描、无效去重和由切片范围已保证不可能触发的保护分支。Qt caret 几何校验改用引用输出，并移除闪烁刷新已触发的重复绘制请求。`cargo machete` 未发现未使用 workspace 依赖；本轮没有证据支持删除独立源文件或资源。
+- 2026-10-27：将 542 行 `document_view/mod.rs` 按职责拆成快照序列化、编辑命令、页面命中与布局快照管理模块，运行时状态和构造入口仍集中在模块根；拆分文件首行按仓库约定说明职责。新增真实 Qt/QML 集成断言：拖选保持静止期间布局代际变化时，焦点、选区高亮和 caret 几何立即清空，避免显示过期预览。
 
 ## 完成摘要
 
