@@ -6,6 +6,7 @@
 #include "preferences_view_model.hpp"
 #include "settings_dialog_controller.hpp"
 #include "theme_view_model.hpp"
+#include <cstddef>
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "settings_runtime_bridge.hpp"
@@ -15,19 +16,25 @@
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
+#include <QHash>
+#include <QIODevice>
+#include <QImage>
+#include <QMetaObject>
+#include <QObject>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QString>
 #include <QTemporaryDir>
 #include <QVariant>
-#include <QVariantMap>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/QTest>
-#include <algorithm>
-#include <string_view>
+#include <QtTest/qtest.h>
+#include <QtTest/qtestcase.h>
+#include <qcontainerfwd.h>
 #include <utility>
 
 Q_IMPORT_QML_PLUGIN(Caret_AdaptersPlugin)

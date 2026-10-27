@@ -60,7 +60,7 @@ bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page
     }
     const QJsonArray rectangles = value.toArray();
     result.reserve(rectangles.size());
-    for (const QJsonValue& rectangle_value : rectangles) {
+    for (const QJsonValue rectangle_value : rectangles) {
         if (!rectangle_value.isObject()) {
             error = item_error;
             return false;

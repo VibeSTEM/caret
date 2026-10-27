@@ -1,6 +1,7 @@
 // 把画布命中与拖选命令适配到 Rust Session。
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
 #include "layout_view_model_support.hpp"
 #endif
 #include <QByteArray>
@@ -10,7 +11,7 @@
 #include <QMap>
 #include <QString>
 #include <QVariant>
-#include <QVariantMap>
+#include <qcontainerfwd.h>
 
 namespace caret {
 #ifdef CARET_ENABLE_APP

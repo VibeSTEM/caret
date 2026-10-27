@@ -7,12 +7,14 @@
 #include <QKeyEvent>
 #include <QQuickItem>
 #include <QString>
+#include <QVariant>
 #include <Qt>
 #include <QtCore/qobjectdefs.h>
 #include <QtCore/qtmetamacros.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <qcontainerfwd.h>
 
 namespace caret {
 
@@ -47,11 +49,11 @@ void DocumentCanvas::cancelPreedit() {
 
 void DocumentCanvas::inputMethodEvent(QInputMethodEvent* event) {
     const QString next_preedit = event->preeditString();
-    int next_cursor_position = next_preedit.size();
+    const int maximum_position =
+        static_cast<int>(std::min<qsizetype>(next_preedit.size(), std::numeric_limits<int>::max()));
+    int next_cursor_position = maximum_position;
     for (const QInputMethodEvent::Attribute& attribute : event->attributes()) {
         if (attribute.type == QInputMethodEvent::Cursor) {
-            const int maximum_position = static_cast<int>(
-                std::min<qsizetype>(next_preedit.size(), std::numeric_limits<int>::max()));
             next_cursor_position = std::clamp(attribute.start, 0, maximum_position);
             break;
         }

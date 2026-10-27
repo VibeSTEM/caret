@@ -1,9 +1,12 @@
 // 把视觉方向键导航命令提交给 Rust。
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
 #include "layout_view_model_support.hpp"
 #endif
 #include <QString>
+#include <QVariant>
+#include <qcontainerfwd.h>
 
 namespace caret {
 QVariantMap LayoutViewModel::moveVisualCaret(bool forward, bool extend) {

@@ -12,6 +12,7 @@
 #include <QVariant>
 #include <QVariantMap>
 #include <cstddef>
+#include <qcontainerfwd.h>
 
 namespace caret {
 QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_bytes) {

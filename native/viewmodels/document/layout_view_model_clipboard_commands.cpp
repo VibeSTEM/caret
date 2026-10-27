@@ -1,6 +1,7 @@
 // 负责系统剪贴板读写，并通过 Rust 执行文稿粘贴事务。
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
 #include "layout_view_model_support.hpp"
 #endif
 #include <QByteArray>
@@ -10,7 +11,8 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QString>
-#include <QVariantMap>
+#include <QVariant>
+#include <qcontainerfwd.h>
 
 namespace caret {
 QVariantMap LayoutViewModel::copySelectionToClipboard() {

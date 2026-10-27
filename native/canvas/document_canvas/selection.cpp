@@ -1,8 +1,10 @@
 // 校验并发布 Rust 提供的页面选区几何。
 #include "document_canvas.hpp"
+#include <QString>
 #include <QVariant>
 #include <cmath>
 #include <limits>
+#include <qcontainerfwd.h>
 #include <qtmetamacros.h>
 
 namespace caret {

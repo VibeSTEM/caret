@@ -1,17 +1,12 @@
 // Qt/QML 文档命中、输入法与编辑交互的集成测试。
 #include "document_canvas.hpp"
-#include "document_units.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
-#include "preferences_view_model.hpp"
-#include "settings_dialog_controller.hpp"
 #include "shell_load_test.hpp"
-#include "theme_view_model.hpp"
 #include <cstddef>
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
-#include "settings_runtime_bridge.hpp"
 #endif
 #include <QByteArray>
 #include <QChar>
@@ -52,18 +47,13 @@
 #include <QtCore/qvariant.h>
 #include <QtMath>
 #include <QtQml/qqmlextensionplugin.h>
-#include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/QTest>
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
 #include <algorithm>
-#include <limits>
 #include <qcontainerfwd.h>
-#include <qtestcase.h>
-#include <qtestsupport_core.h>
-#include <qtmetamacros.h>
 #include <string_view>
 #include <utility>
 

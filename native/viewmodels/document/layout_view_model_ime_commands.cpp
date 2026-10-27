@@ -8,8 +8,10 @@
 #include <QCoreApplication>
 #include <QString>
 #include <QThread>
+#include <QVariant>
 #include <algorithm>
 #include <cstddef>
+#include <qcontainerfwd.h>
 #include <string>
 
 namespace caret {
