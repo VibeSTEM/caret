@@ -143,6 +143,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "caret-layout",
+ "criterion",
  "serde",
  "serde_json",
  "unicode-segmentation",
@@ -179,6 +180,7 @@ name = "caret-layout"
 version = "0.1.0"
 dependencies = [
  "caret-doc",
+ "criterion",
  "fontique",
  "icu_locale_core",
  "icu_properties",

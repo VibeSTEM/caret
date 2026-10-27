@@ -211,8 +211,8 @@ jobs:
         shell: bash
         run: cargo sanitize
 
-  cpu-performance:
-    name: CPU performance sample (ubuntu)
+  rust-cpu-performance:
+    name: Rust CPU performance sample (ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -226,7 +226,7 @@ jobs:
 
       - uses: ./.github/actions/caret-cache-restore
 
-      - name: Run CPU performance suite
+      - name: Run Rust CPU performance suite
         shell: bash
         run: |
           set -o pipefail
@@ -235,8 +235,14 @@ jobs:
             printf 'commit=%s\n' "$GITHUB_SHA"
             printf 'runner_os=%s\n' "$RUNNER_OS"
             printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'cpu_model=%s\n' "$(lscpu | awk -F: '/Model name/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+            printf 'rustc=%s\n' "$(rustc --version)"
+            printf 'profile=bench\n'
+            fc-list --version
+            fc-list --format='%{family}\t%{style}\t%{file}\n' | LC_ALL=C sort > target/performance-ci/font-manifest.txt
+            sha256sum target/performance-ci/font-manifest.txt
             printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            cargo performance cpu --samples 31
+            cargo performance rust cpu --samples 31
             cargo build --locked -p caret-dslc
             cargo build --locked --release -p caret-dslc
             cargo hyperfine --runs 30 --warmup 5 \
@@ -245,11 +251,100 @@ jobs:
               'target/release/caret-dslc check tests/fixtures/dsl/artifacts.pa'
           } 2>&1 | tee target/performance-ci/cpu.log
 
-      - name: Upload CPU performance report
+      - name: Upload Rust CPU performance report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: rust-cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/performance-ci/
+          if-no-files-found: warn
+          retention-days: 30
+
+  qt-cpu-performance:
+    name: Qt CPU performance sample (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Run headless Qt CPU performance suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/performance-ci
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'cpu_model=%s\n' "$(lscpu | awk -F: '/Model name/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+            printf 'build_type=Release\n'
+            printf 'font_source=synthetic_rgba8_glyph_images\n'
+            printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            cargo performance qt cpu --samples 31
+          } 2>&1 | tee target/performance-ci/qt-cpu.log
+
+      - name: Upload Qt CPU performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-cpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/performance-ci/
+          if-no-files-found: warn
+          retention-days: 30
+
+  qt-gpu-performance:
+    name: Qt headless GPU performance sample (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+      QT_QPA_PLATFORM: xcb
+      QSG_RHI_BACKEND: opengl
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      - uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+
+      - name: Install virtual X server for headless OpenGL
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: Run headless Qt GPU performance suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/performance-ci
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'cpu_model=%s\n' "$(lscpu | awk -F: '/Model name/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+            printf 'build_type=Release\n'
+            printf 'font_source=synthetic_rgba8_glyph_images\n'
+            printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            xvfb-run -a cargo performance qt gpu --samples 31
+          } 2>&1 | tee target/performance-ci/qt-gpu.log
+
+      - name: Upload Qt GPU performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-gpu-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/performance-ci/
           if-no-files-found: warn
           retention-days: 30

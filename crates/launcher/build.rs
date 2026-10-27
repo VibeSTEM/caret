@@ -40,6 +40,7 @@ const RERUN_ENVS: &[&str] = &[
     "CMAKE_GENERATOR",
     "CMAKE_GENERATOR_PLATFORM",
     "CMAKE_PREFIX_PATH",
+    "CARET_ENABLE_PERFORMANCE",
     "CARET_NATIVE_COVERAGE",
     "CARET_NATIVE_SANITIZER",
     "DEVELOPER_DIR",
@@ -159,6 +160,14 @@ fn orchestrate() -> Result<PathBuf, String> {
         .arg(format!(
             "-DCARET_ENABLE_COVERAGE={}",
             if std::env::var("CARET_NATIVE_COVERAGE").as_deref() == Ok("1") {
+                "ON"
+            } else {
+                "OFF"
+            }
+        ))
+        .arg(format!(
+            "-DCARET_ENABLE_PERFORMANCE={}",
+            if std::env::var("CARET_ENABLE_PERFORMANCE").as_deref() == Ok("1") {
                 "ON"
             } else {
                 "OFF"

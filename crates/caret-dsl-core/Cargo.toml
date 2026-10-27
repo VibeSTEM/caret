@@ -19,7 +19,7 @@ criterion.workspace = true
 
 [[bench]]
 name = "dsl_core_criterion"
-path = "../../tests/performance/cpu/dsl_core_criterion.rs"
+path = "../../tests/performance/rust/cpu/dsl_core_criterion.rs"
 harness = false
 
 [lints]

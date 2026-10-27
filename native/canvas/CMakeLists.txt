@@ -32,3 +32,20 @@ caret_native_defaults(caret_canvas)
 add_library(caret::canvas ALIAS caret_canvas)
 target_include_directories(caret_canvas PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(caret_canvas PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick)
+
+if(BUILD_TESTING AND CARET_ENABLE_PERFORMANCE)
+  add_executable(caret_qt_cpu_benchmark EXCLUDE_FROM_ALL
+                 ../../tests/performance/qt/cpu/software_canvas_benchmark.cpp)
+  target_include_directories(caret_qt_cpu_benchmark
+                             PRIVATE "${CMAKE_SOURCE_DIR}/../tests/performance/qt")
+  target_link_libraries(caret_qt_cpu_benchmark PRIVATE caret_canvas Qt6::Gui Qt6::Quick)
+  caret_native_defaults(caret_qt_cpu_benchmark)
+
+  add_executable(caret_qt_gpu_benchmark EXCLUDE_FROM_ALL
+                 ../../tests/performance/qt/gpu/headless_canvas_benchmark.cpp)
+  target_include_directories(caret_qt_gpu_benchmark
+                             PRIVATE "${CMAKE_SOURCE_DIR}/../tests/performance/qt")
+  target_link_libraries(caret_qt_gpu_benchmark PRIVATE caret_canvas Qt6::Gui Qt6::Quick
+                                                       Qt6::GuiPrivate)
+  caret_native_defaults(caret_qt_gpu_benchmark)
+endif()

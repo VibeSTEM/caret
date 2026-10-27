@@ -17,13 +17,15 @@ tests/
 ├── support/
 ├── fixtures/
 └── performance/
+    ├── rust/cpu/
+    └── qt/{cpu,gpu}/
 ```
 
 - 需要私有项的单元测试留在被测 `.rs` 的 `#[cfg(test)]` 模块。
 - 公共行为放 `tests/rust/`，由所属 crate 的 `[[test]]` 显式注册。
 - `integration/native.rs` 只检查构建树、qmllint 和 CTest 的退出码，不写领域断言。
 - C++ 和 QML 功能测试在 `BUILD_TESTING=ON` 时注册。源文件列表写在 CMake 里，不用宽泛的 `GLOB`。
-- 性能基准不进入默认 CTest，由 `cargo performance` 运行。源码仍参加格式和 lint。
+- 性能基准按 `rust|qt` 与 `cpu|gpu` 分目录；不进入默认 CTest、默认 workspace 测试或 PR/push CI，只由 nightly 手动 suite 执行。Rust 性能范围限 CPU；Qt CPU 与 Qt GPU 分别位于对应目录。源码仍参加格式检查；实际注册的手动基准目标也由 nightly 编译和运行。
 - 夹具放 `tests/fixtures/<module>/`。日志和覆盖率放构建树或 `artifacts/`。
 
 ## 命令
