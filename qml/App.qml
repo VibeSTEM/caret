@@ -23,9 +23,7 @@ Window {
     // Windows 隐藏系统标题但保留原生按钮。Linux 显式保留空标题和系统按钮提示。
     flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint | (Qt.platform.os === "windows" ? Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : Qt.platform.os === "linux" ? Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : 0)
 
-    property string documentName: qsTr("Untitled")
-    property url documentFileUrl: ""
-    property url pendingSaveFileUrl: ""
+    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : " — Saved")
     property url suggestedSaveFileUrl: ""
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
@@ -47,12 +45,9 @@ Window {
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
                 onSettingsRequested: settingsController.open()
+                onOpenRequested: openDialog.open()
                 documentName: window.documentName
-                onSaveRequested: {
-                    if (window.documentFileUrl.toString().length === 0)
-                        window.suggestedSaveFileUrl = DocumentPathAdapter.defaultSaveFileUrl();
-                    saveDialog.open();
-                }
+                onSaveRequested: window.saveDocument()
             }
 
             WindowCommandBar {
@@ -66,6 +61,7 @@ Window {
                 id: pageSurface
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                enabled: !LayoutViewModel.documentOpening
             }
 
             WindowStatusBar {
@@ -112,16 +108,89 @@ Window {
     }
 
     FileDialog {
+        id: openDialog
+        objectName: "openDocumentDialog"
+        title: qsTr("Open document")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [qsTr("Caret documents (*.cdoc)")]
+        acceptLabel: qsTr("Open")
+        onAccepted: {
+            const result = LayoutViewModel.openDocument(DocumentPathAdapter.localFilePath(selectedFile));
+            if (!result.valid)
+                documentOperationError.showError(result.error);
+        }
+    }
+
+    FileDialog {
         id: saveDialog
         objectName: "saveDocumentDialog"
-        title: qsTr("Save document")
+        title: qsTr("Save document as")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("Caret documents (*.cdoc)")]
         defaultSuffix: "cdoc"
-        selectedFile: window.pendingSaveFileUrl.toString().length > 0 ? window.pendingSaveFileUrl : window.suggestedSaveFileUrl
+        selectedFile: window.suggestedSaveFileUrl
         acceptLabel: qsTr("Save")
         onAccepted: {
-            window.pendingSaveFileUrl = selectedFile;
+            const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
+            if (!result.valid && !result.needsSaveAs)
+                documentOperationError.showError(result.error);
         }
+    }
+
+    MessageDialog {
+        id: documentOperationError
+        title: qsTr("Document operation failed")
+        buttons: MessageDialog.Ok
+        property string operationError: ""
+        text: operationError
+
+        function showError(error) {
+            operationError = error || qsTr("An unknown error occurred.");
+            open();
+        }
+    }
+
+    Connections {
+        target: LayoutViewModel
+
+        function onDocumentFileOperationFinished(succeeded, error) {
+            if (!succeeded)
+                documentOperationError.showError(error);
+        }
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Open]
+        enabled: !LayoutViewModel.documentEdited && !LayoutViewModel.documentFileBusy
+        onActivated: openDialog.open()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Save]
+        onActivated: window.saveDocument()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.SaveAs]
+        onActivated: window.requestSaveAs()
+    }
+
+    function saveDocument() {
+        const result = LayoutViewModel.saveDocument("");
+        if (result.needsSaveAs) {
+            requestSaveAs();
+            return;
+        }
+        if (!result.valid)
+            documentOperationError.showError(result.error);
+    }
+
+    function requestSaveAs() {
+        suggestedSaveFileUrl = LayoutViewModel.documentPath.length > 0 ? DocumentPathAdapter.localFileUrl(LayoutViewModel.documentPath) : DocumentPathAdapter.defaultSaveFileUrl();
+        if (suggestedSaveFileUrl.toString().length === 0) {
+            documentOperationError.showError(qsTr("The document folder is unavailable."));
+            return;
+        }
+        saveDialog.open();
     }
 }

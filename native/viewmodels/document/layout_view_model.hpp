@@ -4,11 +4,17 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QThreadPool>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
 
 namespace caret {
+
+struct DocumentOpenTaskResult final {
+    qulonglong ticket = 0;
+    QString error;
+};
 
 /// 在创建 QML 引擎前安装 Rust 返回的页面快照 JSON。
 bool install_layout_snapshot(const QString& snapshot_json);
@@ -28,6 +34,12 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
     Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
     Q_PROPERTY(QString error READ error CONSTANT)
+    Q_PROPERTY(QString documentPath READ documentPath NOTIFY documentFileChanged)
+    Q_PROPERTY(QString documentFileName READ documentFileName NOTIFY documentFileChanged)
+    Q_PROPERTY(bool documentEdited READ documentEdited NOTIFY documentFileChanged)
+    Q_PROPERTY(bool documentFileBusy READ documentFileBusy NOTIFY documentFileChanged)
+    Q_PROPERTY(bool documentOpening READ documentOpening NOTIFY documentFileChanged)
+    Q_PROPERTY(QString documentSaveStatus READ documentSaveStatus NOTIFY documentFileChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry NOTIFY caretGeometryChanged)
 
   public:
@@ -46,6 +58,17 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] QString fontGeneration() const { return QString::number(m_font_generation); }
     [[nodiscard]] qulonglong layoutRevision() const { return m_layout_revision; }
     [[nodiscard]] const QString& error() const { return m_error; }
+    [[nodiscard]] const QString& documentPath() const { return m_document_path; }
+    [[nodiscard]] const QString& documentFileName() const { return m_document_file_name; }
+    [[nodiscard]] bool documentEdited() const { return m_document_edited; }
+    [[nodiscard]] bool documentFileBusy() const { return m_document_file_busy; }
+    [[nodiscard]] bool documentOpening() const { return m_document_opening; }
+    [[nodiscard]] QString documentSaveStatus() const {
+        if (m_pending_save_operations != 0) {
+            return QStringLiteral("saving");
+        }
+        return m_document_edited ? QStringLiteral("edited") : QStringLiteral("saved");
+    }
     [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
 
     /// 将页面局部 pt 坐标交给 Rust 布局快照，返回带文档位置的命中结果。
@@ -80,6 +103,10 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap copySelectionToClipboard();
     /// 将系统剪贴板文本作为一次 Rust 插入/替换命令粘贴。
     Q_INVOKABLE QVariantMap pasteFromClipboard();
+    /// 在后台读取 `.cdoc`，再由 Rust 在 GUI 线程验证并安装新会话。
+    Q_INVOKABLE QVariantMap openDocument(const QString& path);
+    /// 捕获当前修订后在后台原子保存；空路径表示保存到当前文档路径。
+    Q_INVOKABLE QVariantMap saveDocument(const QString& path = QString{});
     /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
     Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
                                                 qreal page_origin_device_x_px,
@@ -88,16 +115,20 @@ class LayoutViewModel final : public QObject {
                                                 int foreground_alpha);
 
   private:
-    bool installSnapshot(const QString& snapshot_json);
+    bool installSnapshot(const QString& snapshot_json, bool replace_document = false);
     QVariantMap installEditResponse(const QByteArray& response_bytes);
     QVariantMap installInteractionResponse(const QByteArray& response_bytes);
     bool installInteraction(const QString& interaction_json);
     void installCaretGeometry(const QVariantMap& geometry);
+    void refreshDocumentFileStatus();
+    void setDocumentFileBusy(bool busy);
 
   signals:
     void layoutChanged();
     void interactionChanged();
     void caretGeometryChanged();
+    void documentFileChanged();
+    void documentFileOperationFinished(bool succeeded, const QString& error);
 
   private:
     QVariantList m_page_sizes_pt;
@@ -112,6 +143,15 @@ class LayoutViewModel final : public QObject {
     qulonglong m_layout_revision = 0;
     QString m_error;
     QVariantMap m_caret_geometry;
+    QString m_document_path;
+    QString m_document_file_name = QStringLiteral("Untitled");
+    bool m_document_edited = false;
+    bool m_document_file_busy = false;
+    bool m_document_opening = false;
+    int m_pending_file_operations = 0;
+    int m_pending_save_operations = 0;
+    QString m_pending_save_target;
+    QThreadPool m_document_io_pool;
 };
 
 } // namespace caret

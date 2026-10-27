@@ -1,5 +1,5 @@
 // 自定义标题栏。高度锁在 Theme.titlebarHeight，控件在这一行里垂直居中。
-// 文档名和搜索还没接命令。
+// 文档文件操作由 ViewModel 执行，搜索仍为界面占位。
 pragma ComponentBehavior: Bound
 
 import QtQuick
@@ -13,6 +13,7 @@ Rectangle {
     property real leftInset: 0
     property real rightInset: 0
     signal settingsRequested
+    signal openRequested
     signal saveRequested
     property string documentName: qsTr("Untitled")
 
@@ -51,6 +52,13 @@ Rectangle {
             Layout.maximumHeight: autoSave.trackHeight
             text: qsTr("AutoSave")
             checked: false
+        }
+
+        TitleToolButton {
+            objectName: "openButton"
+            iconName: "open"
+            accessibleName: qsTr("Open")
+            onClicked: titleBar.openRequested()
         }
 
         TitleToolButton {

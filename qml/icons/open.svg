@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="15" height="15" viewBox="0 0 15 15" fill="none">
-  <!-- 来源：prototypes/shell/shell.js 的 #i-open；内部绘制，原始几何与颜色保留。 -->
-  <path d="M1.5 3.5h4l1.5 2h6.5v7h-12z" fill="#f0d491" stroke="#8a6d2f" stroke-width="1.1"/>
-  <path d="M1.5 5.5h13" stroke="#8a6d2f" stroke-width="1.1"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <!-- 文件夹轮廓使用单色线条，由图标提供器按主题着色。 -->
+  <path d="M1.5 4h4l1.6 1.8h7.4v7.7h-13z" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M1.5 6h13" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>
 </svg>

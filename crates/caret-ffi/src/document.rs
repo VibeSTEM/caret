@@ -1,18 +1,171 @@
 //! 文档运行时句柄、布局命令转发与 glyph 二进制快照转换。
 
 use crate::generated::bridge;
+use caret_app::document_session::{DocumentSaveSnapshot, DocumentSessionService};
+use caret_app::document_storage::DocumentStorage;
 use caret_app::document_view::DocumentViewRuntime;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+struct PreparedDocument {
+    session: DocumentSessionService,
+    layout_snapshot: String,
+    expected_session_generation: u64,
+    expected_document_generation: u64,
+}
+
+fn prepared_documents() -> &'static Mutex<HashMap<u64, PreparedDocument>> {
+    static PREPARED: OnceLock<Mutex<HashMap<u64, PreparedDocument>>> = OnceLock::new();
+    PREPARED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn next_prepared_document_ticket() -> u64 {
+    static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
+    NEXT_TICKET.fetch_add(1, Ordering::Relaxed)
+}
 
 /// 持有文档会话、字体目录与布局缓存的 Rust 应用运行时。
 pub struct DocumentRuntime {
-    runtime: Result<DocumentViewRuntime, String>,
+    runtime: Result<DocumentSessionService, String>,
 }
 
 /// 创建空白文档运行时；初始化错误由首次快照请求返回。
 pub(crate) fn new_blank_document_runtime() -> Box<DocumentRuntime> {
     Box::new(DocumentRuntime {
-        runtime: DocumentViewRuntime::new_blank(),
+        runtime: DocumentSessionService::new_blank(),
     })
+}
+
+/// 在 worker 中读取、解析、创建 Session 並完成首次整篇排版。
+pub(crate) fn prepare_document_file(
+    path: String,
+    expected_session_generation: u64,
+    expected_document_generation: u64,
+) -> bridge::DocumentOpenResult {
+    let result = (|| {
+        let bytes = DocumentStorage
+            .read_file_bytes(Path::new(&path))
+            .map_err(|error| error.to_string())?;
+        let next_generation = expected_session_generation
+            .checked_add(1)
+            .ok_or_else(|| "document.session_generation_exhausted".to_owned())?;
+        let (session, layout_snapshot) =
+            DocumentSessionService::prepare_open(&bytes, Path::new(&path), next_generation)?;
+        let ticket = next_prepared_document_ticket();
+        if ticket == 0 {
+            return Err("document.open_ticket_exhausted".to_owned());
+        }
+        let prepared = PreparedDocument {
+            session,
+            layout_snapshot,
+            expected_session_generation,
+            expected_document_generation,
+        };
+        prepared_documents()
+            .lock()
+            .map_err(|_| "document.open_registry_unavailable".to_owned())?
+            .insert(ticket, prepared);
+        Ok(ticket)
+    })();
+    match result {
+        Ok(ticket) => bridge::DocumentOpenResult {
+            ticket,
+            error: String::new(),
+        },
+        Err(error) => bridge::DocumentOpenResult { ticket: 0, error },
+    }
+}
+
+/// 在 GUI 线程以 ticket 安装候选会话；捕获后发生的输入会令本次打开过期。
+pub(crate) fn install_prepared_document_json(runtime: &mut DocumentRuntime, ticket: u64) -> String {
+    let prepared = match prepared_documents().lock() {
+        Ok(mut documents) => documents.remove(&ticket),
+        Err(_) => return "error:document.open_registry_unavailable".to_owned(),
+    };
+    let Some(prepared) = prepared else {
+        return "error:document.open_ticket_expired".to_owned();
+    };
+    match &mut runtime.runtime {
+        Ok(runtime) => runtime
+            .install_prepared(
+                prepared.session,
+                prepared.layout_snapshot,
+                prepared.expected_session_generation,
+                prepared.expected_document_generation,
+            )
+            .unwrap_or_else(|error| format!("error:{error}")),
+        Err(error) => format!("error:{error}"),
+    }
+}
+
+/// 在后台将已验证的快照写入同目录临时文件并原子替换目标。
+pub(crate) fn write_document_file(path: String, bytes: Vec<u8>) -> String {
+    DocumentStorage
+        .save_snapshot(Path::new(&path), &bytes)
+        .err()
+        .map_or_else(String::new, |error| error.to_string())
+}
+
+/// 捕获文档快照供后台写入；快照修订不会随后续输入变化。
+pub(crate) fn document_save_snapshot(
+    runtime: &mut DocumentRuntime,
+) -> bridge::DocumentSaveSnapshot {
+    match &runtime.runtime {
+        Ok(runtime) => match runtime.save_snapshot() {
+            Ok(snapshot) => to_bridge_snapshot(snapshot),
+            Err(error) => empty_save_snapshot(error),
+        },
+        Err(error) => empty_save_snapshot(error.clone()),
+    }
+}
+
+fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSnapshot {
+    bridge::DocumentSaveSnapshot {
+        session_generation: snapshot.session_generation,
+        document_generation: snapshot.document_generation,
+        bytes: snapshot.bytes,
+        error: String::new(),
+    }
+}
+
+fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot {
+    bridge::DocumentSaveSnapshot {
+        session_generation: 0,
+        document_generation: 0,
+        bytes: Vec::new(),
+        error,
+    }
+}
+
+/// 在写入成功后推进对应会话的保存点；旧会话回报不改变当前状态。
+pub(crate) fn mark_document_saved_json(
+    runtime: &mut DocumentRuntime,
+    session_generation: u64,
+    document_generation: u64,
+    path: String,
+) -> String {
+    match &mut runtime.runtime {
+        Ok(runtime) => {
+            let accepted =
+                runtime.mark_saved(session_generation, document_generation, Path::new(&path));
+            if accepted {
+                runtime.status_json()
+            } else {
+                "error:document.stale_save_completion".to_owned()
+            }
+        }
+        Err(error) => format!("error:{error}"),
+    }
+}
+
+/// 返回当前文档身份和保存状态的轻量 JSON 投影。
+pub(crate) fn document_status_json(runtime: &mut DocumentRuntime) -> String {
+    match &runtime.runtime {
+        Ok(runtime) => runtime.status_json(),
+        Err(error) => format!("error:{error}"),
+    }
 }
 
 /// 返回页面/段落布局 JSON；错误以 `error:` 开头，调用方不可当作快照消费。
@@ -144,7 +297,7 @@ fn json_response(
     operation: impl FnOnce(&mut DocumentViewRuntime) -> Result<String, String>,
 ) -> String {
     let result = match &mut runtime.runtime {
-        Ok(runtime) => operation(runtime),
+        Ok(runtime) => operation(runtime.view_mut()),
         Err(error) => Err(error.clone()),
     };
     result.unwrap_or_else(|error| format!("error:{error}"))
@@ -160,7 +313,7 @@ pub(crate) fn rasterize_page_glyphs(
         Ok(runtime) => runtime,
         Err(error) => return empty_glyph_frame(page_index, error.clone()),
     };
-    let rasterized = match runtime.rasterize_page_glyphs(
+    let rasterized = match runtime.view_mut().rasterize_page_glyphs(
         usize::try_from(page_index).unwrap_or(usize::MAX),
         request.px_per_pt,
         [

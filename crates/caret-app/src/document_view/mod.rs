@@ -39,7 +39,7 @@ impl DocumentViewRuntime {
         Self::new(Document::blank())
     }
 
-    fn new(document: Document) -> Result<Self, String> {
+    pub(crate) fn new(document: Document) -> Result<Self, String> {
         let session = Session::new(document).map_err(|error| error.to_string())?;
         let layout = DocumentLayoutRuntime::new_system().map_err(|error| error.to_string())?;
         Ok(Self {
@@ -57,5 +57,19 @@ impl DocumentViewRuntime {
             composition_range: None,
             last_interaction_context: None,
         })
+    }
+
+    pub(crate) fn from_document(document: Document) -> Result<Self, String> {
+        Self::new(document)
+    }
+
+    /// 当前文档内容修订代际；导航与绘制状态变化不推进此值。
+    pub fn document_generation(&self) -> u64 {
+        self.session.document_generation()
+    }
+
+    /// 当前文档树的只读视图，供应用服务捕获保存快照。
+    pub fn document(&self) -> &Document {
+        self.session.document()
     }
 }
