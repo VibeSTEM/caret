@@ -114,6 +114,13 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         error = QStringLiteral("layout.invalid_partial_snapshot");
         return false;
     }
+    const QJsonValue composition_preview_value = root.value(QStringLiteral("compositionPreview"));
+    const bool is_composition_preview = composition_preview_value.toBool(false);
+    if ((!composition_preview_value.isUndefined() && !composition_preview_value.isBool()) ||
+        (is_composition_preview && !is_partial)) {
+        error = QStringLiteral("layout.invalid_composition_preview");
+        return false;
+    }
     qulonglong parsed_document_generation = 0;
     qulonglong parsed_font_generation = 0;
     if (!nonnegative_generation(root.value(QStringLiteral("documentGeneration")),
@@ -124,7 +131,8 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         return false;
     }
     const QJsonValue session_value = root.value(QStringLiteral("sessionId"));
-    const QString parsed_session_id = session_value.isString() ? session_value.toString() : QString();
+    const QString parsed_session_id =
+        session_value.isString() ? session_value.toString() : QString();
     qulonglong base_document_generation = 0;
     if (is_partial &&
         (!nonnegative_generation(root.value(QStringLiteral("baseDocumentGeneration")),
@@ -132,7 +140,9 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
          previous_snapshot == nullptr ||
          base_document_generation != previous_snapshot->document_generation ||
          parsed_session_id.isEmpty() || parsed_session_id != previous_snapshot->session_id ||
-         parsed_document_generation <= previous_snapshot->document_generation ||
+         (is_composition_preview
+              ? parsed_document_generation != previous_snapshot->document_generation
+              : parsed_document_generation <= previous_snapshot->document_generation) ||
          parsed_font_generation != previous_snapshot->font_generation)) {
         error = QStringLiteral("layout.stale_partial_snapshot");
         return false;

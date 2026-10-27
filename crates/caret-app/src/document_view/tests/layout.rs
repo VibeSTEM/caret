@@ -115,6 +115,41 @@ fn ordinary_same_paragraph_input_reuses_the_rest_of_the_document_layout()
 }
 
 #[test]
+fn paragraph_split_and_single_paragraph_paste_reuse_untouched_layouts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first paragraph".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("active paragraph".to_owned())?;
+
+    let split: Value = serde_json::from_str(&runtime.split_paragraph_json()?)?;
+    assert_eq!(split["paragraphs"].as_array().map(Vec::len), Some(3));
+    let split_layout = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or("split layout snapshot was not installed")?;
+    let full_after_split = runtime.layout.layout_session(&runtime.session)?;
+    assert_eq!(
+        caret_engine::DocumentLayoutView::from(split_layout),
+        caret_engine::DocumentLayoutView::from(&full_after_split)
+    );
+
+    let pasted: Value =
+        serde_json::from_str(&runtime.paste_text_json("multi-line\npaste".to_owned())?)?;
+    assert_eq!(pasted["paragraphs"].as_array().map(Vec::len), Some(4));
+    let paste_layout = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or("paste layout snapshot was not installed")?;
+    let full_after_paste = runtime.layout.layout_session(&runtime.session)?;
+    assert_eq!(
+        caret_engine::DocumentLayoutView::from(paste_layout),
+        caret_engine::DocumentLayoutView::from(&full_after_paste)
+    );
+    Ok(())
+}
+
+#[test]
 fn ordinary_input_delta_contains_only_the_changed_paragraph()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

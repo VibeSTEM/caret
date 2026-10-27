@@ -78,7 +78,7 @@ impl DocumentViewRuntime {
                 .as_ref()
                 .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?
         };
-        let mut view = match changed_paragraph.filter(|_| !composing) {
+        let mut view = match changed_paragraph {
             Some((paragraph_id, page_start_index, base_generation)) => serde_json::to_value(
                 DocumentLayoutDeltaView::for_paragraph(
                     snapshot,
@@ -91,6 +91,14 @@ impl DocumentViewRuntime {
             None => serde_json::to_value(caret_engine::DocumentLayoutView::from(snapshot)),
         }
         .map_err(|error| format!("layout.serialize: {error}"))?;
+        if composing && changed_paragraph.is_some() {
+            view.as_object_mut()
+                .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+                .insert(
+                    "compositionPreview".to_owned(),
+                    serde_json::Value::Bool(true),
+                );
+        }
         let rectangles = if composing {
             Vec::new()
         } else {
@@ -328,12 +336,55 @@ impl DocumentViewRuntime {
         command: Command,
         error_context: &str,
     ) -> Result<String, String> {
+        let selection = self.session.selection();
+        let reusable_paragraph_id = (selection.anchor.paragraph_id == selection.focus.paragraph_id)
+            .then(|| selection.focus.paragraph_id.clone());
+        let can_reuse_layout =
+            matches!(&command, Command::SplitParagraph | Command::InsertSoftBreak)
+                || matches!(&command, Command::PasteText(_)) && reusable_paragraph_id.is_some();
+        if can_reuse_layout {
+            self.base_snapshot()?;
+        }
         self.session
             .run(command)
             .map_err(|error| format!("{error_context}: {error}"))?;
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
+        if can_reuse_layout && let Some(paragraph_id) = reusable_paragraph_id.as_ref() {
+            let previous = self
+                .last_snapshot
+                .as_ref()
+                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            let updated = self
+                .layout
+                .layout_session_reusing(&self.session, previous, paragraph_id)
+                .map_err(|error| error.to_string())?;
+            self.last_snapshot = Some(updated);
+        }
         self.layout_snapshot_json()
+    }
+
+    fn composition_preview_delta_for(
+        &self,
+        updated: &DocumentLayoutSnapshot,
+        range: &Selection,
+    ) -> Option<(NodeId, usize, u64)> {
+        let selection = self.session.selection();
+        if selection.anchor.paragraph_id != selection.focus.paragraph_id {
+            return None;
+        }
+        if range.anchor.paragraph_id != range.focus.paragraph_id {
+            return None;
+        }
+        let previous = self.last_snapshot.as_ref()?;
+        let paragraph_id = range.anchor.paragraph_id.clone();
+        let mut page_start_index = first_changed_page_index(previous, updated, &paragraph_id)?;
+        if let Some(previous_preview) = self.composition_snapshot.as_ref() {
+            let preview_page_start =
+                first_changed_page_index(previous_preview, updated, &paragraph_id)?;
+            page_start_index = page_start_index.min(preview_page_start);
+        }
+        Some((paragraph_id, page_start_index, previous.document_generation))
     }
 
     /// 返回当前 Rust 光标位置在最新布局中的页面几何。
@@ -428,6 +479,19 @@ impl DocumentViewRuntime {
         self.base_snapshot()
     }
 
+    fn relayout_reusing_paragraph(
+        &mut self,
+        previous: &DocumentLayoutSnapshot,
+        changed_paragraph_id: &NodeId,
+    ) -> Result<(), String> {
+        let snapshot = self
+            .layout
+            .layout_session_reusing(&self.session, previous, changed_paragraph_id)
+            .map_err(|error| error.to_string())?;
+        self.last_snapshot = Some(snapshot);
+        Ok(())
+    }
+
     fn base_snapshot(&mut self) -> Result<&DocumentLayoutSnapshot, String> {
         let font_generation = self.layout.font_generation();
         let current = self
@@ -467,4 +531,12 @@ impl DocumentViewRuntime {
         snapshot.document_generation = self.session.document_generation();
         Ok(snapshot)
     }
+}
+
+fn first_changed_page_index(
+    previous: &DocumentLayoutSnapshot,
+    current: &DocumentLayoutSnapshot,
+    paragraph_id: &NodeId,
+) -> Option<usize> {
+    DocumentLayoutDeltaView::first_affected_page_index(previous, current, paragraph_id)
 }
