@@ -126,13 +126,14 @@ if(_caret_sanitizers)
     # Windows-MSVC 链接规则把 LINK_FLAGS 放在对象文件之后。把 ASan 导入库前置到
     # 各链接规则的对象输入之前，确保进程启动时先加载 ASan，再加载 Qt 等依赖。
     set(_caret_asan_import_lib "\"${_caret_asan_rt_dir}/clang_rt.asan_dynamic-x86_64.lib\"")
-    foreach(_caret_link_rule IN ITEMS
-            CMAKE_C_LINK_EXECUTABLE CMAKE_CXX_LINK_EXECUTABLE
-            CMAKE_C_CREATE_SHARED_LIBRARY CMAKE_CXX_CREATE_SHARED_LIBRARY
-            CMAKE_C_CREATE_SHARED_MODULE CMAKE_CXX_CREATE_SHARED_MODULE)
+    foreach(
+      _caret_link_rule IN
+      ITEMS CMAKE_C_LINK_EXECUTABLE CMAKE_CXX_LINK_EXECUTABLE CMAKE_C_CREATE_SHARED_LIBRARY
+            CMAKE_CXX_CREATE_SHARED_LIBRARY CMAKE_C_CREATE_SHARED_MODULE
+            CMAKE_CXX_CREATE_SHARED_MODULE)
       if(DEFINED ${_caret_link_rule})
-        string(REPLACE "<OBJECTS>" "${_caret_asan_import_lib} <OBJECTS>"
-                       _caret_link_command "${${_caret_link_rule}}")
+        string(REPLACE "<OBJECTS>" "${_caret_asan_import_lib} <OBJECTS>" _caret_link_command
+                       "${${_caret_link_rule}}")
         if(_caret_link_command STREQUAL "${${_caret_link_rule}}")
           message(FATAL_ERROR "Windows ASan 无法将运行库前置到链接规则 ${_caret_link_rule}")
         endif()
