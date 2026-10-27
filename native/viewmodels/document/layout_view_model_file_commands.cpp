@@ -55,12 +55,12 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
     const QJsonObject status = status_document.object();
     bool session_generation_ok = false;
     bool document_generation_ok = false;
-    const quint64 expected_session_generation =
-        status.value(QStringLiteral("sessionGeneration")).toString().toULongLong(
-            &session_generation_ok);
-    const quint64 expected_document_generation =
-        status.value(QStringLiteral("documentGeneration")).toString().toULongLong(
-            &document_generation_ok);
+    const quint64 expected_session_generation = status.value(QStringLiteral("sessionGeneration"))
+                                                    .toString()
+                                                    .toULongLong(&session_generation_ok);
+    const quint64 expected_document_generation = status.value(QStringLiteral("documentGeneration"))
+                                                     .toString()
+                                                     .toULongLong(&document_generation_ok);
     if (!session_generation_ok || !document_generation_ok) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.invalid_revision")}};
@@ -71,69 +71,64 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
     setDocumentFileBusy(true);
     emit documentFileChanged();
     auto* watcher = new QFutureWatcher<DocumentOpenTaskResult>(this);
-    connect(
-        watcher, &QFutureWatcher<DocumentOpenTaskResult>::finished, this, [this, watcher] {
-            const DocumentOpenTaskResult result = watcher->result();
-            watcher->deleteLater();
-            m_document_opening = false;
-            --m_pending_file_operations;
-            setDocumentFileBusy(m_pending_file_operations != 0);
-            emit documentFileChanged();
-            if (!result.error.isEmpty()) {
-                emit documentFileOperationFinished(false, result.error);
-                return;
-            }
-
-            ffi::DocumentRuntime* active_runtime = document_runtime();
-            if (active_runtime == nullptr) {
-                emit documentFileOperationFinished(false,
-                                                   QStringLiteral("layout.runtime_unavailable"));
-                return;
-            }
-            const rust::String response =
-                ffi::install_prepared_document_json(*active_runtime, result.ticket);
-            const QByteArray response_bytes = layout_view_model_support::response_bytes(response);
-            if (response_bytes.startsWith("error:")) {
-                emit documentFileOperationFinished(false,
-                                                   QString::fromUtf8(response_bytes.sliced(6)));
-                return;
-            }
-            const QString snapshot =
-                QString::fromUtf8(response_bytes.constData(), response_bytes.size());
-            if (!installSnapshot(snapshot, true)) {
-                emit documentFileOperationFinished(false, m_error);
-                return;
-            }
-            const rust::String caret_response = ffi::current_caret_json(*active_runtime);
-            const QByteArray caret_bytes =
-                layout_view_model_support::response_bytes(caret_response);
-            QJsonParseError caret_parse_error;
-            const QJsonDocument caret_document =
-                QJsonDocument::fromJson(caret_bytes, &caret_parse_error);
-            if (caret_parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
-                emit documentFileOperationFinished(false,
-                                                   QStringLiteral("layout.invalid_caret_geometry"));
-                return;
-            }
-            installCaretGeometry(caret_document.object().toVariantMap());
-            refreshDocumentFileStatus();
-            emit documentFileOperationFinished(true, QString{});
-        });
-    watcher->setFuture(QtConcurrent::run(
-        &m_document_io_pool,
-        [path, expected_session_generation, expected_document_generation] {
-        const rust::String rust_path = layout_view_model_support::to_rust_string(path);
-        const ffi::DocumentOpenResult open_result = ffi::prepare_document_file(
-            rust_path, expected_session_generation, expected_document_generation);
-        DocumentOpenTaskResult result;
-        if (!open_result.error.empty()) {
-            result.error = QString::fromUtf8(open_result.error.data(),
-                                             static_cast<qsizetype>(open_result.error.size()));
-            return result;
+    connect(watcher, &QFutureWatcher<DocumentOpenTaskResult>::finished, this, [this, watcher] {
+        const DocumentOpenTaskResult result = watcher->result();
+        watcher->deleteLater();
+        m_document_opening = false;
+        --m_pending_file_operations;
+        setDocumentFileBusy(m_pending_file_operations != 0);
+        emit documentFileChanged();
+        if (!result.error.isEmpty()) {
+            emit documentFileOperationFinished(false, result.error);
+            return;
         }
-        result.ticket = open_result.ticket;
-        return result;
-    }));
+
+        ffi::DocumentRuntime* active_runtime = document_runtime();
+        if (active_runtime == nullptr) {
+            emit documentFileOperationFinished(false, QStringLiteral("layout.runtime_unavailable"));
+            return;
+        }
+        const rust::String response =
+            ffi::install_prepared_document_json(*active_runtime, result.ticket);
+        const QByteArray response_bytes = layout_view_model_support::response_bytes(response);
+        if (response_bytes.startsWith("error:")) {
+            emit documentFileOperationFinished(false, QString::fromUtf8(response_bytes.sliced(6)));
+            return;
+        }
+        const QString snapshot =
+            QString::fromUtf8(response_bytes.constData(), response_bytes.size());
+        if (!installSnapshot(snapshot, true)) {
+            emit documentFileOperationFinished(false, m_error);
+            return;
+        }
+        const rust::String caret_response = ffi::current_caret_json(*active_runtime);
+        const QByteArray caret_bytes = layout_view_model_support::response_bytes(caret_response);
+        QJsonParseError caret_parse_error;
+        const QJsonDocument caret_document =
+            QJsonDocument::fromJson(caret_bytes, &caret_parse_error);
+        if (caret_parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
+            emit documentFileOperationFinished(false,
+                                               QStringLiteral("layout.invalid_caret_geometry"));
+            return;
+        }
+        installCaretGeometry(caret_document.object().toVariantMap());
+        refreshDocumentFileStatus();
+        emit documentFileOperationFinished(true, QString{});
+    });
+    watcher->setFuture(QtConcurrent::run(
+        &m_document_io_pool, [path, expected_session_generation, expected_document_generation] {
+            const rust::String rust_path = layout_view_model_support::to_rust_string(path);
+            const ffi::DocumentOpenResult open_result = ffi::prepare_document_file(
+                rust_path, expected_session_generation, expected_document_generation);
+            DocumentOpenTaskResult result;
+            if (!open_result.error.empty()) {
+                result.error = QString::fromUtf8(open_result.error.data(),
+                                                 static_cast<qsizetype>(open_result.error.size()));
+                return result;
+            }
+            result.ticket = open_result.ticket;
+            return result;
+        }));
     return {{QStringLiteral("valid"), true}, {QStringLiteral("pending"), true}};
 #else
     Q_UNUSED(path)
@@ -153,10 +148,10 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.file_operation_busy")}};
     }
-    const QString path = requested_path.isEmpty()
-                             ? (m_pending_save_target.isEmpty() ? m_document_path
-                                                                : m_pending_save_target)
-                             : requested_path;
+    const QString path =
+        requested_path.isEmpty()
+            ? (m_pending_save_target.isEmpty() ? m_document_path : m_pending_save_target)
+            : requested_path;
     if (path.isEmpty()) {
         return {{QStringLiteral("valid"), false}, {QStringLiteral("needsSaveAs"), true}};
     }
