@@ -1,0 +1,43 @@
+# Ubuntu 包下载统一处理短暂网络故障；dpkg 安装阶段不使用硬杀超时。
+name: Install Ubuntu packages
+description: 使用有界重试下载 Ubuntu 宿主包并离线安装
+inputs:
+  packages:
+    description: 以空格分隔的 Ubuntu 包名
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGE_LIST: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+
+        read -r -a packages <<< "$PACKAGE_LIST"
+        apt_options=(
+          -o Acquire::Retries=3
+          -o Acquire::http::Timeout=20
+          -o Acquire::https::Timeout=20
+        )
+
+        apt_with_retry() {
+          local attempt
+          for attempt in 1 2; do
+            if timeout --signal=TERM --kill-after=10s 90s \
+              sudo apt-get "${apt_options[@]}" "$@"; then
+              return 0
+            fi
+
+            if [[ "$attempt" -eq 2 ]]; then
+              return 1
+            fi
+
+            echo "apt-get 操作失败，5 秒后重试（${attempt}/2）：$*" >&2
+            sleep 5
+          done
+        }
+
+        apt_with_retry -o APT::Update::Error-Mode=any update
+        apt_with_retry install --download-only -y --no-install-recommends "${packages[@]}"
+        sudo apt-get "${apt_options[@]}" install -y --no-download --no-install-recommends "${packages[@]}"

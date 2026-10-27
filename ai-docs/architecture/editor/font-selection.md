@@ -40,8 +40,8 @@
 
 ## Rust 分层
 
-- `font_selection` 公共层负责设置校验、BCP 47 lookup、脚本/CJK 分组、候选顺序与去重；不在每个字符上解析 JSON 或扫描字体目录。
-- `shaping/font_selector.rs` 接收 Parley 已解析的 `Segment.script` 与 `ShapeOptions.language`，在脚本/语言/样式上下文变化时更新 Fontique 候选；cluster 覆盖率仍交给 Fontique 查询。
+- `font_selection.rs` 公共层负责设置校验、BCP 47 lookup、脚本/CJK 分组、候选顺序与去重；不在每个字符上解析 JSON 或扫描字体目录。较大的单元测试位于 `font_selection/tests.rs`。
+- `paragraph/parley.rs` 消费 Parley 已解析的段落 shaping 上下文，并应用 `font_selection.rs` 生成的候选族偏好；字体覆盖和 fallback 由 Parley/Fontique 管理。`shaping.rs` 负责可复用的段落分析与样式边界，`shaping/unicode.rs` 提供 Unicode 边界规则。
 - `ResolvedDocumentTextSettings` 在打开文档或全局字体/语言设置改变时编译一次，由同一设置代际的段落共享，避免每段深拷贝文档字体规则。字体族存在性快照随 FontCatalog 代际复用，只有显式刷新时重建。
 - 以后只有当某脚本存在超出 OpenType `locl`、ICU/CLDR 数据和 Fontique fallback 的可复现差异时，才增加对应策略模块；共享脚本规则放在脚本模块，语言差异作为窄增量子模块。没有测试过的差异不加代码，也不预建空文件。
 - 格式化环境语言元数据保持独立；样式覆盖不得改写文档语言。
@@ -49,16 +49,15 @@
 当前已实现结构：
 
 ```text
-font_selection/
-├── mod.rs                    # 不可变偏好解析与候选规则
-└── tests.rs
-shaping/
-├── mod.rs                    # 可复用段落分析和 shaping 上下文
-├── font_selector.rs          # Parley FontSelector 到 Fontique 查询的适配
-└── unicode.rs                 # ICU4X UAX #14、字素与语言 tailoring
-paragraph/mod.rs              # 行范围、cluster 度量
-line_metrics.rs               # baseline、行框和溢出策略
-pagination.rs                 # 页片段、段间距与分页
+crates/caret-layout/src/
+├── font_selection.rs         # 字体偏好解析与候选规则
+├── font_selection/tests.rs   # 字体偏好单元测试
+├── shaping.rs                # 可复用段落分析与 shaping 上下文
+├── shaping/unicode.rs        # Unicode 边界与语言 tailoring
+├── paragraph.rs              # 行范围与 cluster 度量
+├── paragraph/parley.rs       # Parley 段落布局适配
+├── line_metrics.rs           # baseline、行框和溢出策略
+└── pagination.rs             # 页片段、段间距与分页
 ```
 
 使用 ICU4X 做 BCP 47 lookup 和 Unicode 属性读取，使用 Parley 的 `Segment.script`、`ShapeOptions.language` 和 Fontique 字体查询/fallback。Caret 的字体偏好匹配保留完整 BCP 47 标签；当前 Parley `Language` 只表达可解析的语言前缀，无法保留所有 extlang、variant 和 extension，因此不能承诺这些子标签都进入 OpenType `locl`。Fontique 只为有限语言/脚本对提供平台 fallback key；Caret 的显式 `languageScriptFontFamilies` 仍保留合法但未被 Fontique 跟踪的标签，并由同一字体查询器按候选族处理。任何扩展差异都先检查已有库 API 和数据，再决定是否编写规则。

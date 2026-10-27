@@ -1,3 +1,4 @@
+use caret_app::document_session::DocumentSessionService;
 use caret_app::document_storage::{DocumentStorage, DocumentStorageError};
 use caret_doc::{CdocFile, Document, DocumentError, OpenedDocument, open};
 use serde_json::{Value, json};
@@ -385,6 +386,61 @@ fn app_storage_saves_and_reopens_document() -> Result<(), Box<dyn std::error::Er
     let storage = DocumentStorage;
     storage.save_file(&path, &file)?;
     assert_eq!(storage.open_file(&path)?, OpenedDocument::Editable(file));
+    fs::remove_dir_all(directory)?;
+    Ok(())
+}
+
+#[test]
+fn document_session_edits_saves_and_reopens_through_public_services()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = test_dir();
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("edited.cdoc");
+    let storage = DocumentStorage;
+    let mut session = DocumentSessionService::new_blank()?;
+
+    session.view_mut().insert_text_json("Hello".to_owned())?;
+    session.view_mut().split_paragraph_json()?;
+    session.view_mut().paste_text_json("你好".to_owned())?;
+    let edited: Value = serde_json::from_str(&session.status_json())?;
+    assert_eq!(edited["fileName"], "Untitled");
+    assert_eq!(edited["dirty"], true);
+
+    let captured = session.save_snapshot()?;
+    storage.save_snapshot(&path, &captured.bytes)?;
+    assert_eq!(storage.read_file_bytes(&path)?, captured.bytes);
+    assert!(session.mark_saved(
+        captured.session_generation,
+        captured.document_generation,
+        &path,
+    ));
+    let saved: Value = serde_json::from_str(&session.status_json())?;
+    assert_eq!(saved["fileName"], "edited.cdoc");
+    assert_eq!(saved["dirty"], false);
+    assert_eq!(
+        saved["savedGeneration"],
+        captured.document_generation.to_string()
+    );
+
+    let mut reopened = DocumentSessionService::new_blank()?;
+    let expected_session = reopened.session_generation();
+    let expected_document = reopened.document_generation();
+    let (candidate, snapshot) = DocumentSessionService::prepare_open(
+        &storage.read_file_bytes(&path)?,
+        &path,
+        expected_session + 1,
+    )?;
+    let snapshot: Value = serde_json::from_str(&reopened.install_prepared(
+        candidate,
+        snapshot,
+        expected_session,
+        expected_document,
+    )?)?;
+    assert_eq!(snapshot["paragraphs"][0]["text"], "Hello");
+    assert_eq!(snapshot["paragraphs"][1]["text"], "你好");
+    let reopened_status: Value = serde_json::from_str(&reopened.status_json())?;
+    assert_eq!(reopened_status["fileName"], "edited.cdoc");
+    assert_eq!(reopened_status["dirty"], false);
     fs::remove_dir_all(directory)?;
     Ok(())
 }

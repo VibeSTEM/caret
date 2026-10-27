@@ -79,26 +79,22 @@
 共享规则负责语言匹配、候选顺序、族去重、配置验证和缓存；脚本模块只提供该脚本真实需要的差异。语言模块是脚本规则的增量，不复制整份选择器。示意目录如下，未出现真实差异时不创建空模块：
 
 ```text
+caret-layout/src/font_selection.rs          # 选择器接口与上下文
 caret-layout/src/font_selection/
-├── mod.rs                 # 选择器接口与上下文
-├── resolve.rs             # 公共候选链和去重
-├── language_match.rs      # BCP 47 lookup
+├── resolve.rs                             # 公共候选链和去重
+├── language_match.rs                      # BCP 47 lookup
+├── scripts.rs                             # resolved Script 分派
 └── scripts/
-    ├── mod.rs             # resolved Script 分派
-    ├── latin/
-    │   ├── mod.rs         # Latn 共用字体策略
-    │   └── french.rs      # 仅在确有字体策略增量时添加
-    ├── cyrillic/
-    │   ├── mod.rs         # Cyrl 共用字体策略
-    │   ├── bulgarian.rs   # 仅放超出通用 locl/数据覆盖的必要差异
-    │   └── serbian.rs
-    ├── cjk/
-    │   ├── mod.rs         # CJK 分组与通用回退
-    │   ├── chinese.rs
-    │   ├── japanese.rs
-    │   └── korean.rs
-    └── arabic/
-        └── mod.rs         # Arab 共用字体策略
+    ├── latin.rs                           # Latn 共用字体策略
+    ├── latin/french.rs                    # 仅在确有字体策略增量时添加
+    ├── cyrillic.rs                        # Cyrl 共用字体策略
+    ├── cyrillic/bulgarian.rs              # 仅放超出通用 locl/数据覆盖的必要差异
+    ├── cyrillic/serbian.rs
+    ├── cjk.rs                             # CJK 分组与通用回退
+    ├── cjk/chinese.rs
+    ├── cjk/japanese.rs
+    ├── cjk/korean.rs
+    └── arabic.rs                          # Arab 共用字体策略
 ```
 
 这个目录是扩展位置，不是首版必须全部生成的文件清单。法语通常可共用 Latn 字体选择；语言标签照常传给引擎。法语标点间距、阿拉伯语断行/两端对齐等若有独立排版规则，应放在相应断行/排版模块的脚本与语言层，字体选择模块只处理字体策略。阿拉伯字形连接、Cyrl 本地化字形和标准 OpenType 特性由成熟 shaping 引擎负责。

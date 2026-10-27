@@ -1,6 +1,6 @@
 # 仓库文件、产物与忽略规则
 
-更新日期：2026-10-24。
+更新日期：2026-10-28。
 
 ## 归属
 
@@ -24,3 +24,7 @@
 添加忽略规则时列出必须忽略和必须保留的路径，并用 `git check-ignore -v --no-index` 核对。已经跟踪的产物不会因为新规则自动退出索引。
 
 不建立 `old/` 或 `backup/` 目录。废弃实现按[代码生命周期](code-lifecycle.md)删除。
+
+## 模块文件结构
+
+Rust 模块需要拆分职责或单测明显增大时，使用 `module.rs` 作为模块入口，并在同级 `module/` 中放功能子模块和 `tests.rs`。较大的私有单测通过入口中的 `#[cfg(test)] mod tests;` 注册，保留父模块私有访问与测试归属；crate 根 `lib.rs` / `main.rs` 对应的测试放在 `src/tests.rs`。新建或重构模块时不采用 `module/mod.rs`；[Rust Reference](https://doc.rust-lang.org/reference/items/modules.html#module-source-filenames) 与 [The Rust Programming Language](https://doc.rust-lang.org/book/ch07-05-separating-modules-into-different-files.html) 仍将其列为受支持的旧路径，并鼓励使用 `module.rs`，因为它更一致且避免编辑器中出现许多同名 `mod.rs`。不使用平铺的 `module_tests.rs`，也不只为行数阈值机械拆分；拆分应对应独立职责，并在评审中检查调用边界与重复实现。已有 `mod.rs` 在未涉及该模块重构时不要求仅为统一风格搬迁。

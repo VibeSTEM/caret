@@ -206,6 +206,56 @@ fn multiline_paste_replaces_selection_and_splits_paragraphs_atomically() {
 }
 
 #[test]
+fn multiline_paste_replaces_a_reversed_cross_paragraph_selection() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let paragraphs = ["alpha", "beta", "gamma"]
+        .into_iter()
+        .map(|text| {
+            let mut paragraph = Paragraph::empty(NodeId::generate());
+            paragraph.inlines = vec![run(text)];
+            paragraph
+        })
+        .collect::<Vec<_>>();
+    let first_id = paragraphs[0].id.clone();
+    let last_id = paragraphs[2].id.clone();
+    document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: last_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id.clone(),
+            offset: 2,
+            affinity: Affinity::Downstream,
+        },
+    })))?;
+    assert_eq!(session.selected_text()?, "pha\nbeta\nga");
+
+    let effect = session.run(Command::PasteText("中\r\n文\rlast".to_owned()))?;
+    assert!(effect.document_changed);
+    assert!(effect.position_map.is_some());
+    let paragraphs = session
+        .document()
+        .body
+        .iter()
+        .map(|block| match block {
+            Block::Paragraph(paragraph) => paragraph_text(paragraph),
+            _ => panic!("paste should leave only paragraphs"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(paragraphs, ["al中", "文", "lastmma"]);
+    assert_eq!(session.document_generation(), 1);
+    assert_eq!(session.selection().focus.offset, "last".len());
+    assert_eq!(session.selected_text()?, "");
+    Ok(())
+}
+
+#[test]
 fn multiline_paste_rejects_unsafe_run_split_without_mutation() {
     let mut session = session_with(vec![InlineNode::Run(Run {
         text: "ab".to_owned(),
@@ -1813,6 +1863,7 @@ fn ime_failure_restores_preedit_and_rejects_other_composition_ids() -> Result<()
     );
     for command in [
         Command::InsertText("blocked".to_owned()),
+        Command::PasteText("blocked\npaste".to_owned()),
         Command::InsertSoftBreak,
         Command::Delete(Direction::Backward),
         Command::MoveCaret(Direction::Forward),
@@ -2098,6 +2149,24 @@ fn selected_text_is_extracted_by_the_session_without_layout() -> Result<(), Edit
     })))?;
 
     assert_eq!(session.selected_text()?, "好\nwo");
+    Ok(())
+}
+
+#[test]
+fn selection_on_the_same_text_boundary_has_no_copied_text() -> Result<(), EditError> {
+    let mut session = session_with(vec![run("ab")]);
+    let anchor = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..session.selection().focus.clone()
+    };
+    let focus = Pos {
+        affinity: Affinity::Downstream,
+        ..anchor.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection { anchor, focus })))?;
+    assert_eq!(session.selected_text()?, "");
+    assert_eq!(session.document_generation(), 0);
     Ok(())
 }
 
