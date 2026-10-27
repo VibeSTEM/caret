@@ -515,4 +515,110 @@ mod tests {
 
         assert!(!second.accepts(&first.capture_task_scope()));
     }
+
+    #[test]
+    fn snapshot_iteration_is_sorted_and_remains_fixed_after_a_later_commit()
+    -> Result<(), RuntimeCommitError> {
+        let mut context = RuntimeContext::new(17, PathService::new());
+        assert!(context.variables().is_empty());
+        assert_eq!(context.variables().len(), 0);
+        context.commit_variables(
+            0,
+            BTreeMap::from([
+                ("z".to_owned(), RuntimeValue::String("last".to_owned())),
+                ("a".to_owned(), RuntimeValue::Boolean(true)),
+            ]),
+        )?;
+        let scope = context.capture_task_scope();
+        context.commit_variables(1, BTreeMap::new())?;
+
+        assert_eq!(context.generation(), 17);
+        assert_eq!(scope.generation(), 17);
+        assert!(!scope.variables().is_empty());
+        assert_eq!(scope.variables().len(), 2);
+        assert_eq!(
+            scope
+                .variables()
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["a", "z"]
+        );
+        assert!(context.variables().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn task_scope_validates_uncreated_resources_until_its_context_closes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = TempRoot::new("scope-reference")?;
+        fs::write(fixture.root.join("note.txt"), b"note")?;
+        let mut context = RuntimeContext::for_project(9, &fixture.root)?;
+        let scope = context.capture_task_scope();
+        let reference = ResourceRef {
+            category: RootCategory::Project,
+            relative: "future/asset.png".to_owned(),
+        };
+        context.validate_reference(&reference)?;
+        scope.validate_reference(&reference)?;
+        assert_eq!(
+            scope.resolve_existing(&ResourceRef {
+                category: RootCategory::Project,
+                relative: "note.txt".to_owned(),
+            })?,
+            fs::canonicalize(fixture.root.join("note.txt"))?
+        );
+        assert!(
+            scope
+                .validate_reference(&ResourceRef {
+                    category: RootCategory::Project,
+                    relative: "../outside.txt".to_owned(),
+                })
+                .is_err()
+        );
+
+        context.close();
+        assert_eq!(
+            context.validate_reference(&reference),
+            Err(super::RuntimeResourceError::ContextClosed)
+        );
+        assert_eq!(
+            scope.validate_reference(&reference),
+            Err(super::RuntimeResourceError::TaskCancelled)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn current_task_result_commits_once_and_invalidates_its_original_scope()
+    -> Result<(), RuntimeCommitError> {
+        let mut context = RuntimeContext::new(12, PathService::new());
+        let scope = context.capture_task_scope();
+        let committed = context.commit_task_variables(&scope, values("result", 42))?;
+        assert_eq!(committed.revision(), 1);
+        assert_eq!(committed.get("result"), Some(&RuntimeValue::Integer(42)));
+        assert!(!context.accepts(&scope));
+        assert_eq!(
+            context.commit_task_variables(&scope, values("result", 43)),
+            Err(RuntimeCommitError::StaleContext)
+        );
+        assert_eq!(
+            context.variables().get("result"),
+            Some(&RuntimeValue::Integer(42))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exhausted_variable_revision_rejects_a_commit_without_replacing_the_snapshot() {
+        let mut context = RuntimeContext::new(1, PathService::new());
+        context.variables.revision = u64::MAX;
+        let original = context.variables().clone();
+
+        assert_eq!(
+            context.commit_variables(u64::MAX, values("result", 1)),
+            Err(RuntimeCommitError::RevisionExhausted)
+        );
+        assert_eq!(context.variables(), &original);
+    }
 }

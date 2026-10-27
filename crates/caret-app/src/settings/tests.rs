@@ -25,6 +25,7 @@ fn settings_default_composes_theme_language_and_preferences() {
     assert_eq!(current.language, "en");
     assert!(current.preferences.window_maximized);
     assert!(current.preferences.caret_blink_enabled);
+    assert_eq!(current, UserSettings::default());
     assert_eq!(service.validate(current.clone()), Ok(current));
 }
 
@@ -182,5 +183,57 @@ fn unknown_fields_are_rejected_and_quarantined() -> Result<(), Box<dyn std::erro
     ));
     assert_eq!(service.current(), original);
     assert!(dir.root.join("settings.json.isolated").exists());
+    Ok(())
+}
+
+#[test]
+fn invalid_settings_isolation_keeps_existing_quarantines() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new("isolation-collision")?;
+    let path = dir.root.join("settings.json");
+    let existing = dir.root.join("settings.json.isolated");
+    std::fs::write(&existing, b"previous invalid settings")?;
+    std::fs::write(&path, b"new invalid settings")?;
+    let mut service = service();
+    let before = service.current();
+
+    let Err(error) = service.load_file(&path) else {
+        panic!("invalid file should not be accepted");
+    };
+    let super::SettingsFileError::Isolated { quarantined, .. } = &error else {
+        panic!("invalid file should have been isolated: {error}");
+    };
+    assert_eq!(quarantined, &dir.root.join("settings.json.isolated-1"));
+    assert_eq!(std::fs::read(existing)?, b"previous invalid settings");
+    assert_eq!(std::fs::read(quarantined)?, b"new invalid settings");
+    assert!(!path.exists());
+    assert_eq!(service.current(), before);
+    assert!(error.to_string().starts_with("settings.isolated:"));
+    Ok(())
+}
+
+#[test]
+fn invalid_candidate_is_rejected_before_creating_a_settings_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new("invalid-candidate")?;
+    let path = dir.root.join("settings.json");
+    let mut service = service();
+    let before = service.current();
+    let candidate = UserSettings {
+        schema_version: SETTINGS_SCHEMA_VERSION + 1,
+        ..before.clone()
+    };
+
+    let Err(error) = service.commit_and_save(candidate, &path) else {
+        panic!("invalid candidate should not be saved");
+    };
+    assert!(matches!(error, super::SettingsUpdateError::Validation(_)));
+    assert!(
+        error
+            .to_string()
+            .starts_with("settings.unsupported_version:")
+    );
+    assert_eq!(service.current(), before);
+    assert!(!path.exists());
     Ok(())
 }

@@ -1664,3 +1664,102 @@ fn empty_runs_keep_their_order_when_inserting_soft_breaks() -> Result<(), EditEr
     }
     Ok(())
 }
+
+#[test]
+fn backward_movement_at_environment_start_leaves_its_input_scope() -> Result<(), EditError> {
+    let mut session = session_with(vec![
+        run("a"),
+        InlineNode::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Italic,
+            definition_id: None,
+            props: Default::default(),
+            children: vec![run("b")],
+            extra: Default::default(),
+        }),
+    ]);
+    let inside = Pos {
+        offset: 1,
+        affinity: Affinity::Downstream,
+        ..session.selection().focus.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: inside.clone(),
+        focus: inside,
+    })))?;
+
+    let effect = session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(effect.selection_changed);
+    assert!(!effect.document_changed);
+    assert_eq!(session.selection().focus.offset, 1);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+    session.run(Command::InsertText("outside".to_owned()))?;
+
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        unreachable!();
+    };
+    let InlineNode::Environment(environment) = &paragraph.inlines[1] else {
+        panic!("italic environment should keep its position");
+    };
+    assert_eq!(paragraph_text(paragraph), "aoutsideb");
+    assert_eq!(environment.children, vec![run("b")]);
+    Ok(())
+}
+
+#[test]
+fn selected_delete_and_forward_paragraph_merge_publish_position_maps() -> Result<(), EditError> {
+    let mut session = session_with(vec![run("first")]);
+    let paragraph_id = session.selection().focus.paragraph_id.clone();
+    let start = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..session.selection().focus.clone()
+    };
+    let end = Pos {
+        offset: 4,
+        affinity: Affinity::Downstream,
+        ..start.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: end.clone(),
+        focus: start.clone(),
+    })))?;
+    let deletion = session.run(Command::Delete(Direction::Backward))?;
+    assert!(deletion.document_changed);
+    assert_eq!(session.selection().focus.offset, 1);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+    let mapped = deletion
+        .position_map
+        .as_ref()
+        .unwrap_or_else(|| panic!("selection deletion needs a position map"))
+        .map(&end);
+    assert_eq!(mapped.offset, 1);
+    assert_eq!(mapped.paragraph_id, paragraph_id);
+    session.run(Command::SplitParagraph)?;
+    let right = session.selection().focus.clone();
+    let left_end = Pos {
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        ..right.clone()
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: left_end.clone(),
+        focus: left_end,
+    })))?;
+    let merge = session.run(Command::Delete(Direction::Forward))?;
+    assert!(merge.document_changed);
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+    let mapped_right = merge
+        .position_map
+        .as_ref()
+        .unwrap_or_else(|| panic!("paragraph merge needs a position map"))
+        .map(&right);
+    assert_eq!(mapped_right.offset, 1);
+    assert_eq!(mapped_right.paragraph_id, paragraph_id);
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        unreachable!();
+    };
+    assert_eq!(paragraph_text(paragraph), "ft");
+    Ok(())
+}

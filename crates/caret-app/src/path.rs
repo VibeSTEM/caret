@@ -379,8 +379,7 @@ mod tests {
 
     impl FixtureRoot {
         fn new(label: &str) -> std::io::Result<Self> {
-            let base = std::fs::canonicalize(std::env::temp_dir())
-                .unwrap_or_else(|_| std::env::temp_dir());
+            let base = std::fs::canonicalize(std::env::temp_dir())?;
             let root = base.join(format!("caret-path-{}-{label}", std::process::id()));
             let _ = fs::remove_dir_all(&root);
             fs::create_dir_all(&root)?;
@@ -626,8 +625,7 @@ mod tests {
 
     #[test]
     fn missing_root_directory_is_an_error() -> Result<(), Box<dyn std::error::Error>> {
-        let base =
-            std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        let base = std::fs::canonicalize(std::env::temp_dir())?;
         let absent = base.join(format!("caret-path-absent-{}", std::process::id()));
         let _ = fs::remove_dir_all(&absent);
         let mut service = PathService::new();

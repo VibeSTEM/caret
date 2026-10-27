@@ -231,3 +231,25 @@ impl Clone for Session {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {
+        let mut session = Session::new(Document::blank())
+            .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+        let old_session_id = session.session_id().clone();
+        session.document_generation = u64::MAX;
+
+        let effect = session
+            .run(Command::InsertText("new revision".to_owned()))
+            .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+
+        assert!(effect.document_changed);
+        assert_eq!(session.document_generation(), 0);
+        assert_ne!(session.session_id(), &old_session_id);
+        assert_eq!(session.selection().focus.offset, "new revision".len());
+    }
+}
