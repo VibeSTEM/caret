@@ -23,7 +23,7 @@ bool& has_installed_snapshot() {
 }
 } // namespace
 
-bool install_layout_snapshot(QString snapshot_json) {
+bool install_layout_snapshot(const QString& snapshot_json) {
     layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
     QString error;
     if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error)) {

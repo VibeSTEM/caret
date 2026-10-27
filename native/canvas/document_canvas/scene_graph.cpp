@@ -79,10 +79,9 @@ bool has_retryable_missing_texture(const PageGlyphNode* page_node) {
 }
 
 bool has_retryable_missing_texture(const GlyphGroupNode* group) {
-    return std::any_of(group->pages.cbegin(), group->pages.cend(),
-                       [](const PageGlyphNode* page_node) {
-                           return has_retryable_missing_texture(page_node);
-                       });
+    return std::any_of(
+        group->pages.cbegin(), group->pages.cend(),
+        [](const PageGlyphNode* page_node) { return has_retryable_missing_texture(page_node); });
 }
 
 class PageBackgroundNode final : public QSGNode {

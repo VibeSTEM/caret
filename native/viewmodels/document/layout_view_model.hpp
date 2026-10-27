@@ -11,7 +11,7 @@
 namespace caret {
 
 /// 在创建 QML 引擎前安装 Rust 返回的页面快照 JSON。
-bool install_layout_snapshot(QString snapshot_json);
+bool install_layout_snapshot(const QString& snapshot_json);
 
 class LayoutViewModel final : public QObject {
     Q_OBJECT
