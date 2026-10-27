@@ -15,6 +15,9 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 | 动作 | Linux / Windows | macOS |
 | --- | --- | --- |
 | 复制 / 粘贴 | Ctrl+C / Ctrl+V | Command+C / Command+V |
+| 打开 `.cdoc` | Ctrl+O | Command+O |
+| 保存 | Ctrl+S | Command+S |
+| 另存为 | Ctrl+Shift+S | Command+Shift+S |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
 | 扩展选区 | Shift+方向键 | Shift+方向键 |
 | 移至视觉行首 / 行尾 | Home / End | Home / End |

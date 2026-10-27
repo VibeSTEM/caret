@@ -35,6 +35,8 @@ bool install_layout_snapshot(const QString& snapshot_json) {
 }
 
 LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
+    m_document_io_pool.setMaxThreadCount(1);
+    refreshDocumentFileStatus();
     if (!has_installed_snapshot()) {
         m_error = QStringLiteral("layout.snapshot_unavailable");
         return;
@@ -51,10 +53,11 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_font_generation = parsed_snapshot.font_generation;
 }
 
-bool LayoutViewModel::installSnapshot(const QString& snapshot_json) {
+bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace_document) {
     layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
     QString error;
-    const auto* previous_snapshot = has_installed_snapshot() ? &installed_snapshot() : nullptr;
+    const auto* previous_snapshot =
+        !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
     if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error, previous_snapshot)) {
         m_error = std::move(error);
         return false;

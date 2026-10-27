@@ -39,6 +39,11 @@ impl From<DocumentError> for DocumentStorageError {
 pub struct DocumentStorage;
 
 impl DocumentStorage {
+    /// 在后台读取文件字节；文档解析和会话替换由应用层在 Rust 中完成。
+    pub fn read_file_bytes(&self, path: &Path) -> Result<Vec<u8>, DocumentStorageError> {
+        fs::read(path).map_err(DocumentStorageError::Io)
+    }
+
     pub fn open_file(&self, path: &Path) -> Result<OpenedDocument, DocumentStorageError> {
         let bytes = fs::read(path).map_err(DocumentStorageError::Io)?;
         Ok(open(&bytes)?)
@@ -50,6 +55,19 @@ impl DocumentStorage {
         let payload = document.to_bytes()?;
         // 目录同步采用最佳努力；成功返回表示文件已替换，与 Settings 共用同一提交点。
         atomic_file::write(path, &payload)
+            .map(|_| ())
+            .map_err(DocumentStorageError::from)
+    }
+
+    /// 原子写入 Rust 已生成并验证的文档快照。
+    pub fn save_snapshot(&self, path: &Path, bytes: &[u8]) -> Result<(), DocumentStorageError> {
+        let opened = open(bytes)?;
+        let OpenedDocument::Editable(_) = opened else {
+            return Err(DocumentStorageError::Document(
+                DocumentError::ReadOnlyPreview,
+            ));
+        };
+        atomic_file::write(path, bytes)
             .map(|_| ())
             .map_err(DocumentStorageError::from)
     }
@@ -134,6 +152,38 @@ mod tests {
             missing_name.to_string(),
             "document.storage_missing_filename"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_write_validates_before_replacing_and_round_trips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "caret-document-storage-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root)?;
+        let path = root.join("document.cdoc");
+        let file = CdocFile::new(caret_doc::Document::blank())?;
+        let bytes = file.to_bytes()?;
+
+        DocumentStorage.save_snapshot(&path, &bytes)?;
+        assert_eq!(DocumentStorage.read_file_bytes(&path)?, bytes);
+        assert!(matches!(
+            DocumentStorage.open_file(&path)?,
+            caret_doc::OpenedDocument::Editable(_)
+        ));
+
+        let Err(invalid) = DocumentStorage.save_snapshot(&path, b"invalid") else {
+            panic!("invalid bytes must not replace the existing document");
+        };
+        assert!(matches!(
+            invalid,
+            DocumentStorageError::Document(DocumentError::InvalidJson(_))
+        ));
+        assert_eq!(DocumentStorage.read_file_bytes(&path)?, bytes);
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }

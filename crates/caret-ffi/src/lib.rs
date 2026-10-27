@@ -14,11 +14,13 @@ fn version() -> String {
 mod generated {
     use crate::document::{
         DocumentRuntime, clear_selection_json, current_caret_json, delete_backward_json,
-        document_hit_test_json, drag_hit_map_json, input_method_event_json, insert_soft_break_json,
-        insert_text_json, interaction_state_json, layout_snapshot_json,
-        move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
-        new_blank_document_runtime, paste_text_json, place_caret_at_page_json,
-        rasterize_page_glyphs, selected_text_json, set_selection_json, split_paragraph_json,
+        document_hit_test_json, document_save_snapshot, document_status_json, drag_hit_map_json,
+        input_method_event_json, insert_soft_break_json, insert_text_json,
+        install_prepared_document_json, interaction_state_json, layout_snapshot_json,
+        mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
+        move_visual_caret_json, new_blank_document_runtime, paste_text_json,
+        place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
+        set_selection_json, split_paragraph_json, write_document_file,
     };
     use crate::settings::{
         SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_caret_blink_enabled,
@@ -68,6 +70,18 @@ mod generated {
             placements: Vec<GlyphPlacement>,
         }
 
+        struct DocumentOpenResult {
+            ticket: u64,
+            error: String,
+        }
+
+        struct DocumentSaveSnapshot {
+            session_generation: u64,
+            document_generation: u64,
+            bytes: Vec<u8>,
+            error: String,
+        }
+
         struct SettingsSnapshot {
             caret_blink_enabled: bool,
             window_width: u32,
@@ -91,6 +105,28 @@ mod generated {
             fn builtin_theme_catalog() -> String;
             /// Rust 分配运行时；C++ 通过 rust::Box 持有并负责析构，句柄有效期随 Box。
             fn new_blank_document_runtime() -> Box<DocumentRuntime>;
+            /// 后台解析文档、构建 Session 并完成首次布局；返回临时 ticket。
+            fn prepare_document_file(
+                path: String,
+                expected_session_generation: u64,
+                expected_document_generation: u64,
+            ) -> DocumentOpenResult;
+            /// 在 GUI 线程安装候选文档；打开期间文档若被修改则拒绝替换。
+            fn install_prepared_document_json(runtime: &mut DocumentRuntime, ticket: u64)
+            -> String;
+            /// 后台线程原子写入已验证快照；路径 I/O 由 Rust 应用服务完成。
+            fn write_document_file(path: String, bytes: Vec<u8>) -> String;
+            /// 捕获不可变文档字节和会话/文档代际。
+            fn document_save_snapshot(runtime: &mut DocumentRuntime) -> DocumentSaveSnapshot;
+            /// 写入成功后推进对应会话的保存点。
+            fn mark_document_saved_json(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                document_generation: u64,
+                path: String,
+            ) -> String;
+            /// 返回文档名、路径和未保存状态。
+            fn document_status_json(runtime: &mut DocumentRuntime) -> String;
             /// 从宿主给定的配置路径载入 Rust 偏好服务；无效文件会按服务规则隔离并回退默认值。
             fn new_settings_runtime(settings_path: String) -> Box<SettingsRuntime>;
             /// 获取 Rust SettingsService 派生的界面快照。

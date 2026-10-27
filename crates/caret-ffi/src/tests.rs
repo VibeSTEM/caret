@@ -1,9 +1,11 @@
 //! FFI 版本、主题、布局与栅格返回契约的行为测试。
 
 use crate::document::{
-    current_caret_json, delete_backward_json, document_hit_test_json, insert_soft_break_json,
-    insert_text_json, layout_snapshot_json, new_blank_document_runtime, place_caret_at_page_json,
-    rasterize_page_glyphs, split_paragraph_json,
+    current_caret_json, delete_backward_json, document_hit_test_json, document_save_snapshot,
+    document_status_json, insert_soft_break_json, insert_text_json, install_prepared_document_json,
+    layout_snapshot_json, mark_document_saved_json, new_blank_document_runtime,
+    place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, split_paragraph_json,
+    write_document_file,
 };
 
 use crate::generated::bridge::GlyphRasterRequest;
@@ -157,4 +159,57 @@ fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
     assert_eq!(invalid.error, "layout.glyphs.invalid_raster_geometry");
     assert!(invalid.images.is_empty());
     assert!(invalid.placements.is_empty());
+}
+
+#[test]
+fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions_saved()
+-> std::io::Result<()> {
+    let root = std::env::temp_dir().join(format!("caret-ffi-document-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let path = root.join("edited.cdoc");
+    let path = path.to_string_lossy().into_owned();
+
+    let mut first_runtime = new_blank_document_runtime();
+    assert!(!layout_snapshot_json(&mut first_runtime).starts_with("error:"));
+    assert!(!insert_text_json(&mut first_runtime, "Hello 世界".to_owned()).starts_with("error:"));
+    let captured = document_save_snapshot(&mut first_runtime);
+    assert!(captured.error.is_empty());
+    assert_eq!(captured.document_generation, 1);
+    assert!(!insert_text_json(&mut first_runtime, " later".to_owned()).starts_with("error:"));
+    assert!(write_document_file(path.clone(), captured.bytes.clone()).is_empty());
+    assert!(
+        write_document_file(path.clone(), b"invalid".to_vec()).starts_with("cdoc.invalid_json:")
+    );
+
+    let mut reopened_runtime = new_blank_document_runtime();
+    let opened = prepare_document_file(path.clone(), 1, 0);
+    assert!(opened.error.is_empty());
+    let reopened_snapshot = install_prepared_document_json(&mut reopened_runtime, opened.ticket);
+    assert!(!reopened_snapshot.starts_with("error:"));
+    assert!(reopened_snapshot.contains("Hello 世界"));
+    let status = document_status_json(&mut reopened_runtime);
+    assert!(status.contains("\"fileName\":\"edited.cdoc\""));
+    assert!(status.contains("\"dirty\":false"));
+
+    let mut stale_runtime = new_blank_document_runtime();
+    let stale_open = prepare_document_file(path.clone(), 1, 0);
+    assert!(stale_open.error.is_empty());
+    assert!(!insert_text_json(&mut stale_runtime, "new edit".to_owned()).starts_with("error:"));
+    assert_eq!(
+        install_prepared_document_json(&mut stale_runtime, stale_open.ticket),
+        "error:document.open_stale_session"
+    );
+
+    let saved_status = mark_document_saved_json(
+        &mut first_runtime,
+        captured.session_generation,
+        captured.document_generation,
+        path.clone(),
+    );
+    assert!(!saved_status.starts_with("error:"));
+    assert!(saved_status.contains("\"dirty\":true"));
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
 }

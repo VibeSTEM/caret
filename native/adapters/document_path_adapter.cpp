@@ -23,4 +23,12 @@ QUrl DocumentPathAdapter::defaultSaveFileUrl() const {
     return QUrl::fromLocalFile(QDir(directory).filePath(QStringLiteral("Untitled.cdoc")));
 }
 
+QUrl DocumentPathAdapter::localFileUrl(const QString& path) const {
+    return path.isEmpty() ? QUrl{} : QUrl::fromLocalFile(path);
+}
+
+QString DocumentPathAdapter::localFilePath(const QUrl& url) const {
+    return url.isLocalFile() ? url.toLocalFile() : QString{};
+}
+
 } // namespace caret

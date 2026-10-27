@@ -42,6 +42,7 @@ include(cmake/qt-provision.cmake)
 set(QT_HOST_PATH "${QT_STAGING}")
 set(_caret_qt_components
     Core
+    Concurrent
     Gui
     Qml
     Quick

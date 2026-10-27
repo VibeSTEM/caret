@@ -57,6 +57,7 @@ QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_byte
                 {QStringLiteral("error"), QStringLiteral("layout.invalid_caret_geometry")}};
     }
     installCaretGeometry(caret_document.object().toVariantMap());
+    refreshDocumentFileStatus();
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), documentGeneration()}};
 #else

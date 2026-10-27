@@ -20,6 +20,7 @@ qt_add_qml_module(
   document/layout_snapshot_codec.hpp
   document/layout_snapshot_codec.cpp
   document/layout_view_model_clipboard_commands.cpp
+  document/layout_view_model_file_commands.cpp
   document/layout_view_model_edit_commands.cpp
   document/layout_view_model_ime_commands.cpp
   document/layout_view_model_navigation_commands.cpp
@@ -42,4 +43,4 @@ set_target_properties(caret_viewmodels PROPERTIES EXPORT_NAME viewmodels)
 caret_native_defaults(caret_viewmodels)
 add_library(caret::viewmodels ALIAS caret_viewmodels)
 target_include_directories(caret_viewmodels PUBLIC document settings theme)
-target_link_libraries(caret_viewmodels PUBLIC Qt6::Core Qt6::Qml Qt6::StateMachine)
+target_link_libraries(caret_viewmodels PUBLIC Qt6::Concurrent Qt6::Core Qt6::Qml Qt6::StateMachine)
