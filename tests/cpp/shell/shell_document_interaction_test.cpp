@@ -3,7 +3,6 @@
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "shell_load_test.hpp"
-#include <cstddef>
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"

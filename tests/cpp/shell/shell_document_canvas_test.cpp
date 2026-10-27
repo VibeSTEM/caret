@@ -47,7 +47,6 @@
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <algorithm>
-#include <cstddef>
 #include <limits>
 #include <qcontainerfwd.h>
 #include <qtestcase.h>

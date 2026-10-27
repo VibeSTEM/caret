@@ -11,7 +11,6 @@
 #include <QString>
 #include <QVariant>
 #include <QVariantMap>
-#include <cstddef>
 #include <qcontainerfwd.h>
 
 namespace caret {
