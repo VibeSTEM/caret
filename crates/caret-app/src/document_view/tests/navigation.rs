@@ -164,6 +164,7 @@ fn drag_hit_map_is_page_local_and_release_commits_one_selection()
         .collect::<Vec<_>>();
     grapheme_boundaries.push(text.len());
     for stop in stops {
+        assert_eq!(stop["pageIndex"], 0);
         let offset = stop["position"]["offsetUtf8"]
             .as_str()
             .and_then(|value| value.parse::<usize>().ok())

@@ -32,6 +32,8 @@ class DocumentCanvas : public QQuickItem {
                    appearanceChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
                    caretGeometryChanged)
+    Q_PROPERTY(QVariantMap caretPreviewGeometry READ caretPreviewGeometry WRITE
+                   setCaretPreviewGeometry NOTIFY caretPreviewGeometryChanged)
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext WRITE setInputMethodContext
                    NOTIFY inputMethodContextChanged)
     Q_PROPERTY(QString preeditText READ preeditText NOTIFY preeditTextChanged)
@@ -71,6 +73,8 @@ class DocumentCanvas : public QQuickItem {
     void setPageBorderColor(const QColor& color);
     [[nodiscard]] QVariantMap caretGeometry() const;
     void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] QVariantMap caretPreviewGeometry() const;
+    void setCaretPreviewGeometry(const QVariantMap& geometry);
     [[nodiscard]] QVariantMap inputMethodContext() const;
     void setInputMethodContext(const QVariantMap& context);
     [[nodiscard]] QString preeditText() const;
@@ -129,6 +133,7 @@ class DocumentCanvas : public QQuickItem {
     void pageGapPtChanged();
     void pageMarginPtChanged();
     void caretGeometryChanged();
+    void caretPreviewGeometryChanged();
     void inputMethodContextChanged();
     void caretBlinkEnabledChanged();
     void glyphFramesChanged();
@@ -147,7 +152,9 @@ class DocumentCanvas : public QQuickItem {
     void updateGeometry();
     void initializeGeometryNotifications();
     void initializeCaretBlink();
-    [[nodiscard]] QRectF caretRect() const;
+    [[nodiscard]] bool normalizeCaretGeometry(const QVariantMap& geometry,
+                                              QVariantMap& normalized_geometry) const;
+    [[nodiscard]] QRectF caretRect(const QVariantMap& geometry) const;
     void refreshCaretBlink();
     void toggleCaretVisibility();
     void keyPressEvent(QKeyEvent* event) override;
@@ -163,6 +170,7 @@ class DocumentCanvas : public QQuickItem {
     QColor m_page_color;
     QColor m_page_border_color;
     QVariantMap m_caret_geometry;
+    QVariantMap m_caret_preview_geometry;
     QVariantMap m_input_method_context;
     QString m_preedit_text;
     int m_preedit_cursor_position = 0;

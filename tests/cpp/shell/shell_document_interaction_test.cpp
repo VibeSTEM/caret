@@ -474,6 +474,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     const QPointF drag_start_window =
         canvas->mapToItem(window.contentItem(), stop_point(drag_start));
     const QPointF drag_end_window = canvas->mapToItem(window.contentItem(), stop_point(drag_end));
+    const QRectF ime_caret_before_drag = canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
     QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_preview_start_window.toPoint());
     const QPoint drag_end_point = drag_end_window.toPoint();
     QMouseEvent drag_move(QEvent::MouseMove, drag_end_window, drag_end_window,
@@ -491,6 +492,11 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
             preview_focus.value(QStringLiteral("position"))
                 .toMap()
                 .value(QStringLiteral("offsetUtf8")));
+    QTRY_COMPARE_WITH_TIMEOUT(canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
+                              preview_focus.value(QStringLiteral("xPt")).toReal(), 3000);
+    QCOMPARE(canvas->caretPreviewGeometry().value(QStringLiteral("pageIndex")).toInt(),
+             preview_focus.value(QStringLiteral("pageIndex")).toInt());
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), ime_caret_before_drag);
     QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionPreviewRects().isEmpty(), 3000);
     const QVariantList preview_rectangles = canvas->selectionPreviewRects();
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
@@ -512,6 +518,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     };
     QCOMPARE(selection_bounds(preview_rectangles), selection_bounds(committed_rectangles));
     QVERIFY(canvas->selectionPreviewRects().isEmpty());
+    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
     QCOMPARE(scroller->property("contentY").toReal(), drag_scroll_y);
     QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("8"));
     QCOMPARE(
@@ -519,6 +526,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCOMPARE(
         layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4);
 
+    const QRectF ime_caret_before_reverse_drag =
+        canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
     QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
     QMouseEvent reverse_drag_move(QEvent::MouseMove, drag_preview_start_window,
                                   drag_preview_start_window,
@@ -526,6 +535,16 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &reverse_drag_move);
     QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    const QVariantMap reverse_focus = pointer_handler->property("dragFocus").toMap();
+    QCOMPARE(reverse_focus.value(QStringLiteral("position"))
+                 .toMap()
+                 .value(QStringLiteral("offsetUtf8"))
+                 .toString(),
+             QStringLiteral("0"));
+    QTRY_COMPARE_WITH_TIMEOUT(canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
+                              reverse_focus.value(QStringLiteral("xPt")).toReal(), 3000);
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(),
+             ime_caret_before_reverse_drag);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier,
                         drag_preview_start_window.toPoint());
     QTRY_COMPARE_WITH_TIMEOUT(
@@ -534,6 +553,9 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_COMPARE_WITH_TIMEOUT(
         layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 0,
         3000);
+    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
+    QCOMPARE(canvas->caretGeometry().value(QStringLiteral("xPt")).toReal(),
+             reverse_focus.value(QStringLiteral("xPt")).toReal());
 
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("\nabc"));
@@ -654,10 +676,12 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         layout_view_model->dragHitMap(2).value(QStringLiteral("stops")).toList();
     QVERIFY(!first_stops.isEmpty());
     QVERIFY(!third_stops.isEmpty());
-    pointer_handler->setProperty("dragDocumentGeneration", layout_view_model->documentGeneration());
-    pointer_handler->setProperty("dragFontGeneration", layout_view_model->fontGeneration());
-    pointer_handler->setProperty("dragLayoutRevision",
-                                 QString::number(layout_view_model->layoutRevision()));
+    pointer_handler->setProperty(
+        "dragSnapshot",
+        QVariantMap{{QStringLiteral("documentGeneration"), layout_view_model->documentGeneration()},
+                    {QStringLiteral("fontGeneration"), layout_view_model->fontGeneration()},
+                    {QStringLiteral("layoutRevision"),
+                     QString::number(layout_view_model->layoutRevision())}});
     const QVariant first_point = QVariant::fromValue(stop_point(first_stops.first().toMap()));
     const QVariantMap third_stop = third_stops.first().toMap();
     const QVariant third_point = QVariant::fromValue(canvas->documentToContent(
@@ -677,6 +701,14 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         cross_page_preview.cbegin(), cross_page_preview.cend(), [](const QVariant& rectangle) {
             return rectangle.toMap().value(QStringLiteral("pageIndex")).toInt() == 1;
         }));
+    pointer_handler->setProperty("selectionDragActive", true);
+    QVERIFY(canvas->selectionPreviewRects().size() > 0);
+    QVERIFY(!canvas->caretPreviewGeometry().isEmpty());
+    QVERIFY(
+        layout_view_model->insertText(QStringLiteral("x")).value(QStringLiteral("valid")).toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(pointer_handler->property("dragFocus").toMap().isEmpty(), 3000);
+    QVERIFY(canvas->selectionPreviewRects().isEmpty());
+    QVERIFY(canvas->caretPreviewGeometry().isEmpty());
     delete surface;
 }
 

@@ -19,10 +19,11 @@ impl DocumentViewRuntime {
         let mut segments = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for fragment in &page.layout.fragments {
-            let Some(paragraph) = snapshot
+            let Some((paragraph_order, paragraph)) = snapshot
                 .paragraphs
                 .iter()
-                .find(|paragraph| paragraph.id == fragment.paragraph_id)
+                .enumerate()
+                .find(|(_, paragraph)| paragraph.id == fragment.paragraph_id)
             else {
                 continue;
             };
@@ -32,36 +33,25 @@ impl DocumentViewRuntime {
                 .map(|(offset, _)| offset)
                 .collect::<Vec<_>>();
             grapheme_offsets.push(paragraph.text.len());
-            grapheme_offsets.dedup();
-            let paragraph_order = snapshot
-                .paragraphs
-                .iter()
-                .position(|candidate| candidate.id == paragraph.id)
-                .unwrap_or(0);
             let mut offsets = Vec::new();
             let mut line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                     continue;
                 };
-                let first =
+                let first_boundary =
                     grapheme_offsets.partition_point(|offset| *offset < line.source_bytes.start);
                 offsets.extend(
-                    grapheme_offsets[first..]
+                    grapheme_offsets[first_boundary..]
                         .iter()
                         .copied()
                         .take_while(|offset| *offset <= line.consumed_bytes.end),
                 );
-                let first_boundary =
-                    grapheme_offsets.partition_point(|offset| *offset < line.source_bytes.start);
                 let boundary_end =
                     grapheme_offsets.partition_point(|offset| *offset <= line.source_bytes.end);
                 for pair in grapheme_offsets[first_boundary..boundary_end].windows(2) {
                     let start = pair[0];
                     let end = pair[1];
-                    if start < line.source_bytes.start || end > line.source_bytes.end {
-                        continue;
-                    }
                     if let Some(rectangles) = paragraph
                         .layout
                         .selection_text_geometry(&paragraph.text, start..end)
@@ -113,6 +103,7 @@ impl DocumentViewRuntime {
                             continue;
                         }
                         stops.push(serde_json::json!({
+                            "pageIndex": page_index,
                             "xPt": caret.x_pt,
                             "y0Pt": caret.y0_pt,
                             "y1Pt": caret.y1_pt,
@@ -138,8 +129,7 @@ impl DocumentViewRuntime {
         .map_err(|error| format!("selection.hit_map_serialize: {error}"))
     }
 
-    /// 在 Rust Session 中提交鼠标拖选释放时的两个稳定正文位置。
-    /// 将 Qt 释放时提交的两个稳定正文位置设置为 Rust 选区。
+    /// 将 Qt 拖选释放时提交的两个稳定正文位置设置为 Rust 选区。
     pub fn set_selection_json(&mut self, selection_json: &str) -> Result<String, String> {
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase")]
