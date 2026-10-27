@@ -10,6 +10,8 @@ use caret_layout::{
 };
 use std::collections::HashMap;
 
+const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
+
 /// 文档布局失败时返回稳定的错误类别；不产生部分快照。
 #[derive(Debug)]
 pub enum DocumentLayoutError {
@@ -62,6 +64,53 @@ pub struct LaidOutParagraph {
     pub id: NodeId,
     pub text: String,
     pub layout: ParleyParagraphLayout,
+    utf16_checkpoints: Vec<(usize, usize)>,
+    line_locations: Vec<Option<CaretLineLocation>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CaretLineLocation {
+    page_index: usize,
+    y0_pt: f64,
+}
+
+impl LaidOutParagraph {
+    fn new(id: NodeId, text: String, layout: ParleyParagraphLayout) -> Self {
+        let mut utf16_checkpoints = vec![(0, 0)];
+        let mut utf16_offset = 0;
+        let mut last_checkpoint = 0;
+        for (byte_offset, character) in text.char_indices() {
+            if byte_offset.saturating_sub(last_checkpoint) >= UTF16_CHECKPOINT_STRIDE_BYTES {
+                utf16_checkpoints.push((byte_offset, utf16_offset));
+                last_checkpoint = byte_offset;
+            }
+            utf16_offset += character.len_utf16();
+        }
+        let line_locations = vec![None; layout.paragraph.lines.len()];
+        Self {
+            id,
+            text,
+            layout,
+            utf16_checkpoints,
+            line_locations,
+        }
+    }
+
+    /// 将 Rust UTF-8 字节位置映射到 Qt UTF-16 代码单元位置。
+    pub fn utf16_offset(&self, byte_offset: usize) -> Option<usize> {
+        self.text.get(..byte_offset)?;
+        let checkpoint_index = self
+            .utf16_checkpoints
+            .partition_point(|(byte, _)| *byte <= byte_offset)
+            .saturating_sub(1);
+        let (checkpoint_byte, checkpoint_utf16) = self
+            .utf16_checkpoints
+            .get(checkpoint_index)
+            .copied()
+            .unwrap_or((0, 0));
+        let checkpoint_prefix = self.text.get(checkpoint_byte..byte_offset)?;
+        Some(checkpoint_utf16 + checkpoint_prefix.encode_utf16().count())
+    }
 }
 
 /// 一页的文档坐标和段落行片段。
@@ -115,8 +164,12 @@ pub struct PageHit {
 }
 
 impl DocumentLayoutSnapshot {
-    pub(crate) fn paragraph_by_id(&self, id: &NodeId) -> Option<&LaidOutParagraph> {
+    pub fn paragraph_by_id(&self, id: &NodeId) -> Option<&LaidOutParagraph> {
         self.paragraphs.get(*self.paragraph_lookup.get(id)?)
+    }
+
+    pub fn paragraph_index_by_id(&self, id: &NodeId) -> Option<usize> {
+        self.paragraph_lookup.get(id).copied()
     }
 
     /// 判断此布局结果是否仍对应当前文档与字体输入。
@@ -210,41 +263,31 @@ impl DocumentLayoutSnapshot {
             .layout
             .cursor_at(position.offset, visual_affinity)?;
         let (bounds, line_index) = paragraph.layout.cursor_geometry_with_line(cursor, 0.0)?;
-
-        for (page_index, page) in self.pages.iter().enumerate() {
-            for fragment in &page.layout.fragments {
-                if fragment.paragraph_id != position.paragraph_id
-                    || !fragment.line_range.contains(&line_index)
-                {
-                    continue;
-                }
-                let mut fragment_line_top = f64::from(fragment.y_offset_pt);
-                for preceding_line in fragment.line_range.start..line_index {
-                    fragment_line_top += f64::from(
-                        paragraph
-                            .layout
-                            .paragraph
-                            .lines
-                            .get(preceding_line)?
-                            .metrics
-                            .height_pt,
-                    );
-                }
-                let line = paragraph.layout.paragraph.lines.get(line_index)?;
-                let y0_pt = page.margin_top_pt + fragment_line_top;
-                return Some(PageCaretGeometry {
-                    page_index,
-                    x_pt: page.margin_left_pt + bounds.x0,
-                    y0_pt,
-                    y1_pt: y0_pt + f64::from(line.metrics.height_pt),
-                });
-            }
-        }
-        None
+        let line = paragraph.layout.paragraph.lines.get(line_index)?;
+        let location = paragraph.line_locations.get(line_index)?.as_ref()?;
+        Some(PageCaretGeometry {
+            page_index: location.page_index,
+            x_pt: self.pages.get(location.page_index)?.margin_left_pt + bounds.x0,
+            y0_pt: location.y0_pt,
+            y1_pt: location.y0_pt + f64::from(line.metrics.height_pt),
+        })
     }
 
     /// 返回裁切到可见分页片段内的选区矩形。
     pub fn selection_geometry(&self, selection: &Selection) -> Option<Vec<PageSelectionRect>> {
+        self.range_geometry(selection, false)
+    }
+
+    /// 返回按字体度量定位的预编辑下划线。
+    pub fn composition_geometry(&self, selection: &Selection) -> Option<Vec<PageSelectionRect>> {
+        self.range_geometry(selection, true)
+    }
+
+    fn range_geometry(
+        &self,
+        selection: &Selection,
+        composition: bool,
+    ) -> Option<Vec<PageSelectionRect>> {
         if selection.anchor.story != StoryId::Body || selection.focus.story != StoryId::Body {
             return None;
         }
@@ -262,6 +305,9 @@ impl DocumentLayoutSnapshot {
                 .is_char_boundary(selection.focus.offset)
         {
             return None;
+        }
+        if selection.anchor == selection.focus {
+            return Some(Vec::new());
         }
         let (start, start_paragraph, end, end_paragraph) =
             if (anchor_index, selection.anchor.offset) <= (focus_index, selection.focus.offset) {
@@ -313,9 +359,15 @@ impl DocumentLayoutSnapshot {
                 if range_start >= range_end {
                     continue;
                 }
-                let line_rectangles = paragraph
-                    .layout
-                    .selection_geometry(range_start..range_end)?;
+                let line_rectangles = if composition {
+                    paragraph
+                        .layout
+                        .composition_text_geometry(&paragraph.text, range_start..range_end)?
+                } else {
+                    paragraph
+                        .layout
+                        .selection_text_geometry(&paragraph.text, range_start..range_end)?
+                };
                 let mut fragment_line_tops = Vec::with_capacity(fragment.line_range.len());
                 let mut fragment_line_top_pt = f64::from(fragment.y_offset_pt);
                 for line_index in fragment.line_range.clone() {
@@ -331,12 +383,23 @@ impl DocumentLayoutSnapshot {
                     let line_top =
                         page.margin_top_pt + *fragment_line_tops.get(local_line_index)?;
                     let line = paragraph.layout.paragraph.lines.get(line_index)?;
+                    let (y0, y1) = if composition {
+                        (
+                            (line_top + bounds.y0).max(0.0),
+                            (line_top + bounds.y1).min(page.height_pt),
+                        )
+                    } else {
+                        (line_top, line_top + f64::from(line.metrics.height_pt))
+                    };
+                    if y1 <= y0 {
+                        continue;
+                    }
                     rectangles.push(PageSelectionRect {
                         page_index,
                         x0_pt: bounds.x0 + page.margin_left_pt,
-                        y0_pt: line_top,
+                        y0_pt: y0,
                         x1_pt: bounds.x1 + page.margin_left_pt,
-                        y1_pt: line_top + f64::from(line.metrics.height_pt),
+                        y1_pt: y1,
                     });
                 }
             }
@@ -409,6 +472,26 @@ impl DocumentLayoutService {
         Ok(snapshot)
     }
 
+    /// 重排一个发生暂态变化的段落，复用同一文档其他段落的已塑形结果。
+    pub fn layout_session_reusing(
+        &mut self,
+        session: &Session,
+        previous: &DocumentLayoutSnapshot,
+        changed_paragraph_id: &NodeId,
+        catalog: &mut FontCatalog,
+        base_style: &ShapingStyle,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let mut snapshot = self.layout_with_reuse(
+            session.document(),
+            session.document_generation(),
+            catalog,
+            base_style,
+            Some((previous, changed_paragraph_id)),
+        )?;
+        snapshot.session_id = Some(session.session_id().clone());
+        Ok(snapshot)
+    }
+
     /// 根据单一 PageSection 布局正文。未知块先拒绝整次布局，避免静默漏画内容。
     pub fn layout(
         &mut self,
@@ -416,6 +499,17 @@ impl DocumentLayoutService {
         document_generation: u64,
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        self.layout_with_reuse(document, document_generation, catalog, base_style, None)
+    }
+
+    fn layout_with_reuse(
+        &mut self,
+        document: &Document,
+        document_generation: u64,
+        catalog: &mut FontCatalog,
+        base_style: &ShapingStyle,
+        reuse: Option<(&DocumentLayoutSnapshot, &NodeId)>,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
         document
             .validate()
@@ -458,6 +552,14 @@ impl DocumentLayoutService {
             let style =
                 resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
                     .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+            if let Some((previous, changed_paragraph_id)) = reuse
+                && &paragraph.id != changed_paragraph_id
+                && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
+            {
+                paragraphs.push(previous_paragraph.clone());
+                resolved_styles.push(style);
+                continue;
+            }
             let placeholder_metrics = caret_layout::FontLineMetrics {
                 ascent_pt: 9.6,
                 descent_pt: 2.4,
@@ -501,11 +603,7 @@ impl DocumentLayoutService {
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             resolved_styles.push(style);
-            paragraphs.push(LaidOutParagraph {
-                id: paragraph.id.clone(),
-                text,
-                layout,
-            });
+            paragraphs.push(LaidOutParagraph::new(paragraph.id.clone(), text, layout));
         }
 
         let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
@@ -535,7 +633,7 @@ impl DocumentLayoutService {
         }
         let page_layouts = paginate_paragraphs(&pagination_items, content_height_pt as f32)
             .map_err(|error| DocumentLayoutError::Pagination(error.to_string()))?;
-        let pages = page_layouts
+        let pages: Vec<_> = page_layouts
             .into_iter()
             .map(|layout| PageLayoutSnapshot {
                 width_pt: page_width_pt,
@@ -547,15 +645,36 @@ impl DocumentLayoutService {
                 layout,
             })
             .collect();
+        let paragraph_lookup: HashMap<_, _> = paragraphs
+            .iter()
+            .enumerate()
+            .map(|(index, paragraph)| (paragraph.id.clone(), index))
+            .collect();
+        for (page_index, page) in pages.iter().enumerate() {
+            for fragment in &page.layout.fragments {
+                let Some(&paragraph_index) = paragraph_lookup.get(&fragment.paragraph_id) else {
+                    continue;
+                };
+                let Some(paragraph) = paragraphs.get_mut(paragraph_index) else {
+                    continue;
+                };
+                let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                for line_index in fragment.line_range.clone() {
+                    let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
+                        continue;
+                    };
+                    if let Some(location) = paragraph.line_locations.get_mut(line_index) {
+                        *location = Some(CaretLineLocation { page_index, y0_pt });
+                    }
+                    y0_pt += f64::from(line.metrics.height_pt);
+                }
+            }
+        }
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
             font_generation: catalog.generation(),
-            paragraph_lookup: paragraphs
-                .iter()
-                .enumerate()
-                .map(|(index, paragraph)| (paragraph.id.clone(), index))
-                .collect(),
+            paragraph_lookup,
             paragraphs,
             pages,
         })
@@ -590,6 +709,28 @@ impl DocumentLayoutRuntime {
         );
         self.service
             .layout_session(session, &mut self.catalog, &base_style)
+    }
+
+    /// 复用未变段落的塑形结果，仅重新布局指定段落并计算新的分页。
+    pub fn layout_session_reusing(
+        &mut self,
+        session: &Session,
+        previous: &DocumentLayoutSnapshot,
+        changed_paragraph_id: &NodeId,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let base_style = ShapingStyle::new(
+            session
+                .document()
+                .global_settings
+                .default_font_size_centipoints,
+        );
+        self.service.layout_session_reusing(
+            session,
+            previous,
+            changed_paragraph_id,
+            &mut self.catalog,
+            &base_style,
+        )
     }
 
     /// 当前字体目录代际，用于丢弃过期异步结果。
@@ -632,7 +773,7 @@ mod tests {
     use crate::{Affinity, Command, Pos, Selection, Session, StoryId};
     use caret_doc::{
         Block, BlockEnvironment, BlockEnvironmentKind, Document, ExplicitBreak, InlineNode, NodeId,
-        OpaqueNode, Paragraph, Run,
+        OpaqueNode, Paragraph, Run, SoftBreak,
     };
     use caret_layout::{
         FontCatalog, FontCatalogError, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
@@ -931,6 +1072,7 @@ mod tests {
         let caret = snapshot
             .caret_geometry(&position, VisualAffinity::Downstream)
             .unwrap_or_else(|| panic!("late paragraph caret geometry failed"));
+        assert_eq!(caret.page_index, page_index);
         let selection = Selection {
             anchor: position.clone(),
             focus: Pos {
@@ -1271,6 +1413,64 @@ mod tests {
             }),
             Some(Vec::new())
         );
+    }
+
+    #[test]
+    fn soft_break_is_selected_logically_without_a_trailing_highlight_block() {
+        let mut document = Document::blank();
+        let Block::Paragraph(paragraph) = &mut document.body[0] else {
+            unreachable!();
+        };
+        paragraph.inlines = vec![
+            InlineNode::Run(Run {
+                text: "你好".to_owned(),
+                language: Some("zh".to_owned()),
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }),
+            InlineNode::SoftBreak(SoftBreak::default()),
+            InlineNode::Run(Run {
+                text: "你好".to_owned(),
+                language: Some("zh".to_owned()),
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }),
+        ];
+        let paragraph_id = paragraph.id.clone();
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let start = Pos {
+            story: StoryId::Body,
+            paragraph_id,
+            offset: 0,
+            affinity: Affinity::Downstream,
+        };
+        let text_end = Pos {
+            offset: "你好".len(),
+            affinity: Affinity::Upstream,
+            ..start.clone()
+        };
+        let break_end = Pos {
+            offset: "你好\n".len(),
+            ..text_end.clone()
+        };
+        let text_rectangles = snapshot
+            .selection_geometry(&Selection {
+                anchor: start.clone(),
+                focus: text_end,
+            })
+            .unwrap_or_else(|| panic!("text selection geometry failed"));
+        let break_rectangles = snapshot
+            .selection_geometry(&Selection {
+                anchor: start,
+                focus: break_end,
+            })
+            .unwrap_or_else(|| panic!("soft-break selection geometry failed"));
+        assert_eq!(break_rectangles, text_rectangles);
     }
 
     #[test]

@@ -21,8 +21,12 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList selectionRects READ selectionRects NOTIFY interactionChanged)
+    Q_PROPERTY(QVariantList compositionRects READ compositionRects NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
+    Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
     Q_PROPERTY(QString error READ error CONSTANT)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry NOTIFY caretGeometryChanged)
 
@@ -33,10 +37,14 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] const QVariantList& pageLayouts() const { return m_page_layouts; }
     [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
     [[nodiscard]] const QVariantList& paragraphLayouts() const { return m_paragraph_layouts; }
+    [[nodiscard]] const QVariantList& selectionRects() const { return m_selection_rects; }
+    [[nodiscard]] const QVariantList& compositionRects() const { return m_composition_rects; }
+    [[nodiscard]] const QVariantMap& inputMethodContext() const { return m_input_method_context; }
     [[nodiscard]] QString documentGeneration() const {
         return QString::number(m_document_generation);
     }
     [[nodiscard]] QString fontGeneration() const { return QString::number(m_font_generation); }
+    [[nodiscard]] qulonglong layoutRevision() const { return m_layout_revision; }
     [[nodiscard]] const QString& error() const { return m_error; }
     [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
 
@@ -52,6 +60,26 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap deleteBackward();
     /// 将 Shift+Return 提交为段内软换行。
     Q_INVOKABLE QVariantMap insertSoftBreak();
+    /// 按视觉顺序移动 caret，并由 Rust 更新布局快照。
+    Q_INVOKABLE QVariantMap moveVisualCaret(bool forward, bool extend);
+    /// 在上下视觉行移动 caret。
+    Q_INVOKABLE QVariantMap moveVerticalCaret(int line_delta, bool extend);
+    /// 移到当前视觉行首尾。
+    Q_INVOKABLE QVariantMap moveToVisualLineEdge(bool end, bool extend);
+    /// 将 Qt 输入法预编辑、提交及替换范围交给 Rust Session。
+    Q_INVOKABLE QVariantMap inputMethodEvent(const QString& preedit, const QString& commit,
+                                             int replacement_start, int replacement_length,
+                                             int cursor_position_utf16);
+    /// 按需提供当前页拖选缓存；指针移动过程只在 Qt/QML 内部命中。
+    Q_INVOKABLE QVariantMap dragHitMap(int page_index);
+    /// 鼠标释放时一次性提交本地预览锚点与焦点。
+    Q_INVOKABLE QVariantMap setSelection(const QVariantMap& anchor, const QVariantMap& focus);
+    /// 清除选区并保留现有焦点位置。
+    Q_INVOKABLE QVariantMap clearSelection();
+    /// 将 Rust 生成的选区纯文本复制到系统剪贴板。
+    Q_INVOKABLE QVariantMap copySelectionToClipboard();
+    /// 将系统剪贴板文本作为一次 Rust 插入/替换命令粘贴。
+    Q_INVOKABLE QVariantMap pasteFromClipboard();
     /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
     Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
                                                 qreal page_origin_device_x_px,
@@ -62,10 +90,13 @@ class LayoutViewModel final : public QObject {
   private:
     bool installSnapshot(const QString& snapshot_json);
     QVariantMap installEditResponse(const QByteArray& response_bytes);
+    QVariantMap installInteractionResponse(const QByteArray& response_bytes);
+    bool installInteraction(const QString& interaction_json);
     void installCaretGeometry(const QVariantMap& geometry);
 
   signals:
     void layoutChanged();
+    void interactionChanged();
     void caretGeometryChanged();
 
   private:
@@ -73,8 +104,12 @@ class LayoutViewModel final : public QObject {
     QVariantList m_page_layouts;
     QVariantMap m_page_margins_pt;
     QVariantList m_paragraph_layouts;
+    QVariantList m_selection_rects;
+    QVariantList m_composition_rects;
+    QVariantMap m_input_method_context;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
+    qulonglong m_layout_revision = 0;
     QString m_error;
     QVariantMap m_caret_geometry;
 };

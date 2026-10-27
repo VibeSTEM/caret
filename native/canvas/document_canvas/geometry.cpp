@@ -29,7 +29,10 @@ void DocumentCanvas::initializeGeometryNotifications() {
     connect(this, &QQuickItem::widthChanged, this, [this]() {
         ++m_glyph_geometry_revision;
         update();
+        updateInputMethodCursorRectangle();
     });
+    connect(this, &DocumentCanvas::geometryChanged, this,
+            &DocumentCanvas::updateInputMethodCursorRectangle);
     connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* target_window) {
         if (target_window == nullptr) {
             return;

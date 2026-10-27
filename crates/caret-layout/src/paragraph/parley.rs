@@ -12,8 +12,8 @@ use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    FontFamilyName, GenericFamily, Language, Layout, LayoutContext, StyleProperty,
-    WhiteSpaceCollapse,
+    FontFamilyName, GenericFamily, Language, Layout, LayoutContext, PositionedLayoutItem,
+    StyleProperty, WhiteSpaceCollapse,
 };
 
 use crate::{
@@ -403,6 +403,45 @@ impl ParleyParagraphLayout {
         None
     }
 
+    /// 在相邻视觉行按期望 x 命中，返回更新后的视觉光标和可继续复用的 x。
+    pub fn move_vertical(
+        &self,
+        cursor: VisualCursor,
+        line_delta: isize,
+        preferred_x: Option<f32>,
+    ) -> Option<(VisualCursor, f32)> {
+        if line_delta == 0 {
+            return None;
+        }
+        let (bounds, line_index) = self.cursor_geometry_with_line(cursor, 0.0)?;
+        let x = preferred_x.unwrap_or(bounds.x0 as f32);
+        if !x.is_finite() {
+            return None;
+        }
+        let target_line = line_index.checked_add_signed(line_delta)?;
+        let hit = self.cursor_from_point_on_line(x, target_line)?;
+        Some((hit.cursor, x))
+    }
+
+    /// 将光标移到当前视觉行首尾，并将 Parley 的结果校验到扩展字素边界。
+    pub fn move_to_visual_line_edge(
+        &self,
+        cursor: VisualCursor,
+        end: bool,
+    ) -> Option<VisualCursor> {
+        let selection = parley::editing::Selection::from(self.to_parley_cursor(cursor));
+        let moved = if end {
+            selection.line_end(&self.layout, false)
+        } else {
+            selection.line_start(&self.layout, false)
+        };
+        let target = Self::from_parley_cursor(moved.focus());
+        self.grapheme_boundaries
+            .binary_search(&target.byte_index)
+            .is_ok()
+            .then_some(target)
+    }
+
     /// 点击命中时将内部字素停靠点吸附到视觉距离最近的完整字素边缘。
     pub fn cursor_from_point(&self, x: f32, y: f32) -> Option<ParagraphHit> {
         if self.layout.text_len() == 0 {
@@ -537,6 +576,81 @@ impl ParleyParagraphLayout {
                 })
                 .collect(),
         )
+    }
+
+    /// 返回可见文字的选区几何；段落及软换行符本身不产生高亮矩形。
+    pub fn selection_text_geometry(
+        &self,
+        text: &str,
+        range: Range<usize>,
+    ) -> Option<Vec<(parley::BoundingBox, usize)>> {
+        if range.start > range.end
+            || range.end > text.len()
+            || !text.is_char_boundary(range.start)
+            || !text.is_char_boundary(range.end)
+            || range.end > self.layout.text_len()
+        {
+            return None;
+        }
+
+        let mut rectangles = Vec::new();
+        let mut text_start = range.start;
+        for (relative_offset, character) in text[range.clone()].char_indices() {
+            if character != '\n' {
+                continue;
+            }
+            let break_start = range.start + relative_offset;
+            if text_start < break_start {
+                rectangles.extend(self.selection_geometry(text_start..break_start)?);
+            }
+            text_start = break_start + character.len_utf8();
+        }
+        if text_start < range.end {
+            rectangles.extend(self.selection_geometry(text_start..range.end)?);
+        }
+        Some(rectangles)
+    }
+
+    /// 预编辑下划线按视觉 run 的基线和字体度量定位，y 相对 Caret 行顶。
+    pub fn composition_text_geometry(
+        &self,
+        text: &str,
+        range: Range<usize>,
+    ) -> Option<Vec<(parley::BoundingBox, usize)>> {
+        let selection = self.selection_text_geometry(text, range)?;
+        let mut result = Vec::new();
+        for (bounds, line_index) in selection {
+            let line = self.layout.get(line_index)?;
+            let raw_top = f64::from(*self.parley_line_tops_pt.get(line_index)?);
+            let adjustment = f64::from(*self.baseline_adjustments_pt.get(line_index)?);
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                    continue;
+                };
+                let x0 = bounds.x0.max(f64::from(glyph_run.offset()));
+                let x1 = bounds
+                    .x1
+                    .min(f64::from(glyph_run.offset() + glyph_run.advance()));
+                if x1 <= x0 {
+                    continue;
+                }
+                let metrics = glyph_run.run().font_metrics();
+                let thickness = f64::from(if metrics.underline_size > 0.0 {
+                    metrics.underline_size
+                } else {
+                    glyph_run.run().font_size() / 18.0
+                });
+                let y0 = f64::from(glyph_run.baseline() - metrics.underline_offset) - raw_top
+                    + adjustment;
+                if y0.is_finite() && thickness.is_finite() && thickness > 0.0 {
+                    result.push((
+                        parley::BoundingBox::new(x0, y0, x1, y0 + thickness),
+                        line_index,
+                    ));
+                }
+            }
+        }
+        Some(result)
     }
 
     /// 返回与自定义行框 baseline/溢出语义对齐的插入点矩形。

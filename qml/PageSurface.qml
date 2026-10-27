@@ -10,8 +10,15 @@ Item {
 
     signal documentPositionHit(var result)
 
-    property real pageScale: 1
+    property real pageScale: DocumentUnits.percentToFactor(CanvasPolicy.defaultZoomPercent)
     property bool glyphRasterizationPending: false
+    property int canvasGeometryRevision: 0
+
+    function compositionPoint(pageIndex, x, y) {
+        // C++ 坐标映射依赖 QML 无法直接读取的画布几何状态。
+        const revision = canvasGeometryRevision;
+        return pageCanvas.documentToContent(pageIndex, Qt.point(x, y));
+    }
 
     function scheduleGlyphRasterization() {
         if (glyphRasterizationPending)
@@ -61,7 +68,7 @@ Item {
             }
             const phaseX = request.pageOriginDeviceXPx - Math.floor(request.pageOriginDeviceXPx);
             const phaseY = request.pageOriginDeviceYPx - Math.floor(request.pageOriginDeviceYPx);
-            keys.push([pageIndex, LayoutViewModel.documentGeneration, LayoutViewModel.fontGeneration, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":"));
+            keys.push([pageIndex, LayoutViewModel.documentGeneration, LayoutViewModel.fontGeneration, LayoutViewModel.layoutRevision, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":"));
             requests.push({
                 pageIndex: pageIndex,
                 raster: request
@@ -90,8 +97,12 @@ Item {
     Connections {
         target: pageCanvas
         function onGeometryChanged() {
+            surface.canvasGeometryRevision++;
             surface.lastGlyphRasterKey = "";
             surface.scheduleGlyphRasterization();
+        }
+        function onWidthChanged() {
+            surface.canvasGeometryRevision++;
         }
         function onGlyphRasterMetricsChanged() {
             surface.lastGlyphRasterKey = "";
@@ -110,7 +121,6 @@ Item {
     Connections {
         target: LayoutViewModel
         function onLayoutChanged() {
-            surface.lastGlyphRasterKey = "";
             surface.scheduleGlyphRasterization();
         }
     }
@@ -123,8 +133,14 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         contentWidth: Math.max(width, pageCanvas.implicitWidth)
         contentHeight: Math.max(height, pageCanvas.implicitHeight)
-        onContentYChanged: surface.scheduleGlyphRasterization()
-        onContentXChanged: surface.scheduleGlyphRasterization()
+        onContentYChanged: {
+            surface.scheduleGlyphRasterization();
+            pageCanvas.updateInputMethodCursorRectangle();
+        }
+        onContentXChanged: {
+            surface.scheduleGlyphRasterization();
+            pageCanvas.updateInputMethodCursorRectangle();
+        }
         onWidthChanged: surface.scheduleGlyphRasterization()
         onHeightChanged: surface.scheduleGlyphRasterization()
 
@@ -142,11 +158,46 @@ Item {
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
             caretGeometry: LayoutViewModel.caretGeometry
+            selectionRects: pointerHandler.selectionDragActive ? [] : LayoutViewModel.selectionRects
+            selectionColor: Theme.colorSelected
+            inputMethodContext: LayoutViewModel.inputMethodContext
+            onActiveFocusChanged: if (!activeFocus && preeditText.length > 0)
+                cancelPreedit()
 
             onTextInputRequested: function (text) {
                 const result = LayoutViewModel.insertText(text);
                 if (!result.valid)
                     console.warn("Document text input failed:", result.error);
+            }
+
+            onInputMethodEventRequested: function (preedit, commit, replacementStart, replacementLength, cursorPositionUtf16) {
+                const result = LayoutViewModel.inputMethodEvent(preedit, commit, replacementStart, replacementLength, cursorPositionUtf16);
+                if (!result.valid)
+                    console.warn("Document input method event failed:", result.error);
+            }
+
+            onVisualNavigationRequested: function (forward, extend) {
+                const result = LayoutViewModel.moveVisualCaret(forward, extend);
+                if (!result.valid)
+                    console.warn("Document caret navigation failed:", result.error);
+            }
+
+            onVerticalNavigationRequested: function (lineDelta, extend) {
+                const result = LayoutViewModel.moveVerticalCaret(lineDelta, extend);
+                if (!result.valid)
+                    console.warn("Document caret navigation failed:", result.error);
+            }
+
+            onLineEdgeNavigationRequested: function (end, extend) {
+                const result = LayoutViewModel.moveToVisualLineEdge(end, extend);
+                if (!result.valid)
+                    console.warn("Document caret navigation failed:", result.error);
+            }
+
+            onClipboardCommandRequested: function (command) {
+                const result = command === "copy" ? LayoutViewModel.copySelectionToClipboard() : LayoutViewModel.pasteFromClipboard();
+                if (!result.valid)
+                    console.warn("Document clipboard command failed:", result.error);
             }
 
             onEditingCommandRequested: function (commandId) {
@@ -162,11 +213,32 @@ Item {
             }
 
             DocumentCanvasPointerHandler {
+                id: pointerHandler
                 anchors.fill: parent
                 canvas: pageCanvas
                 onDocumentPositionHit: function (result) {
                     surface.documentPositionHit(result);
                 }
+            }
+        }
+
+        Repeater {
+            model: LayoutViewModel.compositionRects
+
+            delegate: Rectangle {
+                required property var modelData
+                objectName: "compositionUnderline"
+
+                readonly property point underlineStart: surface.compositionPoint(modelData.pageIndex, modelData.x0Pt, modelData.y0Pt)
+                readonly property point underlineEnd: surface.compositionPoint(modelData.pageIndex, modelData.x1Pt, modelData.y1Pt)
+
+                x: pageCanvas.x + underlineStart.x
+                y: pageCanvas.y + underlineStart.y
+                width: Math.max(0, underlineEnd.x - underlineStart.x)
+                height: Math.max(1, underlineEnd.y - underlineStart.y)
+                color: Theme.colorText
+                visible: width > 0
+                z: 1
             }
         }
     }

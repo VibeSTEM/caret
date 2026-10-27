@@ -5,7 +5,7 @@ mod layout;
 mod layout_view;
 mod page_glyphs;
 
-pub use caret_layout::VisualAffinity;
+pub use caret_layout::{HitAffinity, VisualAffinity};
 
 pub use editing::{
     Affinity, Command, Direction, EditError, Effect, InputComposition, Pos, PositionMap, Selection,

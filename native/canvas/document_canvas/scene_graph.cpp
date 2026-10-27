@@ -12,6 +12,7 @@
 #include <QSGSimpleRectNode>
 #include <QSGTexture>
 #include <QSet>
+#include <QVector>
 #include <QtAlgorithms>
 #include <algorithm>
 #include <cmath>
@@ -53,13 +54,30 @@ class GlyphGroupNode final : public QSGNode {
     QHash<int, PageGlyphNode*> pages;
 };
 
+class SelectionGroupNode final : public QSGNode {
+  public:
+    void clearRectangles() {
+        while (firstChild() != nullptr) {
+            QSGNode* child = firstChild();
+            removeChildNode(child);
+            delete child;
+        }
+        rectangles.clear();
+    }
+
+    QVector<QSGSimpleRectNode*> rectangles;
+};
+
 class CanvasRootNode final : public QSGNode {
   public:
     int page_count = -1;
     GlyphGroupNode* glyph_group = nullptr;
+    SelectionGroupNode* selection_group = nullptr;
     QSGSimpleRectNode* caret_node = nullptr;
     quint64 glyph_revision = std::numeric_limits<quint64>::max();
     quint64 glyph_geometry_revision = std::numeric_limits<quint64>::max();
+    quint64 selection_revision = std::numeric_limits<quint64>::max();
+    quint64 selection_geometry_revision = std::numeric_limits<quint64>::max();
 };
 
 struct GlyphRectangles {
@@ -243,9 +261,11 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     const int page_count = static_cast<int>(page_count_size);
     if (root == nullptr || root->page_count != page_count) {
         GlyphGroupNode* glyph_group = root != nullptr ? root->glyph_group : nullptr;
+        SelectionGroupNode* selection_group = root != nullptr ? root->selection_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
             root->removeChildNode(glyph_group);
+            root->removeChildNode(selection_group);
             root->removeChildNode(caret_node);
         }
         delete root;
@@ -254,8 +274,11 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root->appendChildNode(new QSGSimpleRectNode());
             root->appendChildNode(new QSGSimpleRectNode());
         }
+        root->selection_group =
+            selection_group != nullptr ? selection_group : new SelectionGroupNode();
         root->glyph_group = glyph_group != nullptr ? glyph_group : new GlyphGroupNode();
         root->caret_node = caret_node != nullptr ? caret_node : new QSGSimpleRectNode();
+        root->appendChildNode(root->selection_group);
         root->appendChildNode(root->glyph_group);
         root->appendChildNode(root->caret_node);
         root->page_count = page_count;
@@ -271,6 +294,36 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         node->setRect(page.adjusted(1.0, 1.0, -1.0, -1.0));
         node->setColor(m_page_color.isValid() ? m_page_color : QColor(Qt::transparent));
         node = static_cast<QSGSimpleRectNode*>(node->nextSibling());
+    }
+    if (root->selection_revision != m_selection_revision ||
+        root->selection_geometry_revision != m_glyph_geometry_revision) {
+        root->selection_group->clearRectangles();
+        QVariantList selection_rectangles = m_selection_rects;
+        selection_rectangles.append(m_selection_preview_rects);
+        for (const QVariant& value : selection_rectangles) {
+            const QVariantMap selection = value.toMap();
+            const int page_index = selection.value(QStringLiteral("pageIndex")).toInt();
+            const QPointF top_left = documentToContent(
+                page_index, QPointF(selection.value(QStringLiteral("x0Pt")).toReal(),
+                                    selection.value(QStringLiteral("y0Pt")).toReal()));
+            const QPointF bottom_right = documentToContent(
+                page_index, QPointF(selection.value(QStringLiteral("x1Pt")).toReal(),
+                                    selection.value(QStringLiteral("y1Pt")).toReal()));
+            const QRectF rect(top_left, bottom_right);
+            const QRectF visible_rect = rect.normalized().intersected(pageRect(page_index));
+            if (visible_rect.isEmpty()) {
+                continue;
+            }
+            auto* rectangle = new QSGSimpleRectNode(visible_rect, m_selection_color);
+            root->selection_group->rectangles.push_back(rectangle);
+            root->selection_group->appendChildNode(rectangle);
+        }
+        root->selection_revision = m_selection_revision;
+        root->selection_geometry_revision = m_glyph_geometry_revision;
+    } else {
+        for (QSGSimpleRectNode* rectangle : root->selection_group->rectangles) {
+            rectangle->setColor(m_selection_color);
+        }
     }
     auto* glyph_group = root->glyph_group;
     if (root->glyph_revision != m_glyph_frame_revision ||

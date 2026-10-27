@@ -1,7 +1,11 @@
 //! 管理编辑 Session 状态并执行输入、选区和 IME 命令。
 
+mod clipboard;
 mod composition;
 mod navigation;
+mod paragraph_edit;
+mod range_edit;
+mod selection;
 mod text_edit;
 
 use super::paragraph_ops::{
@@ -12,6 +16,9 @@ use super::text_map::TextMap;
 use super::{Affinity, Command, EditError, Effect, InputComposition, Pos, Selection, StoryId};
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
+use std::collections::VecDeque;
+
+const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
 #[derive(Debug)]
 pub struct Session {
@@ -22,7 +29,7 @@ pub struct Session {
     document_generation: u64,
     composition: Option<InputComposition>,
     last_committed_composition: Option<u64>,
-    text_map_cache: Option<(NodeId, StoryId, TextMap)>,
+    text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
     paragraph_index: ParagraphIndex,
 }
 
@@ -51,7 +58,7 @@ impl Session {
             document_generation: 0,
             composition: None,
             last_committed_composition: None,
-            text_map_cache: None,
+            text_map_cache: VecDeque::new(),
         })
     }
 
@@ -78,19 +85,6 @@ impl Session {
         self.selection_visual_affinity
     }
 
-    /// 将布局命中得到的视觉侧与同一 Rust 选区一起提交。
-    pub fn set_selection_with_visual_affinity(
-        &mut self,
-        selection: Option<Selection>,
-        visual_affinity: VisualAffinity,
-    ) -> Result<Effect, EditError> {
-        let previous_visual_affinity = self.selection_visual_affinity;
-        let mut effect = self.run(Command::SetSelection(selection))?;
-        effect.selection_changed |= previous_visual_affinity != visual_affinity;
-        self.selection_visual_affinity = visual_affinity;
-        Ok(effect)
-    }
-
     pub fn composition(&self) -> Option<&InputComposition> {
         self.composition.as_ref()
     }
@@ -99,6 +93,7 @@ impl Session {
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
         let effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
+            Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::SplitParagraph => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
@@ -149,16 +144,6 @@ impl Session {
         })
     }
 
-    fn edit_range(&self) -> Result<(Pos, Pos), EditError> {
-        let selection = &self.selection;
-        if selection.anchor.paragraph_id != selection.focus.paragraph_id
-            || selection.anchor.story != selection.focus.story
-        {
-            return Err(EditError::CrossParagraphSelection);
-        }
-        Ok((selection.anchor.clone(), selection.focus.clone()))
-    }
-
     pub(super) fn paragraph_for(&self, pos: &Pos) -> Result<&Paragraph, EditError> {
         let location = self
             .paragraph_index
@@ -183,25 +168,41 @@ impl Session {
             .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))
     }
 
-    fn text_map_for(&mut self, pos: &Pos) -> Result<&TextMap, EditError> {
-        let cache_miss = self
+    pub(super) fn text_map_for(&mut self, pos: &Pos) -> Result<&TextMap, EditError> {
+        if let Some(index) = self
             .text_map_cache
-            .as_ref()
-            .is_none_or(|(paragraph_id, story, _)| {
-                paragraph_id != &pos.paragraph_id || story != &pos.story
-            });
-        if cache_miss {
+            .iter()
+            .position(|(paragraph_id, story, _)| {
+                paragraph_id == &pos.paragraph_id && story == &pos.story
+            })
+        {
+            if index > 0 {
+                let entry = self
+                    .text_map_cache
+                    .remove(index)
+                    .ok_or(EditError::InvalidPosition)?;
+                self.text_map_cache.push_front(entry);
+            }
+        } else {
             let paragraph = self.paragraph_for(pos)?;
             let map = TextMap::new(paragraph)?;
-            self.text_map_cache = Some((pos.paragraph_id.clone(), pos.story.clone(), map));
+            self.text_map_cache
+                .push_front((pos.paragraph_id.clone(), pos.story.clone(), map));
+            if self.text_map_cache.len() > TEXT_MAP_CACHE_CAPACITY {
+                self.text_map_cache.pop_back();
+            }
         }
         self.text_map_cache
-            .as_ref()
+            .front()
             .map(|(_, _, map)| map)
             .ok_or(EditError::InvalidPosition)
     }
 
-    fn replace_paragraph(&mut self, pos: &Pos, paragraph: Paragraph) -> Result<(), EditError> {
+    pub(super) fn replace_paragraph(
+        &mut self,
+        pos: &Pos,
+        paragraph: Paragraph,
+    ) -> Result<(), EditError> {
         let location = self
             .paragraph_index
             .get(&pos.paragraph_id)
@@ -235,6 +236,58 @@ impl Clone for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use caret_doc::Block;
+
+    #[test]
+    fn text_map_cache_keeps_both_paragraphs_of_a_cross_paragraph_selection() {
+        let mut session = Session::new(Document::blank())
+            .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+        session
+            .run(Command::SplitParagraph)
+            .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
+        let Block::Paragraph(first) = &session.document.body[0] else {
+            panic!("first block should be a paragraph");
+        };
+        let Block::Paragraph(second) = &session.document.body[1] else {
+            panic!("second block should be a paragraph");
+        };
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let first_position = Pos {
+            story: StoryId::Body,
+            paragraph_id: first_id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        };
+        let second_position = Pos {
+            paragraph_id: second_id.clone(),
+            ..first_position.clone()
+        };
+
+        session
+            .text_map_for(&first_position)
+            .unwrap_or_else(|error| panic!("first text map failed: {error}"));
+        session
+            .text_map_for(&second_position)
+            .unwrap_or_else(|error| panic!("second text map failed: {error}"));
+        session
+            .text_map_for(&first_position)
+            .unwrap_or_else(|error| panic!("cached first text map failed: {error}"));
+
+        assert_eq!(session.text_map_cache.len(), TEXT_MAP_CACHE_CAPACITY);
+        assert!(
+            session
+                .text_map_cache
+                .iter()
+                .any(|(id, _, _)| id == &first_id)
+        );
+        assert!(
+            session
+                .text_map_cache
+                .iter()
+                .any(|(id, _, _)| id == &second_id)
+        );
+    }
 
     #[test]
     fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {

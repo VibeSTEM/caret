@@ -14,6 +14,7 @@
 
 class QSGNode;
 class QKeyEvent;
+class QInputMethodEvent;
 
 namespace caret {
 
@@ -31,10 +32,20 @@ class DocumentCanvas : public QQuickItem {
                    appearanceChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
                    caretGeometryChanged)
+    Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext WRITE setInputMethodContext
+                   NOTIFY inputMethodContextChanged)
+    Q_PROPERTY(QString preeditText READ preeditText NOTIFY preeditTextChanged)
+    Q_PROPERTY(int preeditCursorPosition READ preeditCursorPosition NOTIFY preeditTextChanged)
     Q_PROPERTY(bool caretBlinkEnabled READ caretBlinkEnabled WRITE setCaretBlinkEnabled NOTIFY
                    caretBlinkEnabledChanged)
     Q_PROPERTY(
         QVariantList glyphFrames READ glyphFrames WRITE setGlyphFrames NOTIFY glyphFramesChanged)
+    Q_PROPERTY(QVariantList selectionRects READ selectionRects WRITE setSelectionRects NOTIFY
+                   selectionRectsChanged)
+    Q_PROPERTY(QVariantList selectionPreviewRects READ selectionPreviewRects WRITE
+                   setSelectionPreviewRects NOTIFY selectionPreviewRectsChanged)
+    Q_PROPERTY(
+        QColor selectionColor READ selectionColor WRITE setSelectionColor NOTIFY appearanceChanged)
     Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
     Q_PROPERTY(int caretWidthCentipixels READ caretWidthCentipixels WRITE setCaretWidthCentipixels
                    NOTIFY caretWidthCentipixelsChanged)
@@ -58,10 +69,20 @@ class DocumentCanvas : public QQuickItem {
     void setPageBorderColor(const QColor& color);
     [[nodiscard]] QVariantMap caretGeometry() const;
     void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] QVariantMap inputMethodContext() const;
+    void setInputMethodContext(const QVariantMap& context);
+    [[nodiscard]] QString preeditText() const;
+    [[nodiscard]] int preeditCursorPosition() const;
     [[nodiscard]] bool caretBlinkEnabled() const;
     void setCaretBlinkEnabled(bool enabled);
     [[nodiscard]] QVariantList glyphFrames() const;
     void setGlyphFrames(const QVariantList& frames);
+    [[nodiscard]] QVariantList selectionRects() const;
+    void setSelectionRects(const QVariantList& rectangles);
+    [[nodiscard]] QVariantList selectionPreviewRects() const;
+    void setSelectionPreviewRects(const QVariantList& rectangles);
+    [[nodiscard]] QColor selectionColor() const;
+    void setSelectionColor(const QColor& color);
     [[nodiscard]] QColor caretColor() const;
     void setCaretColor(const QColor& color);
     [[nodiscard]] int caretWidthCentipixels() const;
@@ -82,18 +103,32 @@ class DocumentCanvas : public QQuickItem {
     Q_INVOKABLE QVariantMap hitTestPage(const QPointF& point_px) const;
     /// 返回视图变换和 DPR 后的页面 raster 请求参数。
     Q_INVOKABLE QVariantMap glyphRasterRequest(int page_index) const;
+    Q_INVOKABLE void cancelPreedit();
+    Q_INVOKABLE void updateInputMethodCursorRectangle();
+    [[nodiscard]] QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
   signals:
     void textInputRequested(const QString& text);
     void editingCommandRequested(const QString& command_id);
+    void visualNavigationRequested(bool forward, bool extend);
+    void verticalNavigationRequested(int line_delta, bool extend);
+    void lineEdgeNavigationRequested(bool end, bool extend);
+    void clipboardCommandRequested(const QString& command);
+    void inputMethodEventRequested(const QString& preedit, const QString& commit,
+                                   int replacement_start, int replacement_length,
+                                   int cursor_position_utf16);
+    void preeditTextChanged();
     void pageSizesPtChanged();
     void pageMarginsPtChanged();
     void zoomChanged();
     void pageGapPtChanged();
     void pageMarginPtChanged();
     void caretGeometryChanged();
+    void inputMethodContextChanged();
     void caretBlinkEnabledChanged();
     void glyphFramesChanged();
+    void selectionRectsChanged();
+    void selectionPreviewRectsChanged();
     void glyphRasterMetricsChanged();
     void caretWidthCentipixelsChanged();
     void appearanceChanged();
@@ -110,6 +145,7 @@ class DocumentCanvas : public QQuickItem {
     void refreshCaretBlink();
     void toggleCaretVisibility();
     void keyPressEvent(QKeyEvent* event) override;
+    void inputMethodEvent(QInputMethodEvent* event) override;
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
     void itemChange(ItemChange change, const ItemChangeData& data) override;
 
@@ -121,10 +157,17 @@ class DocumentCanvas : public QQuickItem {
     QColor m_page_color;
     QColor m_page_border_color;
     QVariantMap m_caret_geometry;
+    QVariantMap m_input_method_context;
+    QString m_preedit_text;
+    int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
+    QVariantList m_selection_rects;
+    QVariantList m_selection_preview_rects;
     quint64 m_glyph_frame_revision = 0;
     quint64 m_glyph_geometry_revision = 0;
     QColor m_caret_color;
+    QColor m_selection_color;
+    quint64 m_selection_revision = 0;
     int m_caret_width_centipixels = 0;
     bool m_caret_blink_enabled = true;
     QTimer m_caret_blink_timer;

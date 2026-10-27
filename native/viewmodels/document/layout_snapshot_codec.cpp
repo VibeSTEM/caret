@@ -50,6 +50,43 @@ bool finite_number(const QJsonValue& value, double& result) {
     return std::isfinite(result);
 }
 
+bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page_sizes,
+                               const QString& field, QVariantList& result, QString& error) {
+    const QString array_error = QStringLiteral("layout.invalid_%1_rects").arg(field);
+    const QString item_error = QStringLiteral("layout.invalid_%1_rect").arg(field);
+    if (!value.isUndefined() && !value.isArray()) {
+        error = array_error;
+        return false;
+    }
+    const QJsonArray rectangles = value.toArray();
+    result.reserve(rectangles.size());
+    for (const QJsonValue& rectangle_value : rectangles) {
+        if (!rectangle_value.isObject()) {
+            error = item_error;
+            return false;
+        }
+        const QJsonObject rectangle = rectangle_value.toObject();
+        qsizetype page_index = 0;
+        double x0 = 0.0;
+        double y0 = 0.0;
+        double x1 = 0.0;
+        double y1 = 0.0;
+        if (!nonnegative_index(rectangle.value(QStringLiteral("pageIndex")), page_index) ||
+            page_index >= page_sizes.size() ||
+            !finite_number(rectangle.value(QStringLiteral("x0Pt")), x0) ||
+            !finite_number(rectangle.value(QStringLiteral("y0Pt")), y0) ||
+            !finite_number(rectangle.value(QStringLiteral("x1Pt")), x1) ||
+            !finite_number(rectangle.value(QStringLiteral("y1Pt")), y1) || x0 < 0.0 || y0 < 0.0 ||
+            x1 <= x0 || y1 <= y0 || x1 > page_sizes.at(page_index).toSizeF().width() ||
+            y1 > page_sizes.at(page_index).toSizeF().height()) {
+            error = item_error;
+            return false;
+        }
+        result.push_back(rectangle.toVariantMap());
+    }
+    return true;
+}
+
 bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
     if (offset < 0 || offset > text.size()) {
         return false;
@@ -255,10 +292,44 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         parsed_sizes.push_back(QVariant::fromValue(QSizeF(width_pt, height_pt)));
         parsed_page_layouts.push_back(page.toVariantMap());
     }
+    QVariantList parsed_selection_rects;
+    if (!parse_geometry_rectangles(root.value(QStringLiteral("selectionRects")), parsed_sizes,
+                                   QStringLiteral("selection"), parsed_selection_rects, error)) {
+        return false;
+    }
+    QVariantList parsed_composition_rects;
+    if (!parse_geometry_rectangles(root.value(QStringLiteral("compositionRects")), parsed_sizes,
+                                   QStringLiteral("composition"), parsed_composition_rects,
+                                   error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_margins = std::move(parsed_margins);
     parsed_snapshot.paragraph_layouts = std::move(parsed_paragraphs);
+    parsed_snapshot.selection_rects = std::move(parsed_selection_rects);
+    parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
+    const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
+    if (!input_context_value.isUndefined()) {
+        if (!input_context_value.isObject()) {
+            error = QStringLiteral("layout.invalid_input_method_context");
+            return false;
+        }
+        const QJsonObject context = input_context_value.toObject();
+        const QString surrounding_text =
+            context.value(QStringLiteral("surroundingText")).toString();
+        qsizetype cursor_position = 0;
+        qsizetype anchor_position = 0;
+        if (!context.value(QStringLiteral("surroundingText")).isString() ||
+            !nonnegative_index(context.value(QStringLiteral("cursorPosition")), cursor_position) ||
+            !nonnegative_index(context.value(QStringLiteral("anchorPosition")), anchor_position) ||
+            cursor_position > surrounding_text.size() ||
+            anchor_position > surrounding_text.size()) {
+            error = QStringLiteral("layout.invalid_input_method_context");
+            return false;
+        }
+        parsed_snapshot.input_method_context = context.toVariantMap();
+    }
     parsed_snapshot.document_generation = parsed_document_generation;
     parsed_snapshot.font_generation = parsed_font_generation;
     error.clear();

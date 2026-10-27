@@ -13,9 +13,12 @@ fn version() -> String {
 #[allow(unsafe_code, clippy::all)]
 mod generated {
     use crate::document::{
-        DocumentRuntime, current_caret_json, delete_backward_json, document_hit_test_json,
-        insert_soft_break_json, insert_text_json, layout_snapshot_json, new_blank_document_runtime,
-        place_caret_at_page_json, rasterize_page_glyphs, split_paragraph_json,
+        DocumentRuntime, clear_selection_json, current_caret_json, delete_backward_json,
+        document_hit_test_json, drag_hit_map_json, input_method_event_json, insert_soft_break_json,
+        insert_text_json, interaction_state_json, layout_snapshot_json,
+        move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
+        new_blank_document_runtime, paste_text_json, place_caret_at_page_json,
+        rasterize_page_glyphs, selected_text_json, set_selection_json, split_paragraph_json,
     };
     use crate::settings::{
         SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_caret_blink_enabled,
@@ -105,6 +108,8 @@ mod generated {
             ) -> SettingsSnapshot;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;
+            /// 返回仅含 caret、选区和 IME 上下文的轻量交互快照。
+            fn interaction_state_json(runtime: &mut DocumentRuntime) -> String;
             /// 仅在持有句柄的 UI 线程同步调用，不保留借用；无位置返回 JSON null，错误以 error: 开头。
             fn document_hit_test_json(
                 runtime: &mut DocumentRuntime,
@@ -121,12 +126,49 @@ mod generated {
             ) -> String;
             /// 将 Qt 文本输入提交给 Rust Session，成功时返回新的布局快照。
             fn insert_text_json(runtime: &mut DocumentRuntime, text: String) -> String;
+            /// 原子插入剪贴板文本，换行拆段并以 Rust 快照返回结果。
+            fn paste_text_json(runtime: &mut DocumentRuntime, text: String) -> String;
             /// 在 Rust Session 中执行 Enter 对应的段落拆分。
             fn split_paragraph_json(runtime: &mut DocumentRuntime) -> String;
             /// 在 Rust Session 中执行 Backspace，对向后删除与段首合并进行处理。
             fn delete_backward_json(runtime: &mut DocumentRuntime) -> String;
             /// 在 Rust Session 中插入段内软换行。
             fn insert_soft_break_json(runtime: &mut DocumentRuntime) -> String;
+            /// 将 Qt 输入法预编辑、提交或取消事件提交给 Rust Session。
+            fn input_method_event_json(
+                runtime: &mut DocumentRuntime,
+                preedit: String,
+                commit: String,
+                replacement_start: i32,
+                replacement_length: i32,
+                cursor_position_utf16: usize,
+            ) -> String;
+            /// 为一次鼠标拖选请求当前页的 caret 命中缓存。
+            fn drag_hit_map_json(runtime: &mut DocumentRuntime, page_index: i32) -> String;
+            /// 在 Rust Session 中提交拖选释放后的稳定位置。
+            fn set_selection_json(runtime: &mut DocumentRuntime, selection_json: String) -> String;
+            /// 清除当前选区并保留 Rust 会话中的焦点位置。
+            fn clear_selection_json(runtime: &mut DocumentRuntime) -> String;
+            /// 以 JSON 返回按文档顺序提取的选中文本。
+            fn selected_text_json(runtime: &mut DocumentRuntime) -> String;
+            /// 按 Parley 视觉顺序移动 caret，可选择扩展当前选区。
+            fn move_visual_caret_json(
+                runtime: &mut DocumentRuntime,
+                forward: bool,
+                extend: bool,
+            ) -> String;
+            /// 在相邻视觉行间移动并保留期望横坐标。
+            fn move_vertical_caret_json(
+                runtime: &mut DocumentRuntime,
+                line_delta: i32,
+                extend: bool,
+            ) -> String;
+            /// 移到当前视觉行首尾，可选择扩展当前选区。
+            fn move_to_visual_line_edge_json(
+                runtime: &mut DocumentRuntime,
+                end: bool,
+                extend: bool,
+            ) -> String;
             /// 返回当前 Session 插入点在最新布局中的页面几何。
             fn current_caret_json(runtime: &mut DocumentRuntime) -> String;
             /// 只栅格化请求页，图像字节走二进制向量，不经 JSON/Base64。

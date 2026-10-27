@@ -17,6 +17,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `text.insert` / `text.delete` | 在插入点输入或删除 | 打字合并成一步 |
 | `text.soft_break` / `text.split_paragraph` | 插入软换行 / 拆分或合并段落 | 一步 |
 | `caret.move` / `selection.set` | 移动插入点 / 设置选区 | 纯命令 |
+| `clipboard.copy` / `clipboard.paste` | 复制所选纯文本 / 以单一 Rust 事务粘贴系统剪贴板文本 | 复制纯命令；粘贴一次文档变更 |
 | `ime.update` / `ime.commit` / `ime.cancel` | 更新、提交或取消输入法组字 | 仅提交正文时一步 |
 | `page.geometry.set` | 设置整份文档的纸型、方向和边距 | 一步 |
 | `para.heading` | 设大纲级别 | 一步 |
@@ -32,3 +33,5 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
+
+M0 的 `clipboard.copy` 只导出选区纯文本；多段选区用换行分隔。`clipboard.paste` 读取系统剪贴板后由 Rust 负责规范换行、替换当前选区并提交一次事务。当前不支持的结构或未知字段必须在写入前拒绝，保留原文与选区。撤销系统接入后，整次粘贴应作为一个撤销单元。
