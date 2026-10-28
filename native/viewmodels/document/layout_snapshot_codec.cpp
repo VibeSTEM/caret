@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QSizeF>
+#include <QString>
 #include <QVariant>
 #include <algorithm>
 #include <atomic>
@@ -295,7 +296,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
             merged_line_counts.insert(iterator.key(), iterator.value());
         }
         paragraph_line_counts = std::move(merged_line_counts);
-        for (const QJsonValue& updated : paragraphs) {
+        for (const auto& updated : paragraphs) {
             const QString id = updated.toObject().value(QStringLiteral("paragraphId")).toString();
             parsed_paragraphs.replace(paragraph_indices.value(id), updated);
         }

@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QObject>
+#include <QString>
 #include <qtmetamacros.h>
 #include <utility>
 

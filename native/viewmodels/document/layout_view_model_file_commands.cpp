@@ -13,12 +13,13 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QObject>
+#include <QString>
 #include <QtConcurrent/qtconcurrentrun.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <qcontainerfwd.h>
-#include <qstringliteral.h>
 #include <qtmetamacros.h>
 #include <utility>
 

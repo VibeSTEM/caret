@@ -90,6 +90,7 @@ Qt 帧基准计时覆盖 `setGlyphFrames` / `setSelectionRects` 安装及 Qt Qui
 | 2026-10-28 | Qt release 离屏基准；Apple M4、Qt 6.11.2、Software renderer、1,000 samples | 更新前后单页和 400 页视口数据见上表。计时分解显示 `setGlyphFrames` 安装约 0.13–0.16 ms，QSG/软件绘制阶段约 1.1–2.2 ms；独立 review 发现无效页面早退会遗留旧 glyph，修复后 native 集成通过。 |
 | 2026-10-28 | `cargo test --locked -p caret-tests --test native` | 通过；CTest 4/4。 |
 | 2026-10-28 | `cargo format --check`、Qt CPU benchmark 构建及无头冒烟（10 samples） | 格式检查、构建和 JSON 输出验证通过；完整前后对比使用 1,000 samples。 |
+| 2026-10-28 | PR #41 Ubuntu clang-tidy/include-cleaner 报错后的本地复验 | 调整 `QJsonArray` range-for 类型并补齐直接头文件；`cargo lint clang-tidy --changed --check`、`cargo lint includes --changed --check`、`cargo lint cppcheck --changed --check`、`cargo format --check` 和 `caret_native_app` 构建均通过。 |
 | 待执行 | Qt GPU nightly、真实窗口端到端采样 | macOS 当前会话无可用屏幕；需远端运行 GPU suite，并在真实窗口测量打开、IME、退格与换页。 |
 
 ## 风险与回退

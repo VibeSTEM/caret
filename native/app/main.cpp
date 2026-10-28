@@ -18,6 +18,7 @@
 #include <QQmlApplicationEngine>
 #include <QStandardPaths>
 #include <QString>
+#include <QUrl>
 #include <QWindow>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
