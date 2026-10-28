@@ -84,7 +84,7 @@
 - 主线程共 17,872 个样本，其中约 15,062 个在 AppKit 等待下一个事件（约 84%）；`QSGRenderThread` 的 17,273 / 17,872 个样本在 `QWaitCondition::wait`（约 97%），`renderSceneGraph` 约 240 个样本。这个窗口内未观察到持续的 GPU 或场景图线程饱和。
 - 主线程的可见应用工作集中在 `PageSurface.qml` 的可视页字形栅格化调用：采样栈经过 `LayoutViewModel::rasterizePageGlyphs`（约 770 个样本）、Rust `DocumentViewRuntime::rasterize_page_glyphs`（约 707 个样本）和 `PageGlyphRasterizer::rasterize`（约 677 个样本）；其中 `colorize_alpha` 约 169 个样本。该路径同步从 QML 调用 Rust，并为字形覆盖率生成着色 RGBA 像素。
 - **判断**：继续优化方向应先聚焦可视页字形栅格化的触发频率、缓存命中与像素着色成本，以及它在主线程同步执行造成的短时阻塞；现有数据不支持优先重写 Rust 整篇布局或 GPU 绘制。
-- **采样限制**：该报告是含大量空闲时间的进程级抽样，不是逐帧追踪，也没有可用的 Xcode `xctrace` 或 `cargo flamegraph` 生成 SVG 火焰图。样本计数只能指出热点方向，不能换算为单帧耗时或证明用户感受到的卡顿都来自此路径；后续应在连续滚动/连续输入场景下采集 Qt 主线程事件耗时和帧时间，再评估异步栅格化或跨页面缓存策略。
+- **采样限制**：当时的 `/usr/bin/sample` 报告包含大量空闲时间，是进程级抽样，不是逐帧追踪；当时没有得到可用的 SVG 火焰图。后续已通过 `xcrun xctrace` 成功导出 IME Time Profiler 表，但 `cargo flamegraph` 的折叠步骤因 Xcode 27 的 `frame` XML 格式失败。样本计数只能指出热点方向，不能换算为单帧耗时或证明用户感受到的卡顿都来自此路径；仍需在连续滚动/连续输入场景下采集 Qt 主线程事件耗时和帧时间，再评估异步栅格化或跨页面缓存策略。
 
 ### 2026-10-28 换页滚动与输入法延迟跟进
 
@@ -103,6 +103,7 @@
 | Rust 输入阶段：仅复用未变段落布局 | 34.854 ms | 3.079 ms | −31.775 ms | 快 91.17% |
 | Rust 输入阶段：在段落复用上增加分页/段落增量 | 3.079 ms | 1.537 ms | −1.542 ms | 快 50.08% |
 | Rust → Qt 快照体积 | 654,930 B | 2,128 B | −652,802 B | 减少 99.68% |
+| Rust IME 预编辑复用快照（100,499 字符，dev） | 4.623 s / 3,000 次 | 1.229 s、1.278 s / 3,000 次 | 后两轮均值减少 3.370 s | 约快 72.9%（3.69×） |
 | Qt CPU 400 页场景中位帧时间 | 2,092.667 μs | 1,443.833 μs | −648.834 μs | 快 31.01% |
 | Qt CPU 400 页场景 P95 帧时间 | 2,373.917 μs | 1,606.625 μs | −767.292 μs | 快 32.32% |
 | Qt 页面背景节点数（400 页文档） | 800 | 6 | −794 个 | 减少 99.25% |
@@ -111,17 +112,20 @@
 
 本次 100,499 字符 Criterion 复测测得 IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms；10,010 字符粘贴 5.468 ms。它们目前没有可比的同条件优化前基线，因此只列测得值，不计算提升百分比。这些 Rust 命令时间不含 Qt JSON 合并、字形栅格化、窗口帧呈现或真实输入间隔。
 
+针对 IME 快速输入另用临时 harness，在准备好 100,499 字符、500 段文档并开始预编辑后，连续调用 3,000 次预编辑更新。相同 Apple M4、Cargo dev 配置下，Arc 优化前单次为 4.623 s；优化后两次为 1.229 s 和 1.278 s，平均 1.254 s，较前次测量减少约 72.9%。旧布局中每次复用都深拷贝未变段落的文本、完整 Parley 结果及 UTF-16 检查点；现在这些不可变数据由 `Arc` 共享，只有段落分页位置仍随新快照重建，并在每次新布局时重新分配空位置表。这个小样本仅用于验证热点优化方向，不是 Criterion 统计，也不代表真实窗口端到端延迟。
+
 ### 验证结果
 
 | 验证项 | 工作负载 / 命令 | 结果 |
 | --- | --- | --- |
 | `.cdoc` 打开与解析 | `CARET_PERF_CDOC=~/Documents/caret/test_1.cdoc cargo bench --locked -p caret-app --bench document_open_delete_criterion -- --sample-size 10 --warm-up-time 0.5 --measurement-time 3`；Apple M4，release，3,673,391 B / 1,000,000 字符 | 完整读入、校验、首次排版、快照序列化时间点估计 364.83 ms（区间 358.83–371.60 ms）；只解析与校验 8.34 ms（区间 8.03–8.71 ms）。跨轮波动存在，Criterion 未检测到显著变化 |
 | `.cdoc` dev 打开阶段 | 临时 `perf_open` 示例测阶段后删除；Apple M4，Cargo dev，3,673,391 B / 1,000,000 字符 | 未优化时解析 87.10 ms、Session 8.82 ms、字体目录 107.25 ms、布局 10.863 s；应用 dev 热路径 `opt-level=2` 后布局 1.081 s、完整 prepare 1.304 s（快约 90.0% / 88.8%） |
+| IME 连续预编辑采样 | 临时 `perf_ime_profile` harness；Apple M4，Cargo dev；100,499 字符、500 段；先准备布局，再重复预编辑 3,000 次 | `cargo flamegraph` 成功运行并采样，但 Xcode 27 输出的 trace XML 无法被 flamegraph 折叠（`Unpaired tag: frame`）。直接用 `xcrun xctrace` 导出 Time Profiler 表并汇总：1,767 个主线程样本；`layout_with_reuse` 约 61.1%，`LaidOutParagraph::clone` 约 35.6%，Parley layout 约 15.3%。应用 Arc 共享后同 harness 为 1.229 s / 1.278 s（优化前单次 4.623 s）；临时 harness 已删除。 |
 | 百万字符单字素删除 | 同一 `.cdoc`；段落 2,500 内退格并构造 Rust UI 增量快照 | 335.63 ms → 13.75 ms，约快 95.9%；结构性删除不在此次快速路径内 |
 | 打开快照 Qt 安装 | 打开 `.cdoc` 时在后台解析/验证 JSON，保留共享 JSON 数组并延迟构造嵌套 QVariant | native 构建通过；仍需真实窗口端到端计时确认解析、QML 更新和首帧绘制耗时 |
 | Rust 长篇排版基线 | `cargo bench --locked -p caret-engine --bench novel_document_criterion`；Apple M4，release，百万字符混合语言语料 | 整篇排版约 515 ms、单段编辑重排约 15.1 ms。过去曾因无显著收益撤回 Session 路径的重复校验跳过；本轮重新引入以避免编辑后重复遍历，未单独量化，不作为本轮性能提升结论 |
 | Rust 编辑与输入基准 | `cargo bench --locked -p caret-app --bench document_view_input_criterion -- --sample-size 10 --warm-up-time 1 --measurement-time 2`；Apple M4，release，100,499 字符交互语料 | 普通单字符输入 1.291 ms；IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms、10,010 字符粘贴 5.468 ms。Criterion 提示部分样本需更长测量窗口；结果用于本机对比，不代表 UI 端到端延迟 |
-| Rust 正确性与静态检查 | `cargo test --locked -p caret-app`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings` | 94 项测试通过；Clippy 通过。测试覆盖普通输入、IME 增量预览、跨页回退、跨段预览/取消、回车与粘贴 |
+| Rust 正确性与静态检查 | `cargo test --locked -p caret-engine`；`cargo test --locked -p caret-app`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings` | caret-engine 83 项、caret-app 104 项测试通过；Clippy 通过。测试覆盖普通输入、IME 增量预览、跨页回退、跨段预览/取消、回车与粘贴，以及段落布局克隆共享只读数据 |
 | Qt / QML 集成 | `cargo test --locked -p caret-tests --test native`；QML 格式检查 | CTest 4/4 通过；QML 格式检查通过。覆盖 Qt 合并增量预览、跨段预览后段落删除与取消恢复 |
 | Qt CPU 基线 | 1280×960、1,000 glyph placements、96 unique images、12 selection rectangles、31 samples | 稳定静态场景多次采样中位数 787–914 μs/帧，P95 860–997 μs/帧 |
 | Qt CPU 400 页对比 | 1280×960、1,000 placements、96 images、12 个可视选区；每帧移动一个 glyph；Apple M4、Qt 6.11.2、Software renderer、31 samples | 页面节点从 800 降至 6；中位数和 P95 分别改善 31.01% 与 32.32%。单页场景慢 3.40%，未显示收益 |
@@ -144,6 +148,8 @@
 | 2026-10-27 | 使用 Caret 实际窗口和 macOS `sample` 检查长文档交互热点 | 100,499 字符粘贴约 2.06 s；主线程最明显的应用热点是同步可视页字形栅格化。快速输入法闪动、Qt 粘贴/回车延迟尚无端到端帧时间数据，不宣称已解决 |
 | 2026-10-28 | 使用 Xcode Instruments Time Profiler 对 release Criterion 与 Cargo dev 打开路径采样；`cargo flamegraph` 在 Xcode 27 的 trace XML 上无法折叠 `frame` 标签，改用 `xcrun xctrace record/export` 汇总 | release Rust 准备约 0.36 s；未优化 dev 整篇布局 10.86 s，主热点为 Parley builder、字体塑形与 HarfBuzz。不能将 release 结果用于解释 dev GUI 延迟 |
 | 2026-10-28 | 同段退格改为段落布局复用并返回增量快照；Cargo dev 对测得的排版热路径启用 `opt-level=2`；打开时将 Qt 快照解析移到 worker，延迟嵌套 QVariant 转换并用 ticket guard 管理候选文档生命周期 | 删除从 335.63 ms 降至 13.75 ms（约快 95.9%）；dev 整篇布局从 10.86 s 降至 1.081 s，完整 Rust prepare 为 1.304 s。native/QML 构建检查通过；需真实窗口确认 1.304 s 之外的 Qt 与首帧耗时 |
+| 2026-10-28 | 安装并尝试用 `cargo flamegraph` 采样长文档 IME 更新；Xcode 27 的 flamegraph 折叠器不能读取其生成的 trace XML，改由 `xcrun xctrace` 导出 Time Profiler 数据检查调用栈 | 1,767 个主线程样本中 `layout_with_reuse` 约占 61.1%，深克隆未变段落约占 35.6%，Parley 排版约占 15.3%。结果证明该输入路径主要受快照复制影响，不是重新塑形 |
+| 2026-10-28 | 将未变段落的正文、Parley 布局和 UTF-16 检查点改为 `Arc` 共享；分页行位置仍归新快照所有，复用时重新分配空位置表 | 100,499 字符、3,000 次 IME 更新从单次 4.623 s 降至两次 1.229 s / 1.278 s，平均快约 72.9%。引擎 83 项和应用 104 项测试通过；真实窗口输入延迟仍需复测 |
 
 ## 完成摘要
 

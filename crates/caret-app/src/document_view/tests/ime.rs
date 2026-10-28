@@ -119,6 +119,14 @@ fn ime_preedit_updates_only_the_composition_paragraph() -> Result<(), Box<dyn st
     assert_eq!(first["compositionPreview"], true);
     assert_eq!(first["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(first["paragraphs"][0]["text"], "active paragraphni");
+    let previous_unchanged_layout = std::sync::Arc::clone(
+        &runtime
+            .composition_snapshot
+            .as_ref()
+            .ok_or("first IME composition snapshot was not installed")?
+            .paragraphs[0]
+            .layout,
+    );
 
     let updated: Value = serde_json::from_str(&runtime.input_method_event_json(
         "ni hao".to_owned(),
@@ -141,6 +149,10 @@ fn ime_preedit_updates_only_the_composition_paragraph() -> Result<(), Box<dyn st
         .composition_snapshot
         .as_ref()
         .ok_or("IME composition snapshot was not installed")?;
+    assert!(std::sync::Arc::ptr_eq(
+        &previous_unchanged_layout,
+        &reused.paragraphs[0].layout
+    ));
     let preview_session = runtime
         .composition_preview_session
         .as_ref()

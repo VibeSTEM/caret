@@ -116,7 +116,7 @@ impl DocumentViewRuntime {
                 cursor_position
             };
         let input_method_context = serde_json::json!({
-            "surroundingText": context.text,
+            "surroundingText": context.text.as_ref(),
             "cursorPosition": cursor_position,
             "anchorPosition": anchor_position,
         });
@@ -169,7 +169,7 @@ impl DocumentViewRuntime {
         if include_surrounding_text {
             input_method_context.insert(
                 "surroundingText".to_owned(),
-                serde_json::Value::String(paragraph.text.clone()),
+                serde_json::Value::String(paragraph.text.to_string()),
             );
         }
         input_method_context.insert(

@@ -8,7 +8,7 @@ use caret_layout::{
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
     paragraph_has_empty_line, resolve_paragraph_style,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
 
@@ -58,13 +58,13 @@ impl From<FontCatalogError> for DocumentLayoutError {
     }
 }
 
-/// 已排版段落的源 ID、原文與行框；正文文本只在快照里保留一份。
+/// 已排版段落的源 ID、原文与行框；只读塑形数据跨快照共享，分页位置按快照独立保存。
 #[derive(Debug, Clone)]
 pub struct LaidOutParagraph {
     pub id: NodeId,
-    pub text: String,
-    pub layout: ParleyParagraphLayout,
-    utf16_checkpoints: Vec<(usize, usize)>,
+    pub text: Arc<str>,
+    pub layout: Arc<ParleyParagraphLayout>,
+    utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
 }
 
@@ -89,10 +89,20 @@ impl LaidOutParagraph {
         let line_locations = vec![None; layout.paragraph.lines.len()];
         Self {
             id,
-            text,
-            layout,
-            utf16_checkpoints,
+            text: Arc::from(text),
+            layout: Arc::new(layout),
+            utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
+        }
+    }
+
+    fn reused_for_layout(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            text: Arc::clone(&self.text),
+            layout: Arc::clone(&self.layout),
+            utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
+            line_locations: vec![None; self.layout.paragraph.lines.len()],
         }
     }
 
@@ -570,7 +580,7 @@ impl DocumentLayoutService {
                 && &paragraph.id != changed_paragraph_id
                 && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
             {
-                paragraphs.push(previous_paragraph.clone());
+                paragraphs.push(previous_paragraph.reused_for_layout());
                 resolved_styles.push(style);
                 continue;
             }
