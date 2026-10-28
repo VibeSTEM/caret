@@ -10,6 +10,7 @@
 #include <QSizeF>
 #include <QVariant>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <qcontainerfwd.h>
@@ -17,6 +18,11 @@
 
 namespace caret::layout_snapshot {
 namespace {
+qulonglong next_page_glyph_revision() {
+    static std::atomic<qulonglong> revision{1};
+    return revision.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool nonnegative_index(const QJsonValue& value, qsizetype& result) {
     if (!value.isDouble()) {
         return false;
@@ -108,7 +114,16 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
            const ParsedLayoutSnapshot* previous_snapshot) {
     QJsonParseError parse_error;
     const QJsonDocument document = QJsonDocument::fromJson(snapshot_json, &parse_error);
-    if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+    if (parse_error.error != QJsonParseError::NoError) {
+        error = QStringLiteral("layout.invalid_snapshot");
+        return false;
+    }
+    return parse(document, parsed_snapshot, error, previous_snapshot);
+}
+
+bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
+           const ParsedLayoutSnapshot* previous_snapshot) {
+    if (!document.isObject()) {
         error = QStringLiteral("layout.invalid_snapshot");
         return false;
     }
@@ -292,6 +307,7 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
         return false;
     }
     QVariantList parsed_sizes;
+    QVariantList parsed_page_glyph_revisions;
     QJsonArray parsed_page_layouts;
     const QJsonArray pages = pages_value.toArray();
     qsizetype page_start_index = 0;
@@ -299,6 +315,8 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
         if (!nonnegative_index(root.value(QStringLiteral("pageStartIndex")), page_start_index) ||
             page_start_index > previous_snapshot->page_sizes.size() ||
             previous_snapshot->page_sizes.size() != previous_snapshot->page_layouts.size() ||
+            previous_snapshot->page_sizes.size() !=
+                previous_snapshot->page_glyph_revisions.size() ||
             previous_snapshot->page_margins != parsed_margins) {
             error = QStringLiteral("layout.invalid_partial_pages");
             return false;
@@ -307,10 +325,13 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
         for (qsizetype index = 0; index < page_start_index; ++index) {
             parsed_sizes.push_back(previous_snapshot->page_sizes.at(index));
             parsed_page_layouts.push_back(previous_snapshot->page_layouts.at(index));
+            parsed_page_glyph_revisions.push_back(
+                previous_snapshot->page_glyph_revisions.at(index));
         }
     } else {
         parsed_sizes.reserve(pages.size());
     }
+    parsed_page_glyph_revisions.reserve(parsed_sizes.size() + pages.size());
     for (const auto& page_value : pages) {
         if (!page_value.isObject()) {
             error = QStringLiteral("layout.invalid_page");
@@ -362,6 +383,7 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
         }
         parsed_sizes.push_back(QVariant::fromValue(QSizeF(width_pt, height_pt)));
         parsed_page_layouts.push_back(page_value);
+        parsed_page_glyph_revisions.push_back(QString::number(next_page_glyph_revision()));
     }
     QVariantList parsed_selection_rects;
     if (!parse_geometry_rectangles(root.value(QStringLiteral("selectionRects")), parsed_sizes,
@@ -376,6 +398,7 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
     }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
+    parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
     parsed_snapshot.page_margins = std::move(parsed_margins);
     parsed_snapshot.paragraph_layouts = std::move(parsed_paragraphs);
     parsed_snapshot.paragraph_line_counts = std::move(paragraph_line_counts);

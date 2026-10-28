@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -13,6 +14,7 @@ namespace caret::layout_snapshot {
 struct ParsedLayoutSnapshot {
     QVariantList page_sizes;
     QJsonArray page_layouts;
+    QVariantList page_glyph_revisions;
     QVariantMap page_margins;
     QJsonArray paragraph_layouts;
     QHash<QString, qsizetype> paragraph_line_counts;
@@ -29,5 +31,7 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
            const ParsedLayoutSnapshot* previous_snapshot = nullptr);
 bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot = nullptr);
+bool parse(const QJsonDocument& snapshot_document, ParsedLayoutSnapshot& parsed_snapshot,
+           QString& error, const ParsedLayoutSnapshot* previous_snapshot = nullptr);
 
 } // namespace caret::layout_snapshot

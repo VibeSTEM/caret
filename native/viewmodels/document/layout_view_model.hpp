@@ -3,6 +3,8 @@
 
 #include <QByteArray>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QThreadPool>
@@ -34,6 +36,7 @@ class LayoutViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(QVariantList pageSizesPt READ pageSizesPt NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList pageGlyphRevisions READ pageGlyphRevisions NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects NOTIFY interactionChanged)
@@ -56,6 +59,7 @@ class LayoutViewModel final : public QObject {
     explicit LayoutViewModel(QObject* parent = nullptr);
 
     [[nodiscard]] const QVariantList& pageSizesPt() const { return m_page_sizes_pt; }
+    [[nodiscard]] const QVariantList& pageGlyphRevisions() const { return m_page_glyph_revisions; }
     [[nodiscard]] QVariantList pageLayouts() const { return m_page_layouts.toVariantList(); }
     [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
     [[nodiscard]] const QVariantList& selectionRects() const { return m_selection_rects; }
@@ -128,10 +132,13 @@ class LayoutViewModel final : public QObject {
 
   private:
     bool installSnapshot(const QString& snapshot_json, bool replace_document = false);
+    bool installSnapshot(const QJsonDocument& snapshot_document, bool replace_document = false);
     bool installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot);
     QVariantMap installEditResponse(const QByteArray& response_bytes);
+    QVariantMap installEditResponse(const QJsonDocument& snapshot_document);
     QVariantMap installInteractionResponse(const QByteArray& response_bytes);
     bool installInteraction(const QString& interaction_json);
+    bool installInteraction(const QJsonObject& interaction_object);
     void installCaretGeometry(const QVariantMap& geometry);
     void refreshDocumentFileStatus();
     void setDocumentFileBusy(bool busy);
@@ -145,6 +152,7 @@ class LayoutViewModel final : public QObject {
 
   private:
     QVariantList m_page_sizes_pt;
+    QVariantList m_page_glyph_revisions;
     QJsonArray m_page_layouts;
     QVariantMap m_page_margins_pt;
     QVariantList m_selection_rects;

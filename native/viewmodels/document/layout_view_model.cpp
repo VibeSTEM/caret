@@ -43,6 +43,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     }
     const auto& parsed_snapshot = installed_snapshot();
     m_page_sizes_pt = parsed_snapshot.page_sizes;
+    m_page_glyph_revisions = parsed_snapshot.page_glyph_revisions;
     m_page_layouts = parsed_snapshot.page_layouts;
     m_page_margins_pt = parsed_snapshot.page_margins;
     m_selection_rects = parsed_snapshot.selection_rects;
@@ -58,7 +59,26 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
     QString error;
     const auto* previous_snapshot =
         !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
-    if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error, previous_snapshot)) {
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(snapshot_json.toUtf8(), &parse_error);
+    if (parse_error.error != QJsonParseError::NoError ||
+        !layout_snapshot::parse(document, parsed_snapshot, error, previous_snapshot)) {
+        if (parse_error.error != QJsonParseError::NoError) {
+            error = QStringLiteral("layout.invalid_snapshot");
+        }
+        m_error = std::move(error);
+        return false;
+    }
+    return installSnapshot(std::move(parsed_snapshot));
+}
+
+bool LayoutViewModel::installSnapshot(const QJsonDocument& snapshot_document,
+                                      bool replace_document) {
+    layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
+    QString error;
+    const auto* previous_snapshot =
+        !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
+    if (!layout_snapshot::parse(snapshot_document, parsed_snapshot, error, previous_snapshot)) {
         m_error = std::move(error);
         return false;
     }
@@ -71,6 +91,7 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
+    m_page_glyph_revisions = std::move(parsed_snapshot.page_glyph_revisions);
     m_page_layouts = std::move(parsed_snapshot.page_layouts);
     m_page_margins_pt = std::move(parsed_snapshot.page_margins);
     m_selection_rects = std::move(parsed_snapshot.selection_rects);
@@ -95,7 +116,10 @@ bool LayoutViewModel::installInteraction(const QString& interaction_json) {
         m_error = QStringLiteral("layout.invalid_interaction");
         return false;
     }
-    const QJsonObject root = document.object();
+    return installInteraction(document.object());
+}
+
+bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     const QString document_generation = root.value(QStringLiteral("documentGeneration")).toString();
     const QString font_generation = root.value(QStringLiteral("fontGeneration")).toString();
     bool document_generation_ok = false;
