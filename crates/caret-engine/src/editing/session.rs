@@ -136,7 +136,7 @@ impl Session {
         let before_state_id = self.history_state_id;
         let edit_group = history::edit_group(&command);
         let breaks_history_merge = edit_group.is_none();
-        let mut before_paragraph_states = if is_document_edit(&command) {
+        let mut before_paragraph_states = if is_paragraph_edit(&command) {
             let mut ids = history::before_selection_ids(&self.paragraph_index, &self.selection);
             if let Command::Delete(direction) = &command
                 && self.selection.anchor == self.selection.focus
@@ -206,30 +206,12 @@ impl Session {
                         "changed document command did not produce a history patch".to_owned(),
                     ));
                 }
-                let patch = DocumentPatch::Paragraphs {
+                DocumentPatch::Paragraphs {
                     before: std::mem::take(&mut before_paragraph_states),
                     after: after_paragraph_states,
                     merge_group: edit_group,
                     merge_epoch: self.history_merge_epoch,
-                };
-                let edit = SessionHistoryEdit::new(
-                    patch,
-                    before_selection,
-                    self.selection.clone(),
-                    before_visual_affinity,
-                    self.selection_visual_affinity,
-                    before_state_id,
-                    after_state_id,
-                );
-                self.record_history_edit(edit);
-                self.history_state_id = after_state_id;
-                if let Some(next) = self.document_generation.checked_add(1) {
-                    self.document_generation = next;
-                } else {
-                    self.session_id = NodeId::generate();
-                    self.document_generation = 0;
                 }
-                return Ok(effect);
             };
             let edit = SessionHistoryEdit::new(
                 patch,
@@ -464,7 +446,7 @@ impl Clone for Session {
     }
 }
 
-fn is_document_edit(command: &Command) -> bool {
+fn is_paragraph_edit(command: &Command) -> bool {
     matches!(
         command,
         Command::InsertText(_)
@@ -473,7 +455,6 @@ fn is_document_edit(command: &Command) -> bool {
             | Command::SplitParagraph
             | Command::Delete(_)
             | Command::CommitComposition { .. }
-            | Command::SetPageGeometry(_)
     )
 }
 

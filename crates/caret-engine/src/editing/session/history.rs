@@ -168,7 +168,13 @@ impl Edit for SessionHistoryEdit {
         {
             return Merged::No(other);
         }
-        *current_after = next_after.clone();
+        let DocumentPatch::Paragraphs {
+            after: next_after, ..
+        } = other.patch
+        else {
+            unreachable!("merge compatibility was checked above");
+        };
+        *current_after = next_after;
         self.after_selection = other.after_selection;
         self.after_visual_affinity = other.after_visual_affinity;
         self.after_state_id = other.after_state_id;
@@ -291,11 +297,7 @@ fn apply_paragraph_states(
     for state in current {
         remove_paragraph(&mut document.body, &state.id);
     }
-    let mut titles = target
-        .iter()
-        .filter(|state| state.is_title)
-        .collect::<Vec<_>>();
-    for state in titles.drain(..) {
+    for state in target.iter().filter(|state| state.is_title) {
         let Some(environment_id) = state.parent_environment_ids.last() else {
             continue;
         };
@@ -540,10 +542,8 @@ pub(super) fn before_selection_ids(
     } else {
         (&focus.block_path, &anchor.block_path)
     };
-    let mut ordered = paragraph_index.iter().collect::<Vec<_>>();
-    ordered.sort_by(|(_, left), (_, right)| left.block_path.cmp(&right.block_path));
-    ordered
-        .into_iter()
+    paragraph_index
+        .iter()
         .filter(|(_, location)| location.block_path >= *start && location.block_path <= *end)
         .map(|(id, _)| id.clone())
         .collect()

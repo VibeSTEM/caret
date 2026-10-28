@@ -75,6 +75,8 @@ AutoSave 策略不在本任务设计或实现，单独由 019 先行设计。
 | 2026-10-28 | macOS 实际窗口：已有文档编辑后关闭选择 Save；随后重开检查内容 | 原路径写回成功，保存完成后关闭文档 | 通过；重开验证新增文本已写回 |
 | 2026-10-28 | macOS 实际窗口：关闭确认选择 Cancel、Don't Save | Cancel 保留 Edited 文档；Don't Save 丢弃修改并关闭文档 | 通过；对话框顺序为 Save / Don't Save / Cancel，无关闭图标 |
 | 2026-10-28 | 独立实现评审 | 检查完整 PR diff、历史/保存状态机、Qt/QML 关闭流程、布局与文档 | 早期评审发现的历史、IME、布局和关闭模态问题均已修复并复验；最终只读复核通过。Windows/Linux 窗口实测未覆盖，等待 CI |
+| 2026-10-28 | `cargo fmt --all --check`、`cargo check --locked -p caret-engine`、`git diff --check` | 验证历史路径局部优化的格式与编译 | 通过；跨段选区筛选移除冗余排序，页面几何编辑跳过段落快照捕获，合并历史补丁时移动替换快照以避免深复制 |
+| 2026-10-28 | `cargo lint includes --changed --check`、`cargo lint clang-tidy --changed --check`、`cargo lint cppcheck --changed --check` | 复现并修复 PR CI 的 C++ lint 失败 | 通过；测试入口补充 `qtestkeyboard.h`、`QtGui/qtestsupport_gui.h` 和 `QtCore/Qt` 的直接包含 |
 
 ## 风险与回退
 
@@ -91,6 +93,7 @@ AutoSave 策略不在本任务设计或实现，单独由 019 先行设计。
 - 2026-10-28：Undo/Redo 使用 Qt 标准键序列，平台对应 Ctrl+Z / Ctrl+Shift+Z 与 Command+Z / Command+Shift+Z；工作模式菜单支持焦点、方向键、Enter/Space 和 Esc，选择后焦点返回按钮。
 - 2026-10-28：按用户参考图将 Comments、工作模式菜单和 Share 移到第一行，搜索入口改为单图标；文件名保持水平居中，去掉首行与 Home 标签行之间的边界线，保留设置入口。
 - 2026-10-28：手工验收发现原生关闭确认内直接打开另存为会造成模态窗口切换失效。改为应用内样式确认窗口，关闭确认后再触发另存为；按钮顺序固定为 Save / Don't Save / Cancel，隐藏右上关闭图标。增加相同路径连续保存回归验证。
+- 2026-10-28：代码优化复核移除了跨段落索引的全量排序、页面设置时不必要的段落快照，以及合并历史补丁时的替换快照克隆；几何/段落历史提交共用同一状态更新尾部。超大段落补丁的记录深复制仍是后续性能采样的候选，不在本次扩大历史表示改造。
 
 ## 完成摘要
 
