@@ -62,6 +62,7 @@ Rectangle {
             Layout.maximumHeight: commandBar.chipHeight
             font.pixelSize: Theme.fontSmall
             contentPadding: Theme.spacingTiny
+            iconName: "comments"
             text: qsTr("Comments")
             controlHeight: commandBar.chipHeight
             contentColor: Theme.colorText
@@ -69,18 +70,11 @@ Rectangle {
             borderColor: Theme.colorPanelLine
         }
 
-        ThemedToolButton {
-            objectName: "editingButton"
+        DocumentModeSelector {
+            id: documentModeSelector
+            objectName: "documentModeSelector"
             Layout.alignment: Qt.AlignVCenter
             Layout.maximumHeight: commandBar.chipHeight
-            font.pixelSize: Theme.fontSmall
-            contentPadding: Theme.spacingTiny
-            text: qsTr("Editing")
-            showCaret: true
-            controlHeight: commandBar.chipHeight
-            contentColor: Theme.colorText
-            hoverColor: Theme.colorHover
-            borderColor: Theme.colorPanelLine
         }
 
         ThemedToolButton {
@@ -90,6 +84,7 @@ Rectangle {
             Layout.maximumHeight: commandBar.chipHeight
             font.pixelSize: Theme.fontSmall
             contentPadding: Theme.spacingTiny
+            iconName: "share"
             text: qsTr("Share")
             controlHeight: commandBar.chipHeight
             contentColor: Theme.colorPanel

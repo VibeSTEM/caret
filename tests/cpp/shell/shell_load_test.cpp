@@ -203,6 +203,42 @@ void ShellLoadTest::unknownIconRefusesColoring() {
     QVERIFY(unknown.isNull());
 }
 
+void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
+    const QString theme =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                               theme, QColor(QStringLiteral("#ffffff")), 16));
+    caret::install_theme_snapshots(themes, QStringLiteral("light"));
+
+    QQmlApplicationEngine engine;
+    caret::install_icon_provider(engine);
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.Shell\n"
+                                        "DocumentModeSelector { objectName: \"modeSelector\" }\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* selector = component.create();
+    QVERIFY2(selector != nullptr, qPrintable(component.errorString()));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("editing"));
+    auto* button = selector->findChild<QObject*>(QStringLiteral("editingButton"));
+    QVERIFY(button != nullptr);
+    QCOMPARE(button->property("text").toString(), QStringLiteral("Editing"));
+
+    QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
+                                      Q_ARG(QString, QStringLiteral("review"))));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("review"));
+    QCOMPARE(button->property("text").toString(), QStringLiteral("Review"));
+
+    QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
+                                      Q_ARG(QString, QStringLiteral("view"))));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
+    QCOMPARE(button->property("text").toString(), QStringLiteral("View"));
+    delete selector;
+}
+
 void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
     QDir dialogs(root + QStringLiteral("/qml/Dialogs"));

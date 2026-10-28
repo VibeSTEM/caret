@@ -23,7 +23,7 @@ Window {
     // Windows 隐藏系统标题但保留原生按钮。Linux 显式保留空标题和系统按钮提示。
     flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint | (Qt.platform.os === "windows" ? Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : Qt.platform.os === "linux" ? Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : 0)
 
-    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : LayoutViewModel.documentSaveStatus === "saved" ? " — Saved" : "")
+    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : " — Saved")
     property url suggestedSaveFileUrl: ""
     property bool allowClose: false
     property bool waitForCloseAfterFileOperation: false

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <!-- 查看模式图标，保持单色以便由界面主题统一着色。 -->
+  <path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4z" stroke="#000" stroke-width="1.2"/>
+  <circle cx="8" cy="8" r="1.8" stroke="#000" stroke-width="1.2"/>
+</svg>

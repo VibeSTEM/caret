@@ -39,7 +39,7 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
             [&view_model, &observed_save_states] {
                 observed_save_states.push_back(view_model.documentSaveStatus());
             });
-    QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("clean"));
+    QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("saved"));
 
     const QVariantMap inserted = view_model.insertText(QStringLiteral("保存後も編集"));
     QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),

@@ -19,6 +19,7 @@ class ShellLoadTest : public QObject {
     void initTestCase();
     void moduleImportsAndThemeBindingTracksSnapshot();
     void unknownIconRefusesColoring();
+    void documentModeSelectorTracksLocalChoice();
     void newDocumentDialogHasNoProcessFields();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();

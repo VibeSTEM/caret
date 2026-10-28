@@ -67,11 +67,13 @@ class IconProvider final : public QQuickImageProvider {
 const QSet<QString>& monochrome_icon_names() {
     // 窗口和编辑动作的单色 glyph。彩色资源走 qrc，未知 ID 拒绝着色。
     static const QSet<QString> names{
-        QStringLiteral("undo"),     QStringLiteral("redo"),     QStringLiteral("minimize"),
-        QStringLiteral("maximize"), QStringLiteral("close"),    QStringLiteral("check"),
-        QStringLiteral("copy"),     QStringLiteral("delete"),   QStringLiteral("caret"),
-        QStringLiteral("search"),   QStringLiteral("new"),      QStringLiteral("open"),
+        QStringLiteral("undo"),     QStringLiteral("redo"),     QStringLiteral("close"),
+        QStringLiteral("check"),    QStringLiteral("caret"),    QStringLiteral("search"),
+        QStringLiteral("open"),
         QStringLiteral("save"),     QStringLiteral("settings"), QStringLiteral("right"),
+        QStringLiteral("comments"), QStringLiteral("share"),
+        QStringLiteral("mode-edit"), QStringLiteral("mode-review"),
+        QStringLiteral("mode-view"),
         QStringLiteral("zoom-out"), QStringLiteral("zoom-in"),
     };
     return names;

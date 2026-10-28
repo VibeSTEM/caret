@@ -33,6 +33,7 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/RibbonContent.qml
     Components/Composites/HorizontalToolStrip.qml
     Components/Composites/DocumentTabBar.qml
+    Components/Composites/DocumentModeSelector.qml
     Components/Composites/PanelTabBar.qml
     Components/Composites/InformationPanel.qml
     Components/Composites/PaneCloseButton.qml
@@ -86,16 +87,16 @@ set(CARET_SHELL_ICON_FILES
     icons/caret.svg
     icons/check.svg
     icons/close.svg
-    icons/copy.svg
-    icons/delete.svg
-    icons/maximize.svg
-    icons/minimize.svg
-    icons/new.svg
+    icons/comments.svg
+    icons/mode-edit.svg
+    icons/mode-review.svg
+    icons/mode-view.svg
     icons/open.svg
     icons/redo.svg
     icons/right.svg
     icons/save.svg
     icons/search.svg
+    icons/share.svg
     icons/settings.svg
     icons/undo.svg
     icons/zoom-in.svg
