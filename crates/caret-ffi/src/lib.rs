@@ -13,10 +13,10 @@ fn version() -> String {
 #[allow(unsafe_code, clippy::all)]
 mod generated {
     use crate::document::{
-        DocumentRuntime, clear_selection_json, current_caret_json, delete_backward_json,
-        document_hit_test_json, document_save_snapshot, document_status_json, drag_hit_map_json,
-        input_method_event_json, insert_soft_break_json, insert_text_json,
-        install_prepared_document_json, interaction_state_json, layout_snapshot_json,
+        DocumentRuntime, cancel_prepared_document, clear_selection_json, current_caret_json,
+        delete_backward_json, document_hit_test_json, document_save_snapshot, document_status_json,
+        drag_hit_map_json, input_method_event_json, insert_soft_break_json, insert_text_json,
+        install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
         move_visual_caret_json, new_blank_document_runtime, paste_text_json,
         place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
@@ -72,6 +72,7 @@ mod generated {
 
         struct DocumentOpenResult {
             ticket: u64,
+            snapshot_json: String,
             error: String,
         }
 
@@ -111,9 +112,10 @@ mod generated {
                 expected_session_generation: u64,
                 expected_document_generation: u64,
             ) -> DocumentOpenResult;
+            /// 释放未安装的候选文档 ticket。
+            fn cancel_prepared_document(ticket: u64);
             /// 在 GUI 线程安装候选文档；打开期间文档若被修改则拒绝替换。
-            fn install_prepared_document_json(runtime: &mut DocumentRuntime, ticket: u64)
-            -> String;
+            fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u64) -> String;
             /// 后台线程原子写入已验证快照；路径 I/O 由 Rust 应用服务完成。
             fn write_document_file(path: String, bytes: Vec<u8>) -> String;
             /// 捕获不可变文档字节和会话/文档代际。

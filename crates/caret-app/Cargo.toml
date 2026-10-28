@@ -23,5 +23,10 @@ name = "document_view_input_criterion"
 path = "../../tests/performance/rust/cpu/document_view_input_criterion.rs"
 harness = false
 
+[[bench]]
+name = "document_open_delete_criterion"
+path = "../../tests/performance/rust/cpu/document_open_delete_criterion.rs"
+harness = false
+
 [lints]
 workspace = true

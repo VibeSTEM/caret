@@ -11,7 +11,6 @@ use std::sync::{Mutex, OnceLock};
 
 struct PreparedDocument {
     session: DocumentSessionService,
-    layout_snapshot: String,
     expected_session_generation: u64,
     expected_document_generation: u64,
 }
@@ -59,7 +58,6 @@ pub(crate) fn prepare_document_file(
         }
         let prepared = PreparedDocument {
             session,
-            layout_snapshot,
             expected_session_generation,
             expected_document_generation,
         };
@@ -67,19 +65,31 @@ pub(crate) fn prepare_document_file(
             .lock()
             .map_err(|_| "document.open_registry_unavailable".to_owned())?
             .insert(ticket, prepared);
-        Ok(ticket)
+        Ok((ticket, layout_snapshot))
     })();
     match result {
-        Ok(ticket) => bridge::DocumentOpenResult {
+        Ok((ticket, snapshot_json)) => bridge::DocumentOpenResult {
             ticket,
+            snapshot_json,
             error: String::new(),
         },
-        Err(error) => bridge::DocumentOpenResult { ticket: 0, error },
+        Err(error) => bridge::DocumentOpenResult {
+            ticket: 0,
+            snapshot_json: String::new(),
+            error,
+        },
+    }
+}
+
+/// 释放尚未安装的候选会话。
+pub(crate) fn cancel_prepared_document(ticket: u64) {
+    if let Ok(mut documents) = prepared_documents().lock() {
+        documents.remove(&ticket);
     }
 }
 
 /// 在 GUI 线程以 ticket 安装候选会话；捕获后发生的输入会令本次打开过期。
-pub(crate) fn install_prepared_document_json(runtime: &mut DocumentRuntime, ticket: u64) -> String {
+pub(crate) fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u64) -> String {
     let prepared = match prepared_documents().lock() {
         Ok(mut documents) => documents.remove(&ticket),
         Err(_) => return "error:document.open_registry_unavailable".to_owned(),
@@ -89,13 +99,12 @@ pub(crate) fn install_prepared_document_json(runtime: &mut DocumentRuntime, tick
     };
     match &mut runtime.runtime {
         Ok(runtime) => runtime
-            .install_prepared(
+            .install_prepared_session(
                 prepared.session,
-                prepared.layout_snapshot,
                 prepared.expected_session_generation,
                 prepared.expected_document_generation,
             )
-            .unwrap_or_else(|error| format!("error:{error}")),
+            .map_or_else(|error| format!("error:{error}"), |_| String::new()),
         Err(error) => format!("error:{error}"),
     }
 }

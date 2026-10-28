@@ -2,17 +2,29 @@
 #pragma once
 
 #include <QByteArray>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QThreadPool>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
+#include <memory>
 
 namespace caret {
 
+namespace layout_snapshot {
+struct ParsedLayoutSnapshot;
+}
+
+struct DocumentOpenTicketOwner;
+
 struct DocumentOpenTaskResult final {
     qulonglong ticket = 0;
+    std::shared_ptr<DocumentOpenTicketOwner> ticket_owner;
+    std::shared_ptr<layout_snapshot::ParsedLayoutSnapshot> snapshot;
     QString error;
 };
 
@@ -24,11 +36,12 @@ class LayoutViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(QVariantList pageSizesPt READ pageSizesPt NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList pageGlyphRevisions READ pageGlyphRevisions NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
-    Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList compositionRects READ compositionRects NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
@@ -46,11 +59,14 @@ class LayoutViewModel final : public QObject {
     explicit LayoutViewModel(QObject* parent = nullptr);
 
     [[nodiscard]] const QVariantList& pageSizesPt() const { return m_page_sizes_pt; }
-    [[nodiscard]] const QVariantList& pageLayouts() const { return m_page_layouts; }
+    [[nodiscard]] const QVariantList& pageGlyphRevisions() const { return m_page_glyph_revisions; }
+    [[nodiscard]] QVariantList pageLayouts() const { return m_page_layouts.toVariantList(); }
     [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
-    [[nodiscard]] const QVariantList& paragraphLayouts() const { return m_paragraph_layouts; }
     [[nodiscard]] const QVariantList& selectionRects() const { return m_selection_rects; }
     [[nodiscard]] const QVariantList& compositionRects() const { return m_composition_rects; }
+    [[nodiscard]] QVariantList paragraphLayouts() const {
+        return m_paragraph_layouts.toVariantList();
+    }
     [[nodiscard]] const QVariantMap& inputMethodContext() const { return m_input_method_context; }
     [[nodiscard]] QString documentGeneration() const {
         return QString::number(m_document_generation);
@@ -116,9 +132,13 @@ class LayoutViewModel final : public QObject {
 
   private:
     bool installSnapshot(const QString& snapshot_json, bool replace_document = false);
+    bool installSnapshot(const QJsonDocument& snapshot_document, bool replace_document = false);
+    bool installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot);
     QVariantMap installEditResponse(const QByteArray& response_bytes);
+    QVariantMap installEditResponse(const QJsonDocument& snapshot_document);
     QVariantMap installInteractionResponse(const QByteArray& response_bytes);
     bool installInteraction(const QString& interaction_json);
+    bool installInteraction(const QJsonObject& interaction_object);
     void installCaretGeometry(const QVariantMap& geometry);
     void refreshDocumentFileStatus();
     void setDocumentFileBusy(bool busy);
@@ -132,11 +152,12 @@ class LayoutViewModel final : public QObject {
 
   private:
     QVariantList m_page_sizes_pt;
-    QVariantList m_page_layouts;
+    QVariantList m_page_glyph_revisions;
+    QJsonArray m_page_layouts;
     QVariantMap m_page_margins_pt;
-    QVariantList m_paragraph_layouts;
     QVariantList m_selection_rects;
     QVariantList m_composition_rects;
+    QJsonArray m_paragraph_layouts;
     QVariantMap m_input_method_context;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;

@@ -8,7 +8,7 @@ use caret_layout::{
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
     paragraph_has_empty_line, resolve_paragraph_style,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
 
@@ -58,13 +58,13 @@ impl From<FontCatalogError> for DocumentLayoutError {
     }
 }
 
-/// 已排版段落的源 ID、原文與行框；正文文本只在快照里保留一份。
+/// 已排版段落的源 ID、原文与行框；只读塑形数据跨快照共享，分页位置按快照独立保存。
 #[derive(Debug, Clone)]
 pub struct LaidOutParagraph {
     pub id: NodeId,
-    pub text: String,
-    pub layout: ParleyParagraphLayout,
-    utf16_checkpoints: Vec<(usize, usize)>,
+    pub text: Arc<str>,
+    pub layout: Arc<ParleyParagraphLayout>,
+    utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
 }
 
@@ -89,10 +89,20 @@ impl LaidOutParagraph {
         let line_locations = vec![None; layout.paragraph.lines.len()];
         Self {
             id,
-            text,
-            layout,
-            utf16_checkpoints,
+            text: Arc::from(text),
+            layout: Arc::new(layout),
+            utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
+        }
+    }
+
+    fn reused_for_layout(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            text: Arc::clone(&self.text),
+            layout: Arc::clone(&self.layout),
+            utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
+            line_locations: vec![None; self.layout.paragraph.lines.len()],
         }
     }
 
@@ -462,11 +472,13 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        let mut snapshot = self.layout(
+        let mut snapshot = self.layout_with_reuse(
             session.document(),
             session.document_generation(),
             catalog,
             base_style,
+            None,
+            false,
         )?;
         snapshot.session_id = Some(session.session_id().clone());
         Ok(snapshot)
@@ -487,6 +499,7 @@ impl DocumentLayoutService {
             catalog,
             base_style,
             Some((previous, changed_paragraph_id)),
+            false,
         )?;
         snapshot.session_id = Some(session.session_id().clone());
         Ok(snapshot)
@@ -500,7 +513,14 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        self.layout_with_reuse(document, document_generation, catalog, base_style, None)
+        self.layout_with_reuse(
+            document,
+            document_generation,
+            catalog,
+            base_style,
+            None,
+            true,
+        )
     }
 
     fn layout_with_reuse(
@@ -510,10 +530,14 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
         reuse: Option<(&DocumentLayoutSnapshot, &NodeId)>,
+        validate_document: bool,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        document
-            .validate()
-            .map_err(|error| DocumentLayoutError::InvalidDocument(error.to_string()))?;
+        // Session 创建时已校验文档，后续命令维持结构不变量，避免每次排版重复遍历整树。
+        if validate_document {
+            document
+                .validate()
+                .map_err(|error| DocumentLayoutError::InvalidDocument(error.to_string()))?;
+        }
         let section = document
             .page_sections
             .first()
@@ -556,7 +580,7 @@ impl DocumentLayoutService {
                 && &paragraph.id != changed_paragraph_id
                 && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
             {
-                paragraphs.push(previous_paragraph.clone());
+                paragraphs.push(previous_paragraph.reused_for_layout());
                 resolved_styles.push(style);
                 continue;
             }

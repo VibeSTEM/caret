@@ -3,12 +3,11 @@
 use crate::document::{
     clear_selection_json, current_caret_json, delete_backward_json, document_hit_test_json,
     document_save_snapshot, document_status_json, drag_hit_map_json, input_method_event_json,
-    insert_soft_break_json, insert_text_json, install_prepared_document_json,
-    interaction_state_json, layout_snapshot_json, mark_document_saved_json,
-    move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
-    new_blank_document_runtime, paste_text_json, place_caret_at_page_json, prepare_document_file,
-    rasterize_page_glyphs, selected_text_json, set_selection_json, split_paragraph_json,
-    write_document_file,
+    insert_soft_break_json, insert_text_json, install_prepared_document, interaction_state_json,
+    layout_snapshot_json, mark_document_saved_json, move_to_visual_line_edge_json,
+    move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime, paste_text_json,
+    place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
+    set_selection_json, split_paragraph_json, write_document_file,
 };
 
 use crate::generated::bridge::GlyphRasterRequest;
@@ -233,11 +232,10 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
     let mut reopened_runtime = new_blank_document_runtime();
     let opened = prepare_document_file(path.clone(), 1, 0);
     assert!(opened.error.is_empty());
-    let reopened_snapshot = install_prepared_document_json(&mut reopened_runtime, opened.ticket);
-    assert!(!reopened_snapshot.starts_with("error:"));
-    assert!(reopened_snapshot.contains("Hello 世界"));
+    assert!(opened.snapshot_json.contains("Hello 世界"));
+    assert!(install_prepared_document(&mut reopened_runtime, opened.ticket).is_empty());
     assert_eq!(
-        install_prepared_document_json(&mut reopened_runtime, opened.ticket),
+        install_prepared_document(&mut reopened_runtime, opened.ticket),
         "error:document.open_ticket_expired"
     );
     let status = document_status_json(&mut reopened_runtime);
@@ -249,7 +247,7 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
     assert!(stale_open.error.is_empty());
     assert!(!insert_text_json(&mut stale_runtime, "new edit".to_owned()).starts_with("error:"));
     assert_eq!(
-        install_prepared_document_json(&mut stale_runtime, stale_open.ticket),
+        install_prepared_document(&mut stale_runtime, stale_open.ticket),
         "error:document.open_stale_session"
     );
 

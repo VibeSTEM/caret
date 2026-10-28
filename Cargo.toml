@@ -68,3 +68,43 @@ all = { level = "deny", priority = -1 }
 # 测试和 build script 也必须显式处理失败。
 unwrap_used = "deny"
 expect_used = "deny"
+
+# Debug GUI 仍保留符号，但关键排版路径使用优化代码，避免百万字符文档在本地开发构建中卡顿。
+[profile.dev.package.caret-app]
+opt-level = 2
+
+[profile.dev.package.caret-engine]
+opt-level = 2
+
+[profile.dev.package.caret-layout]
+opt-level = 2
+
+[profile.dev.package.parley]
+opt-level = 2
+
+[profile.dev.package.parley_engine]
+opt-level = 2
+
+[profile.dev.package.harfrust]
+opt-level = 2
+
+[profile.dev.package.fontique]
+opt-level = 2
+
+[profile.dev.package.read-fonts]
+opt-level = 2
+
+[profile.dev.package.skrifa]
+opt-level = 2
+
+[profile.dev.package.font-types]
+opt-level = 2
+
+[profile.dev.package.icu_segmenter]
+opt-level = 2
+
+[profile.dev.package.icu_properties]
+opt-level = 2
+
+[profile.dev.package.unicode-segmentation]
+opt-level = 2

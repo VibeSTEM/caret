@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QObject>
+#include <QString>
 #include <qtmetamacros.h>
 #include <utility>
 
@@ -43,11 +44,12 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     }
     const auto& parsed_snapshot = installed_snapshot();
     m_page_sizes_pt = parsed_snapshot.page_sizes;
+    m_page_glyph_revisions = parsed_snapshot.page_glyph_revisions;
     m_page_layouts = parsed_snapshot.page_layouts;
     m_page_margins_pt = parsed_snapshot.page_margins;
-    m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_selection_rects = parsed_snapshot.selection_rects;
     m_composition_rects = parsed_snapshot.composition_rects;
+    m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_input_method_context = parsed_snapshot.input_method_context;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -58,20 +60,44 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
     QString error;
     const auto* previous_snapshot =
         !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
-    if (!layout_snapshot::parse(snapshot_json, parsed_snapshot, error, previous_snapshot)) {
+    QJsonParseError parse_error;
+    const QJsonDocument document = QJsonDocument::fromJson(snapshot_json.toUtf8(), &parse_error);
+    if (parse_error.error != QJsonParseError::NoError ||
+        !layout_snapshot::parse(document, parsed_snapshot, error, previous_snapshot)) {
+        if (parse_error.error != QJsonParseError::NoError) {
+            error = QStringLiteral("layout.invalid_snapshot");
+        }
         m_error = std::move(error);
         return false;
     }
+    return installSnapshot(std::move(parsed_snapshot));
+}
+
+bool LayoutViewModel::installSnapshot(const QJsonDocument& snapshot_document,
+                                      bool replace_document) {
+    layout_snapshot::ParsedLayoutSnapshot parsed_snapshot;
+    QString error;
+    const auto* previous_snapshot =
+        !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
+    if (!layout_snapshot::parse(snapshot_document, parsed_snapshot, error, previous_snapshot)) {
+        m_error = std::move(error);
+        return false;
+    }
+    return installSnapshot(std::move(parsed_snapshot));
+}
+
+bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot) {
     const bool interaction_changed = m_selection_rects != parsed_snapshot.selection_rects ||
                                      m_input_method_context != parsed_snapshot.input_method_context;
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
+    m_page_glyph_revisions = std::move(parsed_snapshot.page_glyph_revisions);
     m_page_layouts = std::move(parsed_snapshot.page_layouts);
     m_page_margins_pt = std::move(parsed_snapshot.page_margins);
-    m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
     m_selection_rects = std::move(parsed_snapshot.selection_rects);
     m_composition_rects = std::move(parsed_snapshot.composition_rects);
+    m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -91,7 +117,10 @@ bool LayoutViewModel::installInteraction(const QString& interaction_json) {
         m_error = QStringLiteral("layout.invalid_interaction");
         return false;
     }
-    const QJsonObject root = document.object();
+    return installInteraction(document.object());
+}
+
+bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     const QString document_generation = root.value(QStringLiteral("documentGeneration")).toString();
     const QString font_generation = root.value(QStringLiteral("fontGeneration")).toString();
     bool document_generation_ok = false;

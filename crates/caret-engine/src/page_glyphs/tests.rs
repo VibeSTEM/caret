@@ -407,14 +407,15 @@ fn invalid_fragment_or_glyph_source_rejects_the_page_atomically() {
     );
 
     snapshot = original.clone();
-    snapshot.paragraphs[0].layout.baseline_adjustments_pt[0] = f32::NAN;
+    std::sync::Arc::make_mut(&mut snapshot.paragraphs[0].layout).baseline_adjustments_pt[0] =
+        f32::NAN;
     assert_eq!(
         snapshot.page_glyphs(0),
         Err(PageGlyphError::InvalidLineGeometry)
     );
 
     snapshot = original;
-    snapshot.paragraphs[0].layout.layout = Default::default();
+    std::sync::Arc::make_mut(&mut snapshot.paragraphs[0].layout).layout = Default::default();
     assert_eq!(
         snapshot.page_glyphs(0),
         Err(PageGlyphError::InvalidGlyphSource)

@@ -16,17 +16,50 @@ pub struct DocumentSaveSnapshot {
 /// 应用层文档会话；权威持有编辑视图、文件身份和成功保存点。
 pub struct DocumentSessionService {
     view: DocumentViewRuntime,
-    file: CdocFile,
+    file: DocumentFileMetadata,
     path: Option<PathBuf>,
     session_generation: u64,
     saved_generation: u64,
+}
+
+/// 保存文档信封信息，正文只由编辑会话持有，避免打开时复制整棵文档树。
+struct DocumentFileMetadata {
+    format: String,
+    version: u32,
+    required_features: Vec<String>,
+    media: Vec<caret_doc::Media>,
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+impl DocumentFileMetadata {
+    fn from_file(file: CdocFile) -> (Self, Document) {
+        let CdocFile {
+            format,
+            version,
+            required_features,
+            media,
+            document,
+            extra,
+        } = file;
+        (
+            Self {
+                format,
+                version,
+                required_features,
+                media,
+                extra,
+            },
+            document,
+        )
+    }
 }
 
 impl DocumentSessionService {
     /// 创建新的未命名文档。
     pub fn new_blank() -> Result<Self, String> {
         let file = CdocFile::new(Document::blank()).map_err(|error| error.to_string())?;
-        let view = DocumentViewRuntime::from_document(file.document().clone())?;
+        let (file, document) = DocumentFileMetadata::from_file(file);
+        let view = DocumentViewRuntime::from_document(document)?;
         Ok(Self {
             view,
             file,
@@ -61,7 +94,8 @@ impl DocumentSessionService {
         let OpenedDocument::Editable(file) = opened else {
             return Err("cdoc.safe_preview_read_only".to_owned());
         };
-        let mut candidate_view = DocumentViewRuntime::from_document(file.document().clone())?;
+        let (file, document) = DocumentFileMetadata::from_file(file);
+        let mut candidate_view = DocumentViewRuntime::from_document(document)?;
         let layout_snapshot = candidate_view.layout_snapshot_json()?;
         Ok((
             Self {
@@ -83,13 +117,28 @@ impl DocumentSessionService {
         expected_session_generation: u64,
         expected_document_generation: u64,
     ) -> Result<String, String> {
+        self.install_prepared_session(
+            candidate,
+            expected_session_generation,
+            expected_document_generation,
+        )?;
+        Ok(layout_snapshot)
+    }
+
+    /// 仅安装后台准备好的候选会话；快照可由调用方另行异步解析。
+    pub fn install_prepared_session(
+        &mut self,
+        candidate: Self,
+        expected_session_generation: u64,
+        expected_document_generation: u64,
+    ) -> Result<(), String> {
         if self.session_generation != expected_session_generation
             || self.view.document_generation() != expected_document_generation
         {
             return Err("document.open_stale_session".to_owned());
         }
         *self = candidate;
-        Ok(layout_snapshot)
+        Ok(())
     }
 
     /// 同步打开入口供 Rust 集成测试使用；桌面端通过 worker 准备候选文档。

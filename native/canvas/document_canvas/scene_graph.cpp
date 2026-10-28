@@ -175,12 +175,33 @@ QSGImageNode* make_glyph_node(QQuickWindow* window, QSGTexture* texture,
     if (node == nullptr) {
         return nullptr;
     }
-    node->setTexture(texture);
     node->setOwnsTexture(false);
-    node->setSourceRect(rectangles.source);
     node->setFiltering(QSGTexture::Linear);
+    node->setTexture(texture);
+    node->setSourceRect(rectangles.source);
     node->setRect(rectangles.target);
     return node;
+}
+
+void update_glyph_node(QSGImageNode* node, QSGTexture* texture, const GlyphRectangles& rectangles) {
+    if (node == nullptr || texture == nullptr || rectangles.target.isEmpty()) {
+        return;
+    }
+    if (node->ownsTexture()) {
+        node->setOwnsTexture(false);
+    }
+    if (node->filtering() != QSGTexture::Linear) {
+        node->setFiltering(QSGTexture::Linear);
+    }
+    if (node->texture() != texture) {
+        node->setTexture(texture);
+    }
+    if (node->sourceRect() != rectangles.source) {
+        node->setSourceRect(rectangles.source);
+    }
+    if (node->rect() != rectangles.target) {
+        node->setRect(rectangles.target);
+    }
 }
 
 void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVariantMap& frame,
@@ -188,6 +209,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                        const std::function<QPointF(int, const QPointF&)>& document_to_content,
                        qreal logical_scale, bool create_textures) {
     if (window == nullptr || !frame.value(QStringLiteral("valid")).toBool()) {
+        group->clearGlyphNodes();
         return;
     }
     const int page_index = frame.value(QStringLiteral("pageIndex")).toInt();
@@ -198,6 +220,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
     const QRectF page_clip_rect = page_rect(page_index);
     if (page_clip_rect.isEmpty() || !is_finite_positive(dpr) ||
         !is_finite_positive(raster_pixels_per_point) || image_values.isEmpty()) {
+        group->clearGlyphNodes();
         return;
     }
     const qreal image_to_logical_scale = logical_scale / raster_pixels_per_point;
@@ -242,6 +265,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         qDeleteAll(previous_textures);
     }
 
+    QSGNode* reusable_node = group->firstChild();
     for (const QVariant& value : placement_values) {
         const QVariantMap placement = value.toMap();
         const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
@@ -293,11 +317,27 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         const qreal v1 = (visible_rect.bottom() - glyph_rect.top()) / glyph_rect.height();
         const QRectF source_rect(u0 * width_px, v0 * height_px, (u1 - u0) * width_px,
                                  (v1 - v0) * height_px);
-        QSGImageNode* glyph_node = make_glyph_node(
-            window, group->textures[static_cast<int>(image_index)], {visible_rect, source_rect});
-        if (glyph_node != nullptr) {
-            group->appendChildNode(glyph_node);
+        const GlyphRectangles rectangles{visible_rect, source_rect};
+        auto* glyph_node = static_cast<QSGImageNode*>(reusable_node);
+        if (reusable_node != nullptr) {
+            reusable_node = reusable_node->nextSibling();
         }
+        if (glyph_node == nullptr) {
+            glyph_node =
+                make_glyph_node(window, group->textures[static_cast<int>(image_index)], rectangles);
+            if (glyph_node != nullptr) {
+                group->appendChildNode(glyph_node);
+            }
+        } else {
+            update_glyph_node(glyph_node, group->textures[static_cast<int>(image_index)],
+                              rectangles);
+        }
+    }
+    while (reusable_node != nullptr) {
+        QSGNode* next_node = reusable_node->nextSibling();
+        group->removeChildNode(reusable_node);
+        delete reusable_node;
+        reusable_node = next_node;
     }
 }
 
@@ -337,7 +377,6 @@ void build_glyph_frames(GlyphGroupNode* group, QQuickWindow* window, const QVari
         }
         const bool images_changed =
             page_node->images != frame.value(QStringLiteral("images")).toList();
-        page_node->clearGlyphNodes();
         build_glyph_frame(page_node, window, frame, page_rect, document_to_content, logical_scale,
                           images_changed || missing_texture);
     }

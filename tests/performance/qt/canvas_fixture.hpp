@@ -89,6 +89,25 @@ inline QVariantMap edited_glyph_frame(int page_index, int frame_index) {
     return frame;
 }
 
+inline QVariantMap ime_updated_glyph_frame(int page_index, int frame_index) {
+    QVariantMap frame = glyph_frame(page_index);
+    QVariantList placements = frame.value(QStringLiteral("placements")).toList();
+    const double suffix_offset = frame_index % 2 == 0 ? 12.0 : 0.0;
+    for (qsizetype index = 0; index < placements.size(); ++index) {
+        const int column = static_cast<int>(index % 90);
+        const int row = static_cast<int>(index / 90);
+        if (row != 3 || column < 45) {
+            continue;
+        }
+        QVariantMap placement = placements.at(index).toMap();
+        const double original_x = placement.value(QStringLiteral("xPt")).toDouble();
+        placement.insert(QStringLiteral("xPt"), original_x + suffix_offset);
+        placements[index] = placement;
+    }
+    frame.insert(QStringLiteral("placements"), placements);
+    return frame;
+}
+
 inline QVariantList selection_rectangles(int frame, int page_index = 0) {
     QVariantList rectangles;
     rectangles.reserve(selection_rectangles_count);

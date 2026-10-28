@@ -244,7 +244,7 @@ fn page_views(snapshot: &DocumentLayoutSnapshot, page_start_index: usize) -> Vec
 fn paragraph_view(paragraph: &crate::LaidOutParagraph) -> ParagraphLayoutView {
     ParagraphLayoutView {
         paragraph_id: paragraph.id.to_string(),
-        text: paragraph.text.clone(),
+        text: paragraph.text.to_string(),
         lines: paragraph
             .layout
             .paragraph

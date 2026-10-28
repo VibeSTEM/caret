@@ -742,7 +742,7 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
             "import QtQuick\n"
             "import Caret.ViewModels\n"
             "Item {\n"
-            "    property var result: LayoutViewModel.insertText(\"x\")\n"
+            "    property var result\n"
             "    property var preeditResult\n"
             "    property var updatedPreeditResult\n"
             "    property var commitResult\n"
@@ -754,9 +754,34 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
             "    property int crossPreeditParagraphCount: 0\n"
             "    property int crossCancelParagraphCount: 0\n"
             "    property var pageSizes: LayoutViewModel.pageSizesPt\n"
+            "    property var pageGlyphRevisions: LayoutViewModel.pageGlyphRevisions\n"
             "    property var pageLayouts: LayoutViewModel.pageLayouts\n"
             "    property var paragraphs: LayoutViewModel.paragraphLayouts\n"
+            "    property var initialPageGlyphRevisions\n"
+            "    property var postInsertPageGlyphRevisions\n"
             "    Component.onCompleted: {\n"
+            "        const initialParagraphList = LayoutViewModel.paragraphLayouts\n"
+            "        const lastParagraph = initialParagraphList[initialParagraphList.length - 1]\n"
+            "        const lastPage = LayoutViewModel.pageSizesPt.length - 1\n"
+            "        const stops = LayoutViewModel.dragHitMap(lastPage).stops\n"
+            "        const endOffset = String(lastParagraph.text.length)\n"
+            "        let endStop = null\n"
+            "        for (let index = 0; index < stops.length; ++index) {\n"
+            "            const position = stops[index].position\n"
+            "            if (position.paragraphId === lastParagraph.paragraphId &&\n"
+            "                    position.offsetUtf8 === endOffset) {\n"
+            "                endStop = stops[index]\n"
+            "                break\n"
+            "            }\n"
+            "        }\n"
+            "        if (endStop === null)\n"
+            "            throw new Error(\"Unable to find the final caret stop\")\n"
+            "        const selectionResult = LayoutViewModel.setSelection(endStop, endStop)\n"
+            "        if (!selectionResult.valid)\n"
+            "            throw new Error(selectionResult.error)\n"
+            "        initialPageGlyphRevisions = LayoutViewModel.pageGlyphRevisions.slice()\n"
+            "        result = LayoutViewModel.insertText(\"x\")\n"
+            "        postInsertPageGlyphRevisions = LayoutViewModel.pageGlyphRevisions.slice()\n"
             "        preeditResult = LayoutViewModel.inputMethodEvent(\"n\", \"\", 0, 0, 1)\n"
             "        preeditParagraphCount = LayoutViewModel.paragraphLayouts.length\n"
             "        preeditRectCount = LayoutViewModel.compositionRects.length\n"
@@ -805,9 +830,19 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
              qPrintable(cross_cancel_result.value(QStringLiteral("error")).toString()));
     QCOMPARE(probe->property("crossCancelParagraphCount").toInt(), 100);
     const QVariantList pages = probe->property("pageSizes").toList();
+    const QVariantList initial_glyph_revisions =
+        probe->property("initialPageGlyphRevisions").toList();
+    const QVariantList glyph_revisions = probe->property("pageGlyphRevisions").toList();
+    const QVariantList post_insert_glyph_revisions =
+        probe->property("postInsertPageGlyphRevisions").toList();
     const QVariantList page_layouts = probe->property("pageLayouts").toList();
     const QVariantList paragraphs = probe->property("paragraphs").toList();
     QVERIFY(pages.size() > 1);
+    QCOMPARE(initial_glyph_revisions.size(), pages.size());
+    QCOMPARE(post_insert_glyph_revisions.size(), pages.size());
+    QCOMPARE(glyph_revisions.size(), pages.size());
+    QCOMPARE(post_insert_glyph_revisions.first(), initial_glyph_revisions.first());
+    QVERIFY(post_insert_glyph_revisions.last() != initial_glyph_revisions.last());
     QCOMPARE(page_layouts.size(), pages.size());
     QCOMPARE(paragraphs.size(), 100);
     QVERIFY(paragraphs.first()

@@ -102,6 +102,7 @@ Item {
         const requests = [];
         let lastVisiblePage = low - 1;
         const color = Theme.colorText;
+        const pageGlyphRevisions = LayoutViewModel.pageGlyphRevisions;
         for (let pageIndex = low; pageIndex < pageSizes.length; ++pageIndex) {
             const origin = pageCanvas.pageOrigin(pageIndex);
             if (origin.y >= visibleBottom)
@@ -123,7 +124,7 @@ Item {
             }
             const phaseX = request.pageOriginDeviceXPx - Math.floor(request.pageOriginDeviceXPx);
             const phaseY = request.pageOriginDeviceYPx - Math.floor(request.pageOriginDeviceYPx);
-            const rasterKey = [LayoutViewModel.documentGeneration, LayoutViewModel.fontGeneration, LayoutViewModel.layoutRevision, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":");
+            const rasterKey = [pageGlyphRevisions[pageIndex], LayoutViewModel.fontGeneration, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":");
             keys.push([pageIndex, rasterKey].join(":"));
             requests.push({
                 pageIndex: pageIndex,
@@ -135,7 +136,15 @@ Item {
         const key = "visible:" + keys.join("|");
         if (key === lastGlyphRasterKey)
             return;
+        const cacheStart = Math.max(0, low - 2);
+        const cacheEnd = Math.min(pageSizes.length, lastVisiblePage + 3);
         const nextPageCache = ({});
+        for (const cachedPageIndex in pageGlyphFrameCache) {
+            const pageIndex = Number(cachedPageIndex);
+            const cached = pageGlyphFrameCache[cachedPageIndex];
+            if (pageIndex >= cacheStart && pageIndex < cacheEnd && cached.revision === pageGlyphRevisions[pageIndex])
+                nextPageCache[pageIndex] = cached;
+        }
         for (let index = 0; index < requests.length; ++index) {
             const request = requests[index];
             const cached = pageGlyphFrameCache[request.pageIndex];
@@ -143,6 +152,7 @@ Item {
             frames.push(frame);
             nextPageCache[request.pageIndex] = {
                 key: request.key,
+                revision: pageGlyphRevisions[request.pageIndex],
                 frame: frame
             };
         }

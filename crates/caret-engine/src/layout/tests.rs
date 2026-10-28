@@ -45,6 +45,28 @@ fn blank_page_click_uses_nearest_line_for_caret_placement() {
 }
 
 #[test]
+fn cloning_laid_out_paragraph_shares_immutable_shaping_data() {
+    let document = Document::blank();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+    let paragraph = &snapshot.paragraphs[0];
+    let reused = paragraph.reused_for_layout();
+
+    assert!(std::sync::Arc::ptr_eq(&paragraph.text, &reused.text));
+    assert!(std::sync::Arc::ptr_eq(&paragraph.layout, &reused.layout));
+    assert!(std::sync::Arc::ptr_eq(
+        &paragraph.utf16_checkpoints,
+        &reused.utf16_checkpoints
+    ));
+    assert_eq!(paragraph.line_locations.len(), reused.line_locations.len());
+    assert!(reused.line_locations.iter().all(Option::is_none));
+}
+
+#[test]
 fn document_layout_snapshot_uses_parley_lines_and_pagination() {
     let mut document = Document::blank();
     let text = "A mixed run sequence: e\u{301}, family 👩‍👩‍👧‍👦, and text that wraps. ".repeat(64);
@@ -69,7 +91,7 @@ fn document_layout_snapshot_uses_parley_lines_and_pagination() {
     assert_eq!(snapshot.document_generation, 7);
     assert_eq!(snapshot.font_generation, catalog.generation());
     assert_eq!(snapshot.paragraphs.len(), 1);
-    assert_eq!(snapshot.paragraphs[0].text, text);
+    assert_eq!(snapshot.paragraphs[0].text.as_ref(), text);
     assert!(snapshot.paragraphs[0].layout.paragraph.lines.len() > 1);
     assert!(!snapshot.pages.is_empty());
     assert_eq!(
