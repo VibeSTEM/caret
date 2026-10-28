@@ -9,8 +9,10 @@
 #include <QString>
 #include <QThread>
 #include <QVariantMap>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace caret {
 
@@ -27,16 +29,35 @@ struct DocumentOpenTicketOwner final {
 
 namespace layout_view_model_support {
 
-inline QString recovery_id_from_error(const QString& error) {
-    const qsizetype marker = error.indexOf(QStringLiteral("recovery="));
-    if (marker < 0) {
-        return {};
+struct DocumentWriteResult final {
+    bool conflict = false;
+    bool replace_allowed = false;
+    bool recovery_created = false;
+    rust::String pending_recovery_id;
+    QString recovery_id;
+    QString error;
+    ~DocumentWriteResult() noexcept {
+        if (recovery_created && !pending_recovery_id.empty()) {
+            ffi::cancel_pending_recovery_lease(std::move(pending_recovery_id));
+        }
     }
-    return error.sliced(marker + 9).section(QLatin1Char(';'), 0, 0).section(QLatin1Char(' '), 0, 0);
+};
+
+inline std::shared_ptr<DocumentWriteResult> from_write_result(ffi::DocumentWriteResult&& result) {
+    auto value = std::make_shared<DocumentWriteResult>();
+    value->conflict = result.conflict;
+    value->replace_allowed = result.replace_allowed;
+    value->recovery_created = result.recovery_created;
+    value->recovery_id = QString::fromUtf8(result.recovery_id.data(),
+                                           static_cast<qsizetype>(result.recovery_id.size()));
+    value->pending_recovery_id = std::move(result.recovery_id);
+    value->error =
+        QString::fromUtf8(result.error.data(), static_cast<qsizetype>(result.error.size()));
+    return value;
 }
 
-inline bool replace_allowed_from_error(const QString& error) {
-    return error.contains(QStringLiteral("replace_allowed=true"));
+inline bool current_session(ffi::DocumentRuntime* runtime, quint64 generation) {
+    return runtime != nullptr && ffi::document_session_generation(*runtime) == generation;
 }
 
 inline std::optional<QVariantMap> runtime_error(ffi::DocumentRuntime*& runtime,

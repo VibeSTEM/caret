@@ -221,8 +221,9 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     const QList<QVariant> original_conflict = wait_for_operation();
     QVERIFY(!original_conflict.isEmpty());
     QVERIFY(!original_conflict.at(0).toBool());
-    QVERIFY(original_conflict.at(1).toString().startsWith(
-        QStringLiteral("document.external_conflict")));
+    QVERIFY(original_conflict.at(2).toBool());
+    QVERIFY(!original_conflict.at(3).toBool());
+    QVERIFY(original_conflict.at(4).toString().isEmpty());
     QVERIFY(view_model.saveConflictCanReplace());
 
     QVERIFY(view_model.saveDocument(copy_path).value(QStringLiteral("valid")).toBool());
@@ -241,8 +242,29 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     const QList<QVariant> copy_conflict = wait_for_operation();
     QVERIFY(!copy_conflict.isEmpty());
     QVERIFY(!copy_conflict.at(0).toBool());
-    QVERIFY(
-        copy_conflict.at(1).toString().startsWith(QStringLiteral("document.external_conflict")));
+    QVERIFY(copy_conflict.at(2).toBool());
+    QVERIFY(!copy_conflict.at(3).toBool());
+    QVERIFY(!view_model.saveConflictCanReplace());
+
+    view_model.setAutoSaveEnabled(false);
+    QVERIFY(QFile::remove(copy_path));
+    QVERIFY(view_model.saveDocument().value(QStringLiteral("valid")).toBool());
+    const QList<QVariant> missing_conflict = wait_for_operation();
+    QVERIFY(!missing_conflict.at(0).toBool());
+    QVERIFY(missing_conflict.at(2).toBool());
+    QVERIFY(!missing_conflict.at(3).toBool());
+    QVERIFY(!view_model.saveConflictCanReplace());
+
+    const QByteArray invalid_root = original_path.toUtf8();
+    const rust::String invalid_configuration = caret::ffi::configure_document_recovery(
+        rust::String(invalid_root.constData(), static_cast<std::size_t>(invalid_root.size())));
+    QVERIFY(invalid_configuration.empty());
+    QVERIFY(view_model.saveDocument().value(QStringLiteral("valid")).toBool());
+    const QList<QVariant> failed_recovery = wait_for_operation();
+    QVERIFY(!failed_recovery.at(0).toBool());
+    QVERIFY(failed_recovery.at(2).toBool());
+    QVERIFY(failed_recovery.at(3).toBool());
+    QVERIFY(!failed_recovery.at(4).toString().isEmpty());
     QVERIFY(!view_model.saveConflictCanReplace());
 
     const QVariantMap stale_replace = view_model.replaceExternalVersion();
@@ -252,6 +274,7 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QFile original_file(original_path);
     QVERIFY(original_file.open(QIODevice::ReadOnly));
     QCOMPARE(original_file.readAll(), external_original);
+    QVERIFY(write_external(copy_path, external_copy));
     QFile copy_file(copy_path);
     QVERIFY(copy_file.open(QIODevice::ReadOnly));
     QCOMPARE(copy_file.readAll(), external_copy);

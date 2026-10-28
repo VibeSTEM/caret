@@ -155,8 +155,14 @@ fn is_mandatory_break(text: &str, boundary: usize) -> bool {
     if previous == '\r' && next == '\n' {
         return false;
     }
+    is_mandatory_line_break(CodePointMapData::<LineBreak>::new().get(previous))
+}
+
+/// 判断 ICU 行断类别是否属于 UAX #14 强制断行。
+pub(crate) fn is_mandatory_line_break(value: icu_properties::props::LineBreak) -> bool {
+    use icu_properties::props::LineBreak;
     matches!(
-        CodePointMapData::<LineBreak>::new().get(previous),
+        value,
         LineBreak::MandatoryBreak
             | LineBreak::CarriageReturn
             | LineBreak::LineFeed

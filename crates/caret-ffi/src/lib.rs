@@ -14,12 +14,12 @@ fn version() -> String {
 mod generated {
     use crate::document::{
         DocumentRuntime, auto_save_deadline_fired, auto_save_deadline_json,
-        auto_save_write_finished, cancel_prepared_document, clear_selection_json,
-        configure_document_recovery, current_caret_json, delete_backward_json,
-        discard_document_recovery, discard_recovery, document_hit_test_json,
-        document_save_snapshot, document_status_json, drag_hit_map_json, export_recovery,
-        input_method_event_json, insert_soft_break_json, insert_text_json,
-        install_prepared_document, interaction_state_json, layout_snapshot_json,
+        auto_save_write_finished, cancel_pending_recovery_lease, cancel_prepared_document,
+        clear_selection_json, configure_document_recovery, current_caret_json,
+        delete_backward_json, discard_document_recovery, discard_recovery, document_hit_test_json,
+        document_save_snapshot, document_session_generation, document_status_json,
+        drag_hit_map_json, export_recovery, input_method_event_json, insert_soft_break_json,
+        insert_text_json, install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
         move_visual_caret_json, new_blank_document_runtime, paste_text_json,
         place_caret_at_page_json, prepare_document_file, prepare_recovery_document,
@@ -84,7 +84,16 @@ mod generated {
             error: String,
         }
 
+        struct DocumentWriteResult {
+            conflict: bool,
+            replace_allowed: bool,
+            recovery_id: String,
+            recovery_created: bool,
+            error: String,
+        }
+
         struct DocumentSaveSnapshot {
+            stale_deadline: bool,
             session_generation: u64,
             document_generation: u64,
             history_state_id: u64,
@@ -140,7 +149,9 @@ mod generated {
                 baseline_digest: String,
                 queued_digest: String,
                 recovery_id: String,
-            ) -> String;
+            ) -> DocumentWriteResult;
+            /// 释放未领取的新恢复租约，保留恢复条目。
+            fn cancel_pending_recovery_lease(id: String);
             /// 将冲突恢复项绑定至仍然活动的文档会话。
             fn set_document_recovery_id(
                 runtime: &mut DocumentRuntime,
@@ -189,6 +200,8 @@ mod generated {
             ) -> String;
             /// 捕获不可变文档字节和会话/文档代际。
             fn document_save_snapshot(runtime: &mut DocumentRuntime) -> DocumentSaveSnapshot;
+            /// 轻量读取当前会话代际，避免仅校验回调时序列化整份文档。
+            fn document_session_generation(runtime: &DocumentRuntime) -> u64;
             /// 设置当前会话 AutoSave 运行状态；持久化由 Preferences 服务负责。
             fn set_document_auto_save_enabled(runtime: &mut DocumentRuntime, enabled: bool);
             /// 返回 Rust 决定的单次 deadline；空字符串表示没有待办触发。
