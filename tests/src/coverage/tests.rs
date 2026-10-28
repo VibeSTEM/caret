@@ -55,6 +55,66 @@ fn gate_accepts_boundary_and_rejects_either_deficit() -> Result<(), Box<dyn Erro
     assert!(!rounded.reaches(FUNCTIONS_MINIMUM));
     Ok(())
 }
+
+#[test]
+fn native_product_coverage_gate_checks_function_and_line_thresholds() -> Result<(), Box<dyn Error>>
+{
+    let summary = serde_json::to_vec(&json!({
+        "type": "llvm.coverage.json.export",
+        "version": "2.0.0",
+        "data": [{"totals": {
+            "functions": {"count": 100, "covered": 85},
+            "lines": {"count": 100, "covered": 85}
+        }}]
+    }))?;
+    let coverage = NativeCoverage::parse(&summary)?;
+    coverage.check_gate(NATIVE_COVERAGE_MINIMUM)?;
+    assert!(coverage.summary().contains("85.00%"));
+
+    let below_gate = serde_json::to_vec(&json!({
+        "type": "llvm.coverage.json.export",
+        "version": "2.0.0",
+        "data": [{"totals": {
+            "functions": {"count": 100, "covered": 100},
+            "lines": {"count": 100, "covered": 84}
+        }}]
+    }))?;
+    assert!(
+        NativeCoverage::parse(&below_gate)?
+            .check_gate(NATIVE_COVERAGE_MINIMUM)
+            .is_err()
+    );
+
+    let below_function_gate = serde_json::to_vec(&json!({
+        "type": "llvm.coverage.json.export",
+        "version": "2.0.0",
+        "data": [{"totals": {
+            "functions": {"count": 100, "covered": 84},
+            "lines": {"count": 100, "covered": 100}
+        }}]
+    }))?;
+    assert!(
+        NativeCoverage::parse(&below_function_gate)?
+            .check_gate(NATIVE_COVERAGE_MINIMUM)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn native_product_coverage_gate_rejects_empty_or_malformed_reports() {
+    for bytes in [
+        br#"{"type":"other","data":[]}"#.as_slice(),
+        br#"{"type":"llvm.coverage.json.export","data":[]}"#.as_slice(),
+        br#"{"type":"llvm.coverage.json.export","data":[{"totals":{"lines":{"count":1,"covered":1}}}]}"#.as_slice(),
+        br#"{"type":"llvm.coverage.json.export","data":[{"totals":{"functions":{"count":1,"covered":1}}}]}"#.as_slice(),
+        br#"{"type":"llvm.coverage.json.export","data":[{"totals":{"functions":{"count":1,"covered":1},"lines":{"count":0,"covered":0}}}]}"#.as_slice(),
+        br#"{"type":"llvm.coverage.json.export","data":[{"totals":{"functions":{"count":1,"covered":1},"lines":{"count":10,"covered":11}}}]}"#.as_slice(),
+    ] {
+        assert!(NativeCoverage::parse(bytes).is_err());
+    }
+}
+
 #[test]
 fn rejects_missing_empty_and_invalid_statistics() -> Result<(), Box<dyn Error>> {
     assert!(Report::parse(b"not json", Path::new("/repo")).is_err());
