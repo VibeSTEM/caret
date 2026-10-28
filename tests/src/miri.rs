@@ -15,8 +15,6 @@ fn miri_test(args: &[&str]) -> Result<(), Box<dyn Error>> {
         .args(["miri", "test", "--locked"])
         .args(args)
         .env("MIRIFLAGS", "-Zmiri-disable-isolation")
-        // Miri 测试不调用字体后端；使用 fontconfig 的动态加载模式，避免安装系统开发包。
-        .env("RUST_FONTCONFIG_DLOPEN", "1")
         .env("CARGO_TARGET_DIR", target_root().join("miri"))
         .current_dir(repository_root()?);
     run("cargo miri test", test)

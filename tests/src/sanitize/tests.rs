@@ -110,6 +110,20 @@ fn windows_asan_probe_build_targets_the_qml_smoke_executable() {
 }
 
 #[test]
+fn qml_shell_test_binary_comes_from_the_ctest_manifest() -> Result<(), String> {
+    let manifest = serde_json::json!({
+        "tests": [{
+            "name": "Qml.ShellLoad",
+            "command": ["C:/build/qml/caret_shell_load_test.exe"]
+        }]
+    });
+    let binary =
+        qml_shell_test_binary_from_manifest(&manifest).map_err(|error| error.to_string())?;
+    assert_eq!(binary, Path::new("C:/build/qml/caret_shell_load_test.exe"));
+    Ok(())
+}
+
+#[test]
 fn windows_asan_import_must_precede_qt_core() {
     let valid = vec![
         "clang_rt.asan_dynamic-x86_64.dll".to_owned(),
