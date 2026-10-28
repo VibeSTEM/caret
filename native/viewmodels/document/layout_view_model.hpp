@@ -83,7 +83,10 @@ class LayoutViewModel final : public QObject {
         if (m_pending_save_operations != 0) {
             return QStringLiteral("saving");
         }
-        return m_document_edited ? QStringLiteral("edited") : QStringLiteral("saved");
+        if (m_document_edited) {
+            return QStringLiteral("edited");
+        }
+        return m_document_path.isEmpty() ? QStringLiteral("clean") : QStringLiteral("saved");
     }
     [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
 

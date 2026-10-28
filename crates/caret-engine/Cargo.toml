@@ -12,6 +12,7 @@ caret-doc.workspace = true
 caret-layout.workspace = true
 serde.workspace = true
 unicode-segmentation.workspace = true
+undo.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

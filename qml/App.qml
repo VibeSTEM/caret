@@ -23,8 +23,25 @@ Window {
     // Windows 隐藏系统标题但保留原生按钮。Linux 显式保留空标题和系统按钮提示。
     flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint | (Qt.platform.os === "windows" ? Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : Qt.platform.os === "linux" ? Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : 0)
 
-    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : " — Saved")
+    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : LayoutViewModel.documentSaveStatus === "saved" ? " — Saved" : "")
     property url suggestedSaveFileUrl: ""
+    property bool allowClose: false
+    property bool waitForCloseAfterFileOperation: false
+    property bool closeAfterSaveRequested: false
+
+    onClosing: close => {
+        if (allowClose)
+            return;
+        close.accepted = false;
+        if (LayoutViewModel.documentFileBusy) {
+            waitForCloseAfterFileOperation = true;
+            return;
+        }
+        if (LayoutViewModel.documentEdited)
+            closeConfirmation.open();
+        else
+            closeWindow();
+    }
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
 
@@ -135,6 +152,23 @@ Window {
             if (!result.valid && !result.needsSaveAs)
                 documentOperationError.showError(result.error);
         }
+        onRejected: window.closeAfterSaveRequested = false
+    }
+
+    MessageDialog {
+        id: closeConfirmation
+        objectName: "closeDocumentConfirmation"
+        title: qsTr("Unsaved changes")
+        text: qsTr("Do you want to save your changes before closing?")
+        buttons: MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel
+        onButtonClicked: (button, role) => {
+            if (button === MessageDialog.Save) {
+                window.closeAfterSaveRequested = true;
+                window.saveDocument();
+            } else if (button === MessageDialog.Discard) {
+                window.closeWindow();
+            }
+        }
     }
 
     MessageDialog {
@@ -154,8 +188,18 @@ Window {
         target: LayoutViewModel
 
         function onDocumentFileOperationFinished(succeeded, error) {
-            if (!succeeded)
+            if (!succeeded) {
+                window.closeAfterSaveRequested = false;
                 documentOperationError.showError(error);
+                window.resumeCloseAfterFileOperation();
+                return;
+            }
+            if (window.closeAfterSaveRequested && !LayoutViewModel.documentFileBusy) {
+                window.closeAfterSaveRequested = false;
+                if (!LayoutViewModel.documentEdited)
+                    window.closeWindow();
+            }
+            window.resumeCloseAfterFileOperation();
         }
     }
 
@@ -181,8 +225,10 @@ Window {
             requestSaveAs();
             return;
         }
-        if (!result.valid)
+        if (!result.valid) {
+            closeAfterSaveRequested = false;
             documentOperationError.showError(result.error);
+        }
     }
 
     function requestSaveAs() {
@@ -192,5 +238,20 @@ Window {
             return;
         }
         saveDialog.open();
+    }
+
+    function closeWindow() {
+        allowClose = true;
+        close();
+    }
+
+    function resumeCloseAfterFileOperation() {
+        if (!waitForCloseAfterFileOperation || LayoutViewModel.documentFileBusy)
+            return;
+        waitForCloseAfterFileOperation = false;
+        if (LayoutViewModel.documentEdited)
+            closeConfirmation.open();
+        else
+            closeWindow();
     }
 }
