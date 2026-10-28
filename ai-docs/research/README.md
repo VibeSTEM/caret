@@ -14,3 +14,4 @@
 | 006 | [CJK 排版规则与学术论文样式](006-cjk-and-academic-layout.md) | 区分 Unicode 断行、CLREQ 中文需求和期刊模板差异 |
 | 007 | [多文字体系字体选择器](007-font-selection.md) | 设计脚本、语言变体、数学字体与 fallback 的分层 |
 | 008 | [Office Open XML 行距、段距与分页](008-office-open-xml-spacing-pagination.md) | 对照 ECMA-376 与 Word 公开语义，识别 Caret M0 的排版差异 |
+| 009 | [Rust AutoSave 库评估](009-autosave-rust-library-audit.md) | 评估防抖、文件通知与 AutoSave crate 是否适合 Caret 的文档生命周期 |
