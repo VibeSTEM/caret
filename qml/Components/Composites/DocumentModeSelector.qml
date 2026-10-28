@@ -1,4 +1,4 @@
-// 文档工作模式选择器：展示 Editing、Review、View 三种模式及其当前选择。
+// 文档工作模式选择器：展示 Edit、Review、View 三种模式及其当前选择。
 pragma ComponentBehavior: Bound
 
 import QtQuick
@@ -12,35 +12,55 @@ Item {
     signal modeSelected(string mode)
     onModeSelected: value => selector.mode = value
 
-    readonly property int menuWidth: Theme.searchFieldWidth + Theme.spacingLarge * 2
-    readonly property int optionHeight: Theme.toolbarButtonHeight + Theme.spacingLarge
-    readonly property var modes: ["editing", "review", "view"]
+    property int buttonWidth: naturalButtonWidth
+    property int menuWidth: buttonWidth * 2 + Theme.spacingSmall
+    readonly property int menuGap: Math.ceil(Theme.spacingSmall / 2)
+    readonly property var choices: [
+        {
+            id: "editing",
+            label: qsTr("Edit"),
+            description: qsTr("Make changes to the document"),
+            icon: "mode-edit"
+        },
+        {
+            id: "review",
+            label: qsTr("Review"),
+            description: qsTr("Suggest changes and add comments"),
+            icon: "mode-review"
+        },
+        {
+            id: "view",
+            label: qsTr("View"),
+            description: qsTr("View the document without editing"),
+            icon: "mode-view"
+        }
+    ]
 
-    implicitWidth: modeButton.implicitWidth
+    implicitWidth: buttonWidth
     implicitHeight: modeButton.implicitHeight
 
-    function labelFor(value) {
-        if (value === "review")
-            return qsTr("Review");
-        if (value === "view")
-            return qsTr("View");
-        return qsTr("Editing");
+    TextMetrics {
+        id: editLabelMetrics
+        font.pixelSize: Theme.fontSmall
+        text: qsTr("Edit")
     }
 
-    function descriptionFor(value) {
-        if (value === "review")
-            return qsTr("Suggest changes and add comments");
-        if (value === "view")
-            return qsTr("View the document without editing");
-        return qsTr("Make changes to the document");
+    TextMetrics {
+        id: reviewLabelMetrics
+        font.pixelSize: Theme.fontSmall
+        text: qsTr("Review")
     }
 
-    function iconFor(value) {
-        if (value === "review")
-            return "mode-review";
-        if (value === "view")
-            return "mode-view";
-        return "mode-edit";
+    TextMetrics {
+        id: viewLabelMetrics
+        font.pixelSize: Theme.fontSmall
+        text: qsTr("View")
+    }
+
+    readonly property int naturalButtonWidth: Math.ceil(Math.max(editLabelMetrics.width, reviewLabelMetrics.width, viewLabelMetrics.width)) + Theme.iconSizeDefault + Theme.iconSizeCompact + Theme.spacingXSmall * 2 + Theme.spacingSmall * 2 + Theme.borderWidth * 2
+
+    function choiceFor(value) {
+        return choices.find(choice => choice.id === value) ?? choices[0];
     }
 
     function choose(value) {
@@ -48,41 +68,61 @@ Item {
         modeMenu.close();
     }
 
-    ThemedToolButton {
+    function positionMenu() {
+        const overlay = modeMenu.parent;
+        if (!overlay)
+            return;
+
+        const anchor = modeButton.mapToItem(overlay, 0, modeButton.height);
+        const margin = Theme.spacingSmall;
+        const rightLimit = Math.max(margin, overlay.width - modeMenu.width - margin);
+        let menuY = anchor.y + menuGap;
+
+        if (menuY + modeMenu.height > overlay.height - margin)
+            menuY = modeButton.mapToItem(overlay, 0, 0).y - modeMenu.height - menuGap;
+
+        modeMenu.x = Math.max(margin, Math.min(anchor.x, rightLimit));
+        modeMenu.y = Math.max(margin, Math.min(menuY, overlay.height - modeMenu.height - margin));
+    }
+
+    function toggleMenu() {
+        if (modeMenu.visible)
+            modeMenu.close();
+        else
+            modeMenu.open();
+    }
+
+    TitleBarPillButton {
         id: modeButton
-        objectName: "editingButton"
+        objectName: "documentModeButton"
         anchors.fill: parent
-        text: selector.labelFor(selector.mode)
-        iconName: selector.iconFor(selector.mode)
+        implicitWidth: selector.buttonWidth
+        text: selector.choiceFor(selector.mode).label
+        iconName: selector.choiceFor(selector.mode).icon
         showCaret: true
-        font.pixelSize: Theme.fontSmall
-        contentPadding: Theme.spacingTiny
-        contentColor: Theme.colorText
-        hoverColor: Theme.colorHover
-        borderColor: Theme.colorPanelLine
-        onClicked: modeMenu.open()
+        onClicked: selector.toggleMenu()
     }
 
     Popup {
         id: modeMenu
         objectName: "documentModeMenu"
         parent: Overlay.overlay
-        x: Overlay.overlay ? modeButton.mapToItem(Overlay.overlay, 0, modeButton.height).x : 0
-        y: Overlay.overlay ? modeButton.mapToItem(Overlay.overlay, 0, modeButton.height).y : 0
         width: selector.menuWidth
-        padding: Theme.spacingXSmall
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        padding: Theme.spacingSmall
+        // 指针在触发按钮上时由按钮切换菜单，避免 Popup 与 clicked 重复处理同一次点击。
+        closePolicy: Popup.CloseOnEscape | (modeButton.hovered ? Popup.NoAutoClose : Popup.CloseOnPressOutside)
         focus: true
 
+        onAboutToShow: selector.positionMenu()
         onOpened: {
-            const index = Math.max(0, selector.modes.indexOf(selector.mode));
+            const index = Math.max(0, selector.choices.findIndex(choice => choice.id === selector.mode));
             modeOptions.itemAt(index).forceActiveFocus();
         }
         onClosed: modeButton.forceActiveFocus()
 
         background: Rectangle {
-            radius: Theme.radiusSmall
-            color: Theme.colorPanel
+            radius: Theme.radiusSmall + Theme.spacingSmall
+            color: Qt.rgba(Theme.colorPanel.r, Theme.colorPanel.g, Theme.colorPanel.b, 0.96)
             border.width: Theme.borderWidth
             border.color: Theme.colorPanelLine
         }
@@ -93,34 +133,34 @@ Item {
 
             Repeater {
                 id: modeOptions
-                model: selector.modes
+                model: selector.choices
 
                 delegate: Item {
                     id: option
-                    objectName: "documentModeOption-" + modelData
+                    objectName: "documentModeOption-" + modelData.id
 
-                    required property string modelData
+                    required property var modelData
                     required property int index
 
-                    readonly property bool selected: selector.mode === modelData
-                    readonly property string title: selector.labelFor(modelData)
-                    readonly property string description: selector.descriptionFor(modelData)
+                    readonly property bool selected: selector.mode === modelData.id
+                    readonly property string title: modelData.label
+                    readonly property string description: modelData.description
 
                     width: options.width
-                    height: selector.optionHeight
+                    height: optionContent.implicitHeight + Theme.spacingSmall * 2
                     activeFocusOnTab: true
                     Accessible.name: title + ". " + description
                     Accessible.role: Accessible.MenuItem
-                    Accessible.onPressAction: selector.choose(option.modelData)
+                    Accessible.onPressAction: selector.choose(option.modelData.id)
 
                     Keys.onPressed: event => {
                         if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
                             const offset = event.key === Qt.Key_Up ? -1 : 1;
-                            const nextIndex = (option.index + selector.modes.length + offset) % selector.modes.length;
+                            const nextIndex = (option.index + selector.choices.length + offset) % selector.choices.length;
                             modeOptions.itemAt(nextIndex).forceActiveFocus();
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                            selector.choose(option.modelData);
+                            selector.choose(option.modelData.id);
                             event.accepted = true;
                         } else if (event.key === Qt.Key_Escape) {
                             modeMenu.close();
@@ -130,14 +170,17 @@ Item {
 
                     Rectangle {
                         anchors.fill: parent
-                        radius: Theme.radiusSmall
+                        radius: Theme.radiusSmall + Theme.spacingTiny
                         color: optionMouseArea.containsMouse || option.activeFocus ? Theme.colorHover : Theme.colorTransparent
                     }
 
                     RowLayout {
+                        id: optionContent
                         anchors.fill: parent
                         anchors.leftMargin: Theme.spacingSmall
                         anchors.rightMargin: Theme.spacingSmall
+                        anchors.topMargin: Theme.spacingSmall
+                        anchors.bottomMargin: Theme.spacingSmall
                         spacing: Theme.spacingSmall
 
                         ThemedIcon {
@@ -149,21 +192,21 @@ Item {
 
                         ThemedIcon {
                             Layout.alignment: Qt.AlignVCenter
-                            name: selector.iconFor(option.modelData)
+                            name: option.modelData.icon
                             iconSize: Theme.iconSizeDefault
                             color: Theme.colorIcon
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 0
+                            spacing: Theme.spacingTiny
 
                             ThemedLabel {
                                 Layout.fillWidth: true
                                 text: option.title
                                 textSize: Theme.fontBody
                                 textColor: Theme.colorText
-                                font.weight: option.selected ? Font.DemiBold : Font.Normal
+                                font.weight: Font.DemiBold
                             }
 
                             ThemedLabel {
@@ -171,7 +214,9 @@ Item {
                                 text: option.description
                                 textSize: Theme.fontSmall
                                 textColor: Theme.colorTextMuted
-                                elide: Text.ElideRight
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 2
+                                elide: Text.ElideNone
                             }
                         }
                     }
@@ -180,7 +225,7 @@ Item {
                         id: optionMouseArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        onClicked: selector.choose(option.modelData)
+                        onClicked: selector.choose(option.modelData.id)
                     }
                 }
             }

@@ -77,6 +77,7 @@ QVariantMap snapshot_from_theme_facade(const QString& path, const QColor& backgr
     tokens.insert(QStringLiteral("colorBackground"), background);
     tokens.insert(QStringLiteral("colorPanel"), background);
     tokens.insert(QStringLiteral("colorPanelLine"), QColor(QStringLiteral("#c9c9c9")));
+    tokens.insert(QStringLiteral("colorTransparent"), QColor(Qt::transparent));
     tokens.insert(QStringLiteral("colorCaret"), QColor(QStringLiteral("#1c1c1c")));
     tokens.insert(QStringLiteral("caretWidthCentipixels"), 100);
     tokens.insert(QStringLiteral("fontBody"), body);
@@ -230,28 +231,77 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
     auto* selector_item = qobject_cast<QQuickItem*>(selector);
     QVERIFY(selector_item != nullptr);
     selector_item->setParentItem(window.contentItem());
+    window.resize(800, 600);
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
     QCOMPARE(selector->property("mode").toString(), QStringLiteral("editing"));
-    auto* button = selector->findChild<QObject*>(QStringLiteral("editingButton"));
+    auto* button = selector->findChild<QObject*>(QStringLiteral("documentModeButton"));
     QVERIFY(button != nullptr);
-    QCOMPARE(button->property("text").toString(), QStringLiteral("Editing"));
+    QCOMPARE(button->property("text").toString(), QStringLiteral("Edit"));
 
     auto* button_item = qobject_cast<QQuickItem*>(button);
     QVERIFY(button_item != nullptr);
-    button_item->forceActiveFocus();
-    QTest::keyClick(&window, Qt::Key_Space);
+    const qreal button_width = button_item->width();
+    auto* icon = button->findChild<QObject*>(QStringLiteral("titleBarPillButtonIcon"));
+    QVERIFY(icon != nullptr);
+    auto* icon_item = qobject_cast<QQuickItem*>(icon);
+    QVERIFY(icon_item != nullptr);
+    const qreal icon_x = icon_item->mapToItem(button_item, QPointF(0, 0)).x();
+    auto* caret = button->findChild<QObject*>(QStringLiteral("titleBarPillButtonCaret"));
+    QVERIFY(caret != nullptr);
+    auto* caret_item = qobject_cast<QQuickItem*>(caret);
+    QVERIFY(caret_item != nullptr);
+    const qreal caret_x = caret_item->mapToItem(button_item, QPointF(0, 0)).x();
+    const auto button_center =
+        button_item->mapToScene(button_item->boundingRect().center()).toPoint();
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
     auto* mode_menu = selector->findChild<QObject*>(QStringLiteral("documentModeMenu"));
     QVERIFY(mode_menu != nullptr);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    const qreal menu_x = mode_menu->property("x").toReal();
+    const qreal menu_y = mode_menu->property("y").toReal();
+    QVERIFY(menu_x >= 0);
+    QVERIFY(menu_y >= 0);
+    QVERIFY(menu_x + mode_menu->property("width").toReal() <= window.width());
+    QVERIFY(menu_y + mode_menu->property("height").toReal() <= window.height());
+    auto* button_background =
+        button->findChild<QObject*>(QStringLiteral("titleBarPillButtonBackground"));
+    QVERIFY(button_background != nullptr);
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, button_center);
+    QTRY_VERIFY(button->property("pressed").toBool());
+    QCOMPARE(button_background->property("color").value<QColor>().alpha(), 0);
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, button_center);
+    QTRY_VERIFY(!mode_menu->property("visible").toBool());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(window.width() - 8, window.height() - 8));
+    QTRY_VERIFY(!mode_menu->property("visible").toBool());
+
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
+        QTRY_VERIFY(mode_menu->property("visible").toBool());
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
+        QTRY_VERIFY(!mode_menu->property("visible").toBool());
+    }
+
+    button_item->forceActiveFocus();
+    QTest::keyClick(&window, Qt::Key_Space);
     QTRY_VERIFY(mode_menu->property("visible").toBool());
     QTest::keyClick(&window, Qt::Key_Down);
     QTest::keyClick(&window, Qt::Key_Enter);
     QCOMPARE(selector->property("mode").toString(), QStringLiteral("review"));
+    QCOMPARE(button_item->width(), button_width);
+    QCOMPARE(icon_item->mapToItem(button_item, QPointF(0, 0)).x(), icon_x);
+    QCOMPARE(caret_item->mapToItem(button_item, QPointF(0, 0)).x(), caret_x);
     QTest::keyClick(&window, Qt::Key_Space);
     QTRY_VERIFY(mode_menu->property("visible").toBool());
     QTest::keyClick(&window, Qt::Key_Down);
     QTest::keyClick(&window, Qt::Key_Enter);
     QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
+    QCOMPARE(button_item->width(), button_width);
+    QCOMPARE(icon_item->mapToItem(button_item, QPointF(0, 0)).x(), icon_x);
+    QCOMPARE(caret_item->mapToItem(button_item, QPointF(0, 0)).x(), caret_x);
 
     QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
                                       Q_ARG(QString, QStringLiteral("review"))));
