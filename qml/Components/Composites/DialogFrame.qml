@@ -6,6 +6,7 @@ Rectangle {
     id: frame
     required property Window window
     property bool closeEnabled: true
+    property bool closeButtonVisible: true
     default property alias content: body.data
     anchors.fill: parent
     color: Theme.colorPanel
@@ -18,6 +19,7 @@ Rectangle {
             window: frame.window
             caption: frame.window.title
             closeEnabled: frame.closeEnabled
+            closeVisible: frame.closeButtonVisible
             onCloseRequested: frame.window.close()
         }
     }

@@ -43,6 +43,7 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/DialogButtonRow.qml
     Components/Composites/FormSection.qml
     Dialogs/NewProjectDialog.qml
+    Dialogs/UnsavedChangesDialog.qml
     Dialogs/SettingsDialog.qml
     Dialogs/LanguageSettingsPage.qml
     Dialogs/PreferencesSettingsPage.qml)

@@ -21,6 +21,8 @@ class ShellLoadTest : public QObject {
     void unknownIconRefusesColoring();
     void documentModeSelectorTracksLocalChoice();
     void newDocumentDialogHasNoProcessFields();
+    void unsavedChangesDialogUsesStyledActionsInRequestedOrder();
+    void closeFailureDoesNotReopenPendingConfirmation();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
     void settingsDialogDraftCancelAndFailure();

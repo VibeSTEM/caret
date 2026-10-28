@@ -270,7 +270,8 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     QCOMPARE(names, QStringList({QStringLiteral("LanguageSettingsPage.qml"),
                                  QStringLiteral("NewProjectDialog.qml"),
                                  QStringLiteral("PreferencesSettingsPage.qml"),
-                                 QStringLiteral("SettingsDialog.qml")}));
+                                 QStringLiteral("SettingsDialog.qml"),
+                                 QStringLiteral("UnsavedChangesDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());
@@ -302,6 +303,41 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     QVERIFY(QMetaObject::invokeMethod(dialog, "submit"));
     QCOMPARE(dialog->property("errorCode").toString(), QStringLiteral("document.empty_name"));
     delete dialog;
+}
+
+void ShellLoadTest::unsavedChangesDialogUsesStyledActionsInRequestedOrder() {
+    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
+    QFile source(root + QStringLiteral("/qml/Dialogs/UnsavedChangesDialog.qml"));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(source.readAll());
+    QVERIFY(text.contains(QStringLiteral("DialogWindow")));
+    QVERIFY(text.contains(QStringLiteral("closeButtonVisible: false")));
+    QVERIFY(text.contains(QStringLiteral("Save your changes before closing this document?")));
+
+    const qsizetype save = text.indexOf(QStringLiteral("objectName: \"closeSaveButton\""));
+    const qsizetype discard = text.indexOf(QStringLiteral("objectName: \"closeDiscardButton\""));
+    const qsizetype cancel = text.indexOf(QStringLiteral("objectName: \"closeCancelButton\""));
+    QVERIFY(save >= 0);
+    QVERIFY(discard > save);
+    QVERIFY(cancel > discard);
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Save\")")));
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Don't Save\")")));
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Cancel\")")));
+}
+
+void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
+    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
+    QFile source(root + QStringLiteral("/qml/App.qml"));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(source.readAll());
+    const qsizetype failure_start = text.indexOf(QStringLiteral("if (!succeeded)"));
+    const qsizetype success_start =
+        text.indexOf(QStringLiteral("if (window.closeAfterSaveRequested"), failure_start);
+    QVERIFY(failure_start >= 0);
+    QVERIFY(success_start > failure_start);
+    const QString failure_branch = text.mid(failure_start, success_start - failure_start);
+    QVERIFY(failure_branch.contains(QStringLiteral("waitForCloseAfterFileOperation = false")));
+    QVERIFY(!failure_branch.contains(QStringLiteral("resumeCloseAfterFileOperation()")));
 }
 
 void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {

@@ -115,6 +115,25 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     QVERIFY2(retry_save.at(0).toBool(), qPrintable(retry_save.at(1).toString()));
     QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("saved"));
 
+    const QVariantMap earlier_edit = view_model.insertText(QStringLiteral("旧快照"));
+    QVERIFY2(earlier_edit.value(QStringLiteral("valid")).toBool(),
+             qPrintable(earlier_edit.value(QStringLiteral("error")).toString()));
+    const QVariantMap earlier_save_request = view_model.saveDocument(document_path);
+    QVERIFY2(earlier_save_request.value(QStringLiteral("valid")).toBool(),
+             qPrintable(earlier_save_request.value(QStringLiteral("error")).toString()));
+    const QVariantMap later_edit = view_model.insertText(QStringLiteral("新快照"));
+    QVERIFY2(later_edit.value(QStringLiteral("valid")).toBool(),
+             qPrintable(later_edit.value(QStringLiteral("error")).toString()));
+    const QVariantMap later_save_request = view_model.saveDocument(document_path);
+    QVERIFY2(later_save_request.value(QStringLiteral("valid")).toBool(),
+             qPrintable(later_save_request.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(operation_spy.size(), 2, 10000);
+    const QList<QVariant> earlier_save = operation_spy.takeFirst();
+    const QList<QVariant> later_save = operation_spy.takeFirst();
+    QVERIFY2(earlier_save.at(0).toBool(), qPrintable(earlier_save.at(1).toString()));
+    QVERIFY2(later_save.at(0).toBool(), qPrintable(later_save.at(1).toString()));
+    QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("saved"));
+
     const QString fixture_path = QString::fromUtf8(CARET_SOURCE_DIR) +
                                  QStringLiteral("/tests/fixtures/document/v1-minimal.cdoc");
     const QString alternate_path = directory.filePath(QStringLiteral("alternate.cdoc"));
@@ -142,7 +161,7 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     QCOMPARE(view_model.paragraphLayouts().at(0).toMap().value(QStringLiteral("text")).toString(),
              QStringLiteral("保存後も編集"));
     QCOMPARE(view_model.paragraphLayouts().at(1).toMap().value(QStringLiteral("text")).toString(),
-             QStringLiteral("段落追加！"));
+             QStringLiteral("段落追加！旧快照新快照"));
 }
 #endif
 

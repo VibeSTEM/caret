@@ -151,26 +151,22 @@ Window {
         acceptLabel: qsTr("Save")
         onAccepted: {
             const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
-            if (!result.valid && !result.needsSaveAs)
+            if (!result.valid && !result.needsSaveAs) {
+                window.closeAfterSaveRequested = false;
                 documentOperationError.showError(result.error);
+            }
         }
         onRejected: window.closeAfterSaveRequested = false
     }
 
-    MessageDialog {
+    UnsavedChangesDialog {
         id: closeConfirmation
-        objectName: "closeDocumentConfirmation"
-        title: qsTr("Unsaved changes")
-        text: qsTr("Do you want to save your changes before closing?")
-        buttons: MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel
-        onButtonClicked: (button, role) => {
-            if (button === MessageDialog.Save) {
-                window.closeAfterSaveRequested = true;
-                window.saveDocument();
-            } else if (button === MessageDialog.Discard) {
-                window.closeWindow();
-            }
+        ownerWindow: window
+        onSaveRequested: {
+            window.closeAfterSaveRequested = true;
+            Qt.callLater(window.saveDocument);
         }
+        onDiscardRequested: Qt.callLater(window.closeWindow)
     }
 
     MessageDialog {
@@ -192,8 +188,8 @@ Window {
         function onDocumentFileOperationFinished(succeeded, error) {
             if (!succeeded) {
                 window.closeAfterSaveRequested = false;
+                window.waitForCloseAfterFileOperation = false;
                 documentOperationError.showError(error);
-                window.resumeCloseAfterFileOperation();
                 return;
             }
             if (window.closeAfterSaveRequested && !LayoutViewModel.documentFileBusy) {
@@ -248,6 +244,7 @@ Window {
     function requestSaveAs() {
         suggestedSaveFileUrl = LayoutViewModel.documentPath.length > 0 ? DocumentPathAdapter.localFileUrl(LayoutViewModel.documentPath) : DocumentPathAdapter.defaultSaveFileUrl();
         if (suggestedSaveFileUrl.toString().length === 0) {
+            closeAfterSaveRequested = false;
             documentOperationError.showError(qsTr("The document folder is unavailable."));
             return;
         }
