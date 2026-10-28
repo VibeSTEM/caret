@@ -1,9 +1,9 @@
 # 034 — Qt / Rust 性能测量与热点优化
 
-- 状态：implemented
+- 状态：in-progress
 - 依赖：024、026、027、030
 - 优先级：P2
-- 创建 / 更新：2026-10-27 / 2026-10-27
+- 创建 / 更新：2026-10-27 / 2026-10-28
 
 ## 目标与背景
 
@@ -53,7 +53,8 @@
 - [x] 测量报告带有可解释性能所需的输入规模、配置、硬件/renderer 和 commit 信息；GPU 时间缺失时不会以 CPU 时间替代。
 - [x] 性能基准不进入 PR / push CI、默认 `cargo test` 或默认 CTest，也没有毫秒门槛。
 - [x] Qt 场景图只保留可视页和一页预读范围的页面背景节点；同机 400 页场景完成优化前后对比。
-- [x] 独立 review 完成；验证计划、工作记录和 task index 与实现一致。
+- [ ] 10 万字及百万字文档打开、删除字符保持可交互；长文档实测卡顿需继续定位 Qt 安装与渲染阶段。
+- [ ] 独立 review 完成；验证计划、工作记录和 task index 与实现一致。
 
 ## 性能优化结果总结
 
@@ -65,6 +66,17 @@
 - **同一台 Apple M4 的 10 万字符测试**：普通输入的 Rust 响应中位数从整篇排版的 34.854 ms 降至段落复用与增量快照后的约 1.4 ms；UI 响应从约 657 KB 降至约 2.1 KB（99.67%）。这只测 Rust 命令与响应构造，不含 Qt 主线程解析、场景图绘制和显示器呈现。
 - **未保留的尝试**：复用每个 `QSGImageNode` 的实验在无头软件场景基准里没有显示稳定收益，因此撤回；避免保留没有测量依据的场景图复杂度。
 - **当前限制**：普通输入仍在 UI 调用链同步执行，并在 Rust 内重新计算分页；异步分页或增量分页还未实现。需要用真实窗口和 10 万字符文档复测用户感知滚动及输入延迟。
+
+### 2026-10-28 长文档打开与删除跟进
+
+- 输入文件：`~/Documents/caret/test_1.cdoc`，3,673,391 B，5,001 个正文条目，约 1,000,000 个字符、5,000 个段落；字符分布与仓库多语言长篇夹具一致。
+- Rust release Criterion 的 `open_read_validate_layout_and_snapshot` 包含读文件、解析/校验、创建 Session、首次整篇 Parley 排版与完整 UI 快照序列化；单独 `decode_validate_cdoc` 约 8.34 ms。release 完整准备约 358.83–371.60 ms（时间点估计 364.83 ms）。这个数字不能直接与 `cargo run` 的 dev GUI 比较。
+- 同一 debug/dev 配置的临时阶段测量：解析约 87 ms、Session 构造约 8.8 ms、字体目录约 107 ms、整篇布局约 10.86 s；布局输出 5,001 段、536 页。debug Instruments Time Profiler 采样显示热点集中于 Parley builder、字体塑形和 HarfBuzz。符合用户所见约 10 s 延迟，瓶颈在未优化 debug 构建的整篇塑形，而非文件解码。
+- 为开发期仍保留调试符号的同时避免这种延迟，Cargo dev profile 对 `caret-app`、`caret-engine`、`caret-layout`、Parley、HarfBuzz、字体/ICU 热路径包设 `opt-level = 2`。相同 dev 配置复测整篇布局 1.081 s，完整 `prepare_open` 1.304 s（从 11.595 s 降低约 88.8%）。首次切换 profile 会重编这些包；结果不含 Qt 快照解析、QML 更新和首帧绘制。
+- 单字符退格原先为每次编辑重新塑形整篇文档，Criterion 基线 335.63 ms；同段删除改为复用其他段落布局并生成受影响页之后的增量快照，最新复测中位数 13.75 ms，减少约 321.88 ms（约快 95.9%）。跨段、段落边界和结构性删除仍使用完整布局路径。
+- 删除基准针对段落中间的单字素退格，测量 Rust 编辑及增量快照构造；不代表跨段选区删除、Qt 收到增量后的全部成本或窗口呈现时间。
+- 打开安装阶段原来在 GUI 线程解析完整布局 JSON，并把每段的行布局、每页的分页片段转换成未被产品界面读取的嵌套 `QVariant`。现在后台 worker 校验/解析快照；页面与段落布局作为共享 `QJsonArray` 保存，只在调用对应兼容属性时才转成 `QVariantList`。页面尺寸、段落行数和分页片段仍校验，命中测试与文档布局权威继续属于 Rust。
+- 当前尚无 GUI 端到端复测证明 10 s 已消失。Qt/QML 首帧布局和可视页 glyph 栅格化仍需在真实窗口单独计时；Rust 侧火焰图显示首次塑形与分页是主要 CPU 成本。
 
 ### 10 万字交互采样
 
@@ -96,7 +108,11 @@
 
 | 验证项 | 工作负载 / 命令 | 结果 |
 | --- | --- | --- |
-| Rust 长篇排版基线 | `cargo bench --locked -p caret-engine --bench novel_document_criterion`；Apple M4，release，百万字符混合语言语料 | 整篇排版约 515 ms、单段编辑重排约 15.1 ms。跳过 Session 已保证有效的重复校验未显示显著收益，已撤回该改动 |
+| `.cdoc` 打开与解析 | `CARET_PERF_CDOC=~/Documents/caret/test_1.cdoc cargo bench --locked -p caret-app --bench document_open_delete_criterion -- --sample-size 10 --warm-up-time 0.5 --measurement-time 3`；Apple M4，release，3,673,391 B / 1,000,000 字符 | 完整读入、校验、首次排版、快照序列化时间点估计 364.83 ms（区间 358.83–371.60 ms）；只解析与校验 8.34 ms（区间 8.03–8.71 ms）。跨轮波动存在，Criterion 未检测到显著变化 |
+| `.cdoc` dev 打开阶段 | 临时 `perf_open` 示例测阶段后删除；Apple M4，Cargo dev，3,673,391 B / 1,000,000 字符 | 未优化时解析 87.10 ms、Session 8.82 ms、字体目录 107.25 ms、布局 10.863 s；应用 dev 热路径 `opt-level=2` 后布局 1.081 s、完整 prepare 1.304 s（快约 90.0% / 88.8%） |
+| 百万字符单字素删除 | 同一 `.cdoc`；段落 2,500 内退格并构造 Rust UI 增量快照 | 335.63 ms → 13.75 ms，约快 95.9%；结构性删除不在此次快速路径内 |
+| 打开快照 Qt 安装 | 打开 `.cdoc` 时在后台解析/验证 JSON，保留共享 JSON 数组并延迟构造嵌套 QVariant | native 构建通过；仍需真实窗口端到端计时确认解析、QML 更新和首帧绘制耗时 |
+| Rust 长篇排版基线 | `cargo bench --locked -p caret-engine --bench novel_document_criterion`；Apple M4，release，百万字符混合语言语料 | 整篇排版约 515 ms、单段编辑重排约 15.1 ms。过去曾因无显著收益撤回 Session 路径的重复校验跳过；本轮重新引入以避免编辑后重复遍历，未单独量化，不作为本轮性能提升结论 |
 | Rust 编辑与输入基准 | `cargo bench --locked -p caret-app --bench document_view_input_criterion -- --sample-size 10 --warm-up-time 1 --measurement-time 2`；Apple M4，release，100,499 字符交互语料 | 普通单字符输入 1.291 ms；IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms、10,010 字符粘贴 5.468 ms。Criterion 提示部分样本需更长测量窗口；结果用于本机对比，不代表 UI 端到端延迟 |
 | Rust 正确性与静态检查 | `cargo test --locked -p caret-app`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings` | 94 项测试通过；Clippy 通过。测试覆盖普通输入、IME 增量预览、跨页回退、跨段预览/取消、回车与粘贴 |
 | Qt / QML 集成 | `cargo test --locked -p caret-tests --test native`；QML 格式检查 | CTest 4/4 通过；QML 格式检查通过。覆盖 Qt 合并增量预览、跨段预览后段落删除与取消恢复 |
@@ -119,9 +135,11 @@
 | 2026-10-27 | 为普通单段输入复用未变化段落的 Parley 结果，再将 UI 响应改为只传递变更段和首个受影响页后的分页 | 100,499 字符输入从 34.854 ms 降至最终复测 1.406 ms；快照从约 657 KB 降至约 2.1 KB。跨段编辑和结构操作保留完整快照，Qt 校验代际并在增量失配时回退完整快照 |
 | 2026-10-27 | 根据实际输入反馈增加 IME 预编辑、候选提交、回车和粘贴基准；同段 IME 预览改为增量，回车/软换行/单段粘贴复用未变化段落；滚动结束后才预读下一页 glyph | 最新 Rust 复测：预编辑 1.322 ms、提交 2.300 ms、回车 2.669 ms、10,010 字符粘贴 5.468 ms。跨段 composition 使用完整快照；分页 delta 同时考虑基础布局与上一份预览，覆盖跨页移回场景 |
 | 2026-10-27 | 使用 Caret 实际窗口和 macOS `sample` 检查长文档交互热点 | 100,499 字符粘贴约 2.06 s；主线程最明显的应用热点是同步可视页字形栅格化。快速输入法闪动、Qt 粘贴/回车延迟尚无端到端帧时间数据，不宣称已解决 |
+| 2026-10-28 | 使用 Xcode Instruments Time Profiler 对 release Criterion 与 Cargo dev 打开路径采样；`cargo flamegraph` 在 Xcode 27 的 trace XML 上无法折叠 `frame` 标签，改用 `xcrun xctrace record/export` 汇总 | release Rust 准备约 0.36 s；未优化 dev 整篇布局 10.86 s，主热点为 Parley builder、字体塑形与 HarfBuzz。不能将 release 结果用于解释 dev GUI 延迟 |
+| 2026-10-28 | 同段退格改为段落布局复用并返回增量快照；Cargo dev 对测得的排版热路径启用 `opt-level=2`；打开时将 Qt 快照解析移到 worker，延迟嵌套 QVariant 转换并用 ticket guard 管理候选文档生命周期 | 删除从 335.63 ms 降至 13.75 ms（约快 95.9%）；dev 整篇布局从 10.86 s 降至 1.081 s，完整 Rust prepare 为 1.304 s。native/QML 构建检查通过；需真实窗口确认 1.304 s 之外的 Qt 与首帧耗时 |
 
 ## 完成摘要
 
-仓库实现与本地验证完成。性能 suite 已按 Rust CPU、Qt CPU、Qt GPU 分离；夜间报告包含工作负载、CPU、构建配置、字体清单摘要、Qt RHI renderer 和提交信息。Qt 页面背景场景节点现在按可视范围创建，字形更新复用未变化纹理；400 页软件渲染基准中位数改善 31.0%、P95 改善 32.3%。滚动期间仅当可视页区间变化时刷新字形；下一页 glyph 预读只在滚动结束后发生。普通输入和同段 IME 预编辑复用未变段落布局，并通过页面/段落增量更新 Qt 快照；回车拆段和单段粘贴复用未变化段落的塑形结果。100,499 字符 Rust 基准最新复测测得 IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms；10,010 字符粘贴 5.468 ms。百万字符混合语言文本作为 Rust/Word 的共同 Benchmark 数据，Word 对照独立进行，不接入仓库测试。
+已有性能 suite 与此前优化完成；本次长文档体验跟进仍在进行。性能 suite 已按 Rust CPU、Qt CPU、Qt GPU 分离；夜间报告包含工作负载、CPU、构建配置、字体清单摘要、Qt RHI renderer 和提交信息。Qt 页面背景场景节点现在按可视范围创建，字形更新复用未变化纹理；400 页软件渲染基准中位数改善 31.0%、P95 改善 32.3%。普通输入和同段 IME 预编辑复用未变段落布局，并通过页面/段落增量更新 Qt 快照；回车拆段和单段粘贴复用未变化段落的塑形结果。100,499 字符 Rust 基准最新复测测得 IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms；10,010 字符粘贴 5.468 ms。百万字符混合语言文本作为 Rust/Word 的共同 Benchmark 数据，Word 对照独立进行，不接入仓库测试。
 
-限制：上述输入数据不包括 Qt 主线程 JSON 解析、字形帧更新及显示设备呈现的耗时；当前仍在 Rust 主线程同步计算分页，IME 预览变化也会重新栅格化当前可视页的字形。快速输入时的字符闪动、真实 Qt 回车/粘贴延迟尚未通过端到端帧时间测量关闭。Qt GPU 基准已本地编译，但 macOS 无屏幕环境不能运行；Linux nightly 通过 Xvfb 提供虚拟 X11 context 后是否能取到 GPU timestamp，仍需首次远程运行确认。
+限制：优化后的同一 dev 配置 Rust prepare 为 1.304 s，但尚未完成真实窗口端到端回归；Qt 快照解析已移入 worker，未使用的布局投影延迟转换。首屏布局、QML 更新、可视页 glyph 栅格化及显示设备呈现仍需端到端分段计时。release 与 dev 指标分别报告，不混作因果对比。Qt GPU 基准已本地编译，但 macOS 无屏幕环境不能运行；Linux nightly 通过 Xvfb 提供虚拟 X11 context 后是否能取到 GPU timestamp，仍需首次远程运行确认。

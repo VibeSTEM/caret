@@ -90,9 +90,13 @@ impl DocumentViewRuntime {
         let selection = self.session.selection();
         let reusable_paragraph_id = (selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
+        let delete_is_paragraph_local = matches!(&command, Command::Delete(Direction::Backward))
+            && reusable_paragraph_id.is_some()
+            && (selection.anchor.offset != selection.focus.offset || selection.focus.offset > 0);
         let can_reuse_layout =
             matches!(&command, Command::SplitParagraph | Command::InsertSoftBreak)
-                || matches!(&command, Command::PasteText(_)) && reusable_paragraph_id.is_some();
+                || matches!(&command, Command::PasteText(_)) && reusable_paragraph_id.is_some()
+                || delete_is_paragraph_local;
         if can_reuse_layout {
             self.base_snapshot()?;
         }
@@ -101,17 +105,28 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("{error_context}: {error}"))?;
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
+        let mut delete_delta = None;
         if can_reuse_layout && let Some(paragraph_id) = reusable_paragraph_id.as_ref() {
             let previous = self
                 .last_snapshot
                 .as_ref()
                 .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            let base_generation = previous.document_generation;
             let updated = self
                 .layout
                 .layout_session_reusing(&self.session, previous, paragraph_id)
                 .map_err(|error| error.to_string())?;
+            if delete_is_paragraph_local {
+                let page_start_index = DocumentLayoutDeltaView::first_affected_page_index(
+                    previous,
+                    &updated,
+                    paragraph_id,
+                )
+                .ok_or_else(|| "layout.changed_paragraph_page_unavailable".to_owned())?;
+                delete_delta = Some((paragraph_id, page_start_index, base_generation));
+            }
             self.last_snapshot = Some(updated);
         }
-        self.layout_snapshot_json()
+        self.layout_snapshot_json_with_delta(delete_delta)
     }
 }

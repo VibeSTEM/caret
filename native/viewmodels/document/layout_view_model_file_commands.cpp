@@ -4,6 +4,7 @@
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
+#include "layout_snapshot_codec.hpp"
 #include "layout_view_model_support.hpp"
 #endif
 
@@ -22,6 +23,19 @@
 #include <utility>
 
 namespace caret {
+
+struct DocumentOpenTicketOwner final {
+    qulonglong ticket = 0;
+    bool armed = true;
+
+    ~DocumentOpenTicketOwner() {
+#ifdef CARET_ENABLE_APP
+        if (armed && ticket != 0) {
+            ffi::cancel_prepared_document(ticket);
+        }
+#endif
+    }
+};
 
 QVariantMap LayoutViewModel::openDocument(const QString& path) {
 #ifdef CARET_ENABLE_APP
@@ -82,6 +96,10 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
             emit documentFileOperationFinished(false, result.error);
             return;
         }
+        if (result.snapshot == nullptr) {
+            emit documentFileOperationFinished(false, QStringLiteral("layout.invalid_snapshot"));
+            return;
+        }
 
         ffi::DocumentRuntime* active_runtime = document_runtime();
         if (active_runtime == nullptr) {
@@ -89,15 +107,16 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
             return;
         }
         const rust::String response =
-            ffi::install_prepared_document_json(*active_runtime, result.ticket);
+            ffi::install_prepared_document(*active_runtime, result.ticket);
         const QByteArray response_bytes = layout_view_model_support::response_bytes(response);
         if (response_bytes.startsWith("error:")) {
             emit documentFileOperationFinished(false, QString::fromUtf8(response_bytes.sliced(6)));
             return;
         }
-        const QString snapshot =
-            QString::fromUtf8(response_bytes.constData(), response_bytes.size());
-        if (!installSnapshot(snapshot, true)) {
+        if (result.ticket_owner != nullptr) {
+            result.ticket_owner->armed = false;
+        }
+        if (!installSnapshot(std::move(*result.snapshot))) {
             emit documentFileOperationFinished(false, m_error);
             return;
         }
@@ -127,6 +146,18 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
                 return result;
             }
             result.ticket = open_result.ticket;
+            result.snapshot = std::make_shared<layout_snapshot::ParsedLayoutSnapshot>();
+            const QByteArray snapshot_json =
+                QByteArray::fromRawData(open_result.snapshot_json.data(),
+                                        static_cast<qsizetype>(open_result.snapshot_json.size()));
+            if (!layout_snapshot::parse(snapshot_json, *result.snapshot, result.error)) {
+                ffi::cancel_prepared_document(result.ticket);
+                result.ticket = 0;
+                result.snapshot.reset();
+                return result;
+            }
+            result.ticket_owner = std::make_shared<DocumentOpenTicketOwner>();
+            result.ticket_owner->ticket = result.ticket;
             return result;
         }));
     return {{QStringLiteral("valid"), true}, {QStringLiteral("pending"), true}};

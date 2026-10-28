@@ -101,8 +101,13 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot) {
+    return parse(snapshot_json.toUtf8(), parsed_snapshot, error, previous_snapshot);
+}
+
+bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
+           const ParsedLayoutSnapshot* previous_snapshot) {
     QJsonParseError parse_error;
-    const QJsonDocument document = QJsonDocument::fromJson(snapshot_json.toUtf8(), &parse_error);
+    const QJsonDocument document = QJsonDocument::fromJson(snapshot_json, &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
         error = QStringLiteral("layout.invalid_snapshot");
         return false;
@@ -170,9 +175,8 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         error = QStringLiteral("layout.invalid_paragraphs");
         return false;
     }
-    QVariantList parsed_paragraphs;
     const QJsonArray paragraphs = paragraphs_value.toArray();
-    parsed_paragraphs.reserve(paragraphs.size());
+    QJsonArray parsed_paragraphs = is_partial ? previous_snapshot->paragraph_layouts : paragraphs;
     QHash<QString, qsizetype> paragraph_line_counts;
     QHash<QString, bool> paragraph_ids;
     for (const auto& paragraph_value : paragraphs) {
@@ -202,8 +206,6 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
             error = QStringLiteral("layout.invalid_paragraph");
             return false;
         }
-        QVariantList parsed_lines;
-        parsed_lines.reserve(lines.size());
         qsizetype consumed_cursor = 0;
         double expected_top_pt = 0.0;
         for (const auto& line_value : lines) {
@@ -249,49 +251,38 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
             }
             consumed_cursor = consumed_end;
             expected_top_pt = top_pt + height_pt;
-            parsed_lines.push_back(line.toVariantMap());
         }
         if (consumed_cursor != utf8_size) {
             error = QStringLiteral("layout.invalid_line_ranges");
             return false;
         }
         paragraph_line_counts.insert(paragraph_id, lines.size());
-        QVariantMap parsed_paragraph = paragraph.toVariantMap();
-        parsed_paragraph.insert(QStringLiteral("lines"), parsed_lines);
-        parsed_paragraphs.push_back(parsed_paragraph);
     }
 
     if (is_partial) {
-        QVariantList merged_paragraphs = previous_snapshot->paragraph_layouts;
-        for (const QVariant& updated_value : parsed_paragraphs) {
-            const QVariantMap updated = updated_value.toMap();
-            const QString updated_id = updated.value(QStringLiteral("paragraphId")).toString();
-            auto existing = std::find_if(
-                merged_paragraphs.begin(), merged_paragraphs.end(),
-                [&updated_id](const QVariant& value) {
-                    return value.toMap().value(QStringLiteral("paragraphId")).toString() ==
-                           updated_id;
-                });
-            if (existing == merged_paragraphs.end()) {
+        QHash<QString, qsizetype> merged_line_counts = previous_snapshot->paragraph_line_counts;
+        QHash<QString, qsizetype> paragraph_indices;
+        for (qsizetype index = 0; index < parsed_paragraphs.size(); ++index) {
+            const QString id = parsed_paragraphs.at(index)
+                                   .toObject()
+                                   .value(QStringLiteral("paragraphId"))
+                                   .toString();
+            paragraph_indices.insert(id, index);
+        }
+        for (auto iterator = paragraph_line_counts.cbegin();
+             iterator != paragraph_line_counts.cend(); ++iterator) {
+            const auto existing = paragraph_indices.constFind(iterator.key());
+            if (existing == paragraph_indices.cend() ||
+                !merged_line_counts.contains(iterator.key())) {
                 error = QStringLiteral("layout.unknown_partial_paragraph");
                 return false;
-            } else {
-                *existing = updated_value;
             }
+            merged_line_counts.insert(iterator.key(), iterator.value());
         }
-        parsed_paragraphs = std::move(merged_paragraphs);
-        paragraph_line_counts.clear();
-        paragraph_ids.clear();
-        for (const QVariant& paragraph_value : parsed_paragraphs) {
-            const QVariantMap paragraph = paragraph_value.toMap();
-            const QString id = paragraph.value(QStringLiteral("paragraphId")).toString();
-            const qsizetype line_count = paragraph.value(QStringLiteral("lines")).toList().size();
-            if (id.isEmpty() || line_count <= 0 || paragraph_ids.contains(id)) {
-                error = QStringLiteral("layout.invalid_partial_paragraphs");
-                return false;
-            }
-            paragraph_ids.insert(id, true);
-            paragraph_line_counts.insert(id, line_count);
+        paragraph_line_counts = std::move(merged_line_counts);
+        for (const QJsonValue& updated : paragraphs) {
+            const QString id = updated.toObject().value(QStringLiteral("paragraphId")).toString();
+            parsed_paragraphs.replace(paragraph_indices.value(id), updated);
         }
     }
 
@@ -301,7 +292,7 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
         return false;
     }
     QVariantList parsed_sizes;
-    QVariantList parsed_page_layouts;
+    QJsonArray parsed_page_layouts;
     const QJsonArray pages = pages_value.toArray();
     qsizetype page_start_index = 0;
     if (is_partial) {
@@ -313,14 +304,12 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
             return false;
         }
         parsed_sizes.reserve(page_start_index + pages.size());
-        parsed_page_layouts.reserve(page_start_index + pages.size());
         for (qsizetype index = 0; index < page_start_index; ++index) {
             parsed_sizes.push_back(previous_snapshot->page_sizes.at(index));
             parsed_page_layouts.push_back(previous_snapshot->page_layouts.at(index));
         }
     } else {
         parsed_sizes.reserve(pages.size());
-        parsed_page_layouts.reserve(pages.size());
     }
     for (const auto& page_value : pages) {
         if (!page_value.isObject()) {
@@ -372,7 +361,7 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
             }
         }
         parsed_sizes.push_back(QVariant::fromValue(QSizeF(width_pt, height_pt)));
-        parsed_page_layouts.push_back(page.toVariantMap());
+        parsed_page_layouts.push_back(page_value);
     }
     QVariantList parsed_selection_rects;
     if (!parse_geometry_rectangles(root.value(QStringLiteral("selectionRects")), parsed_sizes,
@@ -389,6 +378,7 @@ bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, 
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_margins = std::move(parsed_margins);
     parsed_snapshot.paragraph_layouts = std::move(parsed_paragraphs);
+    parsed_snapshot.paragraph_line_counts = std::move(paragraph_line_counts);
     parsed_snapshot.selection_rects = std::move(parsed_selection_rects);
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));

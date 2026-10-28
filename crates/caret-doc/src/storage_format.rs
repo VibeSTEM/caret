@@ -301,8 +301,8 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         reasons.push(PreviewReason::UnsupportedThemeVersion(theme.format_version));
     }
     if reasons.is_empty() {
+        // 正文、媒体和特性列表已在上方校验；避免对整棵文档树重复遍历。
         file.refresh_required_features();
-        file.validate()?;
         Ok(OpenedDocument::Editable(file))
     } else {
         Ok(OpenedDocument::SafePreview(ReadOnlyPreview {

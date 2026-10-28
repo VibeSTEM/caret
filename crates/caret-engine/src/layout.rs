@@ -462,11 +462,13 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        let mut snapshot = self.layout(
+        let mut snapshot = self.layout_with_reuse(
             session.document(),
             session.document_generation(),
             catalog,
             base_style,
+            None,
+            false,
         )?;
         snapshot.session_id = Some(session.session_id().clone());
         Ok(snapshot)
@@ -487,6 +489,7 @@ impl DocumentLayoutService {
             catalog,
             base_style,
             Some((previous, changed_paragraph_id)),
+            false,
         )?;
         snapshot.session_id = Some(session.session_id().clone());
         Ok(snapshot)
@@ -500,7 +503,14 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        self.layout_with_reuse(document, document_generation, catalog, base_style, None)
+        self.layout_with_reuse(
+            document,
+            document_generation,
+            catalog,
+            base_style,
+            None,
+            true,
+        )
     }
 
     fn layout_with_reuse(
@@ -510,10 +520,14 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
         reuse: Option<(&DocumentLayoutSnapshot, &NodeId)>,
+        validate_document: bool,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
-        document
-            .validate()
-            .map_err(|error| DocumentLayoutError::InvalidDocument(error.to_string()))?;
+        // Session 创建时已校验文档，后续命令维持结构不变量，避免每次排版重复遍历整树。
+        if validate_document {
+            document
+                .validate()
+                .map_err(|error| DocumentLayoutError::InvalidDocument(error.to_string()))?;
+        }
         let section = document
             .page_sections
             .first()

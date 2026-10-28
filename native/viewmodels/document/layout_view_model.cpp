@@ -45,9 +45,9 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_page_sizes_pt = parsed_snapshot.page_sizes;
     m_page_layouts = parsed_snapshot.page_layouts;
     m_page_margins_pt = parsed_snapshot.page_margins;
-    m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_selection_rects = parsed_snapshot.selection_rects;
     m_composition_rects = parsed_snapshot.composition_rects;
+    m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_input_method_context = parsed_snapshot.input_method_context;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -62,6 +62,10 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
         m_error = std::move(error);
         return false;
     }
+    return installSnapshot(std::move(parsed_snapshot));
+}
+
+bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot) {
     const bool interaction_changed = m_selection_rects != parsed_snapshot.selection_rects ||
                                      m_input_method_context != parsed_snapshot.input_method_context;
     installed_snapshot() = parsed_snapshot;
@@ -69,9 +73,9 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
     m_page_layouts = std::move(parsed_snapshot.page_layouts);
     m_page_margins_pt = std::move(parsed_snapshot.page_margins);
-    m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
     m_selection_rects = std::move(parsed_snapshot.selection_rects);
     m_composition_rects = std::move(parsed_snapshot.composition_rects);
+    m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;

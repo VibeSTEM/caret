@@ -68,3 +68,34 @@ fn keyboard_commands_split_and_merge_paragraphs_and_delete_text()
     assert_eq!(deleted_snapshot["paragraphs"][0]["text"], "A");
     Ok(())
 }
+
+#[test]
+fn deleting_within_a_paragraph_reuses_layout_and_returns_a_delta()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("second".to_owned())?;
+    let paragraph_id = match &runtime.document().body[0] {
+        caret_doc::Block::Paragraph(paragraph) => paragraph.id.to_string(),
+        _ => return Err("预期第一项是段落".into()),
+    };
+    let endpoint = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": "3",
+        "affinity": "downstream",
+        "visualAffinity": "downstream",
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": endpoint, "focus": endpoint }).to_string(),
+    )?;
+
+    let deleted: Value = serde_json::from_str(&runtime.delete_backward_json()?)?;
+
+    assert_eq!(deleted["partial"], true);
+    assert_eq!(deleted["baseDocumentGeneration"], "3");
+    assert_eq!(deleted["documentGeneration"], "4");
+    assert_eq!(deleted["paragraphs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(deleted["paragraphs"][0]["text"], "fist");
+    Ok(())
+}
