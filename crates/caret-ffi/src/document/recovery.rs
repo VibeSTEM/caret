@@ -69,7 +69,7 @@ pub(super) fn clear_recovery_after_saved(runtime: &mut DocumentRuntime) {
         .runtime
         .as_ref()
         .is_ok_and(|session| session.recovery_id().is_some());
-    runtime.recovery_update.set_enabled(recovery_enabled);
+    runtime.lifecycle.set_recovery_enabled(recovery_enabled);
 }
 
 /// 由宿主注入 AppLocalDataLocation；恢复策略仍由 Rust 存储服务管理。
@@ -185,7 +185,7 @@ pub(crate) fn discard_document_recovery(runtime: &mut DocumentRuntime) -> String
         session.clear_recovery_id();
     }
     runtime.recovery_lease = None;
-    runtime.recovery_update.set_enabled(false);
+    runtime.lifecycle.set_recovery_enabled(false);
     String::new()
 }
 
@@ -299,15 +299,24 @@ pub(crate) fn write_document_file_checked(
     baseline_digest: String,
     queued_digest: String,
     recovery_id: String,
-) -> String {
+) -> bridge::DocumentWriteResult {
     let target = Path::new(&path);
+    let result = |conflict, replace_allowed, recovery_id, recovery_created, error| {
+        bridge::DocumentWriteResult {
+            conflict,
+            replace_allowed,
+            recovery_id,
+            recovery_created,
+            error,
+        }
+    };
     match DocumentStorage.save_snapshot_if_unchanged_or_queued(
         target,
         &bytes,
         &baseline_digest,
         (!queued_digest.is_empty()).then_some(queued_digest.as_str()),
     ) {
-        Ok(()) => String::new(),
+        Ok(()) => result(false, false, String::new(), false, String::new()),
         Err(
             error @ (caret_app::document_storage::DocumentStorageError::ExternalConflict
             | caret_app::document_storage::DocumentStorageError::ExternalTargetUnavailable(
@@ -318,6 +327,7 @@ pub(crate) fn write_document_file_checked(
                 error,
                 caret_app::document_storage::DocumentStorageError::ExternalConflict
             );
+            let recovery_created = recovery_id.is_empty();
             let stored = recovery_storage()
                 .lock()
                 .ok()
@@ -351,13 +361,18 @@ pub(crate) fn write_document_file_checked(
                     .map_err(|error| error.to_string())
                 });
             match stored {
-                Ok(id) => format!(
-                    "document.external_conflict: recovery={id};replace_allowed={replace_allowed}"
-                ),
-                Err(error) => format!("document.external_conflict_recovery_failed: {error}"),
+                Ok(id) => result(true, replace_allowed, id, recovery_created, String::new()),
+                Err(error) => result(true, false, String::new(), false, error),
             }
         }
-        Err(error) => error.to_string(),
+        Err(error) => result(false, false, String::new(), false, error.to_string()),
+    }
+}
+
+/// 只释放尚未绑定的新租约，不删除可供恢复的条目。
+pub(crate) fn cancel_pending_recovery_lease(id: String) {
+    if let Ok(mut leases) = pending_recovery_leases().lock() {
+        leases.remove(&id);
     }
 }
 
@@ -402,10 +417,7 @@ pub(crate) fn set_document_recovery_id(
     if let Some(lease) = lease {
         runtime.recovery_lease = Some(lease);
     }
-    runtime
-        .recovery_update
-        .set_session_generation(session_generation);
-    runtime.recovery_update.set_enabled(true);
+    runtime.lifecycle.set_recovery_enabled(true);
     String::new()
 }
 
@@ -459,7 +471,7 @@ pub(crate) fn mark_document_saved_json(
     if !accepted {
         return "error:document.stale_save_completion".to_owned();
     }
-    runtime.auto_save.manually_saved(document_generation);
+    runtime.lifecycle.manually_saved(document_generation);
     if runtime
         .runtime
         .as_ref()
@@ -471,4 +483,42 @@ pub(crate) fn mark_document_saved_json(
         |error| format!("error:{error}"),
         DocumentSessionService::status_json,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cancel_pending_recovery_lease, pending_recovery_leases};
+    use caret_app::document_recovery::DocumentRecoveryStorage;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn cancelling_an_unclaimed_lease_keeps_the_recovery_entry_available() {
+        static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "caret-pending-recovery-lease-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = DocumentRecoveryStorage::new(root.join("recovery"));
+        let stored = storage.store_for_session(Path::new("document.cdoc"), None, b"snapshot");
+        assert!(stored.is_ok());
+        let Ok((id, lease)) = stored else { return };
+        let registry = pending_recovery_leases().lock();
+        assert!(registry.is_ok());
+        let Ok(mut registry) = registry else { return };
+        registry.insert(id.clone(), lease);
+        drop(registry);
+
+        cancel_pending_recovery_lease(id.clone());
+
+        let acquired = storage.acquire_session_lease(&id);
+        assert!(acquired.is_ok());
+        let Ok(replacement_lease) = acquired else {
+            return;
+        };
+        drop(replacement_lease);
+        assert!(storage.remove(&id).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

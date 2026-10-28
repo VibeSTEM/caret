@@ -180,7 +180,9 @@ class LayoutViewModel final : public QObject {
     void interactionChanged();
     void caretGeometryChanged();
     void documentFileChanged();
-    void documentFileOperationFinished(bool succeeded, const QString& error);
+    void documentFileOperationFinished(bool succeeded, const QString& error, bool conflict = false,
+                                       bool recovery_write_failed = false,
+                                       const QString& recovery_error = {});
 
   private:
     QVariantList m_page_sizes_pt;

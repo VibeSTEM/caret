@@ -4,6 +4,7 @@ use caret_doc::{InlineEnvironmentKind, InlineNode, Paragraph};
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
+pub(crate) use unicode::is_mandatory_line_break;
 
 /// 传入 Parley 的段落基础样式；格式环境和 Run 语言在行内范围上覆盖它。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

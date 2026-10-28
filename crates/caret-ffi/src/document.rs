@@ -37,8 +37,7 @@ pub(super) fn next_prepared_document_ticket() -> u64 {
 /// 持有文档会话、字体目录与布局缓存的 Rust 应用运行时。
 pub struct DocumentRuntime {
     pub(super) runtime: Result<DocumentSessionService, String>,
-    pub(super) auto_save: caret_app::autosave::AutoSavePolicy,
-    pub(super) recovery_update: caret_app::autosave::AutoSavePolicy,
+    pub(super) lifecycle: caret_app::document_lifecycle::DocumentLifecycleService,
     pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
     pub(super) monotonic_origin: Instant,
 }
@@ -47,8 +46,7 @@ pub struct DocumentRuntime {
 pub(crate) fn new_blank_document_runtime() -> Box<DocumentRuntime> {
     Box::new(DocumentRuntime {
         runtime: DocumentSessionService::new_blank(),
-        auto_save: caret_app::autosave::AutoSavePolicy::new(1),
-        recovery_update: caret_app::autosave::AutoSavePolicy::new(1),
+        lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(1),
         recovery_lease: None,
         monotonic_origin: Instant::now(),
     })
@@ -145,15 +143,10 @@ pub(crate) fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u
     }
     runtime.recovery_lease = prepared.recovery_lease.take();
     if let Ok(installed) = &runtime.runtime {
-        runtime
-            .auto_save
-            .set_session_generation(installed.session_generation());
-        runtime
-            .recovery_update
-            .set_session_generation(installed.session_generation());
-        runtime
-            .recovery_update
-            .set_enabled(installed.recovery_id().is_some());
+        runtime.lifecycle.set_session(
+            installed.session_generation(),
+            installed.recovery_id().is_some(),
+        );
     }
     String::new()
 }
@@ -179,9 +172,19 @@ pub(crate) fn document_save_snapshot(
     }
 }
 
+/// 轻量读取活动会话代际，供 Qt 拒绝过期 worker 回调。
+pub(crate) fn document_session_generation(runtime: &DocumentRuntime) -> u64 {
+    runtime
+        .runtime
+        .as_ref()
+        .map(DocumentSessionService::session_generation)
+        .unwrap_or_default()
+}
+
 fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSnapshot {
     let recovery_id = snapshot.recovery_id.unwrap_or_default();
     bridge::DocumentSaveSnapshot {
+        stale_deadline: false,
         session_generation: snapshot.session_generation,
         document_generation: snapshot.document_generation,
         history_state_id: snapshot.history_state_id,
@@ -197,6 +200,7 @@ fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSna
 
 pub(super) fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot {
     bridge::DocumentSaveSnapshot {
+        stale_deadline: false,
         session_generation: 0,
         document_generation: 0,
         history_state_id: 0,
@@ -208,6 +212,12 @@ pub(super) fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot
         recovery_baseline_digest: String::new(),
         error,
     }
+}
+
+pub(super) fn stale_deadline_snapshot() -> bridge::DocumentSaveSnapshot {
+    let mut snapshot = empty_save_snapshot(String::new());
+    snapshot.stale_deadline = true;
+    snapshot
 }
 
 /// 返回当前文档身份和保存状态的轻量 JSON 投影。
@@ -369,14 +379,11 @@ fn json_response(
         let after = session.document_generation();
         if after > before {
             let now = runtime.monotonic_origin.elapsed();
-            let _ = runtime.auto_save.edited(after, now);
-            if runtime
+            let has_recovery = runtime
                 .runtime
                 .as_ref()
-                .is_ok_and(|session| session.recovery_id().is_some())
-            {
-                let _ = runtime.recovery_update.edited(after, now);
-            }
+                .is_ok_and(|session| session.recovery_id().is_some());
+            runtime.lifecycle.edited(after, has_recovery, now);
         }
     }
     result.unwrap_or_else(|error| format!("error:{error}"))
@@ -469,8 +476,7 @@ mod tests {
     fn initialization_failure_is_reported_by_document_commands_and_binary_results() {
         let mut runtime = DocumentRuntime {
             runtime: Err("document.initialization_failed".to_owned()),
-            auto_save: caret_app::autosave::AutoSavePolicy::new(0),
-            recovery_update: caret_app::autosave::AutoSavePolicy::new(0),
+            lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(0),
             recovery_lease: None,
             monotonic_origin: Instant::now(),
         };

@@ -18,6 +18,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <qtmetamacros.h>
 #include <utility>
 
@@ -86,13 +87,15 @@ void LayoutViewModel::runAutoSaveDeadline() {
                                                   m_auto_save_deadline_generation)
             : ffi::auto_save_deadline_fired(*runtime, m_auto_save_session_generation,
                                             m_auto_save_deadline_generation);
+    if (snapshot.stale_deadline) {
+        refreshAutoSaveDeadline();
+        return;
+    }
     if (!snapshot.error.empty()) {
         const QString error =
             QString::fromUtf8(snapshot.error.data(), static_cast<qsizetype>(snapshot.error.size()));
         qWarning().noquote() << QStringLiteral("autosave.deadline_failed:") << error;
-        if (!error.endsWith(QStringLiteral("stale_deadline"))) {
-            emit documentFileOperationFinished(false, error);
-        }
+        emit documentFileOperationFinished(false, error);
         refreshAutoSaveDeadline();
         return;
     }
@@ -133,11 +136,14 @@ void LayoutViewModel::runAutoSaveDeadline() {
                     watcher->deleteLater();
                     --m_pending_file_operations;
                     setDocumentFileBusy(m_pending_file_operations != 0);
-                    if (ffi::DocumentRuntime* active_runtime = document_runtime()) {
-                        (void)ffi::recovery_update_write_finished(
-                            *active_runtime, session_generation, document_generation,
-                            error.isEmpty());
+                    ffi::DocumentRuntime* active_runtime = document_runtime();
+                    if (!layout_view_model_support::current_session(active_runtime,
+                                                                    session_generation)) {
+                        refreshAutoSaveDeadline();
+                        return;
                     }
+                    (void)ffi::recovery_update_write_finished(*active_runtime, session_generation,
+                                                              document_generation, error.isEmpty());
                     refreshAutoSaveDeadline();
                     if (!error.isEmpty()) {
                         qWarning().noquote() << QStringLiteral("recovery.update_failed:") << error;
@@ -183,58 +189,63 @@ void LayoutViewModel::runAutoSaveDeadline() {
     ++m_pending_save_operations;
     setDocumentFileBusy(true);
     emit documentFileChanged();
-    auto* watcher = new QFutureWatcher<QString>(this);
-    connect(watcher, &QFutureWatcher<QString>::finished, this,
-            [this, watcher, path, session_generation, document_generation, history_state_id,
-             content_digest, baseline_digest] {
-                QString error = watcher->result();
-                watcher->deleteLater();
-                --m_pending_file_operations;
-                --m_pending_save_operations;
-                if (m_pending_save_operations == 0) {
-                    m_pending_save_target.clear();
-                    m_pending_save_digest_by_path.clear();
-                }
-                setDocumentFileBusy(m_pending_file_operations != 0);
-                ffi::DocumentRuntime* active_runtime = document_runtime();
-                if (active_runtime != nullptr) {
-                    if (!error.isEmpty() &&
-                        error.startsWith(QStringLiteral("document.external_conflict"))) {
-                        if (path == m_document_path) {
-                            m_conflict_path = path;
-                            m_conflict_session_generation = session_generation;
-                            m_conflict_can_replace = false;
-                            emit documentFileChanged();
-                        }
-                        const QString id = layout_view_model_support::recovery_id_from_error(error);
-                        if (!id.isEmpty()) {
-                            const rust::String binding_error = ffi::set_document_recovery_id(
-                                *active_runtime, session_generation,
-                                layout_view_model_support::to_rust_string(id),
-                                layout_view_model_support::to_rust_string(path),
-                                layout_view_model_support::to_rust_string(baseline_digest));
-                            if (!binding_error.empty()) {
-                                error +=
-                                    QStringLiteral("; recovery_binding_failed: ") +
-                                    QString::fromUtf8(binding_error.data(),
-                                                      static_cast<qsizetype>(binding_error.size()));
-                            }
-                        }
+    auto* watcher =
+        new QFutureWatcher<std::shared_ptr<layout_view_model_support::DocumentWriteResult>>(this);
+    connect(
+        watcher,
+        &QFutureWatcher<std::shared_ptr<layout_view_model_support::DocumentWriteResult>>::finished,
+        this,
+        [this, watcher, path, session_generation, document_generation, history_state_id,
+         content_digest, baseline_digest] {
+            const auto result = watcher->result();
+            QString error = result->error;
+            watcher->deleteLater();
+            --m_pending_file_operations;
+            --m_pending_save_operations;
+            if (m_pending_save_operations == 0) {
+                m_pending_save_target.clear();
+                m_pending_save_digest_by_path.clear();
+            }
+            setDocumentFileBusy(m_pending_file_operations != 0);
+            ffi::DocumentRuntime* active_runtime = document_runtime();
+            if (!layout_view_model_support::current_session(active_runtime, session_generation)) {
+                return;
+            }
+            QString binding_error;
+            if (active_runtime != nullptr) {
+                if (result->conflict) {
+                    m_conflict_path = path;
+                    m_conflict_session_generation = session_generation;
+                    m_conflict_can_replace = false;
+                    emit documentFileChanged();
+                    if (!result->recovery_id.isEmpty()) {
+                        const rust::String binding = ffi::set_document_recovery_id(
+                            *active_runtime, session_generation,
+                            layout_view_model_support::to_rust_string(result->recovery_id),
+                            layout_view_model_support::to_rust_string(path),
+                            layout_view_model_support::to_rust_string(baseline_digest));
+                        binding_error = QString::fromUtf8(binding.data(),
+                                                          static_cast<qsizetype>(binding.size()));
                     }
-                    (void)ffi::auto_save_write_finished(
-                        *active_runtime, session_generation, document_generation, history_state_id,
-                        layout_view_model_support::to_rust_string(path),
-                        layout_view_model_support::to_rust_string(content_digest), error.isEmpty());
                 }
-                refreshDocumentFileStatus();
-                refreshAutoSaveDeadline();
-                if (!error.isEmpty()) {
-                    qWarning().noquote() << QStringLiteral("autosave.write_failed:") << error;
-                    emit documentFileOperationFinished(false, error);
-                } else {
-                    emit documentFileOperationFinished(true, QString{});
-                }
-            });
+                (void)ffi::auto_save_write_finished(
+                    *active_runtime, session_generation, document_generation, history_state_id,
+                    layout_view_model_support::to_rust_string(path),
+                    layout_view_model_support::to_rust_string(content_digest),
+                    error.isEmpty() && !result->conflict);
+            }
+            refreshDocumentFileStatus();
+            refreshAutoSaveDeadline();
+            if (result->conflict) {
+                emit documentFileOperationFinished(false, {}, true, !error.isEmpty(),
+                                                   error.isEmpty() ? binding_error : error);
+            } else if (!error.isEmpty()) {
+                qWarning().noquote() << QStringLiteral("autosave.write_failed:") << error;
+                emit documentFileOperationFinished(false, error);
+            } else {
+                emit documentFileOperationFinished(true, QString{});
+            }
+        });
     watcher->setFuture(
         QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes), baseline_digest,
                                                 queued_digest, recovery_id] {
@@ -243,12 +254,11 @@ void LayoutViewModel::runAutoSaveDeadline() {
             for (const char byte : bytes) {
                 payload.push_back(static_cast<std::uint8_t>(byte));
             }
-            const rust::String result = ffi::write_document_file_checked(
+            return layout_view_model_support::from_write_result(ffi::write_document_file_checked(
                 layout_view_model_support::to_rust_string(path), std::move(payload),
                 layout_view_model_support::to_rust_string(baseline_digest),
                 layout_view_model_support::to_rust_string(queued_digest),
-                layout_view_model_support::to_rust_string(recovery_id));
-            return QString::fromUtf8(result.data(), static_cast<qsizetype>(result.size()));
+                layout_view_model_support::to_rust_string(recovery_id)));
         }));
 #endif
 }

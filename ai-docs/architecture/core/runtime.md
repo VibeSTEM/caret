@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-27。`caret-engine` 已实现 `Session`、UTF-8 位置和基础文本/IME 命令；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。历史、布局缓存和结构索引仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
+更新日期：2026-10-29。`caret-engine` 已实现 `Session`、UTF-8 位置和基础文本/IME 命令；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。历史、布局缓存和结构索引仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
 
 ## 权威与派生
 
@@ -64,7 +64,7 @@ Session
 
 ### AutoSave
 
-AutoSave 的策略与文档生命周期分开管理。全局开关是 Rust `PreferencesService` 持久化的用户偏好，默认关闭；每份文档会话分别维护是否可自动保存、待触发 revision、deadline generation、写入状态和外部文件基线。QML 只呈现开关并提交开关意图；Rust 决定偏好提交、路径选择需求、触发策略、状态迁移和错误。Qt GUI 事件循环可设置单次唤醒 deadline，不能维护另一份 AutoSave 策略或周期轮询。
+AutoSave 的策略与文档生命周期分开管理。全局开关是 Rust `PreferencesService` 持久化的用户偏好，默认关闭；`caret-app::document_lifecycle::DocumentLifecycleService` 组合每文档 AutoSave 与恢复快照刷新策略，负责 deadline 选择、会话代际重置和写入完成推进。每份文档会话分别维护是否可自动保存、待触发 revision、deadline generation、写入状态和外部文件基线。QML 只呈现开关并提交开关意图；Rust 决定偏好提交、路径选择需求、触发策略、状态迁移和错误。Qt GUI 事件循环可设置单次唤醒 deadline，不能维护另一份 AutoSave 策略或周期轮询。FFI 只转换 deadline 与保存快照 DTO 并转发到应用服务。
 
 开关启用时，已绑定可写 `.cdoc` 路径的文档直接进入 AutoSave。未命名文档立即请求另存为；成功绑定路径后才提交开启偏好，取消或失败时开关回到关闭。应用在开启偏好下启动为未命名文档时也请求另存为；打开已有 `.cdoc` 不弹路径窗口。AutoSave 不会把未命名文档静默写入用户未选择的路径。
 

@@ -4,6 +4,7 @@
 //! 主题不读文件，语言目录不依赖 Qt。
 
 pub mod autosave;
+pub mod document_lifecycle;
 pub mod document_recovery;
 pub mod document_session;
 pub mod document_storage;

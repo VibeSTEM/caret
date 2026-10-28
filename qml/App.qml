@@ -281,7 +281,7 @@ Window {
     Connections {
         target: LayoutViewModel
 
-        function onDocumentFileOperationFinished(succeeded, error) {
+        function onDocumentFileOperationFinished(succeeded, error, conflict, recoveryWriteFailed, recoveryError) {
             if (window.pendingRecoveryScan) {
                 window.pendingRecoveryScan = false;
                 if (!succeeded) {
@@ -336,17 +336,9 @@ Window {
                     closeConfirmation.open();
                     return;
                 }
-                if (error.startsWith("document.external_conflict")) {
-                    const recoveryFailureMarker = "; recovery_binding_failed: ";
-                    const recoveryFailureOffset = error.indexOf(recoveryFailureMarker);
-                    const recoveryWriteMarker = "document.external_conflict_recovery_failed: ";
-                    saveConflictDialog.recoveryWriteFailed = error.startsWith(recoveryWriteMarker);
-                    if (recoveryFailureOffset >= 0)
-                        saveConflictDialog.recoveryErrorDetail = error.substring(recoveryFailureOffset + recoveryFailureMarker.length);
-                    else if (saveConflictDialog.recoveryWriteFailed)
-                        saveConflictDialog.recoveryErrorDetail = error.substring(recoveryWriteMarker.length);
-                    else
-                        saveConflictDialog.recoveryErrorDetail = "";
+                if (conflict) {
+                    saveConflictDialog.recoveryWriteFailed = recoveryWriteFailed;
+                    saveConflictDialog.recoveryErrorDetail = recoveryError;
                     saveConflictDialog.open();
                     return;
                 }

@@ -1,6 +1,6 @@
 # 仓库结构
 
-更新日期：2026-10-28。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
+更新日期：2026-10-29。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
 
 ```text
 当前仓库
@@ -20,12 +20,15 @@
 │   │       ├── document_view.rs
 │   │       ├── document_view/{composition.rs,editing.rs,hit_test.rs,layout.rs,navigation.rs,selection.rs,snapshot.rs}
 │   │       ├── document_view/tests/{ime.rs,keyboard.rs,layout.rs,navigation.rs}
+│   │       ├── document_lifecycle.rs
+│   │       ├── document_lifecycle/tests.rs
 │   │       ├── storage.rs
 │   │       └── storage/atomic_file.rs
 │   ├── caret-build/
 │   ├── caret-dsl-core/
 │   ├── caret-dslc/
 │   ├── caret-doc/
+│   │   └── src/model/{codec.rs,features.rs,validation.rs}
 │   ├── caret-ffi/
 │   │   └── src/{lib.rs,document.rs,settings.rs,tests.rs}
 │   ├── caret-engine/
@@ -57,6 +60,7 @@
 │   │       └── page_glyphs/tests.rs
 │   ├── caret-foundation/
 │   ├── caret-layout/
+│   │   └── src/paragraph/parley/{interaction.rs,line_mapping.rs}
 │   └── launcher/
 ├── native/
 │   ├── adapters/             # 平台字体、路径、窗口 chrome、图标
@@ -96,7 +100,7 @@ crate 的职责和允许依赖以[分层规范](../../standards/layering.md)为�
 - Qt ViewModel 按 Settings、Theme、Document 分类；Runtime bridge 单独持有对应 Rust runtime，分类 ViewModel 只投影自己的领域属性。平台 API 适配放在 `native/adapters/`，画布和 ViewModel 不互相依赖。
 - 大型会话、画布和布局桥按文本编辑/导航/IME、绘制/几何/光标/输入、快照/命令/glyph 适配等职责拆分；外部命令入口保持集中，子模块不各自建立并行状态机或第二套数据权威。
 
-`caret-app::settings` 是应用设置总协调模块；分类服务分别负责 Preferences、Theme 和 Language，`SettingsRuntime` 负责加载、恢复、可写状态与保存结果。`storage/atomic_file.rs` 是应用层内部的原子写入工具，调用者仍拥有自身的编码、校验和隔离策略。
+`caret-app::settings` 是应用设置总协调模块；分类服务分别负责 Preferences、Theme 和 Language，`SettingsRuntime` 负责加载、恢复、可写状态与保存结果。`document_lifecycle.rs` 协调每文档 AutoSave 与恢复快照 deadline，不持有 Qt 定时器或执行宿主 I/O。`caret-doc::model` 将节点编解码、功能标识推导和模型校验分开；`caret-layout::paragraph::parley` 将视觉交互几何和分页行映射分开，同时共享单一 Parley 布局结果。`storage/atomic_file.rs` 是应用层内部的原子写入工具，调用者仍拥有自身的编码、校验和隔离策略。
 
 `native/viewmodels/` 按领域分类；`native/adapters/` 只依赖 Qt 与平台 API。Canvas 子目录按绘制、几何、光标和输入拆分，仍由单一 `caret_canvas` 目标构建。设置窗口由 `SettingsDialogController` 管理 Qt 交互状态；QML 不复刻控制器状态或 Rust 持久化设置。
 
