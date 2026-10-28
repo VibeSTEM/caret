@@ -97,6 +97,10 @@ fn run_rust_cpu(samples: Option<u32>) -> Result<(), Box<dyn Error>> {
             "caret-app",
             "--bench",
             "document_open_delete_criterion",
+            "--package",
+            "caret-app",
+            "--bench",
+            "document_history_save_criterion",
             "--target-dir",
         ])
         .arg(crate::paths::target_root())

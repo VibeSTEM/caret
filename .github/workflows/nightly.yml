@@ -229,7 +229,7 @@ jobs:
       - name: Run Rust CPU performance suite
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p target/performance-ci
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
@@ -250,6 +250,21 @@ jobs:
               'target/debug/caret-dslc check tests/fixtures/dsl/artifacts.pa' \
               'target/release/caret-dslc check tests/fixtures/dsl/artifacts.pa'
           } 2>&1 | tee target/performance-ci/cpu.log
+
+      - name: Collect Criterion statistics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/performance-ci/criterion
+          if [ -d target/criterion ]; then
+            find target/criterion -type f -path '*/new/*.json' -print0 |
+              while IFS= read -r -d '' report; do
+                relative_path="${report#target/criterion/}"
+                mkdir -p "target/performance-ci/criterion/$(dirname "$relative_path")"
+                cp "$report" "target/performance-ci/criterion/$relative_path"
+              done
+          fi
 
       - name: Upload Rust CPU performance report
         if: always()
@@ -279,7 +294,7 @@ jobs:
       - name: Run headless Qt CPU performance suite
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p target/performance-ci
           {
             printf 'commit=%s\n' "$GITHUB_SHA"
@@ -326,7 +341,7 @@ jobs:
       - name: Run headless Qt GPU performance suite
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p target/performance-ci
           {
             printf 'commit=%s\n' "$GITHUB_SHA"

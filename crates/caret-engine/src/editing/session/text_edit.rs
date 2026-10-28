@@ -75,6 +75,7 @@ impl Session {
             document_changed: !text.is_empty() || anchor.offset != focus.offset,
             selection_changed: true,
             composition_changed: false,
+            changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,
                 start: replaced_start,
@@ -151,6 +152,7 @@ impl Session {
                     document_changed: true,
                     selection_changed: true,
                     composition_changed: false,
+                    changed_paragraph_id: None,
                     position_map: Some(position_map),
                 });
             }
@@ -190,6 +192,7 @@ impl Session {
                     document_changed: true,
                     selection_changed: true,
                     composition_changed: false,
+                    changed_paragraph_id: None,
                     position_map: Some(position_map),
                 });
             }
@@ -228,6 +231,7 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,
                 start: from,

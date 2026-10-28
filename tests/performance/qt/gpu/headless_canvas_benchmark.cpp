@@ -61,7 +61,6 @@ QString device_type_name(QRhi* rhi) {
 
 int run(int samples) {
     using namespace caret::performance;
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QQuickRenderControl render_control;
     QQuickWindow window(&render_control);
     window.resize(render_size);
@@ -135,8 +134,11 @@ int run(int samples) {
         }
         cpu_samples_us.push_back(static_cast<double>(timer.nsecsElapsed()) / 1000.0);
         if (gpu_time_supported) {
-            gpu_samples_us.push_back(render_control.commandBuffer()->lastCompletedGpuTime() *
-                                     1'000'000.0);
+            const double gpu_time_us =
+                render_control.commandBuffer()->lastCompletedGpuTime() * 1'000'000.0;
+            if (std::isfinite(gpu_time_us) && gpu_time_us > 0.0) {
+                gpu_samples_us.push_back(gpu_time_us);
+            }
         }
     }
     const QByteArray renderer_name = rhi->driverInfo().deviceName;
@@ -147,12 +149,14 @@ int run(int samples) {
                 "\"resolution\":\"%dx%d\",\"glyph_placements\":%d,\"unique_images\":%d,"
                 "\"selection_rectangles\":%d,\"median_frame_cpu_us\":%.3f,"
                 "\"p95_frame_cpu_us\":%.3f,\"gpu_time_supported\":%s,"
+                "\"gpu_timestamp_samples\":%zu,\"gpu_timestamp_available\":%s,"
                 "\"median_gpu_us\":%s,\"p95_gpu_us\":%s}\n",
                 backend_name.constData(), renderer_name.constData(),
                 device_type_name(rhi).toUtf8().constData(), qVersion(), samples,
                 render_size.width(), render_size.height(), glyph_placements, unique_glyph_images,
                 selection_rectangles_count, percentile(cpu_samples_us, 0.50),
                 percentile(cpu_samples_us, 0.95), gpu_time_supported ? "true" : "false",
+                gpu_samples_us.size(), gpu_samples_us.empty() ? "false" : "true",
                 gpu_samples_us.empty()
                     ? "null"
                     : QByteArray::number(percentile(gpu_samples_us, 0.50), 'f', 3).constData(),
@@ -174,6 +178,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--samples 必须是 10 到 10000 之间的整数\n");
         return 1;
     }
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QGuiApplication application(argc, argv);
     return run(samples);
 }

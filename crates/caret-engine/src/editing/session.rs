@@ -156,7 +156,7 @@ impl Session {
                     .and_then(|section| section.geometry().ok())
             })
             .flatten();
-        let effect = match command {
+        let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
@@ -213,6 +213,7 @@ impl Session {
                     merge_epoch: self.history_merge_epoch,
                 }
             };
+            effect.changed_paragraph_id = patch.single_changed_paragraph_id();
             let edit = SessionHistoryEdit::new(
                 patch,
                 before_selection,
@@ -288,7 +289,7 @@ impl Session {
         let Some(transition) = transition else {
             return Ok(Effect::default());
         };
-        let (selection, visual_affinity, state_id) =
+        let (selection, visual_affinity, state_id, changed_paragraph_id) =
             history::restore_history_transition(transition);
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
@@ -305,6 +306,7 @@ impl Session {
         Ok(Effect {
             document_changed: true,
             selection_changed: true,
+            changed_paragraph_id,
             ..Effect::default()
         })
     }

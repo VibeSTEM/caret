@@ -3,26 +3,50 @@ use super::DocumentViewRuntime;
 use caret_engine::{Command, Direction, DocumentLayoutDeltaView};
 
 impl DocumentViewRuntime {
-    /// 在 Rust Session 中撤销最近一次可撤销编辑，并重新生成完整布局快照。
+    /// 在 Rust Session 中撤销最近一次可撤销编辑并发布更新后的布局。
     pub fn undo_json(&mut self) -> Result<String, String> {
-        self.session
-            .run(Command::Undo)
-            .map_err(|error| format!("history.undo: {error}"))?;
-        self.anchor_visual_affinity = self.session.selection_visual_affinity();
-        self.preferred_visual_x_pt = None;
-        self.last_snapshot = None;
-        self.layout_snapshot_json()
+        self.restore_history_json(false)
     }
 
-    /// 在 Rust Session 中重做最近一次可重做编辑，并重新生成完整布局快照。
+    /// 在 Rust Session 中重做最近一次可重做编辑并发布更新后的布局。
     pub fn redo_json(&mut self) -> Result<String, String> {
-        self.session
-            .run(Command::Redo)
-            .map_err(|error| format!("history.redo: {error}"))?;
+        self.restore_history_json(true)
+    }
+
+    fn restore_history_json(&mut self, redo: bool) -> Result<String, String> {
+        let command = if redo { Command::Redo } else { Command::Undo };
+        let context = if redo { "history.redo" } else { "history.undo" };
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("{context}: {error}"))?;
+        let previous = self.last_snapshot.take();
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
-        self.last_snapshot = None;
-        self.layout_snapshot_json()
+
+        let (Some(previous), Some(paragraph_id)) = (previous, effect.changed_paragraph_id) else {
+            self.last_snapshot = None;
+            return self.layout_snapshot_json();
+        };
+        let base_generation = previous.document_generation;
+        let updated = self
+            .layout
+            .layout_session_reusing(&self.session, &previous, &paragraph_id)
+            .map_err(|error| error.to_string())?;
+        let page_start_index = caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
+            &previous,
+            &updated,
+            &paragraph_id,
+        );
+        self.last_snapshot = Some(updated);
+        match page_start_index {
+            Some(page_start_index) => self.layout_snapshot_json_with_delta(Some((
+                &paragraph_id,
+                page_start_index,
+                base_generation,
+            ))),
+            None => self.layout_snapshot_json(),
+        }
     }
 
     /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。

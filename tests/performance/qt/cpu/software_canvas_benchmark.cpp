@@ -38,7 +38,6 @@ double percentile(std::vector<double> values, double fraction) {
 
 int run(int samples, int page_count, bool ime_suffix_shift) {
     using namespace caret::performance;
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     QQuickRenderControl render_control;
     QQuickWindow window(&render_control);
     window.resize(render_size);
@@ -114,6 +113,69 @@ int run(int samples, int page_count, bool ime_suffix_shift) {
     render_control.invalidate();
     return 0;
 }
+
+int run_page_scroll(int samples) {
+    using namespace caret::performance;
+    QQuickRenderControl render_control;
+    QQuickWindow window(&render_control);
+    window.resize(render_size);
+    QImage target(render_size, QImage::Format_RGBA8888_Premultiplied);
+    target.fill(Qt::white);
+    window.setRenderTarget(QQuickRenderTarget::fromPaintDevice(&target));
+    caret::DocumentCanvas canvas;
+    set_up_canvas(&canvas, novel_page_count);
+    canvas.setParentItem(window.contentItem());
+    const auto render_frame = [&render_control]() {
+        render_control.polishItems();
+        if (!render_control.sync()) {
+            return false;
+        }
+        render_control.render();
+        return true;
+    };
+    const auto install_page = [&canvas](int page_index, int frame_index) {
+        const int page_end = std::min(novel_page_count, page_index + 2);
+        canvas.setY(-canvas.documentToContent(page_index, QPointF(0.0, 0.0)).y());
+        canvas.setVisiblePageRange({std::max(0, page_index - 1), page_end});
+        canvas.setGlyphFrames({edited_glyph_frame(page_index, frame_index)});
+        canvas.setSelectionRects(selection_rectangles(frame_index, page_index));
+    };
+
+    for (int frame = 0; frame < warmup_frames; ++frame) {
+        const int page_index = 1 + frame;
+        install_page(page_index, frame);
+        if (!render_frame()) {
+            std::fprintf(stderr, "QQuickRenderControl 跨页滚动预热同步失败\n");
+            return 2;
+        }
+    }
+    std::vector<double> frame_samples_us;
+    frame_samples_us.reserve(static_cast<std::size_t>(samples));
+    for (int frame = 0; frame < samples; ++frame) {
+        const int page_index = 1 + (frame % (novel_page_count - 2));
+        QElapsedTimer timer;
+        timer.start();
+        install_page(page_index, frame + warmup_frames);
+        if (!render_frame()) {
+            std::fprintf(stderr, "QQuickRenderControl 跨页滚动同步失败\n");
+            return 2;
+        }
+        frame_samples_us.push_back(static_cast<double>(timer.nsecsElapsed()) / 1000.0);
+    }
+    std::printf("{\"suite\":\"qt/cpu/software_scene_graph\",\"api\":\"Software\","
+                "\"renderer\":\"Qt Quick software adaptation\",\"device_type\":\"cpu_renderer\","
+                "\"qt_version\":\"%s\",\"font_source\":\"synthetic_rgba8_glyph_images\","
+                "\"timed_path\":\"page_scroll+visible_range+glyph_frame+polish_sync_render\","
+                "\"update_scenario\":\"cross_page_scroll\",\"samples\":%d,"
+                "\"resolution\":\"%dx%d\",\"page_count\":%d,"
+                "\"pages_visited\":%d,\"median_frame_cpu_us\":%.3f,"
+                "\"p95_frame_cpu_us\":%.3f}\n",
+                qVersion(), samples, render_size.width(), render_size.height(), novel_page_count,
+                std::min(samples, novel_page_count - 2), percentile(frame_samples_us, 0.50),
+                percentile(frame_samples_us, 0.95));
+    render_control.invalidate();
+    return 0;
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -126,6 +188,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--samples 必须是 10 到 10000 之间的整数\n");
         return 1;
     }
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     QGuiApplication application(argc, argv);
     for (const bool ime_suffix_shift : {false, true}) {
         for (const int page_count : {1, caret::performance::novel_page_count}) {
@@ -135,5 +198,5 @@ int main(int argc, char** argv) {
             }
         }
     }
-    return 0;
+    return run_page_scroll(samples);
 }

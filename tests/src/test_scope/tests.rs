@@ -272,6 +272,10 @@ fn criterion_benches_select_their_registered_cargo_packages() -> Result<(), Box<
             "tests/performance/rust/cpu/document_open_delete_criterion.rs",
             "caret-app",
         ),
+        (
+            "tests/performance/rust/cpu/document_history_save_criterion.rs",
+            "caret-app",
+        ),
     ] {
         assert!(is_rust_package_path(path), "{path}");
         let plan = make_plan(&[path.into()], &root)?;

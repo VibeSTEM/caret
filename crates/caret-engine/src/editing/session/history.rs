@@ -59,6 +59,7 @@ pub(super) struct HistoryTransition {
     pub selection: Selection,
     pub visual_affinity: VisualAffinity,
     pub state_id: u64,
+    pub changed_paragraph_id: Option<NodeId>,
 }
 
 impl SessionHistoryEdit {
@@ -102,6 +103,7 @@ impl SessionHistoryEdit {
             selection: self.before_selection.clone(),
             visual_affinity: self.before_visual_affinity,
             state_id: self.before_state_id,
+            changed_paragraph_id: self.patch.single_changed_paragraph_id(),
         }
     }
 
@@ -110,6 +112,7 @@ impl SessionHistoryEdit {
             selection: self.after_selection.clone(),
             visual_affinity: self.after_visual_affinity,
             state_id: self.after_state_id,
+            changed_paragraph_id: self.patch.single_changed_paragraph_id(),
         }
     }
 }
@@ -183,6 +186,16 @@ impl Edit for SessionHistoryEdit {
 }
 
 impl DocumentPatch {
+    pub(super) fn single_changed_paragraph_id(&self) -> Option<NodeId> {
+        let Self::Paragraphs { before, after, .. } = self else {
+            return None;
+        };
+        if before.len() != 1 || after.len() != 1 || before[0].id != after[0].id {
+            return None;
+        }
+        Some(before[0].id.clone())
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         match self {
             Self::Paragraphs { before, after, .. } => before
@@ -620,10 +633,11 @@ pub(super) fn include_adjacent_paragraph_id(
 
 pub(super) fn restore_history_transition(
     transition: HistoryTransition,
-) -> (Selection, VisualAffinity, u64) {
+) -> (Selection, VisualAffinity, u64, Option<NodeId>) {
     (
         transition.selection,
         transition.visual_affinity,
         transition.state_id,
+        transition.changed_paragraph_id,
     )
 }

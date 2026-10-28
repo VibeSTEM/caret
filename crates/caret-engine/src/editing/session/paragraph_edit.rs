@@ -106,6 +106,7 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,
                 start: replaced_start,
@@ -265,6 +266,7 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            changed_paragraph_id: None,
             position_map: Some(if replaced_start == replaced_end {
                 PositionMap::ParagraphSplit {
                     source_id,
