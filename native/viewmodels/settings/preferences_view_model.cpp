@@ -44,8 +44,9 @@ PreferencesViewModel::PreferencesViewModel(QObject* parent) : QObject(parent) {
         return;
     }
     log_persistence_warning(snapshot);
-    installSnapshot(snapshot.caret_blink_enabled, QSize(static_cast<int>(snapshot.window_width),
-                                                        static_cast<int>(snapshot.window_height)));
+    installSnapshot(
+        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     const ffi::SettingsConstraints constraints = ffi::settings_constraints();
     m_minimum_window_width = static_cast<int>(constraints.minimum_window_width);
     m_minimum_window_height = static_cast<int>(constraints.minimum_window_height);
@@ -70,8 +71,9 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
         return false;
     }
     log_persistence_warning(snapshot);
-    installSnapshot(snapshot.caret_blink_enabled, QSize(static_cast<int>(snapshot.window_width),
-                                                        static_cast<int>(snapshot.window_height)));
+    installSnapshot(
+        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
     return true;
@@ -82,8 +84,36 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
 #endif
 }
 
-void PreferencesViewModel::installSnapshot(bool caret_blink_enabled, QSize window_size) {
+bool PreferencesViewModel::setAutoSaveEnabled(bool enabled) {
+#ifdef CARET_ENABLE_APP
+    if (settings_runtime() == nullptr) {
+        setError(QStringLiteral("settings.runtime_unavailable"));
+        return false;
+    }
+    const ffi::SettingsSnapshot snapshot = ffi::set_auto_save_enabled(*settings_runtime(), enabled);
+    if (!snapshot.error.empty()) {
+        setError(QString::fromUtf8(snapshot.error.data(),
+                                   static_cast<qsizetype>(snapshot.error.size())));
+        return false;
+    }
+    log_persistence_warning(snapshot);
+    installSnapshot(
+        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
+    setError({});
+    emit snapshotChanged();
+    return true;
+#else
+    Q_UNUSED(enabled)
+    setError(QStringLiteral("settings.runtime_unavailable"));
+    return false;
+#endif
+}
+
+void PreferencesViewModel::installSnapshot(bool caret_blink_enabled, bool auto_save_enabled,
+                                           QSize window_size) {
     m_caret_blink_enabled = caret_blink_enabled;
+    m_auto_save_enabled = auto_save_enabled;
     m_window_width = window_size.width();
     m_window_height = window_size.height();
 }

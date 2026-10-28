@@ -1,43 +1,60 @@
 //! 文档运行时句柄、布局命令转发与 glyph 二进制快照转换。
 
 use crate::generated::bridge;
+
+mod autosave;
+mod recovery;
+pub(crate) use autosave::*;
 use caret_app::document_session::{DocumentSaveSnapshot, DocumentSessionService};
 use caret_app::document_storage::DocumentStorage;
 use caret_app::document_view::DocumentViewRuntime;
+pub(crate) use recovery::*;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
-struct PreparedDocument {
-    session: DocumentSessionService,
-    expected_session_generation: u64,
-    expected_document_generation: u64,
+pub(super) struct PreparedDocument {
+    pub(super) session: DocumentSessionService,
+    pub(super) expected_session_generation: u64,
+    pub(super) expected_document_generation: u64,
+    pub(super) recovery_source:
+        Option<(String, caret_app::document_recovery::RecoverySessionLease)>,
+    pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
 }
 
-fn prepared_documents() -> &'static Mutex<HashMap<u64, PreparedDocument>> {
+pub(super) fn prepared_documents() -> &'static Mutex<HashMap<u64, PreparedDocument>> {
     static PREPARED: OnceLock<Mutex<HashMap<u64, PreparedDocument>>> = OnceLock::new();
     PREPARED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn next_prepared_document_ticket() -> u64 {
+pub(super) fn next_prepared_document_ticket() -> u64 {
     static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
     NEXT_TICKET.fetch_add(1, Ordering::Relaxed)
 }
 
 /// 持有文档会话、字体目录与布局缓存的 Rust 应用运行时。
 pub struct DocumentRuntime {
-    runtime: Result<DocumentSessionService, String>,
+    pub(super) runtime: Result<DocumentSessionService, String>,
+    pub(super) auto_save: caret_app::autosave::AutoSavePolicy,
+    pub(super) recovery_update: caret_app::autosave::AutoSavePolicy,
+    pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
+    pub(super) monotonic_origin: Instant,
 }
 
 /// 创建空白文档运行时；初始化错误由首次快照请求返回。
 pub(crate) fn new_blank_document_runtime() -> Box<DocumentRuntime> {
     Box::new(DocumentRuntime {
         runtime: DocumentSessionService::new_blank(),
+        auto_save: caret_app::autosave::AutoSavePolicy::new(1),
+        recovery_update: caret_app::autosave::AutoSavePolicy::new(1),
+        recovery_lease: None,
+        monotonic_origin: Instant::now(),
     })
 }
 
-/// 在 worker 中读取、解析、创建 Session 並完成首次整篇排版。
+/// 在 worker 中读取并准备文档会话；安装由调用方校验 generation 后完成。
 pub(crate) fn prepare_document_file(
     path: String,
     expected_session_generation: u64,
@@ -60,6 +77,8 @@ pub(crate) fn prepare_document_file(
             session,
             expected_session_generation,
             expected_document_generation,
+            recovery_source: None,
+            recovery_lease: None,
         };
         prepared_documents()
             .lock()
@@ -83,8 +102,12 @@ pub(crate) fn prepare_document_file(
 
 /// 释放尚未安装的候选会话。
 pub(crate) fn cancel_prepared_document(ticket: u64) {
-    if let Ok(mut documents) = prepared_documents().lock() {
-        documents.remove(&ticket);
+    if let Ok(mut documents) = prepared_documents().lock()
+        && let Some(mut prepared) = documents.remove(&ticket)
+        && let Some(lease) = prepared.recovery_lease.take()
+        && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+    {
+        let _ = storage.remove_leased(&lease);
     }
 }
 
@@ -94,19 +117,45 @@ pub(crate) fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u
         Ok(mut documents) => documents.remove(&ticket),
         Err(_) => return "error:document.open_registry_unavailable".to_owned(),
     };
-    let Some(prepared) = prepared else {
+    let Some(mut prepared) = prepared else {
         return "error:document.open_ticket_expired".to_owned();
     };
-    match &mut runtime.runtime {
-        Ok(runtime) => runtime
+    let installed = match &mut runtime.runtime {
+        Ok(session) => session
             .install_prepared_session(
                 prepared.session,
                 prepared.expected_session_generation,
                 prepared.expected_document_generation,
             )
-            .map_or_else(|error| format!("error:{error}"), |_| String::new()),
-        Err(error) => format!("error:{error}"),
+            .map_err(|error| format!("error:{error}")),
+        Err(error) => Err(format!("error:{error}")),
+    };
+    if let Err(error) = installed {
+        if let Some(lease) = prepared.recovery_lease.take()
+            && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+        {
+            let _ = storage.remove_leased(&lease);
+        }
+        return error;
     }
+    if let Some((_source_id, source_lease)) = prepared.recovery_source.take()
+        && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+    {
+        let _ = storage.remove_leased(&source_lease);
+    }
+    runtime.recovery_lease = prepared.recovery_lease.take();
+    if let Ok(installed) = &runtime.runtime {
+        runtime
+            .auto_save
+            .set_session_generation(installed.session_generation());
+        runtime
+            .recovery_update
+            .set_session_generation(installed.session_generation());
+        runtime
+            .recovery_update
+            .set_enabled(installed.recovery_id().is_some());
+    }
+    String::new()
 }
 
 /// 在后台将已验证的快照写入同目录临时文件并原子替换目标。
@@ -117,7 +166,7 @@ pub(crate) fn write_document_file(path: String, bytes: Vec<u8>) -> String {
         .map_or_else(String::new, |error| error.to_string())
 }
 
-/// 捕获文档快照供后台写入；快照修订不会随后续输入变化。
+/// 捕获当前文档的保存快照，并在目标文件冲突时先保存本地恢复副本。
 pub(crate) fn document_save_snapshot(
     runtime: &mut DocumentRuntime,
 ) -> bridge::DocumentSaveSnapshot {
@@ -131,48 +180,33 @@ pub(crate) fn document_save_snapshot(
 }
 
 fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSnapshot {
+    let recovery_id = snapshot.recovery_id.unwrap_or_default();
     bridge::DocumentSaveSnapshot {
         session_generation: snapshot.session_generation,
         document_generation: snapshot.document_generation,
         history_state_id: snapshot.history_state_id,
         bytes: snapshot.bytes,
+        content_digest: snapshot.content_digest,
+        baseline_digest: snapshot.baseline_digest.unwrap_or_default(),
+        recovery_id,
+        recovery_original_path: snapshot.recovery_original_path.unwrap_or_default(),
+        recovery_baseline_digest: snapshot.recovery_baseline_digest.unwrap_or_default(),
         error: String::new(),
     }
 }
 
-fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot {
+pub(super) fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot {
     bridge::DocumentSaveSnapshot {
         session_generation: 0,
         document_generation: 0,
         history_state_id: 0,
         bytes: Vec::new(),
+        content_digest: String::new(),
+        baseline_digest: String::new(),
+        recovery_id: String::new(),
+        recovery_original_path: String::new(),
+        recovery_baseline_digest: String::new(),
         error,
-    }
-}
-
-/// 在写入成功后推进对应会话的保存点；旧会话回报不改变当前状态。
-pub(crate) fn mark_document_saved_json(
-    runtime: &mut DocumentRuntime,
-    session_generation: u64,
-    document_generation: u64,
-    history_state_id: u64,
-    path: String,
-) -> String {
-    match &mut runtime.runtime {
-        Ok(runtime) => {
-            let accepted = runtime.mark_saved(
-                session_generation,
-                document_generation,
-                history_state_id,
-                Path::new(&path),
-            );
-            if accepted {
-                runtime.status_json()
-            } else {
-                "error:document.stale_save_completion".to_owned()
-            }
-        }
-        Err(error) => format!("error:{error}"),
     }
 }
 
@@ -320,10 +354,31 @@ fn json_response(
     runtime: &mut DocumentRuntime,
     operation: impl FnOnce(&mut DocumentViewRuntime) -> Result<String, String>,
 ) -> String {
+    let before_generation = runtime
+        .runtime
+        .as_ref()
+        .ok()
+        .map(|value| value.document_generation());
     let result = match &mut runtime.runtime {
         Ok(runtime) => operation(runtime.view_mut()),
         Err(error) => Err(error.clone()),
     };
+    if result.is_ok()
+        && let (Some(before), Ok(session)) = (before_generation, runtime.runtime.as_ref())
+    {
+        let after = session.document_generation();
+        if after > before {
+            let now = runtime.monotonic_origin.elapsed();
+            let _ = runtime.auto_save.edited(after, now);
+            if runtime
+                .runtime
+                .as_ref()
+                .is_ok_and(|session| session.recovery_id().is_some())
+            {
+                let _ = runtime.recovery_update.edited(after, now);
+            }
+        }
+    }
     result.unwrap_or_else(|error| format!("error:{error}"))
 }
 
@@ -414,11 +469,15 @@ mod tests {
     fn initialization_failure_is_reported_by_document_commands_and_binary_results() {
         let mut runtime = DocumentRuntime {
             runtime: Err("document.initialization_failed".to_owned()),
+            auto_save: caret_app::autosave::AutoSavePolicy::new(0),
+            recovery_update: caret_app::autosave::AutoSavePolicy::new(0),
+            recovery_lease: None,
+            monotonic_origin: Instant::now(),
         };
         let expected = "error:document.initialization_failed";
         let responses = [
             document_status_json(&mut runtime),
-            mark_document_saved_json(&mut runtime, 1, 0, 0, "test.cdoc".to_owned()),
+            mark_document_saved_json(&mut runtime, 1, 0, 0, "test.cdoc".to_owned(), String::new()),
             layout_snapshot_json(&mut runtime),
             interaction_state_json(&mut runtime),
             document_hit_test_json(&mut runtime, 0, 1.0, 1.0),

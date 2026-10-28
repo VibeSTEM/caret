@@ -37,6 +37,8 @@ bool install_layout_snapshot(const QString& snapshot_json) {
 
 LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_document_io_pool.setMaxThreadCount(1);
+    m_auto_save_timer.setSingleShot(true);
+    connect(&m_auto_save_timer, &QTimer::timeout, this, &LayoutViewModel::runAutoSaveDeadline);
     refreshDocumentFileStatus();
     if (!has_installed_snapshot()) {
         m_error = QStringLiteral("layout.snapshot_unavailable");

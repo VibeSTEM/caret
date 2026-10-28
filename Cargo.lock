@@ -89,12 +89,15 @@ dependencies = [
 name = "caret-app"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "caret-doc",
  "caret-dsl-core",
  "caret-engine",
  "criterion",
+ "fs4",
  "serde",
  "serde_json",
+ "sha2",
  "unicode-segmentation",
 ]
 
@@ -159,6 +162,7 @@ dependencies = [
  "caret-build",
  "cxx",
  "cxx-build",
+ "serde_json",
 ]
 
 [[package]]

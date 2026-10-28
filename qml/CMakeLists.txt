@@ -43,6 +43,8 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/DialogButtonRow.qml
     Components/Composites/FormSection.qml
     Dialogs/NewProjectDialog.qml
+    Dialogs/RecoveryDialog.qml
+    Dialogs/SaveConflictDialog.qml
     Dialogs/UnsavedChangesDialog.qml
     Dialogs/SettingsDialog.qml
     Dialogs/LanguageSettingsPage.qml
@@ -112,7 +114,8 @@ if(BUILD_TESTING)
     ../tests/cpp/shell/shell_load_test.hpp
     ../tests/cpp/shell/shell_document_canvas_test.cpp
     ../tests/cpp/shell/shell_document_interaction_test.cpp
-    ../tests/cpp/shell/shell_document_file_test.cpp)
+    ../tests/cpp/shell/shell_document_file_test.cpp
+    ../tests/cpp/shell/shell_document_autosave_test.cpp)
   caret_native_defaults(caret_shell_load_test)
   target_compile_definitions(
     caret_shell_load_test PRIVATE "CARET_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\""

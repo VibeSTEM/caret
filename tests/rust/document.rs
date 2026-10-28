@@ -414,6 +414,7 @@ fn document_session_edits_saves_and_reopens_through_public_services()
         captured.document_generation,
         captured.history_state_id,
         &path,
+        &captured.content_digest,
     ));
     let saved: Value = serde_json::from_str(&session.status_json())?;
     assert_eq!(saved["fileName"], "edited.cdoc");

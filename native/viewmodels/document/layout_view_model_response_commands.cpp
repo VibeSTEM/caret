@@ -78,6 +78,7 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     }
     installCaretGeometry(caret_document.object().toVariantMap());
     refreshDocumentFileStatus();
+    refreshAutoSaveDeadline();
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), documentGeneration()}};
 #else

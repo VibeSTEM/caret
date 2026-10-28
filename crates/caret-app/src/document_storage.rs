@@ -13,6 +13,8 @@ pub enum DocumentStorageError {
     Document(DocumentError),
     MissingParent,
     MissingFileName,
+    ExternalConflict,
+    ExternalTargetUnavailable(std::io::ErrorKind),
 }
 
 impl Display for DocumentStorageError {
@@ -22,6 +24,10 @@ impl Display for DocumentStorageError {
             Self::Document(error) => Display::fmt(error, formatter),
             Self::MissingParent => write!(formatter, "document.storage_missing_parent"),
             Self::MissingFileName => write!(formatter, "document.storage_missing_filename"),
+            Self::ExternalConflict => write!(formatter, "document.external_conflict"),
+            Self::ExternalTargetUnavailable(kind) => {
+                write!(formatter, "document.external_target_unavailable: {kind:?}")
+            }
         }
     }
 }
@@ -70,6 +76,39 @@ impl DocumentStorage {
         atomic_file::write(path, bytes)
             .map(|_| ())
             .map_err(DocumentStorageError::from)
+    }
+
+    /// 只有目标摘要仍与打开时基线一致才原子替换；缺失或变化一律拒绝。
+    pub fn save_snapshot_if_unchanged(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        expected_digest: &str,
+    ) -> Result<(), DocumentStorageError> {
+        self.save_snapshot_if_unchanged_or_queued(path, bytes, expected_digest, None)
+    }
+
+    /// 允许串行保存队列中前一份本应用快照作为当前文件基线。
+    pub fn save_snapshot_if_unchanged_or_queued(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        expected_digest: &str,
+        queued_digest: Option<&str>,
+    ) -> Result<(), DocumentStorageError> {
+        let current = fs::read(path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => {
+                DocumentStorageError::ExternalTargetUnavailable(error.kind())
+            }
+            _ => DocumentStorageError::ExternalTargetUnavailable(error.kind()),
+        })?;
+        let current_digest = crate::document_session::content_digest(&current);
+        if current_digest != expected_digest
+            && queued_digest.is_none_or(|queued| current_digest != queued)
+        {
+            return Err(DocumentStorageError::ExternalConflict);
+        }
+        self.save_snapshot(path, bytes)
     }
 }
 
