@@ -18,6 +18,7 @@ Rectangle {
     signal saveRequested
     signal undoRequested
     signal redoRequested
+    signal shareRequested
     signal autoSaveRequested(bool enabled)
     property string documentName: qsTr("Untitled")
 
@@ -25,6 +26,8 @@ Rectangle {
     // 系统窗口控件占用的区域由 WindowChromeMetrics 提供，QML 只增加主题间距。
     readonly property real leadingMargin: leftInset > 0 ? leftInset + Theme.spacingSmall : Theme.spacingMedium + Theme.spacingLarge
     readonly property real trailingMargin: rightInset > 0 ? rightInset + Theme.spacingSmall : Theme.spacingMedium + Theme.spacingLarge
+    readonly property int pillButtonWidth: Math.max(documentModeSelector.naturalButtonWidth, shareButton.implicitWidth)
+    readonly property int pillButtonGroupWidth: pillButtonWidth * 2 + Theme.spacingSmall
 
     implicitHeight: Theme.titlebarHeight
     clip: true
@@ -154,26 +157,17 @@ Rectangle {
             objectName: "documentModeSelector"
             Layout.alignment: Qt.AlignVCenter
             Layout.maximumHeight: titleBar.toolSide
+            buttonWidth: titleBar.pillButtonWidth
+            menuWidth: titleBar.pillButtonGroupWidth
         }
 
-        ThemedToolButton {
+        ShareButton {
             id: shareButton
-            objectName: "shareButton"
             Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: titleBar.pillButtonWidth
             Layout.maximumHeight: titleBar.toolSide
-            font.pixelSize: Theme.fontSmall
-            contentPadding: Theme.spacingTiny
-            iconName: "share"
-            text: qsTr("Share")
-            showCaret: true
             controlHeight: titleBar.toolSide
-            contentColor: Theme.colorPanel
-            hoverColor: Theme.colorTransparent
-            pressedColor: Theme.colorTransparent
-            background: Rectangle {
-                radius: Theme.radiusSmall
-                color: shareButton.hovered || shareButton.pressed ? Qt.darker(Theme.colorFocus, 1.08) : Theme.colorFocus
-            }
+            onShareRequested: titleBar.shareRequested()
         }
 
         TitleToolButton {

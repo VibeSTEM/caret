@@ -16,6 +16,7 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedButton.qml
     Components/Atoms/ThemedCheckBox.qml
     Components/Atoms/ThemedSwitch.qml
+    Components/Atoms/TitleBarPillButton.qml
     Components/Atoms/ThemedRadioButton.qml
     Components/Atoms/ThemedComboBox.qml
     Components/Atoms/CheckIndicator.qml
@@ -34,6 +35,7 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/HorizontalToolStrip.qml
     Components/Composites/DocumentTabBar.qml
     Components/Composites/DocumentModeSelector.qml
+    Components/Composites/ShareButton.qml
     Components/Composites/PanelTabBar.qml
     Components/Composites/InformationPanel.qml
     Components/Composites/PaneCloseButton.qml
