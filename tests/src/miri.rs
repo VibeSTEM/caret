@@ -33,7 +33,7 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
     ]);
     run("安装 Miri 工具链", install)?;
     // pest/stacker 使用 Miri 不支持的外部汇编栈指针；排除调用 DSL parser 的测试。
-    // document_view 依赖 Fontique 的系统字体 FFI，Miri 不能解释 CoreText/Fontconfig 后端。
+    // document_view 与 document_session 测试会创建系统字体目录；Miri 不支持 Fontconfig 的 dlopen。
     miri_test(&[
         "-p",
         "caret-app",
@@ -43,6 +43,8 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
         "theme::tests::",
         "--skip",
         "document_view::tests::",
+        "--skip",
+        "document_session::tests::",
         "--skip",
         "settings::tests::",
         "--skip",
