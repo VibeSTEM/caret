@@ -1,6 +1,6 @@
 # Linux 宿主 GL 前置（任务 006）：Qt 链接期 GL 头文件，以及 QML 运行所需的
 # EGL、xkbcommon、软件渲染驱动、Fontconfig 开发文件，以及中文/emoji smoke 字体；
-# 使用精简中文字体，避免下载完整 CJK 字体集；Qt xcb 后端需要游标库。
+# 使用精简中文字体，避免下载完整 CJK 字体集；Qt xcb 后端的运行依赖需显式安装。
 # 属宿主能力，不进项目依赖。
 name: Install Linux GL prerequisites
 description: apt 安装 Qt、QML 和系统字体发现所需的 Linux 宿主依赖
@@ -11,4 +11,7 @@ runs:
       with:
         packages: >-
           libgl-dev libegl1 libxkbcommon-dev libxkbcommon0 libgl1-mesa-dri
-          libxcb-cursor0 libfontconfig1-dev fonts-noto-color-emoji fonts-wqy-zenhei
+          libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
+          libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1
+          libxcb-xfixes0 libxcb-xkb1 libxcb-xinerama0 libxkbcommon-x11-0
+          libfontconfig1-dev fonts-noto-color-emoji fonts-wqy-zenhei

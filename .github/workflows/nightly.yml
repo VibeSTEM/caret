@@ -185,9 +185,6 @@ jobs:
 
       - name: Run Miri on pure Rust crates
         shell: bash
-        env:
-          # cargo ub-check 自身也会先构建 caret-tests；需要在外层 cargo 解析依赖前启用 dlopen。
-          RUST_FONTCONFIG_DLOPEN: "1"
         run: cargo ub-check
 
   sanitize:

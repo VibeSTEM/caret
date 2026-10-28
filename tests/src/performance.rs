@@ -111,6 +111,9 @@ fn run_qt(samples: Option<u32>, gpu: bool) -> Result<(), Box<dyn Error>> {
         .env("CARET_ENABLE_PERFORMANCE", "1")
         .current_dir(repository_root);
     crate::command::run("Release Qt performance prerequisites", launcher)?;
+    if gpu && cfg!(target_os = "linux") {
+        verify_qt_xcb_runtime_dependencies()?;
+    }
 
     let native_dir = crate::paths::target_root().join("native").join("release");
     let target = if gpu {
@@ -156,6 +159,28 @@ fn run_qt(samples: Option<u32>, gpu: bool) -> Result<(), Box<dyn Error>> {
         },
         benchmark,
     )
+}
+
+/// 在 Linux GPU 基准启动前报告 Qt xcb 插件缺失的系统动态库。
+fn verify_qt_xcb_runtime_dependencies() -> Result<(), Box<dyn Error>> {
+    let plugin = caret_build::toolchain_root()?.join("qt/staging/plugins/platforms/libqxcb.so");
+    if !plugin.is_file() {
+        return Err(format!("Qt xcb 平台插件不存在：{}", plugin.display()).into());
+    }
+    let output = Command::new("ldd").arg(&plugin).output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "无法检查 Qt xcb 插件依赖：{}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let report = String::from_utf8_lossy(&output.stdout);
+    if report.lines().any(|line| line.contains("not found")) {
+        return Err(format!("Qt xcb 插件缺少系统动态库：\n{report}").into());
+    }
+    println!("Qt xcb runtime dependencies: all resolved");
+    Ok(())
 }
 
 #[cfg(test)]

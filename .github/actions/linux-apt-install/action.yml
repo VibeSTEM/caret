@@ -24,7 +24,7 @@ runs:
         apt_with_retry() {
           local attempt
           for attempt in 1 2; do
-            if timeout --signal=TERM --kill-after=10s 90s \
+            if timeout --signal=TERM --kill-after=10s 300s \
               sudo apt-get "${apt_options[@]}" "$@"; then
               return 0
             fi

@@ -103,9 +103,7 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
 
 /// 确认 Windows 动态 ASan 在 Qt 模块之前初始化，避免未插桩 DLL 的启动期分配被误报。
 fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(), Box<dyn Error>> {
-    let binary = native
-        .join("qml")
-        .join(caret_build::exe_name("caret_shell_load_test"));
+    let binary = qml_shell_test_binary(native)?;
     let readobj = llvm_root
         .join("bin")
         .join(caret_build::exe_name("llvm-readobj"));
@@ -129,6 +127,45 @@ fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(
     validate_windows_asan_imports(&imports)?;
     println!("Windows ASan import order: {}", imports.join(" -> "));
     Ok(())
+}
+
+/// 从 CTest 注册信息读取 QML smoke test 的实际 executable 路径。
+fn qml_shell_test_binary(native: &Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    let cmake = caret_build::resolve_cmake()?;
+    let ctest = cmake.with_file_name(caret_build::exe_name("ctest"));
+    let output = Command::new(ctest)
+        .arg("--test-dir")
+        .arg(native)
+        .args(["-N", "--show-only=json-v1"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "ctest 无法读取 QML smoke test 路径：{}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    qml_shell_test_binary_from_manifest(&manifest)
+}
+
+fn qml_shell_test_binary_from_manifest(
+    manifest: &serde_json::Value,
+) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    let binary = manifest
+        .get("tests")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tests| {
+            tests.iter().find(|test| {
+                test.get("name").and_then(serde_json::Value::as_str) == Some("Qml.ShellLoad")
+            })
+        })
+        .and_then(|test| test.get("command"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|command| command.first())
+        .and_then(serde_json::Value::as_str)
+        .ok_or("CTest 未注册 Qml.ShellLoad executable")?;
+    Ok(binary.into())
 }
 
 fn validate_windows_asan_imports(imports: &[String]) -> Result<(), String> {
