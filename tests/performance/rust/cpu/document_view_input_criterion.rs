@@ -26,6 +26,40 @@ fn prepare_runtime(text: &str) -> (DocumentViewRuntime, usize) {
     (runtime, initial_snapshot.len())
 }
 
+fn prepare_ime_runtime(text: &str) -> DocumentViewRuntime {
+    let mut runtime = prepare_runtime(text).0;
+    let page_index = current_caret_page_index(&mut runtime);
+    runtime
+        .rasterize_page_glyphs(page_index, 96.0 / 72.0, [0.0, 0.0], [32, 32, 32, 255])
+        .unwrap_or_else(|error| panic!("无法预热可视页字形缓存：{error}"));
+    runtime
+        .input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)
+        .unwrap_or_else(|error| panic!("无法准备长文档输入法预编辑：{error}"));
+    let composition_page_index = current_caret_page_index(&mut runtime);
+    runtime
+        .rasterize_page_glyphs(
+            composition_page_index,
+            96.0 / 72.0,
+            [0.0, 0.0],
+            [32, 32, 32, 255],
+        )
+        .unwrap_or_else(|error| panic!("无法预热输入法预览字形缓存：{error}"));
+    runtime
+}
+
+fn current_caret_page_index(runtime: &mut DocumentViewRuntime) -> usize {
+    let caret: serde_json::Value = serde_json::from_str(
+        &runtime
+            .current_caret_json()
+            .unwrap_or_else(|error| panic!("无法获取长文档光标位置：{error}")),
+    )
+    .unwrap_or_else(|error| panic!("无法解析长文档光标位置：{error}"));
+    caret["pageIndex"]
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .unwrap_or_else(|| panic!("光标页面索引无效：{caret}"))
+}
+
 fn long_document_input(criterion: &mut Criterion) {
     let text = novel_excerpt();
     let (mut response_probe, full_snapshot_bytes) = prepare_runtime(&text);
@@ -97,6 +131,51 @@ fn long_document_input(criterion: &mut Criterion) {
                     .input_method_event_json("ni hao".to_owned(), String::new(), 0, 0, 5)
                     .unwrap_or_else(|error| panic!("长文档输入法预编辑更新失败：{error}"));
                 black_box(response.len())
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function(
+        "ime_preedit_update_and_visible_page_raster_warm_cache",
+        |bencher| {
+            bencher.iter_batched_ref(
+                || prepare_ime_runtime(&text),
+                |runtime| {
+                    let response = runtime
+                        .input_method_event_json("ni hao".to_owned(), String::new(), 0, 0, 5)
+                        .unwrap_or_else(|error| panic!("长文档输入法预编辑更新失败：{error}"));
+                    let active_page_index = current_caret_page_index(runtime);
+                    let page = runtime
+                        .rasterize_page_glyphs(
+                            active_page_index,
+                            96.0 / 72.0,
+                            [0.0, 0.0],
+                            [32, 32, 32, 255],
+                        )
+                        .unwrap_or_else(|error| panic!("输入法更新后的可视页栅格化失败：{error}"));
+                    black_box((response.len(), page.images.len(), page.placements.len()));
+                },
+                BatchSize::LargeInput,
+            );
+        },
+    );
+    group.bench_function("ime_candidate_commit_and_visible_page_raster", |bencher| {
+        bencher.iter_batched_ref(
+            || prepare_ime_runtime(&text),
+            |runtime| {
+                let response = runtime
+                    .input_method_event_json(String::new(), "你好".to_owned(), 0, 0, 0)
+                    .unwrap_or_else(|error| panic!("输入法候选提交失败：{error}"));
+                let active_page_index = current_caret_page_index(runtime);
+                let page = runtime
+                    .rasterize_page_glyphs(
+                        active_page_index,
+                        96.0 / 72.0,
+                        [0.0, 0.0],
+                        [32, 32, 32, 255],
+                    )
+                    .unwrap_or_else(|error| panic!("候选提交后的可视页栅格化失败：{error}"));
+                black_box((response.len(), page.images.len(), page.placements.len()));
             },
             BatchSize::LargeInput,
         );

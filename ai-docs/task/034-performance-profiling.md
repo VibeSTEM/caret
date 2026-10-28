@@ -114,6 +114,8 @@
 
 针对 IME 快速输入另用临时 harness，在准备好 100,499 字符、500 段文档并开始预编辑后，连续调用 3,000 次预编辑更新。相同 Apple M4、Cargo dev 配置下，Arc 优化前单次为 4.623 s；优化后两次为 1.229 s 和 1.278 s，平均 1.254 s，较前次测量减少约 72.9%。旧布局中每次复用都深拷贝未变段落的文本、完整 Parley 结果及 UTF-16 检查点；现在这些不可变数据由 `Arc` 共享，只有段落分页位置仍随新快照重建，并在每次新布局时重新分配空位置表。这个小样本仅用于验证热点优化方向，不是 Criterion 统计，也不代表真实窗口端到端延迟。
 
+为检查残留延迟，Criterion 新增了 IME 更新/候选提交后同步栅格化活动页的 release 路径。100,499 字符语料、活动页字形缓存预热后，预编辑更新加页面字形生成的中位数为 667.937 μs（区间 663.917–678.667 μs）；候选提交加页面字形生成的中位数为 618.542 μs（区间 612.708–624.625 μs）。基准在每次更新后读取当前 caret 的页面索引，所以排版导致跨页时仍栅格化实际活动页。该基准包括 Rust 输入、caret 几何、布局投影和 Rust 活动页字形栅格化，不包括 Qt JSON/QVariant 校验、QSG 节点更新、纹理上传和 vsync。当前 Qt 消费链会在每次 `layoutChanged` 后通过 `Qt.callLater` 请求可视页，并在页面帧变化时重建该页的 QSG glyph 节点；它是尚未量测的下一候选热点，现有数据不能断言它就是用户看到的延迟来源。
+
 ### 验证结果
 
 | 验证项 | 工作负载 / 命令 | 结果 |
@@ -125,6 +127,7 @@
 | 打开快照 Qt 安装 | 打开 `.cdoc` 时在后台解析/验证 JSON，保留共享 JSON 数组并延迟构造嵌套 QVariant | native 构建通过；仍需真实窗口端到端计时确认解析、QML 更新和首帧绘制耗时 |
 | Rust 长篇排版基线 | `cargo bench --locked -p caret-engine --bench novel_document_criterion`；Apple M4，release，百万字符混合语言语料 | 整篇排版约 515 ms、单段编辑重排约 15.1 ms。过去曾因无显著收益撤回 Session 路径的重复校验跳过；本轮重新引入以避免编辑后重复遍历，未单独量化，不作为本轮性能提升结论 |
 | Rust 编辑与输入基准 | `cargo bench --locked -p caret-app --bench document_view_input_criterion -- --sample-size 10 --warm-up-time 1 --measurement-time 2`；Apple M4，release，100,499 字符交互语料 | 普通单字符输入 1.291 ms；IME 预编辑 1.322 ms、候选提交 2.300 ms、回车拆段 2.669 ms、10,010 字符粘贴 5.468 ms。Criterion 提示部分样本需更长测量窗口；结果用于本机对比，不代表 UI 端到端延迟 |
+| IME 与活动页字形 Rust 路径 | `cargo bench --locked -p caret-app --bench document_view_input_criterion -- visible_page_raster --sample-size 10 --warm-up-time 0.5 --measurement-time 1`；Apple M4，release，100,499 字符 | 预编辑更新加当前页栅格化中位数 667.937 μs（663.917–678.667 μs）；候选提交加当前页栅格化中位数 618.542 μs（612.708–624.625 μs）。预热活动页缓存，并在计时内获取更新后的 caret 页；只测 Rust，Qt snapshot codec、QSG 节点/纹理和呈现未包含 |
 | Rust 正确性与静态检查 | `cargo test --locked -p caret-engine`；`cargo test --locked -p caret-app`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings` | caret-engine 83 项、caret-app 104 项测试通过；Clippy 通过。测试覆盖普通输入、IME 增量预览、跨页回退、跨段预览/取消、回车与粘贴，以及段落布局克隆共享只读数据 |
 | Qt / QML 集成 | `cargo test --locked -p caret-tests --test native`；QML 格式检查 | CTest 4/4 通过；QML 格式检查通过。覆盖 Qt 合并增量预览、跨段预览后段落删除与取消恢复 |
 | Qt CPU 基线 | 1280×960、1,000 glyph placements、96 unique images、12 selection rectangles、31 samples | 稳定静态场景多次采样中位数 787–914 μs/帧，P95 860–997 μs/帧 |
@@ -150,6 +153,7 @@
 | 2026-10-28 | 同段退格改为段落布局复用并返回增量快照；Cargo dev 对测得的排版热路径启用 `opt-level=2`；打开时将 Qt 快照解析移到 worker，延迟嵌套 QVariant 转换并用 ticket guard 管理候选文档生命周期 | 删除从 335.63 ms 降至 13.75 ms（约快 95.9%）；dev 整篇布局从 10.86 s 降至 1.081 s，完整 Rust prepare 为 1.304 s。native/QML 构建检查通过；需真实窗口确认 1.304 s 之外的 Qt 与首帧耗时 |
 | 2026-10-28 | 安装并尝试用 `cargo flamegraph` 采样长文档 IME 更新；Xcode 27 的 flamegraph 折叠器不能读取其生成的 trace XML，改由 `xcrun xctrace` 导出 Time Profiler 数据检查调用栈 | 1,767 个主线程样本中 `layout_with_reuse` 约占 61.1%，深克隆未变段落约占 35.6%，Parley 排版约占 15.3%。结果证明该输入路径主要受快照复制影响，不是重新塑形 |
 | 2026-10-28 | 将未变段落的正文、Parley 布局和 UTF-16 检查点改为 `Arc` 共享；分页行位置仍归新快照所有，复用时重新分配空位置表 | 100,499 字符、3,000 次 IME 更新从单次 4.623 s 降至两次 1.229 s / 1.278 s，平均快约 72.9%。引擎 83 项和应用 104 项测试通过；真实窗口输入延迟仍需复测 |
+| 2026-10-28 | 为 100,499 字符输入基准补入活动页字形缓存预热后的 IME 预编辑/候选提交及 Rust 页面栅格化 | 更新后按当前 caret 页栅格化；预编辑路径中位数 667.937 μs、候选提交 618.542 μs。Rust 路径已很短；Qt JSON 校验、QSG 节点变更和帧呈现仍需单独采样，暂不据此重构场景图 |
 
 ## 完成摘要
 
