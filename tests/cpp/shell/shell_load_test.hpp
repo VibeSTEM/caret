@@ -29,5 +29,6 @@ class ShellLoadTest : public QObject {
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
+    void documentFileFlowPreservesSaveStateAndReopens();
 #endif
 };
