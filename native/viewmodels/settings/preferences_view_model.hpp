@@ -13,6 +13,7 @@ class PreferencesViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(bool caretBlinkEnabled READ caretBlinkEnabled NOTIFY snapshotChanged)
+    Q_PROPERTY(bool autoSaveEnabled READ autoSaveEnabled NOTIFY snapshotChanged)
     Q_PROPERTY(int windowWidth READ windowWidth CONSTANT)
     Q_PROPERTY(int windowHeight READ windowHeight CONSTANT)
     Q_PROPERTY(int minimumWindowWidth READ minimumWindowWidth CONSTANT)
@@ -23,6 +24,7 @@ class PreferencesViewModel final : public QObject {
     explicit PreferencesViewModel(QObject* parent = nullptr);
 
     [[nodiscard]] bool caretBlinkEnabled() const { return m_caret_blink_enabled; }
+    [[nodiscard]] bool autoSaveEnabled() const { return m_auto_save_enabled; }
     [[nodiscard]] int windowWidth() const { return m_window_width; }
     [[nodiscard]] int windowHeight() const { return m_window_height; }
     [[nodiscard]] int minimumWindowWidth() const { return m_minimum_window_width; }
@@ -31,16 +33,19 @@ class PreferencesViewModel final : public QObject {
 
     /// 校验并持久化开关候选；失败时保留最后有效快照。
     bool setCaretBlinkEnabled(bool enabled);
+    /// 校验并持久化 AutoSave 全局偏好；失败时保留最后有效快照。
+    Q_INVOKABLE bool setAutoSaveEnabled(bool enabled);
 
   signals:
     void snapshotChanged();
     void errorChanged();
 
   private:
-    void installSnapshot(bool caret_blink_enabled, QSize window_size);
+    void installSnapshot(bool caret_blink_enabled, bool auto_save_enabled, QSize window_size);
     void setError(QString error);
 
     bool m_caret_blink_enabled = true;
+    bool m_auto_save_enabled = false;
     int m_window_width = 0;
     int m_window_height = 0;
     int m_minimum_window_width = 0;

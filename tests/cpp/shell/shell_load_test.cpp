@@ -270,11 +270,13 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     QDir dialogs(root + QStringLiteral("/qml/Dialogs"));
     const QStringList names =
         dialogs.entryList(QStringList{QStringLiteral("*.qml")}, QDir::Files, QDir::Name);
-    QCOMPARE(names, QStringList({QStringLiteral("LanguageSettingsPage.qml"),
-                                 QStringLiteral("NewProjectDialog.qml"),
-                                 QStringLiteral("PreferencesSettingsPage.qml"),
-                                 QStringLiteral("SettingsDialog.qml"),
-                                 QStringLiteral("UnsavedChangesDialog.qml")}));
+    QCOMPARE(
+        names,
+        QStringList(
+            {QStringLiteral("LanguageSettingsPage.qml"), QStringLiteral("NewProjectDialog.qml"),
+             QStringLiteral("PreferencesSettingsPage.qml"), QStringLiteral("RecoveryDialog.qml"),
+             QStringLiteral("SaveConflictDialog.qml"), QStringLiteral("SettingsDialog.qml"),
+             QStringLiteral("UnsavedChangesDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());
@@ -333,7 +335,8 @@ void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
     QFile source(root + QStringLiteral("/qml/App.qml"));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());
-    const qsizetype failure_start = text.indexOf(QStringLiteral("if (!succeeded)"));
+    const qsizetype failure_start = text.indexOf(QStringLiteral(
+        "if (!succeeded) {\n                window.waitForCloseAfterFileOperation = false;"));
     const qsizetype success_start =
         text.indexOf(QStringLiteral("if (window.closeAfterSaveRequested"), failure_start);
     QVERIFY(failure_start >= 0);

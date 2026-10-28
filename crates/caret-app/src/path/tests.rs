@@ -46,7 +46,14 @@ fn logical_reference_round_trips() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(parsed.relative, "assets/齿轮 box/a.txt");
     assert_eq!(parsed.to_logical(), "project:/assets/齿轮 box/a.txt");
 
-    for scheme in ["user-config", "app-data", "cache", "session", "qrc"] {
+    for scheme in [
+        "user-config",
+        "app-data",
+        "app-local-data",
+        "cache",
+        "session",
+        "qrc",
+    ] {
         let parsed = ResourceRef::parse(&format!("{scheme}:/x"))?;
         assert_eq!(parsed.category.scheme(), scheme);
     }
@@ -61,6 +68,7 @@ fn every_scheme_resolves_only_under_its_injected_root() -> Result<(), Box<dyn st
         RootCategory::Project,
         RootCategory::UserConfig,
         RootCategory::AppData,
+        RootCategory::AppLocalData,
         RootCategory::Cache,
         RootCategory::Session,
     ] {

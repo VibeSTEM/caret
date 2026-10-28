@@ -21,6 +21,8 @@ qt_add_qml_module(
   document/layout_snapshot_codec.cpp
   document/layout_view_model_clipboard_commands.cpp
   document/layout_view_model_file_commands.cpp
+  document/layout_view_model_recovery_commands.cpp
+  document/layout_view_model_autosave_commands.cpp
   document/layout_view_model_edit_commands.cpp
   document/layout_view_model_ime_commands.cpp
   document/layout_view_model_navigation_commands.cpp

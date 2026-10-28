@@ -115,6 +115,29 @@ impl SettingsRuntime {
         }
     }
 
+    /// 持久化 AutoSave 全局开关；失败时保留最后有效设置快照。
+    pub fn set_auto_save_enabled(&mut self, enabled: bool) -> Result<UserSettings, String> {
+        match &mut self.state {
+            SettingsState::Ready {
+                service,
+                load_warning,
+            } => {
+                let mut candidate = service.current();
+                candidate.preferences.auto_save_enabled = enabled;
+                let outcome = service
+                    .commit_and_save(candidate, &self.settings_path)
+                    .map_err(|error| error.to_string())?;
+                self.persistence_warning = outcome.durability_warning;
+                *load_warning = None;
+                Ok(service.current())
+            }
+            SettingsState::ReadOnly { diagnostic, .. } => Err(format!(
+                "settings.read_only_after_load_failure: {diagnostic}"
+            )),
+            SettingsState::Unavailable { diagnostic } => Err(diagnostic.clone()),
+        }
+    }
+
     fn service(&self) -> Result<&SettingsService, String> {
         match &self.state {
             SettingsState::Ready { service, .. } | SettingsState::ReadOnly { service, .. } => {
@@ -149,8 +172,11 @@ mod tests {
         let snapshot = runtime.set_caret_blink_enabled(false)?;
         assert!(!snapshot.preferences.caret_blink_enabled);
         assert!(runtime.load_warning().is_none());
+        let snapshot = runtime.set_auto_save_enabled(true)?;
+        assert!(snapshot.preferences.auto_save_enabled);
         let reopened = SettingsRuntime::open(path);
         assert!(!reopened.snapshot()?.preferences.caret_blink_enabled);
+        assert!(reopened.snapshot()?.preferences.auto_save_enabled);
         fs::remove_dir_all(directory)?;
         Ok(())
     }

@@ -13,19 +13,26 @@ fn version() -> String {
 #[allow(unsafe_code, clippy::all)]
 mod generated {
     use crate::document::{
-        DocumentRuntime, cancel_prepared_document, clear_selection_json, current_caret_json,
-        delete_backward_json, document_hit_test_json, document_save_snapshot, document_status_json,
-        drag_hit_map_json, input_method_event_json, insert_soft_break_json, insert_text_json,
+        DocumentRuntime, auto_save_deadline_fired, auto_save_deadline_json,
+        auto_save_write_finished, cancel_prepared_document, clear_selection_json,
+        configure_document_recovery, current_caret_json, delete_backward_json,
+        discard_document_recovery, discard_recovery, document_hit_test_json,
+        document_save_snapshot, document_status_json, drag_hit_map_json, export_recovery,
+        input_method_event_json, insert_soft_break_json, insert_text_json,
         install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
         move_visual_caret_json, new_blank_document_runtime, paste_text_json,
-        place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, redo_json,
-        selected_text_json, set_selection_json, split_paragraph_json, undo_json,
-        write_document_file,
+        place_caret_at_page_json, prepare_document_file, prepare_recovery_document,
+        rasterize_page_glyphs, recovery_entries_json, recovery_update_deadline_fired,
+        recovery_update_write_finished, redo_json, selected_text_json,
+        set_document_auto_save_enabled, set_document_recovery_id, set_selection_json,
+        split_paragraph_json, undo_json, update_recovery_document, write_document_file,
+        write_document_file_checked, write_document_file_replace_external,
     };
     use crate::settings::{
-        SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_caret_blink_enabled,
-        settings_constraints, settings_load_warning, settings_snapshot, settings_theme_catalog,
+        SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_auto_save_enabled,
+        set_caret_blink_enabled, settings_constraints, settings_load_warning, settings_snapshot,
+        settings_theme_catalog,
     };
     use crate::version;
 
@@ -82,11 +89,17 @@ mod generated {
             document_generation: u64,
             history_state_id: u64,
             bytes: Vec<u8>,
+            content_digest: String,
+            baseline_digest: String,
+            recovery_id: String,
+            recovery_original_path: String,
+            recovery_baseline_digest: String,
             error: String,
         }
 
         struct SettingsSnapshot {
             caret_blink_enabled: bool,
+            auto_save_enabled: bool,
             window_width: u32,
             window_height: u32,
             theme_id: String,
@@ -120,8 +133,82 @@ mod generated {
             fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u64) -> String;
             /// 后台线程原子写入已验证快照；路径 I/O 由 Rust 应用服务完成。
             fn write_document_file(path: String, bytes: Vec<u8>) -> String;
+            /// 校验文件打开时的摘要；外部冲突会先保存本地恢复 envelope。
+            fn write_document_file_checked(
+                path: String,
+                bytes: Vec<u8>,
+                baseline_digest: String,
+                queued_digest: String,
+                recovery_id: String,
+            ) -> String;
+            /// 将冲突恢复项绑定至仍然活动的文档会话。
+            fn set_document_recovery_id(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                id: String,
+                original_path: String,
+                baseline_digest: String,
+            ) -> String;
+            /// 用户确认替换前备份外部原始字节，并原子写入本地快照。
+            fn write_document_file_replace_external(path: String, bytes: Vec<u8>) -> String;
+            /// 配置由 Qt 提供的本机应用数据目录。
+            fn configure_document_recovery(root: String) -> String;
+            /// 列出启动恢复提示所需的本地文档元数据。
+            fn recovery_entries_json() -> String;
+            /// 丢弃用户明确选择的恢复条目。
+            fn discard_recovery(id: String) -> String;
+            /// 将恢复区中的外部原始文件备份写到用户选择的位置。
+            fn export_recovery(id: String, path: String) -> String;
+            /// 丢弃当前文档时删除其关联恢复条目。
+            fn discard_document_recovery(runtime: &mut DocumentRuntime) -> String;
+            /// 后台准备恢复文档，安装前仍校验当前会话代际。
+            fn prepare_recovery_document(
+                id: String,
+                expected_session_generation: u64,
+                expected_document_generation: u64,
+            ) -> DocumentOpenResult;
+            /// 将恢复会话的新快照原子更新到同一恢复项。
+            fn update_recovery_document(
+                id: String,
+                original_path: String,
+                baseline_digest: String,
+                bytes: Vec<u8>,
+            ) -> String;
+            /// 捕获恢复副本刷新 deadline 对应的最新文档快照。
+            fn recovery_update_deadline_fired(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                generation: u64,
+            ) -> DocumentSaveSnapshot;
+            /// 完成恢复副本写入并返回下一个有效 deadline。
+            fn recovery_update_write_finished(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                revision: u64,
+                succeeded: bool,
+            ) -> String;
             /// 捕获不可变文档字节和会话/文档代际。
             fn document_save_snapshot(runtime: &mut DocumentRuntime) -> DocumentSaveSnapshot;
+            /// 设置当前会话 AutoSave 运行状态；持久化由 Preferences 服务负责。
+            fn set_document_auto_save_enabled(runtime: &mut DocumentRuntime, enabled: bool);
+            /// 返回 Rust 决定的单次 deadline；空字符串表示没有待办触发。
+            fn auto_save_deadline_json(runtime: &DocumentRuntime) -> String;
+            /// 校验 timer generation 后捕获自动保存快照。
+            fn auto_save_deadline_fired(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                generation: u64,
+            ) -> DocumentSaveSnapshot;
+            /// 报告自动保存结果并校验快照对应的保存点。
+            fn auto_save_write_finished(
+                runtime: &mut DocumentRuntime,
+                session_generation: u64,
+                document_generation: u64,
+                history_state_id: u64,
+                path: String,
+                content_digest: String,
+                succeeded: bool,
+            ) -> String;
             /// 写入成功后推进对应会话的保存点。
             fn mark_document_saved_json(
                 runtime: &mut DocumentRuntime,
@@ -129,6 +216,7 @@ mod generated {
                 document_generation: u64,
                 history_state_id: u64,
                 path: String,
+                content_digest: String,
             ) -> String;
             /// 返回文档名、路径和未保存状态。
             fn document_status_json(runtime: &mut DocumentRuntime) -> String;
@@ -147,6 +235,11 @@ mod generated {
             fn settings_load_warning(runtime: &mut SettingsRuntime) -> String;
             /// 更新单项偏好；校验或持久化失败时保留当前内存快照。
             fn set_caret_blink_enabled(
+                runtime: &mut SettingsRuntime,
+                enabled: bool,
+            ) -> SettingsSnapshot;
+            /// 更新 AutoSave 全局偏好；失败时设置服务保留原快照。
+            fn set_auto_save_enabled(
                 runtime: &mut SettingsRuntime,
                 enabled: bool,
             ) -> SettingsSnapshot;

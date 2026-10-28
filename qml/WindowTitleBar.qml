@@ -18,6 +18,7 @@ Rectangle {
     signal saveRequested
     signal undoRequested
     signal redoRequested
+    signal autoSaveRequested(bool enabled)
     property string documentName: qsTr("Untitled")
 
     readonly property int toolSide: Math.min(Theme.toolbarButtonHeight, Theme.titlebarHeight - Theme.spacingSmall)
@@ -54,7 +55,14 @@ Rectangle {
             Layout.preferredHeight: autoSave.trackHeight
             Layout.maximumHeight: autoSave.trackHeight
             text: qsTr("AutoSave")
-            checked: false
+            checked: PreferencesViewModel.autoSaveEnabled
+            onToggled: {
+                const requested = checked;
+                checked = Qt.binding(function () {
+                    return PreferencesViewModel.autoSaveEnabled;
+                });
+                titleBar.autoSaveRequested(requested);
+            }
         }
 
         TitleToolButton {

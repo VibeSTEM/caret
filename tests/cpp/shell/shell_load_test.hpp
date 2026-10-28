@@ -33,6 +33,8 @@ class ShellLoadTest : public QObject {
     void documentHitTestReturnsRustPosition();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void documentFileFlowPreservesSaveStateAndReopens();
+    void autoSaveWritesTheCurrentRevisionAfterTheDeadline();
+    void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
     void documentHistoryUndoRedoTracksRustSession();
 #endif
 };

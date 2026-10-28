@@ -24,6 +24,8 @@ pub enum RootCategory {
     UserConfig,
     /// 应用数据目录（宿主经 QStandardPaths::AppDataLocation 注入）。
     AppData,
+    /// 本机应用数据目录（宿主经 QStandardPaths::AppLocalDataLocation 注入）。
+    AppLocalData,
     /// 可重建缓存目录（宿主经 QStandardPaths::CacheLocation 注入）。
     Cache,
     /// 会话/临时工作区（宿主经 QStandardPaths::TempLocation 注入）。
@@ -39,6 +41,7 @@ impl RootCategory {
             Self::Project => "project",
             Self::UserConfig => "user-config",
             Self::AppData => "app-data",
+            Self::AppLocalData => "app-local-data",
             Self::Cache => "cache",
             Self::Session => "session",
             Self::Qrc => "qrc",
@@ -51,6 +54,7 @@ impl RootCategory {
             "project" => Some(Self::Project),
             "user-config" => Some(Self::UserConfig),
             "app-data" => Some(Self::AppData),
+            "app-local-data" => Some(Self::AppLocalData),
             "cache" => Some(Self::Cache),
             "session" => Some(Self::Session),
             "qrc" => Some(Self::Qrc),

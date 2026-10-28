@@ -95,13 +95,15 @@ fn late_save_completion_cannot_move_the_saved_revision_backwards() -> Result<(),
         later.session_generation,
         later.document_generation,
         later.history_state_id,
-        path
+        path,
+        &later.content_digest
     ));
     assert!(service.mark_saved(
         earlier.session_generation,
         earlier.document_generation,
         earlier.history_state_id,
-        path
+        std::path::Path::new("older.cdoc"),
+        &earlier.content_digest
     ));
     let status: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
@@ -109,6 +111,7 @@ fn late_save_completion_cannot_move_the_saved_revision_backwards() -> Result<(),
         status["savedGeneration"],
         later.document_generation.to_string()
     );
+    assert_eq!(status["path"], "document.cdoc");
     assert_eq!(status["dirty"], false);
     Ok(())
 }
@@ -126,6 +129,7 @@ fn save_completion_only_marks_the_captured_revision_saved() -> Result<(), String
         captured.document_generation,
         captured.history_state_id,
         std::path::Path::new("document.cdoc"),
+        &captured.content_digest,
     ));
     let status: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
@@ -148,6 +152,7 @@ fn undo_to_saved_history_state_restores_saved_status_and_redo_marks_edited() -> 
         saved_snapshot.document_generation,
         saved_snapshot.history_state_id,
         std::path::Path::new("document.cdoc"),
+        &saved_snapshot.content_digest,
     ));
 
     service.view_mut().insert_text_json(" later".to_owned())?;
@@ -184,6 +189,7 @@ fn delayed_save_completion_from_replaced_session_is_ignored() -> Result<(), Stri
         stale.document_generation,
         stale.history_state_id,
         std::path::Path::new("stale.cdoc"),
+        &stale.content_digest,
     ));
     let status: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
@@ -208,5 +214,35 @@ fn editing_and_saving_preserves_unknown_optional_envelope_fields() -> Result<(),
         serde_json::from_slice(&snapshot.bytes).map_err(|error| error.to_string())?;
     assert_eq!(saved["futureEnvelopeData"]["retained"], true);
     assert_eq!(saved["document"]["body"][0]["inlines"][0]["text"], "edited");
+    Ok(())
+}
+
+#[test]
+fn recovery_session_stays_dirty_and_retains_its_original_recovery_binding() -> Result<(), String> {
+    let file = CdocFile::new(caret_doc::Document::blank()).map_err(|error| error.to_string())?;
+    let bytes = file.to_bytes().map_err(|error| error.to_string())?;
+    let (mut service, _) = DocumentSessionService::prepare_recovery(
+        &bytes,
+        "recovery-id".to_owned(),
+        "/documents/old.cdoc".to_owned(),
+        Some("baseline".to_owned()),
+        2,
+    )?;
+    assert!(service.is_dirty());
+    assert_eq!(service.recovery_id(), Some("recovery-id"));
+    assert!(service.status_json().contains("\"path\":\"\""));
+
+    service.view_mut().insert_text_json("new edit".to_owned())?;
+    let snapshot = service.save_snapshot()?;
+    assert_eq!(snapshot.recovery_id.as_deref(), Some("recovery-id"));
+    assert_eq!(
+        snapshot.recovery_original_path.as_deref(),
+        Some("/documents/old.cdoc")
+    );
+    assert_eq!(
+        snapshot.recovery_baseline_digest.as_deref(),
+        Some("baseline")
+    );
+    assert!(service.is_dirty());
     Ok(())
 }

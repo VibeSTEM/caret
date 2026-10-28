@@ -257,6 +257,7 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
         captured.document_generation,
         captured.history_state_id,
         path.clone(),
+        captured.content_digest.clone(),
     );
     assert!(!saved_status.starts_with("error:"));
     assert!(saved_status.contains("\"dirty\":true"));
@@ -267,6 +268,7 @@ fn ffi_document_file_round_trip_preserves_edits_and_only_marks_written_revisions
             captured.document_generation,
             captured.history_state_id,
             path.clone(),
+            captured.content_digest.clone(),
         ),
         "error:document.stale_save_completion"
     );

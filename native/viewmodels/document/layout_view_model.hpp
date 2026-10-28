@@ -2,12 +2,14 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QThreadPool>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
@@ -53,6 +55,9 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(bool documentFileBusy READ documentFileBusy NOTIFY documentFileChanged)
     Q_PROPERTY(bool documentOpening READ documentOpening NOTIFY documentFileChanged)
     Q_PROPERTY(QString documentSaveStatus READ documentSaveStatus NOTIFY documentFileChanged)
+    Q_PROPERTY(bool saveConflictCanReplace READ saveConflictCanReplace NOTIFY documentFileChanged)
+    Q_PROPERTY(QVariantList recoveryEntries READ recoveryEntries NOTIFY documentFileChanged)
+    Q_PROPERTY(bool recoveryOperationBusy READ recoveryOperationBusy NOTIFY documentFileChanged)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY documentFileChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY documentFileChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry NOTIFY caretGeometryChanged)
@@ -87,6 +92,9 @@ class LayoutViewModel final : public QObject {
         }
         return m_document_edited ? QStringLiteral("edited") : QStringLiteral("saved");
     }
+    [[nodiscard]] bool saveConflictCanReplace() const { return m_conflict_can_replace; }
+    [[nodiscard]] const QVariantList& recoveryEntries() const { return m_recovery_entries; }
+    [[nodiscard]] bool recoveryOperationBusy() const { return m_recovery_operation_busy; }
     [[nodiscard]] bool canUndo() const { return m_can_undo; }
     [[nodiscard]] bool canRedo() const { return m_can_redo; }
     [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
@@ -129,8 +137,21 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap pasteFromClipboard();
     /// 在后台读取 `.cdoc`，再由 Rust 在 GUI 线程验证并安装新会话。
     Q_INVOKABLE QVariantMap openDocument(const QString& path);
+    /// 读取本机恢复项元数据；正文在用户明确恢复后才加载。
+    Q_INVOKABLE QVariantMap refreshRecoveryEntries();
+    /// 在后台解析并安装选中的恢复项，原恢复项在另存成功前保留。
+    Q_INVOKABLE QVariantMap restoreRecovery(const QString& id);
+    /// 删除用户明确丢弃的恢复项。
+    Q_INVOKABLE QVariantMap discardRecovery(const QString& id);
+    Q_INVOKABLE QVariantMap exportRecovery(const QString& id, const QString& path);
+    /// 关闭时丢弃文档并移除它绑定的恢复副本。
+    Q_INVOKABLE QVariantMap discardCurrentRecovery();
     /// 捕获当前修订后在后台原子保存；空路径表示保存到当前文档路径。
     Q_INVOKABLE QVariantMap saveDocument(const QString& path = QString{});
+    /// 提交当前窗口文档的 AutoSave 运行开关。
+    Q_INVOKABLE void setAutoSaveEnabled(bool enabled);
+    /// 用户确认后备份外部版本并覆盖冲突文件。
+    Q_INVOKABLE QVariantMap replaceExternalVersion();
     /// 只请求当前可见页的 glyph 栅格；图像像素以 QByteArray 二进制返回。
     Q_INVOKABLE QVariantMap rasterizePageGlyphs(int page_index, qreal px_per_pt,
                                                 qreal page_origin_device_x_px,
@@ -149,7 +170,10 @@ class LayoutViewModel final : public QObject {
     bool installInteraction(const QJsonObject& interaction_object);
     void installCaretGeometry(const QVariantMap& geometry);
     void refreshDocumentFileStatus();
+    void clearSaveConflict();
     void setDocumentFileBusy(bool busy);
+    void refreshAutoSaveDeadline();
+    void runAutoSaveDeadline();
 
   signals:
     void layoutChanged();
@@ -182,6 +206,16 @@ class LayoutViewModel final : public QObject {
     int m_pending_file_operations = 0;
     int m_pending_save_operations = 0;
     QString m_pending_save_target;
+    QHash<QString, QString> m_pending_save_digest_by_path;
+    QTimer m_auto_save_timer;
+    qulonglong m_auto_save_session_generation = 0;
+    qulonglong m_auto_save_deadline_generation = 0;
+    bool m_recovery_update_deadline = false;
+    QString m_conflict_path;
+    bool m_conflict_can_replace = false;
+    quint64 m_conflict_session_generation = 0;
+    QVariantList m_recovery_entries;
+    bool m_recovery_operation_busy = false;
     QThreadPool m_document_io_pool;
 };
 

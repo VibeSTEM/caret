@@ -100,3 +100,84 @@ fn snapshot_write_validates_before_replacing_and_round_trips()
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn checked_snapshot_rejects_external_changes_and_preserves_local_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::temp_dir().join(format!(
+        "caret-document-storage-conflict-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root)?;
+    let path = root.join("document.cdoc");
+    let initial = CdocFile::new(Document::blank())?.to_bytes()?;
+    let local = CdocFile::new(Document::blank())?.to_bytes()?;
+    DocumentStorage.save_snapshot(&path, &initial)?;
+    let baseline = crate::document_session::content_digest(&initial);
+    fs::write(&path, b"external edit")?;
+    let Err(error) = DocumentStorage.save_snapshot_if_unchanged(&path, &local, &baseline) else {
+        panic!("external bytes must not be overwritten");
+    };
+    assert!(matches!(error, DocumentStorageError::ExternalConflict));
+    assert_eq!(fs::read(&path)?, b"external edit");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn queued_snapshot_accepts_the_previous_serialized_app_write()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::temp_dir().join(format!(
+        "caret-document-storage-queued-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root)?;
+    let path = root.join("document.cdoc");
+    let initial = CdocFile::new(Document::blank())?.to_bytes()?;
+    let mut queued_file = CdocFile::new(Document::blank())?;
+    queued_file.extra.insert(
+        "queueMarker".to_owned(),
+        serde_json::json!("first app write"),
+    );
+    let queued = queued_file.to_bytes()?;
+    let local = CdocFile::new(Document::blank())?.to_bytes()?;
+    let baseline = crate::document_session::content_digest(&initial);
+    let queued_digest = crate::document_session::content_digest(&queued);
+
+    fs::write(&path, queued)?;
+    DocumentStorage.save_snapshot_if_unchanged_or_queued(
+        &path,
+        &local,
+        &baseline,
+        Some(&queued_digest),
+    )?;
+    assert_eq!(fs::read(&path)?, local);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn checked_snapshot_distinguishes_missing_target_from_replaceable_conflict()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::temp_dir().join(format!(
+        "caret-document-storage-missing-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root)?;
+    let path = root.join("removed.cdoc");
+    let bytes = CdocFile::new(Document::blank())?.to_bytes()?;
+    let error = match DocumentStorage.save_snapshot_if_unchanged(&path, &bytes, "old-digest") {
+        Ok(()) => return Err(std::io::Error::other("missing target was recreated").into()),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        DocumentStorageError::ExternalTargetUnavailable(std::io::ErrorKind::NotFound)
+    ));
+    assert!(!path.exists());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

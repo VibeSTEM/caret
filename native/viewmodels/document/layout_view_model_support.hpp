@@ -12,7 +12,32 @@
 #include <optional>
 #include <string>
 
-namespace caret::layout_view_model_support {
+namespace caret {
+
+struct DocumentOpenTicketOwner final {
+    qulonglong ticket = 0;
+    bool armed = true;
+
+    ~DocumentOpenTicketOwner() {
+        if (armed && ticket != 0) {
+            ffi::cancel_prepared_document(ticket);
+        }
+    }
+};
+
+namespace layout_view_model_support {
+
+inline QString recovery_id_from_error(const QString& error) {
+    const qsizetype marker = error.indexOf(QStringLiteral("recovery="));
+    if (marker < 0) {
+        return {};
+    }
+    return error.sliced(marker + 9).section(QLatin1Char(';'), 0, 0).section(QLatin1Char(' '), 0, 0);
+}
+
+inline bool replace_allowed_from_error(const QString& error) {
+    return error.contains(QStringLiteral("replace_allowed=true"));
+}
 
 inline std::optional<QVariantMap> runtime_error(ffi::DocumentRuntime*& runtime,
                                                 const QString& thread_error) {
@@ -42,5 +67,6 @@ inline rust::String to_rust_string(const QByteArray& utf8) {
     return rust::String(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())));
 }
 
-} // namespace caret::layout_view_model_support
+} // namespace layout_view_model_support
+} // namespace caret
 #endif

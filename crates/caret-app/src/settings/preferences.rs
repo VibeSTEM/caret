@@ -9,6 +9,7 @@ pub const DEFAULT_WINDOW_HEIGHT: u32 = 720;
 pub const MINIMUM_WINDOW_WIDTH: u32 = 880;
 pub const MINIMUM_WINDOW_HEIGHT: u32 = 560;
 pub const DEFAULT_CARET_BLINK_ENABLED: bool = true;
+pub const DEFAULT_AUTO_SAVE_ENABLED: bool = false;
 pub const MAX_WINDOW_DIMENSION: u32 = 16_384;
 pub const MAX_RECENT_PROJECTS: usize = 10;
 const MAX_PATH_BYTES: usize = 32 * 1024;
@@ -23,11 +24,18 @@ pub struct UserPreferences {
     /// 插入点获得焦点时是否跟随操作系统闪烁周期。
     #[serde(default = "default_caret_blink_enabled")]
     pub caret_blink_enabled: bool,
+    /// 是否在命名文档编辑后自动保存。
+    #[serde(default = "default_auto_save_enabled")]
+    pub auto_save_enabled: bool,
     pub recent_project_paths: Vec<String>,
 }
 
 const fn default_caret_blink_enabled() -> bool {
     DEFAULT_CARET_BLINK_ENABLED
+}
+
+const fn default_auto_save_enabled() -> bool {
+    DEFAULT_AUTO_SAVE_ENABLED
 }
 
 impl Default for UserPreferences {
@@ -37,6 +45,7 @@ impl Default for UserPreferences {
             window_height: DEFAULT_WINDOW_HEIGHT,
             window_maximized: true,
             caret_blink_enabled: DEFAULT_CARET_BLINK_ENABLED,
+            auto_save_enabled: DEFAULT_AUTO_SAVE_ENABLED,
             recent_project_paths: Vec::new(),
         }
     }
@@ -150,9 +159,9 @@ fn validate_recent_project_path(value: &str) -> Result<(), PreferencesError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_CARET_BLINK_ENABLED, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
-        MAX_RECENT_PROJECTS, MAX_WINDOW_DIMENSION, MINIMUM_WINDOW_WIDTH, PreferencesError,
-        PreferencesService, UserPreferences,
+        DEFAULT_AUTO_SAVE_ENABLED, DEFAULT_CARET_BLINK_ENABLED, DEFAULT_WINDOW_HEIGHT,
+        DEFAULT_WINDOW_WIDTH, MAX_RECENT_PROJECTS, MAX_WINDOW_DIMENSION, MINIMUM_WINDOW_WIDTH,
+        PreferencesError, PreferencesService, UserPreferences,
     };
 
     fn absolute_path(name: &str) -> String {
@@ -170,6 +179,10 @@ mod tests {
         assert_eq!(
             service.current().caret_blink_enabled,
             DEFAULT_CARET_BLINK_ENABLED
+        );
+        assert_eq!(
+            service.current().auto_save_enabled,
+            DEFAULT_AUTO_SAVE_ENABLED
         );
         assert!(service.validate(service.current().clone()).is_ok());
     }

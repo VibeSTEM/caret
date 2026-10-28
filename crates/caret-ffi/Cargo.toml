@@ -15,6 +15,7 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 cxx.workspace = true
 caret-app.workspace = true
+serde_json.workspace = true
 
 # 构建脚本只用 caret-build 定位与 native 相同的托管 Clang。运行时不依赖它。
 [build-dependencies]

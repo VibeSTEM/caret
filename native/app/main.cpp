@@ -12,6 +12,7 @@
 #include "theme_catalog.hpp"
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QGuiApplication>
 #include <QObject>
@@ -20,6 +21,7 @@
 #include <QString>
 #include <QUrl>
 #include <QWindow>
+#include <QtCore/qlogging.h>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <cstddef>
@@ -95,6 +97,21 @@ int main(int argc, char* argv[]) try {
     }
     const QByteArray settings_path =
         QDir(settings_directory).filePath(QStringLiteral("settings.json")).toUtf8();
+    const QString local_data_directory =
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (local_data_directory.isEmpty() || !QDir().mkpath(local_data_directory)) {
+        qWarning() << "恢复存储不可用；本次启动仍可编辑文档。" << local_data_directory;
+    } else {
+        const QByteArray local_data_path = local_data_directory.toUtf8();
+        const rust::String recovery_configuration =
+            caret::ffi::configure_document_recovery(rust::String(
+                local_data_path.constData(), static_cast<std::size_t>(local_data_path.size())));
+        if (!recovery_configuration.empty()) {
+            qWarning() << "恢复存储配置失败；本次启动仍可编辑文档。"
+                       << QString::fromUtf8(recovery_configuration.data(),
+                                            static_cast<qsizetype>(recovery_configuration.size()));
+        }
+    }
     auto settings_runtime = caret::ffi::new_settings_runtime(
         rust::String(settings_path.constData(), static_cast<std::size_t>(settings_path.size())));
     const caret::ffi::SettingsSnapshot settings_snapshot =
