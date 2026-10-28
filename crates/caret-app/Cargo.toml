@@ -31,5 +31,10 @@ name = "document_open_delete_criterion"
 path = "../../tests/performance/rust/cpu/document_open_delete_criterion.rs"
 harness = false
 
+[[bench]]
+name = "document_history_save_criterion"
+path = "../../tests/performance/rust/cpu/document_history_save_criterion.rs"
+harness = false
+
 [lints]
 workspace = true

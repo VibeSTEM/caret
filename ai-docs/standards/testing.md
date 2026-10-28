@@ -26,6 +26,7 @@ tests/
 - `integration/native.rs` 只检查构建树、qmllint 和 CTest 的退出码，不写领域断言。
 - C++ 和 QML 功能测试在 `BUILD_TESTING=ON` 时注册。源文件列表写在 CMake 里，不用宽泛的 `GLOB`。
 - 性能基准按 `rust|qt` 与 `cpu|gpu` 分目录；不进入默认 CTest、默认 workspace 测试或 PR/push CI，只由 nightly 手动 suite 执行。Rust 性能范围限 CPU；Qt CPU 与 Qt GPU 分别位于对应目录。源码仍参加格式检查；实际注册的手动基准目标也由 nightly 编译和运行。
+- Nightly 性能 artifact 应保存 suite 输出和可比较的 Criterion `new/*.json` 统计，保留期与 runner/构建环境记录明确；Criterion HTML 报告不作为必要产物，以控制体积。artifact 供趋势诊断，不作为跨机器耗时门槛。
 - 夹具放 `tests/fixtures/<module>/`。日志和覆盖率放构建树或 `artifacts/`。
 
 ## 命令

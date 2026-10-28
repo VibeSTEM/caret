@@ -76,7 +76,7 @@
 | 038 | 窗口架构 | [多窗口文档会话与全局操作协调](task/038-multiwindow-document-sessions.md) | P2 | 037 | L | planned |
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | planned |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
-| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | planned |
+| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in_progress |
 
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 

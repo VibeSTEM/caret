@@ -5,7 +5,7 @@ use caret_app::document_storage::DocumentStorage;
 use caret_doc::{
     Block, CdocFile, Document, InlineNode, NodeId, OpenedDocument, Paragraph, Run, open,
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,6 @@ use unicode_segmentation::UnicodeSegmentation;
 const NOVEL_SOURCE: &str = include_str!("../../fixtures/novel-1m-multilingual.txt");
 const PARAGRAPH_LANGUAGES: [&str; 7] =
     ["zh-Hans", "en-US", "fr-FR", "ar", "ru-RU", "el-GR", "ja-JP"];
-const TARGET_PARAGRAPH_INDEX: usize = 2_500;
 const PROFILE_DOCUMENT_ENV: &str = "CARET_PERF_CDOC";
 
 struct BenchmarkDocument {
@@ -93,12 +92,15 @@ fn prepare_session(path: &Path) -> DocumentSessionService {
         .0
 }
 
-fn place_caret_after_first_grapheme(session: &mut DocumentSessionService) -> String {
+fn place_caret_after_first_grapheme(
+    session: &mut DocumentSessionService,
+    target_paragraph_index: usize,
+) -> String {
     let paragraph = match session
         .view_mut()
         .document()
         .body
-        .get(TARGET_PARAGRAPH_INDEX)
+        .get(target_paragraph_index)
     {
         Some(Block::Paragraph(paragraph)) => paragraph,
         _ => panic!("性能文档目标必须是段落"),
@@ -131,13 +133,69 @@ fn place_caret_after_first_grapheme(session: &mut DocumentSessionService) -> Str
     grapheme
 }
 
+fn document_character_count(blocks: &[Block]) -> usize {
+    blocks
+        .iter()
+        .map(|block| match block {
+            Block::Paragraph(paragraph) => {
+                paragraph.inlines.iter().map(inline_character_count).sum()
+            }
+            Block::Environment(environment) => {
+                environment
+                    .title
+                    .as_ref()
+                    .map(|title| title.inlines.iter().map(inline_character_count).sum())
+                    .unwrap_or(0)
+                    + document_character_count(&environment.children)
+            }
+            Block::ExplicitBreak(_) | Block::Opaque(_) => 0,
+        })
+        .sum()
+}
+
+fn inline_character_count(inline: &InlineNode) -> usize {
+    match inline {
+        InlineNode::Run(run) => run.text.chars().count(),
+        InlineNode::Environment(environment) => environment
+            .children
+            .iter()
+            .map(inline_character_count)
+            .sum(),
+        InlineNode::SoftBreak(_) => 1,
+        InlineNode::Opaque(_) => 0,
+    }
+}
+
 fn benchmark_open_and_delete(criterion: &mut Criterion) {
     let document = BenchmarkDocument::load();
     let document_bytes = DocumentStorage
         .read_file_bytes(&document.path)
         .unwrap_or_else(|error| panic!("无法读取性能文档：{error}"));
-    let mut group = criterion.benchmark_group("rust/cdoc_1m_open_delete");
-    group.throughput(criterion::Throughput::Elements(1_000_000));
+    let opened =
+        open(&document_bytes).unwrap_or_else(|error| panic!("无法统计性能文档字符数：{error}"));
+    let OpenedDocument::Editable(opened_file) = opened else {
+        panic!("性能文档必须可编辑");
+    };
+    let character_count = document_character_count(&opened_file.document.body);
+    assert!(character_count > 0, "性能文档必须包含文本");
+    let paragraph_indices: Vec<_> = opened_file
+        .document
+        .body
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| matches!(block, Block::Paragraph(_)).then_some(index))
+        .collect();
+    let target_paragraph_index = *paragraph_indices
+        .get(paragraph_indices.len() / 2)
+        .unwrap_or_else(|| panic!("性能文档必须包含顶层段落"));
+    eprintln!(
+        "document_open_delete fixture: path={}, bytes={}, known_text_unicode_characters={character_count}",
+        document.path.display(),
+        document_bytes.len()
+    );
+
+    let mut group = criterion.benchmark_group("rust/cdoc_open");
+    group.throughput(Throughput::Elements(character_count as u64));
     group.bench_function("decode_validate_cdoc", |bencher| {
         bencher.iter(|| {
             let opened = open(black_box(&document_bytes))
@@ -157,10 +215,13 @@ fn benchmark_open_and_delete(criterion: &mut Criterion) {
             elapsed
         });
     });
+    group.finish();
+
+    let mut group = criterion.benchmark_group("rust/cdoc_edit");
     group.bench_function("delete_one_grapheme_and_build_snapshot", |bencher| {
         bencher.iter_custom(|iterations| {
             let mut session = prepare_session(&document.path);
-            let grapheme = place_caret_after_first_grapheme(&mut session);
+            let grapheme = place_caret_after_first_grapheme(&mut session, target_paragraph_index);
             let mut elapsed = Duration::ZERO;
             for _ in 0..iterations {
                 let start = Instant::now();

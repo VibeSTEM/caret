@@ -2,4 +2,8 @@
 
 Rust suite 只测 CPU：文档模型、Unicode 文本、字体回退、Parley 排版、分页和编辑后的重排都由 Rust 执行。GPU 绘制由 Qt Quick / RHI 负责，对应的无头基准位于 `tests/performance/qt/gpu/`。
 
-长文档基准读取 `tests/performance/fixtures/novel-1m-multilingual.txt`，包含 5,000 段、共 1,000,000 个 Unicode 字符，语言覆盖中文、英文、法文、阿拉伯文、俄文、希腊文和日文。该 UTF-8 纯文本也可在 Word 中单独打开作本机对照。基准测量整篇首次排版，以及单段编辑后复用未修改段落的重排。
+长文档基准读取 `tests/performance/fixtures/novel-1m-multilingual.txt`，包含 5,000 段、共 1,000,000 个 Unicode 字符，语言覆盖中文、英文、法文、阿拉伯文、俄文、希腊文和日文。该 UTF-8 纯文本也可在 Word 中单独打开作本机对照。基准覆盖整篇首次排版、单段编辑后重排、打开与删除、撤销/重做以及保存快照序列化。
+
+`document_history_save_criterion` 使用相同语料的前 500 段（100,000 个正文 Unicode 字符）和全部 5,000 段（1,000,000 个正文 Unicode 字符），分别测撤销、重做和 `.cdoc` 保存快照序列化。会话打开、光标定位和编辑状态准备在 Criterion 计时区间外；撤销/重做计时包含 Rust 布局更新及 UI 快照生成，不包含 Qt 渲染或磁盘 I/O。该基准用于比较 history 操作规模，不设置吞吐量，因为每次只撤销或重做一项编辑。
+
+`document_open_delete_criterion` 仅为完整文档解码和打开准备报告按实际 Unicode 字符数计算的 Criterion throughput；单字素删除独立分组，不标注整篇吞吐量。若设置 `CARET_PERF_CDOC`，基准会记录实际文件字节数和可见文本 Unicode 字符数，结果不能按默认一百万字符语料解读。

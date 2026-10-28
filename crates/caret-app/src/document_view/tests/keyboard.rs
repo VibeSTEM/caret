@@ -70,6 +70,27 @@ fn keyboard_commands_split_and_merge_paragraphs_and_delete_text()
 }
 
 #[test]
+fn single_paragraph_undo_and_redo_publish_incremental_layout_deltas()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.layout_snapshot_json()?;
+    runtime.insert_text_json("history".to_owned())?;
+
+    let undone: Value = serde_json::from_str(&runtime.undo_json()?)?;
+    assert_eq!(undone["partial"], true);
+    assert_eq!(undone["baseDocumentGeneration"], "1");
+    assert_eq!(undone["documentGeneration"], "2");
+    assert_eq!(undone["paragraphs"][0]["text"], "");
+
+    let redone: Value = serde_json::from_str(&runtime.redo_json()?)?;
+    assert_eq!(redone["partial"], true);
+    assert_eq!(redone["baseDocumentGeneration"], "2");
+    assert_eq!(redone["documentGeneration"], "3");
+    assert_eq!(redone["paragraphs"][0]["text"], "history");
+    Ok(())
+}
+
+#[test]
 fn deleting_within_a_paragraph_reuses_layout_and_returns_a_delta()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
