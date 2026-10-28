@@ -28,7 +28,7 @@ fn ffi_theme_catalog_contains_the_builtin_theme_snapshots() {
     assert!(!catalog.starts_with("error:"));
     assert!(catalog.contains("\"light\""));
     assert!(catalog.contains("\"dark\""));
-    assert!(catalog.contains("\"colorBackground\""));
+    assert!(catalog.contains("\"colorPanel\""));
 }
 
 #[test]

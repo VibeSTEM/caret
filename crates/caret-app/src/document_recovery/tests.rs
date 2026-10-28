@@ -35,6 +35,44 @@ impl Drop for RecoveryFixture {
 }
 
 #[test]
+fn releasing_recovery_lock_allows_access_while_a_duplicate_handle_is_alive()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = RecoveryFixture::new()?;
+    for shared in [false, true] {
+        let path = fixture.0.join(if shared {
+            "shared.lock"
+        } else {
+            "exclusive.lock"
+        });
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let duplicate = file.try_clone()?;
+        if shared {
+            fs4::FileExt::lock_shared(&file)?;
+        } else {
+            fs4::FileExt::lock(&file)?;
+        }
+        let lease = super::RecoveryFileLock::new(file);
+        let contender = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+        assert!(matches!(
+            fs4::FileExt::try_lock(&contender),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+
+        drop(lease);
+
+        fs4::FileExt::try_lock(&contender)?;
+        fs4::FileExt::unlock(&contender)?;
+        drop(duplicate);
+    }
+    Ok(())
+}
+
+#[test]
 fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = RecoveryFixture::new()?;
@@ -50,7 +88,7 @@ fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
     assert_eq!(envelope.original_path, source.to_string_lossy());
     assert_eq!(payload, b"cdoc");
     let entries = storage.list_entries()?;
-    assert_eq!(entries.len(), 1);
+    assert_eq!(entries.len(), 1, "fixture={} id={id}", fixture.0.display());
     assert_eq!(entries[0].id, id);
     assert_eq!(entries[0].original_path, source.to_string_lossy());
     assert_eq!(entries[0].baseline_digest.as_deref(), Some("abc"));
@@ -150,7 +188,9 @@ fn failed_restore_preparation_leaves_original_recovery_item_available()
         b"invalid payload",
     )?;
 
-    let (_envelope, payload, lease) = storage.load_for_restore(&id)?;
+    let (_envelope, payload, lease) = storage
+        .load_for_restore(&id)
+        .map_err(|error| format!("failed to lease recovery item: {error}"))?;
     assert_eq!(payload, b"invalid payload");
     assert!(
         DocumentSessionService::prepare_recovery(
@@ -164,7 +204,15 @@ fn failed_restore_preparation_leaves_original_recovery_item_available()
     );
     drop(lease);
 
-    assert_eq!(storage.load(&id)?.1, b"invalid payload");
+    assert_eq!(
+        storage
+            .load(&id)
+            .map_err(|error| format!(
+                "failed to read recovery item after releasing lease: {error}"
+            ))?
+            .1,
+        b"invalid payload"
+    );
     assert!(storage.list_entries()?.iter().any(|entry| entry.id == id));
     Ok(())
 }
@@ -218,6 +266,7 @@ fn cross_process_lease_child() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri 不支持启动该用例所需的子进程")]
 fn cross_process_lease_hides_and_protects_an_active_recovery_item()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = RecoveryFixture::new()?;

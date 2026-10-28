@@ -52,14 +52,35 @@ pub struct RecoveryEntry {
 
 /// 进程级共享租约；持有期间其他实例不会清理恢复目录中的过期条目。
 pub struct RecoveryProcessLease {
-    _file: File,
+    _lock: RecoveryFileLock,
+}
+
+/// 显式解锁后再关闭；子进程短暂继承的描述符不能延长恢复锁的有效期。
+struct RecoveryFileLock(Option<File>);
+
+impl RecoveryFileLock {
+    fn new(file: File) -> Self {
+        Self(Some(file))
+    }
+
+    fn release(&mut self) {
+        if let Some(file) = self.0.take() {
+            let _ = FileExt::unlock(&file);
+        }
+    }
+}
+
+impl Drop for RecoveryFileLock {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// 活动恢复会话的跨进程条目租约；持有期间其他实例不能恢复或删除该项。
 pub struct RecoverySessionLease {
     id: String,
     directory: PathBuf,
-    _file: File,
+    lock: RecoveryFileLock,
 }
 
 fn active_session_ids() -> &'static Mutex<std::collections::HashSet<String>> {
@@ -69,8 +90,15 @@ fn active_session_ids() -> &'static Mutex<std::collections::HashSet<String>> {
 
 impl Drop for RecoverySessionLease {
     fn drop(&mut self) {
-        if let Ok(mut ids) = active_session_ids().lock() {
-            ids.remove(&active_session_key(&self.directory, &self.id));
+        let key = active_session_key(&self.directory, &self.id);
+        match active_session_ids().lock() {
+            Ok(mut ids) => {
+                self.lock.release();
+                ids.remove(&key);
+            }
+            Err(_) => {
+                self.lock.release();
+            }
         }
     }
 }
@@ -165,7 +193,9 @@ impl DocumentRecoveryStorage {
             .truncate(false)
             .open(self.directory.join(".recovery.lock"))?;
         FileExt::lock_shared(&file)?;
-        Ok(RecoveryProcessLease { _file: file })
+        Ok(RecoveryProcessLease {
+            _lock: RecoveryFileLock::new(file),
+        })
     }
 
     /// 将文档或外部文件字节原子保存为单文件 envelope，返回稳定条目标识。
@@ -307,7 +337,7 @@ impl DocumentRecoveryStorage {
         }
     }
 
-    fn lock_operations(&self) -> Result<File, RecoveryError> {
+    fn lock_operations(&self) -> Result<RecoveryFileLock, RecoveryError> {
         fs::create_dir_all(&self.directory)?;
         let lock_file = OpenOptions::new()
             .read(true)
@@ -316,7 +346,7 @@ impl DocumentRecoveryStorage {
             .truncate(false)
             .open(self.directory.join(".recovery-operations.lock"))?;
         match FileExt::try_lock(&lock_file) {
-            Ok(()) => Ok(lock_file),
+            Ok(()) => Ok(RecoveryFileLock::new(lock_file)),
             Err(fs4::TryLockError::WouldBlock) => Err(RecoveryError::Busy),
             Err(fs4::TryLockError::Error(error)) => Err(RecoveryError::Io(error)),
         }
@@ -341,6 +371,7 @@ impl DocumentRecoveryStorage {
             .open(lock_directory.join(format!("{id}.lock")))?;
         match FileExt::try_lock(&file) {
             Ok(()) => {
+                let lock = RecoveryFileLock::new(file);
                 let mut active = active_session_ids()
                     .lock()
                     .map_err(|_| RecoveryError::Busy)?;
@@ -350,7 +381,7 @@ impl DocumentRecoveryStorage {
                 Ok(RecoverySessionLease {
                     id: id.to_owned(),
                     directory: self.directory.clone(),
-                    _file: file,
+                    lock,
                 })
             }
             Err(fs4::TryLockError::WouldBlock) => Err(RecoveryError::Busy),
@@ -397,7 +428,10 @@ impl DocumentRecoveryStorage {
             return false;
         };
         match FileExt::try_lock(&file) {
-            Ok(()) => false,
+            Ok(()) => {
+                drop(RecoveryFileLock::new(file));
+                false
+            }
             Err(fs4::TryLockError::WouldBlock | fs4::TryLockError::Error(_)) => true,
         }
     }
@@ -525,6 +559,7 @@ impl DocumentRecoveryStorage {
             Err(fs4::TryLockError::WouldBlock) => return Ok(0),
             Err(fs4::TryLockError::Error(error)) => return Err(RecoveryError::Io(error)),
         }
+        let _cleanup_lock = RecoveryFileLock::new(lock_file);
         let expired_ids: Vec<_> = self
             .list_entries()?
             .into_iter()

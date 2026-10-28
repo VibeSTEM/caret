@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：018、019、029
 - 优先级：P2
-- 创建 / 更新：2026-10-28 / 2026-10-28
+- 创建 / 更新：2026-10-28 / 2026-10-29
 
 ## 目标与背景
 
@@ -72,7 +72,10 @@
 | 2026-10-29 | `cargo test --offline --workspace --locked` | 完整 Rust workspace、CLI 集成与本机 native CTest | 通过；caret-app 127 项、caret-ffi 10 项、文档集成 19 项；native CTest 4/4。新增独立子进程持有恢复租约时的隔离测试，以及 AutoSave 重新启用时恢复当前脏 revision 的策略测试。 |
 | 2026-10-29 | `cargo lint --check`、`cargo fmt --all --check`、`cargo format --check`、staged/worktree `git diff --check` | Rust、依赖、CMake、分层、QML、clang-tidy、include-cleaner、cppcheck 与格式/空白检查 | 全部通过；lint 的 9 个阶段均通过。 |
 | 2026-10-29 | `cmake --build /tmp/caret-autosave-app-build --parallel 4`、`ctest --test-dir /tmp/caret-autosave-app-build --output-on-failure` | Qt/QML 桌面构建、Shell 加载和 QML 格式 | 通过；CTest 3/3。 |
-| — | Windows/macOS/Linux CI | 三平台编译、lint、测试与资源注册通过 | 未执行；需 PR CI。 |
+| 2026-10-29 | Actions run [40725738442](https://github.com/VibeSTEM/caret/actions/runs/40725738442) | 三平台 Nightly 与 Miri、Rust 覆盖率通过 | macOS/Windows 及多数 Linux job 通过；Linux workspace/coverage 的恢复锁测试偶发 `recovery.entry_busy`，Miri 的跨进程测试触发不支持的 `posix_spawnattr_init`。本分支显式先解锁再清理进程内租约标记，并将跨进程测试标记为 Miri 忽略；本机 Miri 通过，恢复测试 40 轮并发重复通过。 |
+| 2026-10-29 | 恢复锁并发稳定性复测 | 锁释放不受子进程短暂继承的文件描述符延长；恢复测试稳定 | 将恢复锁封装为显式 `unlock` 的 RAII guard，Session lease 在 active ID 锁内释放文件锁；新增重复句柄回归测试。本地完整恢复测试套件连续 300 轮通过（每轮 10 项测试、8 线程）；远端 Linux Nightly 仍待推送后复验。 |
+| 2026-10-29 | Actions run [40732895150](https://github.com/VibeSTEM/caret/actions/runs/40732895150/job/122974451312) | Ubuntu clang-tidy/include-cleaner 通过 | 失败因 Qt Test 鼠标 API 缺少直接头文件 `qtestmouse.h`；已补 include，本地完整 `cargo lint --check` 通过。 |
+| 2026-10-29 | 上述 Nightly / CI runs | 三平台编译、lint、测试与资源注册通过 | macOS 与 Windows workspace 通过；Linux/Miri 本次失败原因已在当前分支修复并本机复验，仍需推送后取得远程复验结果。 |
 
 ## 风险与回退
 
@@ -88,6 +91,7 @@ AutoSave 触及用户文件且可能与外部编辑器竞争。任何基线校�
 - 2026-10-28：最新本地验证通过：workspace Rust 测试、全 workspace Clippy、Rust/跨语言格式、Qt/QML 构建与测试；macOS 手工验证未命名文档 AutoSave 路径选择和 Edited → Saved 更新。三平台 CI 和冲突/恢复/关闭对话框的手工操作仍未覆盖。
 - 2026-10-28：修复恢复副本生命周期竞态：活动恢复 ID 由会话租约锁定并从恢复列表隐藏，普通加载/删除会被拒绝；恢复来源在验证、取消和安装失败时保留，安装成功后才清理。冲突快照现在创建后立即持有租约，并通过 FFI 待绑定表移交给当前会话；Qt 绑定失败会显示在文件操作错误中。针对租约隔离与恢复准备失败补充 Rust 回归测试。独立复核已确认此前恢复来源 P1/P2 关闭；正在复核最新冲突快照租约改动。
 - 2026-10-29：补齐冲突恢复错误详情与对话框动态高度；修正 AutoSave 在关闭后重新开启时同一脏 revision 未重新调度的问题，并覆盖关闭重开、失败后重开、写入中重开等路径。重复设置为开启不会重试失败写入，也不改变现有 deadline。切换开关后立即恢复其 Rust 偏好投影绑定，取消另存为或偏好写入失败时 UI 不会残留为开启。新增子进程级租约测试，验证一个进程持有恢复项时另一进程无法列出、读取或删除该项，释放后可重新读取；恢复测试夹具使用唯一序号避免并行目录碰撞。workspace 全量测试通过：caret-app 127 项、caret-ffi 10 项、文档集成 19 项、native CTest 4/4；9 阶段 `cargo lint --check`、`cargo format --check`、Rust/QML 格式及 diff 空白检查通过。三平台 CI、恢复/冲突/关闭对话框人工流程仍未验证。
+- 2026-10-29：CI 暴露本地恢复文件锁只依赖 `File::drop` 释放时点不确定的问题：子进程 spawn/exec 窗口可能暂时继承文件句柄，使恢复条目仍被判定占用。所有恢复操作、进程、清理和探测锁现在通过 RAII guard 在关闭前显式解锁；完整恢复测试套件本地连续 300 轮通过。远程 Linux/Miri 重新运行仍是 037 完成前置条件。
 
 ## 完成摘要
 

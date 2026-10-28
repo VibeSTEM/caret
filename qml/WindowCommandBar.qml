@@ -27,7 +27,7 @@ Rectangle {
             implicitWidth: homeButton.implicitWidth
             implicitHeight: commandBar.rowHeight
 
-            MenuTabButton {
+            CommandBarTabButton {
                 id: homeButton
                 objectName: "homeTab"
                 anchors.fill: parent
