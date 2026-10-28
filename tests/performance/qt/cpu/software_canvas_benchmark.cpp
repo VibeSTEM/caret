@@ -36,7 +36,7 @@ double percentile(std::vector<double> values, double fraction) {
     return values[std::min(index, values.size() - 1)];
 }
 
-int run(int samples, int page_count) {
+int run(int samples, int page_count, bool ime_suffix_shift) {
     using namespace caret::performance;
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     QQuickRenderControl render_control;
@@ -58,35 +58,58 @@ int run(int samples, int page_count) {
         return true;
     };
     for (int frame = 0; frame < warmup_frames; ++frame) {
-        canvas.setGlyphFrames({edited_glyph_frame(visible_page, frame)});
-        canvas.setSelectionRects(selection_rectangles(frame + 1, visible_page));
+        const QVariantMap glyph_frame = ime_suffix_shift
+                                            ? ime_updated_glyph_frame(visible_page, frame)
+                                            : edited_glyph_frame(visible_page, frame);
+        const QVariantList selection_frame = selection_rectangles(frame + 1, visible_page);
+        canvas.setGlyphFrames({glyph_frame});
+        canvas.setSelectionRects(selection_frame);
         if (!render_frame()) {
             std::fprintf(stderr, "QQuickRenderControl 软件渲染同步失败\n");
             return 2;
         }
     }
     std::vector<double> samples_us;
+    std::vector<double> install_samples_us;
+    std::vector<double> render_samples_us;
     samples_us.reserve(static_cast<std::size_t>(samples));
+    install_samples_us.reserve(static_cast<std::size_t>(samples));
+    render_samples_us.reserve(static_cast<std::size_t>(samples));
     for (int frame = 0; frame < samples; ++frame) {
-        canvas.setGlyphFrames({edited_glyph_frame(visible_page, frame + warmup_frames)});
-        canvas.setSelectionRects(selection_rectangles(frame + warmup_frames, visible_page));
+        const int frame_index = frame + warmup_frames;
+        const QVariantMap glyph_frame = ime_suffix_shift
+                                            ? ime_updated_glyph_frame(visible_page, frame_index)
+                                            : edited_glyph_frame(visible_page, frame_index);
+        const QVariantList selection_frame =
+            selection_rectangles(frame + warmup_frames, visible_page);
         QElapsedTimer timer;
         timer.start();
+        canvas.setGlyphFrames({glyph_frame});
+        canvas.setSelectionRects(selection_frame);
+        install_samples_us.push_back(static_cast<double>(timer.nsecsElapsed()) / 1000.0);
+        timer.restart();
         if (!render_frame()) {
             std::fprintf(stderr, "QQuickRenderControl 软件渲染同步失败\n");
             return 2;
         }
-        samples_us.push_back(static_cast<double>(timer.nsecsElapsed()) / 1000.0);
+        const double render_time_us = static_cast<double>(timer.nsecsElapsed()) / 1000.0;
+        render_samples_us.push_back(render_time_us);
+        samples_us.push_back(install_samples_us.back() + render_time_us);
     }
     std::printf("{\"suite\":\"qt/cpu/software_scene_graph\",\"api\":\"Software\","
                 "\"renderer\":\"Qt Quick software adaptation\",\"device_type\":\"cpu_renderer\","
                 "\"qt_version\":\"%s\",\"font_source\":\"synthetic_rgba8_glyph_images\","
+                "\"timed_path\":\"setGlyphFrames+setSelectionRects+polish_sync_render\","
+                "\"update_scenario\":\"%s\","
                 "\"samples\":%d,\"resolution\":\"%dx%d\",\"page_count\":%d,"
                 "\"glyph_placements\":%d,"
                 "\"unique_images\":%d,\"selection_rectangles\":%d,"
+                "\"median_install_cpu_us\":%.3f,\"median_scene_graph_cpu_us\":%.3f,"
                 "\"median_frame_cpu_us\":%.3f,\"p95_frame_cpu_us\":%.3f}\n",
-                qVersion(), samples, render_size.width(), render_size.height(), page_count,
-                glyph_placements, unique_glyph_images, selection_rectangles_count,
+                qVersion(), ime_suffix_shift ? "ime_suffix_shift" : "single_glyph_change", samples,
+                render_size.width(), render_size.height(), page_count, glyph_placements,
+                unique_glyph_images, selection_rectangles_count,
+                percentile(install_samples_us, 0.50), percentile(render_samples_us, 0.50),
                 percentile(samples_us, 0.50), percentile(samples_us, 0.95));
     render_control.invalidate();
     return 0;
@@ -104,9 +127,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     QGuiApplication application(argc, argv);
-    const int typical_document_result = run(samples, 1);
-    if (typical_document_result != 0) {
-        return typical_document_result;
+    for (const bool ime_suffix_shift : {false, true}) {
+        for (const int page_count : {1, caret::performance::novel_page_count}) {
+            const int result = run(samples, page_count, ime_suffix_shift);
+            if (result != 0) {
+                return result;
+            }
+        }
     }
-    return run(samples, caret::performance::novel_page_count);
+    return 0;
 }
