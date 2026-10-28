@@ -142,7 +142,7 @@ jobs:
           retention-days: 30
 
   native-coverage:
-    name: full native coverage report (ubuntu)
+    name: native C++ 85% coverage gate (ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -170,6 +170,7 @@ jobs:
             target/native-coverage/line-coverage.txt
             target/native-coverage/product-summary.txt
             target/native-coverage/product-line-coverage.txt
+            target/native-coverage/gate.txt
             target/native-coverage/html/
           if-no-files-found: error
           retention-days: 30

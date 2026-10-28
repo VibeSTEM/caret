@@ -15,7 +15,9 @@ const CARGO_LLVM_COV_VERSION: &str = "0.9.1";
 
 const FUNCTIONS_MINIMUM: u64 = 85;
 const LINES_MINIMUM: u64 = 85;
+const NATIVE_COVERAGE_MINIMUM: u64 = 85;
 const IGNORED_SOURCE_REGEX: &str = r"[/\\](caret-launcher|caret-tests|caret-build)[/\\]";
+const NATIVE_PRODUCT_IGNORED_SOURCE_REGEX: &str = r"(/target/|googletest|/usr/|/tests/)";
 // 构建和测试调度不计入领域覆盖率；caret-tests::document 作为额外测试目标单独参与采集，
 // 避免执行会重新构建并启动 CTest 的 native 聚合入口。报告范围从 workspace 动态推导。
 const WORKSPACE_TEST_EXCLUSIONS: &[&str] = &["caret-tests", "caret-launcher", "caret-build"];
@@ -405,6 +407,8 @@ pub(super) fn native_coverage() -> Result<(), Box<dyn Error>> {
     run_command("native coverage merge", merge)?;
     let mut binaries = Vec::new();
     collect_test_binaries(&native, &mut binaries)?;
+    let app = find_native_app(&native)?.ok_or("没有找到 native 覆盖率应用程序产物")?;
+    binaries.push(app);
     binaries.sort();
     let first = binaries.first().ok_or("没有找到 native 覆盖率测试产物")?;
     let llvm_cov = llvm
@@ -426,7 +430,7 @@ pub(super) fn native_coverage() -> Result<(), Box<dyn Error>> {
     let mut product_report =
         native_llvm_cov_command(&llvm_cov, "report", first, &binaries, &merged);
     product_report.args([
-        "--ignore-filename-regex=(/target/|googletest|/usr/|/tests/)",
+        &format!("--ignore-filename-regex={NATIVE_PRODUCT_IGNORED_SOURCE_REGEX}"),
         "--show-region-summary=false",
     ]);
     let output = product_report.output()?;
@@ -451,7 +455,7 @@ pub(super) fn native_coverage() -> Result<(), Box<dyn Error>> {
     product_lines.args([
         "-format=text",
         "-show-line-counts-or-regions",
-        "-ignore-filename-regex=(/target/|googletest|/usr/|/tests/)",
+        &format!("-ignore-filename-regex={NATIVE_PRODUCT_IGNORED_SOURCE_REGEX}"),
     ]);
     let output = product_lines.output()?;
     if !output.status.success() {
@@ -467,7 +471,83 @@ pub(super) fn native_coverage() -> Result<(), Box<dyn Error>> {
     ])
     .arg(format!("-output-dir={}", report_dir.join("html").display()));
     run_command("native HTML coverage report", html)?;
+
+    let mut product_export =
+        native_llvm_cov_command(&llvm_cov, "export", first, &binaries, &merged);
+    product_export.args([
+        "-format=text",
+        "-summary-only",
+        &format!("-ignore-filename-regex={NATIVE_PRODUCT_IGNORED_SOURCE_REGEX}"),
+    ]);
+    let output = product_export.output()?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+    }
+    let product_coverage = NativeCoverage::parse(&output.stdout)?;
+    let gate = product_coverage.summary();
+    fs::write(report_dir.join("gate.txt"), &gate)?;
+    print!("{gate}");
+    product_coverage.check_gate(NATIVE_COVERAGE_MINIMUM)?;
     Ok(())
+}
+
+struct NativeCoverage {
+    totals: Totals,
+}
+
+impl NativeCoverage {
+    fn parse(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+        let value: Value = serde_json::from_slice(bytes)?;
+        if value["type"] != "llvm.coverage.json.export" {
+            return Err("不支持的 native LLVM coverage JSON 格式".into());
+        }
+        let data = value["data"]
+            .as_array()
+            .ok_or("native coverage data 缺失")?;
+        if data.len() != 1 {
+            return Err("native coverage 必须包含一个合并结果".into());
+        }
+        let totals = data[0]
+            .get("totals")
+            .and_then(Value::as_object)
+            .ok_or("native coverage totals 缺失")?;
+        let coverage = Totals {
+            functions: Metric::parse(
+                totals
+                    .get("functions")
+                    .ok_or("native coverage functions 缺失")?,
+            )?,
+            lines: Metric::parse(totals.get("lines").ok_or("native coverage lines 缺失")?)?,
+        };
+        if coverage.functions.count == 0 || coverage.lines.count == 0 {
+            return Err("native 产品源码没有可统计的函数或可执行行".into());
+        }
+        Ok(Self { totals: coverage })
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "Native product coverage gate: functions {}/{} ({}), lines {}/{} ({})\nExcluded: tests, generated/build output, third-party and system sources.\n",
+            self.totals.functions.covered,
+            self.totals.functions.count,
+            self.totals.functions.percent(),
+            self.totals.lines.covered,
+            self.totals.lines.count,
+            self.totals.lines.percent(),
+        )
+    }
+
+    fn check_gate(&self, minimum: u64) -> Result<(), Box<dyn Error>> {
+        if !self.totals.functions.reaches(minimum) || !self.totals.lines.reaches(minimum) {
+            return Err(format!(
+                "native 产品源码覆盖率低于 {minimum}% 门槛：函数 {}，行 {}",
+                self.totals.functions.percent(),
+                self.totals.lines.percent()
+            )
+            .into());
+        }
+        Ok(())
+    }
 }
 
 fn native_llvm_cov_command(
@@ -503,6 +583,27 @@ fn collect_test_binaries(directory: &Path, result: &mut Vec<PathBuf>) -> std::io
         }
     }
     Ok(())
+}
+
+fn find_native_app(directory: &Path) -> std::io::Result<Option<PathBuf>> {
+    let expected_name = caret_build::exe_name("caret");
+    let mut pending = vec![directory.join("app")];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(current)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                pending.push(path);
+            } else if entry.file_type()?.is_file()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == std::ffi::OsStr::new(&expected_name))
+            {
+                return Ok(Some(path));
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
