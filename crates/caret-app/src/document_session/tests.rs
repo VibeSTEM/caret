@@ -91,10 +91,16 @@ fn late_save_completion_cannot_move_the_saved_revision_backwards() -> Result<(),
     let later = service.save_snapshot()?;
     let path = std::path::Path::new("document.cdoc");
 
-    assert!(service.mark_saved(later.session_generation, later.document_generation, path));
+    assert!(service.mark_saved(
+        later.session_generation,
+        later.document_generation,
+        later.history_state_id,
+        path
+    ));
     assert!(service.mark_saved(
         earlier.session_generation,
         earlier.document_generation,
+        earlier.history_state_id,
         path
     ));
     let status: Value =
@@ -118,6 +124,7 @@ fn save_completion_only_marks_the_captured_revision_saved() -> Result<(), String
     assert!(service.mark_saved(
         captured.session_generation,
         captured.document_generation,
+        captured.history_state_id,
         std::path::Path::new("document.cdoc"),
     ));
     let status: Value =
@@ -132,6 +139,39 @@ fn save_completion_only_marks_the_captured_revision_saved() -> Result<(), String
 }
 
 #[test]
+fn undo_to_saved_history_state_restores_saved_status_and_redo_marks_edited() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    service.view_mut().insert_text_json("saved".to_owned())?;
+    let saved_snapshot = service.save_snapshot()?;
+    assert!(service.mark_saved(
+        saved_snapshot.session_generation,
+        saved_snapshot.document_generation,
+        saved_snapshot.history_state_id,
+        std::path::Path::new("document.cdoc"),
+    ));
+
+    service.view_mut().insert_text_json(" later".to_owned())?;
+    let edited: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(edited["dirty"], true);
+
+    service.view_mut().undo_json()?;
+    let undone: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(undone["dirty"], false);
+    assert_eq!(
+        undone["historyStateId"],
+        saved_snapshot.history_state_id.to_string()
+    );
+
+    service.view_mut().redo_json()?;
+    let redone: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(redone["dirty"], true);
+    Ok(())
+}
+
+#[test]
 fn delayed_save_completion_from_replaced_session_is_ignored() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     let stale = service.save_snapshot()?;
@@ -142,6 +182,7 @@ fn delayed_save_completion_from_replaced_session_is_ignored() -> Result<(), Stri
     assert!(!service.mark_saved(
         stale.session_generation,
         stale.document_generation,
+        stale.history_state_id,
         std::path::Path::new("stale.cdoc"),
     ));
     let status: Value =

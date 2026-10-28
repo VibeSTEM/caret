@@ -1,6 +1,7 @@
 //! 验证输入法预编辑、替换提交与失败原子性。
 
 use super::*;
+use caret_engine::Command;
 
 #[test]
 fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
@@ -575,6 +576,16 @@ fn failed_ime_preview_does_not_install_composition_state() -> Result<(), Box<dyn
     assert!(runtime.composition_id.is_none());
     assert!(runtime.composition_preview_session.is_none());
     assert!(runtime.composition_snapshot.is_none());
+
+    let (candidate, preview, _) =
+        runtime
+            .session
+            .composition_update_candidate(77, "X".to_owned(), None, 1)?;
+    drop((candidate, preview));
+    assert!(runtime.session.can_undo());
+    runtime.session.run(Command::Undo)?;
+    assert_eq!(runtime.session.document().body.len(), 1);
+    assert_eq!(runtime.session.document_generation(), 2);
     Ok(())
 }
 

@@ -202,6 +202,7 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
     }
     const quint64 session_generation = snapshot.session_generation;
     const quint64 document_generation = snapshot.document_generation;
+    const quint64 history_state_id = snapshot.history_state_id;
 
     ++m_pending_file_operations;
     ++m_pending_save_operations;
@@ -210,7 +211,7 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
     emit documentFileChanged();
     auto* watcher = new QFutureWatcher<QString>(this);
     connect(watcher, &QFutureWatcher<QString>::finished, this,
-            [this, watcher, path, session_generation, document_generation] {
+            [this, watcher, path, session_generation, document_generation, history_state_id] {
                 const QString error = watcher->result();
                 watcher->deleteLater();
                 --m_pending_file_operations;
@@ -231,7 +232,7 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
                     return;
                 }
                 const rust::String status = ffi::mark_document_saved_json(
-                    *active_runtime, session_generation, document_generation,
+                    *active_runtime, session_generation, document_generation, history_state_id,
                     layout_view_model_support::to_rust_string(path));
                 const QByteArray status_bytes = layout_view_model_support::response_bytes(status);
                 if (status_bytes.startsWith("error:")) {
@@ -277,13 +278,17 @@ void LayoutViewModel::refreshDocumentFileStatus() {
     const QString path = status.value(QStringLiteral("path")).toString();
     const QString file_name = status.value(QStringLiteral("fileName")).toString();
     const bool edited = status.value(QStringLiteral("dirty")).toBool();
+    const bool can_undo = status.value(QStringLiteral("canUndo")).toBool();
+    const bool can_redo = status.value(QStringLiteral("canRedo")).toBool();
     if (m_document_path == path && m_document_file_name == file_name &&
-        m_document_edited == edited) {
+        m_document_edited == edited && m_can_undo == can_undo && m_can_redo == can_redo) {
         return;
     }
     m_document_path = path;
     m_document_file_name = file_name.isEmpty() ? QStringLiteral("Untitled") : file_name;
     m_document_edited = edited;
+    m_can_undo = can_undo;
+    m_can_redo = can_redo;
     emit documentFileChanged();
 #endif
 }

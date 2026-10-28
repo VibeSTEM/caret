@@ -177,7 +177,7 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("ime.preview_layout: {error}"))?;
         let delta = self.composition_preview_delta_for(&snapshot, &range);
 
-        self.session = candidate;
+        self.session.install_composition_candidate(candidate);
         self.composition_id = Some(id);
         self.composition_preview_session = Some(preview);
         self.composition_snapshot = Some(snapshot);

@@ -2,6 +2,7 @@
 
 mod clipboard;
 mod composition;
+mod history;
 mod navigation;
 mod paragraph_edit;
 mod range_edit;
@@ -13,10 +14,15 @@ use super::paragraph_ops::{
     paragraph_at_location_mut,
 };
 use super::text_map::TextMap;
-use super::{Affinity, Command, EditError, Effect, InputComposition, Pos, Selection, StoryId};
+use super::{
+    Affinity, Command, Direction, EditError, Effect, InputComposition, Pos, Selection, StoryId,
+};
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
 use std::collections::VecDeque;
+use undo::History;
+
+use self::history::{DocumentPatch, SessionHistoryEdit};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
@@ -31,6 +37,11 @@ pub struct Session {
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
     paragraph_index: ParagraphIndex,
+    edit_history: History<SessionHistoryEdit>,
+    history_state_id: u64,
+    next_history_state_id: u64,
+    history_estimated_bytes: usize,
+    history_merge_epoch: u64,
 }
 
 impl Session {
@@ -59,6 +70,11 @@ impl Session {
             composition: None,
             last_committed_composition: None,
             text_map_cache: VecDeque::new(),
+            edit_history: history::history(),
+            history_state_id: 0,
+            next_history_state_id: 1,
+            history_estimated_bytes: 0,
+            history_merge_epoch: 0,
         })
     }
 
@@ -89,8 +105,57 @@ impl Session {
         self.composition.as_ref()
     }
 
+    /// 当前文档历史状态标识，用于把异步保存结果关联到实际保存点。
+    pub fn history_state_id(&self) -> u64 {
+        self.history_state_id
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.edit_history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.edit_history.can_redo()
+    }
+
+    /// 在异步保存捕获修订前切断输入合并，保留可精确返回的保存位置。
+    pub fn begin_save_checkpoint(&mut self) {
+        self.advance_history_merge_epoch();
+    }
+
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        if command == Command::Undo {
+            return self.restore_history(false);
+        }
+        if command == Command::Redo {
+            return self.restore_history(true);
+        }
+        let before_selection = self.selection.clone();
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_state_id = self.history_state_id;
+        let edit_group = history::edit_group(&command);
+        let breaks_history_merge = edit_group.is_none();
+        let mut before_paragraph_states = if is_document_edit(&command) {
+            let mut ids = history::before_selection_ids(&self.paragraph_index, &self.selection);
+            if let Command::Delete(direction) = &command
+                && self.selection.anchor == self.selection.focus
+                && let Some(adjacent_id) = self.adjacent_paragraph_for_delete(*direction)?
+            {
+                ids.push(adjacent_id);
+            }
+            history::paragraph_states_for_ids(&self.document, &self.paragraph_index, ids)
+        } else {
+            Vec::new()
+        };
+        let before_page_geometry = matches!(&command, Command::SetPageGeometry(_))
+            .then(|| {
+                self.document
+                    .page_sections
+                    .first()
+                    .and_then(|section| section.geometry().ok())
+            })
+            .flatten();
         let effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
             Command::PasteText(text) => self.paste_text(&text),
@@ -103,7 +168,11 @@ impl Session {
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),
             Command::CancelComposition { id } => self.cancel_composition(id),
             Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
+            Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
+        if breaks_history_merge {
+            self.advance_history_merge_epoch();
+        }
         if effect.selection_changed {
             self.selection_visual_affinity = match self.selection.focus.affinity {
                 Affinity::Upstream => VisualAffinity::Upstream,
@@ -111,6 +180,68 @@ impl Session {
             };
         }
         if effect.document_changed {
+            let after_state_id = self.allocate_history_state_id();
+            let patch = if let Some(before) = before_page_geometry {
+                let after = self
+                    .document
+                    .page_sections
+                    .first()
+                    .and_then(|section| section.geometry().ok())
+                    .ok_or_else(|| {
+                        EditError::InvalidDocument("document has no PageSection".to_owned())
+                    })?;
+                DocumentPatch::PageGeometry { before, after }
+            } else {
+                let mut ids = before_paragraph_states
+                    .iter()
+                    .map(|state| state.id.clone())
+                    .collect::<Vec<_>>();
+                if let Some(map) = &effect.position_map {
+                    history::state_ids_from_position_map(map, &mut ids);
+                }
+                let after_paragraph_states =
+                    history::paragraph_states_for_ids(&self.document, &self.paragraph_index, ids);
+                if after_paragraph_states.is_empty() {
+                    return Err(EditError::InvalidDocument(
+                        "changed document command did not produce a history patch".to_owned(),
+                    ));
+                }
+                let patch = DocumentPatch::Paragraphs {
+                    before: std::mem::take(&mut before_paragraph_states),
+                    after: after_paragraph_states,
+                    merge_group: edit_group,
+                    merge_epoch: self.history_merge_epoch,
+                };
+                let edit = SessionHistoryEdit::new(
+                    patch,
+                    before_selection,
+                    self.selection.clone(),
+                    before_visual_affinity,
+                    self.selection_visual_affinity,
+                    before_state_id,
+                    after_state_id,
+                );
+                self.record_history_edit(edit);
+                self.history_state_id = after_state_id;
+                if let Some(next) = self.document_generation.checked_add(1) {
+                    self.document_generation = next;
+                } else {
+                    self.session_id = NodeId::generate();
+                    self.document_generation = 0;
+                }
+                return Ok(effect);
+            };
+            let edit = SessionHistoryEdit::new(
+                patch,
+                before_selection,
+                self.selection.clone(),
+                before_visual_affinity,
+                self.selection_visual_affinity,
+                before_state_id,
+                after_state_id,
+            );
+            self.record_history_edit(edit);
+            self.history_state_id = after_state_id;
             if let Some(next) = self.document_generation.checked_add(1) {
                 self.document_generation = next;
             } else {
@@ -119,6 +250,101 @@ impl Session {
             }
         }
         Ok(effect)
+    }
+
+    fn record_history_edit(&mut self, edit: SessionHistoryEdit) {
+        let latest_edit_bytes = edit.estimated_bytes();
+        let transition = self.edit_history.edit(&mut self.document, edit.clone());
+        self.history_state_id = transition.state_id;
+        self.history_estimated_bytes = history::estimated_history_bytes(&self.edit_history);
+        if self.history_estimated_bytes > history::history_memory_limit() {
+            self.edit_history.clear();
+            self.history_estimated_bytes = 0;
+            if latest_edit_bytes <= history::history_memory_limit() {
+                let transition = self.edit_history.edit(&mut self.document, edit);
+                self.history_state_id = transition.state_id;
+                self.history_estimated_bytes = history::estimated_history_bytes(&self.edit_history);
+                if self.history_estimated_bytes > history::history_memory_limit() {
+                    self.edit_history.clear();
+                    self.history_estimated_bytes = 0;
+                }
+            }
+        }
+    }
+
+    fn advance_history_merge_epoch(&mut self) {
+        if let Some(next) = self.history_merge_epoch.checked_add(1) {
+            self.history_merge_epoch = next;
+        } else {
+            self.edit_history.clear();
+            self.history_estimated_bytes = 0;
+            self.history_merge_epoch = 0;
+        }
+    }
+
+    pub(super) fn allocate_history_state_id(&mut self) -> u64 {
+        let state_id = self.next_history_state_id;
+        if let Some(next) = state_id.checked_add(1) {
+            self.next_history_state_id = next;
+        } else {
+            self.edit_history.clear();
+            self.history_estimated_bytes = 0;
+            self.next_history_state_id = 1;
+        }
+        state_id
+    }
+
+    fn restore_history(&mut self, redo: bool) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        let transition = if redo {
+            self.edit_history.redo(&mut self.document)
+        } else {
+            self.edit_history.undo(&mut self.document)
+        };
+        let Some(transition) = transition else {
+            return Ok(Effect::default());
+        };
+        let (selection, visual_affinity, state_id) =
+            history::restore_history_transition(transition);
+        self.selection = selection;
+        self.selection_visual_affinity = visual_affinity;
+        self.history_state_id = state_id;
+        self.advance_history_merge_epoch();
+        self.paragraph_index = build_paragraph_index(&self.document.body);
+        self.text_map_cache.clear();
+        if let Some(next) = self.document_generation.checked_add(1) {
+            self.document_generation = next;
+        } else {
+            self.session_id = NodeId::generate();
+            self.document_generation = 0;
+        }
+        Ok(Effect {
+            document_changed: true,
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
+    fn adjacent_paragraph_for_delete(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Option<NodeId>, EditError> {
+        let position = self.selection.focus.clone();
+        let at_boundary = match direction {
+            Direction::Backward => position.offset == 0,
+            Direction::Forward => position.offset == self.text_map_for(&position)?.text.len(),
+        };
+        Ok(at_boundary
+            .then(|| {
+                history::include_adjacent_paragraph_id(
+                    &self.paragraph_index,
+                    &position.paragraph_id,
+                    direction,
+                )
+            })
+            .flatten())
     }
 
     fn set_page_geometry(&mut self, geometry: PageGeometry) -> Result<Effect, EditError> {
@@ -229,8 +455,26 @@ impl Clone for Session {
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),
+            edit_history: self.edit_history.clone(),
+            history_state_id: self.history_state_id,
+            next_history_state_id: self.next_history_state_id,
+            history_estimated_bytes: self.history_estimated_bytes,
+            history_merge_epoch: self.history_merge_epoch,
         }
     }
+}
+
+fn is_document_edit(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::InsertText(_)
+            | Command::PasteText(_)
+            | Command::InsertSoftBreak
+            | Command::SplitParagraph
+            | Command::Delete(_)
+            | Command::CommitComposition { .. }
+            | Command::SetPageGeometry(_)
+    )
 }
 
 #[cfg(test)]

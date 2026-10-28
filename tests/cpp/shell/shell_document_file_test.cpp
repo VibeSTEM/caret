@@ -145,3 +145,39 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
              QStringLiteral("段落追加！"));
 }
 #endif
+
+#ifdef CARET_ENABLE_APP
+void ShellLoadTest::documentHistoryUndoRedoTracksRustSession() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    caret::LayoutViewModel view_model;
+    QVERIFY(!view_model.canUndo());
+    QVERIFY(!view_model.canRedo());
+
+    const QVariantMap inserted = view_model.insertText(QStringLiteral("history"));
+    QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
+             qPrintable(inserted.value(QStringLiteral("error")).toString()));
+    QVERIFY(view_model.canUndo());
+
+    const QVariantMap undone = view_model.undo();
+    QVERIFY2(undone.value(QStringLiteral("valid")).toBool(),
+             qPrintable(undone.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
+             QString{});
+    QVERIFY(!view_model.canUndo());
+    QVERIFY(view_model.canRedo());
+
+    const QVariantMap redone = view_model.redo();
+    QVERIFY2(redone.value(QStringLiteral("valid")).toBool(),
+             qPrintable(redone.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model.paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
+             QStringLiteral("history"));
+    QVERIFY(view_model.canUndo());
+    QVERIFY(!view_model.canRedo());
+}
+#endif

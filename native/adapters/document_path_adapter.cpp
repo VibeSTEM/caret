@@ -26,7 +26,8 @@ QUrl DocumentPathAdapter::defaultSaveFileUrl() const {
     const QString suffix = QStringLiteral("cdoc");
     QString candidate = save_directory.filePath(base_name + u'.' + suffix);
     for (quint64 index = 1; QFileInfo::exists(candidate); ++index) {
-        candidate = save_directory.filePath(base_name + u'-' + QString::number(index) + u'.' + suffix);
+        candidate =
+            save_directory.filePath(base_name + u'-' + QString::number(index) + u'.' + suffix);
     }
     return QUrl::fromLocalFile(candidate);
 }

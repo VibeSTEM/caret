@@ -3,6 +3,28 @@ use super::DocumentViewRuntime;
 use caret_engine::{Command, Direction, DocumentLayoutDeltaView};
 
 impl DocumentViewRuntime {
+    /// 在 Rust Session 中撤销最近一次可撤销编辑，并重新生成完整布局快照。
+    pub fn undo_json(&mut self) -> Result<String, String> {
+        self.session
+            .run(Command::Undo)
+            .map_err(|error| format!("history.undo: {error}"))?;
+        self.anchor_visual_affinity = self.session.selection_visual_affinity();
+        self.preferred_visual_x_pt = None;
+        self.last_snapshot = None;
+        self.layout_snapshot_json()
+    }
+
+    /// 在 Rust Session 中重做最近一次可重做编辑，并重新生成完整布局快照。
+    pub fn redo_json(&mut self) -> Result<String, String> {
+        self.session
+            .run(Command::Redo)
+            .map_err(|error| format!("history.redo: {error}"))?;
+        self.anchor_visual_affinity = self.session.selection_visual_affinity();
+        self.preferred_visual_x_pt = None;
+        self.last_snapshot = None;
+        self.layout_snapshot_json()
+    }
+
     /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。
     pub fn insert_text_json(&mut self, text: String) -> Result<String, String> {
         self.insert_text_with_response(text, false)

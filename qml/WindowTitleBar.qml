@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import Caret.Adapters
+import Caret.ViewModels
 import QtQuick.Layouts
 
 Rectangle {
@@ -15,6 +16,8 @@ Rectangle {
     signal settingsRequested
     signal openRequested
     signal saveRequested
+    signal undoRequested
+    signal redoRequested
     property string documentName: qsTr("Untitled")
 
     readonly property int toolSide: Math.min(Theme.toolbarButtonHeight, Theme.titlebarHeight - Theme.spacingSmall)
@@ -72,12 +75,16 @@ Rectangle {
             objectName: "undoButton"
             iconName: "undo"
             accessibleName: qsTr("Undo")
+            enabled: LayoutViewModel.canUndo
+            onClicked: titleBar.undoRequested()
         }
 
         TitleToolButton {
             objectName: "redoButton"
             iconName: "redo"
             accessibleName: qsTr("Redo")
+            enabled: LayoutViewModel.canRedo
+            onClicked: titleBar.redoRequested()
         }
 
         Item {

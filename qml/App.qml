@@ -65,6 +65,8 @@ Window {
                 onOpenRequested: openDialog.open()
                 documentName: window.documentName
                 onSaveRequested: window.saveDocument()
+                onUndoRequested: LayoutViewModel.undo()
+                onRedoRequested: LayoutViewModel.redo()
             }
 
             WindowCommandBar {
@@ -217,6 +219,18 @@ Window {
     Shortcut {
         sequences: [StandardKey.SaveAs]
         onActivated: window.requestSaveAs()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: LayoutViewModel.canUndo
+        onActivated: LayoutViewModel.undo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: LayoutViewModel.canRedo
+        onActivated: LayoutViewModel.redo()
     }
 
     function saveDocument() {

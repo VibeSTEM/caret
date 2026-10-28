@@ -1,8 +1,8 @@
 # 快捷键
 
-更新日期：2026-10-27。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航与复制粘贴已接入。其他结构快捷键仍是目标绑定。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-10-28。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航、复制粘贴和撤销/重做已接入。其他结构快捷键仍是目标绑定。命令 id 见[命令](../editor/commands.md)。
 
-正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇。方向键按布局视觉位置移动，段落边界可跨段；Ctrl/Command+C 复制选中文本，Ctrl/Command+V 粘贴并替换选区。IME 与选区细节见[030](../../task/030-ime-navigation-selection.md)。
+正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇。方向键按布局视觉位置移动，段落边界可跨段；Ctrl/Command+C 复制选中文本，Ctrl/Command+V 粘贴并替换选区。撤销/重做分别使用 Windows/Linux 的 Ctrl+Z、Ctrl+Shift+Z，以及 macOS 的 Command+Z、Command+Shift+Z。IME 与选区细节见[030](../../task/030-ime-navigation-selection.md)。
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
@@ -18,6 +18,8 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 | 打开 `.cdoc` | Ctrl+O | Command+O |
 | 保存 | Ctrl+S | Command+S |
 | 另存为 | Ctrl+Shift+S | Command+Shift+S |
+| 撤销 | Ctrl+Z | Command+Z |
+| 重做 | Ctrl+Shift+Z | Command+Shift+Z |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
 | 扩展选区 | Shift+方向键 | Shift+方向键 |
 | 移至视觉行首 / 行尾 | Home / End | Home / End |

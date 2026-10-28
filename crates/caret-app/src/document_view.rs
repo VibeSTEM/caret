@@ -68,6 +68,23 @@ impl DocumentViewRuntime {
         self.session.document_generation()
     }
 
+    pub fn history_state_id(&self) -> u64 {
+        self.session.history_state_id()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.session.composition().is_none() && self.session.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.session.composition().is_none() && self.session.can_redo()
+    }
+
+    /// 保存快照前切断连续输入合并，不推进文档 revision 或保存状态。
+    pub fn begin_save_checkpoint(&mut self) {
+        self.session.begin_save_checkpoint();
+    }
+
     /// 当前文档树的只读视图，供应用服务捕获保存快照。
     pub fn document(&self) -> &Document {
         self.session.document()

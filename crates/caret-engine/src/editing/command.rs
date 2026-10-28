@@ -23,6 +23,8 @@ pub enum Command {
     CommitComposition { id: u64, text: String },
     CancelComposition { id: u64 },
     SetPageGeometry(PageGeometry),
+    Undo,
+    Redo,
 }
 
 impl Command {
@@ -39,6 +41,8 @@ impl Command {
             Self::CommitComposition { .. } => "ime.commit",
             Self::CancelComposition { .. } => "ime.cancel",
             Self::SetPageGeometry(_) => "page.geometry.set",
+            Self::Undo => "history.undo",
+            Self::Redo => "history.redo",
         }
     }
 }

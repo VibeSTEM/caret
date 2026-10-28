@@ -24,6 +24,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegularExpression>
 #include <QString>
@@ -222,10 +223,32 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     QObject* selector = component.create();
     QVERIFY2(selector != nullptr, qPrintable(component.errorString()));
+    QQuickWindow window;
+    auto* selector_item = qobject_cast<QQuickItem*>(selector);
+    QVERIFY(selector_item != nullptr);
+    selector_item->setParentItem(window.contentItem());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
     QCOMPARE(selector->property("mode").toString(), QStringLiteral("editing"));
     auto* button = selector->findChild<QObject*>(QStringLiteral("editingButton"));
     QVERIFY(button != nullptr);
     QCOMPARE(button->property("text").toString(), QStringLiteral("Editing"));
+
+    auto* button_item = qobject_cast<QQuickItem*>(button);
+    QVERIFY(button_item != nullptr);
+    button_item->forceActiveFocus();
+    QTest::keyClick(&window, Qt::Key_Space);
+    auto* mode_menu = selector->findChild<QObject*>(QStringLiteral("documentModeMenu"));
+    QVERIFY(mode_menu != nullptr);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::keyClick(&window, Qt::Key_Down);
+    QTest::keyClick(&window, Qt::Key_Enter);
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("review"));
+    QTest::keyClick(&window, Qt::Key_Space);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::keyClick(&window, Qt::Key_Down);
+    QTest::keyClick(&window, Qt::Key_Enter);
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
 
     QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
                                       Q_ARG(QString, QStringLiteral("review"))));

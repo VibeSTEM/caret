@@ -53,6 +53,8 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(bool documentFileBusy READ documentFileBusy NOTIFY documentFileChanged)
     Q_PROPERTY(bool documentOpening READ documentOpening NOTIFY documentFileChanged)
     Q_PROPERTY(QString documentSaveStatus READ documentSaveStatus NOTIFY documentFileChanged)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY documentFileChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY documentFileChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry NOTIFY caretGeometryChanged)
 
   public:
@@ -85,6 +87,8 @@ class LayoutViewModel final : public QObject {
         }
         return m_document_edited ? QStringLiteral("edited") : QStringLiteral("saved");
     }
+    [[nodiscard]] bool canUndo() const { return m_can_undo; }
+    [[nodiscard]] bool canRedo() const { return m_can_redo; }
     [[nodiscard]] const QVariantMap& caretGeometry() const { return m_caret_geometry; }
 
     /// 将页面局部 pt 坐标交给 Rust 布局快照，返回带文档位置的命中结果。
@@ -97,6 +101,10 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap splitParagraph();
     /// 将 Backspace 提交给 Rust，并安装删除后的页面快照。
     Q_INVOKABLE QVariantMap deleteBackward();
+    /// 在 Rust Session 中撤销最近一次编辑。
+    Q_INVOKABLE QVariantMap undo();
+    /// 在 Rust Session 中重做当前分支上的编辑。
+    Q_INVOKABLE QVariantMap redo();
     /// 将 Shift+Return 提交为段内软换行。
     Q_INVOKABLE QVariantMap insertSoftBreak();
     /// 按视觉顺序移动 caret，并由 Rust 更新布局快照。
@@ -167,6 +175,8 @@ class LayoutViewModel final : public QObject {
     QString m_document_path;
     QString m_document_file_name = QStringLiteral("Untitled");
     bool m_document_edited = false;
+    bool m_can_undo = false;
+    bool m_can_redo = false;
     bool m_document_file_busy = false;
     bool m_document_opening = false;
     int m_pending_file_operations = 0;

@@ -59,6 +59,36 @@ QVariantMap LayoutViewModel::deleteBackward() {
 #endif
 }
 
+QVariantMap LayoutViewModel::undo() {
+#ifdef CARET_ENABLE_APP
+    ffi::DocumentRuntime* runtime = nullptr;
+    if (auto error = layout_view_model_support::runtime_error(
+            runtime, QStringLiteral("history.undo_wrong_thread"))) {
+        return *error;
+    }
+    const rust::String response = ffi::undo_json(*runtime);
+    return installEditResponse(layout_view_model_support::response_bytes(response));
+#else
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
+QVariantMap LayoutViewModel::redo() {
+#ifdef CARET_ENABLE_APP
+    ffi::DocumentRuntime* runtime = nullptr;
+    if (auto error = layout_view_model_support::runtime_error(
+            runtime, QStringLiteral("history.redo_wrong_thread"))) {
+        return *error;
+    }
+    const rust::String response = ffi::redo_json(*runtime);
+    return installEditResponse(layout_view_model_support::response_bytes(response));
+#else
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
 QVariantMap LayoutViewModel::insertSoftBreak() {
 #ifdef CARET_ENABLE_APP
     ffi::DocumentRuntime* runtime = nullptr;

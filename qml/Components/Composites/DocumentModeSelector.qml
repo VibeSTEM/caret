@@ -14,6 +14,7 @@ Item {
 
     readonly property int menuWidth: Theme.searchFieldWidth + Theme.spacingLarge * 2
     readonly property int optionHeight: Theme.toolbarButtonHeight + Theme.spacingLarge
+    readonly property var modes: ["editing", "review", "view"]
 
     implicitWidth: modeButton.implicitWidth
     implicitHeight: modeButton.implicitHeight
@@ -71,6 +72,13 @@ Item {
         width: selector.menuWidth
         padding: Theme.spacingXSmall
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        focus: true
+
+        onOpened: {
+            const index = Math.max(0, selector.modes.indexOf(selector.mode));
+            modeOptions.itemAt(index).forceActiveFocus();
+        }
+        onClosed: modeButton.forceActiveFocus()
 
         background: Rectangle {
             radius: Theme.radiusSmall
@@ -84,13 +92,15 @@ Item {
             spacing: Theme.spacingTiny
 
             Repeater {
-                model: ["editing", "review", "view"]
+                id: modeOptions
+                model: selector.modes
 
                 delegate: Item {
                     id: option
                     objectName: "documentModeOption-" + modelData
 
                     required property string modelData
+                    required property int index
 
                     readonly property bool selected: selector.mode === modelData
                     readonly property string title: selector.labelFor(modelData)
@@ -98,14 +108,30 @@ Item {
 
                     width: options.width
                     height: selector.optionHeight
+                    activeFocusOnTab: true
                     Accessible.name: title + ". " + description
-                    Accessible.role: Accessible.Button
+                    Accessible.role: Accessible.MenuItem
                     Accessible.onPressAction: selector.choose(option.modelData)
+
+                    Keys.onPressed: event => {
+                        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                            const offset = event.key === Qt.Key_Up ? -1 : 1;
+                            const nextIndex = (option.index + selector.modes.length + offset) % selector.modes.length;
+                            modeOptions.itemAt(nextIndex).forceActiveFocus();
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                            selector.choose(option.modelData);
+                            event.accepted = true;
+                        } else if (event.key === Qt.Key_Escape) {
+                            modeMenu.close();
+                            event.accepted = true;
+                        }
+                    }
 
                     Rectangle {
                         anchors.fill: parent
                         radius: Theme.radiusSmall
-                        color: optionMouseArea.containsMouse ? Theme.colorHover : Theme.colorTransparent
+                        color: optionMouseArea.containsMouse || option.activeFocus ? Theme.colorHover : Theme.colorTransparent
                     }
 
                     RowLayout {
