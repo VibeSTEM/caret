@@ -27,9 +27,9 @@ fn built_in_themes_merge_full_typed_snapshots() -> Result<(), ThemeError> {
     assert_eq!(
         dark.tokens
             .iter()
-            .find(|token| token.qml_name == "colorBackground")
+            .find(|token| token.qml_name == "colorPanel")
             .map(|token| &token.value),
-        Some(&ThemeTokenValue::Color("#202124".to_owned()))
+        Some(&ThemeTokenValue::Color("#292a2d".to_owned()))
     );
     assert_eq!(
         dark.tokens
@@ -38,19 +38,12 @@ fn built_in_themes_merge_full_typed_snapshots() -> Result<(), ThemeError> {
             .map(|token| &token.value),
         Some(&ThemeTokenValue::Integer(28))
     );
-    assert_eq!(
-        dark.tokens
-            .iter()
-            .find(|token| token.qml_name == "colorBrand")
-            .map(|token| &token.value),
-        Some(&ThemeTokenValue::Color("#c8322b".to_owned()))
-    );
     let light = service.select("light")?;
     assert_eq!(
         light
             .tokens
             .iter()
-            .find(|token| token.qml_name == "colorBackground")
+            .find(|token| token.qml_name == "colorPanel")
             .map(|token| &token.value),
         Some(&ThemeTokenValue::Color("#ffffff".to_owned()))
     );
@@ -121,7 +114,7 @@ fn optional_visual_tokens_allow_zero_but_required_dimensions_remain_positive()
 -> Result<(), ThemeError> {
     let zero_visual_values = LIGHT.replace(
             "kind: theme\n",
-            "kind: theme\n\nvalues:\n  spacing-small: int = 0\n  radius-small: int = 0\n  border-width: int = 0\n  tab-slide-duration: int = 0\n  document-tab-animation-duration: int = 0\n  tool-tip-delay: int = 0\n",
+            "kind: theme\n\nvalues:\n  spacing-small: int = 0\n  radius-small: int = 0\n  border-width: int = 0\n  tool-tip-delay: int = 0\n",
         );
     let mut service = ThemeService::new(
         GUI,
@@ -132,14 +125,7 @@ fn optional_visual_tokens_allow_zero_but_required_dimensions_remain_positive()
         "light",
     )?;
     let light = service.select("light")?;
-    for token_name in [
-        "spacingSmall",
-        "radiusSmall",
-        "borderWidth",
-        "tabSlideDuration",
-        "documentTabAnimationDuration",
-        "toolTipDelay",
-    ] {
+    for token_name in ["spacingSmall", "radiusSmall", "borderWidth", "toolTipDelay"] {
         assert_eq!(
             light
                 .tokens
@@ -186,7 +172,7 @@ fn invalid_theme_selection_preserves_current_snapshot() -> Result<(), ThemeError
 
 #[test]
 fn schema_rejects_unknown_and_invalid_color_tokens() -> Result<(), ThemeError> {
-    let unknown = DARK.replace("color-background", "color-unknown");
+    let unknown = DARK.replace("color-panel", "color-unknown");
     assert_eq!(
         ThemeService::new(
             GUI,
@@ -207,7 +193,7 @@ fn schema_rejects_unknown_and_invalid_color_tokens() -> Result<(), ThemeError> {
             ("light".to_owned(), LIGHT.to_owned()),
             (
                 "dark".to_owned(),
-                DARK.replace("  color-background: string = \"#202124\"\n", ""),
+                DARK.replace("  color-panel: string = \"#292a2d\"\n", ""),
             ),
         ],
         "light",
@@ -217,12 +203,12 @@ fn schema_rejects_unknown_and_invalid_color_tokens() -> Result<(), ThemeError> {
             .select("dark")?
             .tokens
             .iter()
-            .find(|token| token.qml_name == "colorBackground")
+            .find(|token| token.qml_name == "colorPanel")
             .map(|token| &token.value),
         Some(&ThemeTokenValue::Color("#ffffff".to_owned()))
     );
 
-    let invalid = DARK.replace("#202124", "not-a-color");
+    let invalid = DARK.replace("#292a2d", "not-a-color");
     assert_eq!(
         ThemeService::new(
             GUI,
@@ -237,10 +223,8 @@ fn schema_rejects_unknown_and_invalid_color_tokens() -> Result<(), ThemeError> {
         Some("theme.invalid_color")
     );
 
-    let wrong_color_type = DARK.replace(
-        "color-background: string = \"#202124\"",
-        "color-background: int = 12",
-    );
+    let wrong_color_type =
+        DARK.replace("color-panel: string = \"#292a2d\"", "color-panel: int = 12");
     assert_eq!(
         ThemeService::new(
             GUI,
@@ -327,15 +311,12 @@ fn baseline_requires_all_tokens_and_rejects_out_of_range_values() {
 }
 
 #[test]
-fn builtin_catalog_json_carries_the_light_background() {
+fn builtin_catalog_json_carries_the_light_panel_color() {
     let json = builtin_theme_catalog().unwrap_or_else(|error| panic!("{error}"));
     let value: serde_json::Value =
         serde_json::from_str(&json).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value["active"], "light");
-    assert_eq!(value["themes"]["light"]["colorBackground"]["kind"], "color");
-    assert_eq!(
-        value["themes"]["light"]["colorBackground"]["value"],
-        "#ffffff"
-    );
+    assert_eq!(value["themes"]["light"]["colorPanel"]["kind"], "color");
+    assert_eq!(value["themes"]["light"]["colorPanel"]["value"], "#ffffff");
     assert_eq!(value["themes"]["dark"]["fontBody"]["kind"], "int");
 }

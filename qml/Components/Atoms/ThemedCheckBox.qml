@@ -11,11 +11,23 @@ CheckBox {
     hoverEnabled: true
     font.pixelSize: Theme.fontBody
     opacity: enabled ? 1 : Theme.disabledOpacity
-    indicator: CheckIndicator {
+    indicator: Rectangle {
         x: control.leftPadding
         y: (control.height - height) / 2
-        checked: control.checked
-        focused: control.visualFocus
+        implicitWidth: Theme.selectionIndicatorSize
+        implicitHeight: Theme.selectionIndicatorSize
+        radius: Theme.radiusSmall
+        color: control.checked ? Theme.colorFocus : Theme.colorPanel
+        border.color: control.checked || control.visualFocus ? Theme.colorFocus : Theme.colorPanelLine
+        border.width: control.visualFocus ? Theme.focusBorderWidth : Theme.borderWidth
+
+        ThemedIcon {
+            anchors.centerIn: parent
+            name: "check"
+            iconSize: Theme.iconSizeCompact
+            color: Theme.colorPanel
+            visible: control.checked
+        }
     }
     contentItem: ThemedLabel {
         text: control.text

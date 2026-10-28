@@ -38,6 +38,7 @@
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <QtTest/qtestkeyboard.h>
+#include <QtTest/qtestmouse.h>
 #include <qcontainerfwd.h>
 #include <utility>
 
@@ -74,7 +75,6 @@ QVariantMap snapshot_from_theme_facade(const QString& path, const QColor& backgr
             tokens.insert(name, 16);
         }
     }
-    tokens.insert(QStringLiteral("colorBackground"), background);
     tokens.insert(QStringLiteral("colorPanel"), background);
     tokens.insert(QStringLiteral("colorPanelLine"), QColor(QStringLiteral("#c9c9c9")));
     tokens.insert(QStringLiteral("colorTransparent"), QColor(Qt::transparent));
@@ -96,7 +96,7 @@ void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
                                                theme, QColor(QStringLiteral("#ffffff")), 16));
     themes.insert(QStringLiteral("dark"), caret::shell_test::snapshot_from_theme_facade(
                                               theme, QColor(QStringLiteral("#111111")), 18));
-    QVERIFY(themes.value(QStringLiteral("light")).contains(QStringLiteral("colorBackground")));
+    QVERIFY(themes.value(QStringLiteral("light")).contains(QStringLiteral("colorPanel")));
     caret::install_theme_snapshots(themes, QStringLiteral("light"));
 
     QQmlApplicationEngine engine;
@@ -108,7 +108,7 @@ void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
                           "import Caret.Shell\n"
                           "Item {\n"
                           "    objectName: \"probe\"\n"
-                          "    property color background: Theme.colorBackground\n"
+                          "    property color background: Theme.colorPanel\n"
                           "    property int body: Theme.fontBody\n"
                           "    ThemedLabel { objectName: \"label\"; text: \"Caret\" }\n"
                           "}\n"),

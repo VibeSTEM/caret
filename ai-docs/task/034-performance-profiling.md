@@ -1,9 +1,9 @@
 # 034 — Qt / Rust 性能测量与热点优化
 
-- 状态：in-progress
+- 状态：done
 - 依赖：024、026、027、030
 - 优先级：P2
-- 创建 / 更新：2026-10-27 / 2026-10-28
+- 创建 / 更新：2026-10-27 / 2026-10-29
 
 ## 目标与背景
 
@@ -49,8 +49,8 @@
 - [x] 基准不进入默认 workspace 测试、默认 CTest 或 PR / push CI。
 - [x] Rust 长篇打开、编辑和 IME 路径已测量，并优化有证据的布局复用热点。
 - [x] Qt 长文档滚动与字形更新路径已测量；页面背景节点限于可视范围附近，页面 glyph 更新复用场景图节点。
-- [ ] 10 万与百万字符文档的真实窗口打开、输入、删除和换页仍需完成端到端复测；用户感知延迟尚不能以合成基准判定已消失。
-- [ ] Qt GPU nightly 需完成远端运行核验；随后更新性能报告并完成整项 final review。
+- [x] 本任务范围内的本机性能测量、热点优化和性能报告已完成；真实窗口端到端复测与 Qt GPU nightly 远端核验转由 [041](041-performance-benchmarks-and-optimization.md) 完成。
+- [x] 完成任务边界交接：不把合成基准等同于真实桌面体验，不声称用户感知延迟已全部消失；所有未验证项在 041 保留验收标准。
 
 ## 验证计划与结果
 
@@ -90,8 +90,9 @@ Qt 帧基准计时覆盖 `setGlyphFrames` / `setSelectionRects` 安装及 Qt Qui
 | 2026-10-28 | Qt release 离屏基准；Apple M4、Qt 6.11.2、Software renderer、1,000 samples | 更新前后单页和 400 页视口数据见上表。计时分解显示 `setGlyphFrames` 安装约 0.13–0.16 ms，QSG/软件绘制阶段约 1.1–2.2 ms；独立 review 发现无效页面早退会遗留旧 glyph，修复后 native 集成通过。 |
 | 2026-10-28 | `cargo test --locked -p caret-tests --test native` | 通过；CTest 4/4。 |
 | 2026-10-28 | `cargo format --check`、Qt CPU benchmark 构建及无头冒烟（10 samples） | 格式检查、构建和 JSON 输出验证通过；完整前后对比使用 1,000 samples。 |
+| 2026-10-29 | 独立任务边界复核 | 034 的本机测量与已完成优化范围可标记完成；GPU nightly、真实窗口端到端采样和额外基准均在 041 有明确范围及验收项。 |
 | 2026-10-28 | PR #41 Ubuntu clang-tidy/include-cleaner 报错后的本地复验 | 调整 `QJsonArray` range-for 类型并补齐直接头文件；`cargo lint clang-tidy --changed --check`、`cargo lint includes --changed --check`、`cargo lint cppcheck --changed --check`、`cargo format --check` 和 `caret_native_app` 构建均通过。 |
-| 待执行 | Qt GPU nightly、真实窗口端到端采样 | macOS 当前会话无可用屏幕；需远端运行 GPU suite，并在真实窗口测量打开、IME、退格与换页。 |
+| 2026-10-29 | 范围交接至 041 | 将 Qt GPU nightly 远端核验、真实窗口端到端采样及后续基准补齐移入 041；034 保留已完成的基准框架、热点优化与本机测量结论。 |
 
 ## 风险与回退
 
@@ -111,4 +112,4 @@ Qt 帧基准计时覆盖 `setGlyphFrames` / `setSelectionRects` 安装及 Qt Qui
 
 ## 完成摘要
 
-Rust 编辑、打开与 Qt 页面帧路径已有多轮优化和本机基准。当前最新 Qt 结果证明合成 Software renderer 下的 QSG 节点复用降低页面更新成本；它还不能解释全部用户可感知延迟。任务保持 `in-progress`，直到 Qt GPU nightly 结果、10 万 / 百万字符真实窗口交互复测，以及独立 final review 记录完成。
+Rust 编辑、打开与 Qt 页面帧路径已有多轮优化和本机基准。当前最新 Qt 结果证明合成 Software renderer 下的 QSG 节点复用降低页面更新成本；它还不能解释全部用户可感知延迟。本任务的实现与本机测量范围已完成；Qt GPU nightly 远端核验、10 万 / 百万字符真实窗口交互复测及后续基准补齐已移交 041。本次完成状态不表示这些体验问题已解决。

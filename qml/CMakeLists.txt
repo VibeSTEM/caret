@@ -10,40 +10,25 @@ set(CARET_SHELL_QML_FILES
     PageSurface.qml
     WindowStatusBar.qml
     Themes/Theme.qml
-    Components/Atoms/MenuTabButton.qml
-    Components/Atoms/ThemedNumberField.qml
-    Components/Atoms/ChromeToolButton.qml
+    Components/Atoms/CommandBarTabButton.qml
+    Components/Atoms/ThemedNumericField.qml
     Components/Atoms/ThemedButton.qml
     Components/Atoms/ThemedCheckBox.qml
     Components/Atoms/ThemedSwitch.qml
     Components/Atoms/TitleBarPillButton.qml
     Components/Atoms/ThemedRadioButton.qml
     Components/Atoms/ThemedComboBox.qml
-    Components/Atoms/CheckIndicator.qml
     Components/Atoms/ThemedLabel.qml
     Components/Atoms/ThemedToolButton.qml
     Components/Atoms/ThemedTextField.qml
     Components/Atoms/ThemedIcon.qml
-    Components/Atoms/PanelSurface.qml
-    Components/Atoms/RibbonComboBox.qml
     Canvas/DocumentCanvasPointerHandler.qml
-    Components/Composites/ToolGroup.qml
-    Components/Composites/ApplicationBackstageCommand.qml
-    Components/Composites/RibbonTile.qml
-    Components/Composites/RibbonGroup.qml
-    Components/Composites/RibbonContent.qml
-    Components/Composites/HorizontalToolStrip.qml
-    Components/Composites/DocumentTabBar.qml
     Components/Composites/DocumentModeSelector.qml
     Components/Composites/ShareButton.qml
-    Components/Composites/PanelTabBar.qml
-    Components/Composites/InformationPanel.qml
-    Components/Composites/PaneCloseButton.qml
     Components/Composites/DialogTitleBar.qml
     Components/Composites/DialogWindow.qml
     Components/Composites/DialogFrame.qml
     Components/Composites/DialogButtonRow.qml
-    Components/Composites/FormSection.qml
     Dialogs/NewProjectDialog.qml
     Dialogs/RecoveryDialog.qml
     Dialogs/SaveConflictDialog.qml
