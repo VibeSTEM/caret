@@ -19,8 +19,9 @@ mod generated {
         install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
         move_visual_caret_json, new_blank_document_runtime, paste_text_json,
-        place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
-        set_selection_json, split_paragraph_json, write_document_file,
+        place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, redo_json,
+        selected_text_json, set_selection_json, split_paragraph_json, undo_json,
+        write_document_file,
     };
     use crate::settings::{
         SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_caret_blink_enabled,
@@ -79,6 +80,7 @@ mod generated {
         struct DocumentSaveSnapshot {
             session_generation: u64,
             document_generation: u64,
+            history_state_id: u64,
             bytes: Vec<u8>,
             error: String,
         }
@@ -125,10 +127,14 @@ mod generated {
                 runtime: &mut DocumentRuntime,
                 session_generation: u64,
                 document_generation: u64,
+                history_state_id: u64,
                 path: String,
             ) -> String;
             /// 返回文档名、路径和未保存状态。
             fn document_status_json(runtime: &mut DocumentRuntime) -> String;
+            /// 在 Rust Session 中撤销/重做并返回最新布局快照。
+            fn undo_json(runtime: &mut DocumentRuntime) -> String;
+            fn redo_json(runtime: &mut DocumentRuntime) -> String;
             /// 从宿主给定的配置路径载入 Rust 偏好服务；无效文件会按服务规则隔离并回退默认值。
             fn new_settings_runtime(settings_path: String) -> Box<SettingsRuntime>;
             /// 获取 Rust SettingsService 派生的界面快照。

@@ -121,7 +121,7 @@ pub(crate) fn write_document_file(path: String, bytes: Vec<u8>) -> String {
 pub(crate) fn document_save_snapshot(
     runtime: &mut DocumentRuntime,
 ) -> bridge::DocumentSaveSnapshot {
-    match &runtime.runtime {
+    match &mut runtime.runtime {
         Ok(runtime) => match runtime.save_snapshot() {
             Ok(snapshot) => to_bridge_snapshot(snapshot),
             Err(error) => empty_save_snapshot(error),
@@ -134,6 +134,7 @@ fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSna
     bridge::DocumentSaveSnapshot {
         session_generation: snapshot.session_generation,
         document_generation: snapshot.document_generation,
+        history_state_id: snapshot.history_state_id,
         bytes: snapshot.bytes,
         error: String::new(),
     }
@@ -143,6 +144,7 @@ fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot {
     bridge::DocumentSaveSnapshot {
         session_generation: 0,
         document_generation: 0,
+        history_state_id: 0,
         bytes: Vec::new(),
         error,
     }
@@ -153,12 +155,17 @@ pub(crate) fn mark_document_saved_json(
     runtime: &mut DocumentRuntime,
     session_generation: u64,
     document_generation: u64,
+    history_state_id: u64,
     path: String,
 ) -> String {
     match &mut runtime.runtime {
         Ok(runtime) => {
-            let accepted =
-                runtime.mark_saved(session_generation, document_generation, Path::new(&path));
+            let accepted = runtime.mark_saved(
+                session_generation,
+                document_generation,
+                history_state_id,
+                Path::new(&path),
+            );
             if accepted {
                 runtime.status_json()
             } else {
@@ -175,6 +182,14 @@ pub(crate) fn document_status_json(runtime: &mut DocumentRuntime) -> String {
         Ok(runtime) => runtime.status_json(),
         Err(error) => format!("error:{error}"),
     }
+}
+
+pub(crate) fn undo_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::undo_json)
+}
+
+pub(crate) fn redo_json(runtime: &mut DocumentRuntime) -> String {
+    json_response(runtime, DocumentViewRuntime::redo_json)
 }
 
 /// 返回页面/段落布局 JSON；错误以 `error:` 开头，调用方不可当作快照消费。
@@ -403,7 +418,7 @@ mod tests {
         let expected = "error:document.initialization_failed";
         let responses = [
             document_status_json(&mut runtime),
-            mark_document_saved_json(&mut runtime, 1, 0, "test.cdoc".to_owned()),
+            mark_document_saved_json(&mut runtime, 1, 0, 0, "test.cdoc".to_owned()),
             layout_snapshot_json(&mut runtime),
             interaction_state_json(&mut runtime),
             document_hit_test_json(&mut runtime, 0, 1.0, 1.0),

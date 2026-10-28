@@ -4,6 +4,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import Caret.Adapters
+import Caret.ViewModels
 import QtQuick.Layouts
 
 Rectangle {
@@ -15,11 +16,12 @@ Rectangle {
     signal settingsRequested
     signal openRequested
     signal saveRequested
+    signal undoRequested
+    signal redoRequested
     property string documentName: qsTr("Untitled")
 
     readonly property int toolSide: Math.min(Theme.toolbarButtonHeight, Theme.titlebarHeight - Theme.spacingSmall)
-    readonly property int fieldHeight: Math.min(Theme.searchHeight, Theme.titlebarHeight - Theme.spacingSmall)
-    // 非 macOS 左侧没有系统按钮。内容边距与 Home 文案对齐，避免 AutoSave 贴住窗口边。
+    // 系统窗口控件占用的区域由 WindowChromeMetrics 提供，QML 只增加主题间距。
     readonly property real leadingMargin: leftInset > 0 ? leftInset + Theme.spacingSmall : Theme.spacingMedium + Theme.spacingLarge
     readonly property real trailingMargin: rightInset > 0 ? rightInset + Theme.spacingSmall : Theme.spacingMedium + Theme.spacingLarge
 
@@ -38,9 +40,10 @@ Rectangle {
     }
 
     RowLayout {
-        anchors.fill: parent
+        id: leftControls
+        anchors.left: parent.left
         anchors.leftMargin: titleBar.leadingMargin
-        anchors.rightMargin: titleBar.trailingMargin
+        anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.spacingSmall
 
         ThemedSwitch {
@@ -72,90 +75,105 @@ Rectangle {
             objectName: "undoButton"
             iconName: "undo"
             accessibleName: qsTr("Undo")
+            enabled: LayoutViewModel.canUndo
+            onClicked: titleBar.undoRequested()
         }
 
         TitleToolButton {
             objectName: "redoButton"
             iconName: "redo"
             accessibleName: qsTr("Redo")
+            enabled: LayoutViewModel.canRedo
+            onClicked: titleBar.redoRequested()
+        }
+    }
+
+    Item {
+        id: captionArea
+        objectName: "shellCaptionDragArea"
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.max(0, titleBar.width - 2 * Math.max(leftControls.implicitWidth + titleBar.leadingMargin, rightControls.implicitWidth + titleBar.trailingMargin))
+        height: titleBar.height
+        z: 0
+
+        ThemedLabel {
+            anchors.fill: parent
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            text: titleBar.documentName
+            textColor: Theme.colorText
+            textSize: Theme.fontBody
+            font.weight: Font.DemiBold
         }
 
-        Item {
-            id: captionArea
-            objectName: "shellCaptionDragArea"
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.minimumWidth: Theme.spacingLarge
-            Layout.maximumHeight: titleBar.height
-
-            ThemedLabel {
-                anchors.fill: parent
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-                text: titleBar.documentName
-                textColor: Theme.colorText
-                textSize: Theme.fontBody
-                font.weight: Font.DemiBold
-            }
-
-            // 扩展客户区盖住了系统标题栏。拖动和双击交给平台窗口管理器。
-            DragHandler {
-                target: null
-                acceptedButtons: Qt.LeftButton
-                onActiveChanged: {
-                    if (active && titleBar.window)
-                        titleBar.window.startSystemMove();
-                }
-            }
-
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                exclusiveSignals: TapHandler.DoubleTap
-                onDoubleTapped: (eventPoint, button) => {
-                    if (button === Qt.LeftButton)
-                        WindowChromeMetrics.performTitlebarDoubleClickAction();
-                }
+        // 扩展客户区盖住了系统标题栏。拖动和双击交给平台窗口管理器。
+        DragHandler {
+            target: null
+            acceptedButtons: Qt.LeftButton
+            onActiveChanged: {
+                if (active && titleBar.window)
+                    titleBar.window.startSystemMove();
             }
         }
 
-        Rectangle {
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            exclusiveSignals: TapHandler.DoubleTap
+            onDoubleTapped: (eventPoint, button) => {
+                if (button === Qt.LeftButton)
+                    WindowChromeMetrics.performTitlebarDoubleClickAction();
+            }
+        }
+    }
+
+    RowLayout {
+        id: rightControls
+        anchors.right: parent.right
+        anchors.rightMargin: titleBar.trailingMargin
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Theme.spacingSmall
+
+        TitleToolButton {
+            objectName: "commentsButton"
+            iconName: "comments"
+            accessibleName: qsTr("Comments")
+        }
+
+        DocumentModeSelector {
+            id: documentModeSelector
+            objectName: "documentModeSelector"
             Layout.alignment: Qt.AlignVCenter
-            Layout.preferredWidth: Theme.searchFieldWidth
-            Layout.preferredHeight: titleBar.fieldHeight
-            Layout.maximumHeight: titleBar.fieldHeight
-            radius: Theme.radiusSmall
-            clip: true
-            color: Theme.colorPanel
-            border.width: Theme.borderWidth
-            border.color: searchField.activeFocus ? Theme.colorFocus : Theme.colorPanelLine
+            Layout.maximumHeight: titleBar.toolSide
+        }
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.spacingXSmall
-                anchors.rightMargin: Theme.spacingXSmall
-                spacing: Theme.spacingXSmall
-
-                ThemedIcon {
-                    name: "search"
-                    iconSize: Theme.iconSizeCompact
-                    color: Theme.colorTextMuted
-                }
-
-                ThemedTextField {
-                    id: searchField
-                    objectName: "commandSearch"
-                    Accessible.name: qsTr("Search commands and help")
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    placeholderText: qsTr("Search commands and help")
-                    font.pixelSize: Theme.fontSmall
-                    background: Rectangle {
-                        color: Theme.colorTransparent
-                        border.width: 0
-                    }
-                }
+        ThemedToolButton {
+            id: shareButton
+            objectName: "shareButton"
+            Layout.alignment: Qt.AlignVCenter
+            Layout.maximumHeight: titleBar.toolSide
+            font.pixelSize: Theme.fontSmall
+            contentPadding: Theme.spacingTiny
+            iconName: "share"
+            text: qsTr("Share")
+            showCaret: true
+            controlHeight: titleBar.toolSide
+            contentColor: Theme.colorPanel
+            hoverColor: Theme.colorTransparent
+            pressedColor: Theme.colorTransparent
+            background: Rectangle {
+                radius: Theme.radiusSmall
+                color: shareButton.hovered || shareButton.pressed ? Qt.darker(Theme.colorFocus, 1.08) : Theme.colorFocus
             }
+        }
+
+        TitleToolButton {
+            objectName: "searchButton"
+            iconName: "search"
+            accessibleName: qsTr("Search commands and help")
+            cornerRadius: titleBar.toolSide / 2
+            borderColor: Theme.colorPanelLine
         }
 
         TitleToolButton {
@@ -164,13 +182,5 @@ Rectangle {
             accessibleName: qsTr("Settings")
             onClicked: titleBar.settingsRequested()
         }
-    }
-
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: Theme.borderWidth
-        color: Theme.colorChromeLine
     }
 }

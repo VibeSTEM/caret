@@ -19,7 +19,10 @@ class ShellLoadTest : public QObject {
     void initTestCase();
     void moduleImportsAndThemeBindingTracksSnapshot();
     void unknownIconRefusesColoring();
+    void documentModeSelectorTracksLocalChoice();
     void newDocumentDialogHasNoProcessFields();
+    void unsavedChangesDialogUsesStyledActionsInRequestedOrder();
+    void closeFailureDoesNotReopenPendingConfirmation();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
     void settingsDialogDraftCancelAndFailure();
@@ -30,5 +33,6 @@ class ShellLoadTest : public QObject {
     void documentHitTestReturnsRustPosition();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void documentFileFlowPreservesSaveStateAndReopens();
+    void documentHistoryUndoRedoTracksRustSession();
 #endif
 };

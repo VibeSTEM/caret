@@ -1,6 +1,7 @@
 #include "document_path_adapter.hpp"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QObject>
 #include <QStandardPaths>
 #include <QString>
@@ -20,7 +21,15 @@ QUrl DocumentPathAdapter::defaultSaveFileUrl() const {
     if (!QDir().mkpath(directory)) {
         return {};
     }
-    return QUrl::fromLocalFile(QDir(directory).filePath(QStringLiteral("Untitled.cdoc")));
+    const QDir save_directory(directory);
+    const QString base_name = QStringLiteral("Untitled");
+    const QString suffix = QStringLiteral("cdoc");
+    QString candidate = save_directory.filePath(base_name + u'.' + suffix);
+    for (quint64 index = 1; QFileInfo::exists(candidate); ++index) {
+        candidate =
+            save_directory.filePath(base_name + u'-' + QString::number(index) + u'.' + suffix);
+    }
+    return QUrl::fromLocalFile(candidate);
 }
 
 QUrl DocumentPathAdapter::localFileUrl(const QString& path) const {

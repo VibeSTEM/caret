@@ -412,6 +412,7 @@ fn document_session_edits_saves_and_reopens_through_public_services()
     assert!(session.mark_saved(
         captured.session_generation,
         captured.document_generation,
+        captured.history_state_id,
         &path,
     ));
     let saved: Value = serde_json::from_str(&session.status_json())?;

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+  <!-- 分享操作图标，保持单色以便由界面主题统一着色。 -->
+  <path d="M8.5 2.5h4a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V9" stroke="#000" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M5.5 8 12 2m0 0v4m0-4H8" stroke="#000" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -8,6 +8,7 @@ Rectangle {
     required property Window window
     property string caption: ""
     property bool closeEnabled: true
+    property bool closeVisible: true
     signal closeRequested
 
     implicitHeight: Theme.titlebarHeight + Theme.spacingSmall
@@ -33,6 +34,7 @@ Rectangle {
             id: closeButton
             objectName: "dialogCloseButton"
             enabled: titleBar.closeEnabled
+            visible: titleBar.closeVisible
             Layout.alignment: Qt.AlignTop
             Layout.topMargin: Theme.spacingXSmall
             Layout.preferredWidth: Theme.paneCloseSize
@@ -51,7 +53,7 @@ Rectangle {
     MouseArea {
         id: moveArea
         anchors.fill: parent
-        anchors.rightMargin: closeButton.width + Theme.spacingSmall
+        anchors.rightMargin: closeButton.visible ? closeButton.width + Theme.spacingSmall : Theme.spacingXSmall
         acceptedButtons: Qt.LeftButton
         hoverEnabled: true
 

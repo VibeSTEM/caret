@@ -1,4 +1,4 @@
-// 工具栏高度锁在 Theme.menubarHeight。右侧三个按钮还没有命令。
+// 工具栏高度锁在 Theme.menubarHeight；当前显示 Home 标签。
 pragma ComponentBehavior: Bound
 
 import QtQuick
@@ -8,8 +8,6 @@ Rectangle {
     id: commandBar
 
     readonly property int rowHeight: Theme.menubarHeight
-
-    readonly property int chipHeight: Math.min(Theme.toolbarButtonHeight - Theme.spacingTiny, rowHeight - Theme.spacingSmall)
 
     implicitHeight: rowHeight
     clip: true
@@ -54,51 +52,6 @@ Rectangle {
 
         Item {
             Layout.fillWidth: true
-        }
-
-        ThemedToolButton {
-            objectName: "commentsButton"
-            Layout.alignment: Qt.AlignVCenter
-            Layout.maximumHeight: commandBar.chipHeight
-            font.pixelSize: Theme.fontSmall
-            contentPadding: Theme.spacingTiny
-            text: qsTr("Comments")
-            controlHeight: commandBar.chipHeight
-            contentColor: Theme.colorText
-            hoverColor: Theme.colorHover
-            borderColor: Theme.colorPanelLine
-        }
-
-        ThemedToolButton {
-            objectName: "editingButton"
-            Layout.alignment: Qt.AlignVCenter
-            Layout.maximumHeight: commandBar.chipHeight
-            font.pixelSize: Theme.fontSmall
-            contentPadding: Theme.spacingTiny
-            text: qsTr("Editing")
-            showCaret: true
-            controlHeight: commandBar.chipHeight
-            contentColor: Theme.colorText
-            hoverColor: Theme.colorHover
-            borderColor: Theme.colorPanelLine
-        }
-
-        ThemedToolButton {
-            id: shareButton
-            objectName: "shareButton"
-            Layout.alignment: Qt.AlignVCenter
-            Layout.maximumHeight: commandBar.chipHeight
-            font.pixelSize: Theme.fontSmall
-            contentPadding: Theme.spacingTiny
-            text: qsTr("Share")
-            controlHeight: commandBar.chipHeight
-            contentColor: Theme.colorPanel
-            hoverColor: Theme.colorTransparent
-            pressedColor: Theme.colorTransparent
-            background: Rectangle {
-                radius: Theme.radiusSmall
-                color: shareButton.hovered || shareButton.pressed ? Qt.darker(Theme.colorFocus, 1.08) : Theme.colorFocus
-            }
         }
     }
 

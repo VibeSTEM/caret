@@ -6,6 +6,8 @@ use super::super::{
     Affinity, Command, EditError, Effect, InputComposition, Pos, PositionMap, Selection,
 };
 use super::Session;
+use super::history::{self, DocumentPatch, SessionHistoryEdit};
+use std::mem;
 
 impl Session {
     /// 按 Qt UTF-16 相对范围原子提交输入法替换，支持先取消已有预编辑再应用新范围。
@@ -21,38 +23,95 @@ impl Session {
         replacement_length: i32,
         text: &str,
     ) -> Result<Effect, EditError> {
+        let before_selection = self.selection.clone();
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_state_id = self.history_state_id;
+        let mut affected_ids =
+            history::before_selection_ids(&self.paragraph_index, &self.selection);
+        affected_ids.push(self.selection.focus.paragraph_id.clone());
+        let before_paragraph_states =
+            history::paragraph_states_for_ids(&self.document, &self.paragraph_index, affected_ids);
         let mut candidate = self.transaction_clone();
-        if let Some(id) = active_composition_id {
-            candidate.run(Command::CancelComposition { id })?;
-        }
-        let mut effects = Vec::with_capacity(2);
-        let selection_is_nonempty = compare_positions(
-            &candidate.paragraph_index,
-            &candidate.selection.anchor,
-            &candidate.selection.focus,
-        )?
-        .is_ne();
-        if selection_is_nonempty {
+        let original_history = mem::replace(&mut self.edit_history, history::history());
+        let original_history_bytes = self.history_estimated_bytes;
+        let result = (|| {
+            if let Some(id) = active_composition_id {
+                candidate.run(Command::CancelComposition { id })?;
+            }
+            let mut effects = Vec::with_capacity(2);
+            let selection_is_nonempty = compare_positions(
+                &candidate.paragraph_index,
+                &candidate.selection.anchor,
+                &candidate.selection.focus,
+            )?
+            .is_ne();
+            if selection_is_nonempty {
+                candidate.run(Command::UpdateComposition {
+                    id: selection_removal_composition_id,
+                    preedit: String::new(),
+                })?;
+                effects.push(candidate.run(Command::CommitComposition {
+                    id: selection_removal_composition_id,
+                    text: String::new(),
+                })?);
+            }
+            candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
             candidate.run(Command::UpdateComposition {
-                id: selection_removal_composition_id,
+                id: replacement_composition_id,
                 preedit: String::new(),
             })?;
             effects.push(candidate.run(Command::CommitComposition {
-                id: selection_removal_composition_id,
-                text: String::new(),
+                id: replacement_composition_id,
+                text: text.to_owned(),
             })?);
-        }
-        candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
-        candidate.run(Command::UpdateComposition {
-            id: replacement_composition_id,
-            preedit: String::new(),
-        })?;
-        effects.push(candidate.run(Command::CommitComposition {
-            id: replacement_composition_id,
-            text: text.to_owned(),
-        })?);
-        let effect = combine_effects(effects);
-        if candidate.session_id == self.session_id && effect.document_changed {
+            Ok(combine_effects(effects))
+        })();
+        let effect = match result {
+            Ok(effect) => effect,
+            Err(error) => {
+                self.edit_history = original_history;
+                return Err(error);
+            }
+        };
+        candidate.edit_history = original_history;
+        candidate.history_estimated_bytes = original_history_bytes;
+        if effect.document_changed {
+            candidate.document_generation = self.document_generation;
+            candidate.next_history_state_id = self.next_history_state_id;
+            candidate.history_state_id = self.history_state_id;
+            let after_state_id = candidate.allocate_history_state_id();
+            let mut changed_ids = before_paragraph_states
+                .iter()
+                .map(|state| state.id.clone())
+                .collect::<Vec<_>>();
+            if let Some(map) = &effect.position_map {
+                history::state_ids_from_position_map(map, &mut changed_ids);
+            }
+            changed_ids.push(candidate.selection.focus.paragraph_id.clone());
+            let after_paragraph_states = history::paragraph_states_for_ids(
+                &candidate.document,
+                &candidate.paragraph_index,
+                changed_ids,
+            );
+            if before_paragraph_states.is_empty() || after_paragraph_states.is_empty() {
+                self.edit_history = mem::replace(&mut candidate.edit_history, history::history());
+                return Err(EditError::InvalidPosition);
+            }
+            let edit = SessionHistoryEdit::new(
+                DocumentPatch::Paragraphs {
+                    before: before_paragraph_states,
+                    after: after_paragraph_states,
+                    merge_group: None,
+                    merge_epoch: candidate.history_merge_epoch,
+                },
+                before_selection,
+                candidate.selection.clone(),
+                before_visual_affinity,
+                candidate.selection_visual_affinity,
+                before_state_id,
+                after_state_id,
+            );
+            candidate.record_history_edit(edit);
             candidate.document_generation = self
                 .document_generation
                 .checked_add(1)
@@ -79,6 +138,13 @@ impl Session {
         Ok((candidate, preview, range))
     }
 
+    /// 布局验证成功后安装候选，并移动原会话历史，避免失败时丢失撤销分支。
+    pub fn install_composition_candidate(&mut self, mut candidate: Self) {
+        candidate.edit_history = mem::replace(&mut self.edit_history, history::history());
+        candidate.history_estimated_bytes = self.history_estimated_bytes;
+        *self = candidate;
+    }
+
     fn transaction_clone(&self) -> Self {
         Self {
             document: self.document.clone(),
@@ -90,6 +156,11 @@ impl Session {
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),
+            edit_history: history::history(),
+            history_state_id: self.history_state_id,
+            next_history_state_id: self.next_history_state_id,
+            history_estimated_bytes: self.history_estimated_bytes,
+            history_merge_epoch: self.history_merge_epoch,
         }
     }
 
@@ -109,7 +180,7 @@ impl Session {
             .as_ref()
             .ok_or(EditError::InvalidCompositionId)?;
         let preedit = composition.preedit.clone();
-        let mut preview = self.clone();
+        let mut preview = self.transaction_clone();
         preview.run(Command::CommitComposition {
             id: composition.id,
             text: preedit.clone(),

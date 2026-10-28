@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub struct DocumentSaveSnapshot {
     pub session_generation: u64,
     pub document_generation: u64,
+    pub history_state_id: u64,
     pub bytes: Vec<u8>,
 }
 
@@ -20,6 +21,7 @@ pub struct DocumentSessionService {
     path: Option<PathBuf>,
     session_generation: u64,
     saved_generation: u64,
+    saved_history_state_id: u64,
 }
 
 /// 保存文档信封信息，正文只由编辑会话持有，避免打开时复制整棵文档树。
@@ -66,6 +68,7 @@ impl DocumentSessionService {
             path: None,
             session_generation: 1,
             saved_generation: 0,
+            saved_history_state_id: 0,
         })
     }
 
@@ -104,6 +107,7 @@ impl DocumentSessionService {
                 path: Some(path.to_path_buf()),
                 session_generation: next_session_generation,
                 saved_generation: 0,
+                saved_history_state_id: 0,
             },
             layout_snapshot,
         ))
@@ -169,7 +173,8 @@ impl DocumentSessionService {
     }
 
     /// 捕获当前文档修订用于后台写入，不改变当前会话或保存点。
-    pub fn save_snapshot(&self) -> Result<DocumentSaveSnapshot, String> {
+    pub fn save_snapshot(&mut self) -> Result<DocumentSaveSnapshot, String> {
+        self.view.begin_save_checkpoint();
         let file = CdocFile {
             format: self.file.format.clone(),
             version: self.file.version,
@@ -182,6 +187,7 @@ impl DocumentSessionService {
         Ok(DocumentSaveSnapshot {
             session_generation: self.session_generation,
             document_generation: self.view.document_generation(),
+            history_state_id: self.view.history_state_id(),
             bytes,
         })
     }
@@ -191,12 +197,16 @@ impl DocumentSessionService {
         &mut self,
         session_generation: u64,
         document_generation: u64,
+        history_state_id: u64,
         path: &Path,
     ) -> bool {
         if session_generation != self.session_generation {
             return false;
         }
-        self.saved_generation = self.saved_generation.max(document_generation);
+        if document_generation >= self.saved_generation {
+            self.saved_generation = document_generation;
+            self.saved_history_state_id = history_state_id;
+        }
         self.path = Some(path.to_path_buf());
         true
     }
@@ -212,7 +222,10 @@ impl DocumentSessionService {
             "sessionGeneration": self.session_generation.to_string(),
             "documentGeneration": self.view.document_generation().to_string(),
             "savedGeneration": self.saved_generation.to_string(),
-            "dirty": self.view.document_generation() != self.saved_generation,
+            "dirty": self.view.history_state_id() != self.saved_history_state_id,
+            "historyStateId": self.view.history_state_id().to_string(),
+            "canUndo": self.view.can_undo(),
+            "canRedo": self.view.can_redo(),
             "fileName": file_name,
             "path": path.and_then(Path::to_str).unwrap_or_default(),
         })

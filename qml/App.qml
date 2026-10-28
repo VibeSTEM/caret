@@ -25,6 +25,23 @@ Window {
 
     readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : " — Saved")
     property url suggestedSaveFileUrl: ""
+    property bool allowClose: false
+    property bool waitForCloseAfterFileOperation: false
+    property bool closeAfterSaveRequested: false
+
+    onClosing: close => {
+        if (allowClose)
+            return;
+        close.accepted = false;
+        if (LayoutViewModel.documentFileBusy) {
+            waitForCloseAfterFileOperation = true;
+            return;
+        }
+        if (LayoutViewModel.documentEdited)
+            closeConfirmation.open();
+        else
+            closeWindow();
+    }
 
     Component.onCompleted: WindowChromeMetrics.observeWindow(window)
 
@@ -48,6 +65,8 @@ Window {
                 onOpenRequested: openDialog.open()
                 documentName: window.documentName
                 onSaveRequested: window.saveDocument()
+                onUndoRequested: LayoutViewModel.undo()
+                onRedoRequested: LayoutViewModel.redo()
             }
 
             WindowCommandBar {
@@ -132,9 +151,22 @@ Window {
         acceptLabel: qsTr("Save")
         onAccepted: {
             const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
-            if (!result.valid && !result.needsSaveAs)
+            if (!result.valid && !result.needsSaveAs) {
+                window.closeAfterSaveRequested = false;
                 documentOperationError.showError(result.error);
+            }
         }
+        onRejected: window.closeAfterSaveRequested = false
+    }
+
+    UnsavedChangesDialog {
+        id: closeConfirmation
+        ownerWindow: window
+        onSaveRequested: {
+            window.closeAfterSaveRequested = true;
+            Qt.callLater(window.saveDocument);
+        }
+        onDiscardRequested: Qt.callLater(window.closeWindow)
     }
 
     MessageDialog {
@@ -154,8 +186,18 @@ Window {
         target: LayoutViewModel
 
         function onDocumentFileOperationFinished(succeeded, error) {
-            if (!succeeded)
+            if (!succeeded) {
+                window.closeAfterSaveRequested = false;
+                window.waitForCloseAfterFileOperation = false;
                 documentOperationError.showError(error);
+                return;
+            }
+            if (window.closeAfterSaveRequested && !LayoutViewModel.documentFileBusy) {
+                window.closeAfterSaveRequested = false;
+                if (!LayoutViewModel.documentEdited)
+                    window.closeWindow();
+            }
+            window.resumeCloseAfterFileOperation();
         }
     }
 
@@ -175,22 +217,52 @@ Window {
         onActivated: window.requestSaveAs()
     }
 
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: LayoutViewModel.canUndo
+        onActivated: LayoutViewModel.undo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: LayoutViewModel.canRedo
+        onActivated: LayoutViewModel.redo()
+    }
+
     function saveDocument() {
         const result = LayoutViewModel.saveDocument("");
         if (result.needsSaveAs) {
             requestSaveAs();
             return;
         }
-        if (!result.valid)
+        if (!result.valid) {
+            closeAfterSaveRequested = false;
             documentOperationError.showError(result.error);
+        }
     }
 
     function requestSaveAs() {
         suggestedSaveFileUrl = LayoutViewModel.documentPath.length > 0 ? DocumentPathAdapter.localFileUrl(LayoutViewModel.documentPath) : DocumentPathAdapter.defaultSaveFileUrl();
         if (suggestedSaveFileUrl.toString().length === 0) {
+            closeAfterSaveRequested = false;
             documentOperationError.showError(qsTr("The document folder is unavailable."));
             return;
         }
         saveDialog.open();
+    }
+
+    function closeWindow() {
+        allowClose = true;
+        close();
+    }
+
+    function resumeCloseAfterFileOperation() {
+        if (!waitForCloseAfterFileOperation || LayoutViewModel.documentFileBusy)
+            return;
+        waitForCloseAfterFileOperation = false;
+        if (LayoutViewModel.documentEdited)
+            closeConfirmation.open();
+        else
+            closeWindow();
     }
 }

@@ -43,6 +43,7 @@ cxx = "=1.0.202"
 cxx-build = "=1.0.202"
 serde_json = "1.0"
 unicode-segmentation = "=1.13.3"
+undo = "=0.52.0"
 parley_engine = { version = "=0.12.0", features = ["complex-scripts"] }
 parley = { version = "=0.12.0", features = ["complex-scripts"] }
 swash = "=0.2.10"

@@ -24,16 +24,20 @@
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQuickImageProvider>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegularExpression>
 #include <QString>
 #include <QTemporaryDir>
 #include <QVariant>
+#include <QtCore/Qt>
+#include <QtGui/qtestsupport_gui.h>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
 #include <QtTest/QTest>
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
+#include <QtTest/qtestkeyboard.h>
 #include <qcontainerfwd.h>
 #include <utility>
 
@@ -203,6 +207,64 @@ void ShellLoadTest::unknownIconRefusesColoring() {
     QVERIFY(unknown.isNull());
 }
 
+void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
+    const QString theme =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                               theme, QColor(QStringLiteral("#ffffff")), 16));
+    caret::install_theme_snapshots(themes, QStringLiteral("light"));
+
+    QQmlApplicationEngine engine;
+    caret::install_icon_provider(engine);
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.Shell\n"
+                                        "DocumentModeSelector { objectName: \"modeSelector\" }\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* selector = component.create();
+    QVERIFY2(selector != nullptr, qPrintable(component.errorString()));
+    QQuickWindow window;
+    auto* selector_item = qobject_cast<QQuickItem*>(selector);
+    QVERIFY(selector_item != nullptr);
+    selector_item->setParentItem(window.contentItem());
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("editing"));
+    auto* button = selector->findChild<QObject*>(QStringLiteral("editingButton"));
+    QVERIFY(button != nullptr);
+    QCOMPARE(button->property("text").toString(), QStringLiteral("Editing"));
+
+    auto* button_item = qobject_cast<QQuickItem*>(button);
+    QVERIFY(button_item != nullptr);
+    button_item->forceActiveFocus();
+    QTest::keyClick(&window, Qt::Key_Space);
+    auto* mode_menu = selector->findChild<QObject*>(QStringLiteral("documentModeMenu"));
+    QVERIFY(mode_menu != nullptr);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::keyClick(&window, Qt::Key_Down);
+    QTest::keyClick(&window, Qt::Key_Enter);
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("review"));
+    QTest::keyClick(&window, Qt::Key_Space);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::keyClick(&window, Qt::Key_Down);
+    QTest::keyClick(&window, Qt::Key_Enter);
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
+
+    QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
+                                      Q_ARG(QString, QStringLiteral("review"))));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("review"));
+    QCOMPARE(button->property("text").toString(), QStringLiteral("Review"));
+
+    QVERIFY(QMetaObject::invokeMethod(selector, "modeSelected", Qt::DirectConnection,
+                                      Q_ARG(QString, QStringLiteral("view"))));
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
+    QCOMPARE(button->property("text").toString(), QStringLiteral("View"));
+    delete selector;
+}
+
 void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
     QDir dialogs(root + QStringLiteral("/qml/Dialogs"));
@@ -211,7 +273,8 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     QCOMPARE(names, QStringList({QStringLiteral("LanguageSettingsPage.qml"),
                                  QStringLiteral("NewProjectDialog.qml"),
                                  QStringLiteral("PreferencesSettingsPage.qml"),
-                                 QStringLiteral("SettingsDialog.qml")}));
+                                 QStringLiteral("SettingsDialog.qml"),
+                                 QStringLiteral("UnsavedChangesDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());
@@ -243,6 +306,41 @@ void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     QVERIFY(QMetaObject::invokeMethod(dialog, "submit"));
     QCOMPARE(dialog->property("errorCode").toString(), QStringLiteral("document.empty_name"));
     delete dialog;
+}
+
+void ShellLoadTest::unsavedChangesDialogUsesStyledActionsInRequestedOrder() {
+    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
+    QFile source(root + QStringLiteral("/qml/Dialogs/UnsavedChangesDialog.qml"));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(source.readAll());
+    QVERIFY(text.contains(QStringLiteral("DialogWindow")));
+    QVERIFY(text.contains(QStringLiteral("closeButtonVisible: false")));
+    QVERIFY(text.contains(QStringLiteral("Save your changes before closing this document?")));
+
+    const qsizetype save = text.indexOf(QStringLiteral("objectName: \"closeSaveButton\""));
+    const qsizetype discard = text.indexOf(QStringLiteral("objectName: \"closeDiscardButton\""));
+    const qsizetype cancel = text.indexOf(QStringLiteral("objectName: \"closeCancelButton\""));
+    QVERIFY(save >= 0);
+    QVERIFY(discard > save);
+    QVERIFY(cancel > discard);
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Save\")")));
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Don't Save\")")));
+    QVERIFY(text.contains(QStringLiteral("text: qsTr(\"Cancel\")")));
+}
+
+void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
+    const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
+    QFile source(root + QStringLiteral("/qml/App.qml"));
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(source.readAll());
+    const qsizetype failure_start = text.indexOf(QStringLiteral("if (!succeeded)"));
+    const qsizetype success_start =
+        text.indexOf(QStringLiteral("if (window.closeAfterSaveRequested"), failure_start);
+    QVERIFY(failure_start >= 0);
+    QVERIFY(success_start > failure_start);
+    const QString failure_branch = text.mid(failure_start, success_start - failure_start);
+    QVERIFY(failure_branch.contains(QStringLiteral("waitForCloseAfterFileOperation = false")));
+    QVERIFY(!failure_branch.contains(QStringLiteral("resumeCloseAfterFileOperation()")));
 }
 
 void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
