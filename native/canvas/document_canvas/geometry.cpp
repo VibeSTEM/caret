@@ -253,6 +253,7 @@ void DocumentCanvas::updateGeometry() {
     ++m_glyph_geometry_revision;
     update();
     emit geometryChanged();
+    emit caretVisualChanged();
 }
 
 void DocumentCanvas::itemChange(ItemChange change, const ItemChangeData& data) {

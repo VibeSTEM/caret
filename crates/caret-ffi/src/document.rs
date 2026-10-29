@@ -246,6 +246,16 @@ pub(crate) fn interaction_state_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::interaction_state_json)
 }
 
+pub(crate) fn command_line_command_json(
+    runtime: &mut DocumentRuntime,
+    action: String,
+    text: String,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.command_line_command_json(&action, text)
+    })
+}
+
 /// 将页面内命中委托给与快照相同的 Rust 布局结果。
 pub(crate) fn document_hit_test_json(
     runtime: &mut DocumentRuntime,

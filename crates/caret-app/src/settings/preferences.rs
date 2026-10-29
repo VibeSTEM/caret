@@ -9,6 +9,7 @@ pub const DEFAULT_WINDOW_HEIGHT: u32 = 720;
 pub const MINIMUM_WINDOW_WIDTH: u32 = 880;
 pub const MINIMUM_WINDOW_HEIGHT: u32 = 560;
 pub const DEFAULT_CARET_BLINK_ENABLED: bool = true;
+pub const DEFAULT_COMMAND_SUGGESTIONS_ENABLED: bool = true;
 pub const DEFAULT_AUTO_SAVE_ENABLED: bool = false;
 pub const MAX_WINDOW_DIMENSION: u32 = 16_384;
 pub const MAX_RECENT_PROJECTS: usize = 10;
@@ -24,6 +25,9 @@ pub struct UserPreferences {
     /// 插入点获得焦点时是否跟随操作系统闪烁周期。
     #[serde(default = "default_caret_blink_enabled")]
     pub caret_blink_enabled: bool,
+    /// 是否显示反斜线命令的候选补全列表。
+    #[serde(default = "default_command_suggestions_enabled")]
+    pub command_suggestions_enabled: bool,
     /// 是否在命名文档编辑后自动保存。
     #[serde(default = "default_auto_save_enabled")]
     pub auto_save_enabled: bool,
@@ -32,6 +36,10 @@ pub struct UserPreferences {
 
 const fn default_caret_blink_enabled() -> bool {
     DEFAULT_CARET_BLINK_ENABLED
+}
+
+const fn default_command_suggestions_enabled() -> bool {
+    DEFAULT_COMMAND_SUGGESTIONS_ENABLED
 }
 
 const fn default_auto_save_enabled() -> bool {
@@ -45,6 +53,7 @@ impl Default for UserPreferences {
             window_height: DEFAULT_WINDOW_HEIGHT,
             window_maximized: true,
             caret_blink_enabled: DEFAULT_CARET_BLINK_ENABLED,
+            command_suggestions_enabled: DEFAULT_COMMAND_SUGGESTIONS_ENABLED,
             auto_save_enabled: DEFAULT_AUTO_SAVE_ENABLED,
             recent_project_paths: Vec::new(),
         }

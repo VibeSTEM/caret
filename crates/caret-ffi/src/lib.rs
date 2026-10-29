@@ -15,19 +15,19 @@ mod generated {
     use crate::document::{
         DocumentRuntime, auto_save_deadline_fired, auto_save_deadline_json,
         auto_save_write_finished, cancel_pending_recovery_lease, cancel_prepared_document,
-        clear_selection_json, configure_document_recovery, current_caret_json,
-        delete_backward_json, discard_document_recovery, discard_recovery, document_hit_test_json,
-        document_save_snapshot, document_session_generation, document_status_json,
-        drag_hit_map_json, export_recovery, input_method_event_json, insert_soft_break_json,
-        insert_text_json, install_prepared_document, interaction_state_json, layout_snapshot_json,
-        mark_document_saved_json, move_to_visual_line_edge_json, move_vertical_caret_json,
-        move_visual_caret_json, new_blank_document_runtime, paste_text_json,
-        place_caret_at_page_json, prepare_document_file, prepare_recovery_document,
-        rasterize_page_glyphs, recovery_entries_json, recovery_update_deadline_fired,
-        recovery_update_write_finished, redo_json, selected_text_json,
-        set_document_auto_save_enabled, set_document_recovery_id, set_selection_json,
-        split_paragraph_json, undo_json, update_recovery_document, write_document_file,
-        write_document_file_checked, write_document_file_replace_external,
+        clear_selection_json, command_line_command_json, configure_document_recovery,
+        current_caret_json, delete_backward_json, discard_document_recovery, discard_recovery,
+        document_hit_test_json, document_save_snapshot, document_session_generation,
+        document_status_json, drag_hit_map_json, export_recovery, input_method_event_json,
+        insert_soft_break_json, insert_text_json, install_prepared_document,
+        interaction_state_json, layout_snapshot_json, mark_document_saved_json,
+        move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
+        new_blank_document_runtime, paste_text_json, place_caret_at_page_json,
+        prepare_document_file, prepare_recovery_document, rasterize_page_glyphs,
+        recovery_entries_json, recovery_update_deadline_fired, recovery_update_write_finished,
+        redo_json, selected_text_json, set_document_auto_save_enabled, set_document_recovery_id,
+        set_selection_json, split_paragraph_json, undo_json, update_recovery_document,
+        write_document_file, write_document_file_checked, write_document_file_replace_external,
     };
     use crate::settings::{
         SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_auto_save_enabled,
@@ -108,6 +108,7 @@ mod generated {
 
         struct SettingsSnapshot {
             caret_blink_enabled: bool,
+            command_suggestions_enabled: bool,
             auto_save_enabled: bool,
             window_width: u32,
             window_height: u32,
@@ -264,11 +265,18 @@ mod generated {
                 theme_id: String,
                 language: String,
                 caret_blink_enabled: bool,
+                command_suggestions_enabled: bool,
             ) -> SettingsSnapshot;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;
             /// 返回仅含 caret、选区和 IME 上下文的轻量交互快照。
             fn interaction_state_json(runtime: &mut DocumentRuntime) -> String;
+            /// 更新 Session 命令查询；非执行交互返回轻量快照，不触发布局。
+            fn command_line_command_json(
+                runtime: &mut DocumentRuntime,
+                action: String,
+                text: String,
+            ) -> String;
             /// 仅在持有句柄的 UI 线程同步调用，不保留借用；无位置返回 JSON null，错误以 error: 开头。
             fn document_hit_test_json(
                 runtime: &mut DocumentRuntime,

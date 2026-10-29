@@ -1,6 +1,7 @@
 //! 管理编辑 Session 状态并执行输入、选区和 IME 命令。
 
 mod clipboard;
+mod command_line;
 mod composition;
 mod history;
 mod navigation;
@@ -15,7 +16,8 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, Direction, EditError, Effect, InputComposition, Pos, Selection, StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, Effect, InputComposition, Pos, Selection,
+    StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -34,6 +36,7 @@ pub struct Session {
     session_id: NodeId,
     document_generation: u64,
     composition: Option<InputComposition>,
+    command_line: Option<CommandLine>,
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
     paragraph_index: ParagraphIndex,
@@ -68,6 +71,7 @@ impl Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: None,
+            command_line: None,
             last_committed_composition: None,
             text_map_cache: VecDeque::new(),
             edit_history: history::history(),
@@ -105,6 +109,11 @@ impl Session {
         self.composition.as_ref()
     }
 
+    /// 当前临时命令查询；此状态不属于文档修订或布局缓存。
+    pub fn command_line(&self) -> Option<&CommandLine> {
+        self.command_line.as_ref()
+    }
+
     /// 当前文档历史状态标识，用于把异步保存结果关联到实际保存点。
     pub fn history_state_id(&self) -> u64 {
         self.history_state_id
@@ -125,11 +134,29 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        if matches!(
+            &command,
+            Command::BeginCommandLine
+                | Command::TypeCommandLine(_)
+                | Command::BackspaceCommandLine
+                | Command::MoveCommandLineCursor(_)
+                | Command::MoveCommandLineSelection(_)
+                | Command::SelectCommandLineCandidate(_)
+                | Command::TabCommandLine
+                | Command::AcceptCommandLine
+                | Command::CancelCommandLine
+        ) {
+            return self.run_command_line(command);
+        }
         if command == Command::Undo {
-            return self.restore_history(false);
+            let effect = self.restore_history(false)?;
+            self.command_line = None;
+            return Ok(effect);
         }
         if command == Command::Redo {
-            return self.restore_history(true);
+            let effect = self.restore_history(true)?;
+            self.command_line = None;
+            return Ok(effect);
         }
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
@@ -168,8 +195,18 @@ impl Session {
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),
             Command::CancelComposition { id } => self.cancel_composition(id),
             Command::SetPageGeometry(geometry) => self.set_page_geometry(geometry),
+            Command::BeginCommandLine
+            | Command::TypeCommandLine(_)
+            | Command::BackspaceCommandLine
+            | Command::MoveCommandLineCursor(_)
+            | Command::MoveCommandLineSelection(_)
+            | Command::SelectCommandLineCandidate(_)
+            | Command::TabCommandLine
+            | Command::AcceptCommandLine
+            | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
+        self.command_line = None;
         if breaks_history_merge {
             self.advance_history_merge_epoch();
         }
@@ -436,6 +473,7 @@ impl Clone for Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: self.composition.clone(),
+            command_line: self.command_line.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),

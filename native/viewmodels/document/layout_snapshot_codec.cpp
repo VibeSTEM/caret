@@ -19,6 +19,8 @@
 
 namespace caret::layout_snapshot {
 namespace {
+bool is_utf8_boundary(const QByteArray& text, qsizetype offset);
+
 qulonglong next_page_glyph_revision() {
     static std::atomic<qulonglong> revision{1};
     return revision.fetch_add(1, std::memory_order_relaxed);
@@ -94,6 +96,73 @@ bool parse_geometry_rectangles(const QJsonValue& value, const QVariantList& page
     return true;
 }
 
+bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& error) {
+    result = {{QStringLiteral("active"), false},
+              {QStringLiteral("query"), QString{}},
+              {QStringLiteral("cursor"), 0},
+              {QStringLiteral("selected"), 0},
+              {QStringLiteral("candidates"), QVariantList{}}};
+    if (value.isUndefined()) {
+        return true;
+    }
+    if (!value.isObject()) {
+        error = QStringLiteral("layout.invalid_command_line");
+        return false;
+    }
+    const QJsonObject command_line = value.toObject();
+    const QJsonValue active = command_line.value(QStringLiteral("active"));
+    const QJsonValue query = command_line.value(QStringLiteral("query"));
+    const QJsonValue cursor = command_line.value(QStringLiteral("cursor"));
+    const QJsonValue selected = command_line.value(QStringLiteral("selected"));
+    const QJsonValue candidates = command_line.value(QStringLiteral("candidates"));
+    qsizetype cursor_position = 0;
+    qsizetype selected_index = 0;
+    if (!active.isBool() || !query.isString() ||
+        (!cursor.isUndefined() && !nonnegative_index(cursor, cursor_position)) ||
+        !nonnegative_index(selected, selected_index) || !candidates.isArray()) {
+        error = QStringLiteral("layout.invalid_command_line");
+        return false;
+    }
+    const QByteArray query_utf8 = query.toString().toUtf8();
+    if (cursor_position > query_utf8.size() || !is_utf8_boundary(query_utf8, cursor_position)) {
+        error = QStringLiteral("layout.invalid_command_line");
+        return false;
+    }
+    const auto parse_candidates = [&error](const QJsonArray& values,
+                                           QVariantList& parsed_candidates) {
+        for (const QJsonValue candidate_value : values) {
+            if (!candidate_value.isObject()) {
+                error = QStringLiteral("layout.invalid_command_candidate");
+                return false;
+            }
+            const QJsonObject candidate = candidate_value.toObject();
+            if (!candidate.value(QStringLiteral("alias")).isString() ||
+                !candidate.value(QStringLiteral("commandId")).isString() ||
+                !candidate.value(QStringLiteral("available")).isBool()) {
+                error = QStringLiteral("layout.invalid_command_candidate");
+                return false;
+            }
+            parsed_candidates.push_back(candidate.toVariantMap());
+        }
+        return true;
+    };
+    QVariantList parsed_candidates;
+    if (!parse_candidates(candidates.toArray(), parsed_candidates)) {
+        return false;
+    }
+    if (active.toBool() && !parsed_candidates.isEmpty() &&
+        selected_index >= parsed_candidates.size()) {
+        error = QStringLiteral("layout.invalid_command_selection");
+        return false;
+    }
+    result = {{QStringLiteral("active"), active.toBool()},
+              {QStringLiteral("query"), query.toString()},
+              {QStringLiteral("cursor"), cursor_position},
+              {QStringLiteral("selected"), selected_index},
+              {QStringLiteral("candidates"), parsed_candidates}};
+    return true;
+}
+
 bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
     if (offset < 0 || offset > text.size()) {
         return false;
@@ -105,6 +174,10 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 }
 
 } // namespace
+
+bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error) {
+    return parse_command_line(value, command_line, error);
+}
 
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot) {
@@ -397,6 +470,11 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                                    error)) {
         return false;
     }
+    QVariantMap parsed_command_line;
+    if (!parse_command_line(root.value(QStringLiteral("commandLine")), parsed_command_line,
+                            error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
@@ -405,6 +483,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.paragraph_line_counts = std::move(paragraph_line_counts);
     parsed_snapshot.selection_rects = std::move(parsed_selection_rects);
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
+    parsed_snapshot.command_line = std::move(parsed_command_line);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {

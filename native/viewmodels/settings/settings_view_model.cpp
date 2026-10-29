@@ -102,7 +102,7 @@ SettingsViewModel::SettingsViewModel(QObject* parent) : QObject(parent) {
 }
 
 bool SettingsViewModel::applySettings(const QString& theme_id, const QString& language,
-                                      bool caret_blink_enabled) {
+                                      bool caret_blink_enabled, bool command_suggestions_enabled) {
 #ifdef CARET_ENABLE_APP
     if (settings_runtime() == nullptr) {
         setError(QStringLiteral("settings.runtime_unavailable"));
@@ -123,7 +123,7 @@ bool SettingsViewModel::applySettings(const QString& theme_id, const QString& la
         *settings_runtime(),
         rust::String(theme_id_utf8.constData(), static_cast<std::size_t>(theme_id_utf8.size())),
         rust::String(language_utf8.constData(), static_cast<std::size_t>(language_utf8.size())),
-        caret_blink_enabled);
+        caret_blink_enabled, command_suggestions_enabled);
     if (!snapshot.error.empty()) {
         setError(rust_string(snapshot.error));
         return false;
@@ -157,6 +157,7 @@ bool SettingsViewModel::applySettings(const QString& theme_id, const QString& la
     Q_UNUSED(theme_id)
     Q_UNUSED(language)
     Q_UNUSED(caret_blink_enabled)
+    Q_UNUSED(command_suggestions_enabled)
     setError(QStringLiteral("settings.runtime_unavailable"));
     return false;
 #endif

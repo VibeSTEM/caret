@@ -43,6 +43,7 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
         m_caret_geometry.clear();
         refreshCaretBlink();
         emit caretGeometryChanged();
+        emit caretVisualChanged();
         return;
     }
 
@@ -56,6 +57,7 @@ void DocumentCanvas::setCaretGeometry(const QVariantMap& geometry) {
     m_caret_geometry = std::move(normalized_geometry);
     refreshCaretBlink();
     emit caretGeometryChanged();
+    emit caretVisualChanged();
     if (QGuiApplication::inputMethod() != nullptr) {
         QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
     }
@@ -144,12 +146,17 @@ void DocumentCanvas::setCaretWidthCentipixels(int width_centipixels) {
     }
     m_caret_width_centipixels = width_centipixels;
     emit caretWidthCentipixelsChanged();
+    emit caretVisualChanged();
     update();
 }
 
 void DocumentCanvas::refreshCaretBlink() {
     m_caret_blink_timer.stop();
+    const bool was_visible = m_caret_visible;
     m_caret_visible = hasActiveFocus() && !m_caret_geometry.isEmpty();
+    if (was_visible != m_caret_visible) {
+        emit caretVisualChanged();
+    }
     if (m_caret_visible && m_caret_blink_enabled) {
         const QStyleHints* style_hints = QGuiApplication::styleHints();
         const int flash_time = style_hints != nullptr ? style_hints->cursorFlashTime() : 0;
@@ -167,6 +174,7 @@ void DocumentCanvas::toggleCaretVisibility() {
         return;
     }
     m_caret_visible = !m_caret_visible;
+    emit caretVisualChanged();
     update();
 }
 

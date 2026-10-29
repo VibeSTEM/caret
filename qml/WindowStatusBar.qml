@@ -14,6 +14,14 @@ Rectangle {
     readonly property int rowHeight: Theme.statusbarHeight
     readonly property int sliderHeight: Theme.iconSizeCompact
 
+    function zoomOut() {
+        zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - zoomSlider.stepSize);
+    }
+
+    function zoomIn() {
+        zoomSlider.value = Math.min(zoomSlider.to, zoomSlider.value + zoomSlider.stepSize);
+    }
+
     implicitHeight: rowHeight
     clip: true
     color: Theme.colorStatus
@@ -69,7 +77,7 @@ Rectangle {
             iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom out")
             contentColor: Theme.colorText
-            onClicked: zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - zoomSlider.stepSize)
+            onClicked: statusBar.zoomOut()
         }
 
         Slider {
@@ -131,7 +139,7 @@ Rectangle {
             iconSize: Theme.iconSizeCompact
             accessibleName: qsTr("Zoom in")
             contentColor: Theme.colorText
-            onClicked: zoomSlider.value = Math.min(zoomSlider.to, zoomSlider.value + zoomSlider.stepSize)
+            onClicked: statusBar.zoomIn()
         }
 
         ThemedLabel {

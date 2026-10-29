@@ -19,6 +19,20 @@ qint64 DocumentUnits::pointsToLogicalCentipixels(qreal points, int zoom_percent)
     return qRound64(scaled);
 }
 
+qint64 DocumentUnits::centipointsToLogicalCentipixels(qint64 centipoints, int zoom_percent) const {
+    if (centipoints < 0 || zoom_percent < 0) {
+        return 0;
+    }
+    const qreal scaled = static_cast<qreal>(centipoints) * zoom_percent *
+                         document_units::kLogicalPixelsPerInch /
+                         (document_units::kCentipointsPerPoint * document_units::kPointsPerInch);
+    if (!std::isfinite(scaled) ||
+        scaled >= static_cast<qreal>(std::numeric_limits<qint64>::max())) {
+        return std::numeric_limits<qint64>::max();
+    }
+    return qRound64(scaled);
+}
+
 qreal DocumentUnits::percentToFactor(int value) const {
     return document_units::percent_to_factor(value);
 }

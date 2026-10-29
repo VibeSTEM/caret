@@ -153,6 +153,7 @@ impl Session {
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
             composition: self.composition.clone(),
+            command_line: self.command_line.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),

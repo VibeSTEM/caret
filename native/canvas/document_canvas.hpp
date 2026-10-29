@@ -32,11 +32,14 @@ class DocumentCanvas : public QQuickItem {
                    appearanceChanged)
     Q_PROPERTY(QVariantMap caretGeometry READ caretGeometry WRITE setCaretGeometry NOTIFY
                    caretGeometryChanged)
+    Q_PROPERTY(QRectF caretVisualRect READ caretVisualRect NOTIFY caretVisualChanged)
+    Q_PROPERTY(bool caretVisible READ caretVisible NOTIFY caretVisualChanged)
     Q_PROPERTY(QVariantMap caretPreviewGeometry READ caretPreviewGeometry WRITE
                    setCaretPreviewGeometry NOTIFY caretPreviewGeometryChanged)
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext WRITE setInputMethodContext
                    NOTIFY inputMethodContextChanged)
     Q_PROPERTY(QString preeditText READ preeditText NOTIFY preeditTextChanged)
+    Q_PROPERTY(bool commandMode READ commandMode WRITE setCommandMode NOTIFY commandModeChanged)
     Q_PROPERTY(int preeditCursorPosition READ preeditCursorPosition NOTIFY preeditTextChanged)
     Q_PROPERTY(bool caretBlinkEnabled READ caretBlinkEnabled WRITE setCaretBlinkEnabled NOTIFY
                    caretBlinkEnabledChanged)
@@ -73,12 +76,23 @@ class DocumentCanvas : public QQuickItem {
     void setPageBorderColor(const QColor& color);
     [[nodiscard]] QVariantMap caretGeometry() const;
     void setCaretGeometry(const QVariantMap& geometry);
+    [[nodiscard]] QRectF caretVisualRect() const { return caretRect(m_caret_geometry); }
+    [[nodiscard]] bool caretVisible() const { return m_caret_visible; }
     [[nodiscard]] QVariantMap caretPreviewGeometry() const;
     void setCaretPreviewGeometry(const QVariantMap& geometry);
     [[nodiscard]] QVariantMap inputMethodContext() const;
     void setInputMethodContext(const QVariantMap& context);
     [[nodiscard]] QString preeditText() const;
     [[nodiscard]] int preeditCursorPosition() const;
+    [[nodiscard]] bool commandMode() const { return m_command_mode; }
+    void setCommandMode(bool enabled) {
+        if (m_command_mode == enabled) {
+            return;
+        }
+        m_command_mode = enabled;
+        update();
+        emit commandModeChanged();
+    }
     [[nodiscard]] bool caretBlinkEnabled() const;
     void setCaretBlinkEnabled(bool enabled);
     [[nodiscard]] QVariantList glyphFrames() const;
@@ -118,6 +132,7 @@ class DocumentCanvas : public QQuickItem {
 
   signals:
     void textInputRequested(const QString& text);
+    void commandLineKeyRequested(const QString& key);
     void editingCommandRequested(const QString& command_id);
     void visualNavigationRequested(bool forward, bool extend);
     void verticalNavigationRequested(int line_delta, bool extend);
@@ -127,12 +142,14 @@ class DocumentCanvas : public QQuickItem {
                                    int replacement_start, int replacement_length,
                                    int cursor_position_utf16);
     void preeditTextChanged();
+    void commandModeChanged();
     void pageSizesPtChanged();
     void pageMarginsPtChanged();
     void zoomChanged();
     void pageGapPtChanged();
     void pageMarginPtChanged();
     void caretGeometryChanged();
+    void caretVisualChanged();
     void caretPreviewGeometryChanged();
     void inputMethodContextChanged();
     void caretBlinkEnabledChanged();
@@ -173,6 +190,7 @@ class DocumentCanvas : public QQuickItem {
     QVariantMap m_caret_preview_geometry;
     QVariantMap m_input_method_context;
     QString m_preedit_text;
+    bool m_command_mode = false;
     int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
     int m_first_visible_page = 0;

@@ -18,6 +18,8 @@ class ShellLoadTest : public QObject {
   private slots:
     void initTestCase();
     void moduleImportsAndThemeBindingTracksSnapshot();
+    void autoScrollTextMovesOnlyWhenActiveAndOverflowing();
+    void autoScrollTextRepeatsWithTheDocumentedPauseCycle();
     void unknownIconRefusesColoring();
     void documentModeSelectorTracksLocalChoice();
     void newDocumentDialogHasNoProcessFields();
@@ -30,6 +32,7 @@ class ShellLoadTest : public QObject {
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();
 #ifdef CARET_ENABLE_APP
+    void commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument();
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();
     void settingsSelectionUpdatesThemeLanguageAndPersistsAtomically();

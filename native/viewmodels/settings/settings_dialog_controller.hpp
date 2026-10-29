@@ -20,6 +20,8 @@ class SettingsDialogController : public QObject {
     Q_PROPERTY(State state READ state NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool draftCaretBlinkEnabled READ draftCaretBlinkEnabled NOTIFY draftChanged)
+    Q_PROPERTY(
+        bool draftCommandSuggestionsEnabled READ draftCommandSuggestionsEnabled NOTIFY draftChanged)
     Q_PROPERTY(QString draftThemeId READ draftThemeId NOTIFY draftChanged)
     Q_PROPERTY(QString draftLanguage READ draftLanguage NOTIFY draftChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
@@ -37,12 +39,16 @@ class SettingsDialogController : public QObject {
     [[nodiscard]] State state() const { return m_state; }
     [[nodiscard]] bool busy() const { return m_state == Applying; }
     [[nodiscard]] bool draftCaretBlinkEnabled() const { return m_draft_caret_blink_enabled; }
+    [[nodiscard]] bool draftCommandSuggestionsEnabled() const {
+        return m_draft_command_suggestions_enabled;
+    }
     [[nodiscard]] const QString& draftThemeId() const { return m_draft_theme_id; }
     [[nodiscard]] const QString& draftLanguage() const { return m_draft_language; }
     [[nodiscard]] const QString& error() const { return m_error; }
 
     Q_INVOKABLE void open();
     Q_INVOKABLE void editCaretBlinkEnabled(bool enabled);
+    Q_INVOKABLE void editCommandSuggestionsEnabled(bool enabled);
     Q_INVOKABLE void editThemeId(const QString& theme_id);
     Q_INVOKABLE void editLanguage(const QString& language);
     Q_INVOKABLE void apply();
@@ -73,6 +79,7 @@ class SettingsDialogController : public QObject {
     QPointer<QObject> m_settings;
     State m_state = Closed;
     bool m_draft_caret_blink_enabled = true;
+    bool m_draft_command_suggestions_enabled = true;
     QString m_draft_theme_id;
     QString m_draft_language;
     bool m_open_when_ready = false;

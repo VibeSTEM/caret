@@ -170,6 +170,11 @@ message_032:
   tr: Blink the insertion point
   st: finished
 
+message_101:
+  src: Show command suggestions
+  tr: Show command suggestions
+  st: finished
+
 [RecoveryDialog]
 message_033:
   src: Recover documents
@@ -439,4 +444,80 @@ message_083:
 message_084:
   src: Saved
   tr: Saved
+  st: finished
+
+[CommandCompletion]
+message_085:
+  src: Chapter
+  tr: Chapter
+  st: finished
+
+message_086:
+  src: Section
+  tr: Section
+  st: finished
+
+message_087:
+  src: Subsection
+  tr: Subsection
+  st: finished
+
+message_089:
+  src: Bulleted list
+  tr: Bulleted list
+  st: finished
+
+message_090:
+  src: Numbered list
+  tr: Numbered list
+  st: finished
+
+message_091:
+  src: Page break
+  tr: Page break
+  st: finished
+
+message_092:
+  src: Line break
+  tr: Line break
+  st: finished
+
+message_093:
+  src: No matching commands
+  tr: No matching commands
+  st: finished
+
+message_094:
+  src: Inline math
+  tr: Inline math
+  st: finished
+
+message_095:
+  src: Single-line equation
+  tr: Single-line equation
+  st: finished
+
+message_096:
+  src: Fraction
+  tr: Fraction
+  st: finished
+
+message_097:
+  src: Square root
+  tr: Square root
+  st: finished
+
+message_098:
+  src: Table
+  tr: Table
+  st: finished
+
+message_099:
+  src: Subsubsection
+  tr: Subsubsection
+  st: finished
+
+message_100:
+  src: Multiline equation
+  tr: Multiline equation
   st: finished

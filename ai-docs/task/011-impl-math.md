@@ -43,7 +43,9 @@ M3 首版统一使用 `latex-rust` 内嵌的 **STIX Two Math**。保留 `default
 
 ## 范围与非目标
 
-在现有画布内完成上述三种公式结构。实现 `insert.inline_math`、`insert.equation`、`insert.align`、`equation.move`、`equation.exit`，以及 `$` / `\(`、`$$` / `\[`、`\frac`、`\sqrt`、下标和上标。公式内部的 `\\` 不打开正文命令模式；`Align` 内才解释为公式行分隔；输入形式使用 LaTeX 无编号 `align*`。
+在现有画布内完成上述三种公式结构。实现 `insert.inline_math`、`insert.equation`、`insert.align`、`equation.move`、`equation.exit`，以及公式内的 `\frac`、`\sqrt`、下标和上标；`$...$`、`\(...\)`、`\[...\]` 仅作为公式源码解析/导入语法。公式内部的 `\\` 不打开正文命令模式；`Align` 内才解释为公式行分隔；输入形式使用 LaTeX 无编号 `align*`。
+
+命令面板别名固定为 `\math`（行内）、`\equation`（单行显示）、`\align`（多行对齐）。这些是结构插入命令；`\(`、`\[` 仅保留为公式源码定界写法，不作为命令候选。
 
 不包含：表格自身的插入和行列编辑、公式图片导出。单元格内公式由 044 按[公式与表格的集成规则](../architecture/editor/math-and-table.md#m3-集成验收)统一集成；011 汇总验收必须确认该证据已完成。
 
@@ -69,7 +71,7 @@ M3 按可独立验收的边界拆成以下任务；子任务遵守本文和[公�
 
 ## 验收标准
 
-- [ ] `InlineMath`、`Equation` 和 `Align` 的节点名、文档位置和 LaTeX 映射一致；`$` / `\(` 插入行内公式，`$$` / `\[` 插入显示公式，LaTeX `align*` 的 `&`/`\\` 对齐和换行可用。
+- [ ] `InlineMath`、`Equation` 和 `Align` 的节点名、文档位置和 LaTeX 映射一致；`\math`、`\equation`、`\align` 分别插入行内、单行和多行结构，LaTeX `align*` 的 `&`/`\\` 对齐和换行可用。
 - [ ] 数学语法由 `latex-rust` 解析与排版，或记录其公开 API 阻碍及已验证的最小上游/API 适配；没有重复实现已有 parser/layout 能力。
 - [ ] `.cdoc` 持久化格式不暴露依赖 crate AST 版本；首版使用内嵌 STIX Two Math；`defaultMathFontFamily` 保留为稳定扩展入口，未设置时默认为 STIX Two Math，当前只支持该字体；其他请求保留且回退时报告诊断。
 - [ ] 过深/不支持的公式输入不会使进程崩溃或丢失源文本；错误位置可定位，布局失败原子处理。

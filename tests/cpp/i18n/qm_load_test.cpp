@@ -37,6 +37,8 @@ void QmLoadTest::zhHansDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saving"), QStringLiteral("保存中"));
     QCOMPARE(translator.translate("WindowTitleBar", "Edited"), QStringLiteral("已编辑"));
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("已保存"));
+    QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
+             QStringLiteral("编号列表"));
 }
 
 void QmLoadTest::zhHantDictionaryTranslates() {
@@ -48,6 +50,8 @@ void QmLoadTest::zhHantDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saving"), QStringLiteral("儲存中"));
     QCOMPARE(translator.translate("WindowTitleBar", "Edited"), QStringLiteral("已編輯"));
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("已儲存"));
+    QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
+             QStringLiteral("編號清單"));
 }
 
 void QmLoadTest::japaneseDictionaryTranslates() {
@@ -59,6 +63,8 @@ void QmLoadTest::japaneseDictionaryTranslates() {
     QCOMPARE(translator.translate("WindowTitleBar", "Saving"), QStringLiteral("保存中"));
     QCOMPARE(translator.translate("WindowTitleBar", "Edited"), QStringLiteral("編集済み"));
     QCOMPARE(translator.translate("WindowTitleBar", "Saved"), QStringLiteral("保存済み"));
+    QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
+             QStringLiteral("番号付きリスト"));
 }
 
 void QmLoadTest::enBaselineDictionaryLoads() {
@@ -67,6 +73,8 @@ void QmLoadTest::enBaselineDictionaryLoads() {
     QVERIFY(translator.load(QStringLiteral(":/i18n/caret_en.qm")));
     QCOMPARE(translator.translate("DialogAction", "Cancel"), QStringLiteral("Cancel"));
     QCOMPARE(translator.translate("DialogAction", "OK"), QStringLiteral("OK"));
+    QCOMPARE(translator.translate("CommandCompletion", "Numbered list"),
+             QStringLiteral("Numbered list"));
 }
 
 QTEST_GUILESS_MAIN(QmLoadTest)

@@ -45,6 +45,7 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantList compositionRects READ compositionRects NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext NOTIFY interactionChanged)
+    Q_PROPERTY(QVariantMap commandLine READ commandLine NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
     Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
@@ -75,6 +76,7 @@ class LayoutViewModel final : public QObject {
         return m_paragraph_layouts.toVariantList();
     }
     [[nodiscard]] const QVariantMap& inputMethodContext() const { return m_input_method_context; }
+    [[nodiscard]] const QVariantMap& commandLine() const { return m_command_line; }
     [[nodiscard]] QString documentGeneration() const {
         return QString::number(m_document_generation);
     }
@@ -105,6 +107,8 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap placeCaretAtPage(int page_index, qreal x_pt, qreal y_pt);
     /// 将 Qt 键盘输入文本提交给 Rust 会话并安装新布局快照。
     Q_INVOKABLE QVariantMap insertText(const QString& text);
+    /// 将命令面板状态和输入交给 Rust Session；查询更新只安装轻量交互快照。
+    Q_INVOKABLE QVariantMap commandLineCommand(const QString& action, const QString& text = {});
     /// 将 Return 提交给 Rust，并安装拆分后的页面快照。
     Q_INVOKABLE QVariantMap splitParagraph();
     /// 将 Backspace 提交给 Rust，并安装删除后的页面快照。
@@ -165,6 +169,7 @@ class LayoutViewModel final : public QObject {
     bool installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot);
     QVariantMap installEditResponse(const QByteArray& response_bytes);
     QVariantMap installEditResponse(const QJsonDocument& snapshot_document);
+    QVariantMap installCommandLineResponse(const QByteArray& response_bytes);
     QVariantMap installInteractionResponse(const QByteArray& response_bytes);
     bool installInteraction(const QString& interaction_json);
     bool installInteraction(const QJsonObject& interaction_object);
@@ -193,6 +198,7 @@ class LayoutViewModel final : public QObject {
     QVariantList m_composition_rects;
     QJsonArray m_paragraph_layouts;
     QVariantMap m_input_method_context;
+    QVariantMap m_command_line;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     qulonglong m_layout_revision = 0;

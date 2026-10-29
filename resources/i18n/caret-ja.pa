@@ -170,6 +170,11 @@ message_032:
   tr: 挿入カーソルを点滅させる
   st: finished
 
+message_101:
+  src: Show command suggestions
+  tr: コマンド候補を表示する
+  st: finished
+
 [RecoveryDialog]
 message_033:
   src: Recover documents
@@ -439,4 +444,80 @@ message_083:
 message_084:
   src: Saved
   tr: 保存済み
+  st: finished
+
+[CommandCompletion]
+message_085:
+  src: Chapter
+  tr: 章
+  st: finished
+
+message_086:
+  src: Section
+  tr: 節
+  st: finished
+
+message_087:
+  src: Subsection
+  tr: 小節
+  st: finished
+
+message_089:
+  src: Bulleted list
+  tr: 箇条書きリスト
+  st: finished
+
+message_090:
+  src: Numbered list
+  tr: 番号付きリスト
+  st: finished
+
+message_091:
+  src: Page break
+  tr: 改ページ
+  st: finished
+
+message_092:
+  src: Line break
+  tr: ソフト改行
+  st: finished
+
+message_093:
+  src: No matching commands
+  tr: 該当するコマンドがありません
+  st: finished
+
+message_094:
+  src: Inline math
+  tr: インライン数式
+  st: finished
+
+message_095:
+  src: Single-line equation
+  tr: 1行数式
+  st: finished
+
+message_096:
+  src: Fraction
+  tr: 分数
+  st: finished
+
+message_097:
+  src: Square root
+  tr: 平方根
+  st: finished
+
+message_098:
+  src: Table
+  tr: 表
+  st: finished
+
+message_099:
+  src: Subsubsection
+  tr: 小々節
+  st: finished
+
+message_100:
+  src: Multiline equation
+  tr: 複数行数式
   st: finished

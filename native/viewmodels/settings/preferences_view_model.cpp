@@ -45,7 +45,8 @@ PreferencesViewModel::PreferencesViewModel(QObject* parent) : QObject(parent) {
     }
     log_persistence_warning(snapshot);
     installSnapshot(
-        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        snapshot.caret_blink_enabled, snapshot.command_suggestions_enabled,
+        snapshot.auto_save_enabled,
         QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     const ffi::SettingsConstraints constraints = ffi::settings_constraints();
     m_minimum_window_width = static_cast<int>(constraints.minimum_window_width);
@@ -72,7 +73,8 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
     }
     log_persistence_warning(snapshot);
     installSnapshot(
-        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        snapshot.caret_blink_enabled, snapshot.command_suggestions_enabled,
+        snapshot.auto_save_enabled,
         QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
@@ -97,7 +99,8 @@ bool PreferencesViewModel::refresh() {
         return false;
     }
     installSnapshot(
-        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        snapshot.caret_blink_enabled, snapshot.command_suggestions_enabled,
+        snapshot.auto_save_enabled,
         QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
@@ -122,7 +125,8 @@ bool PreferencesViewModel::setAutoSaveEnabled(bool enabled) {
     }
     log_persistence_warning(snapshot);
     installSnapshot(
-        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        snapshot.caret_blink_enabled, snapshot.command_suggestions_enabled,
+        snapshot.auto_save_enabled,
         QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
     setError({});
     emit snapshotChanged();
@@ -134,9 +138,11 @@ bool PreferencesViewModel::setAutoSaveEnabled(bool enabled) {
 #endif
 }
 
-void PreferencesViewModel::installSnapshot(bool caret_blink_enabled, bool auto_save_enabled,
+void PreferencesViewModel::installSnapshot(bool caret_blink_enabled,
+                                           bool command_suggestions_enabled, bool auto_save_enabled,
                                            QSize window_size) {
     m_caret_blink_enabled = caret_blink_enabled;
+    m_command_suggestions_enabled = command_suggestions_enabled;
     m_auto_save_enabled = auto_save_enabled;
     m_window_width = window_size.width();
     m_window_height = window_size.height();

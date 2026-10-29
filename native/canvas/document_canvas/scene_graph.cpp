@@ -484,8 +484,8 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     }
     auto* node = root->caret_node;
     const bool preview_caret_visible = hasActiveFocus() && !m_caret_preview_geometry.isEmpty();
-    if (preview_caret_visible ||
-        (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty())) {
+    if (!m_command_mode && (preview_caret_visible ||
+                            (m_caret_visible && hasActiveFocus() && !m_caret_geometry.isEmpty()))) {
         const QVariantMap& geometry =
             preview_caret_visible ? m_caret_preview_geometry : m_caret_geometry;
         node->setRect(caretRect(geometry));

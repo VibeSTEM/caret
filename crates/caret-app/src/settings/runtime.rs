@@ -148,6 +148,7 @@ impl SettingsRuntime {
         theme_id: &str,
         language: &str,
         caret_blink_enabled: bool,
+        command_suggestions_enabled: bool,
     ) -> Result<UserSettings, String> {
         match &mut self.state {
             SettingsState::Ready {
@@ -158,6 +159,7 @@ impl SettingsRuntime {
                 candidate.theme_id = theme_id.to_owned();
                 candidate.language = language.to_owned();
                 candidate.preferences.caret_blink_enabled = caret_blink_enabled;
+                candidate.preferences.command_suggestions_enabled = command_suggestions_enabled;
                 let outcome = service
                     .commit_and_save(candidate, &self.settings_path)
                     .map_err(|error| error.to_string())?;
@@ -269,7 +271,7 @@ mod tests {
         let path = directory.join("settings.json");
         let mut runtime = SettingsRuntime::open(path.clone());
 
-        let selected = runtime.set_ui_selection("dark", "ja", false)?;
+        let selected = runtime.set_ui_selection("dark", "ja", false, false)?;
         assert_eq!(selected.theme_id, "dark");
         assert_eq!(selected.language, "ja");
         assert!(!selected.preferences.caret_blink_enabled);
@@ -280,7 +282,7 @@ mod tests {
         let original = runtime.snapshot()?;
         assert!(
             runtime
-                .set_ui_selection("missing", "zh-Hant", true)
+                .set_ui_selection("missing", "zh-Hant", true, true)
                 .is_err()
         );
         assert_eq!(runtime.snapshot()?, original);

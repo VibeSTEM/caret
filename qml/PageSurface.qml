@@ -212,12 +212,14 @@ Item {
         contentWidth: Math.max(width, pageCanvas.implicitWidth)
         contentHeight: Math.max(height, pageCanvas.implicitHeight)
         onContentYChanged: {
+            surface.canvasGeometryRevision++;
             const pageRangeChanged = surface.updateVisiblePageRange();
             if (pageRangeChanged || !moving)
                 surface.scheduleGlyphRasterization();
             pageCanvas.updateInputMethodCursorRectangle();
         }
         onContentXChanged: {
+            surface.canvasGeometryRevision++;
             if (!moving)
                 surface.scheduleGlyphRasterization();
             pageCanvas.updateInputMethodCursorRectangle();
@@ -246,18 +248,13 @@ Item {
             pageSizesPt: LayoutViewModel.pageSizesPt
             pageMarginsPt: LayoutViewModel.pageMarginsPt
             caretGeometry: LayoutViewModel.caretGeometry
+            commandMode: LayoutViewModel.commandLine.active === true
             caretPreviewGeometry: pointerHandler.selectionDragActive ? pointerHandler.dragFocusCaretGeometry : ({})
             selectionRects: pointerHandler.selectionDragActive ? [] : LayoutViewModel.selectionRects
             selectionColor: Theme.colorSelected
             inputMethodContext: LayoutViewModel.inputMethodContext
             onActiveFocusChanged: if (!activeFocus && preeditText.length > 0)
                 cancelPreedit()
-
-            onTextInputRequested: function (text) {
-                const result = LayoutViewModel.insertText(text);
-                if (!result.valid)
-                    console.warn("Document text input failed:", result.error);
-            }
 
             onInputMethodEventRequested: function (preedit, commit, replacementStart, replacementLength, cursorPositionUtf16) {
                 const result = LayoutViewModel.inputMethodEvent(preedit, commit, replacementStart, replacementLength, cursorPositionUtf16);
@@ -330,6 +327,17 @@ Item {
                 z: 1
             }
         }
+    }
+
+    CommandCompletion {
+        anchors.fill: parent
+        canvas: pageCanvas
+        commandLine: LayoutViewModel.commandLine
+        geometryRevision: surface.canvasGeometryRevision
+    }
+
+    CommandInputHandler {
+        canvas: pageCanvas
     }
 
     onPageScaleChanged: {

@@ -59,6 +59,64 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
+void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.ViewModels\n"
+                                        "Item { objectName: \"commandLineProbe\" }\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
+    auto* view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(view_model != nullptr);
+    QSignalSpy interaction_changed(view_model, SIGNAL(interactionChanged()));
+    QVERIFY(interaction_changed.isValid());
+
+    const QVariantMap begin = view_model->commandLineCommand(QStringLiteral("begin"));
+    QVERIFY(begin.value(QStringLiteral("valid")).toBool());
+    QVERIFY(view_model->commandLine().value(QStringLiteral("active")).toBool());
+    QCOMPARE(interaction_changed.size(), 1);
+
+    const QVariantMap type =
+        view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("sec"));
+    QVERIFY(type.value(QStringLiteral("valid")).toBool());
+    const QVariantMap command_line = view_model->commandLine();
+    const QVariantList candidates = command_line.value(QStringLiteral("candidates")).toList();
+    QCOMPARE(candidates.size(), 1);
+    const QVariantMap candidate = candidates.first().toMap();
+    QCOMPARE(candidate.value(QStringLiteral("alias")).toString(), QStringLiteral("\\section"));
+    QVERIFY(!candidate.contains(QStringLiteral("label")));
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
+
+    const QVariantMap complete = view_model->commandLineCommand(QStringLiteral("tab"));
+    QVERIFY(complete.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(view_model->commandLine().value(QStringLiteral("query")).toString(),
+             QStringLiteral("section"));
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
+
+    const QVariantMap invalid = view_model->commandLineCommand(QStringLiteral("unknown"));
+    QVERIFY(!invalid.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!invalid.value(QStringLiteral("error")).toString().isEmpty());
+    QVERIFY(view_model->commandLine().value(QStringLiteral("active")).toBool());
+
+    const QVariantMap cancel = view_model->commandLineCommand(QStringLiteral("cancel"));
+    QVERIFY(cancel.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!view_model->commandLine().value(QStringLiteral("active")).toBool());
+    QCOMPARE(interaction_changed.size(), 4);
+    delete probe;
+}
+
 void ShellLoadTest::documentHitTestReturnsRustPosition() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);

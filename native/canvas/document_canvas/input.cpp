@@ -107,6 +107,46 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
             return;
         }
     }
+    if (m_command_mode && semantic_modifiers == Qt::NoModifier) {
+        QString command_key;
+        switch (event->key()) {
+        case Qt::Key_Escape:
+            command_key = QStringLiteral("cancel");
+            break;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            command_key = QStringLiteral("accept");
+            break;
+        case Qt::Key_Tab:
+            command_key = QStringLiteral("tab");
+            break;
+        case Qt::Key_Backspace:
+            command_key = QStringLiteral("backspace");
+            break;
+        case Qt::Key_Left:
+            command_key = QStringLiteral("cursor-left");
+            break;
+        case Qt::Key_Right:
+            command_key = QStringLiteral("cursor-right");
+            break;
+        case Qt::Key_Space:
+            command_key = QStringLiteral("space");
+            break;
+        case Qt::Key_Up:
+            command_key = QStringLiteral("previous");
+            break;
+        case Qt::Key_Down:
+            command_key = QStringLiteral("next");
+            break;
+        default:
+            break;
+        }
+        if (!command_key.isEmpty()) {
+            emit commandLineKeyRequested(command_key);
+            event->accept();
+            return;
+        }
+    }
     if (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier) {
         const bool extend = semantic_modifiers == Qt::ShiftModifier;
         switch (event->key()) {

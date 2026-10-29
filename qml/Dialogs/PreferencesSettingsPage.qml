@@ -9,9 +9,11 @@ Item {
 
     objectName: "preferencesSettingsPage"
     property bool caretBlinkEnabled: true
+    property bool commandSuggestionsEnabled: true
     property string errorText: ""
 
     signal caretBlinkEnabledEdited(bool enabled)
+    signal commandSuggestionsEnabledEdited(bool enabled)
 
     ColumnLayout {
         anchors.fill: parent
@@ -30,6 +32,13 @@ Item {
             text: qsTranslate("PreferencesSettingsPage", "Blink the insertion point")
             checked: page.caretBlinkEnabled
             onToggled: page.caretBlinkEnabledEdited(checked)
+        }
+
+        ThemedSwitch {
+            objectName: "commandSuggestionsPreference"
+            text: qsTranslate("PreferencesSettingsPage", "Show command suggestions")
+            checked: page.commandSuggestionsEnabled
+            onToggled: page.commandSuggestionsEnabledEdited(checked)
         }
 
         ThemedLabel {

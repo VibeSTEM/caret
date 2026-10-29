@@ -36,6 +36,7 @@
 #include <QTemporaryDir>
 #include <QVariant>
 #include <QtCore/Qt>
+#include <QtCore/qtestsupport_core.h>
 #include <QtGui/qtestsupport_gui.h>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
@@ -132,6 +133,107 @@ void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
     QCOMPARE(view_model->activeTheme(), QStringLiteral("light"));
     QVERIFY(view_model->availableThemes().contains(QStringLiteral("dark")));
     QCOMPARE(probe->property("background").value<QColor>(), QColor(QStringLiteral("#ffffff")));
+    delete probe;
+}
+
+void ShellLoadTest::autoScrollTextMovesOnlyWhenActiveAndOverflowing() {
+    const QString theme =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                               theme, QColor(QStringLiteral("#ffffff")), 16));
+    caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
+
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Shell\n"
+                          "Item {\n"
+                          "    width: 180; height: 40\n"
+                          "    CommandCandidateItem {\n"
+                          "        objectName: \"candidateRow\"\n"
+                          "        width: 160; height: 28\n"
+                          "        candidate: ({ alias: \"\\\\subsection\", available: true })\n"
+                          "        label: \"A long localized candidate label\"\n"
+                          "        selected: false\n"
+                          "        aliasColumnWidth: 40\n"
+                          "        labelColumnWidth: 40\n"
+                          "    }\n"
+                          "}\n"),
+        QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
+    QQuickItem* candidate_row = probe->findChild<QQuickItem*>(QStringLiteral("candidateRow"));
+    QVERIFY(candidate_row != nullptr);
+    QList<QQuickItem*> scroll_texts;
+    for (QQuickItem* item : candidate_row->findChildren<QQuickItem*>()) {
+        if (item->property("scrollActive").isValid()) {
+            scroll_texts.push_back(item);
+        }
+    }
+    QCOMPARE(scroll_texts.size(), 2);
+    for (QQuickItem* text : scroll_texts) {
+        QTRY_VERIFY(text->property("overflowDistance").toReal() > 0);
+        QVERIFY(!text->property("shouldScroll").toBool());
+    }
+
+    QTest::qWait(250);
+    for (QQuickItem* text : scroll_texts) {
+        QCOMPARE(text->property("contentX").toReal(), 0.0);
+    }
+
+    QVERIFY(candidate_row->setProperty("selected", true));
+    for (QQuickItem* text : scroll_texts) {
+        QTRY_VERIFY(text->property("shouldScroll").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(text->property("contentX").toReal() > 0, 1500);
+    }
+
+    QVERIFY(candidate_row->setProperty("selected", false));
+    for (QQuickItem* text : scroll_texts) {
+        QTRY_COMPARE_WITH_TIMEOUT(text->property("contentX").toReal(), 0.0, 1000);
+    }
+    delete probe;
+}
+
+void ShellLoadTest::autoScrollTextRepeatsWithTheDocumentedPauseCycle() {
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.Shell\n"
+                                        "Item {\n"
+                                        "    width: 500; height: 32\n"
+                                        "    AutoScrollText {\n"
+                                        "        id: autoText\n"
+                                        "        objectName: \"autoText\"\n"
+                                        "        width: naturalTextWidth - 16\n"
+                                        "        height: 24\n"
+                                        "        text: \"Long scrolling text\"\n"
+                                        "        textColor: \"black\"\n"
+                                        "        fontPixelSize: 16\n"
+                                        "        scrollActive: true\n"
+                                        "    }\n"
+                                        "}\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
+    QQuickItem* auto_text = probe->findChild<QQuickItem*>(QStringLiteral("autoText"));
+    QVERIFY(auto_text != nullptr);
+    QTRY_VERIFY(auto_text->property("overflowDistance").toReal() > 15.0);
+    QCOMPARE(auto_text->property("pauseDurationMilliseconds").toInt(), 1000);
+
+    const qreal overflow = auto_text->property("overflowDistance").toReal();
+    QTRY_VERIFY_WITH_TIMEOUT(auto_text->property("contentX").toReal() >= overflow - 0.5, 1500);
+    QTest::qWait(500);
+    QVERIFY(auto_text->property("contentX").toReal() >= overflow - 0.5);
+    QTRY_COMPARE_WITH_TIMEOUT(auto_text->property("contentX").toReal(), 0.0, 1500);
+    QTest::qWait(500);
+    QCOMPARE(auto_text->property("contentX").toReal(), 0.0);
+    QTRY_VERIFY_WITH_TIMEOUT(auto_text->property("contentX").toReal() > 0.0, 1500);
     delete probe;
 }
 
@@ -318,7 +420,7 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
              QStringLiteral("ja"));
     QVERIFY(!restored.caret_blink_enabled);
 
-    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hans"), false));
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hans"), false, true));
     QCOMPARE(translation_probe->property("settingsTitle").toString(), QStringLiteral("设置"));
     QCOMPARE(translation_probe->property("languageLabel").toString(), QStringLiteral("应用语言"));
     QCOMPARE(translation_probe->property("cancelLabel").toString(), QStringLiteral("取消"));
@@ -328,7 +430,7 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
     QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("已保存"));
     QCOMPARE(close_prompt->property("text").toString(), QStringLiteral("关闭文档前要保存更改吗？"));
     QVERIFY(close_dialog->property("height").toReal() < english_dialog_height);
-    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false));
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false, true));
 
     const qsizetype theme_change_count = theme_changes.count();
     controller.open();

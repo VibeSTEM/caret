@@ -30,7 +30,7 @@ class SettingsViewModel final : public QObject {
 
     /// 原子提交设置窗口草稿，成功后更新主题投影和应用翻译器。
     Q_INVOKABLE bool applySettings(const QString& theme_id, const QString& language,
-                                   bool caret_blink_enabled);
+                                   bool caret_blink_enabled, bool command_suggestions_enabled);
 
   signals:
     void selectionChanged();

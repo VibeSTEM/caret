@@ -2,8 +2,52 @@
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::DocumentLayoutDeltaView;
+use serde_json::{Value, json};
+
+fn command_line_state(session: &caret_engine::Session) -> Value {
+    session
+        .command_line()
+        .map(|command_line| {
+            let candidates = command_line
+                .candidates()
+                .into_iter()
+                .map(|candidate| {
+                    json!({
+                        "alias": candidate.alias,
+                        "commandId": candidate.command_id,
+                        "available": candidate.available,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "active": true,
+                "query": &command_line.query,
+                "cursor": command_line.cursor,
+                "selected": command_line.selected,
+                "candidates": candidates,
+            })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "active": false,
+                "query": "",
+                "cursor": 0,
+                "selected": 0,
+                "candidates": [],
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests;
 
 impl DocumentViewRuntime {
+    /// 只序列化命令查询，按键过滤不读取或重建布局快照。
+    pub fn command_line_state_json(&self) -> Result<String, String> {
+        serde_json::to_string(&command_line_state(&self.session))
+            .map_err(|error| format!("cmdline.serialize: {error}"))
+    }
+
     /// 按当前会话和字体代际生成界面快照 JSON。
     pub fn layout_snapshot_json(&mut self) -> Result<String, String> {
         self.layout_snapshot_json_with_delta(None)
@@ -39,6 +83,9 @@ impl DocumentViewRuntime {
             None => serde_json::to_value(caret_engine::DocumentLayoutView::from(snapshot)),
         }
         .map_err(|error| format!("layout.serialize: {error}"))?;
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert("commandLine".to_owned(), command_line_state(&self.session));
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -136,6 +183,7 @@ impl DocumentViewRuntime {
             selection.focus.paragraph_id.clone(),
         );
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
+        let command_line = command_line_state(&self.session);
         let snapshot = self.current_snapshot()?;
         let rectangles = snapshot
             .selection_geometry(&selection)
@@ -183,16 +231,21 @@ impl DocumentViewRuntime {
         let caret = snapshot
             .caret_geometry(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
+        let font_size_centipoints = snapshot
+            .font_size_centipoints_at(focus, visual_affinity)
+            .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "selectionRects": rectangles,
             "inputMethodContext": input_method_context,
+            "commandLine": command_line,
             "caretGeometry": {
                 "pageIndex": caret.page_index,
                 "xPt": caret.x_pt,
                 "y0Pt": caret.y0_pt,
                 "y1Pt": caret.y1_pt,
+                "fontSizeCentipoints": font_size_centipoints,
             },
         }))
         .map_err(|error| format!("layout.interaction_serialize: {error}"))?;

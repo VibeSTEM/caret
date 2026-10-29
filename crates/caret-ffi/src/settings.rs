@@ -27,6 +27,7 @@ pub(crate) fn settings_snapshot(runtime: &mut SettingsRuntime) -> bridge::Settin
     match runtime.runtime.snapshot() {
         Ok(snapshot) => bridge::SettingsSnapshot {
             caret_blink_enabled: snapshot.preferences.caret_blink_enabled,
+            command_suggestions_enabled: snapshot.preferences.command_suggestions_enabled,
             auto_save_enabled: snapshot.preferences.auto_save_enabled,
             window_width: snapshot.preferences.window_width,
             window_height: snapshot.preferences.window_height,
@@ -41,6 +42,7 @@ pub(crate) fn settings_snapshot(runtime: &mut SettingsRuntime) -> bridge::Settin
         },
         Err(error) => bridge::SettingsSnapshot {
             caret_blink_enabled: true,
+            command_suggestions_enabled: true,
             auto_save_enabled: false,
             window_width: 0,
             window_height: 0,
@@ -110,11 +112,14 @@ pub(crate) fn set_ui_selection(
     theme_id: String,
     language: String,
     caret_blink_enabled: bool,
+    command_suggestions_enabled: bool,
 ) -> bridge::SettingsSnapshot {
-    if let Err(error) = runtime
-        .runtime
-        .set_ui_selection(&theme_id, &language, caret_blink_enabled)
-    {
+    if let Err(error) = runtime.runtime.set_ui_selection(
+        &theme_id,
+        &language,
+        caret_blink_enabled,
+        command_suggestions_enabled,
+    ) {
         let mut snapshot = settings_snapshot(runtime);
         snapshot.error = error;
         return snapshot;
