@@ -9,7 +9,7 @@ pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{IndexedStructure, StructureIndex, StructureKind, StructurePosition};
 
 pub use editing::{
-    Affinity, Command, CommandCandidate, CommandLine, Direction, EditError, Effect,
+    Affinity, Command, CommandCandidate, CommandLine, Direction, EditError, EditorKey, Effect,
     InputComposition, Pos, PositionMap, Selection, Session, StoryId, utf8_offset_to_utf16,
     utf16_offset_to_utf8,
 };

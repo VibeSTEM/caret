@@ -699,15 +699,26 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
     QQmlComponent component(&engine);
     component.setData(QByteArrayLiteral("import QtQuick\n"
                                         "import Caret.Shell\n"
-                                        "DocumentModeSelector { objectName: \"modeSelector\" }\n"),
+                                        "Item {\n"
+                                        "    width: 800; height: 600; focus: true\n"
+                                        "    property int bubbledEscapeCount: 0\n"
+                                        "    Keys.onEscapePressed: event => {\n"
+                                        "        bubbledEscapeCount += 1; event.accepted = true;\n"
+                                        "    }\n"
+                                        "    DocumentModeSelector {\n"
+                                        "        objectName: \"modeSelector\"\n"
+                                        "    }\n"
+                                        "}\n"),
                       QUrl());
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject* selector = component.create();
-    QVERIFY2(selector != nullptr, qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
+    QObject* selector = probe->findChild<QObject*>(QStringLiteral("modeSelector"));
+    QVERIFY(selector != nullptr);
     QQuickWindow window;
-    auto* selector_item = qobject_cast<QQuickItem*>(selector);
-    QVERIFY(selector_item != nullptr);
-    selector_item->setParentItem(window.contentItem());
+    auto* probe_item = qobject_cast<QQuickItem*>(probe);
+    QVERIFY(probe_item != nullptr);
+    probe_item->setParentItem(window.contentItem());
     window.resize(800, 600);
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
@@ -734,6 +745,16 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
     QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
     auto* mode_menu = selector->findChild<QObject*>(QStringLiteral("documentModeMenu"));
     QVERIFY(mode_menu != nullptr);
+    QTRY_VERIFY(mode_menu->property("visible").toBool());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY(!mode_menu->property("visible").toBool());
+    QCOMPARE(probe->property("bubbledEscapeCount").toInt(), 0);
+    QCOMPARE(selector->property("mode").toString(), QStringLiteral("editing"));
+    button_item->forceActiveFocus();
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_COMPARE(probe->property("bubbledEscapeCount").toInt(), 1);
+    probe->setProperty("bubbledEscapeCount", 0);
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, button_center);
     QTRY_VERIFY(mode_menu->property("visible").toBool());
     const qreal menu_x = mode_menu->property("x").toReal();
     const qreal menu_y = mode_menu->property("y").toReal();
@@ -789,7 +810,7 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
                                       Q_ARG(QString, QStringLiteral("view"))));
     QCOMPARE(selector->property("mode").toString(), QStringLiteral("view"));
     QCOMPARE(button->property("text").toString(), QStringLiteral("View"));
-    delete selector;
+    delete probe;
 }
 
 void ShellLoadTest::newDocumentDialogHasNoProcessFields() {

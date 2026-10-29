@@ -162,9 +162,6 @@ Item {
                         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
                             selector.choose(option.modelData.id);
                             event.accepted = true;
-                        } else if (event.key === Qt.Key_Escape) {
-                            modeMenu.close();
-                            event.accepted = true;
                         }
                     }
 

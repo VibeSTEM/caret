@@ -125,6 +125,10 @@ class LayoutViewModel final : public QObject {
     Q_INVOKABLE QVariantMap moveVerticalCaret(int line_delta, bool extend);
     /// 移到当前视觉行首尾。
     Q_INVOKABLE QVariantMap moveToVisualLineEdge(bool end, bool extend);
+    /// 在 Rust 结构索引中导航或按 Esc 语义跳出结构。
+    Q_INVOKABLE QVariantMap moveStructure(const QString& action);
+    /// 由 Rust 按当前编辑上下文处理 Qt 识别的编辑器按键意图。
+    Q_INVOKABLE QVariantMap handleEditorKey(const QString& key);
     /// 将 Qt 输入法预编辑、提交及替换范围交给 Rust Session。
     Q_INVOKABLE QVariantMap inputMethodEvent(const QString& preedit, const QString& commit,
                                              int replacement_start, int replacement_length,

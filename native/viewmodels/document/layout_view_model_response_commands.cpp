@@ -80,7 +80,9 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     refreshDocumentFileStatus();
     refreshAutoSaveDeadline();
     return {{QStringLiteral("valid"), true},
-            {QStringLiteral("documentGeneration"), documentGeneration()}};
+            {QStringLiteral("documentGeneration"), documentGeneration()},
+            {QStringLiteral("compositionCancelled"),
+             snapshot_document.object().value(QStringLiteral("compositionCancelled")).toBool()}};
 #else
     Q_UNUSED(snapshot_document)
     return {{QStringLiteral("valid"), false},

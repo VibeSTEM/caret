@@ -1,6 +1,7 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
+use crate::editing::EditorKey;
 use caret_doc::Block;
 
 fn paragraph_text(session: &Session, block_index: usize) -> String {
@@ -106,6 +107,91 @@ fn failed_editor_command_keeps_the_active_command_query() {
 
     assert!(matches!(result, Err(EditError::InvalidPosition)));
     assert_eq!(session.command_line(), Some(&expected_command_line));
+}
+
+#[test]
+fn escape_cancels_command_query_without_changing_document_or_structure() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("sec".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    let revision = session.document_generation();
+
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Escape))
+        .unwrap_or_else(|error| panic!("Escape failed: {error}"));
+
+    assert!(session.command_line().is_none());
+    assert!(!effect.document_changed);
+    assert_eq!(session.document_generation(), revision);
+    assert_eq!(paragraph_text(&session, 0), "");
+}
+
+#[test]
+fn enter_accepts_command_query_while_shift_enter_cannot_edit_behind_it() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("newparagraph".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    let revision = session.document_generation();
+
+    let shifted = session
+        .run(Command::EditorKey(EditorKey::ShiftEnter))
+        .unwrap_or_else(|error| panic!("Shift+Enter dispatch failed: {error}"));
+    assert!(!shifted.document_changed);
+    assert_eq!(session.document_generation(), revision);
+    assert!(session.command_line().is_some());
+
+    let accepted = session
+        .run(Command::EditorKey(EditorKey::Enter))
+        .unwrap_or_else(|error| panic!("Enter dispatch failed: {error}"));
+    assert!(accepted.document_changed);
+    assert!(session.command_line().is_none());
+    assert_eq!(session.document().body.len(), 2);
+}
+
+#[test]
+fn escape_cancels_ime_preedit_before_collapsing_an_existing_selection() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("hello".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    let focus = session.selection().focus.clone();
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: Pos {
+                offset: 0,
+                ..focus.clone()
+            },
+            focus: focus.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    let selected = session.selection().clone();
+    session
+        .run(Command::UpdateComposition {
+            id: 4,
+            preedit: "にほん".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Escape))
+        .unwrap_or_else(|error| panic!("Escape failed: {error}"));
+
+    assert!(effect.composition_changed);
+    assert!(!effect.selection_changed);
+    assert!(session.composition().is_none());
+    assert_eq!(*session.selection(), selected);
+    assert_eq!(paragraph_text(&session, 0), "hello");
 }
 
 #[test]

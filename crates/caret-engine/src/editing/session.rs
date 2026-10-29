@@ -5,6 +5,7 @@ mod command_line;
 mod composition;
 mod history;
 mod inline_content;
+mod keyboards;
 mod navigation;
 mod paragraph_edit;
 mod range_edit;
@@ -145,6 +146,9 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        if let Command::EditorKey(key) = command {
+            return self.run_editor_key(key);
+        }
         if matches!(&command, Command::MoveStructure(_) | Command::ExitStructure) {
             return self.run_structure(command);
         }
@@ -213,6 +217,7 @@ impl Session {
             Command::MoveStructure(_) | Command::ExitStructure => {
                 unreachable!("structure commands returned above")
             }
+            Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),

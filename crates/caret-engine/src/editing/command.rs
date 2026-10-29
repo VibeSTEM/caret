@@ -10,6 +10,13 @@ pub enum Direction {
     Forward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorKey {
+    Escape,
+    Enter,
+    ShiftEnter,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
@@ -20,6 +27,7 @@ pub enum Command {
     MoveCaret(Direction),
     MoveStructure(Direction),
     ExitStructure,
+    EditorKey(EditorKey),
     SetSelection(Option<Selection>),
     UpdateComposition { id: u64, preedit: String },
     CommitComposition { id: u64, text: String },
@@ -50,6 +58,9 @@ impl Command {
             Self::MoveStructure(Direction::Forward) => "struct.next",
             Self::MoveStructure(Direction::Backward) => "struct.prev",
             Self::ExitStructure => "struct.exit",
+            Self::EditorKey(EditorKey::Escape) => "interaction.escape",
+            Self::EditorKey(EditorKey::Enter) => "interaction.enter",
+            Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::SetSelection(_) => "selection.set",
             Self::UpdateComposition { .. } => "ime.update",
             Self::CommitComposition { .. } => "ime.commit",

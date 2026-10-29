@@ -1,9 +1,31 @@
 //! 按 Parley 视觉几何移动 Rust Session 中的光标和选区。
 
 use super::DocumentViewRuntime;
-use caret_engine::{Affinity, DocumentLayoutSnapshot, HitAffinity, Pos, Selection, VisualAffinity};
+use caret_engine::{
+    Affinity, Command, Direction, DocumentLayoutSnapshot, HitAffinity, Pos, Selection,
+    VisualAffinity,
+};
 
 impl DocumentViewRuntime {
+    /// 按 Rust 结构索引移动段落停靠点，或按 Esc 语义收起选区/跳出环境。
+    pub fn move_structure_json(&mut self, action: &str) -> Result<String, String> {
+        let command = match action {
+            "next" => Command::MoveStructure(Direction::Forward),
+            "previous" => Command::MoveStructure(Direction::Backward),
+            "exit" => Command::ExitStructure,
+            _ => return Err("navigation.unknown_structure_action".to_owned()),
+        };
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("navigation.structure: {error}"))?;
+        if effect.selection_changed {
+            self.anchor_visual_affinity = self.session.selection_visual_affinity();
+            self.preferred_visual_x_pt = None;
+        }
+        self.interaction_state_json()
+    }
+
     /// 按 Parley 的视觉顺序移动焦点；非扩展选区时先折叠到对应视觉边缘。
     pub fn move_visual_caret_json(
         &mut self,

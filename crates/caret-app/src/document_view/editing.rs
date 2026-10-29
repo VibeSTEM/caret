@@ -1,8 +1,41 @@
 //! 将文本编辑命令应用到 Rust 会话并更新布局。
 use super::DocumentViewRuntime;
-use caret_engine::{Command, Direction, DocumentLayoutDeltaView};
+use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey};
 
 impl DocumentViewRuntime {
+    /// 将 Qt 编辑器按键意图交给 Session 裁决，并按结果发布布局或交互快照。
+    pub fn handle_editor_key_json(&mut self, key: &str) -> Result<String, String> {
+        let key = match key {
+            "escape" => EditorKey::Escape,
+            "enter" => EditorKey::Enter,
+            "shift-enter" => EditorKey::ShiftEnter,
+            _ => return Err("interaction.unknown_editor_key".to_owned()),
+        };
+        let command = Command::EditorKey(key);
+        if is_editor_key_document_edit(&self.session, key) {
+            let error_context = command.id();
+            return self.run_edit_command(command, error_context);
+        }
+
+        let error_context = command.id();
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("{error_context}: {error}"))?;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+            return self.layout_snapshot_json_after_composition_cancel();
+        }
+        if effect.selection_changed {
+            self.anchor_visual_affinity = self.session.selection_visual_affinity();
+            self.preferred_visual_x_pt = None;
+        }
+        self.interaction_state_json()
+    }
+
     /// 更新 Rust 命令查询；只有确认可执行候选时才生成文档布局快照。
     pub fn command_line_command_json(
         &mut self,
@@ -177,13 +210,21 @@ impl DocumentViewRuntime {
         ) || matches!(&command, Command::PasteText(_))
             && reusable_paragraph_id.is_some()
             || delete_is_paragraph_local
-            || is_command_line_document_edit(&self.session, &command);
+            || is_command_line_document_edit(&self.session, &command)
+            || matches!(&command, Command::EditorKey(key) if is_editor_key_document_edit(&self.session, *key));
         if can_reuse_layout {
             self.base_snapshot()?;
         }
-        self.session
+        let effect = self
+            .session
             .run(command)
             .map_err(|error| format!("{error_context}: {error}"))?;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+        }
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
         let mut delete_delta = None;
@@ -228,5 +269,16 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
             .selected_candidate()
             .is_some_and(|candidate| candidate.available),
         _ => false,
+    }
+}
+
+fn is_editor_key_document_edit(session: &caret_engine::Session, key: EditorKey) -> bool {
+    match key {
+        EditorKey::Enter if session.command_line().is_some() => {
+            is_command_line_document_edit(session, &Command::AcceptCommandLine)
+        }
+        EditorKey::Enter => true,
+        EditorKey::ShiftEnter => session.command_line().is_none(),
+        EditorKey::Escape => false,
     }
 }

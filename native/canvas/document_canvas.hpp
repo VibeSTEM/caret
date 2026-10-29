@@ -137,6 +137,8 @@ class DocumentCanvas : public QQuickItem {
     void visualNavigationRequested(bool forward, bool extend);
     void verticalNavigationRequested(int line_delta, bool extend);
     void lineEdgeNavigationRequested(bool end, bool extend);
+    void structureNavigationRequested(const QString& action);
+    void editorKeyRequested(const QString& key);
     void clipboardCommandRequested(const QString& command);
     void inputMethodEventRequested(const QString& preedit, const QString& commit,
                                    int replacement_start, int replacement_length,

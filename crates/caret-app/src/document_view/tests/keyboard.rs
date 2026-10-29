@@ -3,6 +3,75 @@
 use super::*;
 
 #[test]
+fn editor_enter_publishes_the_new_paragraph_layout() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first".to_owned())?;
+
+    let snapshot: Value = serde_json::from_str(&runtime.handle_editor_key_json("enter")?)?;
+
+    assert_eq!(snapshot["documentGeneration"], "2");
+    assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(2));
+    assert_eq!(snapshot["paragraphs"][0]["text"], "first");
+    assert_eq!(snapshot["paragraphs"][1]["text"], "");
+    Ok(())
+}
+
+#[test]
+fn editor_enter_accepts_command_candidate_and_publishes_its_document_change()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "newparagraph".to_owned())?;
+    runtime.command_line_command_json("select", "0".to_owned())?;
+
+    let snapshot: Value = serde_json::from_str(&runtime.handle_editor_key_json("enter")?)?;
+
+    assert_eq!(snapshot["documentGeneration"], "1");
+    assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(2));
+    assert_eq!(snapshot["commandLine"]["active"], false);
+    Ok(())
+}
+
+#[test]
+fn editor_escape_cancels_ime_preview_and_publishes_the_base_layout()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let preedit: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "にほん".to_owned(),
+        String::new(),
+        0,
+        0,
+        3,
+    )?)?;
+    assert_eq!(preedit["compositionPreview"], true);
+
+    let cancelled: Value = serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
+
+    assert_eq!(cancelled["documentGeneration"], "0");
+    assert_ne!(cancelled["compositionPreview"], true);
+    assert!(runtime.composition_id.is_none());
+    assert!(runtime.composition_snapshot.is_none());
+    assert_eq!(runtime.session.document().body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn editor_escape_reports_ime_cancellation_to_the_view() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
+    assert!(runtime.session.command_line().is_none());
+    assert!(runtime.session.composition().is_some());
+
+    let composition_cancelled: Value =
+        serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
+    assert_eq!(composition_cancelled["compositionCancelled"], true);
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(composition_cancelled["paragraphs"][0]["text"], "");
+    Ok(())
+}
+
+#[test]
 fn keyboard_text_insertion_updates_rust_document_and_caret_geometry()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
