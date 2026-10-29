@@ -124,7 +124,7 @@ fn settings_file_round_trips_all_services() -> Result<(), Box<dyn std::error::Er
     let path = dir.root.join("settings.json");
     let mut service_runtime = service();
     let mut candidate = service_runtime.current();
-    candidate.language = "zh-CN".to_owned();
+    candidate.language = "zh-Hans".to_owned();
     candidate.theme_id = "dark".to_owned();
     candidate.preferences.window_maximized = false;
     candidate.preferences.caret_blink_enabled = false;
@@ -136,6 +136,22 @@ fn settings_file_round_trips_all_services() -> Result<(), Box<dyn std::error::Er
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
     assert!(saved.get("preferences").is_none());
     assert_eq!(saved["caretBlinkEnabled"], false);
+    Ok(())
+}
+
+#[test]
+fn legacy_china_locale_loads_as_generic_simplified_chinese()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new("legacy-language")?;
+    let path = dir.root.join("settings.json");
+    std::fs::write(
+        &path,
+        br#"{"schemaVersion":1,"themeId":"light","language":"zh-CN","windowWidth":1280,"windowHeight":720,"windowMaximized":true,"caretBlinkEnabled":true,"autoSaveEnabled":false,"recentProjectPaths":[]}"#,
+    )?;
+
+    let mut loaded = service();
+    loaded.load_file(&path)?;
+    assert_eq!(loaded.current().language, "zh-Hans");
     Ok(())
 }
 

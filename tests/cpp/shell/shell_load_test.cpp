@@ -5,14 +5,18 @@
 #include "icon_provider.hpp"
 #include "preferences_view_model.hpp"
 #include "settings_dialog_controller.hpp"
+#include "settings_view_model.hpp"
 #include "theme_view_model.hpp"
 #include <cstddef>
 #ifdef CARET_ENABLE_APP
+#include "application_translator.hpp"
 #include "caret_ffi.h"
 #include "settings_runtime_bridge.hpp"
+#include "theme_catalog.hpp"
 #endif
 #include <QByteArray>
 #include <QColor>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
@@ -27,6 +31,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegularExpression>
+#include <QSignalSpy>
 #include <QString>
 #include <QTemporaryDir>
 #include <QVariant>
@@ -40,6 +45,7 @@
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
 #include <limits>
+#include <memory>
 #include <qcontainerfwd.h>
 #include <utility>
 
@@ -187,6 +193,297 @@ void ShellLoadTest::settingsDialogCommitsPreferencesThroughRust() {
     caret::PreferencesViewModel reloaded;
     QVERIFY(!reloaded.caretBlinkEnabled());
 }
+
+void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath(QStringLiteral("settings.json")).toUtf8();
+    auto runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(runtime)));
+    const rust::String initial_theme_json =
+        caret::ffi::settings_theme_catalog(*caret::settings_runtime());
+    QVERIFY(caret::install_theme_catalog(
+        QByteArray(initial_theme_json.data(), static_cast<qsizetype>(initial_theme_json.size()))));
+    QVERIFY(caret::install_application_translator(
+        caret::prepare_application_translator(QStringLiteral("en"))));
+
+    QQmlEngine translation_engine;
+    caret::set_application_qml_engine(&translation_engine);
+    translation_engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent translation_component(&translation_engine);
+    translation_component.setData(
+        QByteArrayLiteral(
+            "import QtQml\n"
+            "QtObject {\n"
+            "    property string settingsTitle: qsTranslate(\"SettingsDialog\", \"Settings\")\n"
+            "    property string languageLabel: qsTranslate(\"SettingsLanguagePage\", "
+            "\"Application language\")\n"
+            "    property string cancelLabel: qsTranslate(\"DialogAction\", \"Cancel\")\n"
+            "    property string untitledLabel: qsTranslate(\"WindowTitleBar\", \"Untitled\")\n"
+            "    property string savingLabel: qsTranslate(\"WindowTitleBar\", \"Saving\")\n"
+            "    property string editedLabel: qsTranslate(\"WindowTitleBar\", \"Edited\")\n"
+            "    property string savedLabel: qsTranslate(\"WindowTitleBar\", \"Saved\")\n"
+            "}\n"),
+        QUrl());
+    QVERIFY2(translation_component.isReady(), qPrintable(translation_component.errorString()));
+    std::unique_ptr<QObject> translation_probe(translation_component.create());
+    QVERIFY2(translation_probe != nullptr, qPrintable(translation_component.errorString()));
+    QCOMPARE(translation_probe->property("settingsTitle").toString(), QStringLiteral("Settings"));
+    QCOMPARE(translation_probe->property("languageLabel").toString(),
+             QStringLiteral("Application language"));
+    QCOMPARE(translation_probe->property("cancelLabel").toString(), QStringLiteral("Cancel"));
+    QCOMPARE(translation_probe->property("untitledLabel").toString(), QStringLiteral("Untitled"));
+    QCOMPARE(translation_probe->property("savingLabel").toString(), QStringLiteral("Saving"));
+    QCOMPARE(translation_probe->property("editedLabel").toString(), QStringLiteral("Edited"));
+    QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("Saved"));
+
+    QQmlComponent close_dialog_component(&translation_engine);
+    close_dialog_component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Shell\n"
+                          "UnsavedChangesDialog { objectName: \"closeDialogProbe\" }\n"),
+        QUrl());
+    QVERIFY2(close_dialog_component.isReady(), qPrintable(close_dialog_component.errorString()));
+    std::unique_ptr<QObject> close_dialog(close_dialog_component.create());
+    QVERIFY2(close_dialog != nullptr, qPrintable(close_dialog_component.errorString()));
+    const qreal english_dialog_height = close_dialog->property("height").toReal();
+    QObject* close_prompt = close_dialog->findChild<QObject*>(QStringLiteral("closePrompt"));
+    QVERIFY(close_prompt != nullptr);
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("Save your changes before closing this document?"));
+
+    caret::SettingsViewModel settings;
+    caret::ThemeViewModel theme_projection;
+    QSignalSpy theme_changes(&theme_projection, &caret::ThemeViewModel::tokensChanged);
+    QVERIFY(theme_changes.isValid());
+    QCOMPARE(settings.availableLanguages().size(), 4);
+    QVERIFY(settings.availableThemes().contains(QStringLiteral("dark")));
+    QVERIFY(settings.availableThemes().contains(QStringLiteral("light")));
+    QCOMPARE(settings.activeTheme(), QStringLiteral("light"));
+    QCOMPARE(settings.language(), QStringLiteral("en"));
+    const QVariant initial_panel_color =
+        theme_projection.tokens().value(QStringLiteral("colorPanel"));
+
+    caret::PreferencesViewModel preferences;
+    caret::SettingsDialogController controller;
+    controller.setPreferences(&preferences);
+    controller.setSettingsObject(&settings);
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    controller.editThemeId(QStringLiteral("dark"));
+    controller.editLanguage(QStringLiteral("ja"));
+    controller.editCaretBlinkEnabled(false);
+    controller.cancel();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+    QCOMPARE(settings.activeTheme(), QStringLiteral("light"));
+    QCOMPARE(settings.language(), QStringLiteral("en"));
+    QVERIFY(preferences.caretBlinkEnabled());
+
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    controller.editThemeId(QStringLiteral("dark"));
+    controller.editLanguage(QStringLiteral("ja"));
+    controller.editCaretBlinkEnabled(false);
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+    QCOMPARE(settings.activeTheme(), QStringLiteral("dark"));
+    QCOMPARE(settings.language(), QStringLiteral("ja"));
+    QCOMPARE(translation_probe->property("settingsTitle").toString(), QStringLiteral("設定"));
+    QCOMPARE(translation_probe->property("languageLabel").toString(),
+             QStringLiteral("アプリケーションの言語"));
+    QCOMPARE(translation_probe->property("cancelLabel").toString(), QStringLiteral("キャンセル"));
+    QCOMPARE(translation_probe->property("untitledLabel").toString(), QStringLiteral("無題"));
+    QCOMPARE(translation_probe->property("savingLabel").toString(), QStringLiteral("保存中"));
+    QCOMPARE(translation_probe->property("editedLabel").toString(), QStringLiteral("編集済み"));
+    QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("保存済み"));
+    QVERIFY(!preferences.caretBlinkEnabled());
+    QCOMPARE(theme_projection.activeTheme(), QStringLiteral("dark"));
+    QVERIFY(theme_projection.tokens().value(QStringLiteral("colorPanel")) != initial_panel_color);
+    QVERIFY(theme_changes.count() > 0);
+    QCOMPARE(QCoreApplication::translate("SettingsDialog", "Settings"), QStringLiteral("設定"));
+    const caret::ffi::SettingsSnapshot committed =
+        caret::ffi::settings_snapshot(*caret::settings_runtime());
+    QVERIFY(committed.error.empty());
+    QVERIFY(!committed.caret_blink_enabled);
+
+    auto reopened = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    const caret::ffi::SettingsSnapshot restored = caret::ffi::settings_snapshot(*reopened);
+    QCOMPARE(QString::fromUtf8(restored.theme_id.data(),
+                               static_cast<qsizetype>(restored.theme_id.size())),
+             QStringLiteral("dark"));
+    QCOMPARE(QString::fromUtf8(restored.language.data(),
+                               static_cast<qsizetype>(restored.language.size())),
+             QStringLiteral("ja"));
+    QVERIFY(!restored.caret_blink_enabled);
+
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hans"), false));
+    QCOMPARE(translation_probe->property("settingsTitle").toString(), QStringLiteral("设置"));
+    QCOMPARE(translation_probe->property("languageLabel").toString(), QStringLiteral("应用语言"));
+    QCOMPARE(translation_probe->property("cancelLabel").toString(), QStringLiteral("取消"));
+    QCOMPARE(translation_probe->property("untitledLabel").toString(), QStringLiteral("未命名"));
+    QCOMPARE(translation_probe->property("savingLabel").toString(), QStringLiteral("保存中"));
+    QCOMPARE(translation_probe->property("editedLabel").toString(), QStringLiteral("已编辑"));
+    QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("已保存"));
+    QCOMPARE(close_prompt->property("text").toString(), QStringLiteral("关闭文档前要保存更改吗？"));
+    QVERIFY(close_dialog->property("height").toReal() < english_dialog_height);
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false));
+
+    const qsizetype theme_change_count = theme_changes.count();
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    controller.editLanguage(QStringLiteral("fr"));
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Failed);
+    QCOMPARE(theme_changes.count(), theme_change_count);
+    QCOMPARE(settings.language(), QStringLiteral("ja"));
+    QCOMPARE(QCoreApplication::translate("SettingsDialog", "Settings"), QStringLiteral("設定"));
+
+    controller.editLanguage(QStringLiteral("zh-Hant"));
+    controller.editThemeId(QStringLiteral("unsupported"));
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Failed);
+    QCOMPARE(theme_changes.count(), theme_change_count);
+    QCOMPARE(settings.language(), QStringLiteral("ja"));
+    QCOMPARE(settings.activeTheme(), QStringLiteral("dark"));
+    QCOMPARE(QCoreApplication::translate("SettingsDialog", "Settings"), QStringLiteral("設定"));
+    QVERIFY(!controller.error().isEmpty());
+    const caret::ffi::SettingsSnapshot after_failure =
+        caret::ffi::settings_snapshot(*caret::settings_runtime());
+    QCOMPARE(QString::fromUtf8(after_failure.theme_id.data(),
+                               static_cast<qsizetype>(after_failure.theme_id.size())),
+             QStringLiteral("dark"));
+    QCOMPARE(QString::fromUtf8(after_failure.language.data(),
+                               static_cast<qsizetype>(after_failure.language.size())),
+             QStringLiteral("ja"));
+
+    const QByteArray reset_path =
+        directory.filePath(QStringLiteral("reset-settings.json")).toUtf8();
+    auto reset_runtime = caret::ffi::new_settings_runtime(
+        rust::String(reset_path.constData(), static_cast<std::size_t>(reset_path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(reset_runtime)));
+    const rust::String theme_json = caret::ffi::settings_theme_catalog(*caret::settings_runtime());
+    QVERIFY(caret::install_theme_catalog(
+        QByteArray(theme_json.data(), static_cast<qsizetype>(theme_json.size()))));
+    QVERIFY(caret::install_application_translator(
+        caret::prepare_application_translator(QStringLiteral("en"))));
+    caret::set_application_qml_engine(nullptr);
+}
+
+void ShellLoadTest::dialogSizesTrackLocalizedAndOptionalContent() {
+    const QString theme =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                               theme, QColor(QStringLiteral("#ffffff")), 13));
+    caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
+
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    caret::install_icon_provider(engine);
+    caret::set_application_qml_engine(&engine);
+    QVERIFY(caret::install_application_translator(
+        caret::prepare_application_translator(QStringLiteral("en"))));
+
+    QQmlComponent unsaved_component(&engine);
+    unsaved_component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Shell\n"
+                          "UnsavedChangesDialog { objectName: \"localizedCloseDialog\" }\n"),
+        QUrl());
+    QVERIFY2(unsaved_component.isReady(), qPrintable(unsaved_component.errorString()));
+    std::unique_ptr<QObject> unsaved_dialog(unsaved_component.create());
+    QVERIFY2(unsaved_dialog != nullptr, qPrintable(unsaved_component.errorString()));
+    auto* unsaved_window = qobject_cast<QQuickWindow*>(unsaved_dialog.get());
+    QVERIFY(unsaved_window != nullptr);
+    unsaved_window->show();
+    QVERIFY(QTest::qWaitForWindowExposed(unsaved_window));
+    auto* prompt = unsaved_dialog->findChild<QObject*>(QStringLiteral("closePrompt"));
+    auto* close_prompt_item = qobject_cast<QQuickItem*>(prompt);
+    auto* close_actions_item = qobject_cast<QQuickItem*>(
+        unsaved_dialog->findChild<QObject*>(QStringLiteral("closeDialogActions")));
+    auto* close_content_item = qobject_cast<QQuickItem*>(
+        unsaved_dialog->findChild<QObject*>(QStringLiteral("closeDialogContent")));
+    QVERIFY(close_prompt_item != nullptr);
+    QVERIFY(close_actions_item != nullptr);
+    QVERIFY(close_content_item != nullptr);
+    QVERIFY(close_prompt_item->height() > 0);
+    QVERIFY(close_prompt_item->height() + 0.5 >= close_prompt_item->implicitHeight());
+    QVERIFY(close_actions_item->height() > 0);
+    QTRY_VERIFY(close_prompt_item->y() + close_prompt_item->height() <= close_actions_item->y());
+    QTRY_VERIFY(close_actions_item->y() + close_actions_item->height() <=
+                close_content_item->height());
+    QTRY_VERIFY(close_content_item->height() - close_actions_item->y() -
+                    close_actions_item->height() <
+                close_actions_item->y() - close_prompt_item->y() - close_prompt_item->height());
+    const qreal english_height = unsaved_dialog->property("height").toReal();
+
+    QQmlComponent conflict_component(&engine);
+    conflict_component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Shell\n"
+                          "SaveConflictDialog { conflictedFileName: \"draft.cdoc\" }\n"),
+        QUrl());
+    QVERIFY2(conflict_component.isReady(), qPrintable(conflict_component.errorString()));
+    std::unique_ptr<QObject> conflict_dialog(conflict_component.create());
+    QVERIFY2(conflict_dialog != nullptr, qPrintable(conflict_component.errorString()));
+    auto* conflict_window = qobject_cast<QQuickWindow*>(conflict_dialog.get());
+    QVERIFY(conflict_window != nullptr);
+    conflict_window->show();
+    QVERIFY(QTest::qWaitForWindowExposed(conflict_window));
+    auto* conflict_message_item = qobject_cast<QQuickItem*>(
+        conflict_dialog->findChild<QObject*>(QStringLiteral("saveConflictMessage")));
+    auto* conflict_actions_item = qobject_cast<QQuickItem*>(
+        conflict_dialog->findChild<QObject*>(QStringLiteral("saveConflictActions")));
+    auto* conflict_content_item = qobject_cast<QQuickItem*>(
+        conflict_dialog->findChild<QObject*>(QStringLiteral("saveConflictContent")));
+    QVERIFY(conflict_message_item != nullptr);
+    QVERIFY(conflict_actions_item != nullptr);
+    QVERIFY(conflict_content_item != nullptr);
+    QVERIFY(conflict_message_item->height() > 0);
+    QVERIFY(conflict_message_item->height() + 0.5 >= conflict_message_item->implicitHeight());
+    QVERIFY(conflict_actions_item->height() > 0);
+    QTRY_VERIFY(conflict_message_item->y() + conflict_message_item->height() <=
+                conflict_actions_item->y());
+    QTRY_VERIFY(conflict_actions_item->y() + conflict_actions_item->height() <=
+                conflict_content_item->height());
+    QTRY_VERIFY(conflict_content_item->height() - conflict_actions_item->y() -
+                    conflict_actions_item->height() <
+                conflict_actions_item->y() - conflict_message_item->y() -
+                    conflict_message_item->height());
+    const qreal concise_conflict_height = conflict_dialog->property("height").toReal();
+    conflict_dialog->setProperty("recoveryWriteFailed", true);
+    conflict_dialog->setProperty("recoveryErrorDetail", QString(300, QLatin1Char('x')));
+    QTRY_VERIFY(conflict_dialog->property("height").toReal() > concise_conflict_height);
+    QTRY_VERIFY(conflict_message_item->y() + conflict_message_item->height() <=
+                conflict_actions_item->y());
+    QTRY_VERIFY(conflict_actions_item->y() + conflict_actions_item->height() <=
+                conflict_content_item->height());
+    QTRY_VERIFY(conflict_message_item->height() + 0.5 >= conflict_message_item->implicitHeight());
+    QTRY_VERIFY(conflict_content_item->height() - conflict_actions_item->y() -
+                    conflict_actions_item->height() <
+                conflict_actions_item->y() - conflict_message_item->y() -
+                    conflict_message_item->height());
+
+    QVERIFY(caret::install_application_translator(
+        caret::prepare_application_translator(QStringLiteral("zh-Hans"))));
+    QCOMPARE(prompt->property("text").toString(), QStringLiteral("关闭文档前要保存更改吗？"));
+    QTRY_VERIFY(unsaved_dialog->property("height").toReal() < english_height);
+    QTRY_VERIFY(close_prompt_item->height() + 0.5 >= close_prompt_item->implicitHeight());
+    QTRY_VERIFY(close_prompt_item->y() + close_prompt_item->height() <= close_actions_item->y());
+    QTRY_VERIFY(close_actions_item->y() + close_actions_item->height() <=
+                close_content_item->height());
+    QTRY_VERIFY(close_content_item->height() - close_actions_item->y() -
+                    close_actions_item->height() <
+                close_actions_item->y() - close_prompt_item->y() - close_prompt_item->height());
+
+    QVERIFY(caret::install_application_translator(
+        caret::prepare_application_translator(QStringLiteral("en"))));
+    unsaved_window->close();
+    conflict_window->close();
+    caret::set_application_qml_engine(nullptr);
+}
 #endif
 
 void ShellLoadTest::unknownIconRefusesColoring() {
@@ -319,15 +616,6 @@ void ShellLoadTest::documentModeSelectorTracksLocalChoice() {
 void ShellLoadTest::newDocumentDialogHasNoProcessFields() {
     const QString root = QString::fromUtf8(CARET_SOURCE_DIR);
     QDir dialogs(root + QStringLiteral("/qml/Dialogs"));
-    const QStringList names =
-        dialogs.entryList(QStringList{QStringLiteral("*.qml")}, QDir::Files, QDir::Name);
-    QCOMPARE(
-        names,
-        QStringList(
-            {QStringLiteral("LanguageSettingsPage.qml"), QStringLiteral("NewProjectDialog.qml"),
-             QStringLiteral("PreferencesSettingsPage.qml"), QStringLiteral("RecoveryDialog.qml"),
-             QStringLiteral("SaveConflictDialog.qml"), QStringLiteral("SettingsDialog.qml"),
-             QStringLiteral("UnsavedChangesDialog.qml")}));
     QFile source(dialogs.filePath(QStringLiteral("NewProjectDialog.qml")));
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());

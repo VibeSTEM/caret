@@ -11,7 +11,7 @@ Rectangle {
     property bool closeVisible: true
     signal closeRequested
 
-    implicitHeight: Theme.titlebarHeight + Theme.spacingSmall
+    implicitHeight: Math.max(Theme.titlebarHeight, captionLabel.implicitHeight + Theme.spacingMedium * 2)
     color: Theme.colorChrome
 
     RowLayout {
@@ -21,6 +21,8 @@ Rectangle {
         spacing: Theme.spacingSmall
 
         ThemedLabel {
+            id: captionLabel
+
             Layout.fillWidth: true
             text: titleBar.caption
             textSize: Theme.fontTitle

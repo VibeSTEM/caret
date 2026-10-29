@@ -19,7 +19,7 @@ DialogWindow {
     property bool recoveryWriteFailed: false
 
     width: Theme.dialogActionWidth * 3 + Theme.dialogActionSpacing * 2 + Theme.spacingLarge * 2
-    height: Theme.titlebarHeight + messageLabel.implicitHeight + Theme.controlHeight + Theme.spacingLarge * 5
+    height: frame.headerImplicitHeight + Theme.spacingMedium * 2 + messageLabel.implicitHeight + Theme.spacingLarge + actionsRow.implicitHeight
     title: qsTr("File changed outside Caret")
 
     function open() {
@@ -34,10 +34,13 @@ DialogWindow {
     }
 
     DialogFrame {
+        id: frame
+
         window: dialog
         closeButtonVisible: false
 
         ColumnLayout {
+            objectName: "saveConflictContent"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.leftMargin: Theme.spacingLarge
@@ -48,6 +51,7 @@ DialogWindow {
 
             ThemedLabel {
                 id: messageLabel
+                objectName: "saveConflictMessage"
                 Layout.fillWidth: true
                 text: {
                     const message = qsTr("Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.").arg(dialog.conflictedFileName);
@@ -61,6 +65,8 @@ DialogWindow {
             }
 
             DialogButtonRow {
+                id: actionsRow
+                objectName: "saveConflictActions"
                 Layout.fillWidth: true
 
                 ThemedButton {

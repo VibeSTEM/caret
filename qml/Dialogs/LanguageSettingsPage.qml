@@ -4,7 +4,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQml
 
 Item {
     id: page
@@ -15,11 +14,6 @@ Item {
     property string errorText: ""
 
     signal languageSelected(string locale)
-
-    function languageName(locale) {
-        const languageLocale = Qt.locale(String(locale).replace("-", "_"));
-        return languageLocale.nativeLanguageName || locale;
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -49,19 +43,19 @@ Item {
                 Layout.fillWidth: true
                 enabled: page.availableLanguages.length > 0
                 model: page.availableLanguages
-                currentIndex: page.availableLanguages.indexOf(page.selectedLanguage)
-                displayText: currentIndex >= 0 ? page.languageName(currentText) : ""
+                currentIndex: page.availableLanguages.findIndex(language => language.locale === page.selectedLanguage)
+                displayText: currentIndex >= 0 ? page.availableLanguages[currentIndex].displayName : ""
                 Accessible.name: qsTranslate("SettingsLanguagePage", "Application language")
 
                 delegate: ItemDelegate {
                     required property int index
                     required property var modelData
                     width: languagePicker.width
-                    text: page.languageName(modelData)
+                    text: modelData.displayName
                     highlighted: languagePicker.highlightedIndex === index
                 }
 
-                onActivated: page.languageSelected(currentText)
+                onActivated: index => page.languageSelected(page.availableLanguages[index].locale)
             }
         }
 

@@ -7,6 +7,7 @@ Rectangle {
     required property Window window
     property bool closeEnabled: true
     property bool closeButtonVisible: true
+    readonly property real headerImplicitHeight: titleBar.implicitHeight
     default property alias content: body.data
     anchors.fill: parent
     color: Theme.colorPanel
@@ -15,6 +16,8 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
         DialogTitleBar {
+            id: titleBar
+
             Layout.fillWidth: true
             window: frame.window
             caption: frame.window.title

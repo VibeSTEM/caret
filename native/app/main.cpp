@@ -4,6 +4,7 @@
 /// 创建后走同一条 close 路径，供无交互环境确认进程会退出。其余参数必须写在 `--` 之后，
 /// 交给 QGuiApplication。
 
+#include "application_translator.hpp"
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
 #include "icon_provider.hpp"
@@ -123,6 +124,13 @@ int main(int argc, char* argv[]) try {
         !caret::install_theme_catalog(theme_catalog_bytes)) {
         return kExitUnavailable;
     }
+    const QString initial_language =
+        QString::fromUtf8(settings_snapshot.language.data(),
+                          static_cast<qsizetype>(settings_snapshot.language.size()));
+    if (!caret::install_application_translator(
+            caret::prepare_application_translator(initial_language))) {
+        return kExitUnavailable;
+    }
     auto layout_runtime = caret::ffi::new_blank_document_runtime();
     const rust::String layout_snapshot = caret::ffi::layout_snapshot_json(*layout_runtime);
     const std::string_view layout_snapshot_text(layout_snapshot.data(), layout_snapshot.size());
@@ -139,6 +147,7 @@ int main(int argc, char* argv[]) try {
     }
 
     QQmlApplicationEngine engine;
+    caret::set_application_qml_engine(&engine);
     caret::install_icon_provider(engine);
     if (quit_after_load) {
         QObject::connect(

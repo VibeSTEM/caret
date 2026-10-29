@@ -59,6 +59,13 @@ pub(crate) fn settings_theme_catalog(runtime: &mut SettingsRuntime) -> String {
     }
 }
 
+pub(crate) fn settings_language_catalog(runtime: &mut SettingsRuntime) -> String {
+    runtime
+        .runtime
+        .language_catalog_json()
+        .unwrap_or_else(|error| format!("error:{error}"))
+}
+
 pub(crate) fn settings_constraints() -> bridge::SettingsConstraints {
     bridge::SettingsConstraints {
         minimum_window_width: caret_app::settings::preferences::MINIMUM_WINDOW_WIDTH,
@@ -91,6 +98,23 @@ pub(crate) fn set_auto_save_enabled(
     enabled: bool,
 ) -> bridge::SettingsSnapshot {
     if let Err(error) = runtime.runtime.set_auto_save_enabled(enabled) {
+        let mut snapshot = settings_snapshot(runtime);
+        snapshot.error = error;
+        return snapshot;
+    }
+    settings_snapshot(runtime)
+}
+
+pub(crate) fn set_ui_selection(
+    runtime: &mut SettingsRuntime,
+    theme_id: String,
+    language: String,
+    caret_blink_enabled: bool,
+) -> bridge::SettingsSnapshot {
+    if let Err(error) = runtime
+        .runtime
+        .set_ui_selection(&theme_id, &language, caret_blink_enabled)
+    {
         let mut snapshot = settings_snapshot(runtime);
         snapshot.error = error;
         return snapshot;

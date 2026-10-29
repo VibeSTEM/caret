@@ -16,9 +16,12 @@ class SettingsDialogController : public QObject {
     QML_ELEMENT
     Q_PROPERTY(QObject* preferences READ preferencesObject WRITE setPreferencesObject NOTIFY
                    preferencesChanged)
+    Q_PROPERTY(QObject* settings READ settingsObject WRITE setSettingsObject NOTIFY settingsChanged)
     Q_PROPERTY(State state READ state NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool draftCaretBlinkEnabled READ draftCaretBlinkEnabled NOTIFY draftChanged)
+    Q_PROPERTY(QString draftThemeId READ draftThemeId NOTIFY draftChanged)
+    Q_PROPERTY(QString draftLanguage READ draftLanguage NOTIFY draftChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 
   public:
@@ -29,18 +32,25 @@ class SettingsDialogController : public QObject {
     [[nodiscard]] QObject* preferencesObject() const { return m_preferences; }
     void setPreferencesObject(QObject* preferences);
     void setPreferences(PreferencesViewModel* preferences);
+    [[nodiscard]] QObject* settingsObject() const;
+    void setSettingsObject(QObject* settings);
     [[nodiscard]] State state() const { return m_state; }
     [[nodiscard]] bool busy() const { return m_state == Applying; }
     [[nodiscard]] bool draftCaretBlinkEnabled() const { return m_draft_caret_blink_enabled; }
+    [[nodiscard]] const QString& draftThemeId() const { return m_draft_theme_id; }
+    [[nodiscard]] const QString& draftLanguage() const { return m_draft_language; }
     [[nodiscard]] const QString& error() const { return m_error; }
 
     Q_INVOKABLE void open();
     Q_INVOKABLE void editCaretBlinkEnabled(bool enabled);
+    Q_INVOKABLE void editThemeId(const QString& theme_id);
+    Q_INVOKABLE void editLanguage(const QString& language);
     Q_INVOKABLE void apply();
     Q_INVOKABLE void cancel();
 
   signals:
     void preferencesChanged();
+    void settingsChanged();
     void stateChanged();
     void draftChanged();
     void errorChanged();
@@ -60,8 +70,11 @@ class SettingsDialogController : public QObject {
 
     QStateMachine m_machine;
     QPointer<PreferencesViewModel> m_preferences;
+    QPointer<QObject> m_settings;
     State m_state = Closed;
     bool m_draft_caret_blink_enabled = true;
+    QString m_draft_theme_id;
+    QString m_draft_language;
     bool m_open_when_ready = false;
     QString m_error;
 };

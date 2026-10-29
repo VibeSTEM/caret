@@ -12,7 +12,7 @@ DialogWindow {
     signal discardRequested
 
     width: Theme.dialogActionWidth * 3 + Theme.dialogActionSpacing * 2 + Theme.spacingLarge * 2
-    height: Theme.titlebarHeight + Theme.fontTitle + Theme.controlHeight + Theme.spacingLarge * 5
+    height: frame.headerImplicitHeight + Theme.spacingMedium * 2 + promptLabel.implicitHeight + Theme.spacingLarge + actionsRow.implicitHeight
     title: qsTr("Unsaved changes")
 
     function open() {
@@ -20,10 +20,13 @@ DialogWindow {
     }
 
     DialogFrame {
+        id: frame
+
         window: dialog
         closeButtonVisible: false
 
         ColumnLayout {
+            objectName: "closeDialogContent"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.leftMargin: Theme.spacingLarge
@@ -33,6 +36,8 @@ DialogWindow {
             spacing: Theme.spacingLarge
 
             ThemedLabel {
+                id: promptLabel
+                objectName: "closePrompt"
                 Layout.fillWidth: true
                 text: qsTr("Save your changes before closing this document?")
                 textSize: Theme.fontBody
@@ -40,6 +45,8 @@ DialogWindow {
             }
 
             DialogButtonRow {
+                id: actionsRow
+                objectName: "closeDialogActions"
                 Layout.fillWidth: true
 
                 ThemedButton {

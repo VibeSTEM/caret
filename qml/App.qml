@@ -23,7 +23,9 @@ Window {
     // Windows 隐藏系统标题但保留原生按钮。Linux 显式保留空标题和系统按钮提示。
     flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint | (Qt.platform.os === "windows" ? Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : Qt.platform.os === "linux" ? Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint : 0)
 
-    readonly property string documentName: LayoutViewModel.documentFileName + (LayoutViewModel.documentSaveStatus === "saving" ? " — Saving" : LayoutViewModel.documentSaveStatus === "edited" ? " — Edited" : " — Saved")
+    readonly property string documentBaseName: LayoutViewModel.documentPath.length === 0 ? qsTranslate("WindowTitleBar", "Untitled") : LayoutViewModel.documentFileName
+    readonly property string documentStatusLabel: LayoutViewModel.documentSaveStatus === "saving" ? qsTranslate("WindowTitleBar", "Saving") : LayoutViewModel.documentSaveStatus === "edited" ? qsTranslate("WindowTitleBar", "Edited") : qsTranslate("WindowTitleBar", "Saved")
+    readonly property string documentName: documentBaseName + " — " + documentStatusLabel
     property url suggestedSaveFileUrl: ""
     property url suggestedRecoveryExportUrl: ""
     property string pendingRecoveryExportId: ""
@@ -118,6 +120,7 @@ Window {
     SettingsDialogController {
         id: settingsController
         preferences: PreferencesViewModel
+        settings: SettingsViewModel
         onOpened: settingsDialog.open()
         onClosed: settingsDialog.close()
     }
@@ -133,6 +136,18 @@ Window {
                 title: qsTranslate("SettingsDialog", "Preferences"),
                 iconName: "settings",
                 pageComponent: preferencesSettingsPage
+            },
+            {
+                routeId: "theme",
+                title: qsTranslate("SettingsDialog", "Theme"),
+                iconName: "settings",
+                pageComponent: themeSettingsPage
+            },
+            {
+                routeId: "language",
+                title: qsTranslate("SettingsDialog", "Language"),
+                iconName: "settings",
+                pageComponent: languageSettingsPage
             }
         ]
     }
@@ -145,6 +160,30 @@ Window {
             errorText: settingsController.error
             enabled: !settingsController.busy
             onCaretBlinkEnabledEdited: enabled => settingsController.editCaretBlinkEnabled(enabled)
+        }
+    }
+
+    Component {
+        id: themeSettingsPage
+
+        ThemeSettingsPage {
+            availableThemes: SettingsViewModel.availableThemes
+            selectedTheme: settingsController.draftThemeId
+            errorText: settingsController.error
+            enabled: !settingsController.busy
+            onThemeSelected: themeId => settingsController.editThemeId(themeId)
+        }
+    }
+
+    Component {
+        id: languageSettingsPage
+
+        LanguageSettingsPage {
+            availableLanguages: SettingsViewModel.availableLanguages
+            selectedLanguage: settingsController.draftLanguage
+            errorText: settingsController.error
+            enabled: !settingsController.busy
+            onLanguageSelected: locale => settingsController.editLanguage(locale)
         }
     }
 
