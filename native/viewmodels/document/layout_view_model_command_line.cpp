@@ -12,7 +12,9 @@
 #include <QString>
 #include <QVariant>
 #include <qcontainerfwd.h>
+#include <cstddef>
 #include <string>
+#include <utility>
 
 namespace caret {
 QVariantMap LayoutViewModel::commandLineCommand(const QString& action, const QString& text) {

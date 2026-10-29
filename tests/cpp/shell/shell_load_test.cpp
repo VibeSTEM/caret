@@ -36,6 +36,7 @@
 #include <QTemporaryDir>
 #include <QVariant>
 #include <QtCore/Qt>
+#include <QtCore/qtestsupport_core.h>
 #include <QtGui/qtestsupport_gui.h>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtQuickControls2/qquickstyle.h>
