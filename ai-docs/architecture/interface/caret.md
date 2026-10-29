@@ -16,7 +16,8 @@
 - 主题 token 使用独立的 `color-caret`、`color-selection` 和 `color-selection-text`。新增 token 时同步更新默认、浅色和深色主题及主题校验测试。光标宽度以整数百分之一逻辑像素保存在 `caret-width-centipixels`，由画布在 scene graph 几何边界转为逻辑像素。pt 与逻辑像素的换算由 `DocumentUnits` 统一处理；跨 QML 传整数百分之一逻辑像素，在消费 Qt 几何 API 时才转为浮点值。
 - 插入点仅在画布获得活动焦点且 Rust 已提交插入位置时显示；失焦时隐藏。获得焦点或位置变化时立即显示。Settings 的 Preferences 分类提供光标闪烁开关，由 Rust `PreferencesService` 持有；开启时按 Qt 平台周期闪烁，关闭时常亮，平台周期设为 0 时也常亮。PreferencesViewModel 将值传给 `DocumentCanvas.caretBlinkEnabled`；QML 只呈现和提交设置，画布不持久化偏好。设置窗口交互阶段由 `SettingsDialogController` 的 C++ `QStateMachine` 管理；画布焦点和插入点可见性仍是简单属性状态，不使用状态机。IME、导航和完整选区交互由 030 接入，不能由画布自行维护第二份文档状态。
 - 选区透明度和高对比度替代色仍待设计；这些是视图参数，不属于 `.cdoc`。
-- 环境背景高亮是独立的临时视图叠加，不与文本选区或 caret 颜色合并。
+- 环境背景高亮是独立的临时视图叠加，不与文本选区或 caret 颜色合并。最内层行内环境使用 `color-inline-environment-highlight`，块级环境使用 `color-block-environment-highlight`；位置和范围由 Rust 提供，QML/Qt 只绘制与当前布局 generation 对齐的几何。
+- 正文反斜线命令的查询/补全提示使用独立的 `color-command-prompt`。命令模式可以与环境高亮同时出现，两种叠加各自保持独立颜色和范围；命令查询结束并退出命令模式时提示色消失，链式执行若立即进入下一条命令则继续显示提示色。命令产生的 EnvironmentNode 仍按其行内或块级作用域使用对应环境高亮色。
 
 ## 绘制和性能
 
@@ -30,4 +31,4 @@
 - [022：文本编辑、选择与 IME](../../task/022-text-editing-and-ime.md)
 - [027：页面画布、命中与布局快照](../../task/027-canvas-and-hit-testing.md)
 
-具体粗细和各状态颜色仍待界面设计确认；本页不预设具体视觉数值。
+三类高亮颜色的语义和 token 名称固定；GUI 主题分别提供默认、浅色和深色值。具体色值需满足正文可读性，并在实际画布叠加下验证，不在文档排版主题或 `.cdoc` 中保存。
