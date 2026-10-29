@@ -1,7 +1,7 @@
 //! 序列化完整布局与轻量交互快照。
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
-use caret_engine::DocumentLayoutDeltaView;
+use caret_engine::{DocumentLayoutDeltaView, StructureKind, StructurePosition};
 use serde_json::{Value, json};
 
 fn command_line_state(session: &caret_engine::Session) -> Value {
@@ -36,6 +36,38 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "candidates": [],
             })
         })
+}
+
+fn current_structure_state(session: &caret_engine::Session) -> Value {
+    let focus = &session.selection().focus;
+    let stack = session.structure_index().at(&StructurePosition {
+        paragraph_id: focus.paragraph_id.clone(),
+        offset_utf8: focus.offset,
+    });
+    Value::Array(
+        stack
+            .into_iter()
+            .map(|entry| match entry.kind {
+                StructureKind::Heading { level } => json!({
+                    "id": entry.id,
+                    "kind": "heading",
+                    "level": level,
+                }),
+                StructureKind::Paragraph => json!({
+                    "id": entry.id,
+                    "kind": "paragraph",
+                }),
+                StructureKind::Section => json!({
+                    "id": entry.id,
+                    "kind": "section",
+                }),
+                StructureKind::Showcase => json!({
+                    "id": entry.id,
+                    "kind": "showcase",
+                }),
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -99,6 +131,12 @@ impl DocumentViewRuntime {
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("commandLine".to_owned(), command_line_state(&self.session));
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "currentStructure".to_owned(),
+                current_structure_state(&self.session),
+            );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -197,6 +235,7 @@ impl DocumentViewRuntime {
         );
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
+        let current_structure = current_structure_state(&self.session);
         let snapshot = self.current_snapshot()?;
         let rectangles = snapshot
             .selection_geometry(&selection)
@@ -253,6 +292,7 @@ impl DocumentViewRuntime {
             "selectionRects": rectangles,
             "inputMethodContext": input_method_context,
             "commandLine": command_line,
+            "currentStructure": current_structure,
             "caretGeometry": {
                 "pageIndex": caret.page_index,
                 "xPt": caret.x_pt,

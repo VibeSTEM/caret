@@ -20,7 +20,7 @@ Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层�
 | 打开 `.cdoc` | Ctrl+O | Command+O |
 | 保存 | Ctrl+S | Command+S |
 | 另存为 | Ctrl+Shift+S | Command+Shift+S |
-| 放大 / 缩小画布 | Ctrl+Plus / Ctrl+Minus | Command+Plus / Command+Minus |
+| 放大 / 缩小画布 | Ctrl+= / Ctrl+- | Command+= / Command+- |
 | 撤销 | Ctrl+Z | Command+Z |
 | 重做 | Ctrl+Shift+Z | Command+Shift+Z |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |

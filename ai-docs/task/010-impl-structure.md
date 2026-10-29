@@ -57,7 +57,10 @@
 | 2026-10-29 | `cargo test --workspace --locked --offline` | Rust 行为、CLI、QML/native 集成测试通过 | 通过；包含结构索引、`\newparagraph`、多行粘贴索引刷新、导航撤销边界、跨标题选区几何、Escape 对 IME 取消结果的跨层传播测试；native CTest 8/8 通过。QML 测试验证模式弹层 Escape 只关闭弹层，下一次 Escape 才到达外层焦点处理 |
 | — | 跨块边界增量与完整重建对照 | 标题变化及列表合并、拆分结果一致 | 未执行；当前结构索引仍在结构位置映射发生 split/merge 时完整重建，增量更新未实现 |
 | 2026-10-29 | 单页 Section 标题/正文布局及选区几何 | 标题与子块共享布局快照；Body 选区不绘制标题高亮 | 自动测试通过；多页容器范围与分页验证未执行 |
+| 2026-10-29 | 状态栏结构投影 | 光标移动后显示 Rust 结构索引返回的层级，并随交互快照更新 | `cargo check -p caret-app --locked --offline`、`cargo format --check`、`cargo lint --check` 通过；尚未运行行为测试、QM 加载验证或手工窗口验收 |
 | — | 手工：标题间移动并看焦点框 | 框在当前结构上 | 未执行；焦点框尚未接入。Esc/Enter/Shift+Enter 的 Qt 到 Rust 路由有自动测试，手工交互尚未验收 |
+
+2026-10-29 独立评审覆盖本次状态栏/快捷键完整差异。首次发现的 caret-app 直接依赖缺失已通过 `caret_engine` 公开类型修复；复查未发现其他问题。评审未运行行为测试、QM 加载或窗口验收。
 
 ## 实施进度
 
@@ -67,7 +70,9 @@
 - 2026-10-29：段落拆分/合并由事务位置映射统一触发结构索引重建；索引在 IME 候选会话间以 `Arc` 共享。加入 `\\newparagraph` 命令别名，复用 Enter 的 `text.split_paragraph` 语义和撤销步骤，并补齐候选翻译。
 - 2026-10-29：修正 Body 跨段选区穿过环境标题时的几何过滤；结构导航移动会切断连续编辑的 Undo 合并组。
 - 2026-10-29：将画布按键识别拆到 C++ `document_canvas/keyboard.cpp`，IME 查询与预编辑留在 `input.cpp`；Esc、Enter、Shift+Enter 统一转为 Rust 编辑按键意图，由 `session/keyboards/` 按会话状态仲裁，避免命令输入中的 Enter/Shift+Enter 误操作正文。
-- 尚未完成：列表项语义/索引增量更新、创建与嵌套环境命令、结构子树删除/提升及撤销补丁、结构导航快捷键与焦点框、状态栏、跨页环境几何验证。Esc/Enter/Shift+Enter 的事件映射和 Rust 会话仲裁已接入，但尚未替代上述结构导航工作；当前不得标记 implemented 或 done。
+- 2026-10-29：状态栏结构路径由 Rust `StructureIndex::at()` 按光标段落 ID 生成，并经布局/交互快照传到 ViewModel；QML 只本地化展示 Heading、Section、Showcase 和 Paragraph，不重复推断结构。
+- 2026-10-29：缩放快捷键明确使用 `Ctrl+=` / `Ctrl+-`；Qt 在 macOS 将 `Ctrl` 映射为 Command。同步快捷键文档，避免 `StandardKey.ZoomIn` 将放大键设为 `Ctrl+Plus`。
+- 尚未完成：列表项语义/索引增量更新、创建与嵌套环境命令、结构子树删除/提升及撤销补丁、结构导航快捷键与焦点框、跨页环境几何验证。Esc/Enter/Shift+Enter 的事件映射和 Rust 会话仲裁已接入，但尚未替代上述结构导航工作；当前不得标记 implemented 或 done。
 - 性能约束：仅当事务位置映射包含段落拆分/合并时重建结构索引；普通单段输入与 IME 候选事务共享只读 `Arc` 索引。结构拆并目前仍完整重建，增量算法和长文档性能仍需进一步复核。
 
 ## 风险与回退

@@ -385,6 +385,26 @@ message_072:
   tr: 拡大
   st: finished
 
+message_102:
+  src: Heading %1
+  tr: 見出し %1
+  st: finished
+
+message_103:
+  src: Section
+  tr: 節
+  st: finished
+
+message_104:
+  src: Showcase
+  tr: ショーケース
+  st: finished
+
+message_105:
+  src: Paragraph
+  tr: 段落
+  st: finished
+
 [WindowTitleBar]
 message_073:
   src: Untitled

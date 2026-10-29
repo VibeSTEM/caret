@@ -385,6 +385,26 @@ message_072:
   tr: Zoom in
   st: finished
 
+message_102:
+  src: Heading %1
+  tr: Heading %1
+  st: finished
+
+message_103:
+  src: Section
+  tr: Section
+  st: finished
+
+message_104:
+  src: Showcase
+  tr: Showcase
+  st: finished
+
+message_105:
+  src: Paragraph
+  tr: Paragraph
+  st: finished
+
 [WindowTitleBar]
 message_073:
   src: Untitled
