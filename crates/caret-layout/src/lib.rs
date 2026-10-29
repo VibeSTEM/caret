@@ -24,7 +24,8 @@ pub use pagination::{
 pub use paragraph::{
     HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
     ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
-    has_empty_line, paragraph_has_empty_line,
+    first_strong_script_sample, has_empty_line, paragraph_first_strong_script_sample,
+    paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};

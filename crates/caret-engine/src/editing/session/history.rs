@@ -25,11 +25,17 @@ pub(super) struct ParagraphState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DocumentPatch {
+    Compound(Vec<DocumentPatch>),
     Paragraphs {
         before: Vec<ParagraphState>,
         after: Vec<ParagraphState>,
         merge_group: Option<EditGroup>,
         merge_epoch: u64,
+    },
+    ParagraphInsertion {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        paragraph: Box<Paragraph>,
     },
     PageGeometry {
         before: PageGeometry,
@@ -42,6 +48,31 @@ pub(super) enum DocumentPatch {
         paragraph_estimated_bytes: usize,
         environment_id: NodeId,
         kind: BlockEnvironmentKind,
+    },
+    EnvironmentInsertion {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        environment: Box<BlockEnvironment>,
+        environment_estimated_bytes: usize,
+    },
+    EnvironmentBoundaryParagraphs {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        paragraphs: Vec<Paragraph>,
+        paragraphs_estimated_bytes: usize,
+    },
+    EnvironmentDeletion {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        environment: Box<BlockEnvironment>,
+        environment_estimated_bytes: usize,
+        fallback_paragraph: Option<Box<Paragraph>>,
+    },
+    EnvironmentUnwrap {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        environment: Box<BlockEnvironment>,
+        environment_estimated_bytes: usize,
     },
 }
 
@@ -208,11 +239,27 @@ impl DocumentPatch {
 
     pub fn estimated_bytes(&self) -> usize {
         match self {
+            Self::Compound(patches) => {
+                patches.capacity() * size_of::<DocumentPatch>()
+                    + patches.iter().map(Self::estimated_bytes).sum::<usize>()
+            }
             Self::Paragraphs { before, after, .. } => before
                 .iter()
                 .chain(after)
                 .map(ParagraphState::estimated_bytes)
                 .sum(),
+            Self::ParagraphInsertion {
+                parent_environment_ids,
+                paragraph,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + paragraph_estimated_bytes(paragraph)
+                    + size_of::<Box<Paragraph>>()
+            }
             Self::PageGeometry { .. } => size_of::<PageGeometry>(),
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -228,14 +275,80 @@ impl DocumentPatch {
                     + size_of::<Box<Paragraph>>()
                     + node_id_bytes(environment_id)
             }
+            Self::EnvironmentInsertion {
+                parent_environment_ids,
+                environment_estimated_bytes,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + environment_estimated_bytes
+            }
+            Self::EnvironmentBoundaryParagraphs {
+                parent_environment_ids,
+                paragraphs,
+                paragraphs_estimated_bytes,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + paragraphs_estimated_bytes
+                    + paragraphs.len() * size_of::<Paragraph>()
+            }
+            Self::EnvironmentDeletion {
+                parent_environment_ids,
+                environment_estimated_bytes,
+                fallback_paragraph,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + environment_estimated_bytes
+                    + fallback_paragraph.as_ref().map_or(0, |paragraph| {
+                        paragraph_estimated_bytes(paragraph) + size_of::<Box<Paragraph>>()
+                    })
+            }
+            Self::EnvironmentUnwrap {
+                parent_environment_ids,
+                environment_estimated_bytes,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + environment_estimated_bytes
+            }
         }
     }
 
-    fn undo(&self, document: &mut Document) {
+    pub(super) fn undo(&self, document: &mut Document) {
         match self {
+            Self::Compound(patches) => {
+                for patch in patches.iter().rev() {
+                    patch.undo(document);
+                }
+            }
             Self::Paragraphs { before, after, .. } => {
                 apply_paragraph_states(document, after, before)
             }
+            Self::ParagraphInsertion {
+                parent_environment_ids,
+                sibling_index,
+                paragraph,
+            } => apply_paragraph_insertion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraph,
+                false,
+            ),
             Self::PageGeometry { before, .. } => set_page_geometry(document, *before),
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -253,14 +366,80 @@ impl DocumentPatch {
                 *kind,
                 false,
             ),
+            Self::EnvironmentInsertion {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                ..
+            } => apply_environment_insertion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                false,
+            ),
+            Self::EnvironmentBoundaryParagraphs {
+                parent_environment_ids,
+                sibling_index,
+                paragraphs,
+                ..
+            } => apply_environment_boundary_paragraphs(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraphs,
+                false,
+            ),
+            Self::EnvironmentDeletion {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                fallback_paragraph,
+                ..
+            } => apply_environment_deletion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                fallback_paragraph.as_deref(),
+                true,
+            ),
+            Self::EnvironmentUnwrap {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                ..
+            } => apply_environment_unwrap(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                true,
+            ),
         }
     }
 
-    fn redo(&self, document: &mut Document) {
+    pub(super) fn redo(&self, document: &mut Document) {
         match self {
+            Self::Compound(patches) => {
+                for patch in patches {
+                    patch.redo(document);
+                }
+            }
             Self::Paragraphs { before, after, .. } => {
                 apply_paragraph_states(document, before, after)
             }
+            Self::ParagraphInsertion {
+                parent_environment_ids,
+                sibling_index,
+                paragraph,
+            } => apply_paragraph_insertion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraph,
+                true,
+            ),
             Self::PageGeometry { after, .. } => set_page_geometry(document, *after),
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -277,6 +456,56 @@ impl DocumentPatch {
                 environment_id,
                 *kind,
                 true,
+            ),
+            Self::EnvironmentInsertion {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                ..
+            } => apply_environment_insertion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                true,
+            ),
+            Self::EnvironmentBoundaryParagraphs {
+                parent_environment_ids,
+                sibling_index,
+                paragraphs,
+                ..
+            } => apply_environment_boundary_paragraphs(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraphs,
+                true,
+            ),
+            Self::EnvironmentDeletion {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                fallback_paragraph,
+                ..
+            } => apply_environment_deletion(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                fallback_paragraph.as_deref(),
+                false,
+            ),
+            Self::EnvironmentUnwrap {
+                parent_environment_ids,
+                sibling_index,
+                environment,
+                ..
+            } => apply_environment_unwrap(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                environment,
+                false,
             ),
         }
     }
@@ -432,6 +661,33 @@ fn block_list_mut<'a>(
     block_list_mut(&mut environment.children, rest)
 }
 
+fn apply_paragraph_insertion(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    paragraph: &Paragraph,
+    insert: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    if insert {
+        if blocks
+            .iter()
+            .any(|block| matches!(block, Block::Paragraph(existing) if existing.id == paragraph.id))
+        {
+            return;
+        }
+        if sibling_index <= blocks.len() {
+            blocks.insert(sibling_index, Block::Paragraph(paragraph.clone()));
+        }
+    } else if let Some(index) = blocks.iter().position(
+        |block| matches!(block, Block::Paragraph(existing) if existing.id == paragraph.id),
+    ) {
+        blocks.remove(index);
+    }
+}
+
 fn find_environment_mut<'a>(
     blocks: &'a mut [Block],
     environment_id: &NodeId,
@@ -517,6 +773,127 @@ fn apply_environment_creation(
     };
 }
 
+fn apply_environment_insertion(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    environment: &BlockEnvironment,
+    insert: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    if insert {
+        if sibling_index <= blocks.len() {
+            blocks.insert(sibling_index, Block::Environment(environment.clone()));
+        }
+    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    {
+        blocks.remove(sibling_index);
+    }
+}
+
+fn apply_environment_boundary_paragraphs(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    paragraphs: &[Paragraph],
+    insert: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    if insert {
+        if sibling_index <= blocks.len() {
+            blocks.splice(
+                sibling_index..sibling_index,
+                paragraphs.iter().cloned().map(Block::Paragraph),
+            );
+        }
+    } else {
+        let end = sibling_index.saturating_add(paragraphs.len());
+        let matches_inserted = blocks.get(sibling_index..end).is_some_and(|actual| {
+            match actual {
+                [] => false,
+                actual => actual.iter().zip(paragraphs).all(|(block, expected)| {
+                    matches!(block, Block::Paragraph(paragraph) if paragraph.id == expected.id)
+                }),
+            }
+        });
+        if matches_inserted {
+            blocks.drain(sibling_index..end);
+        }
+    }
+}
+
+fn apply_environment_deletion(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    environment: &BlockEnvironment,
+    fallback_paragraph: Option<&Paragraph>,
+    restore: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    if restore {
+        if fallback_paragraph.is_some_and(|paragraph| {
+            matches!(blocks.get(sibling_index), Some(Block::Paragraph(value)) if value.id == paragraph.id)
+        }) {
+            blocks.remove(sibling_index);
+        }
+        if sibling_index <= blocks.len() {
+            blocks.insert(sibling_index, Block::Environment(environment.clone()));
+        }
+    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    {
+        blocks.remove(sibling_index);
+        if let Some(paragraph) = fallback_paragraph
+            && sibling_index <= blocks.len()
+        {
+            blocks.insert(sibling_index, Block::Paragraph(paragraph.clone()));
+        }
+    }
+}
+
+fn apply_environment_unwrap(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    environment: &BlockEnvironment,
+    restore: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    if restore {
+        let mut flattened = Vec::with_capacity(environment.children.len() + 1);
+        if let Some(title) = &environment.title {
+            flattened.push(Block::Paragraph(title.clone()));
+        }
+        flattened.extend(environment.children.iter().cloned());
+        let end = sibling_index.saturating_add(flattened.len());
+        if end <= blocks.len() && blocks[sibling_index..end] == flattened {
+            blocks.splice(
+                sibling_index..end,
+                [Block::Environment(environment.clone())],
+            );
+        }
+        return;
+    }
+    if !matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    {
+        return;
+    }
+    let mut flattened = Vec::with_capacity(environment.children.len() + 1);
+    if let Some(title) = &environment.title {
+        flattened.push(Block::Paragraph(title.clone()));
+    }
+    flattened.extend(environment.children.iter().cloned());
+    blocks.splice(sibling_index..=sibling_index, flattened);
+}
+
 fn set_page_geometry(document: &mut Document, geometry: PageGeometry) {
     if let Some(section) = document.page_sections.first_mut() {
         let _ = section.set_geometry(geometry);
@@ -538,6 +915,35 @@ pub(super) fn paragraph_estimated_bytes(paragraph: &Paragraph) -> usize {
         + paragraph.layout.as_ref().map_or(0, |layout| {
             size_of_val(layout) + string_value_map_bytes(&layout.extra)
         })
+}
+
+pub(super) fn environment_estimated_bytes(environment: &BlockEnvironment) -> usize {
+    size_of::<BlockEnvironment>()
+        + node_id_bytes(&environment.id)
+        + environment.definition_id.as_ref().map_or(0, String::len)
+        + string_value_map_bytes(&environment.props)
+        + string_value_map_bytes(&environment.extra)
+        + environment
+            .title
+            .as_ref()
+            .map_or(0, paragraph_estimated_bytes)
+        + environment
+            .children
+            .iter()
+            .map(block_estimated_bytes)
+            .sum::<usize>()
+}
+
+fn block_estimated_bytes(block: &Block) -> usize {
+    size_of::<Block>()
+        + match block {
+            Block::Paragraph(paragraph) => paragraph_estimated_bytes(paragraph),
+            Block::Environment(environment) => environment_estimated_bytes(environment),
+            Block::ExplicitBreak(value) => {
+                size_of_val(value) + string_value_map_bytes(&value.extra)
+            }
+            Block::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
+        }
 }
 
 fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
@@ -708,6 +1114,7 @@ fn story_id_bytes(story: &StoryId) -> usize {
 }
 
 pub(super) fn include_adjacent_paragraph_id(
+    document: &Document,
     paragraph_index: &ParagraphIndex,
     current_id: &NodeId,
     direction: super::super::Direction,
@@ -717,6 +1124,22 @@ pub(super) fn include_adjacent_paragraph_id(
         return None;
     }
     let (&index, parent_path) = current.block_path.split_last()?;
+    if direction == super::super::Direction::Backward
+        && let Some(previous_index) = index.checked_sub(1)
+        && let Some(Block::Environment(environment)) =
+            block_list_at_path(&document.body, parent_path)
+                .and_then(|blocks| blocks.get(previous_index))
+        && environment.kind == BlockEnvironmentKind::Section
+        && environment.children.is_empty()
+        && let Some(title) = &environment.title
+    {
+        return Some(title.id.clone());
+    }
+    if direction == super::super::Direction::Backward && index == 0 {
+        return paragraph_index.iter().find_map(|(id, location)| {
+            (location.is_title && location.block_path == parent_path).then(|| id.clone())
+        });
+    }
     let target_index = match direction {
         super::super::Direction::Backward => index.checked_sub(1)?,
         super::super::Direction::Forward => index.checked_add(1)?,
@@ -728,6 +1151,17 @@ pub(super) fn include_adjacent_paragraph_id(
             && location.block_path.last() == Some(&target_index))
         .then(|| id.clone())
     })
+}
+
+fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<&'a [Block]> {
+    let mut current = blocks;
+    for block_index in parent_path {
+        let Block::Environment(environment) = current.get(*block_index)? else {
+            return None;
+        };
+        current = &environment.children;
+    }
+    Some(current)
 }
 
 pub(super) fn restore_history_transition(

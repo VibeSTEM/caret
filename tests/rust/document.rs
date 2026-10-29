@@ -57,8 +57,8 @@ fn nested_environment_tree_round_trips() {
         "children": [{
             "type": "environment",
             "scope": "block",
-            "kind": "showcase",
-            "id": "showcase-1",
+            "kind": "custom",
+            "id": "custom-1",
             "props": {},
             "children": [{
                 "type": "paragraph",

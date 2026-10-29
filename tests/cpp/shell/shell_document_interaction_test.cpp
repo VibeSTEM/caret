@@ -1,6 +1,7 @@
 // Qt/QML 文档命中、输入法与编辑交互的集成测试。
 #include "document_canvas.hpp"
 #include "icon_provider.hpp"
+#include "keyboard_modifier_policy.hpp"
 #include "layout_view_model.hpp"
 #include "shell_load_test.hpp"
 #ifdef CARET_ENABLE_APP
@@ -63,7 +64,7 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::structureFocusInteractionSnapshotReplacesAndClearsRects() {
+void ShellLoadTest::blockEnvironmentHighlightSnapshotReplacesAndClearsRects() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -76,7 +77,7 @@ void ShellLoadTest::structureFocusInteractionSnapshotReplacesAndClearsRects() {
                                  {QStringLiteral("y0Pt"), 1.0},
                                  {QStringLiteral("x1Pt"), 2.0},
                                  {QStringLiteral("y1Pt"), 2.0}};
-    root.insert(QStringLiteral("structureFocusRects"), QJsonArray{focus_rect});
+    root.insert(QStringLiteral("blockEnvironmentHighlightRects"), QJsonArray{focus_rect});
     QVERIFY(caret::install_layout_snapshot(
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
@@ -84,22 +85,23 @@ void ShellLoadTest::structureFocusInteractionSnapshotReplacesAndClearsRects() {
     QQmlApplicationEngine engine;
     engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     QQmlComponent component(&engine);
-    component.setData(QByteArrayLiteral("import QtQuick\n"
-                                        "import Caret.ViewModels\n"
-                                        "Item { objectName: \"structureFocusProbe\" }\n"),
-                      QUrl());
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.ViewModels\n"
+                          "Item { objectName: \"blockEnvironmentHighlightProbe\" }\n"),
+        QUrl());
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     QObject* probe = component.create();
     QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
     auto* view_model =
         engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
     QVERIFY(view_model != nullptr);
-    QCOMPARE(view_model->structureFocusRects().size(), 1);
+    QCOMPARE(view_model->blockEnvironmentHighlightRects().size(), 1);
 
     const QVariantMap placement = view_model->placeCaretAtPage(0, 100.0, 100.0);
     QVERIFY2(placement.value(QStringLiteral("valid")).toBool(),
              qPrintable(placement.value(QStringLiteral("error")).toString()));
-    QVERIFY(view_model->structureFocusRects().isEmpty());
+    QVERIFY(view_model->blockEnvironmentHighlightRects().isEmpty());
     delete probe;
 }
 
@@ -212,6 +214,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QSignalSpy edge_navigation(canvas, &caret::DocumentCanvas::lineEdgeNavigationRequested);
     QSignalSpy editing_commands(canvas, &caret::DocumentCanvas::editingCommandRequested);
     QSignalSpy clipboard_commands(canvas, &caret::DocumentCanvas::clipboardCommandRequested);
+    QSignalSpy structure_navigation(canvas, &caret::DocumentCanvas::structureNavigationRequested);
     QVERIFY(command_keys.isValid());
     QVERIFY(editor_keys.isValid());
     QVERIFY(text_input.isValid());
@@ -220,6 +223,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QVERIFY(edge_navigation.isValid());
     QVERIFY(editing_commands.isValid());
     QVERIFY(clipboard_commands.isValid());
+    QVERIFY(structure_navigation.isValid());
     QCOMPARE(canvas->inputMethodContext(), QVariantMap{});
     QVERIFY(canvas->inputMethodQuery(Qt::ImEnabled).toBool());
     const QVariantMap input_method_context{
@@ -273,6 +277,15 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTest::keyClick(&window, Qt::Key_Right, Qt::ShiftModifier);
     QCOMPARE(navigation.size(), 1);
     QCOMPARE(navigation.takeFirst(), (QList<QVariant>{true, true}));
+    QTest::keyClick(&window, Qt::Key_Space, caret::keyboard::physicalControlModifier());
+    QCOMPARE(structure_navigation.size(), 1);
+    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("expand-selection"));
+    QTest::keyClick(&window, Qt::Key_Up, caret::keyboard::structureNavigationModifier());
+    QCOMPARE(structure_navigation.size(), 1);
+    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("previous"));
+    QTest::keyClick(&window, Qt::Key_Space, caret::keyboard::physicalControlModifier());
+    QCOMPARE(structure_navigation.size(), 1);
+    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("expand-selection"));
     QTest::keyClick(&window, Qt::Key_Up);
     QCOMPARE(vertical_navigation.size(), 1);
     QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{-1, false}));
@@ -294,6 +307,9 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTest::keyClick(&window, Qt::Key_Backspace);
     QCOMPARE(editing_commands.size(), 1);
     QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.delete_backward"));
+    QTest::keyClick(&window, Qt::Key_Backspace, caret::keyboard::modModifier());
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("mod-backspace"));
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
     QCOMPARE(clipboard_commands.size(), 1);
     QCOMPARE(clipboard_commands.takeFirst().at(0).toString(), QStringLiteral("copy"));

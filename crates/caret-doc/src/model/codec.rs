@@ -17,19 +17,6 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
             let kind = object.get("kind").and_then(Value::as_str);
             match kind {
                 Some("section") | Some("custom") => parse_block_environment(value),
-                Some("showcase") => {
-                    let has_invalid_custom_name = object
-                        .get("props")
-                        .and_then(Value::as_object)
-                        .and_then(|props| props.get("displayName"))
-                        .is_some_and(|name| !custom_display_name_is_valid(name));
-                    if has_invalid_custom_name {
-                        // 旧 Showcase 不解释 displayName；保留其原始子树并安全预览。
-                        Ok(Block::Opaque(OpaqueNode { raw: value }))
-                    } else {
-                        parse_block_environment(value)
-                    }
-                }
                 _ => Ok(Block::Opaque(OpaqueNode { raw: value })),
             }
         }
@@ -76,7 +63,7 @@ fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
     object.remove("scope");
     let kind = match kind.as_str() {
         "section" => BlockEnvironmentKind::Section,
-        "custom" | "showcase" => BlockEnvironmentKind::Custom,
+        "custom" => BlockEnvironmentKind::Custom,
         _ => return Err(ModelError::InvalidEnvironmentScope(kind)),
     };
     let children = take_nodes(&mut object, "children", block_from_value)?;

@@ -118,6 +118,13 @@ pub(crate) const THEME_TOKEN_SPECS: &[ThemeTokenSpec] = &[
         maximum: 0.0,
     },
     ThemeTokenSpec {
+        dsl_key: "color-block-environment-highlight",
+        qml_name: "colorBlockEnvironmentHighlight",
+        kind: ThemeTokenKind::Color,
+        minimum: 0.0,
+        maximum: 0.0,
+    },
+    ThemeTokenSpec {
         dsl_key: "color-focus",
         qml_name: "colorFocus",
         kind: ThemeTokenKind::Color,

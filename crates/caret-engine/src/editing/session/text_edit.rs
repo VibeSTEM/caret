@@ -1,7 +1,8 @@
 //! 执行字素删除与相邻段落合并。
 
 use super::super::paragraph_ops::{
-    ParagraphMergeResult, merge_adjacent_paragraph, update_index_after_merge,
+    ParagraphMergeResult, merge_adjacent_paragraph, merge_paragraph_after_empty_section_into_title,
+    merge_section_body_into_title, update_index_after_merge,
 };
 use super::super::text_map::TextMap;
 use super::super::{Affinity, Direction, EditError, Effect, Pos, PositionMap, Selection, StoryId};
@@ -37,6 +38,78 @@ impl Session {
                 .get(&anchor.paragraph_id)
                 .cloned()
                 .ok_or_else(|| EditError::UnknownParagraph(anchor.paragraph_id.to_string()))?;
+            if anchor.offset == 0
+                && direction == Direction::Backward
+                && let Some(result) = merge_paragraph_after_empty_section_into_title(
+                    &mut self.document.body,
+                    &location,
+                )?
+            {
+                let merge = result.merge;
+                self.paragraph_index =
+                    super::super::paragraph_ops::build_paragraph_index(&self.document.body);
+                self.text_map_cache.clear();
+                let title_id = merge.left_id;
+                let position_map = PositionMap::Composite(vec![
+                    PositionMap::ParagraphMerge {
+                        left_id: title_id.clone(),
+                        right_id: merge.right_id,
+                        left_len: merge.left_len,
+                        result_boundaries: merge.result_boundaries,
+                    },
+                    PositionMap::StoryChange {
+                        paragraph_id: title_id,
+                        from: StoryId::Body,
+                        to: StoryId::EnvironmentTitle(result.environment_id),
+                    },
+                ]);
+                let position = position_map.map(&anchor);
+                self.selection = Selection {
+                    anchor: position.clone(),
+                    focus: position,
+                };
+                return Ok(Effect {
+                    document_changed: true,
+                    selection_changed: true,
+                    position_map: Some(position_map),
+                    ..Effect::default()
+                });
+            }
+            if anchor.offset == 0
+                && direction == Direction::Backward
+                && let Some(result) =
+                    merge_section_body_into_title(&mut self.document.body, &location)?
+            {
+                let merge = result.merge;
+                self.paragraph_index =
+                    super::super::paragraph_ops::build_paragraph_index(&self.document.body);
+                self.text_map_cache.clear();
+                let title_id = merge.left_id;
+                let position_map = PositionMap::Composite(vec![
+                    PositionMap::ParagraphMerge {
+                        left_id: title_id.clone(),
+                        right_id: merge.right_id,
+                        left_len: merge.left_len,
+                        result_boundaries: merge.result_boundaries,
+                    },
+                    PositionMap::StoryChange {
+                        paragraph_id: title_id,
+                        from: StoryId::Body,
+                        to: StoryId::EnvironmentTitle(result.environment_id),
+                    },
+                ]);
+                let position = position_map.map(&anchor);
+                self.selection = Selection {
+                    anchor: position.clone(),
+                    focus: position,
+                };
+                return Ok(Effect {
+                    document_changed: true,
+                    selection_changed: true,
+                    position_map: Some(position_map),
+                    ..Effect::default()
+                });
+            }
             if anchor.offset == 0
                 && direction == Direction::Backward
                 && matches!(&anchor.story, StoryId::Body)

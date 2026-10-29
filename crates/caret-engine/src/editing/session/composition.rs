@@ -1,6 +1,6 @@
 //! 管理 IME 组字的更新、幂等提交与取消，提交正文仍复用文本编辑事务。
 
-use super::super::paragraph_ops::compare_positions;
+use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 use super::super::{
     Affinity, Command, EditError, Effect, InputComposition, Pos, PositionMap, Selection,
@@ -154,6 +154,10 @@ impl Session {
             document_generation: self.document_generation,
             composition: self.composition.clone(),
             command_line: self.command_line.clone(),
+            block_environment_exit: self.block_environment_exit.clone(),
+            selected_block_environment: self.selected_block_environment.clone(),
+            selected_block_environments: self.selected_block_environments.clone(),
+            structure_selection: self.structure_selection.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),
@@ -187,6 +191,13 @@ impl Session {
             id: composition.id,
             text: preedit.clone(),
         })?;
+        if self.block_environment_exit.is_some() {
+            return self.composition_preview_at_environment_exit(
+                preview,
+                &preedit,
+                cursor_position_utf16,
+            );
+        }
         let mut composition_start = if compare_positions(
             &self.paragraph_index,
             &self.selection.anchor,
@@ -243,6 +254,89 @@ impl Session {
         Ok((preview, range))
     }
 
+    /// 将块环境外的预编辑位置映射到新建的同级段落，而不是映射回环境内部段落。
+    fn composition_preview_at_environment_exit(
+        &self,
+        mut preview: Self,
+        preedit: &str,
+        cursor_position_utf16: usize,
+    ) -> Result<(Self, Selection), EditError> {
+        let normalized = preedit.replace("\r\n", "\n").replace('\r', "\n");
+        let cursor_byte = utf16_offset_to_utf8(
+            &normalized,
+            cursor_position_utf16.min(normalized.encode_utf16().count()),
+        )?;
+        let line_start = normalized[..cursor_byte]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+        let local_offset = cursor_byte - line_start;
+
+        // 提交后的焦点位于新建的最后一段；其余段紧邻它按文本行顺序排列。
+        let last_id = &preview.selection.focus.paragraph_id;
+        if self.paragraph_index.contains_key(last_id) {
+            return Err(EditError::InvalidPosition);
+        }
+        let mut location = preview
+            .paragraph_index
+            .get(last_id)
+            .cloned()
+            .ok_or(EditError::InvalidPosition)?;
+        let lines_after_cursor = normalized[line_start..]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let sibling_index = location
+            .block_path
+            .last_mut()
+            .ok_or(EditError::InvalidPosition)?;
+        *sibling_index = sibling_index
+            .checked_sub(lines_after_cursor)
+            .ok_or(EditError::InvalidPosition)?;
+        let paragraph_id = paragraph_at_location(&preview.document.body, &location)
+            .ok_or(EditError::InvalidPosition)?
+            .id
+            .clone();
+        if self.paragraph_index.contains_key(&paragraph_id) {
+            return Err(EditError::InvalidPosition);
+        }
+        let map = preview.text_map_for(&Pos {
+            story: location.story.clone(),
+            paragraph_id: paragraph_id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        })?;
+        let start = map.snap_to_grapheme_boundary(0, Affinity::Upstream);
+        let end = map.snap_to_grapheme_boundary(map.text.len(), Affinity::Downstream);
+        let position = Pos {
+            story: location.story.clone(),
+            paragraph_id: paragraph_id.clone(),
+            offset: map.snap_to_grapheme_boundary(local_offset, Affinity::Downstream),
+            affinity: Affinity::Downstream,
+        };
+        preview.set_selection_with_visual_affinity(
+            Some(Selection {
+                anchor: position.clone(),
+                focus: position,
+            }),
+            self.selection_visual_affinity,
+        )?;
+        let range = Selection {
+            anchor: Pos {
+                story: location.story.clone(),
+                paragraph_id: paragraph_id.clone(),
+                offset: start,
+                affinity: Affinity::Upstream,
+            },
+            focus: Pos {
+                story: location.story.clone(),
+                paragraph_id,
+                offset: end,
+                affinity: Affinity::Downstream,
+            },
+        };
+        Ok((preview, range))
+    }
+
     /// 将 Qt 的 UTF-16 相对替换区间转换为同段落中按字素边界吸附的 Rust 选区。
     pub fn set_composition_replacement_range(
         &mut self,
@@ -253,6 +347,10 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         if replacement_start == 0 && replacement_length == 0 {
+            return Ok(());
+        }
+        // 虚拟环境外位置没有相邻文本可供 IME 替换，保持外侧停靠点并将提交视为插入。
+        if self.block_environment_exit.is_some() {
             return Ok(());
         }
         let focus = self.selection.focus.clone();
@@ -336,7 +434,12 @@ impl Session {
             return Err(EditError::InvalidCompositionId);
         }
         let prior = self.composition.take();
-        match self.insert_text(text) {
+        let result = if self.block_environment_exit.is_some() {
+            self.insert_text_at_environment_exit(text)
+        } else {
+            self.insert_text(text)
+        };
+        match result {
             Ok(mut effect) => {
                 self.last_committed_composition = Some(id);
                 effect.composition_changed = true;

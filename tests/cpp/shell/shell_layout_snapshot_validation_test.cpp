@@ -4,6 +4,7 @@
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
+#include "layout_snapshot_codec.hpp"
 #include "layout_view_model.hpp"
 #endif
 
@@ -51,6 +52,30 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
     };
     QVERIFY(!caret::install_layout_snapshot(QStringLiteral("{invalid json")));
     QVERIFY(!caret::install_layout_snapshot(QStringLiteral("[]")));
+
+    QVariantList structures;
+    QString structure_error;
+    const auto parse_structure = [&](const QJsonObject& entry) {
+        return caret::layout_snapshot::parse_current_structure(QJsonArray{entry}, structures,
+                                                               structure_error);
+    };
+    QJsonObject heading{{QStringLiteral("id"), QStringLiteral("heading-id")},
+                        {QStringLiteral("kind"), QStringLiteral("heading")},
+                        {QStringLiteral("level"), 2}};
+    QVERIFY(parse_structure(heading));
+    QCOMPARE(structures.first().toMap().value(QStringLiteral("level")).toInt(), 2);
+    heading.remove(QStringLiteral("level"));
+    QVERIFY(!parse_structure(heading));
+    heading.insert(QStringLiteral("level"), 10);
+    QVERIFY(!parse_structure(heading));
+    heading.insert(QStringLiteral("level"), 1.5);
+    QVERIFY(!parse_structure(heading));
+    heading.insert(QStringLiteral("kind"), QStringLiteral("section"));
+    QVERIFY(!parse_structure(heading));
+    heading.remove(QStringLiteral("level"));
+    QVERIFY(parse_structure(heading));
+    heading.insert(QStringLiteral("label"), QStringLiteral("Section"));
+    QVERIFY(!parse_structure(heading));
 
     QJsonObject invalid_partial = root;
     invalid_partial.insert(QStringLiteral("partial"), QStringLiteral("yes"));

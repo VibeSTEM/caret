@@ -7,6 +7,7 @@ use caret_doc::{
     InlineEnvironmentKind, InlineNode, NodeId, Orientation, PageGeometry, PageMargins, PaperSize,
     Paragraph, Run,
 };
+use caret_layout::VisualAffinity;
 
 fn run(text: &str) -> InlineNode {
     InlineNode::Run(Run {
@@ -507,7 +508,7 @@ fn section_title_enter_at_end_keeps_nested_body_order_and_creates_empty_paragrap
 }
 
 #[test]
-fn enter_rejects_cross_title_body_selection_atomically() {
+fn selection_rejects_cross_title_body_range_before_installation() {
     let mut document = Document::blank();
     let title_id = NodeId::generate();
     let environment_id = NodeId::generate();
@@ -544,7 +545,7 @@ fn enter_rejects_cross_title_body_selection_atomically() {
     let selection = Selection {
         anchor: Pos {
             story: StoryId::EnvironmentTitle(environment_id),
-            paragraph_id: title_id,
+            paragraph_id: title_id.clone(),
             offset: 0,
             affinity: Affinity::Downstream,
         },
@@ -555,22 +556,15 @@ fn enter_rejects_cross_title_body_selection_atomically() {
             affinity: Affinity::Upstream,
         },
     };
-    assert!(session.run(Command::SetSelection(Some(selection))).is_ok());
     let before = session.document.clone();
     let before_selection = session.selection.clone();
-    for command in [
-        Command::InsertParagraphBreak,
-        Command::Delete(Direction::Backward),
-        Command::InsertText("replacement".to_owned()),
-    ] {
-        assert_eq!(
-            session.run(command),
-            Err(EditError::CrossParagraphSelection)
-        );
-        assert_eq!(session.document, before);
-        assert_eq!(session.selection, before_selection);
-        assert_eq!(session.document_generation(), 0);
-    }
+    assert_eq!(
+        session.run(Command::SetSelection(Some(selection))),
+        Err(EditError::CrossParagraphSelection)
+    );
+    assert_eq!(session.document, before);
+    assert_eq!(session.selection, before_selection);
+    assert_eq!(session.document_generation(), 0);
 }
 
 #[test]
@@ -887,6 +881,36 @@ fn input_keeps_original_unicode_codepoint_sequence() {
     assert_eq!(map.text, original);
     assert_eq!(map.text.as_bytes(), original.as_bytes());
     assert_eq!(session.selection.focus.offset, original.len());
+}
+
+#[test]
+fn typing_compacts_adjacent_default_runs_and_empty_placeholders() {
+    let mut session = session_with(vec![run("Heading"), run(""), run("")]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let end = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: "Heading".len(),
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: end.clone(),
+                focus: end,
+            })))
+            .is_ok()
+    );
+
+    assert!(session.run(Command::InsertText("a".to_owned())).is_ok());
+    assert!(session.run(Command::InsertText("b".to_owned())).is_ok());
+
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("edited body should remain a paragraph");
+    };
+    assert_eq!(paragraph_text(paragraph), "Headingab");
+    assert_eq!(paragraph.inlines.len(), 1);
+    assert_eq!(paragraph.inlines[0], run("Headingab"));
 }
 
 #[test]
@@ -2149,6 +2173,94 @@ fn selected_text_is_extracted_by_the_session_without_layout() -> Result<(), Edit
     })))?;
 
     assert_eq!(session.selected_text()?, "好\nwo");
+    Ok(())
+}
+
+#[test]
+fn selected_text_includes_title_and_body_across_environment_stories() -> Result<(), EditError> {
+    let title_id = NodeId::generate();
+    let body_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let title = Paragraph {
+        id: title_id.clone(),
+        language: None,
+        layout: None,
+        inlines: vec![run("Section title")],
+        mark_style: Default::default(),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    let body = Paragraph {
+        id: body_id.clone(),
+        language: None,
+        layout: None,
+        inlines: vec![run("body text")],
+        mark_style: Default::default(),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    let before = Paragraph {
+        id: NodeId::generate(),
+        language: None,
+        layout: None,
+        inlines: vec![run("before")],
+        mark_style: Default::default(),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    let before_id = before.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Paragraph(body)],
+            extra: Default::default(),
+        }),
+    ];
+    let mut session = Session::new(document)?;
+
+    session.select_block_environments_from_range(
+        Pos {
+            story: StoryId::EnvironmentTitle(environment_id.clone()),
+            paragraph_id: title_id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        },
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: body_id,
+            offset: "body text".len(),
+            affinity: Affinity::Upstream,
+        },
+        VisualAffinity::Downstream,
+    )?;
+
+    assert_eq!(session.selected_text()?, "Section title\nbody text");
+
+    session.select_block_environments_from_range(
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: before_id,
+            offset: 0,
+            affinity: Affinity::Downstream,
+        },
+        Pos {
+            story: StoryId::EnvironmentTitle(environment_id.clone()),
+            paragraph_id: title_id,
+            offset: 2,
+            affinity: Affinity::Upstream,
+        },
+        VisualAffinity::Downstream,
+    )?;
+    assert_eq!(session.selected_text()?, "before\nSection title\nbody text");
+
+    session.select_block_environment(environment_id)?;
+    assert_eq!(session.selected_text()?, "Section title\nbody text");
     Ok(())
 }
 

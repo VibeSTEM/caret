@@ -14,22 +14,17 @@ Rectangle {
 
     readonly property int rowHeight: Theme.statusbarHeight
     readonly property int sliderHeight: Theme.iconSizeCompact
+    readonly property var structureLabelTranslations: ({
+            "paragraph": qsTranslate("WindowStatusBar", "Paragraph"),
+            "heading": qsTranslate("WindowStatusBar", "Heading"),
+            "section": qsTranslate("WindowStatusBar", "Section"),
+            "custom": qsTranslate("WindowStatusBar", "Custom environment")
+        })
     readonly property string structureDescription: {
         const entries = LayoutViewModel.currentStructure;
         const labels = [];
-        for (let index = 0; index < entries.length; ++index) {
-            const entry = entries[index];
-            if (entry.kind === "paragraph")
-                labels.push(qsTr("Paragraph"));
-            else if (entry.kind === "singleLine")
-                labels.push(qsTr("Single-line"));
-            else if (entry.kind === "multiLine")
-                labels.push(qsTr("Multi-line"));
-            else if (entry.kind === "table")
-                labels.push(qsTr("Table"));
-            else if (entry.kind === "figure")
-                labels.push(qsTr("Figure"));
-        }
+        for (let index = 0; index < entries.length; ++index)
+            labels.push(structureLabelTranslations[entries[index].kind] || entries[index].kind);
         return labels.join(" › ");
     }
 

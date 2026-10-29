@@ -55,69 +55,34 @@ fn required_feature_metadata_rejects_non_string_and_empty_identifiers()
 }
 
 #[test]
-fn legacy_showcase_documents_open_editably_and_normalize_when_saved()
+fn unsupported_block_environment_kind_is_preserved_in_safe_preview()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
-    envelope["requiredFeatures"] = json!(["caret.env.showcase"]);
     envelope["document"]["body"] = json!([{
         "type": "environment",
         "scope": "block",
-        "kind": "showcase",
-        "id": "legacy-showcase",
-        "props": {"displayName": "Old example"},
+        "kind": "future_container",
+        "id": "unknown-environment",
+        "props": {"displayName": "Extension value"},
         "title": null,
         "children": [{"type": "paragraph", "id": "body", "inlines": []}]
     }]);
 
-    let OpenedDocument::Editable(file) = open(envelope.to_string().as_bytes())? else {
-        return Err("legacy Showcase should remain editable".into());
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        return Err("unknown environment kinds must use safe preview".into());
     };
-    let normalized: Value = serde_json::from_slice(&file.to_bytes()?)?;
-    assert_eq!(normalized["document"]["body"][0]["kind"], "custom");
     assert!(
-        normalized["requiredFeatures"]
-            .as_array()
-            .is_some_and(|features| {
-                features.iter().any(|feature| feature == "caret.env.custom")
-                    && !features
-                        .iter()
-                        .any(|feature| feature == "caret.env.showcase")
-            })
+        preview
+            .reasons
+            .contains(&PreviewReason::UnsupportedNodeKind)
     );
+    let preserved = preview.to_json_value()?;
+    assert_eq!(preserved["document"]["body"][0]["kind"], "future_container");
     assert_eq!(
-        normalized["document"]["body"][0]["props"]["displayName"],
-        "Old example"
+        preserved["document"]["body"][0]["props"]["displayName"],
+        "Extension value"
     );
-    Ok(())
-}
-
-#[test]
-fn legacy_showcase_with_invalid_new_custom_name_opens_as_preserved_preview()
--> Result<(), Box<dyn std::error::Error>> {
-    for display_name in [json!(" "), json!("字".repeat(129)), json!(42)] {
-        let mut envelope = blank_envelope()?;
-        envelope["document"]["body"] = json!([{
-            "type": "environment",
-            "scope": "block",
-            "kind": "showcase",
-            "id": "legacy-showcase",
-            "props": {"displayName": display_name},
-            "title": null,
-            "children": [{"type": "paragraph", "id": "body", "inlines": []}]
-        }]);
-
-        let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-            return Err("legacy data conflicting with Custom semantics should be read-only".into());
-        };
-        assert_eq!(preview.reasons, [PreviewReason::UnsupportedNodeKind]);
-        let preserved = preview.to_json_value()?;
-        assert_eq!(preserved["document"]["body"][0]["kind"], "showcase");
-        assert_eq!(
-            preserved["document"]["body"][0]["props"]["displayName"],
-            display_name
-        );
-        assert!(!preview.can_save());
-    }
+    assert!(!preview.can_save());
     Ok(())
 }
 

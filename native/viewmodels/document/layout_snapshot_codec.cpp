@@ -182,11 +182,17 @@ bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result,
         const QString id = entry.value(QStringLiteral("id")).toString();
         const QString kind = entry.value(QStringLiteral("kind")).toString();
         const QJsonValue level = entry.value(QStringLiteral("level"));
-        const bool known_kind = kind == QStringLiteral("paragraph") ||
-                                kind == QStringLiteral("singleLine") ||
-                                kind == QStringLiteral("multiLine") ||
-                                kind == QStringLiteral("table") || kind == QStringLiteral("figure");
-        if (id.isEmpty() || !known_kind || !level.isUndefined()) {
+        const bool heading = kind == QStringLiteral("heading");
+        const bool known_kind = kind == QStringLiteral("paragraph") || heading ||
+                                kind == QStringLiteral("section") ||
+                                kind == QStringLiteral("custom");
+        const int heading_level = level.toInt(-1);
+        const bool valid_level = heading
+                                     ? level.isDouble() && heading_level >= 1 &&
+                                           heading_level <= 9 && level.toDouble() == heading_level
+                                     : level.isUndefined();
+        if (id.isEmpty() || !known_kind || !valid_level ||
+            entry.contains(QStringLiteral("label"))) {
             error = QStringLiteral("layout.invalid_current_structure");
             return false;
         }
@@ -217,10 +223,11 @@ bool parse_current_structure(const QJsonValue& value, QVariantList& current_stru
     return parse_current_structure_impl(value, current_structure, error);
 }
 
-bool parse_structure_focus_rects(const QJsonValue& value, const QVariantList& page_sizes,
-                                 QVariantList& rectangles, QString& error) {
-    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("structure_focus"),
-                                     rectangles, error);
+bool parse_block_environment_highlight_rects(const QJsonValue& value,
+                                             const QVariantList& page_sizes,
+                                             QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(
+        value, page_sizes, QStringLiteral("block_environment_highlight"), rectangles, error);
 }
 
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
@@ -524,9 +531,10 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                                  parsed_current_structure, error)) {
         return false;
     }
-    QVariantList parsed_structure_focus_rects;
-    if (!parse_structure_focus_rects(root.value(QStringLiteral("structureFocusRects")),
-                                     parsed_sizes, parsed_structure_focus_rects, error)) {
+    QVariantList parsed_block_environment_highlight_rects;
+    if (!parse_block_environment_highlight_rects(
+            root.value(QStringLiteral("blockEnvironmentHighlightRects")), parsed_sizes,
+            parsed_block_environment_highlight_rects, error)) {
         return false;
     }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
@@ -539,7 +547,8 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
     parsed_snapshot.command_line = std::move(parsed_command_line);
     parsed_snapshot.current_structure = std::move(parsed_current_structure);
-    parsed_snapshot.structure_focus_rects = std::move(parsed_structure_focus_rects);
+    parsed_snapshot.block_environment_highlight_rects =
+        std::move(parsed_block_environment_highlight_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {

@@ -42,7 +42,7 @@ void DocumentCanvas::setVisiblePageRange(const QVariantList& range) {
     }
     m_first_visible_page = first;
     m_page_end_visible = end;
-    ++m_structure_focus_revision;
+    ++m_block_environment_highlight_revision;
     emit visiblePageRangeChanged();
     update();
 }

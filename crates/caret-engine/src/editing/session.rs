@@ -32,6 +32,13 @@ use self::history::{DocumentPatch, SessionHistoryEdit};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
+/// 保存跨越多个正文 Story 的结构选区锚点与焦点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructureSelection {
+    pub anchor: Pos,
+    pub focus: Pos,
+}
+
 #[derive(Debug)]
 pub struct Session {
     pub(super) document: Document,
@@ -41,6 +48,10 @@ pub struct Session {
     document_generation: u64,
     composition: Option<InputComposition>,
     command_line: Option<CommandLine>,
+    block_environment_exit: Option<(NodeId, Direction)>,
+    selected_block_environment: Option<NodeId>,
+    selected_block_environments: Vec<NodeId>,
+    structure_selection: Option<StructureSelection>,
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
     paragraph_index: ParagraphIndex,
@@ -79,6 +90,10 @@ impl Session {
             document_generation: 0,
             composition: None,
             command_line: None,
+            block_environment_exit: None,
+            selected_block_environment: None,
+            selected_block_environments: Vec::new(),
+            structure_selection: None,
             last_committed_composition: None,
             text_map_cache: VecDeque::new(),
             edit_history: history::history(),
@@ -107,6 +122,13 @@ impl Session {
         &self.selection
     }
 
+    /// 按稳定段落 ID 返回 Rust 索引中的正文或环境标题归属。
+    pub fn story_for_paragraph(&self, paragraph_id: &NodeId) -> Option<StoryId> {
+        self.paragraph_index
+            .get(paragraph_id)
+            .map(|location| location.story.clone())
+    }
+
     /// 当前文档派生的结构索引；不写入文档，不触发布局。
     pub fn structure_index(&self) -> &StructureIndex {
         &self.structure_index
@@ -124,6 +146,63 @@ impl Session {
     /// 当前临时命令查询；此状态不属于文档修订或布局缓存。
     pub fn command_line(&self) -> Option<&CommandLine> {
         self.command_line.as_ref()
+    }
+
+    /// 当前光标是否停在块环境外侧，而不为导航插入可见空段落。
+    pub fn block_environment_exit(&self) -> Option<(NodeId, Direction)> {
+        self.block_environment_exit.clone()
+    }
+
+    /// 返回当前以完整页内几何表示的块环境结构选区。
+    pub fn selected_block_environment(&self) -> Option<&NodeId> {
+        self.selected_block_environment.as_ref()
+    }
+
+    /// 返回当前结构选区覆盖的块环境，按文档顺序排列。
+    pub fn selected_block_environments(&self) -> &[NodeId] {
+        &self.selected_block_environments
+    }
+
+    /// 返回跨 Story 结构选区的原始锚点，用于连续 Shift 导航。
+    pub fn structure_selection_anchor(&self) -> Option<&Pos> {
+        self.structure_selection
+            .as_ref()
+            .map(|selection| &selection.anchor)
+    }
+
+    /// 返回结构选区两端，用于生成跨段、跨 Story 的可见文本选区。
+    pub fn structure_selection(&self) -> Option<(&Pos, &Pos)> {
+        self.structure_selection
+            .as_ref()
+            .map(|selection| (&selection.anchor, &selection.focus))
+    }
+
+    /// 将普通文本选区无法跨越的环境边界表示为结构选区投影。
+    pub fn select_block_environment(
+        &mut self,
+        environment_id: NodeId,
+    ) -> Result<Effect, EditError> {
+        let exists = self
+            .structure_index
+            .structures()
+            .iter()
+            .any(|entry| entry.id == environment_id && entry.kind.is_block_environment());
+        if !exists {
+            return Err(EditError::InvalidPosition);
+        }
+        let changed = self.selected_block_environment.as_ref() != Some(&environment_id);
+        self.selected_block_environment = Some(environment_id);
+        self.selected_block_environments =
+            self.selected_block_environment.iter().cloned().collect();
+        self.structure_selection = Some(StructureSelection {
+            anchor: self.selection.focus.clone(),
+            focus: self.selection.focus.clone(),
+        });
+        self.block_environment_exit = None;
+        Ok(Effect {
+            selection_changed: changed,
+            ..Effect::default()
+        })
     }
 
     /// 当前文档历史状态标识，用于把异步保存结果关联到实际保存点。
@@ -146,10 +225,97 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
-        if let Command::EditorKey(key) = command {
-            return self.run_editor_key(key);
+        if let Command::InsertText(text) | Command::PasteText(text) = &command
+            && !text.is_empty()
+            && self.block_environment_exit.is_some()
+        {
+            return self.insert_text_at_environment_exit(text);
         }
-        if matches!(&command, Command::MoveStructure(_) | Command::ExitStructure) {
+        if matches!(&command, Command::Delete(Direction::Backward))
+            && !self.selected_block_environments.is_empty()
+            && (self.selected_block_environments.len() > 1
+                || self
+                    .structure_selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.anchor != selection.focus))
+        {
+            return self
+                .delete_selected_structure_range()?
+                .ok_or(EditError::InvalidPosition);
+        }
+        if matches!(&command, Command::Delete(Direction::Backward))
+            && self.selected_block_environments.len() == 1
+        {
+            return self.delete_selected_block_environment();
+        }
+        if matches!(&command, Command::Delete(Direction::Backward))
+            && self.selected_block_environments.len() > 1
+        {
+            return Ok(Effect::default());
+        }
+        if let Command::EditorKey(key) = &command {
+            return self.run_editor_key(*key);
+        }
+        if let Command::CommitComposition { id, text } = &command
+            && self.block_environment_exit.is_some()
+        {
+            return self.commit_composition(*id, text);
+        }
+        if self.block_environment_exit.is_some() {
+            match command {
+                Command::InsertParagraphBreak => {
+                    return self.insert_break_at_environment_exit(false);
+                }
+                Command::InsertSoftBreak => return self.insert_break_at_environment_exit(true),
+                _ => {}
+            }
+        }
+        self.selected_block_environment = None;
+        self.selected_block_environments.clear();
+        self.structure_selection = None;
+        if self.command_line.is_some() && matches!(&command, Command::Delete(Direction::Backward)) {
+            return self.run_command_line(Command::BackspaceCommandLine);
+        }
+        if self.block_environment_exit.is_some() && matches!(&command, Command::Delete(_)) {
+            let (environment_id, exit_direction) = self
+                .block_environment_exit
+                .clone()
+                .ok_or(EditError::InvalidPosition)?;
+            let deletes_adjacent_environment = matches!(
+                (exit_direction, &command),
+                (Direction::Forward, Command::Delete(Direction::Backward))
+                    | (Direction::Backward, Command::Delete(Direction::Forward))
+            );
+            if deletes_adjacent_environment
+                && !structure::environment_has_content_at(&self.document.body, &environment_id)?
+            {
+                self.selected_block_environment = Some(environment_id);
+                return self.delete_selected_block_environment();
+            }
+            return Ok(Effect::default());
+        }
+        if matches!(&command, Command::Delete(Direction::Backward))
+            && self.selection.anchor == self.selection.focus
+            && self.selection.focus.offset == 0
+            && self.composition.is_none()
+            && self.command_line.is_none()
+        {
+            let position = self.selection.focus.clone();
+            if let Some(effect) = self.unwrap_focused_block_environment(true)? {
+                return Ok(effect);
+            }
+            if let Some(effect) = self.delete_empty_environment_before(&position)? {
+                return Ok(effect);
+            }
+        }
+        if matches!(
+            &command,
+            Command::MoveStructure(_)
+                | Command::ExitBlockEnvironment(_)
+                | Command::RemoveBlockEnvironmentPreservingContent
+                | Command::ExpandStructureSelection
+                | Command::ExitStructure
+        ) {
             return self.run_structure(command);
         }
         if let Command::CreateBlockEnvironment(kind) = command {
@@ -217,7 +383,11 @@ impl Session {
             Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),
-            Command::MoveStructure(_) | Command::ExitStructure => {
+            Command::MoveStructure(_)
+            | Command::ExitBlockEnvironment(_)
+            | Command::RemoveBlockEnvironmentPreservingContent
+            | Command::ExpandStructureSelection
+            | Command::ExitStructure => {
                 unreachable!("structure commands returned above")
             }
             Command::CreateBlockEnvironment(_) => {
@@ -333,6 +503,15 @@ impl Session {
         }
     }
 
+    pub(super) fn advance_document_generation(&mut self) {
+        if let Some(next) = self.document_generation.checked_add(1) {
+            self.document_generation = next;
+        } else {
+            self.session_id = NodeId::generate();
+            self.document_generation = 0;
+        }
+    }
+
     fn advance_history_merge_epoch(&mut self) {
         if let Some(next) = self.history_merge_epoch.checked_add(1) {
             self.history_merge_epoch = next;
@@ -371,6 +550,8 @@ impl Session {
             history::restore_history_transition(transition);
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
+        self.selected_block_environment = None;
+        self.block_environment_exit = None;
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         self.paragraph_index = build_paragraph_index(&self.document.body);
@@ -402,6 +583,7 @@ impl Session {
         Ok(at_boundary
             .then(|| {
                 history::include_adjacent_paragraph_id(
+                    &self.document,
                     &self.paragraph_index,
                     &position.paragraph_id,
                     direction,
@@ -516,6 +698,10 @@ impl Clone for Session {
             document_generation: 0,
             composition: self.composition.clone(),
             command_line: self.command_line.clone(),
+            block_environment_exit: self.block_environment_exit.clone(),
+            selected_block_environment: self.selected_block_environment.clone(),
+            selected_block_environments: self.selected_block_environments.clone(),
+            structure_selection: self.structure_selection.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),

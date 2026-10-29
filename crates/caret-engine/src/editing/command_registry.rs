@@ -22,12 +22,6 @@ const CANDIDATES: &[CommandCandidate] = &[
         available: true,
     },
     CommandCandidate {
-        alias: "\\environment",
-        command_id: "struct.custom.create",
-        label: "Custom environment",
-        available: true,
-    },
-    CommandCandidate {
         alias: "\\subsection",
         command_id: "para.heading",
         label: "Subsection",

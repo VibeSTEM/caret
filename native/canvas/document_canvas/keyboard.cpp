@@ -1,5 +1,6 @@
 // 将 Qt 画布按键映射为编辑器意图，并按焦点作用域交给对应处理层。
 #include "document_canvas.hpp"
+#include "keyboard_modifier_policy.hpp"
 #include <QChar>
 #include <QKeyEvent>
 #include <QQuickItem>
@@ -26,6 +27,16 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Escape &&
         (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier)) {
         emit editorKeyRequested(QStringLiteral("escape"));
+        event->accept();
+        return;
+    }
+    if (keyboard::isPhysicalControlOnly(semantic_modifiers) && event->key() == Qt::Key_Space) {
+        emit structureNavigationRequested(QStringLiteral("expand-selection"));
+        event->accept();
+        return;
+    }
+    if (keyboard::isModOnly(semantic_modifiers) && event->key() == Qt::Key_Backspace) {
+        emit editorKeyRequested(QStringLiteral("mod-backspace"));
         event->accept();
         return;
     }
@@ -71,23 +82,12 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
             return;
         }
     }
-#ifdef Q_OS_MACOS
-    if (semantic_modifiers == Qt::AltModifier &&
-        (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
+    if (keyboard::isStructureBlockNavigation(semantic_modifiers, event->key())) {
         emit structureNavigationRequested(event->key() == Qt::Key_Up ? QStringLiteral("previous")
                                                                      : QStringLiteral("next"));
         event->accept();
         return;
     }
-#else
-    if (semantic_modifiers == Qt::ControlModifier &&
-        (event->key() == Qt::Key_Up || event->key() == Qt::Key_Down)) {
-        emit structureNavigationRequested(event->key() == Qt::Key_Up ? QStringLiteral("previous")
-                                                                     : QStringLiteral("next"));
-        event->accept();
-        return;
-    }
-#endif
     if (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier) {
         const bool extend = semantic_modifiers == Qt::ShiftModifier;
         switch (event->key()) {

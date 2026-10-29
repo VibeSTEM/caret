@@ -22,7 +22,7 @@ struct ParsedLayoutSnapshot {
     QVariantList selection_rects;
     QVariantList composition_rects;
     QVariantList current_structure;
-    QVariantList structure_focus_rects;
+    QVariantList block_environment_highlight_rects;
     QVariantMap command_line;
     QVariantMap input_method_context;
     QString session_id;
@@ -41,7 +41,8 @@ bool parse(const QJsonDocument& snapshot_document, ParsedLayoutSnapshot& parsed_
 bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error);
 bool parse_current_structure(const QJsonValue& value, QVariantList& current_structure,
                              QString& error);
-bool parse_structure_focus_rects(const QJsonValue& value, const QVariantList& page_sizes,
-                                 QVariantList& rectangles, QString& error);
+bool parse_block_environment_highlight_rects(const QJsonValue& value,
+                                             const QVariantList& page_sizes,
+                                             QVariantList& rectangles, QString& error);
 
 } // namespace caret::layout_snapshot

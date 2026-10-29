@@ -300,7 +300,7 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
             }]
         }]},
         "children": [{
-            "type": "environment", "scope": "block", "kind": "showcase", "id": "custom",
+            "type": "environment", "scope": "block", "kind": "custom", "id": "custom",
             "props": {"displayName": "Example"},
             "children": [{"type": "paragraph", "id": "paragraph", "inlines": [{
                 "type": "environment", "scope": "inline", "kind": "italic", "id": "italic",

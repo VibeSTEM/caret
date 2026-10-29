@@ -170,389 +170,379 @@ message_032:
   tr: Blink the insertion point
   st: finished
 
-message_101:
+message_033:
   src: Show command suggestions
   tr: Show command suggestions
   st: finished
 
 [RecoveryDialog]
-message_033:
+message_034:
   src: Recover documents
   tr: Recover documents
   st: finished
 
-message_034:
+message_035:
   src: Caret found document recovery files. Choose one to restore, or discard it.
   tr: Caret found document recovery files. Choose one to restore, or discard it.
   st: finished
 
-message_035:
+message_036:
   src: This is an external file backup. Save a copy to restore it outside Caret.
   tr: This is an external file backup. Save a copy to restore it outside Caret.
   st: finished
 
-message_036:
+message_037:
   src: Save backup copy
   tr: Save backup copy
   st: finished
 
-message_037:
+message_038:
   src: Restore
   tr: Restore
   st: finished
 
-message_038:
+message_039:
   src: Discard
   tr: Discard
   st: finished
 
-message_039:
+message_040:
   src: Later
   tr: Later
   st: finished
 
 [SaveConflictDialog]
-message_040:
+message_041:
   src: File changed outside Caret
   tr: File changed outside Caret
   st: finished
 
-message_041:
+message_042:
   src: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
   tr: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
   st: finished
 
-message_042:
+message_043:
   src: The recovery copy could not be written:
   tr: The recovery copy could not be written:
   st: finished
 
-message_043:
+message_044:
   src: The recovery copy could not be linked to this document:
   tr: The recovery copy could not be linked to this document:
   st: finished
 
-message_044:
+message_045:
   src: Save a Copy
   tr: Save a Copy
   st: finished
 
-message_045:
+message_046:
   src: Replace
   tr: Replace
   st: finished
 
-message_046:
+message_047:
   src: Cancel
   tr: Cancel
   st: finished
 
 [SettingsDialog]
-message_047:
+message_048:
   src: Preferences
   tr: Preferences
   st: finished
 
-message_048:
+message_049:
   src: Theme
   tr: Theme
   st: finished
 
-message_049:
+message_050:
   src: Language
   tr: Language
   st: finished
 
-message_050:
+message_051:
   src: Settings
   tr: Settings
   st: finished
 
 [SettingsLanguagePage]
-message_051:
+message_052:
   src: Choose the language used by the application. The change is applied when you select OK.
   tr: Choose the language used by the application. The change is applied when you select OK.
   st: finished
 
-message_052:
+message_053:
   src: Application language
   tr: Application language
   st: finished
 
-message_053:
+message_054:
   src: Language settings are unavailable in this build.
   tr: Language settings are unavailable in this build.
   st: finished
 
 [ShareButton]
-message_054:
+message_055:
   src: Share
   tr: Share
   st: finished
 
 [ThemeSettingsPage]
-message_055:
+message_056:
   src: Choose the application theme.
   tr: Choose the application theme.
   st: finished
 
-message_056:
+message_057:
   src: Application theme
   tr: Application theme
   st: finished
 
-message_057:
+message_058:
   src: Theme settings are unavailable in this build.
   tr: Theme settings are unavailable in this build.
   st: finished
 
-message_058:
+message_059:
   src: Dark
   tr: Dark
   st: finished
 
-message_059:
+message_060:
   src: Light
   tr: Light
   st: finished
 
 [UiCommonNavigation]
-message_060:
+message_061:
   src: Browse
   tr: Browse
   st: finished
 
 [UnsavedChangesDialog]
-message_061:
+message_062:
   src: Unsaved changes
   tr: Unsaved changes
   st: finished
 
-message_062:
+message_063:
   src: Save your changes before closing this document?
   tr: Save your changes before closing this document?
   st: finished
 
-message_063:
+message_064:
   src: Save
   tr: Save
   st: finished
 
-message_064:
+message_065:
   src: Don't Save
   tr: Don't Save
   st: finished
 
-message_065:
+message_066:
   src: Cancel
   tr: Cancel
   st: finished
 
 [WindowCommandBar]
-message_066:
+message_067:
   src: Home
   tr: Home
   st: finished
 
 [WindowStatusBar]
-message_067:
+message_068:
   src: Page %1 of %2
   tr: Page %1 of %2
   st: finished
 
-message_068:
+message_069:
   src: %1 words
   tr: %1 words
   st: finished
 
-message_069:
+message_070:
   src: English (United States)
   tr: English (United States)
   st: finished
 
-message_070:
+message_071:
   src: Zoom out
   tr: Zoom out
   st: finished
 
-message_071:
+message_072:
   src: Zoom
   tr: Zoom
   st: finished
 
-message_072:
+message_073:
   src: Zoom in
   tr: Zoom in
   st: finished
 
-message_102:
-  src: Single-line
-  tr: Single-line
-  st: finished
-
-message_103:
-  src: Multi-line
-  tr: Multi-line
-  st: finished
-
-message_104:
+message_074:
   src: Paragraph
   tr: Paragraph
   st: finished
 
-message_105:
-  src: Table
-  tr: Table
+message_075:
+  src: Section
+  tr: Section
   st: finished
 
-message_106:
-  src: Figure
-  tr: Figure
+message_076:
+  src: Heading
+  tr: Heading
+  st: finished
+
+message_077:
+  src: Custom environment
+  tr: Custom environment
   st: finished
 
 [WindowTitleBar]
-message_073:
+message_078:
   src: Untitled
   tr: Untitled
   st: finished
 
-message_074:
+message_079:
   src: AutoSave
   tr: AutoSave
   st: finished
 
-message_075:
+message_080:
   src: Open
   tr: Open
   st: finished
 
-message_076:
+message_081:
   src: Save
   tr: Save
   st: finished
 
-message_077:
+message_082:
   src: Undo
   tr: Undo
   st: finished
 
-message_078:
+message_083:
   src: Redo
   tr: Redo
   st: finished
 
-message_079:
+message_084:
   src: Comments
   tr: Comments
   st: finished
 
-message_080:
+message_085:
   src: Search commands and help
   tr: Search commands and help
   st: finished
 
-message_081:
+message_086:
   src: Settings
   tr: Settings
   st: finished
 
-message_082:
+message_087:
   src: Saving
   tr: Saving
   st: finished
 
-message_083:
+message_088:
   src: Edited
   tr: Edited
   st: finished
 
-message_084:
+message_089:
   src: Saved
   tr: Saved
   st: finished
 
 [CommandCompletion]
-message_085:
+message_090:
   src: Chapter
   tr: Chapter
   st: finished
 
-message_086:
+message_091:
   src: Section
   tr: Section
   st: finished
 
-message_087:
+message_092:
   src: Subsection
   tr: Subsection
   st: finished
 
-message_089:
+message_093:
   src: Bulleted list
   tr: Bulleted list
   st: finished
 
-message_090:
+message_094:
   src: Numbered list
   tr: Numbered list
   st: finished
 
-message_091:
+message_095:
   src: Page break
   tr: Page break
   st: finished
 
-message_092:
+message_096:
   src: Line break
   tr: Line break
   st: finished
 
-message_093:
+message_097:
   src: No matching commands
   tr: No matching commands
   st: finished
 
-message_094:
+message_098:
   src: Inline math
   tr: Inline math
   st: finished
 
-message_095:
+message_099:
   src: Single-line equation
   tr: Single-line equation
   st: finished
 
-message_096:
+message_100:
   src: Fraction
   tr: Fraction
   st: finished
 
-message_097:
+message_101:
   src: Square root
   tr: Square root
   st: finished
 
-message_098:
+message_102:
   src: Table
   tr: Table
   st: finished
 
-message_099:
+message_103:
   src: Subsubsection
   tr: Subsubsection
   st: finished
 
-message_100:
+message_104:
   src: Multiline equation
   tr: Multiline equation
   st: finished
 
-message_101:
+message_105:
   src: New paragraph
   tr: New paragraph
-  st: finished
-
-message_102:
-  src: Custom environment
-  tr: Custom environment
   st: finished

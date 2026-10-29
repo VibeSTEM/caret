@@ -1,15 +1,17 @@
 //! 序列化完整布局与轻量交互快照。
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
-use caret_engine::{DocumentLayoutDeltaView, StructureClass, StructurePosition};
+use caret_engine::{
+    DocumentLayoutDeltaView, PageCaretGeometry, StructureClass, StructureKind, StructurePosition,
+};
 use serde_json::{Value, json};
 
 fn command_line_state(session: &caret_engine::Session) -> Value {
     session
         .command_line()
         .map(|command_line| {
-            let candidates = command_line
-                .candidates()
+            let candidates = session
+                .command_line_candidates()
                 .into_iter()
                 .map(|candidate| {
                     json!({
@@ -38,42 +40,46 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
         })
 }
 
-fn current_structure_state(session: &caret_engine::Session) -> Value {
+pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
+    if session.block_environment_exit().is_some() {
+        return Value::Array(Vec::new());
+    }
     let focus = &session.selection().focus;
     let stack = session.structure_index().at(&StructurePosition {
         paragraph_id: focus.paragraph_id.clone(),
         offset_utf8: focus.offset,
     });
-    Value::Array(
-        stack
-            .into_iter()
-            .map(|entry| match entry.kind.class() {
-                StructureClass::Paragraph => json!({
-                    "id": entry.id,
-                    "kind": "paragraph",
-                }),
-                StructureClass::SingleLine => json!({
-                    "id": entry.id,
-                    "kind": "singleLine",
-                }),
-                StructureClass::MultiLine => json!({
-                    "id": entry.id,
-                    "kind": "multiLine",
-                }),
-                StructureClass::Table => json!({
-                    "id": entry.id,
-                    "kind": "table",
-                }),
-                StructureClass::Figure => json!({
-                    "id": entry.id,
-                    "kind": "figure",
-                }),
-            })
-            .collect(),
-    )
+    let has_block_environment = stack.iter().any(|entry| entry.kind.is_block_environment());
+    let mut entries = Vec::with_capacity(stack.len());
+    let mut previous_kind = None;
+    for entry in stack {
+        if has_block_environment && entry.kind.class() == StructureClass::Paragraph {
+            continue;
+        }
+        if previous_kind == Some(entry.kind) {
+            continue;
+        }
+        previous_kind = Some(entry.kind);
+        let (kind, level) = match entry.kind {
+            StructureKind::Paragraph => ("paragraph", None),
+            StructureKind::Heading { level } => ("heading", Some(level)),
+            StructureKind::Section => ("section", None),
+            StructureKind::Custom => ("custom", None),
+        };
+        let mut value = json!({ "id": entry.id, "kind": kind });
+        if let Some(level) = level {
+            value["level"] = json!(level);
+        }
+        entries.push(value);
+    }
+    Value::Array(entries)
 }
 
 fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
+    if session.block_environment_exit().is_some() || session.selected_block_environment().is_some()
+    {
+        return None;
+    }
     let focus = &session.selection().focus;
     let stack = session.structure_index().at(&StructurePosition {
         paragraph_id: focus.paragraph_id.clone(),
@@ -82,16 +88,91 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
     stack
         .iter()
         .rev()
-        .find(|entry| {
-            matches!(
-                entry.kind,
-                caret_engine::StructureKind::Section | caret_engine::StructureKind::Custom
-            )
-        })
+        .find(|entry| entry.kind.is_block_environment())
         .map(|entry| entry.id.clone())
 }
 
-fn structure_focus_rects(
+/// 将最终选区一次性投影为页面矩形；文本布局负责文字几何，结构环境复用环境范围。
+fn selection_rectangles_json(
+    selection: &caret_engine::Selection,
+    structure_selection: Option<(&caret_engine::Pos, &caret_engine::Pos)>,
+    selected_environment_ids: &[NodeId],
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
+    let mut rectangles = if let Some((anchor, focus)) = structure_selection {
+        snapshot
+            .structure_selection_geometry(anchor, focus, selected_environment_ids)
+            .unwrap_or_default()
+    } else {
+        snapshot.selection_geometry(selection).unwrap_or_default()
+    }
+    .into_iter()
+    .map(|rectangle| {
+        json!({
+            "pageIndex": rectangle.page_index,
+            "x0Pt": rectangle.x0_pt,
+            "y0Pt": rectangle.y0_pt,
+            "x1Pt": rectangle.x1_pt,
+            "y1Pt": rectangle.y1_pt,
+        })
+    })
+    .collect::<Vec<_>>();
+    rectangles.extend(
+        snapshot
+            .environment_ranges
+            .iter()
+            .filter(|range| selected_environment_ids.contains(&range.environment_id))
+            .map(|range| {
+                json!({
+                    "pageIndex": range.page_index,
+                    "x0Pt": range.x0_pt,
+                    "y0Pt": range.y0_pt,
+                    "x1Pt": range.x1_pt,
+                    "y1Pt": range.y1_pt,
+                })
+            }),
+    );
+    Value::Array(rectangles)
+}
+
+fn block_environment_exit_caret_x(
+    block_environment_exit: Option<&(NodeId, caret_engine::Direction)>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    page_index: usize,
+) -> Option<f64> {
+    let (environment_id, direction) = block_environment_exit?;
+    let mut ranges = snapshot
+        .environment_ranges
+        .iter()
+        .filter(|range| &range.environment_id == environment_id)
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| range.page_index);
+    match direction {
+        caret_engine::Direction::Backward => ranges
+            .into_iter()
+            .find(|range| range.page_index == page_index)
+            .map(|range| range.x0_pt),
+        caret_engine::Direction::Forward => ranges
+            .into_iter()
+            .rev()
+            .find(|range| range.page_index == page_index)
+            .map(|range| range.x1_pt),
+    }
+}
+
+/// 将虚拟环境外停靠点应用到所有返回路径共享的光标几何。
+pub(super) fn caret_geometry_with_environment_exit(
+    block_environment_exit: Option<(NodeId, caret_engine::Direction)>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    mut caret: PageCaretGeometry,
+) -> PageCaretGeometry {
+    caret.x_pt =
+        block_environment_exit_caret_x(block_environment_exit.as_ref(), snapshot, caret.page_index)
+            .unwrap_or(caret.x_pt);
+    caret
+}
+
+fn block_environment_highlight_rects(
     environment_id: Option<&NodeId>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
@@ -153,6 +234,12 @@ impl DocumentViewRuntime {
         }
         let composing = self.composition_preview_session.is_some();
         let focus_environment_id = current_block_environment_id(&self.session);
+        let selection = self.session.selection().clone();
+        let selected_environment_ids = self.session.selected_block_environments().to_vec();
+        let structure_selection = self
+            .session
+            .structure_selection()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = if composing {
             self.composition_snapshot
                 .as_ref()
@@ -187,8 +274,8 @@ impl DocumentViewRuntime {
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
-                "structureFocusRects".to_owned(),
-                structure_focus_rects(focus_environment_id.as_ref(), snapshot),
+                "blockEnvironmentHighlightRects".to_owned(),
+                block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -199,29 +286,20 @@ impl DocumentViewRuntime {
                 );
         }
         let rectangles = if composing {
-            Vec::new()
+            Value::Array(Vec::new())
         } else {
-            snapshot
-                .selection_geometry(self.session.selection())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|rectangle| {
-                    serde_json::json!({
-                        "pageIndex": rectangle.page_index,
-                        "x0Pt": rectangle.x0_pt,
-                        "y0Pt": rectangle.y0_pt,
-                        "x1Pt": rectangle.x1_pt,
-                        "y1Pt": rectangle.y1_pt,
-                    })
-                })
-                .collect()
+            selection_rectangles_json(
+                &selection,
+                structure_selection
+                    .as_ref()
+                    .map(|(anchor, focus)| (anchor, focus)),
+                &selected_environment_ids,
+                snapshot,
+            )
         };
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-            .insert(
-                "selectionRects".to_owned(),
-                serde_json::Value::Array(rectangles),
-            );
+            .insert("selectionRects".to_owned(), rectangles);
         let composition_rectangles = if composing {
             self.composition_range
                 .as_ref()
@@ -290,21 +368,21 @@ impl DocumentViewRuntime {
         let command_line = command_line_state(&self.session);
         let current_structure = current_structure_state(&self.session);
         let focus_environment_id = current_block_environment_id(&self.session);
+        let block_environment_exit = self.session.block_environment_exit();
+        let selected_environment_ids = self.session.selected_block_environments().to_vec();
+        let structure_selection = self
+            .session
+            .structure_selection()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = self.current_snapshot()?;
-        let rectangles = snapshot
-            .selection_geometry(&selection)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|rectangle| {
-                serde_json::json!({
-                    "pageIndex": rectangle.page_index,
-                    "x0Pt": rectangle.x0_pt,
-                    "y0Pt": rectangle.y0_pt,
-                    "x1Pt": rectangle.x1_pt,
-                    "y1Pt": rectangle.y1_pt,
-                })
-            })
-            .collect::<Vec<_>>();
+        let rectangles = selection_rectangles_json(
+            &selection,
+            structure_selection
+                .as_ref()
+                .map(|(anchor, focus)| (anchor, focus)),
+            &selected_environment_ids,
+            snapshot,
+        );
         let focus = &selection.focus;
         let paragraph = snapshot
             .paragraph_by_id(&focus.paragraph_id)
@@ -337,6 +415,7 @@ impl DocumentViewRuntime {
         let caret = snapshot
             .caret_geometry(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
+        let caret = caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
         let font_size_centipoints = snapshot
             .font_size_centipoints_at(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
@@ -347,7 +426,7 @@ impl DocumentViewRuntime {
             "inputMethodContext": input_method_context,
             "commandLine": command_line,
             "currentStructure": current_structure,
-            "structureFocusRects": structure_focus_rects(focus_environment_id.as_ref(), snapshot),
+            "blockEnvironmentHighlightRects": block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
             "caretGeometry": {
                 "pageIndex": caret.page_index,
                 "xPt": caret.x_pt,

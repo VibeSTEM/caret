@@ -16,6 +16,7 @@ values:
   color-hover: string = "#e5f1fb"
   color-selected: string = "#e8f3fd"
   color-command-prompt: string = "#e8eaff"
+  color-block-environment-highlight: string = "#fff2cc"
   color-focus: string = "#2e7ce0"
   color-error: string = "#c62828"
   color-menubar-text: string = "#f2f2f2"

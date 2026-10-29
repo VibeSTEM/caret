@@ -28,13 +28,15 @@ impl DocumentViewRuntime {
         let composition_range_before = self.composition_range.clone();
         let selection_is_single_paragraph =
             selection_before.anchor.paragraph_id == selection_before.focus.paragraph_id;
-        let reusable_paragraph_id = selection_is_single_paragraph.then(|| {
-            composition_range_before
-                .as_ref()
-                .filter(|range| range.anchor.paragraph_id == range.focus.paragraph_id)
-                .map(|range| range.anchor.paragraph_id.clone())
-                .unwrap_or_else(|| selection_before.focus.paragraph_id.clone())
-        });
+        let outside_environment = self.session.block_environment_exit().is_some();
+        let reusable_paragraph_id =
+            (selection_is_single_paragraph && !outside_environment).then(|| {
+                composition_range_before
+                    .as_ref()
+                    .filter(|range| range.anchor.paragraph_id == range.focus.paragraph_id)
+                    .map(|range| range.anchor.paragraph_id.clone())
+                    .unwrap_or_else(|| selection_before.focus.paragraph_id.clone())
+            });
         let previous_preview_page_start = previous_layout.as_ref().and_then(|previous| {
             let preview = self.composition_snapshot.as_ref()?;
             let paragraph_id = reusable_paragraph_id.as_ref()?;

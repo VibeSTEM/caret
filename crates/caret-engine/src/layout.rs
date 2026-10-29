@@ -8,9 +8,11 @@ use caret_layout::{
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
     paragraph_has_empty_line, resolve_paragraph_style,
 };
+use icu_locale_core::subtags::Script;
 use std::{collections::HashMap, sync::Arc};
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
+const MAX_BASELINE_ANCHOR_VARIANTS: usize = 32;
 
 /// 文档布局失败时返回稳定的错误类别；不产生部分快照。
 #[derive(Debug)]
@@ -165,6 +167,14 @@ pub struct DocumentLayoutSnapshot {
     pub pages: Vec<PageLayoutSnapshot>,
     pub environment_ranges: Vec<PageEnvironmentRange>,
     paragraph_lookup: HashMap<NodeId, usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParagraphTextRange {
+    start_index: usize,
+    start_offset: usize,
+    end_index: usize,
+    end_offset: usize,
 }
 
 /// 页面局部坐标中的选区矩形；一份跨页选择可产生多页矩形。
@@ -355,6 +365,43 @@ impl DocumentLayoutSnapshot {
         self.range_geometry(selection, true)
     }
 
+    /// 返回跨 Story 结构选区中环境外文字的几何；选中的块环境由环境矩形单独绘制。
+    pub fn structure_selection_geometry(
+        &self,
+        anchor: &Pos,
+        focus: &Pos,
+        selected_environment_ids: &[NodeId],
+    ) -> Option<Vec<PageSelectionRect>> {
+        let anchor_index = *self.paragraph_lookup.get(&anchor.paragraph_id)?;
+        let focus_index = *self.paragraph_lookup.get(&focus.paragraph_id)?;
+        let anchor_paragraph = self.paragraphs.get(anchor_index)?;
+        let focus_paragraph = self.paragraphs.get(focus_index)?;
+        if anchor_paragraph.story != anchor.story
+            || focus_paragraph.story != focus.story
+            || !Self::valid_text_offset(anchor_paragraph, anchor.offset)
+            || !Self::valid_text_offset(focus_paragraph, focus.offset)
+        {
+            return None;
+        }
+        let (start_index, start_offset, end_index, end_offset) =
+            if (anchor_index, anchor.offset) <= (focus_index, focus.offset) {
+                (anchor_index, anchor.offset, focus_index, focus.offset)
+            } else {
+                (focus_index, focus.offset, anchor_index, anchor.offset)
+            };
+        self.text_range_geometry(
+            ParagraphTextRange {
+                start_index,
+                start_offset,
+                end_index,
+                end_offset,
+            },
+            false,
+            None,
+            selected_environment_ids,
+        )
+    }
+
     fn range_geometry(
         &self,
         selection: &Selection,
@@ -373,14 +420,8 @@ impl DocumentLayoutSnapshot {
         {
             return None;
         }
-        if selection.anchor.offset > anchor_paragraph.text.len()
-            || !anchor_paragraph
-                .text
-                .is_char_boundary(selection.anchor.offset)
-            || selection.focus.offset > focus_paragraph.text.len()
-            || !focus_paragraph
-                .text
-                .is_char_boundary(selection.focus.offset)
+        if !Self::valid_text_offset(anchor_paragraph, selection.anchor.offset)
+            || !Self::valid_text_offset(focus_paragraph, selection.focus.offset)
         {
             return None;
         }
@@ -403,86 +444,88 @@ impl DocumentLayoutSnapshot {
                     anchor_index,
                 )
             };
-        let mut rectangles = Vec::new();
+        self.text_range_geometry(
+            ParagraphTextRange {
+                start_index: start_paragraph,
+                start_offset: start.offset,
+                end_index: end_paragraph,
+                end_offset: end.offset,
+            },
+            composition,
+            Some(&start.story),
+            &[],
+        )
+    }
 
-        for (page_index, page) in self.pages.iter().enumerate() {
-            for fragment in &page.layout.fragments {
-                let &paragraph_index = self.paragraph_lookup.get(&fragment.paragraph_id)?;
-                if paragraph_index < start_paragraph || paragraph_index > end_paragraph {
-                    continue;
-                }
-                let paragraph = self.paragraphs.get(paragraph_index)?;
-                if paragraph.story != start.story {
-                    continue;
-                }
-                let first_line = paragraph
+    fn valid_text_offset(paragraph: &LaidOutParagraph, offset: usize) -> bool {
+        offset <= paragraph.text.len() && paragraph.text.is_char_boundary(offset)
+    }
+
+    fn text_range_geometry(
+        &self,
+        range: ParagraphTextRange,
+        composition: bool,
+        story: Option<&StoryId>,
+        excluded_environment_ids: &[NodeId],
+    ) -> Option<Vec<PageSelectionRect>> {
+        let mut rectangles = Vec::new();
+        for paragraph_index in range.start_index..=range.end_index {
+            let paragraph = self.paragraphs.get(paragraph_index)?;
+            if story.is_some_and(|story| &paragraph.story != story)
+                || paragraph
+                    .environment_ids
+                    .iter()
+                    .any(|id| excluded_environment_ids.contains(id))
+            {
+                continue;
+            }
+            let range_start = if paragraph_index == range.start_index {
+                range.start_offset
+            } else {
+                0
+            };
+            let range_end = if paragraph_index == range.end_index {
+                range.end_offset
+            } else {
+                paragraph.text.len()
+            };
+            if range_start >= range_end {
+                continue;
+            }
+            let line_rectangles = if composition {
+                paragraph
                     .layout
-                    .paragraph
-                    .lines
-                    .get(fragment.line_range.start)?;
-                let last_line = paragraph
+                    .composition_text_geometry(&paragraph.text, range_start..range_end)?
+            } else {
+                paragraph
                     .layout
-                    .paragraph
-                    .lines
-                    .get(fragment.line_range.end.checked_sub(1)?)?;
-                let range_start = if paragraph_index == start_paragraph {
-                    start.offset
+                    .selection_text_geometry(&paragraph.text, range_start..range_end)?
+            };
+            for (bounds, line_index) in line_rectangles {
+                let line = paragraph.layout.paragraph.lines.get(line_index)?;
+                let location = paragraph.line_locations.get(line_index)?.as_ref()?;
+                let page = self.pages.get(location.page_index)?;
+                let (y0, y1) = if composition {
+                    (
+                        (location.y0_pt + bounds.y0).max(0.0),
+                        (location.y0_pt + bounds.y1).min(page.height_pt),
+                    )
                 } else {
-                    0
-                }
-                .max(first_line.source_bytes.start);
-                let range_end = if paragraph_index == end_paragraph {
-                    end.offset
-                } else {
-                    paragraph.text.len()
-                }
-                .min(last_line.consumed_bytes.end);
-                if range_start >= range_end {
-                    continue;
-                }
-                let line_rectangles = if composition {
-                    paragraph
-                        .layout
-                        .composition_text_geometry(&paragraph.text, range_start..range_end)?
-                } else {
-                    paragraph
-                        .layout
-                        .selection_text_geometry(&paragraph.text, range_start..range_end)?
+                    (
+                        location.y0_pt,
+                        location.y0_pt + f64::from(line.metrics.height_pt),
+                    )
                 };
-                let mut fragment_line_tops = Vec::with_capacity(fragment.line_range.len());
-                let mut fragment_line_top_pt = f64::from(fragment.y_offset_pt);
-                for line_index in fragment.line_range.clone() {
-                    let line = paragraph.layout.paragraph.lines.get(line_index)?;
-                    fragment_line_tops.push(fragment_line_top_pt);
-                    fragment_line_top_pt += f64::from(line.metrics.height_pt);
+                if y1 <= y0 {
+                    continue;
                 }
-                for (bounds, line_index) in line_rectangles {
-                    if !fragment.line_range.contains(&line_index) {
-                        continue;
-                    }
-                    let local_line_index = line_index.checked_sub(fragment.line_range.start)?;
-                    let line_top =
-                        page.margin_top_pt + *fragment_line_tops.get(local_line_index)?;
-                    let line = paragraph.layout.paragraph.lines.get(line_index)?;
-                    let (y0, y1) = if composition {
-                        (
-                            (line_top + bounds.y0).max(0.0),
-                            (line_top + bounds.y1).min(page.height_pt),
-                        )
-                    } else {
-                        (line_top, line_top + f64::from(line.metrics.height_pt))
-                    };
-                    if y1 <= y0 {
-                        continue;
-                    }
-                    rectangles.push(PageSelectionRect {
-                        page_index,
-                        x0_pt: bounds.x0 + page.margin_left_pt,
-                        y0_pt: y0,
-                        x1_pt: bounds.x1 + page.margin_left_pt,
-                        y1_pt: y1,
-                    });
-                }
+                rectangles.push(PageSelectionRect {
+                    page_index: location.page_index,
+                    x0_pt: bounds.x0 + page.margin_left_pt,
+                    y0_pt: y0,
+                    x1_pt: bounds.x1 + page.margin_left_pt,
+                    y1_pt: y1,
+                });
             }
         }
         Some(rectangles)
@@ -513,7 +556,16 @@ struct BaselineAnchorCache {
     font_generation: u64,
     settings: ResolvedDocumentTextSettings,
     style: ShapingStyle,
+    metrics_by_language_script:
+        HashMap<String, HashMap<Option<(Script, char)>, CachedBaselineMetrics>>,
+    metrics_count: usize,
+    access_clock: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CachedBaselineMetrics {
     metrics: caret_layout::FontLineMetrics,
+    last_used: u64,
 }
 
 impl DocumentLayoutService {
@@ -526,25 +578,78 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
         style: &ShapingStyle,
+        language: Option<&str>,
+        script_sample: Option<&(Script, char)>,
     ) -> Result<caret_layout::FontLineMetrics, DocumentLayoutError> {
         let font_generation = catalog.generation();
-        if let Some(cache) = &self.baseline_anchor_cache
-            && cache.font_generation == font_generation
-            && cache.settings == *settings
-            && cache.style == *style
-        {
-            return Ok(cache.metrics);
+        let language_key = language.unwrap_or("");
+        let script_key = script_sample.copied();
+        let context_matches = self.baseline_anchor_cache.as_ref().is_some_and(|cache| {
+            cache.font_generation == font_generation
+                && cache.settings == *settings
+                && cache.style == *style
+        });
+        if context_matches {
+            let cache = self
+                .baseline_anchor_cache
+                .as_mut()
+                .unwrap_or_else(|| unreachable!("cache context was checked above"));
+            cache.access_clock = cache.access_clock.saturating_add(1);
+            let last_used = cache.access_clock;
+            if let Some(entry) = cache
+                .metrics_by_language_script
+                .get_mut(language_key)
+                .and_then(|scripts| scripts.get_mut(&script_key))
+            {
+                entry.last_used = last_used;
+                return Ok(entry.metrics);
+            }
         }
         let metrics = self
             .layouter
-            .measure_font_metrics(catalog, settings, style, settings.default_language())
+            .measure_font_metrics(
+                catalog,
+                settings,
+                style,
+                language,
+                script_sample.map(|(_, character)| *character),
+            )
             .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
-        self.baseline_anchor_cache = Some(BaselineAnchorCache {
-            font_generation,
-            settings: settings.clone(),
-            style: style.clone(),
-            metrics,
-        });
+        if context_matches {
+            let cache = self
+                .baseline_anchor_cache
+                .as_mut()
+                .unwrap_or_else(|| unreachable!("cache context was checked above"));
+            if cache.metrics_count >= MAX_BASELINE_ANCHOR_VARIANTS {
+                cache.evict_least_recent();
+            }
+            cache.access_clock = cache.access_clock.saturating_add(1);
+            let last_used = cache.access_clock;
+            cache
+                .metrics_by_language_script
+                .entry(language_key.to_owned())
+                .or_default()
+                .insert(script_key, CachedBaselineMetrics { metrics, last_used });
+            cache.metrics_count += 1;
+        } else {
+            self.baseline_anchor_cache = Some(BaselineAnchorCache {
+                font_generation,
+                settings: settings.clone(),
+                style: style.clone(),
+                metrics_by_language_script: HashMap::from([(
+                    language_key.to_owned(),
+                    HashMap::from([(
+                        script_key,
+                        CachedBaselineMetrics {
+                            metrics,
+                            last_used: 1,
+                        },
+                    )]),
+                )]),
+                metrics_count: 1,
+                access_clock: 1,
+            });
+        }
         Ok(metrics)
     }
 
@@ -635,17 +740,9 @@ impl DocumentLayoutService {
         let text_settings =
             ResolvedDocumentTextSettings::from_document_settings(&document.global_settings)
                 .map_err(|error| DocumentLayoutError::FontPreferences(error.to_string()))?;
-        let baseline_anchor_metrics =
-            self.resolve_baseline_anchor_metrics(catalog, &text_settings, base_style)?;
-
         let mut ordered_inputs = Vec::new();
         collect_blocks(&document.body, &mut ordered_inputs, &mut Vec::new())?;
 
-        let mut empty_mark_metrics_by_language = HashMap::new();
-        empty_mark_metrics_by_language.insert(
-            text_settings.default_language().map(str::to_owned),
-            baseline_anchor_metrics,
-        );
         let paragraph_count = ordered_inputs
             .iter()
             .filter(|item| matches!(item, LayoutInput::Paragraph { .. }))
@@ -675,6 +772,18 @@ impl DocumentLayoutService {
                 resolved_styles.push(style);
                 continue;
             }
+            let anchor_language = paragraph
+                .language
+                .as_deref()
+                .or(text_settings.default_language());
+            let script_sample = caret_layout::paragraph_first_strong_script_sample(paragraph);
+            let baseline_anchor_metrics = self.resolve_baseline_anchor_metrics(
+                catalog,
+                &text_settings,
+                base_style,
+                anchor_language,
+                script_sample.as_ref(),
+            )?;
             let placeholder_metrics = caret_layout::FontLineMetrics {
                 ascent_pt: 9.6,
                 descent_pt: 2.4,
@@ -684,23 +793,10 @@ impl DocumentLayoutService {
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
-            let language_key = paragraph.language.clone();
             let empty_mark_metrics = if !needs_mark_metrics {
                 placeholder_metrics
-            } else if let Some(metrics) = empty_mark_metrics_by_language.get(&language_key) {
-                *metrics
             } else {
-                let metrics = self
-                    .layouter
-                    .measure_font_metrics(
-                        catalog,
-                        &text_settings,
-                        base_style,
-                        paragraph.language.as_deref(),
-                    )
-                    .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
-                empty_mark_metrics_by_language.insert(language_key, metrics);
-                metrics
+                baseline_anchor_metrics
             };
             let (text, layout) = self
                 .layouter
@@ -802,6 +898,31 @@ impl DocumentLayoutService {
             pages,
             environment_ranges,
         })
+    }
+}
+
+impl BaselineAnchorCache {
+    fn evict_least_recent(&mut self) {
+        let Some((language, script)) = self
+            .metrics_by_language_script
+            .iter()
+            .flat_map(|(language, scripts)| {
+                scripts
+                    .iter()
+                    .map(move |(script, entry)| (language, script, entry.last_used))
+            })
+            .min_by_key(|(_, _, last_used)| *last_used)
+            .map(|(language, script, _)| (language.clone(), *script))
+        else {
+            return;
+        };
+        if let Some(scripts) = self.metrics_by_language_script.get_mut(&language) {
+            scripts.remove(&script);
+            if scripts.is_empty() {
+                self.metrics_by_language_script.remove(&language);
+            }
+        }
+        self.metrics_count = self.metrics_count.saturating_sub(1);
     }
 }
 

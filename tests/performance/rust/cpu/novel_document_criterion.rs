@@ -84,6 +84,32 @@ fn benchmark_novel_document_layout(criterion: &mut Criterion) {
     let baseline = service
         .layout_session(&initial_session, &mut catalog, &base_style)
         .unwrap_or_else(|error| panic!("百万字长篇首次排版失败：{error}"));
+    let first_selected_paragraph = match &document.body[PARAGRAPH_COUNT / 2] {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => panic!("长篇基准必须由段落组成"),
+    };
+    let last_selected_paragraph = match &document.body[PARAGRAPH_COUNT / 2 + 9] {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => panic!("长篇基准必须由段落组成"),
+    };
+    let selection = Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first_selected_paragraph.id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: last_selected_paragraph.id.clone(),
+            offset: NOVEL_SOURCE
+                .lines()
+                .nth(PARAGRAPH_COUNT / 2 + 9)
+                .map(str::len)
+                .unwrap_or_else(|| panic!("长篇基准末段缺失")),
+            affinity: Affinity::Downstream,
+        },
+    };
 
     let mut group = criterion.benchmark_group("rust/novel_1m_mixed_language");
     group.throughput(criterion::Throughput::Elements(NOVEL_CHARACTERS as u64));
@@ -115,6 +141,9 @@ fn benchmark_novel_document_layout(criterion: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
+    });
+    group.bench_function("selection_geometry_10_paragraph_range", |bencher| {
+        bencher.iter(|| black_box(baseline.selection_geometry(black_box(&selection))));
     });
     group.finish();
 }

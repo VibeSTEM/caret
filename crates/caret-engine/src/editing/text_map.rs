@@ -172,6 +172,11 @@ impl TextMap {
                     run.text.insert_str(local, text);
                 }
             }) {
+                normalize_run_neighborhood(
+                    inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+                        .ok_or(EditError::InvalidPosition)?,
+                    *span.path.last().ok_or(EditError::InvalidPosition)?,
+                );
                 return Ok(());
             }
         }
@@ -190,6 +195,7 @@ impl TextMap {
                     extra: Default::default(),
                 }),
             );
+            normalize_run_neighborhood(list, insertion_index);
             return Ok(());
         }
         let run = InlineNode::Run(Run {
@@ -200,8 +206,11 @@ impl TextMap {
         });
         if offset == 0 && affinity == Affinity::Upstream {
             paragraph.inlines.insert(0, run);
+            normalize_run_neighborhood(&mut paragraph.inlines, 0);
         } else {
             paragraph.inlines.push(run);
+            let index = paragraph.inlines.len() - 1;
+            normalize_run_neighborhood(&mut paragraph.inlines, index);
         }
         Ok(())
     }
@@ -396,6 +405,81 @@ fn collect_text(
         path.pop();
     }
     Ok(())
+}
+
+fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
+    if nodes.is_empty() || !matches!(nodes.get(index), Some(InlineNode::Run(_))) {
+        return;
+    }
+    let mut current = index;
+    while current > 0 {
+        let previous_is_empty_default = matches!(
+            nodes.get(current - 1),
+            Some(InlineNode::Run(run))
+                if run.text.is_empty()
+                    && run.language.is_none()
+                    && run.props.is_empty()
+                    && run.extra.is_empty()
+        );
+        if previous_is_empty_default {
+            nodes.remove(current - 1);
+            current -= 1;
+            continue;
+        }
+        let can_merge = match (nodes.get(current - 1), nodes.get(current)) {
+            (Some(InlineNode::Run(previous)), Some(InlineNode::Run(current))) => {
+                previous.language == current.language
+                    && previous.props == current.props
+                    && previous.extra == current.extra
+            }
+            _ => false,
+        };
+        if !can_merge {
+            break;
+        }
+        let Some(InlineNode::Run(current_run)) = nodes.get(current) else {
+            break;
+        };
+        let current_text = current_run.text.clone();
+        if let Some(InlineNode::Run(previous_run)) = nodes.get_mut(current - 1) {
+            previous_run.text.push_str(&current_text);
+        }
+        nodes.remove(current);
+        current -= 1;
+    }
+    while current + 1 < nodes.len() {
+        let next_is_empty_default = matches!(
+            nodes.get(current + 1),
+            Some(InlineNode::Run(run))
+                if run.text.is_empty()
+                    && run.language.is_none()
+                    && run.props.is_empty()
+                    && run.extra.is_empty()
+        );
+        if next_is_empty_default {
+            nodes.remove(current + 1);
+            continue;
+        }
+        let can_merge = match (nodes.get(current), nodes.get(current + 1)) {
+            (Some(InlineNode::Run(current)), Some(InlineNode::Run(next))) => {
+                current.language == next.language
+                    && current.props == next.props
+                    && current.extra == next.extra
+            }
+            _ => false,
+        };
+        if !can_merge {
+            break;
+        }
+        let Some(InlineNode::Run(next_run)) = nodes.get(current + 1) else {
+            break;
+        };
+        let next_text = next_run.text.clone();
+        if let Some(InlineNode::Run(current_run)) = nodes.get_mut(current) {
+            current_run.text.push_str(&next_text);
+        }
+        nodes.remove(current + 1);
+    }
 }
 
 pub(super) fn inline_length(node: &InlineNode) -> Result<usize, EditError> {

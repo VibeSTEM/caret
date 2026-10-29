@@ -46,6 +46,11 @@ impl StructureKind {
             Self::Section | Self::Custom => StructureClass::MultiLine,
         }
     }
+
+    /// 是否为具有标题和子项的块环境。
+    pub const fn is_block_environment(self) -> bool {
+        matches!(self, Self::Section | Self::Custom)
+    }
 }
 
 /// 索引中的一个结构节点，父链和节点身份均使用稳定 ID。
@@ -82,6 +87,34 @@ impl StructureIndex {
     /// 返回索引结构的稳定文档顺序。
     pub fn structures(&self) -> &[IndexedStructure] {
         &self.structures
+    }
+
+    /// 通过稳定节点 ID 查询结构，不扫描整份文档索引。
+    pub fn get(&self, id: &NodeId) -> Option<&IndexedStructure> {
+        self.structure_lookup
+            .get(id)
+            .and_then(|index| self.structures.get(*index))
+    }
+
+    /// 判断 `ancestor_id` 是否位于 `descendant_id` 的父链上。
+    pub fn is_ancestor(&self, ancestor_id: &NodeId, descendant_id: &NodeId) -> bool {
+        let Some(&descendant_index) = self.structure_lookup.get(descendant_id) else {
+            return false;
+        };
+        let mut parent_index = self
+            .structures
+            .get(descendant_index)
+            .and_then(|entry| entry.parent_index);
+        while let Some(index) = parent_index {
+            let Some(parent) = self.structures.get(index) else {
+                return false;
+            };
+            if &parent.id == ancestor_id {
+                return true;
+            }
+            parent_index = parent.parent_index;
+        }
+        false
     }
 
     /// 返回由稳定段落 ID 定位的结构栈，从外层容器到当前段落。

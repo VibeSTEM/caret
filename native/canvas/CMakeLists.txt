@@ -19,6 +19,7 @@ qt_add_qml_module(
   document_units.hpp
   document_units.cpp
   document_canvas.hpp
+  keyboard_modifier_policy.hpp
   document_canvas.cpp
   document_canvas/caret.cpp
   document_canvas/geometry.cpp
@@ -26,8 +27,10 @@ qt_add_qml_module(
   document_canvas/input.cpp
   document_canvas/keyboard.cpp
   document_canvas/selection.cpp
-  document_canvas/structure_focus.cpp
+  document_canvas/block_environment_highlight.cpp
+  document_canvas/block_environment_highlight_scene.cpp
   document_canvas/scene_graph.cpp
+  document_canvas/scene_graph_geometry.hpp
   document_canvas/value_validation.hpp)
 set_target_properties(caret_canvas PROPERTIES EXPORT_NAME canvas)
 caret_native_defaults(caret_canvas)

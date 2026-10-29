@@ -9,7 +9,7 @@
 | `Document` | 只有文档命令 | 布局、结构索引、保存 |
 | 选区、公式内光标 | 导航和编辑命令 | 画布、状态栏 |
 | 命令模式查询 | `cmdline.*`，不进文档 | 补全弹窗 |
-| `DocLayout` | 布局器，按缓存键 | 画布、命中、焦点框 |
+| `DocLayout` | 布局器，按缓存键 | 画布、命中、环境高亮几何 |
 | `StructureIndex` | 结构索引，按段落 `structureRev` 和大纲样式代际 | 结构命令、状态栏 |
 | 应用设置与用户偏好 | `caret-app` 中的 Rust 服务 | QML 经 ViewModel；C++ 只消费当前视图所需的临时值 |
 | 应用主题、界面语言 | `ThemeService`、`LanguageService` | QML 经 ViewModel |

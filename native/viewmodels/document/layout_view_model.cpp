@@ -58,7 +58,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
                       {QStringLiteral("selected"), 0},
                       {QStringLiteral("candidates"), QVariantList{}}};
     m_current_structure = parsed_snapshot.current_structure;
-    m_structure_focus_rects = parsed_snapshot.structure_focus_rects;
+    m_block_environment_highlight_rects = parsed_snapshot.block_environment_highlight_rects;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
 }
@@ -100,7 +100,7 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
         m_input_method_context != parsed_snapshot.input_method_context ||
         m_command_line != parsed_snapshot.command_line ||
         m_current_structure != parsed_snapshot.current_structure ||
-        m_structure_focus_rects != parsed_snapshot.structure_focus_rects;
+        m_block_environment_highlight_rects != parsed_snapshot.block_environment_highlight_rects;
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
@@ -112,7 +112,8 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
     m_command_line = std::move(parsed_snapshot.command_line);
     m_current_structure = std::move(parsed_snapshot.current_structure);
-    m_structure_focus_rects = std::move(parsed_snapshot.structure_focus_rects);
+    m_block_environment_highlight_rects =
+        std::move(parsed_snapshot.block_environment_highlight_rects);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -166,15 +167,17 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     }
     const QVariantMap command_line =
         root.value(QStringLiteral("commandLine")).toObject().toVariantMap();
-    QVariantList structure_focus_rects = m_structure_focus_rects;
-    const QJsonValue structure_focus_value = root.value(QStringLiteral("structureFocusRects"));
-    if (!structure_focus_value.isUndefined()) {
-        QVariantList parsed_structure_focus_rects;
-        if (!layout_snapshot::parse_structure_focus_rects(structure_focus_value, m_page_sizes_pt,
-                                                          parsed_structure_focus_rects, m_error)) {
+    QVariantList block_environment_highlight_rects = m_block_environment_highlight_rects;
+    const QJsonValue block_environment_highlight_value =
+        root.value(QStringLiteral("blockEnvironmentHighlightRects"));
+    if (!block_environment_highlight_value.isUndefined()) {
+        QVariantList parsed_block_environment_highlight_rects;
+        if (!layout_snapshot::parse_block_environment_highlight_rects(
+                block_environment_highlight_value, m_page_sizes_pt,
+                parsed_block_environment_highlight_rects, m_error)) {
             return false;
         }
-        structure_focus_rects = std::move(parsed_structure_focus_rects);
+        block_environment_highlight_rects = std::move(parsed_block_environment_highlight_rects);
     }
     QVariantList current_structure = m_current_structure;
     const QJsonValue current_structure_value = root.value(QStringLiteral("currentStructure"));
@@ -185,12 +188,12 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     }
     if (m_selection_rects != selection_rectangles || m_input_method_context != input_context ||
         m_command_line != command_line || m_current_structure != current_structure ||
-        m_structure_focus_rects != structure_focus_rects) {
+        m_block_environment_highlight_rects != block_environment_highlight_rects) {
         m_selection_rects = selection_rectangles;
         m_input_method_context = input_context;
         m_command_line = command_line;
         m_current_structure = std::move(current_structure);
-        m_structure_focus_rects = std::move(structure_focus_rects);
+        m_block_environment_highlight_rects = std::move(block_environment_highlight_rects);
         emit interactionChanged();
     }
     installCaretGeometry(caret_value.toObject().toVariantMap());

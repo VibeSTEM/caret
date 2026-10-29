@@ -54,6 +54,8 @@ fn nested_environment_stack_is_stable_id_ordered() {
     });
     assert!(stack.iter().any(|entry| entry.id == section_id));
     assert!(stack.iter().any(|entry| entry.id == custom_id));
+    assert!(index.is_ancestor(&section_id, &custom_id));
+    assert!(!index.is_ancestor(&custom_id, &section_id));
     assert_eq!(
         stack.last().and_then(|entry| entry.paragraph_id.as_ref()),
         Some(&text_id)

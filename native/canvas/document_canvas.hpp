@@ -51,14 +51,16 @@ class DocumentCanvas : public QQuickItem {
                    selectionRectsChanged)
     Q_PROPERTY(QVariantList selectionPreviewRects READ selectionPreviewRects WRITE
                    setSelectionPreviewRects NOTIFY selectionPreviewRectsChanged)
-    Q_PROPERTY(QVariantList structureFocusRects READ structureFocusRects WRITE
-                   setStructureFocusRects NOTIFY structureFocusRectsChanged)
+    Q_PROPERTY(QVariantList blockEnvironmentHighlightRects READ blockEnvironmentHighlightRects WRITE
+                   setBlockEnvironmentHighlightRects NOTIFY blockEnvironmentHighlightRectsChanged)
     Q_PROPERTY(
         QColor selectionColor READ selectionColor WRITE setSelectionColor NOTIFY appearanceChanged)
-    Q_PROPERTY(QColor structureFocusColor READ structureFocusColor WRITE setStructureFocusColor
-                   NOTIFY appearanceChanged)
-    Q_PROPERTY(int structureFocusBorderWidthPx READ structureFocusBorderWidthPx WRITE
-                   setStructureFocusBorderWidthPx NOTIFY appearanceChanged)
+    Q_PROPERTY(QColor blockEnvironmentHighlightColor READ blockEnvironmentHighlightColor WRITE
+                   setBlockEnvironmentHighlightColor NOTIFY appearanceChanged)
+    Q_PROPERTY(qreal blockEnvironmentHighlightRadius READ blockEnvironmentHighlightRadius WRITE
+                   setBlockEnvironmentHighlightRadius NOTIFY appearanceChanged)
+    Q_PROPERTY(qreal blockEnvironmentHighlightPaddingPx READ blockEnvironmentHighlightPaddingPx
+                   WRITE setBlockEnvironmentHighlightPaddingPx NOTIFY appearanceChanged)
     Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
     Q_PROPERTY(int caretWidthCentipixels READ caretWidthCentipixels WRITE setCaretWidthCentipixels
                    NOTIFY caretWidthCentipixelsChanged)
@@ -110,14 +112,16 @@ class DocumentCanvas : public QQuickItem {
     void setSelectionRects(const QVariantList& rectangles);
     [[nodiscard]] QVariantList selectionPreviewRects() const;
     void setSelectionPreviewRects(const QVariantList& rectangles);
-    [[nodiscard]] QVariantList structureFocusRects() const;
-    void setStructureFocusRects(const QVariantList& rectangles);
+    [[nodiscard]] QVariantList blockEnvironmentHighlightRects() const;
+    void setBlockEnvironmentHighlightRects(const QVariantList& rectangles);
     [[nodiscard]] QColor selectionColor() const;
     void setSelectionColor(const QColor& color);
-    [[nodiscard]] QColor structureFocusColor() const;
-    void setStructureFocusColor(const QColor& color);
-    [[nodiscard]] int structureFocusBorderWidthPx() const;
-    void setStructureFocusBorderWidthPx(int width_px);
+    [[nodiscard]] QColor blockEnvironmentHighlightColor() const;
+    void setBlockEnvironmentHighlightColor(const QColor& color);
+    [[nodiscard]] qreal blockEnvironmentHighlightRadius() const;
+    void setBlockEnvironmentHighlightRadius(qreal radius);
+    [[nodiscard]] qreal blockEnvironmentHighlightPaddingPx() const;
+    void setBlockEnvironmentHighlightPaddingPx(qreal padding_px);
     [[nodiscard]] QColor caretColor() const;
     void setCaretColor(const QColor& color);
     [[nodiscard]] int caretWidthCentipixels() const;
@@ -171,7 +175,7 @@ class DocumentCanvas : public QQuickItem {
     void visiblePageRangeChanged();
     void selectionRectsChanged();
     void selectionPreviewRectsChanged();
-    void structureFocusRectsChanged();
+    void blockEnvironmentHighlightRectsChanged();
     void glyphRasterMetricsChanged();
     void caretWidthCentipixelsChanged();
     void appearanceChanged();
@@ -212,16 +216,17 @@ class DocumentCanvas : public QQuickItem {
     int m_page_end_visible = -1;
     QVariantList m_selection_rects;
     QVariantList m_selection_preview_rects;
-    QVariantList m_structure_focus_rects;
-    quint64 m_structure_focus_revision = 0;
+    QVariantList m_block_environment_highlight_rects;
+    quint64 m_block_environment_highlight_revision = 0;
     quint64 m_glyph_frame_revision = 0;
     quint64 m_glyph_geometry_revision = 0;
     QColor m_caret_color;
     QColor m_selection_color;
-    QColor m_structure_focus_color;
+    QColor m_block_environment_highlight_color;
+    qreal m_block_environment_highlight_radius = 0.0;
+    qreal m_block_environment_highlight_padding_px = 0.0;
     quint64 m_selection_revision = 0;
     int m_caret_width_centipixels = 0;
-    int m_structure_focus_border_width_px = 0;
     bool m_caret_blink_enabled = true;
     QTimer m_caret_blink_timer;
     bool m_caret_visible = false;

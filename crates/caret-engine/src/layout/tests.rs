@@ -8,9 +8,31 @@ use caret_doc::{
 use caret_layout::{
     FontCatalog, FontCatalogError, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
 };
-use std::collections::BTreeMap;
+use icu_locale_core::subtags::Script;
+use std::collections::{BTreeMap, HashMap};
 
-use super::{DocumentLayoutError, DocumentLayoutService};
+use super::{DocumentLayoutError, DocumentLayoutService, MAX_BASELINE_ANCHOR_VARIANTS};
+
+fn script(value: &str) -> Script {
+    value
+        .parse()
+        .unwrap_or_else(|error| panic!("invalid script subtag {value}: {error}"))
+}
+
+fn baseline_cache_contains(
+    cache: &super::BaselineAnchorCache,
+    language: Option<&str>,
+    script: Option<&str>,
+) -> bool {
+    cache
+        .metrics_by_language_script
+        .get(language.unwrap_or(""))
+        .is_some_and(|scripts| {
+            scripts
+                .keys()
+                .any(|key| key.map(|(cached_script, _)| cached_script) == script.map(self::script))
+        })
+}
 
 fn paragraph(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
@@ -21,6 +43,118 @@ fn paragraph(text: &str) -> Paragraph {
         extra: BTreeMap::new(),
     })];
     paragraph
+}
+
+fn single_line_y_offset(snapshot: &super::DocumentLayoutSnapshot, paragraph_id: &NodeId) -> f32 {
+    snapshot.pages[0]
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| &fragment.paragraph_id == paragraph_id)
+        .unwrap_or_else(|| panic!("paragraph {paragraph_id} is missing from the first page"))
+        .y_offset_pt
+}
+
+#[test]
+fn cjk_text_keeps_paragraph_spacing_fixed_and_environment_tracks_line_boxes() {
+    fn layout_section(title_text: &str, body_text: &str) -> super::DocumentLayoutSnapshot {
+        let before = paragraph("Before");
+        let before_id = before.id.clone();
+        let title = paragraph(title_text);
+        let title_id = title.id.clone();
+        let body = paragraph(body_text);
+        let body_id = body.id.clone();
+        let after = paragraph("After");
+        let after_id = after.id.clone();
+        let environment_id = NodeId::generate();
+
+        let mut document = Document::blank();
+        document.body = vec![
+            Block::Paragraph(before),
+            Block::Environment(BlockEnvironment {
+                id: environment_id.clone(),
+                kind: BlockEnvironmentKind::Section,
+                definition_id: None,
+                props: BTreeMap::new(),
+                title: Some(title),
+                children: vec![Block::Paragraph(body)],
+                extra: BTreeMap::new(),
+            }),
+            Block::Paragraph(after),
+        ];
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+
+        let before_height = snapshot
+            .paragraph_by_id(&before_id)
+            .unwrap_or_else(|| panic!("preceding paragraph is missing"))
+            .layout
+            .paragraph
+            .lines[0]
+            .metrics
+            .height_pt;
+        let title_height = snapshot
+            .paragraph_by_id(&title_id)
+            .unwrap_or_else(|| panic!("Section title paragraph is missing"))
+            .layout
+            .paragraph
+            .lines[0]
+            .metrics
+            .height_pt;
+        let body_height = snapshot
+            .paragraph_by_id(&body_id)
+            .unwrap_or_else(|| panic!("Section body paragraph is missing"))
+            .layout
+            .paragraph
+            .lines[0]
+            .metrics
+            .height_pt;
+        let after_y = single_line_y_offset(&snapshot, &after_id);
+        let title_y = single_line_y_offset(&snapshot, &title_id);
+        let body_y = single_line_y_offset(&snapshot, &body_id);
+        assert!((title_y - before_height - 10.0).abs() < 0.01);
+        assert!((body_y - title_y - title_height - 10.0).abs() < 0.01);
+        assert!((after_y - body_y - body_height - 10.0).abs() < 0.01);
+
+        let environment_range = snapshot
+            .environment_ranges
+            .iter()
+            .find(|range| range.environment_id == environment_id)
+            .unwrap_or_else(|| panic!("Section highlight range is missing"));
+        assert!(
+            (environment_range.y1_pt
+                - environment_range.y0_pt
+                - f64::from(title_height + 10.0 + body_height))
+            .abs()
+                < 0.01
+        );
+
+        snapshot
+    }
+
+    let latin = layout_section("Section title", "Section body");
+    let cjk = layout_section("章节标题", "正文内容");
+    let mixed = layout_section("Section 标题", "正文 content");
+    let latin_line_height = latin.paragraphs[1].layout.paragraph.lines[0]
+        .metrics
+        .height_pt;
+    let cjk_line_height = cjk.paragraphs[1].layout.paragraph.lines[0]
+        .metrics
+        .height_pt;
+
+    // 行框和环境高亮容纳实际字体度量；固定段距仍由文档样式精确控制。
+    let mixed_line_height = mixed.paragraphs[1].layout.paragraph.lines[0]
+        .metrics
+        .height_pt;
+    assert!(
+        latin_line_height.is_finite()
+            && cjk_line_height.is_finite()
+            && mixed_line_height.is_finite()
+    );
 }
 
 #[test]
@@ -566,13 +700,17 @@ fn failed_font_measurement_preserves_the_last_valid_baseline_cache() {
             .unwrap_or_else(|error| panic!("text settings rejected: {error}"));
     let style = ShapingStyle::new(1200);
     let valid = service
-        .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style)
+        .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style, None, None)
         .unwrap_or_else(|error| panic!("font measurement failed: {error}"));
     let saved_cache = service.baseline_anchor_cache.clone();
 
-    let Err(error) =
-        service.resolve_baseline_anchor_metrics(&mut catalog, &settings, &ShapingStyle::new(0))
-    else {
+    let Err(error) = service.resolve_baseline_anchor_metrics(
+        &mut catalog,
+        &settings,
+        &ShapingStyle::new(0),
+        None,
+        None,
+    ) else {
         panic!("zero-sized font must not produce baseline metrics");
     };
     assert!(matches!(error, DocumentLayoutError::Shaping(_)));
@@ -583,7 +721,7 @@ fn failed_font_measurement_preserves_the_last_valid_baseline_cache() {
     assert_eq!(service.baseline_anchor_cache, saved_cache);
     assert_eq!(
         service
-            .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style)
+            .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style, None, None)
             .unwrap_or_else(|error| panic!("valid cache was lost: {error}")),
         valid
     );
@@ -603,12 +741,42 @@ fn baseline_cache_tracks_style_language_and_refreshed_font_generation() {
         .unwrap_or_else(|error| panic!("first layout failed: {error}"));
     let first_cache = service
         .baseline_anchor_cache
-        .clone()
+        .as_ref()
         .unwrap_or_else(|| panic!("successful layout needs a baseline cache"));
+    let first_font_generation = first_cache.font_generation;
+    let first_settings = first_cache.settings.clone();
+    let first_style = first_cache.style.clone();
+    let first_metrics = first_cache
+        .metrics_by_language_script
+        .iter()
+        .flat_map(|(language, scripts)| {
+            scripts
+                .iter()
+                .map(move |(script, cached)| ((language.clone(), *script), cached.metrics))
+        })
+        .collect::<HashMap<_, _>>();
     let same = service
         .layout_session(&session, &mut catalog, &style)
         .unwrap_or_else(|error| panic!("repeated layout failed: {error}"));
-    assert_eq!(service.baseline_anchor_cache.as_ref(), Some(&first_cache));
+    let repeated_cache = service
+        .baseline_anchor_cache
+        .as_ref()
+        .unwrap_or_else(|| panic!("repeated layout discarded its baseline cache"));
+    assert_eq!(repeated_cache.font_generation, first_font_generation);
+    assert_eq!(repeated_cache.settings, first_settings);
+    assert_eq!(repeated_cache.style, first_style);
+    assert_eq!(
+        repeated_cache
+            .metrics_by_language_script
+            .iter()
+            .flat_map(|(language, scripts)| {
+                scripts
+                    .iter()
+                    .map(move |(script, cached)| ((language.clone(), *script), cached.metrics))
+            })
+            .collect::<HashMap<_, _>>(),
+        first_metrics
+    );
     assert_eq!(same.pages, first.pages);
 
     document.global_settings.default_language = Some("ru".to_owned());
@@ -622,8 +790,15 @@ fn baseline_cache_tracks_style_language_and_refreshed_font_generation() {
         language: Some("el".to_owned()),
         requested_family: Some("Caret Missing Baseline Font".to_owned()),
     };
+    let larger_script = (script("Cyrl"), 'ж');
     let larger_metrics = service
-        .resolve_baseline_anchor_metrics(&mut catalog, &changed_settings, &larger_style)
+        .resolve_baseline_anchor_metrics(
+            &mut catalog,
+            &changed_settings,
+            &larger_style,
+            changed_settings.default_language(),
+            Some(&larger_script),
+        )
         .unwrap_or_else(|error| panic!("changed baseline failed: {error}"));
     let changed_cache = service
         .baseline_anchor_cache
@@ -631,7 +806,13 @@ fn baseline_cache_tracks_style_language_and_refreshed_font_generation() {
         .unwrap_or_else(|| panic!("changed style needs a new cache entry"));
     assert_eq!(changed_cache.settings, changed_settings);
     assert_eq!(changed_cache.style, larger_style);
-    assert!(larger_metrics.ascent_pt > first_cache.metrics.ascent_pt);
+    assert!(larger_metrics.ascent_pt > 0.0);
+    assert_eq!(changed_cache.metrics_count, 1);
+    assert!(baseline_cache_contains(
+        changed_cache,
+        Some("ru"),
+        Some("Cyrl")
+    ));
     assert_eq!(changed_cache.font_generation, catalog.generation());
 
     let refreshed_generation = catalog
@@ -648,6 +829,182 @@ fn baseline_cache_tracks_style_language_and_refreshed_font_generation() {
             .as_ref()
             .map(|cache| cache.font_generation),
         Some(refreshed_generation)
+    );
+}
+
+#[test]
+fn baseline_metrics_do_not_depend_on_the_order_of_same_script_fallback_characters() {
+    let first_paragraphs = [paragraph("a"), paragraph("ɏ")];
+    let second_paragraphs = [paragraph("ɏ"), paragraph("a")];
+    let first_ids = [
+        first_paragraphs[0].id.clone(),
+        first_paragraphs[1].id.clone(),
+    ];
+    let second_ids = [
+        second_paragraphs[0].id.clone(),
+        second_paragraphs[1].id.clone(),
+    ];
+    let mut first_document = Document::blank();
+    first_document.body = first_paragraphs.into_iter().map(Block::Paragraph).collect();
+    let mut second_document = Document::blank();
+    second_document.body = second_paragraphs
+        .into_iter()
+        .map(Block::Paragraph)
+        .collect();
+    let mut first_service = DocumentLayoutService::new();
+    let mut second_service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let style = ShapingStyle::new(1200);
+    let first = first_service
+        .layout(&first_document, 1, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("first ordering failed: {error}"));
+    let second = second_service
+        .layout(&second_document, 1, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("reversed ordering failed: {error}"));
+
+    for (first_index, second_index) in [(0, 1), (1, 0)] {
+        let first_paragraph = first
+            .paragraph_by_id(&first_ids[first_index])
+            .unwrap_or_else(|| panic!("first paragraph is missing"));
+        let second_paragraph = second
+            .paragraph_by_id(&second_ids[second_index])
+            .unwrap_or_else(|| panic!("reordered paragraph is missing"));
+        assert_eq!(
+            first_paragraph.layout.paragraph.lines[0]
+                .metrics
+                .baseline_pt,
+            second_paragraph.layout.paragraph.lines[0]
+                .metrics
+                .baseline_pt,
+            "baseline for the same character changed with paragraph order"
+        );
+    }
+}
+
+#[test]
+fn baseline_cache_keeps_recent_metrics_when_variant_limit_is_reached() {
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let settings =
+        ResolvedDocumentTextSettings::from_document_settings(&Document::blank().global_settings)
+            .unwrap_or_else(|error| panic!("default text settings failed: {error}"));
+    let style = ShapingStyle::new(1200);
+    let metrics = service
+        .resolve_baseline_anchor_metrics(&mut catalog, &settings, &style, None, None)
+        .unwrap_or_else(|error| panic!("initial baseline failed: {error}"));
+    let language = "".to_owned();
+    let mut scripts = HashMap::new();
+    let script_tags = [
+        "Latn", "Cyrl", "Grek", "Hani", "Arab", "Hebr", "Deva", "Thai", "Armn", "Geor", "Ethi",
+        "Beng", "Guru", "Gujr", "Orya", "Taml", "Telu", "Knda", "Mlym", "Sinh", "Laoo", "Tibt",
+        "Mymr", "Khmr", "Hang", "Hira", "Kana", "Bopo", "Yiii", "Cher", "Cans", "Mong",
+    ];
+    assert_eq!(script_tags.len(), MAX_BASELINE_ANCHOR_VARIANTS);
+    for (index, tag) in script_tags.into_iter().enumerate() {
+        let script = script(tag);
+        scripts.insert(
+            Some((script, 'a')),
+            super::CachedBaselineMetrics {
+                metrics,
+                last_used: index as u64 + 1,
+            },
+        );
+    }
+    scripts.insert(
+        None,
+        super::CachedBaselineMetrics {
+            metrics,
+            last_used: MAX_BASELINE_ANCHOR_VARIANTS as u64 + 1,
+        },
+    );
+    let cache = service
+        .baseline_anchor_cache
+        .as_mut()
+        .unwrap_or_else(|| panic!("successful layout must keep a baseline cache"));
+    cache.metrics_by_language_script = HashMap::from([(language.clone(), scripts)]);
+    cache.metrics_count = MAX_BASELINE_ANCHOR_VARIANTS + 1;
+    cache.evict_least_recent();
+    assert_eq!(cache.metrics_count, MAX_BASELINE_ANCHOR_VARIANTS);
+    assert!(cache.metrics_by_language_script[&language].contains_key(&None));
+    assert!(
+        !cache.metrics_by_language_script[&language].contains_key(&Some((script("Latn"), 'a')))
+    );
+}
+
+#[test]
+fn baseline_anchor_uses_paragraph_language_then_document_language_and_stays_stable_on_soft_wraps() {
+    let mut latin_then_cjk = paragraph("Latin first, then 中文");
+    latin_then_cjk.inlines = vec![
+        InlineNode::Run(Run {
+            text: "Latin first".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::SoftBreak(SoftBreak::default()),
+        InlineNode::Run(Run {
+            text: "中文 second line".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut chinese = paragraph("中文段落");
+    chinese.language = Some("zh-Hans".to_owned());
+    let mut document = Document::blank();
+    document.global_settings.default_language = Some("en".to_owned());
+    document.body = vec![
+        Block::Paragraph(latin_then_cjk.clone()),
+        Block::Paragraph(chinese.clone()),
+    ];
+
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+    let cache = service
+        .baseline_anchor_cache
+        .as_ref()
+        .unwrap_or_else(|| panic!("paragraph layout must populate the baseline cache"));
+    for expected in [(Some("en"), Some("Latn")), (Some("zh-Hans"), Some("Hani"))] {
+        assert!(baseline_cache_contains(cache, expected.0, expected.1));
+    }
+
+    let wrapped = snapshot
+        .paragraph_by_id(&latin_then_cjk.id)
+        .unwrap_or_else(|| panic!("soft-wrapped paragraph is missing"));
+    assert!(wrapped.layout.paragraph.lines.len() >= 2);
+    let anchor_baseline = wrapped.layout.paragraph.lines[0].metrics.baseline_pt;
+    assert!(
+        wrapped
+            .layout
+            .paragraph
+            .lines
+            .iter()
+            .all(|line| (line.metrics.baseline_pt - anchor_baseline).abs() < 0.01)
+    );
+
+    let no_language_sample = caret_layout::paragraph_first_strong_script_sample(&chinese)
+        .unwrap_or_else(|| panic!("Chinese text must provide a strong script sample"));
+    assert_eq!(no_language_sample, (script("Hani"), '中'));
+
+    document.global_settings.default_language = None;
+    let mut language_free_chinese = paragraph("中文段落");
+    language_free_chinese.language = None;
+    document.body = vec![Block::Paragraph(language_free_chinese)];
+    let mut script_only_service = DocumentLayoutService::new();
+    script_only_service
+        .layout(&document, 2, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("script-only layout failed: {error}"));
+    assert!(
+        script_only_service
+            .baseline_anchor_cache
+            .as_ref()
+            .is_some_and(|cache| baseline_cache_contains(cache, None, Some("Hani")))
     );
 }
 

@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use caret_doc::Paragraph;
+use caret_doc::{InlineNode, Paragraph};
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
@@ -90,13 +90,13 @@ pub struct ParleyParagraphLayout {
     pub requested_family_missing: bool,
 }
 
-/// 段落布局的版心宽度、行距、空段度量和文档级基线锚点。
+/// 段落布局的版心宽度、行距、空段度量和段落级基线锚点。
 #[derive(Debug, Clone, Copy)]
 pub struct ParagraphLayoutOptions {
     pub width_pt: f32,
     pub spacing: LineSpacing,
     pub empty_mark_metrics: FontLineMetrics,
-    /// 由文档默认语言和默认字体测得；各段落、脚本和字体回退共享同一基线。
+    /// 由段落有效语言和段落首个强脚本测得，在该段所有软换行间保持不变。
     pub baseline_anchor_metrics: FontLineMetrics,
 }
 
@@ -320,13 +320,15 @@ impl ParagraphLayouter {
         settings: &ResolvedDocumentTextSettings,
         base_style: &ShapingStyle,
         language: Option<&str>,
+        script_sample: Option<char>,
     ) -> Result<FontLineMetrics, ParagraphLayoutError> {
+        let sample = script_sample.unwrap_or(' ');
         let paragraph = Paragraph {
             id: caret_doc::NodeId::generate(),
             language: language.map(str::to_owned),
             layout: None,
             inlines: vec![caret_doc::InlineNode::Run(caret_doc::Run {
-                text: " ".to_owned(),
+                text: sample.to_string(),
                 language: None,
                 props: Default::default(),
                 extra: Default::default(),
@@ -457,6 +459,48 @@ fn strong_script(text: &str) -> Option<Script> {
         }
         names.get_locale_script(script)
     })
+}
+
+/// 返回段落中第一个强脚本及其代表字符，供段落级度量选择稳定锚点。
+pub fn first_strong_script_sample(text: &str) -> Option<(Script, char)> {
+    let script_map = CodePointMapData::<props::Script>::new();
+    let names = PropertyNamesShort::<props::Script>::new();
+    text.chars().find_map(|character| {
+        let script = script_map.get(character);
+        if matches!(
+            script,
+            props::Script::Common | props::Script::Inherited | props::Script::Unknown
+        ) {
+            return None;
+        }
+        names
+            .get_locale_script(script)
+            .map(|script| (script, character))
+    })
+}
+
+/// 不展平段落文本，返回其行内树中第一个强脚本及代表字符。
+pub fn paragraph_first_strong_script_sample(paragraph: &Paragraph) -> Option<(Script, char)> {
+    fn find(nodes: &[InlineNode], sample: &mut Option<(Script, char)>) {
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => {
+                    if sample.is_none() {
+                        *sample = first_strong_script_sample(&run.text);
+                    }
+                }
+                InlineNode::Environment(environment) => find(&environment.children, sample),
+                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
+            }
+            if sample.is_some() {
+                return;
+            }
+        }
+    }
+
+    let mut sample = None;
+    find(&paragraph.inlines, &mut sample);
+    sample
 }
 
 fn default_script() -> Script {

@@ -170,389 +170,379 @@ message_032:
   tr: 挿入カーソルを点滅させる
   st: finished
 
-message_101:
+message_033:
   src: Show command suggestions
   tr: コマンド候補を表示する
   st: finished
 
 [RecoveryDialog]
-message_033:
+message_034:
   src: Recover documents
   tr: 文書を復元
   st: finished
 
-message_034:
+message_035:
   src: Caret found document recovery files. Choose one to restore, or discard it.
   tr: Caret は文書の復元ファイルを検出しました。復元するファイルを選択するか、破棄してください。
   st: finished
 
-message_035:
+message_036:
   src: This is an external file backup. Save a copy to restore it outside Caret.
   tr: これは外部ファイルのバックアップです。Caret の外部で復元するにはコピーを保存してください。
   st: finished
 
-message_036:
+message_037:
   src: Save backup copy
   tr: バックアップを保存
   st: finished
 
-message_037:
+message_038:
   src: Restore
   tr: 復元
   st: finished
 
-message_038:
+message_039:
   src: Discard
   tr: 破棄
   st: finished
 
-message_039:
+message_040:
   src: Later
   tr: 後で
   st: finished
 
 [SaveConflictDialog]
-message_040:
+message_041:
   src: File changed outside Caret
   tr: Caret の外部でファイルが変更されました
   st: finished
 
-message_041:
+message_042:
   src: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
   tr: ファイルが変更、移動されたか利用できないため、Caret は %1 を安全に上書きできません。コピーを保存するか、可能であればバックアップ後に現在のファイルを置き換えるか、キャンセルしてください。
   st: finished
 
-message_042:
+message_043:
   src: The recovery copy could not be written:
   tr: 復元コピーを書き込めませんでした：
   st: finished
 
-message_043:
+message_044:
   src: The recovery copy could not be linked to this document:
   tr: 復元コピーをこの文書に関連付けられませんでした：
   st: finished
 
-message_044:
+message_045:
   src: Save a Copy
   tr: コピーを保存
   st: finished
 
-message_045:
+message_046:
   src: Replace
   tr: 置換
   st: finished
 
-message_046:
+message_047:
   src: Cancel
   tr: キャンセル
   st: finished
 
 [SettingsDialog]
-message_047:
+message_048:
   src: Preferences
   tr: 環境設定
   st: finished
 
-message_048:
+message_049:
   src: Theme
   tr: テーマ
   st: finished
 
-message_049:
+message_050:
   src: Language
   tr: 言語
   st: finished
 
-message_050:
+message_051:
   src: Settings
   tr: 設定
   st: finished
 
 [SettingsLanguagePage]
-message_051:
+message_052:
   src: Choose the language used by the application. The change is applied when you select OK.
   tr: アプリケーションで使用する言語を選択します。「OK」を選択すると変更が適用されます。
   st: finished
 
-message_052:
+message_053:
   src: Application language
   tr: アプリケーションの言語
   st: finished
 
-message_053:
+message_054:
   src: Language settings are unavailable in this build.
   tr: このビルドでは言語設定を利用できません。
   st: finished
 
 [ShareButton]
-message_054:
+message_055:
   src: Share
   tr: 共有
   st: finished
 
 [ThemeSettingsPage]
-message_055:
+message_056:
   src: Choose the application theme.
   tr: アプリケーションのテーマを選択します。
   st: finished
 
-message_056:
+message_057:
   src: Application theme
   tr: アプリケーションのテーマ
   st: finished
 
-message_057:
+message_058:
   src: Theme settings are unavailable in this build.
   tr: このビルドではテーマ設定を利用できません。
   st: finished
 
-message_058:
+message_059:
   src: Dark
   tr: ダーク
   st: finished
 
-message_059:
+message_060:
   src: Light
   tr: ライト
   st: finished
 
 [UiCommonNavigation]
-message_060:
+message_061:
   src: Browse
   tr: 参照
   st: finished
 
 [UnsavedChangesDialog]
-message_061:
+message_062:
   src: Unsaved changes
   tr: 未保存の変更
   st: finished
 
-message_062:
+message_063:
   src: Save your changes before closing this document?
   tr: この文書を閉じる前に変更を保存しますか？
   st: finished
 
-message_063:
+message_064:
   src: Save
   tr: 保存
   st: finished
 
-message_064:
+message_065:
   src: Don't Save
   tr: 保存しない
   st: finished
 
-message_065:
+message_066:
   src: Cancel
   tr: キャンセル
   st: finished
 
 [WindowCommandBar]
-message_066:
+message_067:
   src: Home
   tr: ホーム
   st: finished
 
 [WindowStatusBar]
-message_067:
+message_068:
   src: Page %1 of %2
   tr: %1 / %2 ページ
   st: finished
 
-message_068:
+message_069:
   src: %1 words
   tr: %1 語
   st: finished
 
-message_069:
+message_070:
   src: English (United States)
   tr: 英語（米国）
   st: finished
 
-message_070:
+message_071:
   src: Zoom out
   tr: 縮小
   st: finished
 
-message_071:
+message_072:
   src: Zoom
   tr: ズーム
   st: finished
 
-message_072:
+message_073:
   src: Zoom in
   tr: 拡大
   st: finished
 
-message_102:
-  src: Single-line
-  tr: 単一行構造
-  st: finished
-
-message_103:
-  src: Multi-line
-  tr: 複数行構造
-  st: finished
-
-message_104:
+message_074:
   src: Paragraph
   tr: 段落
   st: finished
 
-message_105:
-  src: Table
-  tr: 表
+message_075:
+  src: Section
+  tr: 節
   st: finished
 
-message_106:
-  src: Figure
-  tr: 図
+message_076:
+  src: Heading
+  tr: 見出し
+  st: finished
+
+message_077:
+  src: Custom environment
+  tr: カスタム環境
   st: finished
 
 [WindowTitleBar]
-message_073:
+message_078:
   src: Untitled
   tr: 無題
   st: finished
 
-message_074:
+message_079:
   src: AutoSave
   tr: 自動保存
   st: finished
 
-message_075:
+message_080:
   src: Open
   tr: 開く
   st: finished
 
-message_076:
+message_081:
   src: Save
   tr: 保存
   st: finished
 
-message_077:
+message_082:
   src: Undo
   tr: 元に戻す
   st: finished
 
-message_078:
+message_083:
   src: Redo
   tr: やり直し
   st: finished
 
-message_079:
+message_084:
   src: Comments
   tr: コメント
   st: finished
 
-message_080:
+message_085:
   src: Search commands and help
   tr: コマンドとヘルプを検索
   st: finished
 
-message_081:
+message_086:
   src: Settings
   tr: 設定
   st: finished
 
-message_082:
+message_087:
   src: Saving
   tr: 保存中
   st: finished
 
-message_083:
+message_088:
   src: Edited
   tr: 編集済み
   st: finished
 
-message_084:
+message_089:
   src: Saved
   tr: 保存済み
   st: finished
 
 [CommandCompletion]
-message_085:
+message_090:
   src: Chapter
   tr: 章
   st: finished
 
-message_086:
+message_091:
   src: Section
   tr: 節
   st: finished
 
-message_087:
+message_092:
   src: Subsection
   tr: 小節
   st: finished
 
-message_089:
+message_093:
   src: Bulleted list
   tr: 箇条書きリスト
   st: finished
 
-message_090:
+message_094:
   src: Numbered list
   tr: 番号付きリスト
   st: finished
 
-message_091:
+message_095:
   src: Page break
   tr: 改ページ
   st: finished
 
-message_092:
+message_096:
   src: Line break
   tr: ソフト改行
   st: finished
 
-message_093:
+message_097:
   src: No matching commands
   tr: 該当するコマンドがありません
   st: finished
 
-message_094:
+message_098:
   src: Inline math
   tr: インライン数式
   st: finished
 
-message_095:
+message_099:
   src: Single-line equation
   tr: 1行数式
   st: finished
 
-message_096:
+message_100:
   src: Fraction
   tr: 分数
   st: finished
 
-message_097:
+message_101:
   src: Square root
   tr: 平方根
   st: finished
 
-message_098:
+message_102:
   src: Table
   tr: 表
   st: finished
 
-message_099:
+message_103:
   src: Subsubsection
   tr: 小々節
   st: finished
 
-message_100:
+message_104:
   src: Multiline equation
   tr: 複数行数式
   st: finished
 
-message_101:
+message_105:
   src: New paragraph
   tr: 新しい段落
-  st: finished
-
-message_102:
-  src: Custom environment
-  tr: カスタム環境
   st: finished

@@ -18,8 +18,7 @@ Item {
 
     HighlightBackground {
         anchors.fill: parent
-        color: root.selected ? Theme.colorCommandPrompt : Theme.colorPanel
-        opacity: root.candidate.available ? 1 : Theme.disabledOpacity
+        color: root.candidate.available ? (root.selected ? Theme.colorCommandPrompt : Theme.colorPanel) : (root.selected ? Theme.colorChrome : Theme.colorPanel)
     }
 
     AutoScrollText {
@@ -29,7 +28,7 @@ Item {
         width: Math.max(0, Math.min(root.aliasColumnWidth, parent.width - Theme.spacingSmall * 2))
         height: parent.height
         text: root.candidate.alias
-        textColor: Theme.colorFocus
+        textColor: root.candidate.available ? Theme.colorFocus : Theme.colorTextMuted
         fontPixelSize: Theme.fontSmall
         monospaced: true
         scrollActive: root.selected
@@ -42,7 +41,7 @@ Item {
         width: Math.max(0, Math.min(root.labelColumnWidth, parent.width - x - Theme.spacingSmall))
         height: parent.height
         text: root.label
-        textColor: Theme.colorText
+        textColor: root.candidate.available ? Theme.colorText : Theme.colorTextMuted
         fontPixelSize: Theme.fontBody
         scrollActive: root.selected
     }

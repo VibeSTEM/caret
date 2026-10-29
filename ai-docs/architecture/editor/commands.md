@@ -1,6 +1,6 @@
 # 命令
 
-更新日期：2026-10-25。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
+更新日期：2026-10-29。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
 
 ## 注册表
 
@@ -8,7 +8,7 @@
 
 id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`、`cmdline.accept`。别名不是第二条命令，只是名字到 id 和默认参数的映射。
 
-命令定义表单独维护别名、稳定 ID、显示名和可用状态；命令查询状态机只负责查询、匹配、高亮与接受，不内嵌注册表数据。补全按前缀匹配，优先级为别名、命令 ID、显示名；同一优先级保留注册表顺序，匹配忽略 ASCII 大小写。空格不属于查询字符；M1 不做模糊搜索或隐式排序。Rust 返回完整候选列表和高亮索引，QML 不重复过滤或维护选中状态。
+命令定义表单独维护别名、稳定 ID、显示名和可用状态；命令查询状态机负责查询、匹配、高亮与接受，不内嵌注册表数据。补全按前缀匹配，优先级为别名、命令 ID、显示名；同一优先级保留注册表顺序，匹配忽略 ASCII 大小写。空格不属于查询字符；M1 不做模糊搜索或隐式排序。Rust 按[候选可用性规则](command-input.md#候选可用性)返回当前列表和高亮索引，QML 不重复过滤或维护选中状态。
 
 命令要么成功并给出 `Effect`，要么返回错误且不改文档。不使用 panic 表示「没有这个命令」或「参数不对」。
 
@@ -16,7 +16,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 
 | id | 作用 | 撤销 |
 | --- | --- | --- |
-| `text.insert` / `text.delete` | 在插入点输入或删除 | 打字合并成一步 |
+| `text.insert` / `text.delete` | 在插入点输入或删除；Backspace 在完整块环境结构选区上删除环境子树 | 打字合并成一步；结构删除一步 |
 | `text.soft_break` / `text.split_paragraph` | 插入软换行 / 拆分或合并段落 | 一步 |
 | `caret.move` / `selection.set` | 移动插入点 / 设置选区 | 纯命令 |
 | `clipboard.copy` / `clipboard.paste` | 复制所选纯文本 / 以单一 Rust 事务粘贴系统剪贴板文本 | 复制纯命令；粘贴一次文档变更 |
@@ -29,14 +29,15 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `insert.table` | 插入表格 | 一步 |
 | `table.insert_row` / `table.delete_row` / `table.insert_col` / `table.delete_col` | 改表格形状 | 一步 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
-| `struct.section.create` / `struct.custom.create` | 把当前段落转换为 Section 标题 / 包入可命名的 Custom 容器 | 一步，可撤销 |
-| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决 | 视分支而定：Esc/普通 Enter/软换行本身不合并历史；Enter 最终使用段落命令 |
+| `struct.section.create` | 把当前段落转换为 Section 标题 | 一步，可撤销 |
+| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决；Mod+Backspace 解除当前块环境并保留内容 | 视分支而定；解除环境作为一个结构编辑撤销 |
+| `struct.remove_preserving_content` | 将当前块环境标题与正文提升为父级内容并移除环境外壳 | 一步，可撤销 |
 | `cmdline.begin` / `cmdline.type` / `cmdline.backspace` / `cmdline.move_selection` / `cmdline.select_candidate` / `cmdline.tab` / `cmdline.accept` / `cmdline.cancel` | 命令模式 | 查询和选择是纯命令；`tab`、`accept` 与重复前缀键由 Rust 按当前查询状态决定插入字面字符或执行候选 |
 | `file.save` | 把当前文档写成 `.cdoc` | 不改文档，失败不丢内存里的稿 |
 
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
-注册表条目不代表命令已经可执行。当前 `struct.next`、`struct.prev`、`struct.exit`、`struct.section.create` 和 `struct.custom.create` 已进入 Rust Session；Section 将当前段落转成独立环境标题，Custom 将当前段落放入通用可命名容器。标题级别命令、列表、结构删除和提升仍由后续任务实现，未接入前候选必须标记不可用。每次实现后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
+注册表条目不代表命令已经可执行。当前 `struct.next`、`struct.prev`、`struct.exit` 与 `struct.section.create` 已进入用户交互；Custom 容器创建目前仅有 Rust 领域 API，不是命令候选，用户入口留待 Customize 设计。标题级别命令和列表仍由后续任务实现，未接入前候选必须标记不可用。结构选区上的 Backspace 复用 `text.delete` 按键意图，不新增独立候选。每次实现后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
 
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
 

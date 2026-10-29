@@ -33,7 +33,7 @@ class ShellLoadTest : public QObject {
     void settingsDialogDraftCancelAndFailure();
 #ifdef CARET_ENABLE_APP
     void preferencesWithoutRuntimeRejectChangesAndKeepDefaults();
-    void structureFocusInteractionSnapshotReplacesAndClearsRects();
+    void blockEnvironmentHighlightSnapshotReplacesAndClearsRects();
     void commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument();
     void documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior();
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();

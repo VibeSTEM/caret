@@ -9,6 +9,7 @@ impl DocumentViewRuntime {
             "escape" => EditorKey::Escape,
             "enter" => EditorKey::Enter,
             "shift-enter" => EditorKey::ShiftEnter,
+            "mod-backspace" => EditorKey::ModBackspace,
             _ => return Err("interaction.unknown_editor_key".to_owned()),
         };
         let command = Command::EditorKey(key);
@@ -32,6 +33,9 @@ impl DocumentViewRuntime {
         if effect.selection_changed {
             self.anchor_visual_affinity = self.session.selection_visual_affinity();
             self.preferred_visual_x_pt = None;
+        }
+        if effect.document_changed {
+            return self.layout_snapshot_json();
         }
         self.interaction_state_json()
     }
@@ -131,7 +135,9 @@ impl DocumentViewRuntime {
     ) -> Result<String, String> {
         self.base_snapshot()?;
         let selection = self.session.selection();
-        let reusable_paragraph_id = (selection.anchor.paragraph_id == selection.focus.paragraph_id)
+        let reusable_paragraph_id = (self.session.block_environment_exit().is_none()
+            && self.session.selected_block_environment().is_none()
+            && selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
         self.session
             .run(Command::InsertText(text))
@@ -199,7 +205,8 @@ impl DocumentViewRuntime {
         error_context: &str,
     ) -> Result<String, String> {
         let selection = self.session.selection();
-        let reusable_paragraph_id = (selection.anchor.paragraph_id == selection.focus.paragraph_id)
+        let reusable_paragraph_id = (self.session.selected_block_environment().is_none()
+            && selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
         let delete_is_paragraph_local = matches!(&command, Command::Delete(Direction::Backward))
             && reusable_paragraph_id.is_some()
@@ -257,17 +264,14 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
     let Some(line) = session.command_line() else {
         return false;
     };
+    let candidates = session.command_line_candidates();
+    let selected = candidates.get(line.selected).copied();
     match command {
         Command::TypeCommandLine(text) if text == "\\" => {
-            line.query.is_empty()
-                || line
-                    .selected_candidate()
-                    .is_some_and(|candidate| candidate.available)
+            line.query.is_empty() || selected.is_some_and(|candidate| candidate.available)
         }
         Command::TabCommandLine => line.query.is_empty(),
-        Command::AcceptCommandLine => line
-            .selected_candidate()
-            .is_some_and(|candidate| candidate.available),
+        Command::AcceptCommandLine => selected.is_some_and(|candidate| candidate.available),
         _ => false,
     }
 }
@@ -279,6 +283,7 @@ fn is_editor_key_document_edit(session: &caret_engine::Session, key: EditorKey) 
         }
         EditorKey::Enter => true,
         EditorKey::ShiftEnter => session.command_line().is_none(),
+        EditorKey::ModBackspace => session.command_line().is_none(),
         EditorKey::Escape => false,
     }
 }
