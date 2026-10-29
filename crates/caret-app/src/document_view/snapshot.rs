@@ -15,7 +15,6 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                     json!({
                         "alias": candidate.alias,
                         "commandId": candidate.command_id,
-                        "label": candidate.label,
                         "available": candidate.available,
                     })
                 })
@@ -38,6 +37,9 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
             })
         })
 }
+
+#[cfg(test)]
+mod tests;
 
 impl DocumentViewRuntime {
     /// 只序列化命令查询，按键过滤不读取或重建布局快照。

@@ -34,10 +34,7 @@ Item {
         const fontSizeCentipoints = Number(canvas.caretGeometry.fontSizeCentipoints);
         if (!Number.isFinite(fontSizeCentipoints) || fontSizeCentipoints <= 0)
             return Math.max(root.minimumCommandFontPixelSize, Theme.fontSmall * canvas.zoom);
-        const smallerFontSizeCentipoints = Math.max(
-            Math.min(fontSizeCentipoints, root.commandFontSizeStepCentipoints),
-            fontSizeCentipoints - root.commandFontSizeStepCentipoints
-        );
+        const smallerFontSizeCentipoints = Math.max(Math.min(fontSizeCentipoints, root.commandFontSizeStepCentipoints), fontSizeCentipoints - root.commandFontSizeStepCentipoints);
         const zoomPercent = DocumentUnits.factorToPercent(canvas.zoom);
         const centipixels = DocumentUnits.centipointsToLogicalCentipixels(smallerFontSizeCentipoints, zoomPercent);
         return Math.max(root.minimumCommandFontPixelSize, DocumentUnits.centipixelsToLogicalPixels(centipixels));
@@ -66,10 +63,7 @@ Item {
             height: parent.height
             contentWidth: queryText.implicitWidth
             contentHeight: height
-            contentX: Math.max(0, Math.min(
-                queryCursorMetrics.advanceWidth - width + root.caretDisplayRect.width,
-                contentWidth - width
-            ))
+            contentX: Math.max(0, Math.min(queryCursorMetrics.advanceWidth - width + root.caretDisplayRect.width, contentWidth - width))
             clip: true
             interactive: false
 

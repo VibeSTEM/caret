@@ -18,10 +18,7 @@ Flickable {
     readonly property real naturalTextWidth: textMetrics.advanceWidth
     readonly property real overflowDistance: Math.max(0, naturalTextWidth - width)
     readonly property bool shouldScroll: scrollActive && visible && width > 0 && overflowDistance > 0
-    readonly property int scrollDurationMilliseconds: Math.max(
-        1,
-        Math.ceil(overflowDistance * millisecondsPerLogicalPixel)
-    )
+    readonly property int scrollDurationMilliseconds: Math.max(1, Math.ceil(overflowDistance * millisecondsPerLogicalPixel))
 
     implicitHeight: fontPixelSize
     contentWidth: naturalTextWidth

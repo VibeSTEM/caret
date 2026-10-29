@@ -119,8 +119,7 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     qsizetype selected_index = 0;
     if (!active.isBool() || !query.isString() ||
         (!cursor.isUndefined() && !nonnegative_index(cursor, cursor_position)) ||
-        !nonnegative_index(selected, selected_index) ||
-        !candidates.isArray()) {
+        !nonnegative_index(selected, selected_index) || !candidates.isArray()) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
@@ -139,7 +138,6 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
             const QJsonObject candidate = candidate_value.toObject();
             if (!candidate.value(QStringLiteral("alias")).isString() ||
                 !candidate.value(QStringLiteral("commandId")).isString() ||
-                !candidate.value(QStringLiteral("label")).isString() ||
                 !candidate.value(QStringLiteral("available")).isBool()) {
                 error = QStringLiteral("layout.invalid_command_candidate");
                 return false;

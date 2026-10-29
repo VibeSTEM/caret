@@ -23,11 +23,7 @@ Rectangle {
     readonly property real maximumEstimatedWidth: 240
     readonly property real aliasColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
     readonly property real labelColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
-    readonly property real preferredWidth: candidateList.count > 0
-        ? Math.min(maximumEstimatedWidth,
-                   aliasColumnWidth + candidateColumnSpacing + labelColumnWidth
-                   + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
-        : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
+    readonly property real preferredWidth: candidateList.count > 0 ? Math.min(maximumEstimatedWidth, aliasColumnWidth + candidateColumnSpacing + labelColumnWidth + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
     readonly property real preferredHeight: candidateList.count > 0 ? Math.min(maximumRows, candidateList.count) * rowHeight + verticalPadding : emptyMetrics.height + verticalPadding
 
     function widestTextWidth(measurements) {

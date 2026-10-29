@@ -63,7 +63,13 @@
 | 2026-10-29 | `cargo fmt --check`、`git diff HEAD --check` | Rust 格式与完整待提交差异无空白错误 | 通过；真实 IME 与窗口验收未执行 |
 | 2026-10-29 | `cargo check --locked -p caret-app -p caret-engine` | 命令快照与 Session 改动编译通过 | 通过 |
 | 2026-10-29 | `cargo test --locked -p caret-engine failed_editor_command_keeps_the_active_command_query` | 编辑命令失败时命令查询仍保持活动 | 通过，1 项 |
+| 2026-10-29 | `cargo test --locked -p caret-engine tab_completes_a_filtered_command_without_editing_the_document`、`accepting_the_newline_command_inserts_a_soft_break_and_closes_the_query` | Tab 补全无文档副作用；接受换行命令插入软换行并退出查询 | 通过，各 1 项 |
+| 2026-10-29 | `cargo test --locked -p caret-app command_candidate_snapshot_omits_search_only_labels`、Qt `commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument` | 候选快照不传搜索专用名称；Rust Session 状态经 FFI/Qt 投影，Tab 不改正文，错误和取消状态符合契约 | 通过，各 1 项 |
+| 2026-10-29 | `cargo coverage` | Rust 产品 crate 全局函数/行覆盖率均至少 85% | 通过；函数 85.54%，行 89.58% |
+| 2026-10-29 | Criterion 0.8.2 release 对照：旧快照结构（含候选 `label`）与当前结构；20 个样本、预热 1 秒、测量 2 秒 | 以 10 万字符文档上的命令查询快照比较序列化耗时和负载大小 | macOS arm64、Rust 1.99.0；100,499 个 Unicode 字符、500 段、5 个候选：旧版 538 B，耗时区间 3.0967–3.1275 μs（点估计 3.1092 μs）；当前 422 B，区间 2.6177–2.7090 μs（点估计 2.6540 μs）。负载减少 21.6%，微基准点估计耗时减少 14.6%（455 ns）。文档准备不计入计时；只衡量命令状态快照序列化，不代表整次按键、Qt 渲染或端到端延迟；未测分配次数。该对照为一次性测量，临时基准代码未保留 |
 | 2026-10-29 | `cmake --build target/native/debug-coverage --target caret_shell_qmllint caret_native_app -j4` | QML lint 与 macOS 应用构建通过 | 通过；链接器有托管 LLVM LTO 文件缺失和静态库部署目标版本较新的警告 |
+| 2026-10-29 | `cargo coverage native` | native CTest 与 C++ 函数/行覆盖率至少 85% | CTest 7/7 通过；函数 87.58% 达标，行 82.96% 未达标，native 覆盖率门槛尚未通过 |
+| 2026-10-29 | Qt `autoScrollTextMovesOnlyWhenActiveAndOverflowing`、`autoScrollTextRepeatsWithTheDocumentedPauseCycle` | 候选选中态驱动两列溢出文本滚动，取消选中后复位；到末尾停 1 秒、复位后停 1 秒再循环 | 通过；无头 Qt 测试 2 项，profile 输出位于 `target/native-coverage/profiles/` |
 | 2026-10-29 | `git diff HEAD --check` | 完整待提交差异无空白错误 | 通过 |
 | 2026-10-29 | 独立 subagent 完整差异评审（gpt-6.1-sol，medium，只读） | 检查状态一致性、重复数据、QML 自动滚动、文件注册和文档 | 前次发现的命令失败状态分叉、无用 catalog 热路径和 HTML 原型引用已修复；本轮无新阻断问题。未替代真实窗口语言切换验收 |
 
@@ -79,4 +85,4 @@
 
 ## 完成摘要
 
-进行中。已接入 Rust 命令会话与候选注册、Tab 别名补全、轻量命令状态通道、Qt/QML 补全展示、主题色和候选显示首选项；命令候选行与自动循环文本已抽为 Atoms。Rust 定向检查、回归用例、macOS app 构建、qmllint、格式检查和独立完整 diff review 通过。尚待真实窗口中的 IME 与英文/中文语言切换验收。
+进行中。已接入 Rust 命令会话与候选注册、Tab 别名补全、轻量命令状态通道、Qt/QML 补全展示、主题色和候选显示首选项；命令候选行与自动循环文本已抽为 Atoms。Rust 定向测试、Qt 命令状态跨层测试、候选选中态滚动/复位、1 秒自动滚动循环、qmllint、QML 格式检查和独立完整 diff review 通过。Rust 全局覆盖率为函数 85.54%、行 89.58%；native 函数覆盖率为 87.58%，行覆盖率 82.96%，因此 native 85% 门槛未达标。10 万字符文档上的 Criterion 对照显示，命令快照序列化耗时点估计减少 14.6%（3.1092 μs 至 2.6540 μs），负载减少 21.6%（538 B 至 422 B）；这不代表端到端输入或渲染延迟，且未测分配次数。尚待真实窗口中的 IME 和英文/中文语言切换验收。
