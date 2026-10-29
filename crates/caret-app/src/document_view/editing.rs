@@ -147,7 +147,7 @@ impl DocumentViewRuntime {
 
     /// 在 Rust Session 中拆分当前段落并返回新布局。
     pub fn split_paragraph_json(&mut self) -> Result<String, String> {
-        self.run_edit_command(Command::SplitParagraph, "text.split_paragraph")
+        self.run_edit_command(Command::InsertParagraphBreak, "text.split_paragraph")
     }
 
     /// 在当前插入点删除前一个字素；位于段首时与前一段合并。
@@ -171,11 +171,13 @@ impl DocumentViewRuntime {
         let delete_is_paragraph_local = matches!(&command, Command::Delete(Direction::Backward))
             && reusable_paragraph_id.is_some()
             && (selection.anchor.offset != selection.focus.offset || selection.focus.offset > 0);
-        let can_reuse_layout =
-            matches!(&command, Command::SplitParagraph | Command::InsertSoftBreak)
-                || matches!(&command, Command::PasteText(_)) && reusable_paragraph_id.is_some()
-                || delete_is_paragraph_local
-                || is_command_line_document_edit(&self.session, &command);
+        let can_reuse_layout = matches!(
+            &command,
+            Command::InsertParagraphBreak | Command::InsertSoftBreak
+        ) || matches!(&command, Command::PasteText(_))
+            && reusable_paragraph_id.is_some()
+            || delete_is_paragraph_local
+            || is_command_line_document_edit(&self.session, &command);
         if can_reuse_layout {
             self.base_snapshot()?;
         }

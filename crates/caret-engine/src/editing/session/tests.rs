@@ -17,7 +17,7 @@ fn text_map_cache_keeps_both_paragraphs_of_a_cross_paragraph_selection() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));
     session
-        .run(Command::SplitParagraph)
+        .run(Command::InsertParagraphBreak)
         .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
     let Block::Paragraph(first) = &session.document.body[0] else {
         panic!("first block should be a paragraph");
@@ -188,6 +188,121 @@ fn accepting_the_newline_command_inserts_a_soft_break_and_closes_the_query() {
 }
 
 #[test]
+fn accepting_newparagraph_command_creates_a_paragraph_and_is_one_undo_step() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("hello".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("newparagraph".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    session
+        .run(Command::SelectCommandLineCandidate(0))
+        .unwrap_or_else(|error| panic!("new paragraph candidate selection failed: {error}"));
+
+    let effect = session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("new paragraph command failed: {error}"));
+
+    assert!(effect.document_changed);
+    assert_eq!(paragraph_text(&session, 0), "hello");
+    assert_eq!(paragraph_text(&session, 1), "");
+    assert!(session.command_line().is_none());
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undoing new paragraph failed: {error}"));
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(paragraph_text(&session, 0), "hello");
+
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redoing new paragraph failed: {error}"));
+    assert_eq!(paragraph_text(&session, 1), "");
+}
+
+#[test]
+fn multiline_paste_rebuilds_structure_navigation_for_created_paragraphs() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+
+    session
+        .run(Command::PasteText("first\nsecond".to_owned()))
+        .unwrap_or_else(|error| panic!("multiline paste failed: {error}"));
+
+    let Block::Paragraph(first) = &session.document.body[0] else {
+        panic!("first pasted block should be a paragraph");
+    };
+    let Block::Paragraph(second) = &session.document.body[1] else {
+        panic!("second pasted block should be a paragraph");
+    };
+    let first_id = first.id.clone();
+    let second_id = second.id.clone();
+    assert_eq!(
+        session.structure_index().navigation_paragraphs(),
+        &[first_id.clone(), second_id]
+    );
+
+    session
+        .run(Command::MoveStructure(Direction::Backward))
+        .unwrap_or_else(|error| panic!("structure navigation after paste failed: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, first_id);
+}
+
+#[test]
+fn structure_navigation_ends_the_current_deletion_undo_group() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertParagraphBreak)
+        .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
+    session
+        .run(Command::InsertText("ab".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    let Block::Paragraph(second) = &session.document.body[1] else {
+        panic!("second block should be a paragraph");
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: Pos {
+                paragraph_id: second.id.clone(),
+                offset: 0,
+                ..session.selection().focus.clone()
+            },
+            focus: Pos {
+                paragraph_id: second.id.clone(),
+                offset: 0,
+                ..session.selection().focus.clone()
+            },
+        })))
+        .unwrap_or_else(|error| {
+            panic!("moving the caret to the second paragraph start failed: {error}")
+        });
+    session
+        .run(Command::Delete(Direction::Forward))
+        .unwrap_or_else(|error| panic!("first forward deletion failed: {error}"));
+    session
+        .run(Command::MoveStructure(Direction::Backward))
+        .unwrap_or_else(|error| panic!("moving to the previous paragraph failed: {error}"));
+    session
+        .run(Command::MoveStructure(Direction::Forward))
+        .unwrap_or_else(|error| panic!("moving to the next paragraph failed: {error}"));
+    session
+        .run(Command::Delete(Direction::Forward))
+        .unwrap_or_else(|error| panic!("second forward deletion failed: {error}"));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undoing the second deletion failed: {error}"));
+
+    assert_eq!(paragraph_text(&session, 1), "b");
+}
+
+#[test]
 fn empty_command_tab_inserts_a_literal_prefix() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
@@ -309,7 +424,7 @@ fn undoing_a_paragraph_split_restores_the_original_paragraph_id_and_text() {
         })))
         .unwrap_or_else(|error| panic!("selection failed: {error}"));
     session
-        .run(Command::SplitParagraph)
+        .run(Command::InsertParagraphBreak)
         .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
     assert_eq!(session.document.body.len(), 2);
 
@@ -419,7 +534,7 @@ fn undo_restores_a_cross_paragraph_deletion_and_original_paragraph_ids() {
         .run(Command::InsertText("alpha".to_owned()))
         .unwrap_or_else(|error| panic!("first insertion failed: {error}"));
     session
-        .run(Command::SplitParagraph)
+        .run(Command::InsertParagraphBreak)
         .unwrap_or_else(|error| panic!("paragraph split failed: {error}"));
     session
         .run(Command::InsertText("gamma".to_owned()))

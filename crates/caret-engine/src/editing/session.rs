@@ -4,10 +4,12 @@ mod clipboard;
 mod command_line;
 mod composition;
 mod history;
+mod inline_content;
 mod navigation;
 mod paragraph_edit;
 mod range_edit;
 mod selection;
+mod structure;
 mod text_edit;
 
 use super::paragraph_ops::{
@@ -16,12 +18,13 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, CommandLine, Direction, EditError, Effect, InputComposition, Pos, Selection,
-    StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, Effect, InputComposition, Pos,
+    PositionMap, Selection, StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
-use std::collections::VecDeque;
+use caret_structure::StructureIndex;
+use std::{collections::VecDeque, sync::Arc};
 use undo::History;
 
 use self::history::{DocumentPatch, SessionHistoryEdit};
@@ -40,6 +43,7 @@ pub struct Session {
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
     paragraph_index: ParagraphIndex,
+    structure_index: Arc<StructureIndex>,
     edit_history: History<SessionHistoryEdit>,
     history_state_id: u64,
     next_history_state_id: u64,
@@ -60,8 +64,10 @@ impl Session {
             offset: 0,
             affinity: Affinity::Downstream,
         };
+        let structure_index = Arc::new(StructureIndex::build(&document));
         Ok(Self {
             paragraph_index: build_paragraph_index(&document.body),
+            structure_index,
             document,
             selection: Selection {
                 anchor: pos.clone(),
@@ -100,6 +106,11 @@ impl Session {
         &self.selection
     }
 
+    /// 当前文档派生的结构索引；不写入文档，不触发布局。
+    pub fn structure_index(&self) -> &StructureIndex {
+        &self.structure_index
+    }
+
     /// 当前焦点的视觉侧；不属于 UTF-8 逻辑位置，也不改变文档 generation。
     pub fn selection_visual_affinity(&self) -> VisualAffinity {
         self.selection_visual_affinity
@@ -134,6 +145,9 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        if matches!(&command, Command::MoveStructure(_) | Command::ExitStructure) {
+            return self.run_structure(command);
+        }
         if matches!(
             &command,
             Command::BeginCommandLine
@@ -161,13 +175,19 @@ impl Session {
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
+        let adjacent_delete_paragraph = match &command {
+            Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
+                self.adjacent_paragraph_for_delete(*direction)?
+            }
+            _ => None,
+        };
         let edit_group = history::edit_group(&command);
         let breaks_history_merge = edit_group.is_none();
         let mut before_paragraph_states = if is_paragraph_edit(&command) {
             let mut ids = history::before_selection_ids(&self.paragraph_index, &self.selection);
-            if let Command::Delete(direction) = &command
+            if let Command::Delete(_) = &command
                 && self.selection.anchor == self.selection.focus
-                && let Some(adjacent_id) = self.adjacent_paragraph_for_delete(*direction)?
+                && let Some(adjacent_id) = adjacent_delete_paragraph.clone()
             {
                 ids.push(adjacent_id);
             }
@@ -187,9 +207,12 @@ impl Session {
             Command::InsertText(text) => self.insert_text(&text),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
-            Command::SplitParagraph => self.split_paragraph(),
+            Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),
+            Command::MoveStructure(_) | Command::ExitStructure => {
+                unreachable!("structure commands returned above")
+            }
             Command::SetSelection(selection) => self.set_selection(selection),
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
             Command::CommitComposition { id, text } => self.commit_composition(id, &text),
@@ -217,6 +240,13 @@ impl Session {
             };
         }
         if effect.document_changed {
+            if effect
+                .position_map
+                .as_ref()
+                .is_some_and(position_map_changes_paragraph_structure)
+            {
+                self.structure_index = Arc::new(StructureIndex::build(&self.document));
+            }
             let after_state_id = self.allocate_history_state_id();
             let patch = if let Some(before) = before_page_geometry {
                 let after = self
@@ -333,6 +363,7 @@ impl Session {
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         self.paragraph_index = build_paragraph_index(&self.document.body);
+        self.structure_index = Arc::new(StructureIndex::build(&self.document));
         self.text_map_cache.clear();
         if let Some(next) = self.document_generation.checked_add(1) {
             self.document_generation = next;
@@ -477,6 +508,7 @@ impl Clone for Session {
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),
+            structure_index: self.structure_index.clone(),
             edit_history: self.edit_history.clone(),
             history_state_id: self.history_state_id,
             next_history_state_id: self.next_history_state_id,
@@ -492,10 +524,20 @@ fn is_paragraph_edit(command: &Command) -> bool {
         Command::InsertText(_)
             | Command::PasteText(_)
             | Command::InsertSoftBreak
-            | Command::SplitParagraph
+            | Command::InsertParagraphBreak
             | Command::Delete(_)
             | Command::CommitComposition { .. }
     )
+}
+
+fn position_map_changes_paragraph_structure(position_map: &PositionMap) -> bool {
+    match position_map {
+        PositionMap::Composite(maps) => maps.iter().any(position_map_changes_paragraph_structure),
+        PositionMap::ParagraphSplit { .. }
+        | PositionMap::ParagraphMerge { .. }
+        | PositionMap::ParagraphRangeMerge { .. } => true,
+        PositionMap::TextEdit { .. } => false,
+    }
 }
 
 #[cfg(test)]

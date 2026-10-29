@@ -111,6 +111,7 @@ impl Session {
         self.command_line = None;
         let effect = match candidate.command_id {
             "text.soft_break" => self.run(Command::InsertSoftBreak),
+            "text.split_paragraph" => self.run(Command::InsertParagraphBreak),
             _ => return Ok(Effect::default()),
         };
         let effect = match effect {

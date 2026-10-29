@@ -157,6 +157,7 @@ impl Session {
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
             paragraph_index: self.paragraph_index.clone(),
+            structure_index: self.structure_index.clone(),
             edit_history: history::history(),
             history_state_id: self.history_state_id,
             next_history_state_id: self.next_history_state_id,

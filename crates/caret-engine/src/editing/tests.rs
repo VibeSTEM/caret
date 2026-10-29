@@ -344,7 +344,7 @@ fn paragraph_split_then_backspace_merges_compatible_siblings() {
             })))
             .is_ok()
     );
-    assert!(session.run(Command::SplitParagraph).is_ok());
+    assert!(session.run(Command::InsertParagraphBreak).is_ok());
     assert_eq!(session.document.body.len(), 2);
     assert!(session.run(Command::Delete(Direction::Backward)).is_ok());
     assert_eq!(session.document.body.len(), 1);
@@ -408,7 +408,7 @@ fn section_title_enter_moves_suffix_to_new_first_body_paragraph() {
             })))
             .is_ok()
     );
-    assert!(session.run(Command::SplitParagraph).is_ok());
+    assert!(session.run(Command::InsertParagraphBreak).is_ok());
     let Block::Environment(environment) = &session.document.body[0] else {
         panic!("section should remain in place");
     };
@@ -490,7 +490,7 @@ fn section_title_enter_at_end_keeps_nested_body_order_and_creates_empty_paragrap
             })))
             .is_ok()
     );
-    assert!(session.run(Command::SplitParagraph).is_ok());
+    assert!(session.run(Command::InsertParagraphBreak).is_ok());
 
     let Block::Environment(section) = &session.document.body[0] else {
         panic!("section should remain in place");
@@ -559,7 +559,7 @@ fn enter_rejects_cross_title_body_selection_atomically() {
     let before = session.document.clone();
     let before_selection = session.selection.clone();
     for command in [
-        Command::SplitParagraph,
+        Command::InsertParagraphBreak,
         Command::Delete(Direction::Backward),
         Command::InsertText("replacement".to_owned()),
     ] {
@@ -1006,7 +1006,7 @@ fn reversed_selection_split_uses_the_ordered_range() {
             .run(Command::SetSelection(Some(Selection { anchor, focus })))
             .is_ok()
     );
-    assert!(session.run(Command::SplitParagraph).is_ok());
+    assert!(session.run(Command::InsertParagraphBreak).is_ok());
 
     assert_eq!(session.document.body.len(), 2);
     let left = match &session.document.body[0] {
@@ -1044,7 +1044,7 @@ fn split_after_range_deletion_keeps_original_cut_when_graphemes_would_join() {
             })))
             .is_ok()
     );
-    let effect = match session.run(Command::SplitParagraph) {
+    let effect = match session.run(Command::InsertParagraphBreak) {
         Ok(effect) => effect,
         Err(error) => panic!("selection split should succeed: {error}"),
     };
@@ -1470,7 +1470,7 @@ fn split_refuses_unknown_paragraph_fields_without_changing_session() {
     let before_selection = session.selection.clone();
 
     assert_eq!(
-        session.run(Command::SplitParagraph),
+        session.run(Command::InsertParagraphBreak),
         Err(EditError::UnsupportedOpaqueContent)
     );
     assert_eq!(session.document, before_document);
@@ -1550,7 +1550,7 @@ fn ime_cancel_is_transient_and_enter_is_rejected_while_composing() {
     );
     assert_eq!(session.selection, before_selection);
     assert_eq!(
-        session.run(Command::SplitParagraph),
+        session.run(Command::InsertParagraphBreak),
         Err(EditError::CompositionPending)
     );
     assert_eq!(session.document, before);
@@ -1566,7 +1566,7 @@ fn public_command_ids_and_error_codes_remain_stable() {
         (Command::InsertText("text".to_owned()), "text.insert"),
         (Command::PasteText("text".to_owned()), "clipboard.paste"),
         (Command::InsertSoftBreak, "text.soft_break"),
-        (Command::SplitParagraph, "text.split_paragraph"),
+        (Command::InsertParagraphBreak, "text.split_paragraph"),
         (Command::Delete(Direction::Forward), "text.delete"),
         (Command::MoveCaret(Direction::Backward), "caret.move"),
         (Command::SetSelection(None), "selection.set"),
@@ -2036,7 +2036,7 @@ fn selected_delete_and_forward_paragraph_merge_publish_position_maps() -> Result
         .map(&end);
     assert_eq!(mapped.offset, 1);
     assert_eq!(mapped.paragraph_id, paragraph_id);
-    session.run(Command::SplitParagraph)?;
+    session.run(Command::InsertParagraphBreak)?;
     let right = session.selection().focus.clone();
     let left_end = Pos {
         paragraph_id: paragraph_id.clone(),
@@ -2208,7 +2208,7 @@ fn cross_paragraph_selection_is_replaced_by_enter() -> Result<(), EditError> {
         focus: second,
     })))?;
 
-    let effect = session.run(Command::SplitParagraph)?;
+    let effect = session.run(Command::InsertParagraphBreak)?;
     assert!(effect.document_changed);
     assert_eq!(session.document().body.len(), 2);
     let texts = session

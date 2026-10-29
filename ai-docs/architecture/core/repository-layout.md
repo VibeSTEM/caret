@@ -47,6 +47,7 @@
 │   │       │   │   ├── paragraph_edit.rs
 │   │       │   │   ├── range_edit.rs
 │   │       │   │   ├── selection.rs
+│   │       │   │   ├── structure.rs
 │   │       │   │   ├── tests.rs
 │   │       │   │   └── text_edit.rs
 │   │       │   ├── tests.rs
@@ -61,6 +62,8 @@
 │   ├── caret-foundation/
 │   ├── caret-layout/
 │   │   └── src/paragraph/parley/{interaction.rs,line_mapping.rs}
+│   ├── caret-structure/
+│   │   └── src/{index.rs,index/tests.rs}
 │   └── launcher/
 ├── native/
 │   ├── adapters/             # 平台字体、路径、窗口 chrome、图标
@@ -87,7 +90,6 @@
     └── src/
 
 规划中的 crate
-├── caret-structure/     # 只读结构索引
 └── caret-cli/           # 应用命令行
 ```
 

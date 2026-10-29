@@ -34,7 +34,7 @@
 
 ## 预计改动
 
-caret-doc 样式类型、caret-engine 格式命令、格式查询 DTO 和命令测试。
+`caret-doc/src/model/inline.rs` 的行内环境节点、`run.rs` 与 `paragraph.rs` 的直接属性载体；`caret-engine` 中彼此独立的行内环境树操作和 Run/Paragraph 直接属性操作模块、格式查询 DTO 和命令测试。命令类型和注册仍由统一入口管理，格式执行器按行为边界分开。当前不预建空模块。
 
 ## 验收标准
 

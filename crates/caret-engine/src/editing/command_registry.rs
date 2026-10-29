@@ -93,6 +93,12 @@ const CANDIDATES: &[CommandCandidate] = &[
         label: "Line break",
         available: true,
     },
+    CommandCandidate {
+        alias: "\\newparagraph",
+        command_id: "text.split_paragraph",
+        label: "New paragraph",
+        available: true,
+    },
 ];
 
 pub const fn candidates() -> &'static [CommandCandidate] {

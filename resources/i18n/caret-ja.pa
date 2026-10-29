@@ -521,3 +521,8 @@ message_100:
   src: Multiline equation
   tr: 複数行数式
   st: finished
+
+message_101:
+  src: New paragraph
+  tr: 新しい段落
+  st: finished

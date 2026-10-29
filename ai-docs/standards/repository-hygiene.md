@@ -28,3 +28,5 @@
 ## 模块文件结构
 
 Rust 模块需要拆分职责或单测明显增大时，使用 `module.rs` 作为模块入口，并在同级 `module/` 中放功能子模块和 `tests.rs`。较大的私有单测通过入口中的 `#[cfg(test)] mod tests;` 注册，保留父模块私有访问与测试归属；crate 根 `lib.rs` / `main.rs` 对应的测试放在 `src/tests.rs`。新建或重构模块时不采用 `module/mod.rs`；[Rust Reference](https://doc.rust-lang.org/reference/items/modules.html#module-source-filenames) 与 [The Rust Programming Language](https://doc.rust-lang.org/book/ch07-05-separating-modules-into-different-files.html) 仍将其列为受支持的旧路径，并鼓励使用 `module.rs`，因为它更一致且避免编辑器中出现许多同名 `mod.rs`。不使用平铺的 `module_tests.rs`，也不只为行数阈值机械拆分；拆分应对应独立职责，并在评审中检查调用边界与重复实现。已有 `mod.rs` 在未涉及该模块重构时不要求仅为统一风格搬迁。
+
+由多个可独立推导的构件组成一个领域投影时，可在功能模块下放 `atoms/`，每个 atom 只持有源节点的稳定 ID、范围或轻量引用；用一个明确的 composer/index 入口按文档顺序完成装配。atom 不能复制领域源数据、各自维护计数或重复承担最终组合策略；只有存在多个真实消费者或稳定公共契约时才导出 atom API。单一职责的小功能直接保留在模块内，不为了形式创建空 atoms 目录。

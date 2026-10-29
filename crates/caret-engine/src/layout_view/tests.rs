@@ -11,7 +11,7 @@ fn layout_projection_keeps_utf8_ranges_and_large_generation_ids_in_json()
     let mut session = Session::new(Document::blank())?;
     for command in [
         Command::InsertText("é".to_owned()),
-        Command::SplitParagraph,
+        Command::InsertParagraphBreak,
         Command::InsertText("中".to_owned()),
     ] {
         session.run(command)?;
