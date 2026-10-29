@@ -2,6 +2,9 @@
 leak:CFPrefsPlistSource
 leak:synchronouslySendSystemMessage:andUserMessage:andDirectMessage
 
+# macOS 字体后端首次使用 NSFont 时会注册进程级 CoreFoundation 通知观察者。
+leak:+[NSFont initialize]
+
 # Qt 字体发现和绘制会初始化进程级 CoreText/CoreGraphics 字体缓存。
 leak:TGlobalFontRegistry
 leak:QCoreTextFontDatabase::populateFontDatabase
