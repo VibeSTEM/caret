@@ -271,6 +271,19 @@ void ShellLoadTest::settingsDialogDraftCancelAndFailure() {
 }
 
 #ifdef CARET_ENABLE_APP
+void ShellLoadTest::preferencesWithoutRuntimeRejectChangesAndKeepDefaults() {
+    if (caret::settings_runtime() != nullptr) {
+        QSKIP("该用例由独立进程运行，避免依赖共享测试进程的执行顺序");
+    }
+    caret::PreferencesViewModel preferences;
+    QVERIFY(!preferences.refresh());
+    QVERIFY(!preferences.setCaretBlinkEnabled(false));
+    QVERIFY(!preferences.setAutoSaveEnabled(true));
+    QVERIFY(preferences.caretBlinkEnabled());
+    QVERIFY(preferences.commandSuggestionsEnabled());
+    QVERIFY(!preferences.autoSaveEnabled());
+}
+
 void ShellLoadTest::settingsDialogCommitsPreferencesThroughRust() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -280,20 +293,84 @@ void ShellLoadTest::settingsDialogCommitsPreferencesThroughRust() {
     QVERIFY(caret::install_settings_runtime(std::move(runtime)));
     caret::PreferencesViewModel preferences;
     QVERIFY(preferences.error().isEmpty());
+    caret::SettingsViewModel settings;
+    QVERIFY(settings.error().isEmpty());
     caret::SettingsDialogController controller;
     controller.setPreferences(&preferences);
+    controller.setSettingsObject(&settings);
     controller.open();
     QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
     controller.editCaretBlinkEnabled(false);
+    controller.editCommandSuggestionsEnabled(false);
     controller.apply();
     QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
     QVERIFY(!preferences.caretBlinkEnabled());
+    QVERIFY(!preferences.commandSuggestionsEnabled());
     QVERIFY(QFile::exists(QString::fromUtf8(path)));
     auto reloaded_runtime = caret::ffi::new_settings_runtime(
         rust::String(path.constData(), static_cast<std::size_t>(path.size())));
     QVERIFY(caret::install_settings_runtime(std::move(reloaded_runtime)));
     caret::PreferencesViewModel reloaded;
     QVERIFY(!reloaded.caretBlinkEnabled());
+    QVERIFY(!reloaded.commandSuggestionsEnabled());
+}
+
+void ShellLoadTest::preferencesPersistAndRefreshUserFacingSwitches() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath(QStringLiteral("settings.json")).toUtf8();
+    auto runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(runtime)));
+    caret::PreferencesViewModel preferences;
+    QVERIFY(preferences.error().isEmpty());
+    QVERIFY(!preferences.autoSaveEnabled());
+    QVERIFY(preferences.caretBlinkEnabled());
+
+    QSignalSpy snapshot_changes(&preferences, &caret::PreferencesViewModel::snapshotChanged);
+    QVERIFY(snapshot_changes.isValid());
+    QVERIFY(preferences.setAutoSaveEnabled(true));
+    QVERIFY(preferences.autoSaveEnabled());
+    QCOMPARE(snapshot_changes.size(), 1);
+    QVERIFY(preferences.setCaretBlinkEnabled(false));
+    QVERIFY(!preferences.caretBlinkEnabled());
+    QCOMPARE(snapshot_changes.size(), 2);
+    QVERIFY(preferences.refresh());
+    QCOMPARE(snapshot_changes.size(), 3);
+
+    auto reloaded_runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(reloaded_runtime)));
+    caret::PreferencesViewModel reloaded;
+    QVERIFY(reloaded.error().isEmpty());
+    QVERIFY(reloaded.autoSaveEnabled());
+    QVERIFY(!reloaded.caretBlinkEnabled());
+}
+
+void ShellLoadTest::preferencesKeepTheLastSnapshotWhenPersistenceIsUnavailable() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile blocker(directory.filePath(QStringLiteral("not-a-directory")));
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    QCOMPARE(blocker.write(QByteArrayLiteral("file")), qint64(4));
+    blocker.close();
+    const QByteArray path = (blocker.fileName() + QStringLiteral("/settings.json")).toUtf8();
+    auto runtime = caret::ffi::new_settings_runtime(
+        rust::String(path.constData(), static_cast<std::size_t>(path.size())));
+    QVERIFY(caret::install_settings_runtime(std::move(runtime)));
+    caret::PreferencesViewModel preferences;
+    QVERIFY(!preferences.error().isEmpty());
+
+    QVERIFY(!preferences.setCaretBlinkEnabled(false));
+    QVERIFY(preferences.caretBlinkEnabled());
+    QVERIFY(!preferences.error().isEmpty());
+    QVERIFY(!preferences.setAutoSaveEnabled(true));
+    QVERIFY(!preferences.autoSaveEnabled());
+    QVERIFY(!preferences.error().isEmpty());
+    QVERIFY(preferences.refresh());
+    QVERIFY(preferences.error().isEmpty());
+    QVERIFY(preferences.caretBlinkEnabled());
+    QVERIFY(!preferences.autoSaveEnabled());
 }
 
 void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically() {

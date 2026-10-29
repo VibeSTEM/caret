@@ -56,6 +56,7 @@
 #include <qcontainerfwd.h>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
@@ -82,6 +83,14 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     QVERIFY(view_model != nullptr);
     QSignalSpy interaction_changed(view_model, SIGNAL(interactionChanged()));
     QVERIFY(interaction_changed.isValid());
+
+    QVariantMap wrong_thread;
+    std::thread worker(
+        [&]() { wrong_thread = view_model->commandLineCommand(QStringLiteral("begin")); });
+    worker.join();
+    QVERIFY(!wrong_thread.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(wrong_thread.value(QStringLiteral("error")).toString(),
+             QStringLiteral("cmdline.wrong_thread"));
 
     const QVariantMap begin = view_model->commandLineCommand(QStringLiteral("begin"));
     QVERIFY(begin.value(QStringLiteral("valid")).toBool());
@@ -114,7 +123,136 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     QVERIFY(cancel.value(QStringLiteral("valid")).toBool());
     QVERIFY(!view_model->commandLine().value(QStringLiteral("active")).toBool());
     QCOMPARE(interaction_changed.size(), 4);
+
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("begin"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("newline"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QVariantMap newline = view_model->commandLineCommand(QStringLiteral("accept"));
+    QVERIFY2(newline.value(QStringLiteral("valid")).toBool(),
+             qPrintable(newline.value(QStringLiteral("error")).toString()));
+    QVERIFY(!view_model->commandLine().value(QStringLiteral("active")).toBool());
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("1"));
+    QCOMPARE(
+        view_model->paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
+        QStringLiteral("\n"));
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("begin"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("tab"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("2"));
+    QCOMPARE(
+        view_model->paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
+        QStringLiteral("\n\\"));
     delete probe;
+}
+
+void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior() {
+    QQuickWindow window;
+    window.resize(320, 180);
+    auto* canvas = new caret::DocumentCanvas(window.contentItem());
+    canvas->setSize(QSizeF(320, 180));
+    canvas->setFocus(true);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
+
+    QSignalSpy command_keys(canvas, &caret::DocumentCanvas::commandLineKeyRequested);
+    QSignalSpy text_input(canvas, &caret::DocumentCanvas::textInputRequested);
+    QSignalSpy navigation(canvas, &caret::DocumentCanvas::visualNavigationRequested);
+    QSignalSpy vertical_navigation(canvas, &caret::DocumentCanvas::verticalNavigationRequested);
+    QSignalSpy edge_navigation(canvas, &caret::DocumentCanvas::lineEdgeNavigationRequested);
+    QSignalSpy editing_commands(canvas, &caret::DocumentCanvas::editingCommandRequested);
+    QSignalSpy clipboard_commands(canvas, &caret::DocumentCanvas::clipboardCommandRequested);
+    QVERIFY(command_keys.isValid());
+    QVERIFY(text_input.isValid());
+    QVERIFY(navigation.isValid());
+    QVERIFY(vertical_navigation.isValid());
+    QVERIFY(edge_navigation.isValid());
+    QVERIFY(editing_commands.isValid());
+    QVERIFY(clipboard_commands.isValid());
+    QCOMPARE(canvas->inputMethodContext(), QVariantMap{});
+    QVERIFY(canvas->inputMethodQuery(Qt::ImEnabled).toBool());
+    const QVariantMap input_method_context{
+        {QStringLiteral("surroundingText"), QStringLiteral("caret")},
+        {QStringLiteral("cursorPosition"), 5},
+        {QStringLiteral("anchorPosition"), 0},
+    };
+    canvas->setInputMethodContext(input_method_context);
+    QCOMPARE(canvas->inputMethodContext(), input_method_context);
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImSurroundingText).toString(), QStringLiteral("caret"));
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorPosition).toInt(), 5);
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImAnchorPosition).toInt(), 0);
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCurrentSelection).toString(), QStringLiteral("caret"));
+    QVERIFY(!canvas->inputMethodQuery(Qt::ImHints).isValid());
+
+    canvas->setCommandMode(true);
+    QTest::keyClick(&window, Qt::Key_A);
+    QCOMPARE(text_input.size(), 1);
+    QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("a"));
+    const QList<QPair<Qt::Key, QString>> command_key_cases = {
+        {Qt::Key_Escape, QStringLiteral("cancel")},
+        {Qt::Key_Return, QStringLiteral("accept")},
+        {Qt::Key_Tab, QStringLiteral("tab")},
+        {Qt::Key_Backspace, QStringLiteral("backspace")},
+        {Qt::Key_Left, QStringLiteral("cursor-left")},
+        {Qt::Key_Right, QStringLiteral("cursor-right")},
+        {Qt::Key_Space, QStringLiteral("space")},
+        {Qt::Key_Up, QStringLiteral("previous")},
+        {Qt::Key_Down, QStringLiteral("next")},
+    };
+    for (const auto& [key, expected] : command_key_cases) {
+        QTest::keyClick(&window, key);
+        QCOMPARE(command_keys.size(), 1);
+        QCOMPARE(command_keys.takeFirst().at(0).toString(), expected);
+    }
+
+    canvas->setCommandMode(false);
+    QTest::keyClick(&window, Qt::Key_A);
+    QCOMPARE(text_input.size(), 1);
+    QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("a"));
+    QTest::keyClick(&window, Qt::Key_Left);
+    QCOMPARE(navigation.size(), 1);
+    QCOMPARE(navigation.takeFirst(), (QList<QVariant>{false, false}));
+    QTest::keyClick(&window, Qt::Key_Right, Qt::ShiftModifier);
+    QCOMPARE(navigation.size(), 1);
+    QCOMPARE(navigation.takeFirst(), (QList<QVariant>{true, true}));
+    QTest::keyClick(&window, Qt::Key_Up);
+    QCOMPARE(vertical_navigation.size(), 1);
+    QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{-1, false}));
+    QTest::keyClick(&window, Qt::Key_Down, Qt::ShiftModifier);
+    QCOMPARE(vertical_navigation.size(), 1);
+    QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{1, true}));
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(edge_navigation.size(), 1);
+    QCOMPARE(edge_navigation.takeFirst(), (QList<QVariant>{false, false}));
+    QTest::keyClick(&window, Qt::Key_End, Qt::ShiftModifier);
+    QCOMPARE(edge_navigation.size(), 1);
+    QCOMPARE(edge_navigation.takeFirst(), (QList<QVariant>{true, true}));
+    QTest::keyClick(&window, Qt::Key_Return);
+    QCOMPARE(editing_commands.size(), 1);
+    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.split_paragraph"));
+    QTest::keyClick(&window, Qt::Key_Enter, Qt::ShiftModifier);
+    QCOMPARE(editing_commands.size(), 1);
+    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.soft_break"));
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QCOMPARE(editing_commands.size(), 1);
+    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.delete_backward"));
+    QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QCOMPARE(clipboard_commands.size(), 1);
+    QCOMPARE(clipboard_commands.takeFirst().at(0).toString(), QStringLiteral("copy"));
+    QTest::keyClick(&window, Qt::Key_V, Qt::MetaModifier);
+    QCOMPARE(clipboard_commands.size(), 1);
+    QCOMPARE(clipboard_commands.takeFirst().at(0).toString(), QStringLiteral("paste"));
+    QKeyEvent altgr_event(QEvent::KeyPress, Qt::Key_2, Qt::ControlModifier | Qt::AltModifier,
+                          QStringLiteral("@"));
+    QCoreApplication::sendEvent(canvas, &altgr_event);
+    QCOMPARE(text_input.size(), 1);
+    QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("@"));
 }
 
 void ShellLoadTest::documentHitTestReturnsRustPosition() {

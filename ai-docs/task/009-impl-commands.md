@@ -1,6 +1,6 @@
 # 009 — M1：`\` 命令
 
-- 状态：in-progress
+- 状态：done
 - 依赖：008
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-29
@@ -45,13 +45,13 @@
 
 ## 验收标准
 
-- [ ] 补全层锚在插入点旁，能显示候选和空结果；宽度自适应，候选可滚动，空间不足时不遮挡输入光标。
-- [ ] Preferences 中可开关候选面板；关闭面板后命令查询与键盘执行仍可用。
+- [x] 补全层锚在插入点旁，能显示候选和空结果；宽度自适应，候选可滚动，空间不足时不遮挡输入光标。
+- [x] Preferences 中可开关候选面板；关闭面板后命令查询与键盘执行仍可用。
 - [x] 命令提示背景使用独立的 `color-command-prompt` 主题 token，支持默认、浅色和深色主题；不改变执行后环境节点的高亮色。
-- [ ] `\newline` 插入段内软换行，整条命令是一个撤销步；结构标题和列表候选在 010/025 提供语义目标后可执行。
-- [ ] Enter 执行当前候选；非空查询 Tab 补全当前候选别名但不执行，空查询 Tab 或重复前缀键插入字面 `\`；空格不执行也不插入。
+- [x] `\newline` 插入段内软换行，整条命令是一个撤销步；结构标题和列表候选在 010/025 提供语义目标后可执行。
+- [x] Enter 执行当前候选；非空查询 Tab 补全当前候选别名但不执行，空查询 Tab 或重复前缀键插入字面 `\`；空格不执行也不插入。
 - [x] Esc 取消且没有撤销步。组字期间不进入命令模式。
-- [ ] 命令模式查询不主动触发排版；fmt、跨语言构建、行为验证与独立评审通过。
+- [x] 命令模式查询不主动触发排版；fmt、跨语言构建、行为验证与独立评审通过。
 
 ## 验证计划与结果
 
@@ -65,17 +65,20 @@
 | 2026-10-29 | `cargo test --locked -p caret-engine failed_editor_command_keeps_the_active_command_query` | 编辑命令失败时命令查询仍保持活动 | 通过，1 项 |
 | 2026-10-29 | `cargo test --locked -p caret-engine tab_completes_a_filtered_command_without_editing_the_document`、`accepting_the_newline_command_inserts_a_soft_break_and_closes_the_query` | Tab 补全无文档副作用；接受换行命令插入软换行并退出查询 | 通过，各 1 项 |
 | 2026-10-29 | `cargo test --locked -p caret-app command_candidate_snapshot_omits_search_only_labels`、Qt `commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument` | 候选快照不传搜索专用名称；Rust Session 状态经 FFI/Qt 投影，Tab 不改正文，错误和取消状态符合契约 | 通过，各 1 项 |
-| 2026-10-29 | `cargo coverage` | Rust 产品 crate 全局函数/行覆盖率均至少 85% | 通过；函数 85.54%，行 89.58% |
+| 2026-10-29 | `cargo coverage` | Rust 产品 crate 全局函数/行覆盖率均至少 85% | 通过；函数 85.61%，行 89.66% |
 | 2026-10-29 | Criterion 0.8.2 release 对照：旧快照结构（含候选 `label`）与当前结构；20 个样本、预热 1 秒、测量 2 秒 | 以 10 万字符文档上的命令查询快照比较序列化耗时和负载大小 | macOS arm64、Rust 1.99.0；100,499 个 Unicode 字符、500 段、5 个候选：旧版 538 B，耗时区间 3.0967–3.1275 μs（点估计 3.1092 μs）；当前 422 B，区间 2.6177–2.7090 μs（点估计 2.6540 μs）。负载减少 21.6%，微基准点估计耗时减少 14.6%（455 ns）。文档准备不计入计时；只衡量命令状态快照序列化，不代表整次按键、Qt 渲染或端到端延迟；未测分配次数。该对照为一次性测量，临时基准代码未保留 |
 | 2026-10-29 | `cmake --build target/native/debug-coverage --target caret_shell_qmllint caret_native_app -j4` | QML lint 与 macOS 应用构建通过 | 通过；链接器有托管 LLVM LTO 文件缺失和静态库部署目标版本较新的警告 |
 | 2026-10-29 | `cargo coverage native` | native CTest 与 C++ 函数/行覆盖率至少 85% | CTest 7/7 通过；函数 87.58% 达标，行 82.96% 未达标，native 覆盖率门槛尚未通过 |
+| 2026-10-29 | `cargo coverage native`（补充 Canvas 按键分派、命令跨层执行与 Preferences 成功/失败行为测试后） | native CTest 与 C++ 函数/行覆盖率至少 85% | CTest 8/8 通过；函数 89.09%，行 85.06%，均达标。无 SettingsRuntime 的失败行为使用独立 CTest 进程，避免依赖共享测试顺序。结果报告位于 `target/native-coverage/` |
+| 2026-10-29 | `cargo format --check`、`cargo test --locked --workspace` | 跨语言格式与 workspace 行为回归通过 | 通过；Rust 单元与集成测试、QML 检查和 CTest 全部通过 |
+| 2026-10-29 | macOS 桌面应用手工验收 | 打开补全、关闭补全后继续用键盘输入和导航；确认命令执行结果 | 用户确认实测无问题；当前只有 `\newline` 已接入执行，其余结构、列表、分页、数学命令等待对应任务提供语义后接入 |
 | 2026-10-29 | Qt `autoScrollTextMovesOnlyWhenActiveAndOverflowing`、`autoScrollTextRepeatsWithTheDocumentedPauseCycle` | 候选选中态驱动两列溢出文本滚动，取消选中后复位；到末尾停 1 秒、复位后停 1 秒再循环 | 通过；无头 Qt 测试 2 项，profile 输出位于 `target/native-coverage/profiles/` |
 | 2026-10-29 | `git diff HEAD --check` | 完整待提交差异无空白错误 | 通过 |
-| 2026-10-29 | 独立 subagent 完整差异评审（gpt-6.1-sol，medium，只读） | 检查状态一致性、重复数据、QML 自动滚动、文件注册和文档 | 前次发现的命令失败状态分叉、无用 catalog 热路径和 HTML 原型引用已修复；本轮无新阻断问题。未替代真实窗口语言切换验收 |
+| 2026-10-29 | 独立 subagent 完整差异评审（gpt-6.1-sol，medium，只读） | 检查状态一致性、重复数据、QML 自动滚动、文件注册和文档 | 前次发现的命令失败状态分叉、无用 catalog 热路径和 HTML 原型引用已修复；本轮发现的共享运行时测试顺序依赖改为独立进程验证后复审 |
 
 ## 风险与回退
 
-输入法事件顺序在 Qt 上可能和文档假设不同；自动滚动字体修正仍需在真实窗口验证英文启动、中文切回英文及重启后三种路径。验证失败就保持命令补全面板关闭，并把现象记入本任务，不改命令查询状态机。回退是隐藏补全层并忽略 `\`。
+当前命令执行范围限于 `\newline`；其他候选只提供查询与提示，不会伪装为已实现的命令。标题/环境、列表与分页、数学和表格能力分别由后续任务接入。命令入口若出现回归，可通过 Preferences 隐藏候选面板；这不会改变命令会话或编辑状态。
 
 ## 决策与工作记录
 
@@ -85,4 +88,4 @@
 
 ## 完成摘要
 
-进行中。已接入 Rust 命令会话与候选注册、Tab 别名补全、轻量命令状态通道、Qt/QML 补全展示、主题色和候选显示首选项；命令候选行与自动循环文本已抽为 Atoms。Rust 定向测试、Qt 命令状态跨层测试、候选选中态滚动/复位、1 秒自动滚动循环、qmllint、QML 格式检查和独立完整 diff review 通过。Rust 全局覆盖率为函数 85.54%、行 89.58%；native 函数覆盖率为 87.58%，行覆盖率 82.96%，因此 native 85% 门槛未达标。10 万字符文档上的 Criterion 对照显示，命令快照序列化耗时点估计减少 14.6%（3.1092 μs 至 2.6540 μs），负载减少 21.6%（538 B 至 422 B）；这不代表端到端输入或渲染延迟，且未测分配次数。尚待真实窗口中的 IME 和英文/中文语言切换验收。
+已接入 Rust 命令会话与候选注册、Tab 别名补全、轻量命令状态通道、Qt/QML 补全展示、主题色和候选显示首选项；命令候选行与自动循环文本已抽为 Atoms。命令键真实画布路由、IME 期间拒绝命令模式、空查询 Tab/重复前缀、空格无副作用、换行命令单步撤销重做，以及 Preferences 保存与运行时失败保留状态均有行为测试。用户已在 macOS 实际验收补全面板与键盘操作，并确认当前可执行命令仅为 `\newline`。`cargo format --check`、完整 workspace 测试、native CTest、qmllint、QML 格式检查和覆盖率门槛通过；Rust 全局覆盖率为函数 85.61%、行 89.66%，native 函数覆盖率为 89.09%、行 85.06%。10 万字符文档上的 Criterion 对照显示，命令快照序列化耗时点估计减少 14.6%（3.1092 μs 至 2.6540 μs），负载减少 21.6%（538 B 至 422 B）；这不代表端到端输入或渲染延迟，且未测分配次数。其他结构、列表、分页及数学命令等待其语义任务接入。

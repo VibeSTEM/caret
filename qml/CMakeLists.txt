@@ -154,6 +154,10 @@ if(BUILD_TESTING)
     endif()
   endif()
   caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
+  if(CARET_ENABLE_APP)
+    caret_add_qml_test(Qml.PreferencesWithoutRuntime caret_shell_load_test qml
+                       preferencesWithoutRuntimeRejectChangesAndKeepDefaults)
+  endif()
 
   find_program(
     CARET_QMLFORMAT_EXECUTABLE

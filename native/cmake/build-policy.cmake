@@ -185,7 +185,11 @@ function(caret_add_qml_test name target)
   if(ARGC GREATER 2)
     list(APPEND _caret_qml_labels "${ARGV2}")
   endif()
-  add_test(NAME ${name} COMMAND ${target})
+  set(_caret_qml_arguments)
+  if(ARGC GREATER 3)
+    list(APPEND _caret_qml_arguments ${ARGV3})
+  endif()
+  add_test(NAME ${name} COMMAND ${target} ${_caret_qml_arguments})
   set_tests_properties(
     ${name}
     PROPERTIES
