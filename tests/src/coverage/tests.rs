@@ -170,3 +170,45 @@ fn crate_summary_combines_files_and_preserves_zero_denominator() -> Result<(), B
     );
     Ok(())
 }
+
+#[test]
+fn per_file_report_orders_the_weakest_behavior_coverage_first() -> Result<(), Box<dyn Error>> {
+    let value = json!({
+        "type": "llvm.coverage.json.export",
+        "version": "3.1.0",
+        "data": [{
+            "totals": {
+                "functions": {"count": 10, "covered": 7},
+                "lines": {"count": 100, "covered": 90}
+            },
+            "files": [
+                {
+                    "filename": "/repo/crates/caret-app/src/document.rs",
+                    "summary": {
+                        "functions": {"count": 5, "covered": 1},
+                        "lines": {"count": 50, "covered": 49}
+                    }
+                },
+                {
+                    "filename": "/repo/crates/caret-doc/src/model.rs",
+                    "summary": {
+                        "functions": {"count": 5, "covered": 5},
+                        "lines": {"count": 50, "covered": 41}
+                    }
+                }
+            ]
+        }]
+    });
+    let report = parse(&value)?;
+    let summary = report.file_summary();
+    let weakest = summary
+        .find("caret-app/src/document.rs")
+        .ok_or("缺少低覆盖源文件")?;
+    let strongest = summary
+        .find("caret-doc/src/model.rs")
+        .ok_or("缺少高覆盖源文件")?;
+    assert!(weakest < strongest);
+    assert!(summary.contains("functions 1/5 (20.00%)"));
+    assert!(summary.contains("lines 49/50 (98.00%)"));
+    Ok(())
+}

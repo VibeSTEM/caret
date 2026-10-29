@@ -52,6 +52,23 @@ set_target_properties(
              QT_QML_MODULE_QML_FILES "${_caret_shell_qml_files}")
 qt_finalize_executable(caret_native_app)
 
+if(BUILD_TESTING)
+  add_test(NAME App.Version COMMAND "$<TARGET_FILE:caret_native_app>" --version)
+  add_test(NAME App.InvalidArgument COMMAND "$<TARGET_FILE:caret_native_app>" --invalid-argument)
+  set_tests_properties(App.InvalidArgument PROPERTIES LABELS "cpp;app" WILL_FAIL TRUE)
+  add_test(
+    NAME App.HeadlessWindowLoads
+    COMMAND
+      "${CMAKE_COMMAND}" -E env "QT_QPA_PLATFORM=offscreen"
+      "HOME=${CMAKE_CURRENT_BINARY_DIR}/test-home"
+      "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config"
+      "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-data"
+      "APPDATA=${CMAKE_CURRENT_BINARY_DIR}/test-appdata"
+      "LOCALAPPDATA=${CMAKE_CURRENT_BINARY_DIR}/test-localappdata"
+      "$<TARGET_FILE:caret_native_app>" --quit-after-load)
+  set_tests_properties(App.Version App.HeadlessWindowLoads PROPERTIES LABELS "cpp;app" TIMEOUT 30)
+endif()
+
 if(WIN32)
   get_filename_component(_caret_sdk_bin "${CMAKE_RC_COMPILER}" DIRECTORY)
   find_program(

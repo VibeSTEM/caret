@@ -25,8 +25,12 @@ class ShellLoadTest : public QObject {
     void closeFailureDoesNotReopenPendingConfirmation();
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
+    void canvasPolicyPublishesDocumentedZoomLimits();
+    void documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation();
+    void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();
 #ifdef CARET_ENABLE_APP
+    void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();
 #endif
 #ifdef CARET_ENABLE_APP
@@ -35,6 +39,11 @@ class ShellLoadTest : public QObject {
     void documentFileFlowPreservesSaveStateAndReopens();
     void autoSaveWritesTheCurrentRevisionAfterTheDeadline();
     void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
+    void recoveryEntriesCanBeRestoredExportedAndDiscarded();
     void documentHistoryUndoRedoTracksRustSession();
+    void documentCaretNavigationUpdatesObservablePosition();
+    void confirmedConflictReplacementWritesCurrentDocument();
+    void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();
+    void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
 #endif
 };

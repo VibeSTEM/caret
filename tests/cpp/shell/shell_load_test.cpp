@@ -39,6 +39,7 @@
 #include <QtTest/qtestcase.h>
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
+#include <limits>
 #include <qcontainerfwd.h>
 #include <utility>
 
@@ -404,6 +405,12 @@ void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {
     QCOMPARE(units.factorToPercent(1.25), 125);
     QCOMPARE(units.pointsToLogicalCentipixels(-1.0, 100), qint64{0});
     QCOMPARE(units.pointsToLogicalCentipixels(12.0, -1), qint64{0});
+    QCOMPARE(units.pointsToLogicalCentipixels(std::numeric_limits<qreal>::infinity(), 100),
+             qint64{0});
+    QCOMPARE(units.pointsToLogicalCentipixels(std::numeric_limits<qreal>::max(), 100),
+             std::numeric_limits<qint64>::max());
+    QCOMPARE(units.factorToPercent(std::numeric_limits<qreal>::infinity()), 0);
+    QCOMPARE(units.factorToPercent(std::numeric_limits<qreal>::max()), 0);
 }
 
 int main(int argc, char* argv[]) {

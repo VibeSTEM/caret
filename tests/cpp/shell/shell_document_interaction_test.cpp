@@ -120,6 +120,11 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     auto* layout_view_model =
         engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
     QVERIFY(layout_view_model != nullptr);
+    const QVariantMap invalid_glyph_request =
+        layout_view_model->rasterizePageGlyphs(-1, 1.0, 0.0, 0.0, 0, 0, 0, 255);
+    QVERIFY(!invalid_glyph_request.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalid_glyph_request.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_request"));
     const QVariantMap rust_hit =
         layout_view_model->hitTestDocument(page_hit.value(QStringLiteral("pageIndex")).toInt(),
                                            page_hit.value(QStringLiteral("xPt")).toReal(),

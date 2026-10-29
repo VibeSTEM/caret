@@ -487,8 +487,14 @@ pub(crate) fn mark_document_saved_json(
 
 #[cfg(test)]
 mod tests {
-    use super::{cancel_pending_recovery_lease, pending_recovery_leases};
-    use caret_app::document_recovery::DocumentRecoveryStorage;
+    use super::{
+        cancel_pending_recovery_lease, configure_document_recovery, discard_document_recovery,
+        discard_recovery, export_recovery, mark_document_saved_json, pending_recovery_leases,
+        prepare_recovery_document, recovery_entries_json, recovery_storage_for_cleanup,
+        set_document_recovery_id, update_recovery_document, write_document_file_replace_external,
+    };
+    use crate::document::{document_save_snapshot, new_blank_document_runtime};
+    use caret_app::document_recovery::{DocumentRecoveryStorage, RecoveryKind};
     use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -519,6 +525,134 @@ mod tests {
         };
         drop(replacement_lease);
         assert!(storage.remove(&id).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_file_commands_preserve_external_bytes_and_clear_saved_session_backups() {
+        static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "caret-ffi-recovery-flow-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ));
+        assert!(configure_document_recovery(root.to_string_lossy().into_owned()).is_empty());
+        assert_eq!(recovery_entries_json(), "[]");
+
+        let document_path = root.join("document.cdoc");
+        let original_external_bytes = b"external document version";
+        assert!(std::fs::write(&document_path, original_external_bytes).is_ok());
+        let mut runtime = new_blank_document_runtime();
+        let snapshot = document_save_snapshot(&mut runtime);
+        assert!(snapshot.error.is_empty());
+        assert!(
+            write_document_file_replace_external(
+                document_path.to_string_lossy().into_owned(),
+                snapshot.bytes.clone(),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            std::fs::read(&document_path).ok(),
+            Some(snapshot.bytes.clone())
+        );
+
+        let entries = recovery_entries_json();
+        let parsed_result: Result<serde_json::Value, _> = serde_json::from_str(&entries);
+        assert!(parsed_result.is_ok(), "recovery entries should be JSON");
+        let parsed = parsed_result.unwrap_or_default();
+        assert_eq!(parsed.as_array().map(Vec::len), Some(1));
+        let external_id = parsed[0]["id"].as_str().unwrap_or_default().to_owned();
+        assert!(
+            !external_id.is_empty(),
+            "external recovery entry should have an ID"
+        );
+        assert_eq!(parsed[0]["kind"], "external_version");
+        let exported_path = root.join("external-backup.bin");
+        assert!(
+            export_recovery(
+                external_id.clone(),
+                exported_path.to_string_lossy().into_owned(),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            std::fs::read(&exported_path).ok(),
+            Some(original_external_bytes.to_vec())
+        );
+        assert!(discard_recovery(external_id).is_empty());
+
+        let storage_result = recovery_storage_for_cleanup();
+        assert!(
+            storage_result.is_ok(),
+            "recovery storage should be configured"
+        );
+        let Ok(storage) = storage_result else { return };
+        let recovery_result = storage.store(
+            RecoveryKind::LocalDocument,
+            &document_path,
+            Some(snapshot.baseline_digest.clone()),
+            &snapshot.bytes,
+        );
+        assert!(
+            recovery_result.is_ok(),
+            "document recovery should be stored"
+        );
+        let Ok(recovery_id) = recovery_result else {
+            return;
+        };
+        assert!(
+            update_recovery_document(
+                recovery_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+                snapshot.bytes.clone(),
+            )
+            .is_empty()
+        );
+        assert!(
+            set_document_recovery_id(
+                &mut runtime,
+                snapshot.session_generation,
+                recovery_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+            )
+            .is_empty()
+        );
+
+        let saved = mark_document_saved_json(
+            &mut runtime,
+            snapshot.session_generation,
+            snapshot.document_generation,
+            snapshot.history_state_id,
+            document_path.to_string_lossy().into_owned(),
+            snapshot.content_digest,
+        );
+        assert!(!saved.starts_with("error:"));
+        let saved_status_result: Result<serde_json::Value, _> = serde_json::from_str(&saved);
+        assert!(saved_status_result.is_ok(), "saved status should be JSON");
+        let saved_status = saved_status_result.unwrap_or_default();
+        assert_eq!(
+            saved_status["path"],
+            document_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(saved_status["dirty"], false);
+        let remaining_result = storage.list();
+        assert!(
+            remaining_result.is_ok(),
+            "recovery storage should remain readable"
+        );
+        let remaining = remaining_result.unwrap_or_default();
+        assert!(!remaining.contains(&recovery_id));
+
+        assert!(
+            !prepare_recovery_document("missing-entry".to_owned(), 0, 0)
+                .error
+                .is_empty()
+        );
+        assert!(discard_document_recovery(&mut runtime).is_empty());
+        cancel_pending_recovery_lease("missing-entry".to_owned());
         let _ = std::fs::remove_dir_all(root);
     }
 }
