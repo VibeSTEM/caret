@@ -11,6 +11,7 @@ namespace document_units {
 inline constexpr int kPointsPerInch = 72;
 inline constexpr int kLogicalPixelsPerInch = 96;
 inline constexpr int kCentipixelsPerLogicalPixel = 100;
+inline constexpr int kCentipointsPerPoint = 100;
 inline constexpr int kPercentPerFactor = 100;
 
 constexpr qreal logical_pixels_per_point() {
@@ -35,6 +36,9 @@ class DocumentUnits final : public QObject {
 
     /// zoom_percent 以 100 表示 100%；无效输入返回 0。
     Q_INVOKABLE qint64 pointsToLogicalCentipixels(qreal points, int zoom_percent) const;
+    /// 字号使用百分之一 pt，缩放使用整数百分比，返回百分之一逻辑像素。
+    Q_INVOKABLE qint64 centipointsToLogicalCentipixels(qint64 centipoints,
+                                                      int zoom_percent) const;
     /// 把整数百分比转换为 Qt 几何 API 所需的浮点倍率。
     Q_INVOKABLE qreal percentToFactor(int value) const;
     /// 把 Qt 几何 API 的浮点倍率转换为整数百分比。

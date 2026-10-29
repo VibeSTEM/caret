@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonValue>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -20,6 +21,7 @@ struct ParsedLayoutSnapshot {
     QHash<QString, qsizetype> paragraph_line_counts;
     QVariantList selection_rects;
     QVariantList composition_rects;
+    QVariantMap command_line;
     QVariantMap input_method_context;
     QString session_id;
     qulonglong document_generation = 0;
@@ -33,5 +35,7 @@ bool parse(const QByteArray& snapshot_json, ParsedLayoutSnapshot& parsed_snapsho
            const ParsedLayoutSnapshot* previous_snapshot = nullptr);
 bool parse(const QJsonDocument& snapshot_document, ParsedLayoutSnapshot& parsed_snapshot,
            QString& error, const ParsedLayoutSnapshot* previous_snapshot = nullptr);
+/// 校验命令查询的轻量 JSON，并转换为 Qt 属性映射。
+bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error);
 
 } // namespace caret::layout_snapshot

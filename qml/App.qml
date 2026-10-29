@@ -108,6 +108,7 @@ Window {
             }
 
             WindowStatusBar {
+                id: windowStatusBar
                 Layout.fillWidth: true
                 Layout.minimumHeight: Theme.statusbarHeight
                 Layout.preferredHeight: Theme.statusbarHeight
@@ -157,9 +158,11 @@ Window {
 
         PreferencesSettingsPage {
             caretBlinkEnabled: settingsController.draftCaretBlinkEnabled
+            commandSuggestionsEnabled: settingsController.draftCommandSuggestionsEnabled
             errorText: settingsController.error
             enabled: !settingsController.busy
             onCaretBlinkEnabledEdited: enabled => settingsController.editCaretBlinkEnabled(enabled)
+            onCommandSuggestionsEnabledEdited: enabled => settingsController.editCommandSuggestionsEnabled(enabled)
         }
     }
 
@@ -427,6 +430,16 @@ Window {
         sequences: [StandardKey.Redo]
         enabled: LayoutViewModel.canRedo
         onActivated: LayoutViewModel.redo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.ZoomIn]
+        onActivated: windowStatusBar.zoomIn()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.ZoomOut]
+        onActivated: windowStatusBar.zoomOut()
     }
 
     function saveDocument() {

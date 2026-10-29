@@ -19,6 +19,7 @@ QtObject {
     readonly property color colorIcon: ThemeViewModel.tokens.colorIcon
     readonly property color colorHover: ThemeViewModel.tokens.colorHover
     readonly property color colorSelected: ThemeViewModel.tokens.colorSelected
+    readonly property color colorCommandPrompt: ThemeViewModel.tokens.colorCommandPrompt
     readonly property color colorFocus: ThemeViewModel.tokens.colorFocus
     readonly property color colorError: ThemeViewModel.tokens.colorError
     readonly property color colorMenubarText: ThemeViewModel.tokens.colorMenubarText

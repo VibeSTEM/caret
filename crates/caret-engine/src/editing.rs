@@ -1,6 +1,8 @@
 //! 编辑会话的命令、位置、文本映射与段落操作模块。
 
 mod command;
+mod command_line;
+mod command_registry;
 mod error;
 mod paragraph_ops;
 mod position;
@@ -10,6 +12,8 @@ mod tests;
 mod text_map;
 
 pub use command::{Command, Direction};
+pub use command_line::CommandLine;
+pub use command_registry::CommandCandidate;
 pub use error::EditError;
 pub use position::{Affinity, Pos, PositionMap, Selection, StoryId};
 pub use session::Session;

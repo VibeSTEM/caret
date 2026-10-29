@@ -73,6 +73,7 @@ void SettingsDialogController::open() {
     }
     if (m_preferences != nullptr) {
         m_draft_caret_blink_enabled = m_preferences->caretBlinkEnabled();
+        m_draft_command_suggestions_enabled = m_preferences->commandSuggestionsEnabled();
         setError(m_preferences->error());
     } else {
         setError(QStringLiteral("settings.preferences_unavailable"));
@@ -93,6 +94,17 @@ void SettingsDialogController::editCaretBlinkEnabled(bool enabled) {
         return;
     }
     m_draft_caret_blink_enabled = enabled;
+    setError({});
+    emit draftChanged();
+    emit editRequested();
+}
+
+void SettingsDialogController::editCommandSuggestionsEnabled(bool enabled) {
+    if ((m_state != Editing && m_state != Failed) ||
+        m_draft_command_suggestions_enabled == enabled) {
+        return;
+    }
+    m_draft_command_suggestions_enabled = enabled;
     setError({});
     emit draftChanged();
     emit editRequested();
@@ -148,7 +160,8 @@ void SettingsDialogController::enterState(State state) {
 void SettingsDialogController::submitDraft() {
     if (auto* settings = qobject_cast<SettingsViewModel*>(m_settings.data())) {
         if (!settings->applySettings(m_draft_theme_id, m_draft_language,
-                                     m_draft_caret_blink_enabled)) {
+                                     m_draft_caret_blink_enabled,
+                                     m_draft_command_suggestions_enabled)) {
             setError(settings->error());
             emit applyFailed();
             return;

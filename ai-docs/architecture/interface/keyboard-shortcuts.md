@@ -18,6 +18,7 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 | 打开 `.cdoc` | Ctrl+O | Command+O |
 | 保存 | Ctrl+S | Command+S |
 | 另存为 | Ctrl+Shift+S | Command+Shift+S |
+| 放大 / 缩小画布 | Ctrl+Plus / Ctrl+Minus | Command+Plus / Command+Minus |
 | 撤销 | Ctrl+Z | Command+Z |
 | 重做 | Ctrl+Shift+Z | Command+Shift+Z |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
@@ -45,6 +46,7 @@ Esc 按一次用掉，顺序是：退出命令模式，离开公式，有选区�
 | 进入命令模式 | `\` |
 | 执行候选 | Enter；查询非空时 Tab 也可以 |
 | 查询为空时插入 `\` | Tab |
+| 在命令查询中移动插入点 | ← / →（只在查询文本内移动） |
 | 空格 | 无效果 |
 | 取消并清除已输入内容 | Esc |
 | 字面 `\` | `\\` |

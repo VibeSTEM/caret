@@ -318,7 +318,7 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
              QStringLiteral("ja"));
     QVERIFY(!restored.caret_blink_enabled);
 
-    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hans"), false));
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hans"), false, true));
     QCOMPARE(translation_probe->property("settingsTitle").toString(), QStringLiteral("设置"));
     QCOMPARE(translation_probe->property("languageLabel").toString(), QStringLiteral("应用语言"));
     QCOMPARE(translation_probe->property("cancelLabel").toString(), QStringLiteral("取消"));
@@ -328,7 +328,7 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
     QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("已保存"));
     QCOMPARE(close_prompt->property("text").toString(), QStringLiteral("关闭文档前要保存更改吗？"));
     QVERIFY(close_dialog->property("height").toReal() < english_dialog_height);
-    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false));
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false, true));
 
     const qsizetype theme_change_count = theme_changes.count();
     controller.open();

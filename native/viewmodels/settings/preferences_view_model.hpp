@@ -13,6 +13,7 @@ class PreferencesViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(bool caretBlinkEnabled READ caretBlinkEnabled NOTIFY snapshotChanged)
+    Q_PROPERTY(bool commandSuggestionsEnabled READ commandSuggestionsEnabled NOTIFY snapshotChanged)
     Q_PROPERTY(bool autoSaveEnabled READ autoSaveEnabled NOTIFY snapshotChanged)
     Q_PROPERTY(int windowWidth READ windowWidth CONSTANT)
     Q_PROPERTY(int windowHeight READ windowHeight CONSTANT)
@@ -24,6 +25,7 @@ class PreferencesViewModel final : public QObject {
     explicit PreferencesViewModel(QObject* parent = nullptr);
 
     [[nodiscard]] bool caretBlinkEnabled() const { return m_caret_blink_enabled; }
+    [[nodiscard]] bool commandSuggestionsEnabled() const { return m_command_suggestions_enabled; }
     [[nodiscard]] bool autoSaveEnabled() const { return m_auto_save_enabled; }
     [[nodiscard]] int windowWidth() const { return m_window_width; }
     [[nodiscard]] int windowHeight() const { return m_window_height; }
@@ -43,10 +45,12 @@ class PreferencesViewModel final : public QObject {
     void errorChanged();
 
   private:
-    void installSnapshot(bool caret_blink_enabled, bool auto_save_enabled, QSize window_size);
+    void installSnapshot(bool caret_blink_enabled, bool command_suggestions_enabled,
+                         bool auto_save_enabled, QSize window_size);
     void setError(QString error);
 
     bool m_caret_blink_enabled = true;
+    bool m_command_suggestions_enabled = true;
     bool m_auto_save_enabled = false;
     int m_window_width = 0;
     int m_window_height = 0;

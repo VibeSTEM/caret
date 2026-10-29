@@ -18,6 +18,8 @@
 
 由 Rust 当前光标位置解析最内层 `EnvironmentNode` 的稳定 ID、作用域和范围，并提供给画布作为视图叠加。行内环境使用 `color-inline-environment-highlight`，块级环境使用 `color-block-environment-highlight`；命令查询/补全层使用 `color-command-prompt`，由 009 接入。命令提示可与环境高亮同时显示，二者几何和颜色互不覆盖。离开环境或光标移到其他环境时清除旧范围。缩放、分页、换行和滚动后，高亮几何必须与当前 LayoutResult 对齐。
 
+行内、块级、多行环境与命令提示复用 `HighlightBackground` 的背景外观；每种作用域独立提供布局几何和主题颜色。行内范围不加水平留白，命令提示按输入控件需要保留水平内边距。
+
 不包含环境创建、环境样式编辑、主题定制面板或把高亮序列化为文档格式。
 
 ## 前置条件与待决策

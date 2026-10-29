@@ -24,6 +24,7 @@ qt_add_qml_module(
   document/layout_view_model_recovery_commands.cpp
   document/layout_view_model_autosave_commands.cpp
   document/layout_view_model_edit_commands.cpp
+  document/layout_view_model_command_line.cpp
   document/layout_view_model_ime_commands.cpp
   document/layout_view_model_navigation_commands.cpp
   document/layout_view_model_response_commands.cpp

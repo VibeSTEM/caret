@@ -4,7 +4,7 @@ use crate::{Affinity, Pos, Selection, Session, StoryId};
 use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
     FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout,
+    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
     paragraph_has_empty_line, resolve_paragraph_style,
 };
@@ -141,6 +141,7 @@ pub struct DocumentLayoutSnapshot {
     pub session_id: Option<NodeId>,
     pub document_generation: u64,
     pub font_generation: u64,
+    default_font_size_centipoints: u16,
     pub paragraphs: Vec<LaidOutParagraph>,
     pub pages: Vec<PageLayoutSnapshot>,
     paragraph_lookup: HashMap<NodeId, usize>,
@@ -174,6 +175,47 @@ pub struct PageHit {
 }
 
 impl DocumentLayoutSnapshot {
+    /// 返回光标位置当前塑形 Run 的字号；Run 边界按视觉亲和性选择，空段回退到文档默认字号。
+    pub fn font_size_centipoints_at(
+        &self,
+        position: &Pos,
+        visual_affinity: VisualAffinity,
+    ) -> Option<u16> {
+        if position.story != StoryId::Body {
+            return None;
+        }
+        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
+        let cursor = paragraph
+            .layout
+            .cursor_at(position.offset, visual_affinity)?;
+        let (_, line_index) = paragraph.layout.cursor_geometry_with_line(cursor, 0.0)?;
+        let line = paragraph.layout.layout.get(line_index)?;
+        let mut upstream_size = None;
+        let mut downstream_size = None;
+        for item in line.items() {
+            let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+            let run = glyph_run.run();
+            let range = run.text_range();
+            let font_size = run.font_size();
+            if range.start < position.offset && position.offset < range.end {
+                return font_size_centipoints(font_size);
+            }
+            if range.end == position.offset {
+                upstream_size = font_size_centipoints(font_size);
+            }
+            if range.start == position.offset {
+                downstream_size = font_size_centipoints(font_size);
+            }
+        }
+        let size = match visual_affinity {
+            VisualAffinity::Upstream => upstream_size.or(downstream_size),
+            VisualAffinity::Downstream => downstream_size.or(upstream_size),
+        };
+        Some(size.unwrap_or(self.default_font_size_centipoints))
+    }
+
     pub fn paragraph_by_id(&self, id: &NodeId) -> Option<&LaidOutParagraph> {
         self.paragraphs.get(*self.paragraph_lookup.get(id)?)
     }
@@ -416,6 +458,18 @@ impl DocumentLayoutSnapshot {
         }
         Some(rectangles)
     }
+}
+
+fn font_size_centipoints(font_size_pt: f32) -> Option<u16> {
+    let centipoints = f64::from(font_size_pt) * 100.0;
+    if !centipoints.is_finite() || centipoints < 1.0 || centipoints > f64::from(u16::MAX) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "字号已校验并四舍五入到 u16 范围"
+    )]
+    u16::try_from(centipoints.round() as u32).ok()
 }
 
 /// 可复用塑形器；调用方跨文档代际复用字体目录，避免按段落扫描系统字体。
@@ -698,6 +752,7 @@ impl DocumentLayoutService {
             session_id: None,
             document_generation,
             font_generation: catalog.generation(),
+            default_font_size_centipoints: base_style.font_size_centipoints,
             paragraph_lookup,
             paragraphs,
             pages,

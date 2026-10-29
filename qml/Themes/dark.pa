@@ -2,6 +2,7 @@ version: 1
 kind: theme
 
 values:
+  color-command-prompt: string = "#292f46"
   color-panel: string = "#292a2d"
   color-chrome: string = "#34363a"
   color-chrome-pressed: string = "#50545a"

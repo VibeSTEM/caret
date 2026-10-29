@@ -16,6 +16,10 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedCheckBox.qml
     Components/Atoms/ThemedSwitch.qml
     Components/Atoms/TitleBarPillButton.qml
+    Components/Atoms/CommandCandidateItem.qml
+    Components/Atoms/HighlightBackground.qml
+    Components/Atoms/ScrollableListView.qml
+    Components/Atoms/ScrollableRow.qml
     Components/Atoms/ThemedRadioButton.qml
     Components/Atoms/ThemedComboBox.qml
     Components/Atoms/ThemedLabel.qml
@@ -23,6 +27,9 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedTextField.qml
     Components/Atoms/ThemedIcon.qml
     Canvas/DocumentCanvasPointerHandler.qml
+    Canvas/CommandCompletion.qml
+    Canvas/CommandSuggestionPopup.qml
+    Canvas/CommandInputHandler.qml
     Components/Composites/DocumentModeSelector.qml
     Components/Composites/ShareButton.qml
     Components/Composites/DialogTitleBar.qml

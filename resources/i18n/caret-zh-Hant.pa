@@ -170,6 +170,11 @@ message_032:
   tr: 閃爍顯示插入點
   st: finished
 
+message_101:
+  src: Show command suggestions
+  tr: 顯示命令候選
+  st: finished
+
 [RecoveryDialog]
 message_033:
   src: Recover documents
@@ -439,4 +444,80 @@ message_083:
 message_084:
   src: Saved
   tr: 已儲存
+  st: finished
+
+[CommandCompletion]
+message_085:
+  src: Chapter
+  tr: 章
+  st: finished
+
+message_086:
+  src: Section
+  tr: 節
+  st: finished
+
+message_087:
+  src: Subsection
+  tr: 小節
+  st: finished
+
+message_089:
+  src: Bulleted list
+  tr: 項目符號清單
+  st: finished
+
+message_090:
+  src: Numbered list
+  tr: 編號清單
+  st: finished
+
+message_091:
+  src: Page break
+  tr: 分頁符號
+  st: finished
+
+message_092:
+  src: Line break
+  tr: 軟換行
+  st: finished
+
+message_093:
+  src: No matching commands
+  tr: 找不到相符的命令
+  st: finished
+
+message_094:
+  src: Inline math
+  tr: 行內公式
+  st: finished
+
+message_095:
+  src: Single-line equation
+  tr: 單行公式
+  st: finished
+
+message_096:
+  src: Fraction
+  tr: 分數
+  st: finished
+
+message_097:
+  src: Square root
+  tr: 平方根
+  st: finished
+
+message_098:
+  src: Table
+  tr: 表格
+  st: finished
+
+message_099:
+  src: Subsubsection
+  tr: 小小節
+  st: finished
+
+message_100:
+  src: Multiline equation
+  tr: 多行公式
   st: finished

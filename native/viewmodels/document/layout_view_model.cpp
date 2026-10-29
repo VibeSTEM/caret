@@ -53,6 +53,10 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_composition_rects = parsed_snapshot.composition_rects;
     m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
     m_input_method_context = parsed_snapshot.input_method_context;
+    m_command_line = {{QStringLiteral("active"), false},
+                      {QStringLiteral("query"), QString{}},
+                      {QStringLiteral("selected"), 0},
+                      {QStringLiteral("candidates"), QVariantList{}}};
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
 }
@@ -89,8 +93,10 @@ bool LayoutViewModel::installSnapshot(const QJsonDocument& snapshot_document,
 }
 
 bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot) {
-    const bool interaction_changed = m_selection_rects != parsed_snapshot.selection_rects ||
-                                     m_input_method_context != parsed_snapshot.input_method_context;
+    const bool interaction_changed =
+        m_selection_rects != parsed_snapshot.selection_rects ||
+        m_input_method_context != parsed_snapshot.input_method_context ||
+        m_command_line != parsed_snapshot.command_line;
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
@@ -100,6 +106,7 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     m_selection_rects = std::move(parsed_snapshot.selection_rects);
     m_composition_rects = std::move(parsed_snapshot.composition_rects);
     m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);
+    m_command_line = std::move(parsed_snapshot.command_line);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -151,9 +158,13 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         input_context.insert(QStringLiteral("surroundingText"),
                              m_input_method_context.value(QStringLiteral("surroundingText")));
     }
-    if (m_selection_rects != selection_rectangles || m_input_method_context != input_context) {
+    const QVariantMap command_line =
+        root.value(QStringLiteral("commandLine")).toObject().toVariantMap();
+    if (m_selection_rects != selection_rectangles || m_input_method_context != input_context ||
+        m_command_line != command_line) {
         m_selection_rects = selection_rectangles;
         m_input_method_context = input_context;
+        m_command_line = command_line;
         emit interactionChanged();
     }
     installCaretGeometry(caret_value.toObject().toVariantMap());

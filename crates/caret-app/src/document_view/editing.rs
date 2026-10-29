@@ -3,6 +3,38 @@ use super::DocumentViewRuntime;
 use caret_engine::{Command, Direction, DocumentLayoutDeltaView};
 
 impl DocumentViewRuntime {
+    /// 更新 Rust 命令查询；只有确认可执行候选时才生成文档布局快照。
+    pub fn command_line_command_json(
+        &mut self,
+        action: &str,
+        text: String,
+    ) -> Result<String, String> {
+        let command = match action {
+            "begin" => Command::BeginCommandLine,
+            "type" => Command::TypeCommandLine(text),
+            "backspace" => Command::BackspaceCommandLine,
+            "cursor-left" => Command::MoveCommandLineCursor(Direction::Backward),
+            "cursor-right" => Command::MoveCommandLineCursor(Direction::Forward),
+            "previous" => Command::MoveCommandLineSelection(Direction::Backward),
+            "next" => Command::MoveCommandLineSelection(Direction::Forward),
+            "select" => Command::SelectCommandLineCandidate(
+                text.parse()
+                    .map_err(|_| "cmdline.invalid_candidate_index")?,
+            ),
+            "cancel" => Command::CancelCommandLine,
+            "tab" => Command::TabCommandLine,
+            "accept" => Command::AcceptCommandLine,
+            _ => return Err("cmdline.unknown_action".to_owned()),
+        };
+        if is_command_line_document_edit(&self.session, &command) {
+            return self.run_edit_command(command, &format!("cmdline.{action}"));
+        }
+        self.session
+            .run(command)
+            .map_err(|error| format!("cmdline.{action}: {error}"))?;
+        self.command_line_state_json()
+    }
+
     /// 在 Rust Session 中撤销最近一次可撤销编辑并发布更新后的布局。
     pub fn undo_json(&mut self) -> Result<String, String> {
         self.restore_history_json(false)
@@ -142,7 +174,8 @@ impl DocumentViewRuntime {
         let can_reuse_layout =
             matches!(&command, Command::SplitParagraph | Command::InsertSoftBreak)
                 || matches!(&command, Command::PasteText(_)) && reusable_paragraph_id.is_some()
-                || delete_is_paragraph_local;
+                || delete_is_paragraph_local
+                || is_command_line_document_edit(&self.session, &command);
         if can_reuse_layout {
             self.base_snapshot()?;
         }
@@ -174,5 +207,24 @@ impl DocumentViewRuntime {
             self.last_snapshot = Some(updated);
         }
         self.layout_snapshot_json_with_delta(delete_delta)
+    }
+}
+
+fn is_command_line_document_edit(session: &caret_engine::Session, command: &Command) -> bool {
+    let Some(line) = session.command_line() else {
+        return false;
+    };
+    match command {
+        Command::TypeCommandLine(text) if text == "\\" => {
+            line.query.is_empty()
+                || line
+                    .selected_candidate()
+                    .is_some_and(|candidate| candidate.available)
+        }
+        Command::TabCommandLine => line.query.is_empty(),
+        Command::AcceptCommandLine => line
+            .selected_candidate()
+            .is_some_and(|candidate| candidate.available),
+        _ => false,
     }
 }
