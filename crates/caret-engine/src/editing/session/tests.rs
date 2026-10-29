@@ -139,6 +139,16 @@ fn tab_completes_a_filtered_command_without_editing_the_document() {
     assert_eq!(command_line.query, "section");
     assert_eq!(session.document_generation(), revision);
     assert_eq!(paragraph_text(&session, 0), "");
+
+    session
+        .run(Command::TypeCommandLine(" ".to_owned()))
+        .unwrap_or_else(|error| panic!("space handling failed: {error}"));
+    assert_eq!(
+        session
+            .command_line()
+            .map(|command_line| command_line.query.as_str()),
+        Some("section")
+    );
 }
 
 #[test]
@@ -165,6 +175,75 @@ fn accepting_the_newline_command_inserts_a_soft_break_and_closes_the_query() {
     assert!(effect.document_changed);
     assert_eq!(paragraph_text(&session, 0), "hello\n");
     assert!(session.command_line().is_none());
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undoing the newline command failed: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "hello");
+
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redoing the newline command failed: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "hello\n");
+}
+
+#[test]
+fn empty_command_tab_inserts_a_literal_prefix() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    let revision = session.document_generation();
+
+    session
+        .run(Command::TabCommandLine)
+        .unwrap_or_else(|error| panic!("empty-query Tab failed: {error}"));
+
+    assert_eq!(paragraph_text(&session, 0), "\\");
+    assert!(session.command_line().is_none());
+    assert_eq!(session.document_generation(), revision + 1);
+}
+
+#[test]
+fn repeating_the_command_prefix_with_an_empty_query_inserts_a_literal_prefix() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+
+    session
+        .run(Command::TypeCommandLine("\\".to_owned()))
+        .unwrap_or_else(|error| panic!("repeated command prefix failed: {error}"));
+
+    assert_eq!(paragraph_text(&session, 0), "\\");
+    assert!(session.command_line().is_none());
+}
+
+#[test]
+fn command_line_does_not_start_during_input_composition() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::UpdateComposition {
+            id: 1,
+            preedit: "にほん".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("begin command during composition failed: {error}"));
+
+    assert!(session.command_line().is_none());
+    assert_eq!(
+        session
+            .composition()
+            .map(|composition| composition.preedit.as_str()),
+        Some("にほん")
+    );
+    assert_eq!(paragraph_text(&session, 0), "");
 }
 
 #[test]

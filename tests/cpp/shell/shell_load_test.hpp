@@ -32,9 +32,13 @@ class ShellLoadTest : public QObject {
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();
 #ifdef CARET_ENABLE_APP
+    void preferencesWithoutRuntimeRejectChangesAndKeepDefaults();
     void commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument();
+    void documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior();
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();
+    void preferencesPersistAndRefreshUserFacingSwitches();
+    void preferencesKeepTheLastSnapshotWhenPersistenceIsUnavailable();
     void settingsSelectionUpdatesThemeLanguageAndPersistsAtomically();
     void dialogSizesTrackLocalizedAndOptionalContent();
 #endif
