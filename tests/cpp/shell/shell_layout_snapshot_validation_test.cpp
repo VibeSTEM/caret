@@ -16,7 +16,6 @@
 #include <QtCore/qstring.h>
 #include <QtCore/qvariant.h>
 #include <QtTest/qtestcase.h>
-#include <cstddef>
 #include <string_view>
 #include <utility>
 
