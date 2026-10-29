@@ -1,6 +1,8 @@
 //! 验证文档视图布局快照、绘制与错误隔离。
 
 use super::*;
+use caret_doc::{BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph};
+use std::collections::BTreeMap;
 
 #[test]
 fn blank_document_snapshot_contains_page_and_paragraph_layout()
@@ -15,6 +17,10 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
     assert_eq!(snapshot["pages"][0]["widthPt"], 595.2755905511812);
     assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(snapshot["paragraphs"][0]["text"], "");
+    assert_eq!(
+        snapshot["structureFocusRects"].as_array().map(Vec::len),
+        Some(0)
+    );
     assert_eq!(snapshot["paragraphs"][0]["lines"][0]["sourceStart"], 0);
     assert!(
         snapshot["paragraphs"][0]["lines"][0]["heightPt"]
@@ -32,6 +38,39 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
     assert!(hit["caret"]["y0Pt"].as_f64().is_some());
     assert!(hit["caret"]["y1Pt"].as_f64().is_some());
     assert_eq!(runtime.hit_test_json(-1, 73.0, 73.0)?, "null");
+    Ok(())
+}
+
+#[test]
+fn structure_focus_geometry_tracks_the_active_block_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(Paragraph::empty(NodeId::generate())),
+        children: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        extra: BTreeMap::new(),
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let rectangles = snapshot["structureFocusRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("focus rectangles were omitted"))?;
+    assert_eq!(rectangles.len(), 1);
+    assert_eq!(rectangles[0]["pageIndex"], 0);
+    assert!(rectangles[0]["x1Pt"].as_f64() > rectangles[0]["x0Pt"].as_f64());
+    assert!(rectangles[0]["y1Pt"].as_f64() > rectangles[0]["y0Pt"].as_f64());
+
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert_eq!(
+        interaction["structureFocusRects"],
+        snapshot["structureFocusRects"]
+    );
     Ok(())
 }
 

@@ -1,10 +1,11 @@
-// 底栏高度锁在 Theme.statusbarHeight。左侧是占位页码、字数和语言，右侧只留缩放尺。
+// 底栏高度来自主题；左侧展示页面与当前结构信息，右侧提供缩放控制。
 pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Caret.Canvas
+import Caret.ViewModels
 
 Rectangle {
     id: statusBar
@@ -13,6 +14,24 @@ Rectangle {
 
     readonly property int rowHeight: Theme.statusbarHeight
     readonly property int sliderHeight: Theme.iconSizeCompact
+    readonly property string structureDescription: {
+        const entries = LayoutViewModel.currentStructure;
+        const labels = [];
+        for (let index = 0; index < entries.length; ++index) {
+            const entry = entries[index];
+            if (entry.kind === "paragraph")
+                labels.push(qsTr("Paragraph"));
+            else if (entry.kind === "singleLine")
+                labels.push(qsTr("Single-line"));
+            else if (entry.kind === "multiLine")
+                labels.push(qsTr("Multi-line"));
+            else if (entry.kind === "table")
+                labels.push(qsTr("Table"));
+            else if (entry.kind === "figure")
+                labels.push(qsTr("Figure"));
+        }
+        return labels.join(" › ");
+    }
 
     function zoomOut() {
         zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - zoomSlider.stepSize);
@@ -57,6 +76,17 @@ Rectangle {
         ThemedLabel {
             Layout.alignment: Qt.AlignVCenter
             text: qsTr("English (United States)")
+            textSize: Theme.fontSmall
+            textColor: Theme.colorText
+        }
+
+        ThemedLabel {
+            objectName: "currentStructureLabel"
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: 180
+            Layout.maximumWidth: 240
+            elide: Text.ElideRight
+            text: statusBar.structureDescription
             textSize: Theme.fontSmall
             textColor: Theme.colorText
         }

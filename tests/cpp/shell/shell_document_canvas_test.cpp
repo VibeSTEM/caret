@@ -57,8 +57,8 @@
 void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
     const caret::CanvasPolicy policy;
     QCOMPARE(policy.defaultZoomPercent(), 100);
-    QCOMPARE(policy.minimumZoomPercent(), 10);
-    QCOMPARE(policy.maximumZoomPercent(), 800);
+    QCOMPARE(policy.minimumZoomPercent(), 50);
+    QCOMPARE(policy.maximumZoomPercent(), 300);
     QCOMPARE(policy.zoomStepPercent(), 10);
 }
 
@@ -298,23 +298,35 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
 
     QQmlComponent render_component(&engine);
     render_component.setData(
-        QByteArrayLiteral("import QtQuick\n"
-                          "import Caret.Canvas\n"
-                          "DocumentCanvas {\n"
-                          "    width: 200; height: 200\n"
-                          "    pageColor: \"#ffffff\"\n"
-                          "    pageBorderColor: \"#c8c8c8\"\n"
-                          "    caretColor: \"#ff0000\"\n"
-                          "    caretWidthCentipixels: 125\n"
-                          "    pageSizesPt: [Qt.size(60, 60), Qt.size(60, 60)]\n"
-                          "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
-                          "    pageMarginPt: 12; pageGapPt: 0\n"
-                          "}\n"),
+        QByteArrayLiteral(
+            "import QtQuick\n"
+            "import Caret.Canvas\n"
+            "DocumentCanvas {\n"
+            "    width: 200; height: 200\n"
+            "    pageColor: \"#ffffff\"\n"
+            "    pageBorderColor: \"#c8c8c8\"\n"
+            "    caretColor: \"#ff0000\"\n"
+            "    caretWidthCentipixels: 125\n"
+            "    structureFocusRects: [{ pageIndex: 0, x0Pt: 10, y0Pt: 10, x1Pt: 40, y1Pt: 40 }]\n"
+            "    structureFocusColor: \"#ff00ff\"\n"
+            "    structureFocusBorderWidthPx: 1\n"
+            "    pageSizesPt: [Qt.size(60, 60), Qt.size(60, 60)]\n"
+            "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
+            "    pageMarginPt: 12; pageGapPt: 0\n"
+            "}\n"),
         QUrl());
     QVERIFY2(render_component.isReady(), qPrintable(render_component.errorString()));
     auto* rendered_canvas = qobject_cast<QQuickItem*>(render_component.create());
     QVERIFY(rendered_canvas != nullptr);
     QCOMPARE(rendered_canvas->property("caretWidthCentipixels").toInt(), 125);
+    QVERIFY(rendered_canvas->setProperty(
+        "structureFocusRects", QVariantList{QVariantMap{{QStringLiteral("pageIndex"), 0},
+                                                        {QStringLiteral("x0Pt"), 0.0},
+                                                        {QStringLiteral("y0Pt"), 0.0},
+                                                        {QStringLiteral("x1Pt"), 60.0},
+                                                        {QStringLiteral("y1Pt"), 60.0}}}));
+    QVERIFY(rendered_canvas->setProperty("structureFocusColor", QColor(QStringLiteral("#ff00ff"))));
+    QVERIFY(rendered_canvas->setProperty("structureFocusBorderWidthPx", 1));
     constexpr qsizetype glyph_pixel_count = qsizetype{8} * 8;
     QByteArray glyph_pixels(glyph_pixel_count * 4, '\0');
     for (qsizetype pixel = 0; pixel < glyph_pixel_count; ++pixel) {
@@ -370,6 +382,33 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QTRY_VERIFY_WITH_TIMEOUT(render_window.isExposed(), 3000);
     rendered_canvas->forceActiveFocus(Qt::OtherFocusReason);
     QTRY_VERIFY(rendered_canvas->hasActiveFocus());
+    const auto count_color_pixels = [](const QImage& image, const QColor& color) {
+        qsizetype count = 0;
+        for (qsizetype y = 0; y < image.height(); ++y) {
+            for (qsizetype x = 0; x < image.width(); ++x) {
+                count += image.pixelColor(static_cast<int>(x), static_cast<int>(y)) == color;
+            }
+        }
+        return count;
+    };
+    const QColor structure_focus_color(QStringLiteral("#ff00ff"));
+    QCOMPARE(rendered_canvas->property("structureFocusRects").toList().size(), 1);
+    QCOMPARE(rendered_canvas->property("structureFocusColor").value<QColor>(),
+             structure_focus_color);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), structure_focus_color) > 0, 3000);
+    const QImage focus_frame = render_window.grabWindow();
+    QVERIFY(!focus_frame.isNull());
+    QVERIFY(count_color_pixels(focus_frame, structure_focus_color) > 0);
+    QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{1, 2}));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), structure_focus_color) == 0, 3000);
+    QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 2}));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), structure_focus_color) > 0, 3000);
+    rendered_canvas->setProperty("structureFocusBorderWidthPx", 0);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), structure_focus_color) == 0, 3000);
     const QImage frame = render_window.grabWindow();
     QVERIFY(!frame.isNull());
     const auto pixel_at_logical_point = [&frame, &render_window](qreal x, qreal y) {

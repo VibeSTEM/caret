@@ -7,8 +7,8 @@
 namespace caret {
 namespace canvas_policy {
 inline constexpr int kDefaultZoomPercent = 100;
-inline constexpr int kMinimumZoomPercent = 10;
-inline constexpr int kMaximumZoomPercent = 800;
+inline constexpr int kMinimumZoomPercent = 50;
+inline constexpr int kMaximumZoomPercent = 300;
 inline constexpr int kZoomStepPercent = 10;
 } // namespace canvas_policy
 

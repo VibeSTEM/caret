@@ -27,6 +27,27 @@ pub enum StructureKind {
     Showcase,
 }
 
+/// 面向通用界面展示的结构形态，不暴露具体结构语义名称。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureClass {
+    Paragraph,
+    SingleLine,
+    MultiLine,
+    Table,
+    Figure,
+}
+
+impl StructureKind {
+    /// 将具体结构语义归并到通用结构形态，而非计算实际排版行数。
+    pub const fn class(self) -> StructureClass {
+        match self {
+            Self::Paragraph => StructureClass::Paragraph,
+            Self::Heading { .. } => StructureClass::SingleLine,
+            Self::Section | Self::Showcase => StructureClass::MultiLine,
+        }
+    }
+}
+
 /// 索引中的一个结构节点，父链和节点身份均使用稳定 ID。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedStructure {

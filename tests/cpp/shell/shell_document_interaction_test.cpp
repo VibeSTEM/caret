@@ -17,6 +17,9 @@
 #include <QHash>
 #include <QImage>
 #include <QInputMethodEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QList>
 #include <QMouseEvent>
@@ -60,6 +63,46 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
+void ShellLoadTest::structureFocusInteractionSnapshotReplacesAndClearsRects() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QJsonObject root = QJsonDocument::fromJson(
+                           QByteArray(snapshot.data(), static_cast<qsizetype>(snapshot.size())))
+                           .object();
+    QVERIFY(!root.isEmpty());
+    const QJsonObject focus_rect{{QStringLiteral("pageIndex"), 0},
+                                 {QStringLiteral("x0Pt"), 1.0},
+                                 {QStringLiteral("y0Pt"), 1.0},
+                                 {QStringLiteral("x1Pt"), 2.0},
+                                 {QStringLiteral("y1Pt"), 2.0}};
+    root.insert(QStringLiteral("structureFocusRects"), QJsonArray{focus_rect});
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.ViewModels\n"
+                                        "Item { objectName: \"structureFocusProbe\" }\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* probe = component.create();
+    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
+    auto* view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(view_model != nullptr);
+    QCOMPARE(view_model->structureFocusRects().size(), 1);
+
+    const QVariantMap placement = view_model->placeCaretAtPage(0, 100.0, 100.0);
+    QVERIFY2(placement.value(QStringLiteral("valid")).toBool(),
+             qPrintable(placement.value(QStringLiteral("error")).toString()));
+    QVERIFY(view_model->structureFocusRects().isEmpty());
+    delete probe;
+}
+
 void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);

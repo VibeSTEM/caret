@@ -6,7 +6,9 @@ mod layout_view;
 mod page_glyphs;
 
 pub use caret_layout::{HitAffinity, VisualAffinity};
-pub use caret_structure::{IndexedStructure, StructureIndex, StructureKind, StructurePosition};
+pub use caret_structure::{
+    IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
+};
 
 pub use editing::{
     Affinity, Command, CommandCandidate, CommandLine, Direction, EditError, EditorKey, Effect,

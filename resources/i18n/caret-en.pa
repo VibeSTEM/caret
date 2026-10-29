@@ -385,6 +385,31 @@ message_072:
   tr: Zoom in
   st: finished
 
+message_102:
+  src: Single-line
+  tr: Single-line
+  st: finished
+
+message_103:
+  src: Multi-line
+  tr: Multi-line
+  st: finished
+
+message_104:
+  src: Paragraph
+  tr: Paragraph
+  st: finished
+
+message_105:
+  src: Table
+  tr: Table
+  st: finished
+
+message_106:
+  src: Figure
+  tr: Figure
+  st: finished
+
 [WindowTitleBar]
 message_073:
   src: Untitled

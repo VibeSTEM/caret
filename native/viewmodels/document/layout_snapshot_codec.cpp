@@ -163,6 +163,39 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     return true;
 }
 
+bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result, QString& error) {
+    if (value.isUndefined()) {
+        result.clear();
+        return true;
+    }
+    if (!value.isArray()) {
+        error = QStringLiteral("layout.invalid_current_structure");
+        return false;
+    }
+    QVariantList entries;
+    for (const QJsonValue entry_value : value.toArray()) {
+        if (!entry_value.isObject()) {
+            error = QStringLiteral("layout.invalid_current_structure");
+            return false;
+        }
+        const QJsonObject entry = entry_value.toObject();
+        const QString id = entry.value(QStringLiteral("id")).toString();
+        const QString kind = entry.value(QStringLiteral("kind")).toString();
+        const QJsonValue level = entry.value(QStringLiteral("level"));
+        const bool known_kind = kind == QStringLiteral("paragraph") ||
+                                kind == QStringLiteral("singleLine") ||
+                                kind == QStringLiteral("multiLine") ||
+                                kind == QStringLiteral("table") || kind == QStringLiteral("figure");
+        if (id.isEmpty() || !known_kind || !level.isUndefined()) {
+            error = QStringLiteral("layout.invalid_current_structure");
+            return false;
+        }
+        entries.push_back(entry.toVariantMap());
+    }
+    result = std::move(entries);
+    return true;
+}
+
 bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
     if (offset < 0 || offset > text.size()) {
         return false;
@@ -177,6 +210,17 @@ bool is_utf8_boundary(const QByteArray& text, qsizetype offset) {
 
 bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error) {
     return parse_command_line(value, command_line, error);
+}
+
+bool parse_current_structure(const QJsonValue& value, QVariantList& current_structure,
+                             QString& error) {
+    return parse_current_structure_impl(value, current_structure, error);
+}
+
+bool parse_structure_focus_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                 QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("structure_focus"),
+                                     rectangles, error);
 }
 
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
@@ -475,6 +519,16 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                             error)) {
         return false;
     }
+    QVariantList parsed_current_structure;
+    if (!parse_current_structure(root.value(QStringLiteral("currentStructure")),
+                                 parsed_current_structure, error)) {
+        return false;
+    }
+    QVariantList parsed_structure_focus_rects;
+    if (!parse_structure_focus_rects(root.value(QStringLiteral("structureFocusRects")),
+                                     parsed_sizes, parsed_structure_focus_rects, error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
@@ -484,6 +538,8 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.selection_rects = std::move(parsed_selection_rects);
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
     parsed_snapshot.command_line = std::move(parsed_command_line);
+    parsed_snapshot.current_structure = std::move(parsed_current_structure);
+    parsed_snapshot.structure_focus_rects = std::move(parsed_structure_focus_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {
