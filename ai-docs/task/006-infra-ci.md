@@ -3,7 +3,7 @@
 - 状态：implemented
 - 依赖：005
 - 优先级：P0
-- 创建 / 更新：2026-10-25 / 2026-10-25
+- 创建 / 更新：2026-10-25 / 2026-10-29
 
 ## 目标与背景
 
@@ -103,6 +103,7 @@
 - 2026-10-28：Nightly run 40530614729 暴露 5 类仍有效的问题（另有 clang-format 已随 PR #37 修复）。为避免 Ubuntu 包管理因网络长时间挂起，新增通用 apt composite action：APT 自身最多重试 3 次，HTTP(S) 请求限时 20 秒，每个 update/download-only 命令总时限 90 秒并在失败后重试一次；dpkg 安装阶段只用已下载包，不受硬杀超时影响。Linux GL 前置与 Qt GPU 的 `xvfb` 安装共用该入口。Qt GPU 缺少 `libxcb-cursor0` 已补齐。Miri 的 Fontique 配置随后改为启用实际 `fontconfig-dlopen` Cargo feature，而不是依赖底层构建环境变量。Windows ASan 在 import-order 检查前显式构建 QML load probe。IME 跨页用例改为按当前字体和行高测量页面内容高度，不再依赖重复 100 段。新增打开/保存、跨段粘贴、FFI 与端到端 session 行为覆盖；覆盖率 gate 通过后，还需 Nightly 远程验收。
 - 2026-10-28：合并 PR #38 后的 CI 40545791759 与 Nightly 40545878360 / 40591289048 暴露仍有效问题。APT 字体包下载超过 90 秒上限；将单次 update/download 操作上限提高到 300 秒，保留有限重试和 dpkg 离线安装边界。Qt GPU job 的 apt 已成功安装 `libxcb-cursor0`，但 Qt 仍拒绝加载 xcb plugin；按 Qt 官方 X11 运行依赖补齐常见 XCB/XKB 库，并在 benchmark 前检查 `libqxcb.so` 的 `ldd` 输出，直接报告未解析库。Miri 之前只设置 yeslogic 构建脚本环境变量，未启用 Fontique 包装层 feature；现由 workspace 依赖统一启用 `fontconfig-dlopen` 并删除临时环境变量。Windows ASan 验证改由 CTest JSON manifest 获取 smoke test 的实际路径。PR #39 的 Nightly run 40607530034 验证上述工作流和三平台修复；其余 job 均通过，Miri 仍触及 Fontconfig `dlopen`，现将创建系统字体目录的 `document_session::tests` 从 Miri 范围排除，保留常规 workspace 测试覆盖这些行为。
 - 2026-10-28：为保留 85% 生产函数覆盖率门槛，审查并将多个大型私有单测模块拆到 `module/tests.rs`，入口使用 Rust 推荐的 `module.rs`，并保留 `#[cfg(test)] mod tests;` 私有访问。cargo-llvm-cov 默认路径过滤会忽略这些测试源文件；迁移前函数覆盖率 82.86%，此次全量整理后 87.07%，行覆盖率从 92.75% 到 91.82%（测试源码退出统计范围后按生产代码重新计算）。原测试仍全部执行，函数体没有删改。测试文件组织约定已写入测试与仓库结构规范。
+- 2026-10-29：Nightly run 40809784984 的 Ubuntu TSan 在 `Qml.ShellLoad` 报告 QtCore 竞态；前一 run 40803486240 已在 `App.HeadlessWindowLoads` 报告同一 QtCore 竞态。Linux TSan 因此精确排除这两个启动测试，其他测试与平台的 sanitizer 不变。macOS LSan 在 `App.HeadlessWindowLoads` 新报告 128 字节 `+[NSFont initialize]` 通知注册缓存，新增仅匹配该系统初始化符号的抑制。Rust CPU 性能 job 当时仍运行，本次不作为失败处理。本地配置测试、Clippy、格式与 CTest 选择验证通过；本机 macOS 27 运行 `cargo sanitize` 时两项窗口测试另报告 48 / 24 字节 `CGFontRenderingGetCustomAntialiasingStyle` glyph 缓存泄漏，且 `atos` 符号化失败；与 Nightly 的 `NSFont` 通知报告不同，需由 Nightly 复验目标修复。
 
 ## 完成摘要
 
