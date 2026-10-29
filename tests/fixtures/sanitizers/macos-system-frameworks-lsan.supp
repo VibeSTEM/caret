@@ -1,23 +1,24 @@
-# macOS 26 Qt translation startup leaves a process-wide CoreFoundation preferences cache.
+# macOS 26 上 Qt 翻译初始化会留下进程级 CoreFoundation 偏好设置缓存。
 leak:CFPrefsPlistSource
+leak:synchronouslySendSystemMessage:andUserMessage:andDirectMessage
 
-# Qt font discovery/rendering initializes process-wide CoreText/CoreGraphics font caches.
+# Qt 字体发现和绘制会初始化进程级 CoreText/CoreGraphics 字体缓存。
 leak:TGlobalFontRegistry
 leak:QCoreTextFontDatabase::populateFontDatabase
 leak:QCoreTextFontEngine::init
 
-# Apple color conversion retains CoreGraphics ColorSync transform caches process-wide.
+# Apple 色彩转换会在进程生命周期内保留 CoreGraphics ColorSync 转换缓存。
 leak:CGCMSConverterCreate
 
-# CoreText fallback discovery retains descriptors and variation-font cache roots process-wide.
+# CoreText 回退字体发现会在进程生命周期内保留字体描述符和可变字体缓存根对象。
 leak:TDescriptorSource::CopyDescriptorUncached
 leak:TCGFontCache::CopyFontWithOpticalSizeVariation
 
-# macOS 26 font registry replies retain decoded URL objects in its XPC callback.
+# macOS 26 的字体注册表会在 XPC 回调中保留已解码的 URL 对象。
 leak:XTCopyPropertiesForFontsMatchingRequest
 leak:XTCopyPropertiesForFont
 
-# Qt 6.11 uses these CoreText cache paths on newer macOS releases.
+# 较新 macOS 版本上的 Qt 6.11 会经过这些 CoreText 缓存路径。
 leak:QCoreTextFontDatabase::invalidate
 leak:QCoreTextFontDatabase::fallbacksForFamily
 leak:QCoreTextFontEngine::boundingBox
@@ -25,5 +26,8 @@ leak:QCoreTextFontEngine::QCoreTextFontEngine
 leak:QCoreTextFontEngine::loadAdvancesForGlyphs
 leak:QCoreTextFontEngine::ct_getSfntTable
 
-# Qt 6.11's nearest exported frame for macOS 27 plugin-directory scan URL allocations.
+# macOS 系统菜单字体初始化期间，CoreText 保留进程生命周期内的字体缓存。
+leak:_refreshMenuFontsIfNeeded
+
+# macOS 27 上 Qt 6.11 扫描插件目录产生 URL 分配时最近的导出栈帧。
 leak:qt_apple_urlFromPossiblySecurityScopedURL
