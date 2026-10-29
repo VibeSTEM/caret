@@ -24,7 +24,7 @@ M0 允许整篇重排。本任务改成普通按键只重排脏段落，并用�
 
 ## 前置条件与待决策
 
-011 和 012 已 done，且后完成者已按[公式与表格的集成规则](../architecture/editor/math-and-table.md#m3-集成验收)记录单元格公式的集成验收证据。长文档夹具放在 `tests/fixtures/`。
+011 和 012 已 done，且 044 已按[公式与表格的集成规则](../architecture/editor/math-and-table.md#m3-集成验收)完成单元格公式集成并留下验收证据。长文档夹具放在 `tests/fixtures/`。
 
 ## 实施步骤
 

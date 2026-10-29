@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-10-28。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-10-29。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -46,8 +46,8 @@
 | 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | implemented |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | planned |
 | 010 | 结构导航 | [M2：结构导航与环境命令](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
-| 011 | 数学排版 | [M3：公式](task/011-impl-math.md) | P2 | 010 | L | planned |
-| 012 | 表格排版 | [M3：表格](task/012-impl-table.md) | P2 | 010 | M | planned |
+| 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044 | M | planned |
+| 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046 | S | planned |
 | 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
 | 014 | CLI | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | planned |
 | 015 | 文档维护 | [文档审查修正](task/015-doc-review-fixes.md) | P0 | — | S | done |
@@ -77,12 +77,22 @@
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | planned |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
 | 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in_progress |
+| 042 | 数学排版 | [M3：latex-rust 后端验证](task/042-latex-rust-math-backend.md) | P2 | — | M | ready |
+| 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | planned |
+| 044 | 数学排版 | [M3：公式布局、画布渲染与表格集成](task/044-math-layout-and-rendering.md) | P2 | 012、027、043 | L | planned |
+| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021 | M | planned |
+| 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、045 | M | planned |
+| 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 010、021 | M | planned |
+| 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 010、012、021、025、047 | L | planned |
+| 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 010、011、012、021、047 | L | planned |
 
-分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
+分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
-004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011、012 的后完成者负责[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)，通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
+004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011 是 M3 公式总体验收；042 验证并锁定数学后端，043 实现公式模型与编辑，044 负责公式布局渲染及[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)。012 是表格总体验收，由 045 实现模型与交互、046 实现布局与画布。011、012、044 全部验收通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
 021 的 done 只表示文档树、`.cdoc` 校验和 `caret-app` 存储边界完成，不表示 M0 编辑器已完成；M0 仍需 022–024、026、027 和 008 集成验收。025 格式命令不阻塞 M0。`caret-doc` 已落地；`caret-layout`、`caret-structure`、`caret-engine` 和 `caret-cli` 按各自任务的依赖顺序创建，不提前建立空 crate。019 定义 AutoSave 策略并通过独立评审后，037 实现单窗口偏好、触发、保存冲突和恢复；未命名文档开启 AutoSave 必须先让用户选择保存路径。038 在 037 完成后迁移为窗口级文档运行时，并实现跨窗口 AutoSave 开启协调。
+
+外部格式使用 [Caret 规范文档树](architecture/editor/document-interchange.md) 作为唯一中间模型，禁止引入通用最低公分母 AST；格式专属 IR 只存在于适配器边界。047 建立转换框架并实现 Markdown 基础子集，048、049 分别处理 DOCX 与 TeX。
 
 034 的本机性能测量与有数据支持的热点优化已完成；Qt GPU nightly 核验、真实窗口大文档端到端测量及额外基准补齐移交 041，由 041 独立推进。039 接通现有 Rust Settings、Theme、Language 服务与设置 UI，并确保 locale 选项对应真实构建资源。040 承接架构审计中需要独立迁移或回归验证的整改；可直接安全清理的孤儿组件在发现后及时删除。
 

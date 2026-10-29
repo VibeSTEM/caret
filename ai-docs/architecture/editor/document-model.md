@@ -1,6 +1,6 @@
 # 文档模型
 
-更新日期：2026-10-25。
+更新日期：2026-10-29。
 
 > 产品已决定使用 Paragraph/Run 作为文本表示。020 定稿 Caret 的语义块、位置、编号、删除和持久化契约；实现任务可补实现细节，但不得另立冲突的产品语义。后续澄清只补充环境样式优先级、边界亲和性和相应测试，不改变模型，也不撤销单一 PageSection、原始 Unicode 保留、BCP 47 回退或标题 Enter 等既有规则。下列字段仍是设计草案，不等于照搬 OOXML，也不承诺 DOCX 兼容。
 
@@ -10,7 +10,7 @@
 
 ```text
 Document
-├── globalSettings: DocumentSettings { theme, defaultLanguage?: Bcp47, defaultFontFamily?: Family, defaultCjkFontFamily?: Family, scriptFontFamilies?: Map<ISO15924, Family>, defaultMathFontFamily?: Family, defaultStyles, formatOverrides, ... }
+├── globalSettings: DocumentSettings { theme, defaultLanguage?: Bcp47, defaultFontFamily?: Family, defaultCjkFontFamily?: Family, defaultMathFontFamily?: Family, scriptFontFamilies?: Map<ISO15924, Family>, defaultStyles, formatOverrides, ... }
 │   └── theme snapshot: { formatVersion, named styles, composable environment templates }
 ├── styles: StyleSheet { generation: StyleGeneration }
 ├── body: Vec<Arc<Block>>
@@ -18,6 +18,8 @@ Document
 │   │   ├── inline scope: Run | nested inline EnvironmentNode | inline object
 │   │   └── block scope: Paragraph | nested block EnvironmentNode | Table | ExplicitBreak
 │   ├── Paragraph { props, inlines: Vec<InlineNode> }
+│   ├── Equation { id, math: CaretMathTree }
+│   ├── Align { id, rows: Vec<CaretMathRow> }
 │   ├── Table(Table → rows → cells → body)
 │   └── ExplicitBreak
 └── pageSections: Vec<PageSection>
@@ -27,8 +29,8 @@ Document
 M0 的 `pageSections` 恰有一个元素，覆盖整份 `Document.body`。首版不支持在文档内部切换纸型、方向或边距；多节范围与显式分节节点以后另行设计，不从数组顺序推断内容范围。
 
 ```text
-Block = Paragraph | EnvironmentNode(scope: block) | Table | ExplicitBreak
-InlineNode = Run | EnvironmentNode(scope: inline) | InlineObject | SoftBreak
+Block = Paragraph | EnvironmentNode(scope: block) | Equation | Align | Table | ExplicitBreak
+InlineNode = Run | EnvironmentNode(scope: inline) | InlineMath | InlineObject | SoftBreak
 Run = { text, props, language?: Bcp47 }  # text 保留原始 Unicode 码点序列
 
 EnvironmentNode(scope: block).children: Vec<Block>
@@ -48,7 +50,7 @@ Paragraph
 
 `children` 按顺序保存环境拥有的正文节点：块级环境存段落、嵌套块环境、表格等 `Block`；行内环境存 Run、嵌套行内环境等 `InlineNode`。块级环境的 `title` 单独保存，不是 `children` 的首项。整体删除块级环境会删除标题和子树。解除环境则保留所有可见内容：有标题时将其转成普通 Paragraph，放在原位置的提升子项之前；Section 的当前自动编号物化为标题段落中的普通文字。提升子项保留原顺序和节点 ID，标题段落保留自身 ID；环境节点及其编号定义被移除。无标题 Section 按编号规则不显示、不占号，解除时只提升子项，不合成标题段落。
 
-文档有独立的全局设置层，用于选择文档排版主题、默认语言、默认 Run/Paragraph 样式和整份文档的格式覆盖值。字体选择契约见[多文字体系字体选择](font-selection.md)。语言使用 BCP 47 标签，按 Run → Paragraph → `globalSettings.defaultLanguage` → `und` 回退，用于断行词典等语言相关处理；它与应用界面语言相互独立。语言自动检测只能作为建议，不能静默修改正文或持久化标签。全局字体按 Unicode 文字体系选择，而不按英语、俄语等语言分别建字段：`defaultFontFamily` 是默认拉丁字体（英语及其他拉丁文字共用），`defaultCjkFontFamily` 用于 CJK 文字体系，`scriptFontFamilies` 可按 Unicode `Script` 短标签覆盖个别脚本（如 `Hani`、`Cyrl`、`Grek`、`Arab`），`languageScriptFontFamilies` 可在具体脚本内再按 BCP 47 标签覆盖，公式上下文单独使用 `defaultMathFontFamily`。未配置的文字体系回退到默认拉丁字体，再由字体引擎进行系统字体回退；缺字时必须检查实际 glyph fallback，不能假设单一字体覆盖全部字符。CJK 默认字体覆盖 Han（`Hani`）、Hiragana（`Hira`）、Katakana（`Kana`）、Hangul（`Hang`）和 Bopomofo（`Bopo`）；`Hani` 本身只表示 Han 脚本，不等于整个 CJK。语言标签（例如 `ja`、`ko`、`zh-Hant`）仍参与 shaping 和本地字形形式选择。公式、文字体系和局部 `Font` 环境选择的是不同上下文，局部环境内的显式字体优先于文档默认字体。Run 不直接保存字体族；新建文档的各默认字体均未设置。格式按属性逐项解析，优先级为 Run/Paragraph 局部显式属性（字体族除外）→ EnvironmentNode 有效设置 → 文档全局覆盖 → 主题中的命名样式 → 应用默认值。主题 kind 默认模板、环境命名变体及实例 `props` 一旦作为某个环境的样式来源，解析结果都属于 `EnvironmentNode` 有效设置层，不再作为较低的主题命名样式层参与回退；节点内部优先级为 kind 默认模板 → 所选变体覆盖默认模板 → 实例 `props` 覆盖变体，之后最近的内层环境值覆盖外层环境值。因此全局字号为 14 pt、Section 默认模板字号为 18 pt 且实例无覆盖时，Section 内最终字号为 18 pt；实例字号可再覆盖它。环境未提供某属性时才继续回退到全局覆盖、主题命名样式和应用默认值。Run/Paragraph 局部显式属性是直接存于具体 Run/Paragraph 的值（如字号、字色、缩进、段后距），不是命名样式引用。粗体和斜体只由 EnvironmentNode 表示。Run/Paragraph 可引用可复用的命名样式。命名样式定义属于文档排版主题，不是应用界面主题（如 GUI 颜色和控件外观）。`.cdoc` 保存所选主题的当前格式快照，可记录外部来源 ID；文档不依赖主题源文件持续存在。主题只维护一个当前格式，不并行支持多版本运行时；加载旧主题或旧快照时立即迁移到当前结构。外部主题更新不会自动改变已有文档；显式更新时替换快照并按受影响范围推进 `StyleGeneration`，使相应格式与布局缓存失效。页面尺寸等分页设置仍属于 `PageSection`，环境标题和编号由环境类型管理，不混入格式全局设置。
+文档有独立的全局设置层，用于选择文档排版主题、默认语言、默认 Run/Paragraph 样式和整份文档的格式覆盖值。字体选择契约见[多文字体系字体选择](font-selection.md)。语言使用 BCP 47 标签，按 Run → Paragraph → `globalSettings.defaultLanguage` → `und` 回退，用于断行词典等语言相关处理；它与应用界面语言相互独立。语言自动检测只能作为建议，不能静默修改正文或持久化标签。全局字体按 Unicode 文字体系选择，而不按英语、俄语等语言分别建字段：`defaultFontFamily` 是默认拉丁字体（英语及其他拉丁文字共用），`defaultCjkFontFamily` 用于 CJK 文字体系，`scriptFontFamilies` 可按 Unicode `Script` 短标签覆盖个别脚本（如 `Hani`、`Cyrl`、`Grek`、`Arab`），`languageScriptFontFamilies` 可在具体脚本内再按 BCP 47 标签覆盖。公式属于独立的语义数学上下文，使用 `defaultMathFontFamily`；M3 默认并仅支持 `STIX Two Math`，该字段保留为未来扩展其他数学字体的稳定设置入口。未配置的文字体系回退到默认拉丁字体，再由字体引擎进行系统字体回退；缺字时必须检查实际 glyph fallback，不能假设单一字体覆盖全部字符。CJK 默认字体覆盖 Han（`Hani`）、Hiragana（`Hira`）、Katakana（`Kana`）、Hangul（`Hang`）和 Bopomofo（`Bopo`）；`Hani` 本身只表示 Han 脚本，不等于整个 CJK。语言标签（例如 `ja`、`ko`、`zh-Hant`）仍参与 shaping 和本地字形形式选择。普通文字体系与局部 `Font` 环境按既有字体优先级解析，局部环境内的显式字体优先于文档默认字体；语义公式不使用正文字体选择链。Run 不直接保存字体族；新建文档的正文字体默认均未设置，数学字体默认使用 STIX Two Math。格式按属性逐项解析，优先级为 Run/Paragraph 局部显式属性（字体族除外）→ EnvironmentNode 有效设置 → 文档全局覆盖 → 主题中的命名样式 → 应用默认值。主题 kind 默认模板、环境命名变体及实例 `props` 一旦作为某个环境的样式来源，解析结果都属于 `EnvironmentNode` 有效设置层，不再作为较低的主题命名样式层参与回退；节点内部优先级为 kind 默认模板 → 所选变体覆盖默认模板 → 实例 `props` 覆盖变体，之后最近的内层环境值覆盖外层环境值。因此全局字号为 14 pt、Section 默认模板字号为 18 pt 且实例无覆盖时，Section 内最终字号为 18 pt；实例字号可再覆盖它。环境未提供某属性时才继续回退到全局覆盖、主题命名样式和应用默认值。Run/Paragraph 局部显式属性是直接存于具体 Run/Paragraph 的值（如字号、字色、缩进、段后距），不是命名样式引用。粗体和斜体只由 EnvironmentNode 表示。Run/Paragraph 可引用可复用的命名样式。命名样式定义属于文档排版主题，不是应用界面主题（如 GUI 颜色和控件外观）。`.cdoc` 保存所选主题的当前格式快照，可记录外部来源 ID；文档不依赖主题源文件持续存在。主题只维护一个当前格式，不并行支持多版本运行时；加载旧主题或旧快照时立即迁移到当前结构。外部主题更新不会自动改变已有文档；显式更新时替换快照并按受影响范围推进 `StyleGeneration`，使相应格式与布局缓存失效。页面尺寸等分页设置仍属于 `PageSection`，环境标题和编号由环境类型管理，不混入格式全局设置。
 
 Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。
 
@@ -88,7 +90,7 @@ Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不�
 - `Section`、`Showcase` 是块级 EnvironmentNode，拥有块子项和可选独立标题；`Section` 另有编号规则，`Showcase` 是可嵌套的展示容器。行内环境没有标题。
 - 当前环境背景高亮是由光标位置派生的视图叠加，不属于持久化模型；行为见[结构导航](structure-navigation.md)。
 - 章节编号由 `Section` 持有的编号定义生成，并作为标题 Paragraph 前的虚拟标签绘制。启用编号的 Section 构成编号层级与计数流：顶层共用文档级计数流；子级按最近的已编号 Section 祖先和显示层级计数。关闭编号的 Section 和 `Showcase` 对标签路径及计数流都透明，其已编号后代继续使用最近已编号祖先的计数流，因此不同未编号容器下同层后代按文档顺序接续序号。例如 Section `1` 下有未编号容器 A、B，A 内首个编号 Section 为 `1.1`，B 内首个编号 Section 为 `1.2`。关闭编号的节点本身不占序号。模板为编号提供默认显示开关与逐层格式，实例可覆盖；格式至少支持阿拉伯数字、小写/大写罗马数字和中文数字。模板可定制标签显示格式，但不能改变层级和计数关系。`title: None` 的 Section 不显示标签且不占自身序号，作为结构容器对后代编号透明；空标题 Paragraph 则可正常显示标签并占号。编号在视觉上类似行内文本，但不持久化为 Run、不进入标题文本或 UTF-8 偏移，因此插入、移动或删除同一计数流中的 Section 后可重新编号。解除 Section 时，先为整个操作范围快照当前显示标签，再原子提升子树并物化标签，结果不依赖遍历顺序。
-- `Table`、公式对象和显式分页仍是有类型的语义块/对象；自动分页只存在于布局结果。
+- `InlineMath` 是段落内的原子对象；`Equation` 与 `Align` 是块级公式节点，分别表示单行显示公式和多行对齐公式。公式内部位置使用 `MathPos`。自动分页只存在于布局结果。
 - `PageSection` 只表示纸张、方向和边距等分页配置，与用户可见的 `EnvironmentNode` 分开，避免把页面分节和内容环境混为一谈。
 
 块级环境可折叠、可选中和通过结构命令整体删除，默认删除该节点、独立标题及子树；若要保留内容，提供明确的“解除环境”操作，按上述规则把标题和正文移回父级。行内格式环境按文字范围编辑和删除。两者都不能让普通文本删除隐式破坏外层结构。命令事务、失败原子性和后续撤销由 018 衔接。环境种类、scope、编号定义、嵌套约束、标题的位置映射及块移动后的 ID/位置映射按本文规则维护，实现任务补充具体 API 和测试。

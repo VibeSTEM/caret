@@ -13,4 +13,5 @@
 | `\` 输入 | [命令输入](command-input.md) |
 | 结构索引与跳转 | [结构导航](structure-navigation.md) |
 | 公式与表格 | [公式与表格](math-and-table.md) |
+| 外部文档格式 | [文档导入与导出](document-interchange.md) |
 | 缓存键 | [增量排版](incremental-layout.md) |
