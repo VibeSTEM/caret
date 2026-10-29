@@ -82,9 +82,13 @@
 | 044 | 数学排版 | [M3：公式布局、画布渲染与表格集成](task/044-math-layout-and-rendering.md) | P2 | 012、027、043 | L | planned |
 | 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021 | M | planned |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、045 | M | planned |
-| 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 010、021 | M | planned |
-| 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 010、012、021、025、047 | L | planned |
-| 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 010、011、012、021、047 | L | planned |
+| 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053 | L | planned |
+| 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
+| 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 047 | L | planned |
+| 050 | 文档模型 | [代码、引用与链接语义节点及编辑](task/050-document-code-links-quotes.md) | P2 | 010、021、025 | L | planned |
+| 051 | 画布 | [代码、引用、链接与列表的布局和画布呈现](task/051-code-links-quotes-layout.md) | P2 | 024、027、050 | L | planned |
+| 052 | 文档模型 | [图片节点、媒体资源与编辑](task/052-image-model-and-editing.md) | P2 | 021 | M | planned |
+| 053 | 画布 | [图片布局与画布呈现](task/053-image-layout-and-canvas.md) | P2 | 024、027、052 | M | planned |
 
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
@@ -92,7 +96,7 @@
 
 021 的 done 只表示文档树、`.cdoc` 校验和 `caret-app` 存储边界完成，不表示 M0 编辑器已完成；M0 仍需 022–024、026、027 和 008 集成验收。025 格式命令不阻塞 M0。`caret-doc` 已落地；`caret-layout`、`caret-structure`、`caret-engine` 和 `caret-cli` 按各自任务的依赖顺序创建，不提前建立空 crate。019 定义 AutoSave 策略并通过独立评审后，037 实现单窗口偏好、触发、保存冲突和恢复；未命名文档开启 AutoSave 必须先让用户选择保存路径。038 在 037 完成后迁移为窗口级文档运行时，并实现跨窗口 AutoSave 开启协调。
 
-外部格式使用 [Caret 规范文档树](architecture/editor/document-interchange.md) 作为唯一中间模型，禁止引入通用最低公分母 AST；格式专属 IR 只存在于适配器边界。047 建立转换框架并实现 Markdown 基础子集，048、049 分别处理 DOCX 与 TeX。
+外部格式使用 [Caret 规范文档树](architecture/editor/document-interchange.md) 作为唯一中间模型，禁止引入通用最低公分母 AST；格式专属 IR 只存在于适配器边界。050–053 补齐代码、引用、链接、图片及画布能力；011/012 补齐公式和表格。047 必须等编辑会话、关闭保护、全部节点/媒体和布局画布能力完成后，才实现完整 Markdown 导入导出；048/049 在 047 之后分别实现完整 DOCX 与 TeX 映射。
 
 034 的本机性能测量与有数据支持的热点优化已完成；Qt GPU nightly 核验、真实窗口大文档端到端测量及额外基准补齐移交 041，由 041 独立推进。039 接通现有 Rust Settings、Theme、Language 服务与设置 UI，并确保 locale 选项对应真实构建资源。040 承接架构审计中需要独立迁移或回归验证的整改；可直接安全清理的孤儿组件在发现后及时删除。
 
