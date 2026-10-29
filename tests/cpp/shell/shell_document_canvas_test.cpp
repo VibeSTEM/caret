@@ -1,4 +1,5 @@
 // Qt/QML 画布几何、输入和缩放行为的集成测试。
+#include "canvas_policy.hpp"
 #include "document_canvas.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
@@ -52,6 +53,14 @@
 #include <qtestcase.h>
 #include <qtestsupport_core.h>
 #include <utility>
+
+void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
+    const caret::CanvasPolicy policy;
+    QCOMPARE(policy.defaultZoomPercent(), 100);
+    QCOMPARE(policy.minimumZoomPercent(), 10);
+    QCOMPARE(policy.maximumZoomPercent(), 800);
+    QCOMPARE(policy.zoomStepPercent(), 10);
+}
 
 void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     constexpr int kTestCursorFlashPeriodMs = 100;

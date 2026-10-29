@@ -18,6 +18,7 @@
 #include <QtCore/qvariant.h>
 #include <QtTest/qtestcase.h>
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -47,6 +48,34 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
             });
     QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("saved"));
 
+    const QVariantMap save_without_target = view_model.saveDocument();
+    QVERIFY(!save_without_target.value(QStringLiteral("valid")).toBool());
+    QVERIFY(save_without_target.value(QStringLiteral("needsSaveAs")).toBool());
+    const QVariantMap open_without_path = view_model.openDocument(QString{});
+    QVERIFY(!open_without_path.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(open_without_path.value(QStringLiteral("error")).toString(),
+             QStringLiteral("document.open_missing_path"));
+
+    const QString missing_path = directory.filePath(QStringLiteral("missing.cdoc"));
+    const QVariantMap failed_open_request = view_model.openDocument(missing_path);
+    QVERIFY2(failed_open_request.value(QStringLiteral("valid")).toBool(),
+             qPrintable(failed_open_request.value(QStringLiteral("error")).toString()));
+    QVERIFY(view_model.documentOpening());
+    const QVariantMap busy_open_request = view_model.openDocument(missing_path);
+    QVERIFY(!busy_open_request.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(busy_open_request.value(QStringLiteral("error")).toString(),
+             QStringLiteral("document.file_operation_busy"));
+    const QVariantMap busy_save_request = view_model.saveDocument(missing_path);
+    QVERIFY(!busy_save_request.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(busy_save_request.value(QStringLiteral("error")).toString(),
+             QStringLiteral("document.file_operation_busy"));
+    QTRY_COMPARE_WITH_TIMEOUT(operation_spy.size(), 1, 10000);
+    const QList<QVariant> failed_open = operation_spy.takeFirst();
+    QVERIFY(!failed_open.at(0).toBool());
+    QVERIFY(!failed_open.at(1).toString().isEmpty());
+    QVERIFY(!view_model.documentOpening());
+    QVERIFY(view_model.documentPath().isEmpty());
+
     const QVariantMap inserted = view_model.insertText(QStringLiteral("保存後も編集"));
     QVERIFY2(inserted.value(QStringLiteral("valid")).toBool(),
              qPrintable(inserted.value(QStringLiteral("error")).toString()));
@@ -72,6 +101,10 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     QVERIFY2(restored.value(QStringLiteral("valid")).toBool(),
              qPrintable(restored.value(QStringLiteral("error")).toString()));
     QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("edited"));
+    const QVariantMap rejected_open = view_model.openDocument(QStringLiteral("ignored.cdoc"));
+    QVERIFY(!rejected_open.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(rejected_open.value(QStringLiteral("error")).toString(),
+             QStringLiteral("document.unsaved_changes"));
 
     const QString document_path = directory.filePath(QStringLiteral("roundtrip.cdoc"));
     const QVariantMap save_request = view_model.saveDocument(document_path);
@@ -278,6 +311,77 @@ void ShellLoadTest::saveConflictCannotReplaceAPreviousDocumentAfterSaveAs() {
     QFile copy_file(copy_path);
     QVERIFY(copy_file.open(QIODevice::ReadOnly));
     QCOMPARE(copy_file.readAll(), external_copy);
+}
+
+void ShellLoadTest::confirmedConflictReplacementWritesCurrentDocument() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray recovery_root = directory.path().toUtf8();
+    const rust::String recovery_configuration = caret::ffi::configure_document_recovery(
+        rust::String(recovery_root.constData(), static_cast<std::size_t>(recovery_root.size())));
+    QVERIFY(recovery_configuration.empty());
+
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String blank_snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(blank_snapshot.data(), blank_snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(blank_snapshot.data(), static_cast<qsizetype>(blank_snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    caret::LayoutViewModel view_model;
+    QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operation_spy.isValid());
+    const auto wait_for_operation = [&operation_spy]() {
+        if (operation_spy.isEmpty() && !operation_spy.wait(10000)) {
+            return QList<QVariant>{};
+        }
+        return operation_spy.takeFirst();
+    };
+    const QString path = directory.filePath(QStringLiteral("conflict.cdoc"));
+    QVERIFY(view_model.insertText(QStringLiteral("local version"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QVERIFY(view_model.saveDocument(path).value(QStringLiteral("valid")).toBool());
+    const QList<QVariant> initial_save = wait_for_operation();
+    QVERIFY(!initial_save.isEmpty());
+    QVERIFY2(initial_save.at(0).toBool(), qPrintable(initial_save.at(1).toString()));
+
+    QVERIFY(view_model.insertText(QStringLiteral(" with edits"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QFile external_file(path);
+    QVERIFY(external_file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QVERIFY(external_file.write("external version") > 0);
+    external_file.close();
+    QVERIFY(view_model.saveDocument().value(QStringLiteral("valid")).toBool());
+    const QList<QVariant> conflict = wait_for_operation();
+    QVERIFY(!conflict.isEmpty());
+    QVERIFY(!conflict.at(0).toBool());
+    QVERIFY(conflict.at(2).toBool());
+    QVERIFY(view_model.saveConflictCanReplace());
+
+    const QVariantMap replace = view_model.replaceExternalVersion();
+    QVERIFY2(replace.value(QStringLiteral("valid")).toBool(),
+             qPrintable(replace.value(QStringLiteral("error")).toString()));
+    const QList<QVariant> replaced = wait_for_operation();
+    QVERIFY(!replaced.isEmpty());
+    QVERIFY2(replaced.at(0).toBool(), qPrintable(replaced.at(1).toString()));
+    QVERIFY(!view_model.saveConflictCanReplace());
+    QCOMPARE(view_model.documentSaveStatus(), QStringLiteral("saved"));
+
+    auto* active_runtime = caret::document_runtime();
+    QVERIFY(active_runtime != nullptr);
+    const auto expected_snapshot = caret::ffi::document_save_snapshot(*active_runtime);
+    QVERIFY(expected_snapshot.error.empty());
+    QByteArray expected_contents;
+    expected_contents.reserve(static_cast<qsizetype>(expected_snapshot.bytes.size()));
+    for (const std::uint8_t byte : expected_snapshot.bytes) {
+        expected_contents.append(static_cast<char>(byte));
+    }
+
+    QVERIFY(external_file.open(QIODevice::ReadOnly));
+    const QByteArray saved_contents = external_file.readAll();
+    QCOMPARE(saved_contents, expected_contents);
 }
 #endif
 

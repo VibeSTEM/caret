@@ -46,7 +46,7 @@ pub(super) fn run() -> Result<(), Box<dyn Error>> {
         "minimum_percent": {"functions": FUNCTIONS_MINIMUM, "lines": LINES_MINIMUM},
         "branch_coverage": "not measured",
         "scope": "cargo-llvm-cov default filters; inline tests remain included",
-        "detailed_reports": ["uncovered-lines.txt", "html/index.html"]
+        "detailed_reports": ["uncovered-lines.txt", "file-coverage.txt", "html/index.html"]
     });
     fs::write(
         directory.join("metadata.json"),
@@ -99,6 +99,7 @@ pub(super) fn run() -> Result<(), Box<dyn Error>> {
     let report = Report::parse(&fs::read(report_path)?, root)?;
     let summary = report.summary();
     fs::write(directory.join("summary.txt"), &summary)?;
+    fs::write(directory.join("file-coverage.txt"), report.file_summary())?;
     print!("{summary}");
     write_rust_details(&tool, root, target, &directory, &coverage_packages)?;
     report.check_gate()
@@ -256,7 +257,7 @@ impl Metric {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Totals {
     functions: Metric,
     lines: Metric,
@@ -278,6 +279,12 @@ impl Totals {
 struct Report {
     global: Totals,
     crates: BTreeMap<String, Totals>,
+    files: Vec<SourceCoverage>,
+}
+
+struct SourceCoverage {
+    path: String,
+    totals: Totals,
 }
 
 impl Report {
@@ -302,6 +309,7 @@ impl Report {
             return Err("coverage 文件集为空".into());
         }
         let mut crates: BTreeMap<String, Totals> = BTreeMap::new();
+        let mut source_files = Vec::with_capacity(files.len());
         for file in files {
             let filename = file["filename"].as_str().ok_or("coverage filename 缺失")?;
             let relative = Path::new(filename).strip_prefix(root).ok();
@@ -312,14 +320,20 @@ impl Report {
                     || "other sources".to_owned(),
                     |c| c.as_os_str().to_string_lossy().into_owned(),
                 );
-            crates
-                .entry(name)
-                .or_default()
-                .add(Totals::parse(&file["summary"])?)?;
+            let totals = Totals::parse(&file["summary"])?;
+            crates.entry(name).or_default().add(totals)?;
+            source_files.push(SourceCoverage {
+                path: relative.map_or_else(
+                    || filename.to_owned(),
+                    |path| path.to_string_lossy().into_owned(),
+                ),
+                totals,
+            });
         }
         Ok(Self {
             global: Totals::parse(&data[0]["totals"])?,
             crates,
+            files: source_files,
         })
     }
     fn summary(&self) -> String {
@@ -343,6 +357,29 @@ impl Report {
         }
         text
     }
+    /// 优先列出函数覆盖率最低的源文件，帮助定位新增行为测试的落点。
+    fn file_summary(&self) -> String {
+        let mut files: Vec<_> = self.files.iter().collect();
+        files.sort_by(|left, right| {
+            compare_coverage(left.totals.functions, right.totals.functions)
+                .then_with(|| compare_coverage(left.totals.lines, right.totals.lines))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        let mut text = String::from("按函数覆盖率从低到高；crate 总计见 summary.txt。\n");
+        for file in files {
+            text.push_str(&format!(
+                "{}: functions {}/{} ({}), lines {}/{} ({})\n",
+                file.path,
+                file.totals.functions.covered,
+                file.totals.functions.count,
+                file.totals.functions.percent(),
+                file.totals.lines.covered,
+                file.totals.lines.count,
+                file.totals.lines.percent(),
+            ));
+        }
+        text
+    }
     fn check_gate(&self) -> Result<(), Box<dyn Error>> {
         if !self.global.functions.reaches(FUNCTIONS_MINIMUM)
             || !self.global.lines.reaches(LINES_MINIMUM)
@@ -355,6 +392,16 @@ impl Report {
             .into());
         }
         Ok(())
+    }
+}
+
+fn compare_coverage(left: Metric, right: Metric) -> std::cmp::Ordering {
+    match (left.count, right.count) {
+        (0, 0) => std::cmp::Ordering::Equal,
+        (0, _) => std::cmp::Ordering::Less,
+        (_, 0) => std::cmp::Ordering::Greater,
+        _ => (u128::from(left.covered) * u128::from(right.count))
+            .cmp(&(u128::from(right.covered) * u128::from(left.count))),
     }
 }
 

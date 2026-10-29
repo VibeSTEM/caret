@@ -1,13 +1,14 @@
 //! FFI 版本、主题、布局与栅格返回契约的行为测试。
 
 use crate::document::{
+    auto_save_deadline_fired, auto_save_deadline_json, auto_save_write_finished,
     clear_selection_json, current_caret_json, delete_backward_json, document_hit_test_json,
     document_save_snapshot, document_status_json, drag_hit_map_json, input_method_event_json,
     insert_soft_break_json, insert_text_json, install_prepared_document, interaction_state_json,
     layout_snapshot_json, mark_document_saved_json, move_to_visual_line_edge_json,
     move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime, paste_text_json,
     place_caret_at_page_json, prepare_document_file, rasterize_page_glyphs, selected_text_json,
-    set_selection_json, split_paragraph_json, write_document_file,
+    set_document_auto_save_enabled, set_selection_json, split_paragraph_json, write_document_file,
 };
 
 use crate::generated::bridge::GlyphRasterRequest;
@@ -16,6 +17,7 @@ use crate::settings::{
     settings_load_warning, settings_snapshot, settings_theme_catalog,
 };
 use crate::version;
+use std::time::{Duration, Instant};
 
 #[test]
 fn ffi_version_matches_package_metadata() {
@@ -167,6 +169,66 @@ fn ffi_ime_preview_is_transient_until_commit() {
     let saved = document_save_snapshot(&mut runtime);
     assert_eq!(saved.document_generation, before.document_generation + 1);
     assert!(String::from_utf8_lossy(&saved.bytes).contains("你"));
+}
+
+#[test]
+fn ffi_auto_save_captures_and_marks_only_the_written_revision() {
+    let mut runtime = new_blank_document_runtime();
+    assert!(!insert_text_json(&mut runtime, "初稿".to_owned()).starts_with("error:"));
+
+    set_document_auto_save_enabled(&mut runtime, true);
+    let deadline_result: Result<serde_json::Value, _> =
+        serde_json::from_str(&auto_save_deadline_json(&runtime));
+    assert!(deadline_result.is_ok(), "autosave deadline should be JSON");
+    let deadline = deadline_result.unwrap_or_default();
+    let session_generation = deadline["sessionGeneration"]
+        .as_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    let generation = deadline["generation"]
+        .as_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    assert_ne!(
+        session_generation, 0,
+        "deadline should identify its session"
+    );
+    assert_ne!(
+        generation, 0,
+        "deadline should identify its policy generation"
+    );
+
+    let stale = auto_save_deadline_fired(&mut runtime, session_generation, generation + 1);
+    assert!(stale.stale_deadline);
+
+    // 只推进测试时钟，让单次 deadline 到期，不依赖固定睡眠。
+    runtime.monotonic_origin = Instant::now() - Duration::from_secs(2);
+    let snapshot = auto_save_deadline_fired(&mut runtime, session_generation, generation);
+    assert!(!snapshot.stale_deadline);
+    assert!(snapshot.error.is_empty());
+    assert_eq!(snapshot.document_generation, 1);
+    assert!(String::from_utf8_lossy(&snapshot.bytes).contains("初稿"));
+
+    assert!(!insert_text_json(&mut runtime, "追加".to_owned()).starts_with("error:"));
+    let path = std::env::temp_dir()
+        .join("caret-ffi-autosave.cdoc")
+        .to_string_lossy()
+        .into_owned();
+    let follow_up = auto_save_write_finished(
+        &mut runtime,
+        snapshot.session_generation,
+        snapshot.document_generation,
+        snapshot.history_state_id,
+        path,
+        snapshot.content_digest,
+        true,
+    );
+    assert!(follow_up.contains("\"delayMs\":"));
+    let status_result: Result<serde_json::Value, _> =
+        serde_json::from_str(&document_status_json(&mut runtime));
+    assert!(status_result.is_ok(), "document status should be JSON");
+    let status = status_result.unwrap_or_default();
+    assert_eq!(status["dirty"], true);
 }
 
 #[test]
