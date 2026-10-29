@@ -39,6 +39,11 @@ pub(super) struct ParagraphRangeMergeResult {
     pub(super) result_boundaries: Vec<usize>,
 }
 
+pub(super) struct SectionTitleMergeResult {
+    pub(super) merge: ParagraphMergeResult,
+    pub(super) environment_id: NodeId,
+}
+
 pub(super) fn build_paragraph_index(blocks: &[Block]) -> ParagraphIndex {
     let mut index = ParagraphIndex::new();
     collect_locations(blocks, &mut Vec::new(), &mut index);
@@ -400,6 +405,129 @@ pub(super) fn merge_adjacent_paragraph(
         right_id: removed_id,
         left_len: caret_offset,
         result_boundaries: boundaries,
+    }))
+}
+
+/// 将 Section 首个正文段落合并回独立标题，供段首退格删除标题边界。
+pub(super) fn merge_section_body_into_title(
+    blocks: &mut [Block],
+    location: &ParagraphLocation,
+) -> Result<Option<SectionTitleMergeResult>, EditError> {
+    if location.is_title || location.story != StoryId::Body {
+        return Ok(None);
+    }
+    let Some((&index, parent_path)) = location.block_path.split_last() else {
+        return Ok(None);
+    };
+    if index != 0 {
+        return Ok(None);
+    }
+    let Some(Block::Environment(environment)) = block_at_path_mut(blocks, parent_path) else {
+        return Ok(None);
+    };
+    if environment.kind != caret_doc::BlockEnvironmentKind::Section {
+        return Ok(None);
+    }
+    let Some(title) = environment.title.as_mut() else {
+        return Ok(None);
+    };
+    let Some(Block::Paragraph(body)) = environment.children.first() else {
+        return Ok(None);
+    };
+    if title.language != body.language
+        || title.layout != body.layout
+        || title.mark_style != body.mark_style
+        || title.props != body.props
+        || !title.extra.is_empty()
+        || !body.extra.is_empty()
+    {
+        return Err(EditError::IncompatibleParagraphMerge);
+    }
+
+    let left_len = title.inlines.iter().try_fold(0usize, |length, node| {
+        length
+            .checked_add(inline_length(node)?)
+            .ok_or(EditError::InvalidPosition)
+    })?;
+    let body = match environment.children.remove(0) {
+        Block::Paragraph(body) => body,
+        _ => return Err(EditError::InvalidPosition),
+    };
+    title.inlines.extend(body.inlines);
+    let title_id = title.id.clone();
+    let environment_id = environment.id.clone();
+    let boundaries = TextMap::new(title)?.grapheme_boundaries;
+    Ok(Some(SectionTitleMergeResult {
+        merge: ParagraphMergeResult {
+            left_id: title_id,
+            right_id: body.id,
+            left_len,
+            result_boundaries: boundaries,
+        },
+        environment_id,
+    }))
+}
+
+/// 将空 Section 后紧邻段落并入标题，供该段段首退格回到节标题末尾。
+pub(super) fn merge_paragraph_after_empty_section_into_title(
+    blocks: &mut Vec<Block>,
+    location: &ParagraphLocation,
+) -> Result<Option<SectionTitleMergeResult>, EditError> {
+    if location.is_title || location.story != StoryId::Body {
+        return Ok(None);
+    }
+    let Some((&paragraph_index, parent_path)) = location.block_path.split_last() else {
+        return Ok(None);
+    };
+    let Some(section_index) = paragraph_index.checked_sub(1) else {
+        return Ok(None);
+    };
+    let Some(siblings) = block_list_at_path_mut(blocks, parent_path) else {
+        return Ok(None);
+    };
+    let Some(Block::Paragraph(paragraph)) = siblings.get(paragraph_index) else {
+        return Ok(None);
+    };
+    let paragraph = paragraph.clone();
+    let Some(Block::Environment(environment)) = siblings.get_mut(section_index) else {
+        return Ok(None);
+    };
+    if environment.kind != caret_doc::BlockEnvironmentKind::Section
+        || !environment.children.is_empty()
+    {
+        return Ok(None);
+    }
+    let Some(title) = environment.title.as_mut() else {
+        return Ok(None);
+    };
+    if title.language != paragraph.language
+        || title.layout != paragraph.layout
+        || title.mark_style != paragraph.mark_style
+        || title.props != paragraph.props
+        || !title.extra.is_empty()
+        || !paragraph.extra.is_empty()
+    {
+        return Err(EditError::IncompatibleParagraphMerge);
+    }
+
+    let left_len = title.inlines.iter().try_fold(0usize, |length, node| {
+        length
+            .checked_add(inline_length(node)?)
+            .ok_or(EditError::InvalidPosition)
+    })?;
+    title.inlines.extend(paragraph.inlines.clone());
+    let title_id = title.id.clone();
+    let environment_id = environment.id.clone();
+    let boundaries = TextMap::new(title)?.grapheme_boundaries;
+    siblings.remove(paragraph_index);
+    Ok(Some(SectionTitleMergeResult {
+        merge: ParagraphMergeResult {
+            left_id: title_id,
+            right_id: paragraph.id,
+            left_len,
+            result_boundaries: boundaries,
+        },
+        environment_id,
     }))
 }
 

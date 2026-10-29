@@ -18,7 +18,9 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
     assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(snapshot["paragraphs"][0]["text"], "");
     assert_eq!(
-        snapshot["structureFocusRects"].as_array().map(Vec::len),
+        snapshot["blockEnvironmentHighlightRects"]
+            .as_array()
+            .map(Vec::len),
         Some(0)
     );
     assert_eq!(snapshot["paragraphs"][0]["lines"][0]["sourceStart"], 0);
@@ -42,7 +44,7 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
 }
 
 #[test]
-fn structure_focus_geometry_tracks_the_active_block_environment()
+fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
     let environment_id = NodeId::generate();
@@ -58,7 +60,7 @@ fn structure_focus_geometry_tracks_the_active_block_environment()
     let mut runtime = DocumentViewRuntime::new(document)?;
 
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
-    let rectangles = snapshot["structureFocusRects"]
+    let rectangles = snapshot["blockEnvironmentHighlightRects"]
         .as_array()
         .ok_or_else(|| std::io::Error::other("focus rectangles were omitted"))?;
     assert_eq!(rectangles.len(), 1);
@@ -68,8 +70,8 @@ fn structure_focus_geometry_tracks_the_active_block_environment()
 
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
     assert_eq!(
-        interaction["structureFocusRects"],
-        snapshot["structureFocusRects"]
+        interaction["blockEnvironmentHighlightRects"],
+        snapshot["blockEnvironmentHighlightRects"]
     );
     Ok(())
 }

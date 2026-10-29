@@ -1,7 +1,7 @@
 //! 生成拖选命中映射并提交、清除或提取 Rust 文档选区。
 
 use super::DocumentViewRuntime;
-use caret_engine::{Affinity, Pos, Selection, StoryId, VisualAffinity};
+use caret_engine::{Affinity, Pos, Selection, VisualAffinity};
 use std::convert::TryFrom;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -34,7 +34,6 @@ impl DocumentViewRuntime {
                 .collect::<Vec<_>>();
             grapheme_offsets.push(paragraph.text.len());
             let mut offsets = Vec::new();
-            let mut line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                     continue;
@@ -52,12 +51,23 @@ impl DocumentViewRuntime {
                 for pair in grapheme_offsets[first_boundary..boundary_end].windows(2) {
                     let start = pair[0];
                     let end = pair[1];
-                    if let Some(rectangles) = paragraph
-                        .layout
-                        .selection_text_geometry(&paragraph.text, start..end)
-                    {
-                        for (bounds, geometry_line_index) in rectangles {
-                            if geometry_line_index != line_index {
+                    let selection = Selection {
+                        anchor: Pos {
+                            story: paragraph.story.clone(),
+                            paragraph_id: paragraph.id.clone(),
+                            offset: start,
+                            affinity: Affinity::Downstream,
+                        },
+                        focus: Pos {
+                            story: paragraph.story.clone(),
+                            paragraph_id: paragraph.id.clone(),
+                            offset: end,
+                            affinity: Affinity::Downstream,
+                        },
+                    };
+                    if let Some(rectangles) = snapshot.selection_geometry(&selection) {
+                        for rectangle in rectangles {
+                            if rectangle.page_index != page_index {
                                 continue;
                             }
                             segments.push(serde_json::json!({
@@ -65,15 +75,14 @@ impl DocumentViewRuntime {
                                 "paragraphIndex": paragraph_order,
                                 "startUtf8": start.to_string(),
                                 "endUtf8": end.to_string(),
-                                "x0Pt": bounds.x0 + page.margin_left_pt,
-                                "y0Pt": line_top_pt,
-                                "x1Pt": bounds.x1 + page.margin_left_pt,
-                                "y1Pt": line_top_pt + f64::from(line.metrics.height_pt),
+                                "x0Pt": rectangle.x0_pt,
+                                "y0Pt": rectangle.y0_pt,
+                                "x1Pt": rectangle.x1_pt,
+                                "y1Pt": rectangle.y1_pt,
                             }));
                         }
                     }
                 }
-                line_top_pt += f64::from(line.metrics.height_pt);
             }
             offsets.sort_unstable();
             offsets.dedup();
@@ -81,7 +90,7 @@ impl DocumentViewRuntime {
                 for logical_affinity in [Affinity::Upstream, Affinity::Downstream] {
                     for visual_affinity in [VisualAffinity::Upstream, VisualAffinity::Downstream] {
                         let position = Pos {
-                            story: StoryId::Body,
+                            story: paragraph.story.clone(),
                             paragraph_id: paragraph.id.clone(),
                             offset,
                             affinity: logical_affinity,
@@ -144,7 +153,10 @@ impl DocumentViewRuntime {
             anchor: PositionDto,
             focus: PositionDto,
         }
-        fn to_position(dto: PositionDto) -> Result<(Pos, VisualAffinity), String> {
+        fn to_position(
+            session: &caret_engine::Session,
+            dto: PositionDto,
+        ) -> Result<(Pos, VisualAffinity), String> {
             let paragraph_id = caret_doc::NodeId::parse(dto.paragraph_id)
                 .map_err(|error| format!("selection.invalid_paragraph_id: {error}"))?;
             let offset = dto
@@ -161,9 +173,12 @@ impl DocumentViewRuntime {
                 "downstream" => VisualAffinity::Downstream,
                 _ => return Err("selection.invalid_visual_affinity".to_owned()),
             };
+            let story = session
+                .story_for_paragraph(&paragraph_id)
+                .ok_or_else(|| "selection.unknown_paragraph".to_owned())?;
             Ok((
                 Pos {
-                    story: StoryId::Body,
+                    story,
                     paragraph_id,
                     offset,
                     affinity,
@@ -173,10 +188,10 @@ impl DocumentViewRuntime {
         }
         let dto: SelectionDto = serde_json::from_str(selection_json)
             .map_err(|error| format!("selection.invalid_payload: {error}"))?;
-        let (anchor, anchor_visual) = to_position(dto.anchor)?;
-        let (focus, focus_visual) = to_position(dto.focus)?;
+        let (anchor, anchor_visual) = to_position(&self.session, dto.anchor)?;
+        let (focus, focus_visual) = to_position(&self.session, dto.focus)?;
         self.session
-            .set_selection_with_visual_affinity(Some(Selection { anchor, focus }), focus_visual)
+            .set_pointer_selection_range(anchor, focus, focus_visual)
             .map_err(|error| format!("selection.set: {error}"))?;
         self.anchor_visual_affinity = anchor_visual;
         self.preferred_visual_x_pt = None;

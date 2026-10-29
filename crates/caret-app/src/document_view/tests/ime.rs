@@ -1,7 +1,39 @@
 //! 验证输入法预编辑、替换提交与失败原子性。
 
 use super::*;
+use caret_doc::{
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineNode, NodeId, Paragraph, Run,
+};
 use caret_engine::Command;
+use std::collections::BTreeMap;
+
+fn paragraph_with_text(text: &str) -> Paragraph {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines.push(InlineNode::Run(Run {
+        text: text.to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    }));
+    paragraph
+}
+
+fn section_with_body(title: &str, body: &str) -> (Block, NodeId) {
+    let paragraph = paragraph_with_text(body);
+    let id = paragraph.id.clone();
+    (
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(paragraph_with_text(title)),
+            children: vec![Block::Paragraph(paragraph)],
+            extra: BTreeMap::new(),
+        }),
+        id,
+    )
+}
 
 #[test]
 fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
@@ -612,5 +644,117 @@ fn ime_preedit_is_laid_out_at_its_insertion_point_and_moves_the_suffix()
     let cancelled = runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
     let restored: Value = serde_json::from_str(&cancelled)?;
     assert_eq!(restored["paragraphs"][0]["text"], "ABCD");
+    Ok(())
+}
+
+#[test]
+fn ime_commit_at_environment_exit_inserts_after_the_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (section, body_id) = section_with_body("Heading", "inside");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_text("before")),
+        section,
+        Block::Paragraph(paragraph_with_text("after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let end = serde_json::json!({
+        "paragraphId": body_id.to_string(),
+        "offsetUtf8": "6",
+        "affinity": "upstream",
+        "visualAffinity": "upstream"
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({"anchor": end.clone(), "focus": end}).to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(runtime.session.block_environment_exit().is_some());
+
+    let preview = runtime.input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)?;
+    let preview: Value = serde_json::from_str(&preview)?;
+    assert!(runtime.session.composition().is_some());
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(
+        preview["paragraphs"].as_array().is_some_and(|paragraphs| {
+            paragraphs.iter().any(|paragraph| paragraph["text"] == "ni")
+        }),
+        "composition preview must be outside the environment: {preview}"
+    );
+
+    let committed = runtime.input_method_event_json(String::new(), "你好".to_owned(), -1, 1, 0)?;
+    let committed: Value = serde_json::from_str(&committed)?;
+    assert_eq!(runtime.document().body.len(), 4);
+    assert!(matches!(runtime.document().body[1], Block::Environment(_)));
+    let Block::Paragraph(inserted) = &runtime.document().body[2] else {
+        return Err("IME input after Section should be in a sibling paragraph".into());
+    };
+    let inserted_text = inserted
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            InlineNode::Run(run) => Some(run.text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(inserted_text, "你好");
+    assert!(
+        committed["paragraphs"]
+            .as_array()
+            .is_some_and(|paragraphs| {
+                paragraphs
+                    .iter()
+                    .any(|paragraph| paragraph["text"] == "你好")
+            }),
+        "committed layout should include inserted text: {committed}"
+    );
+    assert!(runtime.session.block_environment_exit().is_none());
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn multiline_paste_at_environment_exit_inserts_sibling_paragraphs_as_one_edit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (section, body_id) = section_with_body("Heading", "inside");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_text("before")),
+        section,
+        Block::Paragraph(paragraph_with_text("after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let end = serde_json::json!({
+        "paragraphId": body_id.to_string(),
+        "offsetUtf8": "6",
+        "affinity": "upstream",
+        "visualAffinity": "upstream"
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({"anchor": end.clone(), "focus": end}).to_string(),
+    )?;
+    runtime.move_visual_caret_json(true, false)?;
+
+    runtime.paste_text_json("first\nsecond".to_owned())?;
+
+    assert_eq!(runtime.document().body.len(), 5);
+    assert!(matches!(runtime.document().body[1], Block::Environment(_)));
+    for (index, expected) in [(2, "first"), (3, "second")] {
+        let Block::Paragraph(paragraph) = &runtime.document().body[index] else {
+            return Err("multiline paste should create sibling paragraphs".into());
+        };
+        let text = paragraph
+            .inlines
+            .iter()
+            .filter_map(|inline| match inline {
+                InlineNode::Run(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(text, expected);
+    }
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(matches!(runtime.document().body[1], Block::Environment(_)));
     Ok(())
 }

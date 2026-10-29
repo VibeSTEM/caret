@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::editing::EditorKey;
-use caret_doc::Block;
+use caret_doc::{Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph};
+use std::collections::BTreeMap;
 
 fn paragraph_text(session: &Session, block_index: usize) -> String {
     let Some(Block::Paragraph(paragraph)) = session.document.body.get(block_index) else {
@@ -235,6 +236,110 @@ fn tab_completes_a_filtered_command_without_editing_the_document() {
             .map(|command_line| command_line.query.as_str()),
         Some("section")
     );
+}
+
+#[test]
+fn unavailable_candidates_are_hidden_until_prefix_matches_and_cannot_execute() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    let empty_candidates = session
+        .command_line()
+        .unwrap_or_else(|| panic!("command line should remain active"))
+        .candidates();
+    assert!(empty_candidates.iter().all(|candidate| candidate.available));
+    assert!(
+        !empty_candidates
+            .iter()
+            .any(|candidate| candidate.alias == "\\chapter")
+    );
+
+    session
+        .run(Command::TypeCommandLine("chapter".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    let command_line = session
+        .command_line()
+        .unwrap_or_else(|| panic!("command query should remain active"));
+    let candidate = command_line
+        .selected_candidate()
+        .unwrap_or_else(|| panic!("matching unavailable candidate should be visible"));
+    assert_eq!(candidate.alias, "\\chapter");
+    assert!(!candidate.available);
+    let generation = session.document_generation();
+
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("disabled command should be safely ignored: {error}"));
+
+    assert!(session.command_line().is_some());
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(paragraph_text(&session, 0), "");
+}
+
+#[test]
+fn custom_environment_is_not_registered_as_a_user_command_candidate() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    assert!(
+        session
+            .command_line_candidates()
+            .iter()
+            .all(|candidate| candidate.alias != "\\environment")
+    );
+    session
+        .run(Command::TypeCommandLine("env".to_owned()))
+        .unwrap_or_else(|error| panic!("command prefix failed: {error}"));
+    assert!(
+        session
+            .command_line_candidates()
+            .iter()
+            .all(|candidate| candidate.alias != "\\environment")
+    );
+}
+
+#[test]
+fn environment_creation_candidates_are_disabled_in_section_titles() {
+    let mut document = Document::blank();
+    let title = Paragraph::empty(NodeId::generate());
+    let title_id = title.id.clone();
+    let section = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(title),
+        children: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        extra: BTreeMap::new(),
+    };
+    document.body = vec![Block::Environment(section)];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid section document rejected: {error}"));
+    assert_eq!(session.selection().focus.paragraph_id, title_id);
+
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("sec".to_owned()))
+        .unwrap_or_else(|error| panic!("command prefix failed: {error}"));
+
+    let candidate = session
+        .command_line_candidates()
+        .into_iter()
+        .find(|candidate| candidate.alias == "\\section")
+        .unwrap_or_else(|| panic!("section command is missing from prefix results"));
+    assert!(!candidate.available);
+    let document_generation = session.document_generation();
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("disabled command acceptance failed: {error}"));
+    assert!(session.command_line().is_some());
+    assert_eq!(session.document_generation(), document_generation);
 }
 
 #[test]

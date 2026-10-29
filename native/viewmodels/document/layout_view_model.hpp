@@ -47,7 +47,8 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext NOTIFY interactionChanged)
     Q_PROPERTY(QVariantMap commandLine READ commandLine NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList currentStructure READ currentStructure NOTIFY interactionChanged)
-    Q_PROPERTY(QVariantList structureFocusRects READ structureFocusRects NOTIFY interactionChanged)
+    Q_PROPERTY(QVariantList blockEnvironmentHighlightRects READ blockEnvironmentHighlightRects
+                   NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
     Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
@@ -80,8 +81,8 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] const QVariantMap& inputMethodContext() const { return m_input_method_context; }
     [[nodiscard]] const QVariantMap& commandLine() const { return m_command_line; }
     [[nodiscard]] const QVariantList& currentStructure() const { return m_current_structure; }
-    [[nodiscard]] const QVariantList& structureFocusRects() const {
-        return m_structure_focus_rects;
+    [[nodiscard]] const QVariantList& blockEnvironmentHighlightRects() const {
+        return m_block_environment_highlight_rects;
     }
     [[nodiscard]] QString documentGeneration() const {
         return QString::number(m_document_generation);
@@ -210,7 +211,7 @@ class LayoutViewModel final : public QObject {
     QVariantMap m_input_method_context;
     QVariantMap m_command_line;
     QVariantList m_current_structure;
-    QVariantList m_structure_focus_rects;
+    QVariantList m_block_environment_highlight_rects;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     qulonglong m_layout_revision = 0;

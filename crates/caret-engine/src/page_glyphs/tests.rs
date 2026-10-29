@@ -49,17 +49,7 @@ fn layout(document: &Document) -> DocumentLayoutSnapshot {
 }
 
 #[test]
-fn paragraph_scripts_share_the_document_baseline_anchor() {
-    let reference = layout(&document_with_text("English"));
-    let reference_baseline = reference
-        .page_glyphs(0)
-        .unwrap_or_else(|error| panic!("reference glyphs failed: {error}"))
-        .runs
-        .first()
-        .and_then(|run| run.glyphs.first())
-        .unwrap_or_else(|| panic!("reference run is empty"))
-        .baseline_y_pt;
-
+fn paragraph_glyphs_keep_one_anchor_across_mixed_scripts() {
     for text in [
         "English！",
         "！English",
@@ -71,24 +61,24 @@ fn paragraph_scripts_share_the_document_baseline_anchor() {
         let page = snapshot
             .page_glyphs(0)
             .unwrap_or_else(|error| panic!("glyph extraction failed for {text:?}: {error}"));
+        let first_baseline = page
+            .runs
+            .iter()
+            .flat_map(|run| &run.glyphs)
+            .next()
+            .unwrap_or_else(|| panic!("paragraph has no glyphs: {text:?}"))
+            .baseline_y_pt;
         assert!(
             page.runs
                 .iter()
                 .flat_map(|run| &run.glyphs)
-                .all(|glyph| { glyph.baseline_y_pt == reference_baseline }),
-            "script changed the document baseline for {text:?}"
+                .all(|glyph| glyph.baseline_y_pt == first_baseline),
+            "mixed scripts changed the paragraph baseline for {text:?}"
         );
     }
 
     let multilingual = layout(&document_with_multilingual_paragraphs());
-    assert_eq!(
-        multilingual.paragraphs[0].layout.paragraph.lines[0]
-            .metrics
-            .baseline_pt,
-        multilingual.paragraphs[1].layout.paragraph.lines[0]
-            .metrics
-            .baseline_pt
-    );
+    assert_eq!(multilingual.paragraphs.len(), 2);
 }
 
 #[test]

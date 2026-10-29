@@ -1,5 +1,7 @@
 // 在场景图线程维护纸张、字形纹理和插入点节点，并复用未变化页面。
+#include "block_environment_highlight_scene.hpp"
 #include "document_canvas.hpp"
+#include "scene_graph_geometry.hpp"
 #include "value_validation.hpp"
 #include <QByteArray>
 #include <QColor>
@@ -103,7 +105,7 @@ class PageBackgroundGroupNode final : public QSGNode {
     QHash<int, PageBackgroundNode*> pages;
 };
 
-class SelectionGroupNode final : public QSGNode {
+template <typename RectangleNode> class RectangleGroupNode final : public QSGNode {
   public:
     void clearRectangles() {
         while (firstChild() != nullptr) {
@@ -114,22 +116,11 @@ class SelectionGroupNode final : public QSGNode {
         rectangles.clear();
     }
 
-    QVector<QSGSimpleRectNode*> rectangles;
+    QVector<RectangleNode*> rectangles;
 };
 
-class StructureFocusGroupNode final : public QSGNode {
-  public:
-    void clearRectangles() {
-        while (firstChild() != nullptr) {
-            QSGNode* child = firstChild();
-            removeChildNode(child);
-            delete child;
-        }
-        rectangles.clear();
-    }
-
-    QVector<QSGSimpleRectNode*> rectangles;
-};
+using SelectionGroupNode = RectangleGroupNode<QSGSimpleRectNode>;
+using BlockEnvironmentHighlightGroupNode = BlockEnvironmentHighlightLayer;
 
 class CanvasRootNode final : public QSGNode {
   public:
@@ -137,14 +128,14 @@ class CanvasRootNode final : public QSGNode {
     PageBackgroundGroupNode* page_background_group = nullptr;
     GlyphGroupNode* glyph_group = nullptr;
     SelectionGroupNode* selection_group = nullptr;
-    StructureFocusGroupNode* structure_focus_group = nullptr;
+    BlockEnvironmentHighlightGroupNode* block_environment_highlight_group = nullptr;
     QSGSimpleRectNode* caret_node = nullptr;
     quint64 glyph_revision = std::numeric_limits<quint64>::max();
     quint64 glyph_geometry_revision = std::numeric_limits<quint64>::max();
     quint64 selection_revision = std::numeric_limits<quint64>::max();
     quint64 selection_geometry_revision = std::numeric_limits<quint64>::max();
-    quint64 structure_focus_revision = std::numeric_limits<quint64>::max();
-    quint64 structure_focus_geometry_revision = std::numeric_limits<quint64>::max();
+    quint64 block_environment_highlight_revision = std::numeric_limits<quint64>::max();
+    quint64 block_environment_highlight_geometry_revision = std::numeric_limits<quint64>::max();
 };
 
 void update_page_backgrounds(PageBackgroundGroupNode* group, int page_count, int first_page,
@@ -424,14 +415,14 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root != nullptr ? root->page_background_group : nullptr;
         GlyphGroupNode* glyph_group = root != nullptr ? root->glyph_group : nullptr;
         SelectionGroupNode* selection_group = root != nullptr ? root->selection_group : nullptr;
-        StructureFocusGroupNode* structure_focus_group =
-            root != nullptr ? root->structure_focus_group : nullptr;
+        BlockEnvironmentHighlightGroupNode* block_environment_highlight_group =
+            root != nullptr ? root->block_environment_highlight_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
             root->removeChildNode(page_background_group);
             root->removeChildNode(glyph_group);
             root->removeChildNode(selection_group);
-            root->removeChildNode(structure_focus_group);
+            root->removeChildNode(block_environment_highlight_group);
             root->removeChildNode(caret_node);
         }
         delete root;
@@ -442,14 +433,14 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->selection_group =
             selection_group != nullptr ? selection_group : new SelectionGroupNode();
         root->glyph_group = glyph_group != nullptr ? glyph_group : new GlyphGroupNode();
-        root->structure_focus_group = structure_focus_group != nullptr
-                                          ? structure_focus_group
-                                          : new StructureFocusGroupNode();
+        root->block_environment_highlight_group = block_environment_highlight_group != nullptr
+                                                      ? block_environment_highlight_group
+                                                      : new BlockEnvironmentHighlightGroupNode();
         root->caret_node = caret_node != nullptr ? caret_node : new QSGSimpleRectNode();
         root->appendChildNode(root->page_background_group);
+        root->appendChildNode(root->block_environment_highlight_group);
         root->appendChildNode(root->selection_group);
         root->appendChildNode(root->glyph_group);
-        root->appendChildNode(root->structure_focus_group);
         root->appendChildNode(root->caret_node);
         root->page_count = page_count;
     }
@@ -460,6 +451,10 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         [this](int page_index) { return pageRect(page_index); },
         m_page_border_color.isValid() ? m_page_border_color : QColor(Qt::transparent),
         m_page_color.isValid() ? m_page_color : QColor(Qt::transparent));
+    const auto to_content = [this](int page_index, const QPointF& point) {
+        return documentToContent(page_index, point);
+    };
+    const auto page_rect = [this](int page_index) { return pageRect(page_index); };
     if (root->selection_revision != m_selection_revision ||
         root->selection_geometry_revision != m_glyph_geometry_revision) {
         root->selection_group->clearRectangles();
@@ -468,14 +463,8 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         for (const QVariant& value : selection_rectangles) {
             const QVariantMap selection = value.toMap();
             const int page_index = selection.value(QStringLiteral("pageIndex")).toInt();
-            const QPointF top_left = documentToContent(
-                page_index, QPointF(selection.value(QStringLiteral("x0Pt")).toReal(),
-                                    selection.value(QStringLiteral("y0Pt")).toReal()));
-            const QPointF bottom_right = documentToContent(
-                page_index, QPointF(selection.value(QStringLiteral("x1Pt")).toReal(),
-                                    selection.value(QStringLiteral("y1Pt")).toReal()));
-            const QRectF rect(top_left, bottom_right);
-            const QRectF visible_rect = rect.normalized().intersected(pageRect(page_index));
+            const QRectF visible_rect =
+                canvas_detail::visible_canvas_rect(page_index, selection, to_content, page_rect);
             if (visible_rect.isEmpty()) {
                 continue;
             }
@@ -490,54 +479,18 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             rectangle->setColor(m_selection_color);
         }
     }
-    if (root->structure_focus_revision != m_structure_focus_revision ||
-        root->structure_focus_geometry_revision != m_glyph_geometry_revision) {
-        root->structure_focus_group->clearRectangles();
-        const qreal border_width = static_cast<qreal>(m_structure_focus_border_width_px);
-        if (border_width > 0.0 && m_structure_focus_color.isValid()) {
-            for (const QVariant& value : m_structure_focus_rects) {
-                const QVariantMap focus = value.toMap();
-                const int page_index = focus.value(QStringLiteral("pageIndex")).toInt();
-                if (page_index < m_first_visible_page ||
-                    (m_page_end_visible >= 0 && page_index >= m_page_end_visible)) {
-                    continue;
-                }
-                const QPointF top_left = documentToContent(
-                    page_index, QPointF(focus.value(QStringLiteral("x0Pt")).toReal(),
-                                        focus.value(QStringLiteral("y0Pt")).toReal()));
-                const QPointF bottom_right = documentToContent(
-                    page_index, QPointF(focus.value(QStringLiteral("x1Pt")).toReal(),
-                                        focus.value(QStringLiteral("y1Pt")).toReal()));
-                const QRectF rect =
-                    QRectF(top_left, bottom_right).normalized().intersected(pageRect(page_index));
-                if (rect.isEmpty()) {
-                    continue;
-                }
-                const qreal edge =
-                    std::min({border_width, rect.width() / 2.0, rect.height() / 2.0});
-                const QRectF edges[] = {
-                    QRectF(rect.left(), rect.top(), rect.width(), edge),
-                    QRectF(rect.left(), rect.bottom() - edge, rect.width(), edge),
-                    QRectF(rect.left(), rect.top() + edge, edge, rect.height() - 2.0 * edge),
-                    QRectF(rect.right() - edge, rect.top() + edge, edge,
-                           rect.height() - 2.0 * edge),
-                };
-                for (const QRectF& edge_rect : edges) {
-                    if (edge_rect.isEmpty()) {
-                        continue;
-                    }
-                    auto* node = new QSGSimpleRectNode(edge_rect, m_structure_focus_color);
-                    root->structure_focus_group->rectangles.push_back(node);
-                    root->structure_focus_group->appendChildNode(node);
-                }
-            }
-        }
-        root->structure_focus_revision = m_structure_focus_revision;
-        root->structure_focus_geometry_revision = m_glyph_geometry_revision;
+    if (root->block_environment_highlight_revision != m_block_environment_highlight_revision ||
+        root->block_environment_highlight_geometry_revision != m_glyph_geometry_revision) {
+        root->block_environment_highlight_group->update(
+            m_block_environment_highlight_rects, m_first_visible_page,
+            m_page_end_visible < 0 ? page_count : m_page_end_visible,
+            {m_block_environment_highlight_color, m_block_environment_highlight_radius,
+             m_block_environment_highlight_padding_px},
+            to_content, page_rect);
+        root->block_environment_highlight_revision = m_block_environment_highlight_revision;
+        root->block_environment_highlight_geometry_revision = m_glyph_geometry_revision;
     } else {
-        for (QSGSimpleRectNode* rectangle : root->structure_focus_group->rectangles) {
-            rectangle->setColor(m_structure_focus_color);
-        }
+        root->block_environment_highlight_group->setColor(m_block_environment_highlight_color);
     }
     auto* glyph_group = root->glyph_group;
     const bool missing_glyph_texture = has_retryable_missing_texture(glyph_group);

@@ -170,389 +170,379 @@ message_032:
   tr: 閃爍顯示插入點
   st: finished
 
-message_101:
+message_033:
   src: Show command suggestions
   tr: 顯示命令候選
   st: finished
 
 [RecoveryDialog]
-message_033:
+message_034:
   src: Recover documents
   tr: 復原文件
   st: finished
 
-message_034:
+message_035:
   src: Caret found document recovery files. Choose one to restore, or discard it.
   tr: Caret 找到文件復原檔案。請選擇要還原的檔案，或將其捨棄。
   st: finished
 
-message_035:
+message_036:
   src: This is an external file backup. Save a copy to restore it outside Caret.
   tr: 這是外部檔案備份。請另存副本，以便在 Caret 之外還原。
   st: finished
 
-message_036:
+message_037:
   src: Save backup copy
   tr: 儲存備份副本
   st: finished
 
-message_037:
+message_038:
   src: Restore
   tr: 還原
   st: finished
 
-message_038:
+message_039:
   src: Discard
   tr: 捨棄
   st: finished
 
-message_039:
+message_040:
   src: Later
   tr: 稍後
   st: finished
 
 [SaveConflictDialog]
-message_040:
+message_041:
   src: File changed outside Caret
   tr: 檔案已在 Caret 外部變更
   st: finished
 
-message_041:
+message_042:
   src: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
   tr: 由於檔案已變更、移動或無法使用，Caret 無法安全覆寫 %1。您可以另存副本、在可行時備份後取代目前檔案，或取消。
   st: finished
 
-message_042:
+message_043:
   src: The recovery copy could not be written:
   tr: 無法寫入復原副本：
   st: finished
 
-message_043:
+message_044:
   src: The recovery copy could not be linked to this document:
   tr: 無法將復原副本連結至此文件：
   st: finished
 
-message_044:
+message_045:
   src: Save a Copy
   tr: 另存副本
   st: finished
 
-message_045:
+message_046:
   src: Replace
   tr: 取代
   st: finished
 
-message_046:
+message_047:
   src: Cancel
   tr: 取消
   st: finished
 
 [SettingsDialog]
-message_047:
+message_048:
   src: Preferences
   tr: 偏好設定
   st: finished
 
-message_048:
+message_049:
   src: Theme
   tr: 主題
   st: finished
 
-message_049:
+message_050:
   src: Language
   tr: 語言
   st: finished
 
-message_050:
+message_051:
   src: Settings
   tr: 設定
   st: finished
 
 [SettingsLanguagePage]
-message_051:
+message_052:
   src: Choose the language used by the application. The change is applied when you select OK.
   tr: 選擇應用程式使用的介面語言。按一下「確定」後套用變更。
   st: finished
 
-message_052:
+message_053:
   src: Application language
   tr: 應用程式語言
   st: finished
 
-message_053:
+message_054:
   src: Language settings are unavailable in this build.
   tr: 此建置版本無法使用語言設定。
   st: finished
 
 [ShareButton]
-message_054:
+message_055:
   src: Share
   tr: 分享
   st: finished
 
 [ThemeSettingsPage]
-message_055:
+message_056:
   src: Choose the application theme.
   tr: 選擇應用程式主題。
   st: finished
 
-message_056:
+message_057:
   src: Application theme
   tr: 應用程式主題
   st: finished
 
-message_057:
+message_058:
   src: Theme settings are unavailable in this build.
   tr: 此建置版本無法使用主題設定。
   st: finished
 
-message_058:
+message_059:
   src: Dark
   tr: 深色
   st: finished
 
-message_059:
+message_060:
   src: Light
   tr: 淺色
   st: finished
 
 [UiCommonNavigation]
-message_060:
+message_061:
   src: Browse
   tr: 瀏覽
   st: finished
 
 [UnsavedChangesDialog]
-message_061:
+message_062:
   src: Unsaved changes
   tr: 有未儲存的變更
   st: finished
 
-message_062:
+message_063:
   src: Save your changes before closing this document?
   tr: 關閉文件前要儲存變更嗎？
   st: finished
 
-message_063:
+message_064:
   src: Save
   tr: 儲存
   st: finished
 
-message_064:
+message_065:
   src: Don't Save
   tr: 不儲存
   st: finished
 
-message_065:
+message_066:
   src: Cancel
   tr: 取消
   st: finished
 
 [WindowCommandBar]
-message_066:
+message_067:
   src: Home
   tr: 首頁
   st: finished
 
 [WindowStatusBar]
-message_067:
+message_068:
   src: Page %1 of %2
   tr: 第 %1 頁，共 %2 頁
   st: finished
 
-message_068:
+message_069:
   src: %1 words
   tr: %1 個字
   st: finished
 
-message_069:
+message_070:
   src: English (United States)
   tr: 英文（美國）
   st: finished
 
-message_070:
+message_071:
   src: Zoom out
   tr: 縮小
   st: finished
 
-message_071:
+message_072:
   src: Zoom
   tr: 縮放
   st: finished
 
-message_072:
+message_073:
   src: Zoom in
   tr: 放大
   st: finished
 
-message_102:
-  src: Single-line
-  tr: 單行結構
-  st: finished
-
-message_103:
-  src: Multi-line
-  tr: 多行結構
-  st: finished
-
-message_104:
+message_074:
   src: Paragraph
   tr: 段落
   st: finished
 
-message_105:
-  src: Table
-  tr: 表格
+message_075:
+  src: Section
+  tr: 節
   st: finished
 
-message_106:
-  src: Figure
-  tr: 圖
+message_076:
+  src: Heading
+  tr: 標題
+  st: finished
+
+message_077:
+  src: Custom environment
+  tr: 自訂環境
   st: finished
 
 [WindowTitleBar]
-message_073:
+message_078:
   src: Untitled
   tr: 未命名
   st: finished
 
-message_074:
+message_079:
   src: AutoSave
   tr: 自動儲存
   st: finished
 
-message_075:
+message_080:
   src: Open
   tr: 開啟
   st: finished
 
-message_076:
+message_081:
   src: Save
   tr: 儲存
   st: finished
 
-message_077:
+message_082:
   src: Undo
   tr: 復原
   st: finished
 
-message_078:
+message_083:
   src: Redo
   tr: 重做
   st: finished
 
-message_079:
+message_084:
   src: Comments
   tr: 註解
   st: finished
 
-message_080:
+message_085:
   src: Search commands and help
   tr: 搜尋命令與說明
   st: finished
 
-message_081:
+message_086:
   src: Settings
   tr: 設定
   st: finished
 
-message_082:
+message_087:
   src: Saving
   tr: 儲存中
   st: finished
 
-message_083:
+message_088:
   src: Edited
   tr: 已編輯
   st: finished
 
-message_084:
+message_089:
   src: Saved
   tr: 已儲存
   st: finished
 
 [CommandCompletion]
-message_085:
+message_090:
   src: Chapter
   tr: 章
   st: finished
 
-message_086:
+message_091:
   src: Section
   tr: 節
   st: finished
 
-message_087:
+message_092:
   src: Subsection
   tr: 小節
   st: finished
 
-message_089:
+message_093:
   src: Bulleted list
   tr: 項目符號清單
   st: finished
 
-message_090:
+message_094:
   src: Numbered list
   tr: 編號清單
   st: finished
 
-message_091:
+message_095:
   src: Page break
   tr: 分頁符號
   st: finished
 
-message_092:
+message_096:
   src: Line break
   tr: 軟換行
   st: finished
 
-message_093:
+message_097:
   src: No matching commands
   tr: 找不到相符的命令
   st: finished
 
-message_094:
+message_098:
   src: Inline math
   tr: 行內公式
   st: finished
 
-message_095:
+message_099:
   src: Single-line equation
   tr: 單行公式
   st: finished
 
-message_096:
+message_100:
   src: Fraction
   tr: 分數
   st: finished
 
-message_097:
+message_101:
   src: Square root
   tr: 平方根
   st: finished
 
-message_098:
+message_102:
   src: Table
   tr: 表格
   st: finished
 
-message_099:
+message_103:
   src: Subsubsection
   tr: 小小節
   st: finished
 
-message_100:
+message_104:
   src: Multiline equation
   tr: 多行公式
   st: finished
 
-message_101:
+message_105:
   src: New paragraph
   tr: 新段落
-  st: finished
-
-message_102:
-  src: Custom environment
-  tr: 自訂環境
   st: finished

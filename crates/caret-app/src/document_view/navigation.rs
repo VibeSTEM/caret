@@ -1,9 +1,10 @@
 //! 按 Parley 视觉几何移动 Rust Session 中的光标和选区。
 
 use super::DocumentViewRuntime;
+use caret_doc::NodeId;
 use caret_engine::{
     Affinity, Command, Direction, DocumentLayoutSnapshot, HitAffinity, Pos, Selection,
-    VisualAffinity,
+    StructureIndex, VisualAffinity,
 };
 
 impl DocumentViewRuntime {
@@ -12,6 +13,7 @@ impl DocumentViewRuntime {
         let command = match action {
             "next" => Command::MoveStructure(Direction::Forward),
             "previous" => Command::MoveStructure(Direction::Backward),
+            "expand-selection" => Command::ExpandStructureSelection,
             "exit" => Command::ExitStructure,
             _ => return Err("navigation.unknown_structure_action".to_owned()),
         };
@@ -23,6 +25,9 @@ impl DocumentViewRuntime {
             self.anchor_visual_affinity = self.session.selection_visual_affinity();
             self.preferred_visual_x_pt = None;
         }
+        if effect.document_changed {
+            return self.layout_snapshot_json();
+        }
         self.interaction_state_json()
     }
 
@@ -33,6 +38,11 @@ impl DocumentViewRuntime {
         extend: bool,
     ) -> Result<String, String> {
         let current = self.session.selection().clone();
+        let selection_anchor = self
+            .session
+            .structure_selection_anchor()
+            .cloned()
+            .unwrap_or_else(|| current.anchor.clone());
         let current_visual = self.session.selection_visual_affinity();
         let current_anchor_visual = self.anchor_visual_affinity;
         let target = {
@@ -115,6 +125,7 @@ impl DocumentViewRuntime {
                         let cursor = adjacent.layout.cursor_at(offset, visual_affinity)?;
                         Some((
                             Pos {
+                                story: adjacent.story.clone(),
                                 paragraph_id: adjacent.id.clone(),
                                 offset,
                                 affinity: if offset == 0 {
@@ -122,7 +133,6 @@ impl DocumentViewRuntime {
                                 } else {
                                     Affinity::Upstream
                                 },
-                                ..current.focus.clone()
                             },
                             cursor.affinity(),
                             false,
@@ -131,11 +141,79 @@ impl DocumentViewRuntime {
             }
         };
         let Some((focus, visual_affinity, collapsed_selection)) = target else {
+            if extend
+                && let Some(environment_id) =
+                    block_environment_at(self.session.structure_index(), &current.focus)
+            {
+                self.session
+                    .select_block_environment(environment_id)
+                    .map_err(|error| format!("selection.environment: {error}"))?;
+                return self.interaction_state_json();
+            }
+            if extend || current.anchor != current.focus {
+                return self.interaction_state_json();
+            }
+            let Some(paragraph) = self
+                .current_snapshot()?
+                .paragraph_by_id(&current.focus.paragraph_id)
+            else {
+                return Err("navigation.unknown_paragraph".to_owned());
+            };
+            let exit_direction = if paragraph.text.is_empty() {
+                if forward {
+                    Direction::Forward
+                } else {
+                    Direction::Backward
+                }
+            } else if current.focus.offset == paragraph.text.len() {
+                Direction::Forward
+            } else if current.focus.offset == 0 {
+                Direction::Backward
+            } else {
+                return self.interaction_state_json();
+            };
+            let effect = self
+                .session
+                .run(Command::ExitBlockEnvironment(exit_direction))
+                .map_err(|error| format!("navigation.exit_block: {error}"))?;
+            if effect.document_changed {
+                self.anchor_visual_affinity = self.session.selection_visual_affinity();
+                self.preferred_visual_x_pt = None;
+                return self.layout_snapshot_json();
+            }
             return self.interaction_state_json();
         };
+        if !extend
+            && current.anchor == current.focus
+            && focus.paragraph_id != current.focus.paragraph_id
+        {
+            let paragraph = self
+                .current_snapshot()?
+                .paragraph_by_id(&current.focus.paragraph_id)
+                .ok_or_else(|| "navigation.unknown_paragraph".to_owned())?;
+            let current_text_len = paragraph.text.len();
+            if let Some(direction) = environment_exit_direction(
+                self.session.structure_index(),
+                &current.focus,
+                &focus,
+                current_text_len,
+                forward,
+            ) {
+                let effect = self
+                    .session
+                    .run(Command::ExitBlockEnvironment(direction))
+                    .map_err(|error| format!("navigation.exit_block: {error}"))?;
+                if effect.document_changed {
+                    self.anchor_visual_affinity = self.session.selection_visual_affinity();
+                    self.preferred_visual_x_pt = None;
+                    return self.layout_snapshot_json();
+                }
+                return self.interaction_state_json();
+            }
+        }
         let selection = if extend && !collapsed_selection {
             Selection {
-                anchor: current.anchor,
+                anchor: selection_anchor,
                 focus,
             }
         } else {
@@ -163,6 +241,11 @@ impl DocumentViewRuntime {
         extend: bool,
     ) -> Result<String, String> {
         let current = self.session.selection().clone();
+        let selection_anchor = self
+            .session
+            .structure_selection_anchor()
+            .cloned()
+            .unwrap_or_else(|| current.anchor.clone());
         let current_visual = self.session.selection_visual_affinity();
         let current_anchor_visual = self.anchor_visual_affinity;
         let preferred_visual_x = self.preferred_visual_x_pt;
@@ -214,10 +297,10 @@ impl DocumentViewRuntime {
                     };
                     Some((
                         Pos {
+                            story: adjacent.story.clone(),
                             paragraph_id: adjacent.id.clone(),
                             offset: hit.cursor.byte_index(),
                             affinity: position_affinity,
-                            ..current.focus.clone()
                         },
                         hit.cursor.affinity(),
                         preferred_x,
@@ -229,7 +312,7 @@ impl DocumentViewRuntime {
         };
         let selection = if extend {
             Selection {
-                anchor: current.anchor,
+                anchor: selection_anchor,
                 focus,
             }
         } else {
@@ -307,6 +390,81 @@ impl DocumentViewRuntime {
         self.preferred_visual_x_pt = None;
         self.interaction_state_json()
     }
+}
+
+pub(super) fn block_environment_at(
+    structure_index: &StructureIndex,
+    position: &Pos,
+) -> Option<NodeId> {
+    let ordinal = structure_index.paragraph_ordinal(&position.paragraph_id)?;
+    structure_index
+        .at(&caret_engine::StructurePosition {
+            paragraph_id: position.paragraph_id.clone(),
+            offset_utf8: position.offset,
+        })
+        .into_iter()
+        .rev()
+        .find(|entry| {
+            entry.kind.is_block_environment() && entry.range.paragraph_ordinals.contains(&ordinal)
+        })
+        .map(|entry| entry.id.clone())
+}
+
+fn logical_boundary_direction(
+    offset: usize,
+    text_len: usize,
+    visual_forward: bool,
+) -> Option<Direction> {
+    if text_len == 0 {
+        Some(if visual_forward {
+            Direction::Forward
+        } else {
+            Direction::Backward
+        })
+    } else if offset == text_len {
+        Some(Direction::Forward)
+    } else if offset == 0 {
+        Some(Direction::Backward)
+    } else {
+        None
+    }
+}
+
+fn environment_exit_direction(
+    structure_index: &StructureIndex,
+    current: &Pos,
+    target: &Pos,
+    current_text_len: usize,
+    visual_forward: bool,
+) -> Option<Direction> {
+    let current_environment_ids = structure_index
+        .at(&caret_engine::StructurePosition {
+            paragraph_id: current.paragraph_id.clone(),
+            offset_utf8: current.offset,
+        })
+        .into_iter()
+        .filter(|entry| entry.kind.is_block_environment())
+        .map(|entry| &entry.id)
+        .collect::<Vec<_>>();
+    if current_environment_ids.is_empty() {
+        return None;
+    }
+    let target_environment_ids = structure_index
+        .at(&caret_engine::StructurePosition {
+            paragraph_id: target.paragraph_id.clone(),
+            offset_utf8: target.offset,
+        })
+        .into_iter()
+        .filter(|entry| entry.kind.is_block_environment())
+        .map(|entry| &entry.id)
+        .collect::<Vec<_>>();
+    let leaves_environment = current_environment_ids
+        .iter()
+        .any(|current_id| !target_environment_ids.contains(current_id));
+    if !leaves_environment {
+        return None;
+    }
+    logical_boundary_direction(current.offset, current_text_len, visual_forward)
 }
 
 fn visual_caret_key(

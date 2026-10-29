@@ -2,6 +2,7 @@
 
 mod enter;
 mod escape;
+mod mod_backspace;
 
 use super::Session;
 use crate::editing::{EditError, EditorKey, Effect};
@@ -13,6 +14,7 @@ impl Session {
             EditorKey::Escape => self.handle_escape(),
             EditorKey::Enter => self.handle_enter(false),
             EditorKey::ShiftEnter => self.handle_enter(true),
+            EditorKey::ModBackspace => self.handle_mod_backspace(),
         }
     }
 }

@@ -2,6 +2,52 @@
 
 use super::*;
 
+fn paragraph_with_text(text: &str) -> caret_doc::Paragraph {
+    let mut paragraph = caret_doc::Paragraph::empty(caret_doc::NodeId::generate());
+    paragraph.inlines.push(InlineNode::Run(Run {
+        text: text.to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    }));
+    paragraph
+}
+
+fn paragraph_text(paragraph: &caret_doc::Paragraph) -> String {
+    paragraph
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            InlineNode::Run(run) => Some(run.text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn document_with_paragraph_section_paragraph() -> (Document, String, String) {
+    let before = paragraph_with_text("before");
+    let title = paragraph_with_text("heading");
+    let body = paragraph_with_text("inside");
+    let body_id = body.id.to_string();
+    let after = paragraph_with_text("after");
+    let after_id = after.id.to_string();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Environment(caret_doc::BlockEnvironment {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Paragraph(body)],
+            extra: Default::default(),
+        }),
+        Block::Paragraph(after),
+    ];
+    (document, body_id, after_id)
+}
+
 #[test]
 fn editor_enter_publishes_the_new_paragraph_layout() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -187,5 +233,336 @@ fn deleting_within_a_paragraph_reuses_layout_and_returns_a_delta()
     assert_eq!(deleted["documentGeneration"], "4");
     assert_eq!(deleted["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(deleted["paragraphs"][0]["text"], "fist");
+    Ok(())
+}
+
+#[test]
+fn arrow_leaves_section_before_entering_following_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, body_id, after_id) = document_with_paragraph_section_paragraph();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let section_endpoint = serde_json::json!({
+        "paragraphId": body_id,
+        "offsetUtf8": "6",
+        "affinity": "downstream",
+        "visualAffinity": "downstream",
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": section_endpoint,
+            "focus": section_endpoint
+        })
+        .to_string(),
+    )?;
+    let outside: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+    assert!(runtime.session.block_environment_exit().is_some());
+    assert_eq!(
+        outside["currentStructure"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(runtime.document().body.len(), 3);
+
+    let outside_caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    assert_eq!(outside_caret["xPt"], outside["caretGeometry"]["xPt"]);
+
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(runtime.session.block_environment_exit().is_none());
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id.to_string(),
+        after_id
+    );
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    for _ in 0..3 {
+        runtime.move_visual_caret_json(true, false)?;
+    }
+
+    let deleted: Value = serde_json::from_str(&runtime.delete_backward_json()?)?;
+
+    assert_eq!(deleted["paragraphs"].as_array().map(Vec::len), Some(1));
+    assert_eq!(deleted["paragraphs"][0]["text"], "afer");
+    assert_eq!(deleted["partial"], true);
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(matches!(runtime.document().body[1], Block::Environment(_)));
+    Ok(())
+}
+
+#[test]
+fn backspace_at_start_after_nonempty_section_does_not_delete_section_or_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, _, after_id) = document_with_paragraph_section_paragraph();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let endpoint = serde_json::json!({
+        "paragraphId": after_id,
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream",
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": endpoint, "focus": endpoint }).to_string(),
+    )?;
+
+    let deleted: Value = serde_json::from_str(&runtime.delete_backward_json()?)?;
+
+    assert_eq!(deleted["documentGeneration"], "0");
+    assert_eq!(runtime.document().body.len(), 3);
+    assert_eq!(deleted["paragraphs"][0]["text"], "before");
+    assert_eq!(deleted["paragraphs"][1]["text"], "heading");
+    assert_eq!(deleted["paragraphs"][2]["text"], "inside");
+    assert_eq!(deleted["paragraphs"][3]["text"], "after");
+    Ok(())
+}
+
+#[test]
+fn backspace_after_empty_section_merges_into_the_section_title()
+-> Result<(), Box<dyn std::error::Error>> {
+    let title = paragraph_with_text("Heading");
+    let title_id = title.id.clone();
+    let section_id = caret_doc::NodeId::generate();
+    let following = paragraph_with_text("body");
+    let following_id = following.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Environment(caret_doc::BlockEnvironment {
+            id: section_id.clone(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: Vec::new(),
+            extra: Default::default(),
+        }),
+        Block::Paragraph(following),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let start = serde_json::json!({
+        "paragraphId": following_id.to_string(),
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream"
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({"anchor": start.clone(), "focus": start}).to_string(),
+    )?;
+
+    runtime.delete_backward_json()?;
+
+    assert_eq!(runtime.document().body.len(), 1);
+    let Block::Environment(section) = &runtime.document().body[0] else {
+        return Err("Section should remain after merging its following paragraph".into());
+    };
+    let title = section
+        .title
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("Section title should remain"))?;
+    assert_eq!(title.id, title_id);
+    assert_eq!(paragraph_text(title), "Headingbody");
+    assert_eq!(section.id, section_id);
+    assert_eq!(runtime.session.selection().focus.paragraph_id, title_id);
+    assert_eq!(
+        runtime.session.selection().focus.story,
+        caret_engine::StoryId::EnvironmentTitle(section_id)
+    );
+    assert_eq!(runtime.session.selection().focus.offset, "Heading".len());
+
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 2);
+    let Block::Environment(restored_section) = &runtime.document().body[0] else {
+        return Err("Undo should restore the Section".into());
+    };
+    assert_eq!(
+        restored_section.title.as_ref().map(paragraph_text),
+        Some("Heading".to_owned())
+    );
+    assert_eq!(
+        paragraph_text(match &runtime.document().body[1] {
+            Block::Paragraph(paragraph) => paragraph,
+            _ => return Err("Undo should restore the following paragraph".into()),
+        }),
+        "body"
+    );
+
+    runtime.redo_json()?;
+    assert_eq!(runtime.document().body.len(), 1);
+    let Block::Environment(redone_section) = &runtime.document().body[0] else {
+        return Err("Redo should keep the Section".into());
+    };
+    assert_eq!(
+        redone_section.title.as_ref().map(paragraph_text),
+        Some("Headingbody".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn backspace_on_keyboard_selected_environment_deletes_and_restores_its_subtree()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, body_id, _) = document_with_paragraph_section_paragraph();
+    let Block::Environment(section) = &mut document.body[1] else {
+        return Err("预期第二个块为 Section".into());
+    };
+    section
+        .children
+        .push(Block::Environment(caret_doc::BlockEnvironment {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph_with_text("nested"))],
+            extra: Default::default(),
+        }));
+    let section_id = section.id.clone();
+    let nested_id = match &section.children[1] {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => return Err("预期 Section 中包含嵌套环境".into()),
+    };
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let endpoint = serde_json::json!({
+        "paragraphId": body_id,
+        "offsetUtf8": "6",
+        "affinity": "upstream",
+        "visualAffinity": "upstream",
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": endpoint, "focus": endpoint }).to_string(),
+    )?;
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environment(),
+        Some(&section_id)
+    );
+    let deleted: Value = serde_json::from_str(&runtime.delete_backward_json()?)?;
+    assert_eq!(runtime.document().body.len(), 2);
+    assert!(matches!(runtime.document().body[0], Block::Paragraph(_)));
+    assert!(matches!(runtime.document().body[1], Block::Paragraph(_)));
+    assert_eq!(deleted["documentGeneration"], "1");
+
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 3);
+    let Block::Environment(restored) = &runtime.document().body[1] else {
+        return Err("撤销后应恢复 Section".into());
+    };
+    assert_eq!(restored.id, section_id);
+    let Block::Environment(restored_nested) = &restored.children[1] else {
+        return Err("撤销后应恢复嵌套环境".into());
+    };
+    assert_eq!(restored_nested.id, nested_id);
+
+    runtime.redo_json()?;
+    assert_eq!(runtime.document().body.len(), 2);
+    assert!(matches!(runtime.document().body[1], Block::Paragraph(_)));
+    Ok(())
+}
+
+#[test]
+fn backspace_deletes_the_entire_paragraph_section_paragraph_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, _, after_id) = document_with_paragraph_section_paragraph();
+    let before_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.to_string(),
+        _ => return Err("预期第一个块为段落".into()),
+    };
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let anchor = serde_json::json!({
+        "paragraphId": before_id,
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream"
+    });
+    let focus = serde_json::json!({
+        "paragraphId": after_id,
+        "offsetUtf8": "5",
+        "affinity": "upstream",
+        "visualAffinity": "upstream"
+    });
+    runtime
+        .set_selection_json(&serde_json::json!({"anchor": anchor, "focus": focus}).to_string())?;
+
+    runtime.delete_backward_json()?;
+
+    assert_eq!(runtime.document().body.len(), 2);
+    assert!(
+        matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
+    );
+    assert!(
+        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
+    );
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(
+        matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph) == "before")
+    );
+    assert!(matches!(&runtime.document().body[1], Block::Environment(_)));
+    assert!(
+        matches!(&runtime.document().body[2], Block::Paragraph(paragraph) if paragraph_text(paragraph) == "after")
+    );
+
+    runtime.redo_json()?;
+    assert_eq!(runtime.document().body.len(), 2);
+    assert!(
+        matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
+    );
+    assert!(
+        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
+    );
+    Ok(())
+}
+
+#[test]
+fn backspace_deletes_multiple_selected_sections_and_intervening_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first_title = paragraph_with_text("first");
+    let first_title_id = first_title.id.to_string();
+    let second_title = paragraph_with_text("second");
+    let second_title_id = second_title.id.to_string();
+    let make_section = |title| {
+        Block::Environment(caret_doc::BlockEnvironment {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: Some(title),
+            children: vec![Block::Paragraph(paragraph_with_text("body"))],
+            extra: Default::default(),
+        })
+    };
+    let mut document = Document::blank();
+    document.body = vec![
+        make_section(first_title),
+        Block::Paragraph(paragraph_with_text("middle")),
+        make_section(second_title),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let anchor = serde_json::json!({
+        "paragraphId": first_title_id,
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream"
+    });
+    let focus = serde_json::json!({
+        "paragraphId": second_title_id,
+        "offsetUtf8": "6",
+        "affinity": "upstream",
+        "visualAffinity": "upstream"
+    });
+    runtime
+        .set_selection_json(&serde_json::json!({"anchor": anchor, "focus": focus}).to_string())?;
+    assert_eq!(runtime.session.selected_block_environments().len(), 2);
+
+    runtime.delete_backward_json()?;
+
+    assert_eq!(runtime.document().body.len(), 1);
+    assert!(
+        matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
+    );
+    runtime.undo_json()?;
+    assert_eq!(runtime.document().body.len(), 3);
+    assert!(matches!(&runtime.document().body[0], Block::Environment(_)));
+    assert!(
+        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph) == "middle")
+    );
+    assert!(matches!(&runtime.document().body[2], Block::Environment(_)));
     Ok(())
 }

@@ -12,6 +12,14 @@ impl Session {
         if let Some(composition) = &self.composition {
             return self.cancel_composition(composition.id);
         }
+        if self.selected_block_environment.take().is_some() {
+            self.selected_block_environments.clear();
+            self.structure_selection = None;
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         if self.selection.anchor != self.selection.focus {
             self.advance_history_merge_epoch();
             self.selection.anchor = self.selection.focus.clone();

@@ -1,5 +1,5 @@
 //! 提供 caret 几何、字形栅格化和页面命中接口。
-use super::DocumentViewRuntime;
+use super::{DocumentViewRuntime, snapshot::caret_geometry_with_environment_exit};
 use caret_engine::{PageCaretView, RasterizedPageGlyphs, Selection};
 
 impl DocumentViewRuntime {
@@ -11,10 +11,17 @@ impl DocumentViewRuntime {
             .unwrap_or(&self.session);
         let position = display_session.selection().focus.clone();
         let visual_affinity = display_session.selection_visual_affinity();
-        let caret = self
-            .current_snapshot()?
+        let block_environment_exit = display_session.block_environment_exit();
+        let snapshot = self.current_snapshot()?;
+        let caret = snapshot
             .caret_geometry(&position, visual_affinity)
-            .map(PageCaretView::from);
+            .map(|caret| {
+                PageCaretView::from(caret_geometry_with_environment_exit(
+                    block_environment_exit,
+                    snapshot,
+                    caret,
+                ))
+            });
         serde_json::to_string(&caret).map_err(|error| format!("layout.caret_serialize: {error}"))
     }
 

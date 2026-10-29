@@ -55,7 +55,7 @@ crates/caret-structure/src/index.rs     唯一结构索引装配入口
 
 页面角色与内容块形态是正交层级。页面角色组织页级内容；Paragraph 承载行内内容并决定段落折行，`SingleLine` 只是语义分类，不保证窄页面上只有一条视觉行。
 
-Heading、Section、Custom 等具体领域语义由结构索引保留，界面消费索引投影出的通用类别。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 映射为 `SingleLine`，Align 映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](structure-navigation.md)。
+Heading、Section、Custom 等具体领域语义由结构索引保留，快照提供稳定语义 kind，界面按当前 UI 语言翻译；通用类别仅用于布局/导航分类，不替代状态栏的语义标签。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 映射为 `SingleLine`，Align 映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](structure-navigation.md)。
 
 页面组合的语义草案（不是当前 DTO 字段或 `.cdoc` JSON schema）：
 
@@ -98,13 +98,13 @@ Paragraph
 
 文档设置包括主题快照、语言、默认 Run/Paragraph 样式和全局格式覆盖。语言使用 BCP 47 标签，按 Run → Paragraph → `globalSettings.defaultLanguage` → `und` 回退；它与 UI 语言相互独立，自动检测不能静默改写正文或标签。字段、脚本/语言映射、字体回退和字体缓存规则以[多文字体系字体选择](font-selection.md)为准。格式属性的解析层级、环境模板覆盖和直接属性语义以[文字格式语义](text-formatting.md)为准。`PageSection` 承载页面尺寸等分页设置，不与文档主题或环境属性混用。
 
-Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。
+Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。相邻 Run 的 `language`、`props`、未知可选字段 `extra` 完全相同时，编辑器可在受影响的局部范围合并它们；这些边界不代表光标停靠点。没有文本且无显式属性/语言/未知字段的默认 Run 是无语义占位，可在局部编辑归一化时移除；不能合并格式不同或带未知字段的 Run，也不在打开文档时重写整棵内容树。
 
-块级环境的 `title` 始终是单个 Paragraph。标题中按 Enter 时，光标前文本留在标题，后半段移入新建的正文首段，并插到已有正文内容之前；光标在标题开头或末尾时，允许标题前缀或新正文段为空。标题内的选区按“删除选区，再在选区起点拆分”一次提交。当前 M0 的选区模型只接受同一 `Story` 内的范围；跨越环境标题与正文的范围在安装选区时拒绝，文档和现有选区保持不变。标题 Enter 不会隐式改写这种跨 Story 范围。若正文首项是表格或嵌套环境，也在它之前插入 Paragraph。标题不会被拆成多个标题段。IME composition 尚未提交时 Return 由输入法消费，不触发 Enter 命令。
+块级环境的 `title` 始终是单个 Paragraph。标题中按 Enter 时，光标前文本留在标题，后半段移入新建的正文首段，并插到已有正文内容之前；光标在标题开头或末尾时，允许标题前缀或新正文段为空。标题内的文本选区按“删除选区，再在选区起点拆分”一次提交。普通文本 Selection 只接受同一 `Story` 内的范围；GUI 指针拖选若跨越环境标题/正文或环境内外边界，会在 Rust 校验两个合法位置后提升为整块结构选区，并把焦点放到拖动方向对应的环境边界。无效 UTF-8/字素位置不得改变现有选区。标题 Enter 不会隐式改写跨 Story 文本范围。若正文首项是表格或嵌套环境，也在它之前插入 Paragraph。标题不会被拆成多个标题段。IME composition 尚未提交时 Return 由输入法消费，不触发 Enter 命令。
 
 Section 首个正文 Paragraph 的段首 Backspace 删除标题与正文之间的段落边界：把正文首段的行内内容追加到 Section 标题，移除该正文段，并将插入点放到标题原内容之后；Section 本身保留。若标题与正文段落的段落级属性不兼容，操作原子失败，不静默丢弃属性。该操作必须作为单个撤销单元，并通过位置映射把焦点从正文 `Body` story 转到所属 `EnvironmentTitle` story。
 
-块环境首尾分别提供环境内、外的键盘停靠位置；缺少外部相邻 Paragraph 时，方向键离开环境会创建可编辑的外部段落。普通 Backspace 在折叠光标位于空环境起点时可移除空环境；非空环境不会因此被删除。若用户通过 Shift+方向键选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。Mod+Backspace 解除当前环境外壳并保留标题和正文，按一次结构编辑撤销；内部按键意图名为 `mod-backspace`，领域命令 ID 为 `struct.remove_preserving_content`。
+块环境首尾分别提供环境内、外的键盘停靠位置。方向键到达外侧停靠点时不立即改写文档；若外侧已有相邻段落，再按一次同方向进入该段落；若没有相邻段落，则继续保留外侧停靠状态，直到用户输入时才创建外部 Paragraph。此时 Enter 创建一个外部空段落，Shift+Enter 创建一个含软换行的外部段落；之后输入留在该段落。空段落执行 `\section` 时转换为 Section 标题；非空段落执行时保留原段，并在其后创建一个空 Section。普通 Backspace 在折叠光标位于空环境起点，或从环境末尾外侧停靠点向回删除时可移除空环境；在空 Section 后继外部段落的段首按 Backspace 时，将该段内容合并到 Section 标题末尾并移除外部段落。非空环境不会因普通 Backspace 被删除。若用户通过 Shift+方向键或指针拖选选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。第一次 Escape 收起整个环境选区，第二次才离开当前结构。撤销或重做后清除不再对应当前文档的虚拟环境外侧停靠状态。Mod+Backspace 解除当前环境外壳并保留标题和正文，按一次结构编辑撤销；内部按键意图名为 `mod-backspace`，领域命令 ID 为 `struct.remove_preserving_content`。
 
 环境区分内置语义 kind 和可组合定义。内置 kind 固定 scope、合法子项和结构行为；Custom 是可跨 scope 选择的定义族，具体实例的 scope 必须与其 `definitionId` 指向的定义一致。主题快照提供内置 kind 默认模板、命名变体和自定义环境定义，实例 `props` 保存局部覆盖。`definitionId` 缺省表示使用 Custom 的通用默认模板；存在时必须能在当前文档嵌入的快照中解析到同 scope 定义。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版内置 kind 如下：
 
