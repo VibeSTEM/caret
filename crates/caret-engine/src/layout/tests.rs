@@ -54,7 +54,7 @@ fn cloning_laid_out_paragraph_shares_immutable_shaping_data() {
         .layout(&document, 0, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
     let paragraph = &snapshot.paragraphs[0];
-    let reused = paragraph.reused_for_layout();
+    let reused = paragraph.reused_for_layout(StoryId::Body, &[]);
 
     assert!(std::sync::Arc::ptr_eq(&paragraph.text, &reused.text));
     assert!(std::sync::Arc::ptr_eq(&paragraph.layout, &reused.layout));
@@ -375,16 +375,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
     opaque_block.body.push(Block::Opaque(OpaqueNode {
         raw: serde_json::json!({"type": "future_block", "content": "preserved"}),
     }));
-    let mut environment = Document::blank();
-    environment.body.push(Block::Environment(BlockEnvironment {
-        id: NodeId::generate(),
-        kind: BlockEnvironmentKind::Showcase,
-        definition_id: None,
-        props: BTreeMap::new(),
-        title: None,
-        children: vec![Block::Paragraph(paragraph("nested body"))],
-        extra: BTreeMap::new(),
-    }));
     let mut unknown_empty_mark = Document::blank();
     let Block::Paragraph(empty) = &mut unknown_empty_mark.body[0] else {
         unreachable!();
@@ -400,7 +390,6 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         (invalid_model, "layout.invalid_document:"),
         (unknown_break, "layout.unknown_break_kind: column"),
         (opaque_block, "layout.unsupported_content"),
-        (environment, "layout.unsupported_environment_semantics"),
         (
             unknown_empty_mark,
             "layout.unsupported_paragraph_mark_style",
@@ -423,6 +412,136 @@ fn layout_errors_reject_the_entire_document_and_leave_the_service_reusable() {
         assert_eq!(valid.paragraphs.len(), 1);
         assert_eq!(valid.pages.len(), 1);
     }
+}
+
+#[test]
+fn block_environment_titles_and_children_share_document_layout_and_hit_testing() {
+    let mut document = Document::blank();
+    let title = paragraph("Section title");
+    let title_id = title.id.clone();
+    let environment_id = NodeId::generate();
+    let child = paragraph("nested body");
+    let child_id = child.id.clone();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(title),
+        children: vec![Block::Paragraph(child)],
+        extra: BTreeMap::new(),
+    })];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("environment layout failed: {error}"));
+
+    assert_eq!(snapshot.paragraphs.len(), 2);
+    assert_eq!(
+        snapshot.paragraph_by_id(&title_id).map(|p| &p.story),
+        Some(&StoryId::EnvironmentTitle(environment_id.clone()))
+    );
+    assert_eq!(
+        snapshot
+            .paragraph_by_id(&child_id)
+            .map(|p| p.environment_ids.as_ref()),
+        Some([environment_id.clone()].as_slice())
+    );
+    assert_eq!(snapshot.environment_ranges.len(), 1);
+    assert_eq!(
+        snapshot.environment_ranges[0].environment_id,
+        environment_id
+    );
+    assert_eq!(snapshot.environment_ranges[0].page_index, 0);
+    assert!(snapshot.environment_ranges[0].y1_pt > snapshot.environment_ranges[0].y0_pt);
+    let title_y = f64::from(snapshot.pages[0].layout.fragments[0].y_offset_pt);
+    let Some(title_hit) = snapshot.hit_test(
+        0,
+        snapshot.pages[0].margin_left_pt + 1.0,
+        snapshot.pages[0].margin_top_pt + title_y + 1.0,
+    ) else {
+        panic!("laid-out environment title should be hittable");
+    };
+    assert_eq!(
+        title_hit.position.story,
+        StoryId::EnvironmentTitle(environment_id)
+    );
+}
+
+#[test]
+fn body_selection_geometry_skips_environment_title_stories() {
+    let mut document = Document::blank();
+    let before = paragraph("before");
+    let before_id = before.id.clone();
+    let title = paragraph("title");
+    let environment_id = NodeId::generate();
+    let child = paragraph("inside");
+    let after = paragraph("after");
+    let after_id = after.id.clone();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(title),
+            children: vec![Block::Paragraph(child)],
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("environment layout failed: {error}"));
+
+    let rectangles = snapshot
+        .selection_geometry(&Selection {
+            anchor: Pos {
+                story: StoryId::Body,
+                paragraph_id: before_id,
+                offset: 0,
+                affinity: Affinity::Downstream,
+            },
+            focus: Pos {
+                story: StoryId::Body,
+                paragraph_id: after_id,
+                offset: "after".len(),
+                affinity: Affinity::Downstream,
+            },
+        })
+        .unwrap_or_else(|| panic!("body selection across the environment was rejected"));
+
+    assert_eq!(rectangles.len(), 3);
+    let title_paragraph = snapshot
+        .paragraph_by_id(
+            snapshot
+                .paragraphs
+                .iter()
+                .find(|paragraph| {
+                    paragraph.story == StoryId::EnvironmentTitle(environment_id.clone())
+                })
+                .map(|paragraph| &paragraph.id)
+                .unwrap_or_else(|| panic!("environment title layout is missing")),
+        )
+        .unwrap_or_else(|| panic!("environment title lookup failed"));
+    let title_fragment = snapshot.pages[0]
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| fragment.paragraph_id == title_paragraph.id)
+        .unwrap_or_else(|| panic!("environment title fragment is missing"));
+    let title_y = snapshot.pages[0].margin_top_pt + f64::from(title_fragment.y_offset_pt);
+    assert!(
+        !rectangles
+            .iter()
+            .any(|rectangle| { rectangle.y0_pt <= title_y && title_y < rectangle.y1_pt })
+    );
 }
 
 #[test]

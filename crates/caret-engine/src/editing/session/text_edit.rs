@@ -1,4 +1,4 @@
-//! 执行段落内文本插入、字素删除与相邻段落合并。
+//! 执行字素删除与相邻段落合并。
 
 use super::super::paragraph_ops::{
     ParagraphMergeResult, merge_adjacent_paragraph, update_index_after_merge,
@@ -8,85 +8,6 @@ use super::super::{Affinity, Direction, EditError, Effect, Pos, PositionMap, Sel
 use super::Session;
 
 impl Session {
-    pub(super) fn insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
-        if text.contains(['\n', '\r']) {
-            return Err(EditError::UnsupportedNewline);
-        }
-        if self.composition.is_some() {
-            return Err(EditError::CompositionPending);
-        }
-        let (anchor, focus) = self.edit_range()?;
-        if anchor.paragraph_id != focus.paragraph_id {
-            return self.insert_text_across_paragraphs(anchor, focus, text);
-        }
-        if text.is_empty() && anchor.offset == focus.offset {
-            return Ok(Effect::default());
-        }
-        let start = if anchor.offset <= focus.offset {
-            &anchor
-        } else {
-            &focus
-        };
-        let insert_offset = anchor.offset.min(focus.offset);
-        if anchor.offset == focus.offset {
-            let map = TextMap::new(self.paragraph_for(&anchor)?)?;
-            map.validate_pos(&anchor)?;
-            map.insert_text(
-                self.paragraph_for_mut(&anchor)?,
-                insert_offset,
-                start.affinity,
-                text,
-            )?;
-        } else {
-            let mut paragraph = self.paragraph_for(&anchor)?.clone();
-            let map = TextMap::new(&paragraph)?;
-            map.validate_pos(&anchor)?;
-            map.validate_pos(&focus)?;
-            map.delete_range(
-                &mut paragraph,
-                anchor.offset.min(focus.offset),
-                anchor.offset.max(focus.offset),
-            )?;
-            let updated_map = TextMap::new(&paragraph)?;
-            updated_map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
-            self.replace_paragraph(&anchor, paragraph)?;
-        }
-        let paragraph_id = anchor.paragraph_id.clone();
-        let replaced_start = anchor.offset.min(focus.offset);
-        let replaced_end = anchor.offset.max(focus.offset);
-        self.text_map_cache.clear();
-        let result_map = self.text_map_for(&Pos {
-            offset: insert_offset + text.len(),
-            ..start.clone()
-        })?;
-        let position_offset =
-            result_map.snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
-        let result_boundaries = result_map.grapheme_boundaries.clone();
-        let new_pos = Pos {
-            offset: position_offset,
-            affinity: start.affinity,
-            ..anchor
-        };
-        self.selection = Selection {
-            anchor: new_pos.clone(),
-            focus: new_pos,
-        };
-        Ok(Effect {
-            document_changed: !text.is_empty() || anchor.offset != focus.offset,
-            selection_changed: true,
-            composition_changed: false,
-            changed_paragraph_id: None,
-            position_map: Some(PositionMap::TextEdit {
-                paragraph_id,
-                start: replaced_start,
-                end: replaced_end,
-                inserted_len: text.len(),
-                snap_graphemes: true,
-                result_boundaries,
-            }),
-        })
-    }
-
     pub(super) fn delete(&mut self, direction: Direction) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);

@@ -1,6 +1,6 @@
 # 分层与依赖方向
 
-更新日期：2026-10-26。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域 crate 仍是规划。下方图表示目标成员和允许边，不代表每条边都已配置。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
+更新日期：2026-10-29。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、`caret-structure` 初始索引、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域能力按任务推进。下方图表示成员和允许边；以当前 manifests 与 CMake 图确认实际边。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
 
 层号越小越靠下。生产代码只能依赖更小的层，不能依赖同层的另一个成员，也不能依赖更大的层。Rust 的层号和 Native 的层号各算各的。测试可以依赖被测对象，生产代码不能依赖测试。
 

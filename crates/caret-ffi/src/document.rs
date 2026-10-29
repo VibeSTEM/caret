@@ -365,6 +365,14 @@ pub(crate) fn move_to_visual_line_edge_json(
     })
 }
 
+pub(crate) fn move_structure_json(runtime: &mut DocumentRuntime, action: String) -> String {
+    json_response(runtime, |runtime| runtime.move_structure_json(&action))
+}
+
+pub(crate) fn handle_editor_key_json(runtime: &mut DocumentRuntime, key: String) -> String {
+    json_response(runtime, |runtime| runtime.handle_editor_key_json(&key))
+}
+
 pub(crate) fn current_caret_json(runtime: &mut DocumentRuntime) -> String {
     json_response(runtime, DocumentViewRuntime::current_caret_json)
 }

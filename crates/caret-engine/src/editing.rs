@@ -11,7 +11,7 @@ mod session;
 mod tests;
 mod text_map;
 
-pub use command::{Command, Direction};
+pub use command::{Command, Direction, EditorKey};
 pub use command_line::CommandLine;
 pub use command_registry::CommandCandidate;
 pub use error::EditError;

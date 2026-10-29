@@ -162,6 +162,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
 
     QSignalSpy command_keys(canvas, &caret::DocumentCanvas::commandLineKeyRequested);
+    QSignalSpy editor_keys(canvas, &caret::DocumentCanvas::editorKeyRequested);
     QSignalSpy text_input(canvas, &caret::DocumentCanvas::textInputRequested);
     QSignalSpy navigation(canvas, &caret::DocumentCanvas::visualNavigationRequested);
     QSignalSpy vertical_navigation(canvas, &caret::DocumentCanvas::verticalNavigationRequested);
@@ -169,6 +170,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QSignalSpy editing_commands(canvas, &caret::DocumentCanvas::editingCommandRequested);
     QSignalSpy clipboard_commands(canvas, &caret::DocumentCanvas::clipboardCommandRequested);
     QVERIFY(command_keys.isValid());
+    QVERIFY(editor_keys.isValid());
     QVERIFY(text_input.isValid());
     QVERIFY(navigation.isValid());
     QVERIFY(vertical_navigation.isValid());
@@ -195,8 +197,6 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(text_input.size(), 1);
     QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("a"));
     const QList<QPair<Qt::Key, QString>> command_key_cases = {
-        {Qt::Key_Escape, QStringLiteral("cancel")},
-        {Qt::Key_Return, QStringLiteral("accept")},
         {Qt::Key_Tab, QStringLiteral("tab")},
         {Qt::Key_Backspace, QStringLiteral("backspace")},
         {Qt::Key_Left, QStringLiteral("cursor-left")},
@@ -210,6 +210,15 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
         QCOMPARE(command_keys.size(), 1);
         QCOMPARE(command_keys.takeFirst().at(0).toString(), expected);
     }
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("escape"));
+    QTest::keyClick(&window, Qt::Key_Return);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("enter"));
+    QTest::keyClick(&window, Qt::Key_Enter, Qt::ShiftModifier);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
 
     canvas->setCommandMode(false);
     QTest::keyClick(&window, Qt::Key_A);
@@ -234,11 +243,11 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(edge_navigation.size(), 1);
     QCOMPARE(edge_navigation.takeFirst(), (QList<QVariant>{true, true}));
     QTest::keyClick(&window, Qt::Key_Return);
-    QCOMPARE(editing_commands.size(), 1);
-    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.split_paragraph"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("enter"));
     QTest::keyClick(&window, Qt::Key_Enter, Qt::ShiftModifier);
-    QCOMPARE(editing_commands.size(), 1);
-    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.soft_break"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
     QTest::keyClick(&window, Qt::Key_Backspace);
     QCOMPARE(editing_commands.size(), 1);
     QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.delete_backward"));
@@ -338,6 +347,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     const qreal initial_caret_x = canvas->caretGeometry().value(QStringLiteral("xPt")).toReal();
     QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
     QVERIFY(text_input_spy.isValid());
+    QSignalSpy editor_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
     QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
     QVERIFY(editing_command_spy.isValid());
     QTest::keyClick(&window, Qt::Key_X);
@@ -460,9 +471,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(1), 3000);
 
     QTest::keyClick(&window, Qt::Key_Return);
-    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
-             QStringLiteral("text.split_paragraph"));
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("enter"));
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("3"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts().size(), 2);
     QCOMPARE(layout_view_model->paragraphLayouts()
@@ -546,9 +556,12 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         QCOMPARE(underlines.at(index)->y(), start.y());
     }
 
-    QInputMethodEvent cancel_composition(QString(), {});
-    QCoreApplication::sendEvent(canvas, &cancel_composition);
-    QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->layoutRevision(), composition_revision + 3, 3000);
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->preeditText().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(layout_view_model->compositionRects().isEmpty(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("escape"));
+    QVERIFY(layout_view_model->layoutRevision() >= composition_revision + 3);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .at(1)
                  .toMap()
@@ -560,6 +573,18 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         layout_view_model->inputMethodEvent(QString(), QString(), 0, 0, 0);
     QVERIFY2(idle_ime_response.value(QStringLiteral("valid")).toBool(),
              qPrintable(idle_ime_response.value(QStringLiteral("error")).toString()));
+    QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("3"));
+
+    QKeyEvent command_start(QEvent::KeyPress, Qt::Key_Backslash, Qt::NoModifier,
+                            QStringLiteral("\\"));
+    QCoreApplication::sendEvent(canvas, &command_start);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !layout_view_model->commandLine().value(QStringLiteral("active")).toBool(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("escape"));
     QCOMPARE(layout_view_model->documentGeneration(), QStringLiteral("3"));
 
     QTest::keyClick(&window, Qt::Key_Left);
@@ -611,8 +636,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              QString());
 
     QTest::keyClick(&window, Qt::Key_Return, Qt::ShiftModifier);
-    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(), QStringLiteral("text.soft_break"));
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("7"), 3000);
 
     const QVariantMap drag_text = layout_view_model->insertText(QStringLiteral("abc"));

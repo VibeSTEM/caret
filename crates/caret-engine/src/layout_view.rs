@@ -1,7 +1,8 @@
 //! 将 Rust 内部布局结果投影为供 FFI 与界面消费的稳定只读数据。
 
 use crate::{
-    Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageHit, PageLayoutSnapshot, StoryId,
+    Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageEnvironmentRange, PageHit,
+    PageLayoutSnapshot, StoryId,
 };
 use caret_layout::VisualAffinity;
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub struct DocumentLayoutView {
     pub margins_pt: PageMarginsView,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
+    pub environment_ranges: Vec<EnvironmentRangeView>,
 }
 
 /// 单段编辑使用的增量投影；分页结果完整，段落内容只携带发生变化的段。
@@ -31,10 +33,11 @@ pub struct DocumentLayoutDeltaView {
     pub page_start_index: usize,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
+    pub environment_ranges: Vec<EnvironmentRangeView>,
 }
 
 /// 页面边距，单位为 pt。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageMarginsView {
     pub top: f64,
@@ -60,6 +63,18 @@ pub struct PageFragmentView {
     pub first_line: usize,
     pub line_end: usize,
     pub y_offset_pt: f64,
+}
+
+/// 块环境在指定页面上的范围，坐标与页面段落几何同源，单位为 pt。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentRangeView {
+    pub environment_id: String,
+    pub page_index: usize,
+    pub x0_pt: f64,
+    pub y0_pt: f64,
+    pub x1_pt: f64,
+    pub y1_pt: f64,
 }
 
 /// 段落原文及其 Parley/Caret 共用的行框数据。
@@ -137,6 +152,7 @@ impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
             margins_pt: margins_view(snapshot),
             pages: page_views(snapshot, 0),
             paragraphs: snapshot.paragraphs.iter().map(paragraph_view).collect(),
+            environment_ranges: environment_ranges(snapshot, 0),
         }
     }
 }
@@ -163,6 +179,7 @@ impl DocumentLayoutDeltaView {
             page_start_index,
             pages: page_views(snapshot, page_start_index),
             paragraphs: vec![paragraph_view(paragraph)],
+            environment_ranges: environment_ranges(snapshot, page_start_index),
         })
     }
 
@@ -263,6 +280,29 @@ fn paragraph_view(paragraph: &crate::LaidOutParagraph) -> ParagraphLayoutView {
                 overflows_width: line.overflows_width,
             })
             .collect(),
+    }
+}
+
+fn environment_ranges(
+    snapshot: &DocumentLayoutSnapshot,
+    page_start_index: usize,
+) -> Vec<EnvironmentRangeView> {
+    snapshot
+        .environment_ranges
+        .iter()
+        .filter(|range| range.page_index >= page_start_index)
+        .map(environment_range_view)
+        .collect()
+}
+
+fn environment_range_view(range: &PageEnvironmentRange) -> EnvironmentRangeView {
+    EnvironmentRangeView {
+        environment_id: range.environment_id.to_string(),
+        page_index: range.page_index,
+        x0_pt: range.x0_pt,
+        y0_pt: range.y0_pt,
+        x1_pt: range.x1_pt,
+        y1_pt: range.y1_pt,
     }
 }
 

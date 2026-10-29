@@ -146,6 +146,27 @@ fn visual_navigation_crosses_paragraph_boundaries() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn structure_navigation_commands_update_interaction_snapshot_without_editing_document()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("first".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("second".to_owned())?;
+    let generation = runtime.session.document_generation();
+
+    let previous: Value = serde_json::from_str(&runtime.move_structure_json("previous")?)?;
+    assert_eq!(runtime.session.selection().focus.offset, "first".len());
+    assert!(previous.get("caretGeometry").is_some());
+    assert_eq!(runtime.session.document_generation(), generation);
+
+    let next: Value = serde_json::from_str(&runtime.move_structure_json("next")?)?;
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert!(next.get("caretGeometry").is_some());
+    assert_eq!(runtime.session.document_generation(), generation);
+    Ok(())
+}
+
+#[test]
 fn drag_hit_map_is_page_local_and_release_commits_one_selection()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

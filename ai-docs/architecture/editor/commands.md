@@ -29,11 +29,14 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `insert.table` | 插入表格 | 一步 |
 | `table.insert_row` / `table.delete_row` / `table.insert_col` / `table.delete_col` | 改表格形状 | 一步 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
+| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决 | 视分支而定：Esc/普通 Enter/软换行本身不合并历史；Enter 最终使用段落命令 |
 | `cmdline.begin` / `cmdline.type` / `cmdline.backspace` / `cmdline.move_selection` / `cmdline.select_candidate` / `cmdline.tab` / `cmdline.accept` / `cmdline.cancel` | 命令模式 | 查询和选择是纯命令；`tab`、`accept` 与重复前缀键由 Rust 按当前查询状态决定插入字面字符或执行候选 |
 | `file.save` | 把当前文档写成 `.cdoc` | 不改文档，失败不丢内存里的稿 |
 
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
+
+编辑器按键从 Qt 以 `EditorKey` 意图进入 Rust Session；Session 是命令输入、IME、选区和文档结构状态的唯一权威。按键分发目录、行为优先级、Qt 焦点作用域和扩展规则见[键盘路由](../interface/keyboard-routing.md)。
 
 M0 的 `clipboard.copy` 只导出选区纯文本；多段选区用换行分隔。`clipboard.paste` 读取系统剪贴板后由 Rust 负责规范换行、替换当前选区并提交一次事务。当前不支持的结构或未知字段必须在写入前拒绝，保留原文与选区。撤销系统接入后，整次粘贴应作为一个撤销单元。

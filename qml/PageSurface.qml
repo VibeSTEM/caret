@@ -280,6 +280,21 @@ Item {
                     console.warn("Document caret navigation failed:", result.error);
             }
 
+            onStructureNavigationRequested: function (action) {
+                const result = LayoutViewModel.moveStructure(action);
+                if (!result.valid)
+                    console.warn("Document structure navigation failed:", result.error);
+            }
+
+            onEditorKeyRequested: function (key) {
+                const hadPreedit = pageCanvas.preeditText.length > 0;
+                const result = LayoutViewModel.handleEditorKey(key);
+                if (!result.valid)
+                    console.warn("Document editor key handling failed:", result.error);
+                else if (key === "escape" && hadPreedit && result.compositionCancelled === true)
+                    pageCanvas.cancelPreedit();
+            }
+
             onClipboardCommandRequested: function (command) {
                 const result = command === "copy" ? LayoutViewModel.copySelectionToClipboard() : LayoutViewModel.pasteFromClipboard();
                 if (!result.valid)

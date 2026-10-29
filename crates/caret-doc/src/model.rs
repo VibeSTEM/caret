@@ -8,9 +8,18 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod block;
 mod codec;
 mod features;
+mod inline;
+mod paragraph;
+mod run;
 mod validation;
+
+pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
+pub use inline::{InlineEnvironment, InlineEnvironmentKind, InlineNode, SoftBreak};
+pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
+pub use run::Run;
 
 // 保留节点转换函数在 crate 内原有的访问路径。
 #[allow(unused_imports)]
@@ -286,133 +295,6 @@ impl PageSection {
             extra: BTreeMap::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Block {
-    Paragraph(Paragraph),
-    Environment(BlockEnvironment),
-    ExplicitBreak(ExplicitBreak),
-    Opaque(OpaqueNode),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Paragraph {
-    pub id: NodeId,
-    #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default)]
-    pub layout: Option<ParagraphLayoutOverrides>,
-    #[serde(default)]
-    pub inlines: Vec<InlineNode>,
-    #[serde(default)]
-    pub mark_style: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub props: BTreeMap<String, Value>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-impl Paragraph {
-    pub fn empty(id: NodeId) -> Self {
-        Self {
-            id,
-            language: None,
-            layout: None,
-            inlines: Vec::new(),
-            mark_style: BTreeMap::new(),
-            props: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        }
-    }
-}
-
-/// 段落级可选覆盖；未设置的属性继承文档全局段落样式。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ParagraphLayoutOverrides {
-    pub line_spacing: Option<ParagraphLineSpacing>,
-    pub space_before_centipoints: Option<u32>,
-    pub space_after_centipoints: Option<u32>,
-    pub widow_orphan_control: Option<bool>,
-    pub keep_with_next: Option<bool>,
-    pub keep_lines_together: Option<bool>,
-    pub page_break_before: Option<bool>,
-    #[serde(default, flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Run {
-    pub text: String,
-    #[serde(default)]
-    pub language: Option<String>,
-    #[serde(default)]
-    pub props: BTreeMap<String, Value>,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InlineEnvironmentKind {
-    Bold,
-    Italic,
-    Font,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InlineEnvironment {
-    pub id: NodeId,
-    pub kind: InlineEnvironmentKind,
-    pub definition_id: Option<String>,
-    pub props: BTreeMap<String, Value>,
-    pub children: Vec<InlineNode>,
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BlockEnvironmentKind {
-    Section,
-    Showcase,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct BlockEnvironment {
-    pub id: NodeId,
-    pub kind: BlockEnvironmentKind,
-    pub definition_id: Option<String>,
-    pub props: BTreeMap<String, Value>,
-    pub title: Option<Paragraph>,
-    pub children: Vec<Block>,
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum InlineNode {
-    Run(Run),
-    Environment(InlineEnvironment),
-    SoftBreak(SoftBreak),
-    Opaque(OpaqueNode),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ExplicitBreak {
-    #[serde(default)]
-    pub kind: String,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SoftBreak {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

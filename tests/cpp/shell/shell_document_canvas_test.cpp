@@ -176,6 +176,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY(text_input_spy.isValid());
     QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
     QVERIFY(editing_command_spy.isValid());
+    QSignalSpy editor_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(editor_key_spy.isValid());
     QSignalSpy visual_navigation_spy(canvas, &caret::DocumentCanvas::visualNavigationRequested);
     QVERIFY(visual_navigation_spy.isValid());
     QSignalSpy vertical_navigation_spy(canvas, &caret::DocumentCanvas::verticalNavigationRequested);
@@ -199,9 +201,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(text_input_spy.size(), 0);
     QKeyEvent keypad_enter(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier, QString());
     QCoreApplication::sendEvent(canvas, &keypad_enter);
-    QCOMPARE(editing_command_spy.size(), 1);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
-             QStringLiteral("text.split_paragraph"));
+    QCOMPARE(editor_key_spy.size(), 1);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("enter"));
     QKeyEvent shift_left(QEvent::KeyPress, Qt::Key_Left, Qt::ShiftModifier, QString());
     QCoreApplication::sendEvent(canvas, &shift_left);
     QCOMPARE(visual_navigation_spy.size(), 1);

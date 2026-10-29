@@ -43,10 +43,13 @@
 │   │       │   ├── session/
 │   │       │   │   ├── clipboard.rs
 │   │       │   │   ├── composition.rs
+│   │       │   │   ├── keyboards.rs
+│   │       │   │   ├── keyboards/{enter.rs,escape.rs}
 │   │       │   │   ├── navigation.rs
 │   │       │   │   ├── paragraph_edit.rs
 │   │       │   │   ├── range_edit.rs
 │   │       │   │   ├── selection.rs
+│   │       │   │   ├── structure.rs
 │   │       │   │   ├── tests.rs
 │   │       │   │   └── text_edit.rs
 │   │       │   ├── tests.rs
@@ -61,12 +64,14 @@
 │   ├── caret-foundation/
 │   ├── caret-layout/
 │   │   └── src/paragraph/parley/{interaction.rs,line_mapping.rs}
+│   ├── caret-structure/
+│   │   └── src/{index.rs,index/tests.rs}
 │   └── launcher/
 ├── native/
 │   ├── adapters/             # 平台字体、路径、窗口 chrome、图标
 │   ├── app/
 │   ├── canvas/
-│   │   └── document_canvas/{caret,geometry,glyph_frames,input,scene_graph}.cpp
+│   │   └── document_canvas/{caret,geometry,glyph_frames,input,keyboard,scene_graph}.cpp
 │   ├── cmake/
 │   ├── i18n/
 │   └── viewmodels/
@@ -87,7 +92,6 @@
     └── src/
 
 规划中的 crate
-├── caret-structure/     # 只读结构索引
 └── caret-cli/           # 应用命令行
 ```
 
@@ -99,6 +103,7 @@ crate 的职责和允许依赖以[分层规范](../../standards/layering.md)为�
 - Rust 模块入口使用 `module.rs`，对应目录 `module/` 放子模块与较大的私有单元测试 `tests.rs`；crate 根单测位于 `src/tests.rs`。新建或重构时不使用 `mod.rs`，已有路径仅在模块重构时迁移。领域模型、服务协调、运行时生命周期、存储适配和分类规则各归其模块。共享低层机制仅在出现真实重复消费者后提取到所属应用层。
 - Qt ViewModel 按 Settings、Theme、Document 分类；Runtime bridge 单独持有对应 Rust runtime，分类 ViewModel 只投影自己的领域属性。平台 API 适配放在 `native/adapters/`，画布和 ViewModel 不互相依赖。
 - 大型会话、画布和布局桥按文本编辑/导航/IME、绘制/几何/光标/输入、快照/命令/glyph 适配等职责拆分；外部命令入口保持集中，子模块不各自建立并行状态机或第二套数据权威。
+- 编辑器物理按键映射单独放在 `document_canvas/keyboard.cpp`，Rust 会话按键仲裁放在 `session/keyboards.rs` 与 `session/keyboards/`；按键实现按行为拆分，但共享 `Session` 的状态和唯一入口。职责与扩展规则见[键盘路由](../interface/keyboard-routing.md)。
 
 `caret-app::settings` 是应用设置总协调模块；分类服务分别负责 Preferences、Theme 和 Language，`SettingsRuntime` 负责加载、恢复、可写状态与保存结果。`document_lifecycle.rs` 协调每文档 AutoSave 与恢复快照 deadline，不持有 Qt 定时器或执行宿主 I/O。`caret-doc::model` 将节点编解码、功能标识推导和模型校验分开；`caret-layout::paragraph::parley` 将视觉交互几何和分页行映射分开，同时共享单一 Parley 布局结果。`storage/atomic_file.rs` 是应用层内部的原子写入工具，调用者仍拥有自身的编码、校验和隔离策略。
 

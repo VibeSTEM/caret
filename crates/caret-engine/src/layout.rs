@@ -23,7 +23,6 @@ pub enum DocumentLayoutError {
     Pagination(String),
     UnknownBreakKind(String),
     UnsupportedContent,
-    UnsupportedEnvironmentSemantics,
     UnsupportedParagraphMarkStyle,
 }
 
@@ -40,9 +39,6 @@ impl std::fmt::Display for DocumentLayoutError {
                 write!(formatter, "layout.unknown_break_kind: {kind}")
             }
             Self::UnsupportedContent => formatter.write_str("layout.unsupported_content"),
-            Self::UnsupportedEnvironmentSemantics => {
-                formatter.write_str("layout.unsupported_environment_semantics")
-            }
             Self::UnsupportedParagraphMarkStyle => {
                 formatter.write_str("layout.unsupported_paragraph_mark_style")
             }
@@ -62,6 +58,8 @@ impl From<FontCatalogError> for DocumentLayoutError {
 #[derive(Debug, Clone)]
 pub struct LaidOutParagraph {
     pub id: NodeId,
+    pub story: StoryId,
+    pub environment_ids: Arc<[NodeId]>,
     pub text: Arc<str>,
     pub layout: Arc<ParleyParagraphLayout>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
@@ -75,7 +73,13 @@ struct CaretLineLocation {
 }
 
 impl LaidOutParagraph {
-    fn new(id: NodeId, text: String, layout: ParleyParagraphLayout) -> Self {
+    fn new(
+        id: NodeId,
+        story: StoryId,
+        environment_ids: Vec<NodeId>,
+        text: String,
+        layout: ParleyParagraphLayout,
+    ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
         let mut utf16_offset = 0;
         let mut last_checkpoint = 0;
@@ -89,6 +93,8 @@ impl LaidOutParagraph {
         let line_locations = vec![None; layout.paragraph.lines.len()];
         Self {
             id,
+            story,
+            environment_ids: Arc::from(environment_ids),
             text: Arc::from(text),
             layout: Arc::new(layout),
             utf16_checkpoints: Arc::from(utf16_checkpoints),
@@ -96,9 +102,11 @@ impl LaidOutParagraph {
         }
     }
 
-    fn reused_for_layout(&self) -> Self {
+    fn reused_for_layout(&self, story: StoryId, environment_ids: &[NodeId]) -> Self {
         Self {
             id: self.id.clone(),
+            story,
+            environment_ids: Arc::from(environment_ids),
             text: Arc::clone(&self.text),
             layout: Arc::clone(&self.layout),
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
@@ -135,6 +143,17 @@ pub struct PageLayoutSnapshot {
     pub layout: PageLayout,
 }
 
+/// 块级环境在单页上的内容范围，由其标题和子块的实际分页片段合并得到。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageEnvironmentRange {
+    pub environment_id: NodeId,
+    pub page_index: usize,
+    pub x0_pt: f64,
+    pub y0_pt: f64,
+    pub x1_pt: f64,
+    pub y1_pt: f64,
+}
+
 /// 单代文档布局结果。页面和段落位置共用同一分页输出。
 #[derive(Debug, Clone)]
 pub struct DocumentLayoutSnapshot {
@@ -144,6 +163,7 @@ pub struct DocumentLayoutSnapshot {
     default_font_size_centipoints: u16,
     pub paragraphs: Vec<LaidOutParagraph>,
     pub pages: Vec<PageLayoutSnapshot>,
+    pub environment_ranges: Vec<PageEnvironmentRange>,
     paragraph_lookup: HashMap<NodeId, usize>,
 }
 
@@ -181,10 +201,10 @@ impl DocumentLayoutSnapshot {
         position: &Pos,
         visual_affinity: VisualAffinity,
     ) -> Option<u16> {
-        if position.story != StoryId::Body {
+        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
+        if paragraph.story != position.story {
             return None;
         }
-        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
         let cursor = paragraph
             .layout
             .cursor_at(position.offset, visual_affinity)?;
@@ -283,7 +303,7 @@ impl DocumentLayoutSnapshot {
         let caret_y0 = page.margin_top_pt + line_top;
         Some(PageHit {
             position: Pos {
-                story: StoryId::Body,
+                story: paragraph.story.clone(),
                 paragraph_id: paragraph.id.clone(),
                 offset: cursor.cursor.byte_index(),
                 affinity: match cursor.logical_affinity {
@@ -307,10 +327,10 @@ impl DocumentLayoutSnapshot {
         position: &Pos,
         visual_affinity: VisualAffinity,
     ) -> Option<PageCaretGeometry> {
-        if position.story != StoryId::Body {
+        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
+        if paragraph.story != position.story {
             return None;
         }
-        let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
         let cursor = paragraph
             .layout
             .cursor_at(position.offset, visual_affinity)?;
@@ -340,13 +360,19 @@ impl DocumentLayoutSnapshot {
         selection: &Selection,
         composition: bool,
     ) -> Option<Vec<PageSelectionRect>> {
-        if selection.anchor.story != StoryId::Body || selection.focus.story != StoryId::Body {
+        if selection.anchor.story != selection.focus.story {
             return None;
         }
         let anchor_index = *self.paragraph_lookup.get(&selection.anchor.paragraph_id)?;
         let focus_index = *self.paragraph_lookup.get(&selection.focus.paragraph_id)?;
         let anchor_paragraph = self.paragraphs.get(anchor_index)?;
         let focus_paragraph = self.paragraphs.get(focus_index)?;
+        if anchor_paragraph.story != selection.anchor.story
+            || focus_paragraph.story != selection.focus.story
+            || selection.anchor.story != selection.focus.story
+        {
+            return None;
+        }
         if selection.anchor.offset > anchor_paragraph.text.len()
             || !anchor_paragraph
                 .text
@@ -386,6 +412,9 @@ impl DocumentLayoutSnapshot {
                     continue;
                 }
                 let paragraph = self.paragraphs.get(paragraph_index)?;
+                if paragraph.story != start.story {
+                    continue;
+                }
                 let first_line = paragraph
                     .layout
                     .paragraph
@@ -610,7 +639,7 @@ impl DocumentLayoutService {
             self.resolve_baseline_anchor_metrics(catalog, &text_settings, base_style)?;
 
         let mut ordered_inputs = Vec::new();
-        collect_blocks(&document.body, &mut ordered_inputs)?;
+        collect_blocks(&document.body, &mut ordered_inputs, &mut Vec::new())?;
 
         let mut empty_mark_metrics_by_language = HashMap::new();
         empty_mark_metrics_by_language.insert(
@@ -619,12 +648,17 @@ impl DocumentLayoutService {
         );
         let paragraph_count = ordered_inputs
             .iter()
-            .filter(|item| matches!(item, LayoutInput::Paragraph(_)))
+            .filter(|item| matches!(item, LayoutInput::Paragraph { .. }))
             .count();
         let mut paragraphs = Vec::with_capacity(paragraph_count);
         let mut resolved_styles = Vec::with_capacity(paragraph_count);
         for item in &ordered_inputs {
-            let LayoutInput::Paragraph(paragraph) = item else {
+            let LayoutInput::Paragraph {
+                paragraph,
+                story,
+                environment_ids,
+            } = item
+            else {
                 continue;
             };
             let style =
@@ -633,8 +667,11 @@ impl DocumentLayoutService {
             if let Some((previous, changed_paragraph_id)) = reuse
                 && &paragraph.id != changed_paragraph_id
                 && let Some(previous_paragraph) = previous.paragraph_by_id(&paragraph.id)
+                && previous_paragraph.story == *story
+                && previous_paragraph.environment_ids.as_ref() == environment_ids
             {
-                paragraphs.push(previous_paragraph.reused_for_layout());
+                paragraphs
+                    .push(previous_paragraph.reused_for_layout(story.clone(), environment_ids));
                 resolved_styles.push(style);
                 continue;
             }
@@ -681,7 +718,13 @@ impl DocumentLayoutService {
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             resolved_styles.push(style);
-            paragraphs.push(LaidOutParagraph::new(paragraph.id.clone(), text, layout));
+            paragraphs.push(LaidOutParagraph::new(
+                paragraph.id.clone(),
+                story.clone(),
+                environment_ids.clone(),
+                text,
+                layout,
+            ));
         }
 
         let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
@@ -691,7 +734,7 @@ impl DocumentLayoutService {
                 LayoutInput::ExplicitBreak => {
                     pagination_items.push(PaginationItem::ExplicitPageBreak);
                 }
-                LayoutInput::Paragraph(_) => {
+                LayoutInput::Paragraph { .. } => {
                     let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
                         DocumentLayoutError::InvalidDocument("missing laid out paragraph".into())
                     })?;
@@ -748,6 +791,7 @@ impl DocumentLayoutService {
                 }
             }
         }
+        let environment_ranges = collect_environment_ranges(&pages, &paragraphs, &paragraph_lookup);
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -756,8 +800,78 @@ impl DocumentLayoutService {
             paragraph_lookup,
             paragraphs,
             pages,
+            environment_ranges,
         })
     }
+}
+
+fn collect_environment_ranges(
+    pages: &[PageLayoutSnapshot],
+    paragraphs: &[LaidOutParagraph],
+    paragraph_lookup: &HashMap<NodeId, usize>,
+) -> Vec<PageEnvironmentRange> {
+    let mut ranges = HashMap::<(NodeId, usize), (f64, f64)>::new();
+    for (page_index, page) in pages.iter().enumerate() {
+        for fragment in &page.layout.fragments {
+            let Some(&paragraph_index) = paragraph_lookup.get(&fragment.paragraph_id) else {
+                continue;
+            };
+            let Some(paragraph) = paragraphs.get(paragraph_index) else {
+                continue;
+            };
+            let Some(first_line) = paragraph
+                .line_locations
+                .get(fragment.line_range.start)
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let Some(last_line) = fragment
+                .line_range
+                .end
+                .checked_sub(1)
+                .and_then(|index| paragraph.line_locations.get(index))
+                .and_then(Option::as_ref)
+            else {
+                continue;
+            };
+            let Some(line) = paragraph
+                .layout
+                .paragraph
+                .lines
+                .get(fragment.line_range.end.saturating_sub(1))
+            else {
+                continue;
+            };
+            let y0_pt = first_line.y0_pt;
+            let y1_pt = last_line.y0_pt + f64::from(line.metrics.height_pt);
+            for environment_id in paragraph.environment_ids.iter() {
+                ranges
+                    .entry((environment_id.clone(), page_index))
+                    .and_modify(|range| {
+                        range.0 = range.0.min(y0_pt);
+                        range.1 = range.1.max(y1_pt);
+                    })
+                    .or_insert((y0_pt, y1_pt));
+            }
+        }
+    }
+    let mut result = ranges
+        .into_iter()
+        .filter_map(|((environment_id, page_index), (y0_pt, y1_pt))| {
+            let page = pages.get(page_index)?;
+            Some(PageEnvironmentRange {
+                environment_id,
+                page_index,
+                x0_pt: page.margin_left_pt,
+                y0_pt,
+                x1_pt: page.width_pt - page.margin_right_pt,
+                y1_pt,
+            })
+        })
+        .collect::<Vec<_>>();
+    result.sort_by_key(|range| (range.page_index, range.environment_id.clone()));
+    result
 }
 
 /// 持有系统字体目录与复用布局器的会话级布局运行时。
@@ -819,19 +933,37 @@ impl DocumentLayoutRuntime {
 }
 
 enum LayoutInput<'a> {
-    Paragraph(&'a Paragraph),
+    Paragraph {
+        paragraph: &'a Paragraph,
+        story: StoryId,
+        environment_ids: Vec<NodeId>,
+    },
     ExplicitBreak,
 }
 
 fn collect_blocks<'a>(
     blocks: &'a [Block],
     ordered: &mut Vec<LayoutInput<'a>>,
+    environment_ids: &mut Vec<NodeId>,
 ) -> Result<(), DocumentLayoutError> {
     for block in blocks {
         match block {
-            Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph(paragraph)),
-            Block::Environment(_) => {
-                return Err(DocumentLayoutError::UnsupportedEnvironmentSemantics);
+            Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
+                paragraph,
+                story: StoryId::Body,
+                environment_ids: environment_ids.clone(),
+            }),
+            Block::Environment(environment) => {
+                environment_ids.push(environment.id.clone());
+                if let Some(title) = &environment.title {
+                    ordered.push(LayoutInput::Paragraph {
+                        paragraph: title,
+                        story: StoryId::EnvironmentTitle(environment.id.clone()),
+                        environment_ids: environment_ids.clone(),
+                    });
+                }
+                collect_blocks(&environment.children, ordered, environment_ids)?;
+                environment_ids.pop();
             }
             Block::ExplicitBreak(page_break) => {
                 if !page_break.kind.is_empty() && page_break.kind != "page" {

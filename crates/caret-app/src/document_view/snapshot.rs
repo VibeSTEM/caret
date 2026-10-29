@@ -53,6 +53,19 @@ impl DocumentViewRuntime {
         self.layout_snapshot_json_with_delta(None)
     }
 
+    /// 发布输入法取消结果，使界面只清除 Rust 实际取消的预编辑状态。
+    pub(super) fn layout_snapshot_json_after_composition_cancel(
+        &mut self,
+    ) -> Result<String, String> {
+        let snapshot = self.layout_snapshot_json()?;
+        let mut view: Value = serde_json::from_str(&snapshot)
+            .map_err(|error| format!("layout.serialize: {error}"))?;
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert("compositionCancelled".to_owned(), Value::Bool(true));
+        serde_json::to_string(&view).map_err(|error| format!("layout.serialize: {error}"))
+    }
+
     pub(super) fn layout_snapshot_json_with_delta(
         &mut self,
         changed_paragraph: Option<(&NodeId, usize, u64)>,

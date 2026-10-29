@@ -10,14 +10,24 @@ pub enum Direction {
     Forward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorKey {
+    Escape,
+    Enter,
+    ShiftEnter,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
     PasteText(String),
     InsertSoftBreak,
-    SplitParagraph,
+    InsertParagraphBreak,
     Delete(Direction),
     MoveCaret(Direction),
+    MoveStructure(Direction),
+    ExitStructure,
+    EditorKey(EditorKey),
     SetSelection(Option<Selection>),
     UpdateComposition { id: u64, preedit: String },
     CommitComposition { id: u64, text: String },
@@ -42,9 +52,15 @@ impl Command {
             Self::InsertText(_) => "text.insert",
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
-            Self::SplitParagraph => "text.split_paragraph",
+            Self::InsertParagraphBreak => "text.split_paragraph",
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
+            Self::MoveStructure(Direction::Forward) => "struct.next",
+            Self::MoveStructure(Direction::Backward) => "struct.prev",
+            Self::ExitStructure => "struct.exit",
+            Self::EditorKey(EditorKey::Escape) => "interaction.escape",
+            Self::EditorKey(EditorKey::Enter) => "interaction.enter",
+            Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::SetSelection(_) => "selection.set",
             Self::UpdateComposition { .. } => "ime.update",
             Self::CommitComposition { .. } => "ime.commit",

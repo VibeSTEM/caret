@@ -18,14 +18,15 @@ mod generated {
         clear_selection_json, command_line_command_json, configure_document_recovery,
         current_caret_json, delete_backward_json, discard_document_recovery, discard_recovery,
         document_hit_test_json, document_save_snapshot, document_session_generation,
-        document_status_json, drag_hit_map_json, export_recovery, input_method_event_json,
-        insert_soft_break_json, insert_text_json, install_prepared_document,
-        interaction_state_json, layout_snapshot_json, mark_document_saved_json,
-        move_to_visual_line_edge_json, move_vertical_caret_json, move_visual_caret_json,
-        new_blank_document_runtime, paste_text_json, place_caret_at_page_json,
-        prepare_document_file, prepare_recovery_document, rasterize_page_glyphs,
-        recovery_entries_json, recovery_update_deadline_fired, recovery_update_write_finished,
-        redo_json, selected_text_json, set_document_auto_save_enabled, set_document_recovery_id,
+        document_status_json, drag_hit_map_json, export_recovery, handle_editor_key_json,
+        input_method_event_json, insert_soft_break_json, insert_text_json,
+        install_prepared_document, interaction_state_json, layout_snapshot_json,
+        mark_document_saved_json, move_structure_json, move_to_visual_line_edge_json,
+        move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime,
+        paste_text_json, place_caret_at_page_json, prepare_document_file,
+        prepare_recovery_document, rasterize_page_glyphs, recovery_entries_json,
+        recovery_update_deadline_fired, recovery_update_write_finished, redo_json,
+        selected_text_json, set_document_auto_save_enabled, set_document_recovery_id,
         set_selection_json, split_paragraph_json, undo_json, update_recovery_document,
         write_document_file, write_document_file_checked, write_document_file_replace_external,
     };
@@ -336,6 +337,10 @@ mod generated {
                 end: bool,
                 extend: bool,
             ) -> String;
+            /// 在 Rust 结构索引中导航或按 Esc 语义跳出结构。
+            fn move_structure_json(runtime: &mut DocumentRuntime, action: String) -> String;
+            /// 将 Qt 识别的编辑器按键意图交给 Rust 会话按上下文裁决。
+            fn handle_editor_key_json(runtime: &mut DocumentRuntime, key: String) -> String;
             /// 返回当前 Session 插入点在最新布局中的页面几何。
             fn current_caret_json(runtime: &mut DocumentRuntime) -> String;
             /// 只栅格化请求页，图像字节走二进制向量，不经 JSON/Base64。

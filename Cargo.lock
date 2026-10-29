@@ -147,6 +147,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "caret-layout",
+ "caret-structure",
  "criterion",
  "serde",
  "serde_json",
@@ -197,6 +198,14 @@ dependencies = [
  "serde_json",
  "swash",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "caret-structure"
+version = "0.1.0"
+dependencies = [
+ "caret-doc",
+ "serde_json",
 ]
 
 [[package]]
