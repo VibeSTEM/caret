@@ -2,11 +2,15 @@
 
 更新日期：2026-10-29。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航、复制粘贴、撤销/重做和上一块/下一块/跳出结构已接入。结构内移动、结构首尾和表格快捷键仍是后续目标。命令 id 见[命令](../editor/commands.md)。
 
+本文中的 `Mod` 是平台抽象修饰键：macOS 映射为 Command，Windows/Linux 映射为 Ctrl。快捷键和代码使用 `Mod` 表示这一映射；平台差异只在本说明中定义。
+
 ## 路由
 
 窗口、控件和画布分别处理自己焦点作用域内的按键；命令输入、IME、选区和结构之间的优先级由 Rust Session 单点裁决。实现位置、扩展规则和 Qt/Rust 职责见[键盘路由](keyboard-routing.md)。
 
 正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇。方向键按布局视觉位置移动，段落边界可跨段；Ctrl/Command+C 复制选中文本，Ctrl/Command+V 粘贴并替换选区。撤销/重做分别使用 Windows/Linux 的 Ctrl+Z、Ctrl+Shift+Z，以及 macOS 的 Command+Z、Command+Shift+Z。IME 与选区细节见[030](../../task/030-ime-navigation-selection.md)。
+
+块环境首尾停靠、Backspace 删除和 Mod+Backspace 解除环境的具体行为见[文档模型](../editor/document-model.md)。
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
@@ -24,6 +28,7 @@ Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层�
 | 缩小画布 | Ctrl+Minus | Command+Minus |
 | 撤销 | Ctrl+Z | Command+Z |
 | 重做 | Ctrl+Shift+Z | Command+Shift+Z |
+| 移除块环境并保留内容 | Ctrl+Backspace | Command+Backspace |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
 | 扩展选区 | Shift+方向键 | Shift+方向键 |
 | 移至视觉行首 / 行尾 | Home / End | Home / End |
@@ -35,6 +40,8 @@ Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层�
 | 逐级扩大选区 | Ctrl+Space | Control+Space |
 | 插入行或列 | Alt+方向键 | Control+Option+Shift+方向键 |
 | 删除列 | Alt+Backspace / Delete | Option+Backspace / Delete |
+
+逐级扩大选区使用物理 Control+Space；macOS 上不是 Command+Space。Qt 的平台修饰键语义映射由画布统一处理。
 
 表格里，上一块 / 下一块（Linux / Windows 的 Ctrl+↑ / ↓、macOS 的 Option+↑ / ↓）先按行移动，到首行或末行才离开表格。单元格之间的移动用结构内移动那一组。
 

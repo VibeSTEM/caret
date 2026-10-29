@@ -66,7 +66,7 @@
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | done |
 | 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | done |
-| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027 | M | planned |
+| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027 | M | in-progress |
 | 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
 | 033 | 排版基线 | [OpenType BASE 脚本基线与行框溢出](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | ready |
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
@@ -95,7 +95,7 @@
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011 是 M3 公式总体验收；042 验证并锁定数学后端，043 实现公式模型与编辑，044 负责公式布局渲染及[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)。012 是表格总体验收，由 045 实现模型与交互、046 实现布局与画布。011、012、044 全部验收通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
-031 的颜色语义区分行内环境、块级环境和命令输入提示。009 负责命令提示 token，010 先提供块级 EnvironmentNode 的布局范围，031 再实现行内/块级环境高亮；三类颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
+031 的颜色语义区分行内环境、块级环境和命令输入提示。009 负责命令提示 token，010 提供块级 EnvironmentNode 的布局范围；块级淡绿色高亮已接入，031 继续完成行内高亮和整体验收。三类颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
 
 008 的 Windows、macOS、Linux Nightly 合成 IME/Unicode 矩阵已通过并完成验收；009 可直接基于已完成的 008 开始。
 

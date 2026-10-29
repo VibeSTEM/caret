@@ -16,7 +16,7 @@
 | IME | `document_canvas/input.cpp` 与 QML 输入法事件桥 | Qt 保存用于绘制的预编辑投影并处理提交/光标查询；Rust Session 持有编辑会话 composition 的权威状态。Rust 通过 Escape 实际取消 composition 后，在布局响应中返回 `compositionCancelled`；QML 仅在该标志为真时清除 Qt 预编辑投影并同步空输入法事件 |
 | 编辑会话 | `caret-engine::editing::session::keyboards` | 持有编辑上下文的权威状态并裁决有冲突的编辑意图；每种按键行为单独维护 |
 
-窗口级 `Shortcut`、控件本地按键和画布按键属于不同焦点作用域，不要求集中成一个大型全局路由器。每个作用域内部只保留一个事件入口；最内层焦点所有者处理后接受事件，不让同一次按键继续触发外层动作。QML 控件的简单关闭行为使用 Qt 的 Popup/Window 焦点和关闭策略；多阶段 UI 流程按 [Qt 规范](../../standards/qt.md)使用 C++ `QStateMachine`。
+窗口级 `Shortcut`、控件本地按键和画布按键属于不同焦点作用域，不要求集中成一个大型全局路由器。每个作用域内部只保留一个事件入口；最内层焦点所有者处理后接受事件，不让同一次按键继续触发外层动作。Qt 在 macOS 上把 `ControlModifier` 映射到物理 Command、`MetaModifier` 映射到物理 Control；需要物理修饰键语义的画布快捷键统一通过 `native/canvas/keyboard_modifier_policy.hpp` 映射，避免每个快捷键各自处理平台差异。QML 控件的简单关闭行为使用 Qt 的 Popup/Window 焦点和关闭策略；多阶段 UI 流程按 [Qt 规范](../../standards/qt.md)使用 C++ `QStateMachine`。
 
 ## Rust 编辑器按键仲裁
 
