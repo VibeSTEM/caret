@@ -386,23 +386,28 @@ message_072:
   st: finished
 
 message_102:
-  src: Heading %1
-  tr: 見出し %1
+  src: Single-line
+  tr: 単一行構造
   st: finished
 
 message_103:
-  src: Section
-  tr: 節
+  src: Multi-line
+  tr: 複数行構造
   st: finished
 
 message_104:
-  src: Showcase
-  tr: ショーケース
+  src: Paragraph
+  tr: 段落
   st: finished
 
 message_105:
-  src: Paragraph
-  tr: 段落
+  src: Table
+  tr: 表
+  st: finished
+
+message_106:
+  src: Figure
+  tr: 図
   st: finished
 
 [WindowTitleBar]

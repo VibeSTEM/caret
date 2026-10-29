@@ -19,14 +19,16 @@ Rectangle {
         const labels = [];
         for (let index = 0; index < entries.length; ++index) {
             const entry = entries[index];
-            if (entry.kind === "heading")
-                labels.push(qsTr("Heading %1").arg(entry.level));
-            else if (entry.kind === "section")
-                labels.push(qsTr("Section"));
-            else if (entry.kind === "showcase")
-                labels.push(qsTr("Showcase"));
-            else if (entry.kind === "paragraph")
+            if (entry.kind === "paragraph")
                 labels.push(qsTr("Paragraph"));
+            else if (entry.kind === "singleLine")
+                labels.push(qsTr("Single-line"));
+            else if (entry.kind === "multiLine")
+                labels.push(qsTr("Multi-line"));
+            else if (entry.kind === "table")
+                labels.push(qsTr("Table"));
+            else if (entry.kind === "figure")
+                labels.push(qsTr("Figure"));
         }
         return labels.join(" › ");
     }

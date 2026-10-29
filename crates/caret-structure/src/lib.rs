@@ -4,5 +4,6 @@ mod atoms;
 mod index;
 
 pub use index::{
-    IndexedStructure, StructureIndex, StructureKind, StructurePosition, StructureRange,
+    IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
+    StructureRange,
 };

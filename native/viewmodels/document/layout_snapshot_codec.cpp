@@ -182,15 +182,11 @@ bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result,
         const QString id = entry.value(QStringLiteral("id")).toString();
         const QString kind = entry.value(QStringLiteral("kind")).toString();
         const QJsonValue level = entry.value(QStringLiteral("level"));
-        const bool known_kind =
-            kind == QStringLiteral("paragraph") || kind == QStringLiteral("heading") ||
-            kind == QStringLiteral("section") || kind == QStringLiteral("showcase");
-        const bool valid_level = kind == QStringLiteral("heading")
-                                     ? level.isDouble() && level.toInt(-1) >= 1 &&
-                                           level.toInt(-1) <= 9 &&
-                                           level.toDouble() == level.toInt(-1)
-                                     : level.isUndefined();
-        if (id.isEmpty() || !known_kind || !valid_level) {
+        const bool known_kind = kind == QStringLiteral("paragraph") ||
+                                kind == QStringLiteral("singleLine") ||
+                                kind == QStringLiteral("multiLine") ||
+                                kind == QStringLiteral("table") || kind == QStringLiteral("figure");
+        if (id.isEmpty() || !known_kind || !level.isUndefined()) {
             error = QStringLiteral("layout.invalid_current_structure");
             return false;
         }

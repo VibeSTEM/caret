@@ -1,7 +1,7 @@
 //! 序列化完整布局与轻量交互快照。
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
-use caret_engine::{DocumentLayoutDeltaView, StructureKind, StructurePosition};
+use caret_engine::{DocumentLayoutDeltaView, StructureClass, StructurePosition};
 use serde_json::{Value, json};
 
 fn command_line_state(session: &caret_engine::Session) -> Value {
@@ -47,23 +47,26 @@ fn current_structure_state(session: &caret_engine::Session) -> Value {
     Value::Array(
         stack
             .into_iter()
-            .map(|entry| match entry.kind {
-                StructureKind::Heading { level } => json!({
-                    "id": entry.id,
-                    "kind": "heading",
-                    "level": level,
-                }),
-                StructureKind::Paragraph => json!({
+            .map(|entry| match entry.kind.class() {
+                StructureClass::Paragraph => json!({
                     "id": entry.id,
                     "kind": "paragraph",
                 }),
-                StructureKind::Section => json!({
+                StructureClass::SingleLine => json!({
                     "id": entry.id,
-                    "kind": "section",
+                    "kind": "singleLine",
                 }),
-                StructureKind::Showcase => json!({
+                StructureClass::MultiLine => json!({
                     "id": entry.id,
-                    "kind": "showcase",
+                    "kind": "multiLine",
+                }),
+                StructureClass::Table => json!({
+                    "id": entry.id,
+                    "kind": "table",
+                }),
+                StructureClass::Figure => json!({
+                    "id": entry.id,
+                    "kind": "figure",
                 }),
             })
             .collect(),
