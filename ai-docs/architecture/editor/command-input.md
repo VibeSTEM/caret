@@ -1,10 +1,16 @@
 # `\` 命令输入
 
-更新日期：2026-10-24。键位总表见[快捷键](../interface/keyboard-shortcuts.md)。
+更新日期：2026-10-29。键位总表见[快捷键](../interface/keyboard-shortcuts.md)。
 
 ## 状态
 
 命令模式是 `Session` 上的 `CmdLine { at, query, selected }`。`query` 画在插入点旁的补全层里，不插入文档，因此不改变 `rev`，也不触发排版。
+
+## 外观
+
+命令补全层的提示背景使用独立 GUI 主题 token `color-command-prompt`。它与当前环境高亮分开：行内环境使用 `color-inline-environment-highlight`，块级环境使用 `color-block-environment-highlight`。三者只表示不同的临时交互状态，不写入 `.cdoc`，也不使用文档排版主题的格式值。主题 token 仅在各自的界面调用落地时加入 `Theme.qml`、Rust 主题 schema 和默认/浅色/深色主题，避免保留未使用 token。
+
+命令提示颜色只作用于命令查询/补全提示区域，不改变命令实际执行后的环境外观。命令模式可以与光标所在环境同时存在，二者各自使用自己的背景色和几何范围。
 
 ## 键
 

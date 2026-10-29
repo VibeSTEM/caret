@@ -43,8 +43,8 @@
 | 005 | 桌面入口 | [launcher、CMake 与 FFI 骨架](task/005-infra-launcher.md) | P0 | 003、004 | M | done |
 | 006 | CI/发布 | [CI 与打包管线](task/006-infra-ci.md) | P0 | 005 | M | implemented |
 | 007 | 窗口 UI | [M0 窗口](task/007-ui-m0.md) | P1 | 006 | S | implemented |
-| 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | implemented |
-| 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | planned |
+| 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | done |
+| 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | ready |
 | 010 | 结构导航 | [M2：结构导航与环境命令](task/010-impl-structure.md) | P2 | 009、020 | M | planned |
 | 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044 | M | planned |
 | 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046 | S | planned |
@@ -66,7 +66,7 @@
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | done |
 | 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | done |
-| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 027 | M | ready |
+| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027 | M | planned |
 | 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
 | 033 | 排版基线 | [OpenType BASE 脚本基线与行框溢出](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | ready |
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
@@ -93,6 +93,10 @@
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011 是 M3 公式总体验收；042 验证并锁定数学后端，043 实现公式模型与编辑，044 负责公式布局渲染及[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)。012 是表格总体验收，由 045 实现模型与交互、046 实现布局与画布。011、012、044 全部验收通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
+
+031 的颜色语义区分行内环境、块级环境和命令输入提示。009 负责命令提示 token，010 先提供块级 EnvironmentNode 的布局范围，031 再实现行内/块级环境高亮；三类颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
+
+008 的 Windows、macOS、Linux Nightly 合成 IME/Unicode 矩阵已通过并完成验收；009 可直接基于已完成的 008 开始。
 
 021 的 done 只表示文档树、`.cdoc` 校验和 `caret-app` 存储边界完成，不表示 M0 编辑器已完成；M0 仍需 022–024、026、027 和 008 集成验收。025 格式命令不阻塞 M0。`caret-doc` 已落地；`caret-layout`、`caret-structure`、`caret-engine` 和 `caret-cli` 按各自任务的依赖顺序创建，不提前建立空 crate。019 定义 AutoSave 策略并通过独立评审后，037 实现单窗口偏好、触发、保存冲突和恢复；未命名文档开启 AutoSave 必须先让用户选择保存路径。038 在 037 完成后迁移为窗口级文档运行时，并实现跨窗口 AutoSave 开启协调。
 

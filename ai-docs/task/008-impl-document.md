@@ -1,9 +1,9 @@
 # 008 — M0：基础文本编辑纵向切片
 
-- 状态：implemented
+- 状态：done
 - 依赖：021–024、026、027、030
 - 优先级：P2
-- 创建 / 更新：2026-10-25 / 2026-10-28
+- 创建 / 更新：2026-10-25 / 2026-10-29
 
 ## 目标与背景
 
@@ -43,7 +43,7 @@
 - [x] hover 和拖选预览不往返 Rust；鼠标释放时将最终插入点或选区提交到 Rust。键入会提交命令。
 - [x] Qt 输入 DTO 与 `caret-engine::Command` 映射 UTF-16 code unit 和 Rust UTF-8 byte offset；拒绝代理对中间位置，不能用 UTF-16 索引冒充领域位置。
 - [x] IME preedit 更新仅显示暂存态；提交只应用一次、取消不改文档。重复平台通知幂等，composition 未提交时 Return 由输入法消费，不触发段落拆分。
-- [ ] 同一 Unicode/IME 行为用例在 Windows、macOS、Linux 执行，结果一致；平台差异只留在 Qt 适配层。
+- [x] 同一 Unicode/IME 行为用例在 Windows、macOS、Linux 执行，结果一致；平台差异只留在 Qt 适配层。
 - [x] 分层符合 L2 到 L6。fmt、clippy 和本任务测试通过。评审发现已处理。
 
 标题状态由 ViewModel 投影，不复制 Rust 的保存点：Rust 会话提供当前修订是否已保存，Qt 文件命令提供未完成的写入数。
@@ -67,7 +67,7 @@
 | 2026-10-28 | `cargo test --locked -p caret-tests --test native` | 文件流程桌面集成测试与 QML/native 聚合通过 | 通过；新增用例覆盖输入、删除、段落拆分/合并、另存、失败保留内容、三态通知、切换文档后重开正文与页数 |
 | 2026-10-28 | `cargo format --check`、`cargo lint clang-tidy --changed --check`、`cargo lint includes --changed --check`、`cargo lint cppcheck --changed --check`、`git diff --check` | 格式、受影响 C++ 静态检查和差异检查通过 | 通过 |
 | 2026-10-28 | 独立 Sol medium 评审完整变更 | 文件测试构建条件、会话替换断言、异步资源清理可靠 | 发现的 2 项均修复；复核后无阻塞问题 |
-| 待 nightly | Windows/macOS/Linux 输入法与 Unicode 矩阵 | 同一用例得到一致文档结果 | 本地仅验证 macOS；Windows/Linux 待 nightly 平台任务执行 |
+| 2026-10-29 | [Nightly run 40809784984](https://github.com/VibeSTEM/caret/actions/runs/40809784984) 的 Windows/macOS/Linux full workspace tests | 三个平台运行相同的 Qt 合成 IME/Unicode 测试；覆盖 emoji UTF-16 位置、混合文本预编辑、预编辑取消及输入状态更新 | 三个平台均通过。该矩阵验证应用处理 Qt 输入法事件的一致性，不覆盖各操作系统原生输入法候选窗的人工端到端体验 |
 
 ## 风险与回退
 
@@ -85,4 +85,4 @@
 
 ## 完成摘要
 
-桌面编辑与保存重开主链已有端到端覆盖，Rust/native/QML 本地验证通过。任务仍等待 Windows、macOS、Linux nightly 输入法与 Unicode 矩阵结果。
+桌面编辑与保存重开主链已有端到端覆盖，Rust/native/QML 本地验证通过；Windows、macOS、Linux Nightly 的合成 IME/Unicode 矩阵也已通过。该自动化结果不代表原生输入法候选窗的人工端到端验收。
