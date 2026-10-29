@@ -32,6 +32,8 @@ class ShellLoadTest : public QObject {
 #ifdef CARET_ENABLE_APP
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();
+    void settingsSelectionUpdatesThemeLanguageAndPersistsAtomically();
+    void dialogSizesTrackLocalizedAndOptionalContent();
 #endif
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();

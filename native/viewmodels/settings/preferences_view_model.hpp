@@ -33,6 +33,8 @@ class PreferencesViewModel final : public QObject {
 
     /// 校验并持久化开关候选；失败时保留最后有效快照。
     bool setCaretBlinkEnabled(bool enabled);
+    /// 刷新已由 Rust Settings 总服务提交的偏好投影。
+    bool refresh();
     /// 校验并持久化 AutoSave 全局偏好；失败时保留最后有效快照。
     Q_INVOKABLE bool setAutoSaveEnabled(bool enabled);
 

@@ -24,7 +24,7 @@
 
 应用设置的权威状态与持久化属于 Rust `caret-app::settings`，QML 和 C++ 不保存平行的已提交副本。Settings 是设置界面的总入口；Preferences、Theme、Language 是分类服务。`SettingsService` 组合这些服务，`SettingsRuntime` 管理加载恢复、`Ready/ReadOnly/Unavailable` 状态、持久化和诊断。PreferencesViewModel 只发布偏好投影；专用 Qt runtime bridge 持有唯一 Rust 设置运行时。设置窗口的 `SettingsDialogController` 用 `QStateMachine` 管理临时草稿、确认、取消和失败阶段，提交成功与否只由 Rust 结果决定。
 
-界面主题的颜色、间距和控件外观属于 Theme，不属于 Preferences。`Theme.qml` 是 QML 只读 token 门面，内置主题数据位于 `qml/Themes/*.pa`，由 Rust `ThemeService` 校验、合并并经 ThemeViewModel 发布快照。当前 `themeId` 是完整 `UserSettings` 的主题分类选择值，由总设置服务持有；PreferencesViewModel 不读取或修改它。若开放外部自定义主题，定义仍作为主题数据文件交给 Rust ThemeService 校验；不把可变 token 写进 `Theme.qml`。QML 不直接修改 ThemeViewModel 的投影。当前 ThemeService 支持内置主题快照，外部用户主题加载和主题切换 UI 尚未实现。
+界面主题的颜色、间距和控件外观属于 Theme，不属于 Preferences。`Theme.qml` 是 QML 只读 token 门面，内置主题数据位于 `qml/Themes/*.pa`，由 Rust `ThemeService` 校验、合并并经 ThemeViewModel 发布快照。当前 `themeId` 是完整 `UserSettings` 的主题分类选择值，由总设置服务持有；PreferencesViewModel 不读取或修改它。SettingsViewModel 从 Rust 获取主题与语言目录；设置对话框持有未提交草稿，确认时由 Rust 一次性校验并持久化相关设置。应用翻译资源在创建 QML 引擎前按 Rust 当前语言加载；运行中切换先预加载 QM，再提交设置，随后替换翻译器并更新主题投影。旧配置中的 `zh-CN` 读取时归一为 `zh-Hans`。若开放外部自定义主题，定义仍作为主题数据文件交给 Rust ThemeService 校验；不把可变 token 写进 `Theme.qml`。QML 不直接修改 ThemeViewModel 的投影。
 
 ```text
 Session

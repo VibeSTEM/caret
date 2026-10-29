@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
@@ -21,22 +22,42 @@ Catalog& catalog() {
     return value;
 }
 
+QPointer<ThemeViewModel>& active_view_model() {
+    static QPointer<ThemeViewModel> value;
+    return value;
+}
+
 } // namespace
 
 void install_theme_snapshots(QHash<QString, QVariantMap> themes, QString active_theme) {
     catalog().themes = std::move(themes);
     catalog().active = std::move(active_theme);
+    if (active_view_model() != nullptr) {
+        active_view_model()->install(catalog().themes, catalog().active);
+    }
 }
 
 ThemeViewModel::ThemeViewModel(QObject* parent) : QObject(parent) {
-    const Catalog& source = catalog();
-    m_availableThemes.reserve(source.themes.size());
-    for (auto it = source.themes.cbegin(); it != source.themes.cend(); ++it) {
-        m_availableThemes.push_back(it.key());
+    active_view_model() = this;
+    install(catalog().themes, catalog().active);
+}
+
+void ThemeViewModel::install(const QHash<QString, QVariantMap>& themes,
+                             const QString& active_theme) {
+    QStringList available;
+    available.reserve(themes.size());
+    for (auto it = themes.cbegin(); it != themes.cend(); ++it) {
+        available.push_back(it.key());
     }
-    m_availableThemes.sort();
-    m_activeTheme = source.active;
-    m_tokens = source.themes.value(m_activeTheme);
+    available.sort();
+    const QVariantMap tokens = themes.value(active_theme);
+    if (m_availableThemes == available && m_activeTheme == active_theme && m_tokens == tokens) {
+        return;
+    }
+    m_availableThemes = std::move(available);
+    m_activeTheme = active_theme;
+    m_tokens = tokens;
+    emit tokensChanged();
 }
 
 } // namespace caret

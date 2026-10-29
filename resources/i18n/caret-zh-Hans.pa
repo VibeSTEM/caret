@@ -1,0 +1,442 @@
+version: 1
+kind: language
+catalog: caret
+language: zh-Hans
+sourcelanguage: en
+
+[App]
+message_001:
+  src: Open document
+  tr: 打开文档
+  st: finished
+
+message_002:
+  src: Caret documents (*.cdoc)
+  tr: Caret 文档 (*.cdoc)
+  st: finished
+
+message_003:
+  src: Open
+  tr: 打开
+  st: finished
+
+message_004:
+  src: Save external backup copy
+  tr: 保存外部备份副本
+  st: finished
+
+message_005:
+  src: All files (*)
+  tr: 所有文件 (*)
+  st: finished
+
+message_006:
+  src: Save copy
+  tr: 保存副本
+  st: finished
+
+message_007:
+  src: Save document as
+  tr: 文档另存为
+  st: finished
+
+message_008:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_009:
+  src: Document operation failed
+  tr: 文档操作失败
+  st: finished
+
+message_010:
+  src: An unknown error occurred.
+  tr: 发生未知错误。
+  st: finished
+
+message_011:
+  src: The document folder is unavailable.
+  tr: 文档文件夹不可用。
+  st: finished
+
+[DialogAction]
+message_012:
+  src: OK
+  tr: 确定
+  st: finished
+
+message_013:
+  src: Cancel
+  tr: 取消
+  st: finished
+
+[DocumentModeSelector]
+message_014:
+  src: Edit
+  tr: 编辑
+  st: finished
+
+message_015:
+  src: Make changes to the document
+  tr: 修改文档
+  st: finished
+
+message_016:
+  src: Review
+  tr: 审阅
+  st: finished
+
+message_017:
+  src: Suggest changes and add comments
+  tr: 建议修改并添加批注
+  st: finished
+
+message_018:
+  src: View
+  tr: 查看
+  st: finished
+
+message_019:
+  src: View the document without editing
+  tr: 查看文档，不进行修改
+  st: finished
+
+[IconActionCloseDialog]
+message_020:
+  src: Close dialog
+  tr: 关闭对话框
+  st: finished
+
+[NewProjectDialog]
+message_021:
+  src: New Document
+  tr: 新建文档
+  st: finished
+
+message_022:
+  src: Enter a valid document name.
+  tr: 请输入有效的文档名称。
+  st: finished
+
+message_023:
+  src: Choose an absolute folder.
+  tr: 请选择绝对路径文件夹。
+  st: finished
+
+message_024:
+  src: Create a document in the selected folder.
+  tr: 在所选文件夹中创建文档。
+  st: finished
+
+message_025:
+  src: Document name
+  tr: 文档名称
+  st: finished
+
+message_026:
+  src: My Document
+  tr: 我的文档
+  st: finished
+
+message_027:
+  src: Create in
+  tr: 创建位置
+  st: finished
+
+message_028:
+  src: Choose a folder
+  tr: 选择文件夹
+  st: finished
+
+message_029:
+  src: Document location
+  tr: 文档位置
+  st: finished
+
+message_030:
+  src: Choose Document Location
+  tr: 选择文档位置
+  st: finished
+
+[PreferencesSettingsPage]
+message_031:
+  src: Control editing behavior and other user preferences.
+  tr: 配置编辑行为和其他用户偏好。
+  st: finished
+
+message_032:
+  src: Blink the insertion point
+  tr: 闪烁显示插入光标
+  st: finished
+
+[RecoveryDialog]
+message_033:
+  src: Recover documents
+  tr: 恢复文档
+  st: finished
+
+message_034:
+  src: Caret found document recovery files. Choose one to restore, or discard it.
+  tr: Caret 找到了文档恢复文件。请选择要恢复的文件，或将其丢弃。
+  st: finished
+
+message_035:
+  src: This is an external file backup. Save a copy to restore it outside Caret.
+  tr: 这是外部文件备份。请另存副本，以便在 Caret 之外恢复。
+  st: finished
+
+message_036:
+  src: Save backup copy
+  tr: 保存备份副本
+  st: finished
+
+message_037:
+  src: Restore
+  tr: 恢复
+  st: finished
+
+message_038:
+  src: Discard
+  tr: 丢弃
+  st: finished
+
+message_039:
+  src: Later
+  tr: 稍后
+  st: finished
+
+[SaveConflictDialog]
+message_040:
+  src: File changed outside Caret
+  tr: 文件已在 Caret 外部更改
+  st: finished
+
+message_041:
+  src: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
+  tr: 由于文件已更改、移动或不可用，Caret 无法安全覆盖 %1。您可以另存副本、在可能时备份后替换当前文件，或取消。
+  st: finished
+
+message_042:
+  src: The recovery copy could not be written:
+  tr: 无法写入恢复副本：
+  st: finished
+
+message_043:
+  src: The recovery copy could not be linked to this document:
+  tr: 无法将恢复副本关联到此文档：
+  st: finished
+
+message_044:
+  src: Save a Copy
+  tr: 另存副本
+  st: finished
+
+message_045:
+  src: Replace
+  tr: 替换
+  st: finished
+
+message_046:
+  src: Cancel
+  tr: 取消
+  st: finished
+
+[SettingsDialog]
+message_047:
+  src: Preferences
+  tr: 偏好设置
+  st: finished
+
+message_048:
+  src: Theme
+  tr: 主题
+  st: finished
+
+message_049:
+  src: Language
+  tr: 语言
+  st: finished
+
+message_050:
+  src: Settings
+  tr: 设置
+  st: finished
+
+[SettingsLanguagePage]
+message_051:
+  src: Choose the language used by the application. The change is applied when you select OK.
+  tr: 选择应用使用的界面语言。点击“确定”后应用更改。
+  st: finished
+
+message_052:
+  src: Application language
+  tr: 应用语言
+  st: finished
+
+message_053:
+  src: Language settings are unavailable in this build.
+  tr: 此构建版本无法使用语言设置。
+  st: finished
+
+[ShareButton]
+message_054:
+  src: Share
+  tr: 分享
+  st: finished
+
+[ThemeSettingsPage]
+message_055:
+  src: Choose the application theme.
+  tr: 选择应用主题。
+  st: finished
+
+message_056:
+  src: Application theme
+  tr: 应用主题
+  st: finished
+
+message_057:
+  src: Theme settings are unavailable in this build.
+  tr: 此构建版本无法使用主题设置。
+  st: finished
+
+message_058:
+  src: Dark
+  tr: 深色
+  st: finished
+
+message_059:
+  src: Light
+  tr: 浅色
+  st: finished
+
+[UiCommonNavigation]
+message_060:
+  src: Browse
+  tr: 浏览
+  st: finished
+
+[UnsavedChangesDialog]
+message_061:
+  src: Unsaved changes
+  tr: 有未保存的更改
+  st: finished
+
+message_062:
+  src: Save your changes before closing this document?
+  tr: 关闭文档前要保存更改吗？
+  st: finished
+
+message_063:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_064:
+  src: Don't Save
+  tr: 不保存
+  st: finished
+
+message_065:
+  src: Cancel
+  tr: 取消
+  st: finished
+
+[WindowCommandBar]
+message_066:
+  src: Home
+  tr: 主页
+  st: finished
+
+[WindowStatusBar]
+message_067:
+  src: Page %1 of %2
+  tr: 第 %1 页，共 %2 页
+  st: finished
+
+message_068:
+  src: %1 words
+  tr: %1 个字
+  st: finished
+
+message_069:
+  src: English (United States)
+  tr: 英语（美国）
+  st: finished
+
+message_070:
+  src: Zoom out
+  tr: 缩小
+  st: finished
+
+message_071:
+  src: Zoom
+  tr: 缩放
+  st: finished
+
+message_072:
+  src: Zoom in
+  tr: 放大
+  st: finished
+
+[WindowTitleBar]
+message_073:
+  src: Untitled
+  tr: 未命名
+  st: finished
+
+message_074:
+  src: AutoSave
+  tr: 自动保存
+  st: finished
+
+message_075:
+  src: Open
+  tr: 打开
+  st: finished
+
+message_076:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_077:
+  src: Undo
+  tr: 撤销
+  st: finished
+
+message_078:
+  src: Redo
+  tr: 重做
+  st: finished
+
+message_079:
+  src: Comments
+  tr: 批注
+  st: finished
+
+message_080:
+  src: Search commands and help
+  tr: 搜索命令和帮助
+  st: finished
+
+message_081:
+  src: Settings
+  tr: 设置
+  st: finished
+
+message_082:
+  src: Saving
+  tr: 保存中
+  st: finished
+
+message_083:
+  src: Edited
+  tr: 已编辑
+  st: finished
+
+message_084:
+  src: Saved
+  tr: 已保存
+  st: finished

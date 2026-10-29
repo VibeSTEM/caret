@@ -2,6 +2,7 @@
 #include "settings_dialog_controller.hpp"
 
 #include "preferences_view_model.hpp"
+#include "settings_view_model.hpp"
 #include <QState>
 #include <QString>
 #include <qobject.h>
@@ -52,6 +53,16 @@ void SettingsDialogController::setPreferencesObject(QObject* preferences) {
     setPreferences(qobject_cast<PreferencesViewModel*>(preferences));
 }
 
+QObject* SettingsDialogController::settingsObject() const { return m_settings; }
+
+void SettingsDialogController::setSettingsObject(QObject* settings) {
+    if (m_settings == settings || m_state != Closed) {
+        return;
+    }
+    m_settings = settings;
+    emit settingsChanged();
+}
+
 void SettingsDialogController::open() {
     if (!m_machine.isRunning()) {
         m_open_when_ready = true;
@@ -66,6 +77,13 @@ void SettingsDialogController::open() {
     } else {
         setError(QStringLiteral("settings.preferences_unavailable"));
     }
+    if (auto* settings = qobject_cast<SettingsViewModel*>(m_settings.data())) {
+        m_draft_theme_id = settings->activeTheme();
+        m_draft_language = settings->language();
+        if (m_error.isEmpty()) {
+            setError(settings->error());
+        }
+    }
     emit draftChanged();
     emit openRequested();
 }
@@ -75,6 +93,26 @@ void SettingsDialogController::editCaretBlinkEnabled(bool enabled) {
         return;
     }
     m_draft_caret_blink_enabled = enabled;
+    setError({});
+    emit draftChanged();
+    emit editRequested();
+}
+
+void SettingsDialogController::editThemeId(const QString& theme_id) {
+    if ((m_state != Editing && m_state != Failed) || m_draft_theme_id == theme_id) {
+        return;
+    }
+    m_draft_theme_id = theme_id;
+    setError({});
+    emit draftChanged();
+    emit editRequested();
+}
+
+void SettingsDialogController::editLanguage(const QString& language) {
+    if ((m_state != Editing && m_state != Failed) || m_draft_language == language) {
+        return;
+    }
+    m_draft_language = language;
     setError({});
     emit draftChanged();
     emit editRequested();
@@ -108,6 +146,22 @@ void SettingsDialogController::enterState(State state) {
 }
 
 void SettingsDialogController::submitDraft() {
+    if (auto* settings = qobject_cast<SettingsViewModel*>(m_settings.data())) {
+        if (!settings->applySettings(m_draft_theme_id, m_draft_language,
+                                     m_draft_caret_blink_enabled)) {
+            setError(settings->error());
+            emit applyFailed();
+            return;
+        }
+        if (m_preferences != nullptr && !m_preferences->refresh()) {
+            setError(m_preferences->error());
+            emit applyFailed();
+            return;
+        }
+        setError({});
+        emit applySucceeded();
+        return;
+    }
     if (m_preferences == nullptr) {
         setError(QStringLiteral("settings.preferences_unavailable"));
         emit applyFailed();

@@ -1,0 +1,442 @@
+version: 1
+kind: language
+catalog: caret
+language: ja
+sourcelanguage: en
+
+[App]
+message_001:
+  src: Open document
+  tr: 文書を開く
+  st: finished
+
+message_002:
+  src: Caret documents (*.cdoc)
+  tr: Caret 文書 (*.cdoc)
+  st: finished
+
+message_003:
+  src: Open
+  tr: 開く
+  st: finished
+
+message_004:
+  src: Save external backup copy
+  tr: 外部バックアップのコピーを保存
+  st: finished
+
+message_005:
+  src: All files (*)
+  tr: すべてのファイル (*)
+  st: finished
+
+message_006:
+  src: Save copy
+  tr: コピーを保存
+  st: finished
+
+message_007:
+  src: Save document as
+  tr: 文書に名前を付けて保存
+  st: finished
+
+message_008:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_009:
+  src: Document operation failed
+  tr: 文書の操作に失敗しました
+  st: finished
+
+message_010:
+  src: An unknown error occurred.
+  tr: 不明なエラーが発生しました。
+  st: finished
+
+message_011:
+  src: The document folder is unavailable.
+  tr: 文書フォルダーを利用できません。
+  st: finished
+
+[DialogAction]
+message_012:
+  src: OK
+  tr: OK
+  st: finished
+
+message_013:
+  src: Cancel
+  tr: キャンセル
+  st: finished
+
+[DocumentModeSelector]
+message_014:
+  src: Edit
+  tr: 編集
+  st: finished
+
+message_015:
+  src: Make changes to the document
+  tr: 文書を編集します
+  st: finished
+
+message_016:
+  src: Review
+  tr: 校閲
+  st: finished
+
+message_017:
+  src: Suggest changes and add comments
+  tr: 変更を提案し、コメントを追加します
+  st: finished
+
+message_018:
+  src: View
+  tr: 表示
+  st: finished
+
+message_019:
+  src: View the document without editing
+  tr: 文書を編集せずに表示します
+  st: finished
+
+[IconActionCloseDialog]
+message_020:
+  src: Close dialog
+  tr: ダイアログを閉じる
+  st: finished
+
+[NewProjectDialog]
+message_021:
+  src: New Document
+  tr: 新しい文書
+  st: finished
+
+message_022:
+  src: Enter a valid document name.
+  tr: 有効な文書名を入力してください。
+  st: finished
+
+message_023:
+  src: Choose an absolute folder.
+  tr: 絶対パスのフォルダーを選択してください。
+  st: finished
+
+message_024:
+  src: Create a document in the selected folder.
+  tr: 選択したフォルダーに文書を作成します。
+  st: finished
+
+message_025:
+  src: Document name
+  tr: 文書名
+  st: finished
+
+message_026:
+  src: My Document
+  tr: マイ ドキュメント
+  st: finished
+
+message_027:
+  src: Create in
+  tr: 作成先
+  st: finished
+
+message_028:
+  src: Choose a folder
+  tr: フォルダーを選択
+  st: finished
+
+message_029:
+  src: Document location
+  tr: 文書の場所
+  st: finished
+
+message_030:
+  src: Choose Document Location
+  tr: 文書の保存場所を選択
+  st: finished
+
+[PreferencesSettingsPage]
+message_031:
+  src: Control editing behavior and other user preferences.
+  tr: 編集動作やその他のユーザー設定を管理します。
+  st: finished
+
+message_032:
+  src: Blink the insertion point
+  tr: 挿入カーソルを点滅させる
+  st: finished
+
+[RecoveryDialog]
+message_033:
+  src: Recover documents
+  tr: 文書を復元
+  st: finished
+
+message_034:
+  src: Caret found document recovery files. Choose one to restore, or discard it.
+  tr: Caret は文書の復元ファイルを検出しました。復元するファイルを選択するか、破棄してください。
+  st: finished
+
+message_035:
+  src: This is an external file backup. Save a copy to restore it outside Caret.
+  tr: これは外部ファイルのバックアップです。Caret の外部で復元するにはコピーを保存してください。
+  st: finished
+
+message_036:
+  src: Save backup copy
+  tr: バックアップを保存
+  st: finished
+
+message_037:
+  src: Restore
+  tr: 復元
+  st: finished
+
+message_038:
+  src: Discard
+  tr: 破棄
+  st: finished
+
+message_039:
+  src: Later
+  tr: 後で
+  st: finished
+
+[SaveConflictDialog]
+message_040:
+  src: File changed outside Caret
+  tr: Caret の外部でファイルが変更されました
+  st: finished
+
+message_041:
+  src: Caret cannot safely overwrite %1 because it changed, moved, or is unavailable. Save a copy, replace the current file after backing it up when possible, or cancel.
+  tr: ファイルが変更、移動されたか利用できないため、Caret は %1 を安全に上書きできません。コピーを保存するか、可能であればバックアップ後に現在のファイルを置き換えるか、キャンセルしてください。
+  st: finished
+
+message_042:
+  src: The recovery copy could not be written:
+  tr: 復元コピーを書き込めませんでした：
+  st: finished
+
+message_043:
+  src: The recovery copy could not be linked to this document:
+  tr: 復元コピーをこの文書に関連付けられませんでした：
+  st: finished
+
+message_044:
+  src: Save a Copy
+  tr: コピーを保存
+  st: finished
+
+message_045:
+  src: Replace
+  tr: 置換
+  st: finished
+
+message_046:
+  src: Cancel
+  tr: キャンセル
+  st: finished
+
+[SettingsDialog]
+message_047:
+  src: Preferences
+  tr: 環境設定
+  st: finished
+
+message_048:
+  src: Theme
+  tr: テーマ
+  st: finished
+
+message_049:
+  src: Language
+  tr: 言語
+  st: finished
+
+message_050:
+  src: Settings
+  tr: 設定
+  st: finished
+
+[SettingsLanguagePage]
+message_051:
+  src: Choose the language used by the application. The change is applied when you select OK.
+  tr: アプリケーションで使用する言語を選択します。「OK」を選択すると変更が適用されます。
+  st: finished
+
+message_052:
+  src: Application language
+  tr: アプリケーションの言語
+  st: finished
+
+message_053:
+  src: Language settings are unavailable in this build.
+  tr: このビルドでは言語設定を利用できません。
+  st: finished
+
+[ShareButton]
+message_054:
+  src: Share
+  tr: 共有
+  st: finished
+
+[ThemeSettingsPage]
+message_055:
+  src: Choose the application theme.
+  tr: アプリケーションのテーマを選択します。
+  st: finished
+
+message_056:
+  src: Application theme
+  tr: アプリケーションのテーマ
+  st: finished
+
+message_057:
+  src: Theme settings are unavailable in this build.
+  tr: このビルドではテーマ設定を利用できません。
+  st: finished
+
+message_058:
+  src: Dark
+  tr: ダーク
+  st: finished
+
+message_059:
+  src: Light
+  tr: ライト
+  st: finished
+
+[UiCommonNavigation]
+message_060:
+  src: Browse
+  tr: 参照
+  st: finished
+
+[UnsavedChangesDialog]
+message_061:
+  src: Unsaved changes
+  tr: 未保存の変更
+  st: finished
+
+message_062:
+  src: Save your changes before closing this document?
+  tr: この文書を閉じる前に変更を保存しますか？
+  st: finished
+
+message_063:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_064:
+  src: Don't Save
+  tr: 保存しない
+  st: finished
+
+message_065:
+  src: Cancel
+  tr: キャンセル
+  st: finished
+
+[WindowCommandBar]
+message_066:
+  src: Home
+  tr: ホーム
+  st: finished
+
+[WindowStatusBar]
+message_067:
+  src: Page %1 of %2
+  tr: %1 / %2 ページ
+  st: finished
+
+message_068:
+  src: %1 words
+  tr: %1 語
+  st: finished
+
+message_069:
+  src: English (United States)
+  tr: 英語（米国）
+  st: finished
+
+message_070:
+  src: Zoom out
+  tr: 縮小
+  st: finished
+
+message_071:
+  src: Zoom
+  tr: ズーム
+  st: finished
+
+message_072:
+  src: Zoom in
+  tr: 拡大
+  st: finished
+
+[WindowTitleBar]
+message_073:
+  src: Untitled
+  tr: 無題
+  st: finished
+
+message_074:
+  src: AutoSave
+  tr: 自動保存
+  st: finished
+
+message_075:
+  src: Open
+  tr: 開く
+  st: finished
+
+message_076:
+  src: Save
+  tr: 保存
+  st: finished
+
+message_077:
+  src: Undo
+  tr: 元に戻す
+  st: finished
+
+message_078:
+  src: Redo
+  tr: やり直し
+  st: finished
+
+message_079:
+  src: Comments
+  tr: コメント
+  st: finished
+
+message_080:
+  src: Search commands and help
+  tr: コマンドとヘルプを検索
+  st: finished
+
+message_081:
+  src: Settings
+  tr: 設定
+  st: finished
+
+message_082:
+  src: Saving
+  tr: 保存中
+  st: finished
+
+message_083:
+  src: Edited
+  tr: 編集済み
+  st: finished
+
+message_084:
+  src: Saved
+  tr: 保存済み
+  st: finished

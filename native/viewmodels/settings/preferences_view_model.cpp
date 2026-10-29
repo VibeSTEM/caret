@@ -84,6 +84,30 @@ bool PreferencesViewModel::setCaretBlinkEnabled(bool enabled) {
 #endif
 }
 
+bool PreferencesViewModel::refresh() {
+#ifdef CARET_ENABLE_APP
+    if (settings_runtime() == nullptr) {
+        setError(QStringLiteral("settings.runtime_unavailable"));
+        return false;
+    }
+    const ffi::SettingsSnapshot snapshot = ffi::settings_snapshot(*settings_runtime());
+    if (!snapshot.error.empty()) {
+        setError(QString::fromUtf8(snapshot.error.data(),
+                                   static_cast<qsizetype>(snapshot.error.size())));
+        return false;
+    }
+    installSnapshot(
+        snapshot.caret_blink_enabled, snapshot.auto_save_enabled,
+        QSize(static_cast<int>(snapshot.window_width), static_cast<int>(snapshot.window_height)));
+    setError({});
+    emit snapshotChanged();
+    return true;
+#else
+    setError(QStringLiteral("settings.runtime_unavailable"));
+    return false;
+#endif
+}
+
 bool PreferencesViewModel::setAutoSaveEnabled(bool enabled) {
 #ifdef CARET_ENABLE_APP
     if (settings_runtime() == nullptr) {

@@ -33,6 +33,10 @@ qt_add_qml_module(
   document/document_runtime_bridge.cpp
   settings/preferences_view_model.hpp
   settings/preferences_view_model.cpp
+  settings/application_translator.hpp
+  settings/application_translator.cpp
+  settings/settings_view_model.hpp
+  settings/settings_view_model.cpp
   settings/settings_runtime_bridge.hpp
   settings/settings_runtime_bridge.cpp
   settings/settings_dialog_controller.hpp

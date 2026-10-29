@@ -79,6 +79,10 @@ impl SettingsRuntime {
             .map_err(|error| error.to_string())
     }
 
+    pub fn language_catalog_json(&self) -> Result<String, String> {
+        super::language::LanguageService::catalog_json().map_err(|error| error.to_string())
+    }
+
     /// 只报告初始化/加载诊断；保存后的崩溃持久性警告单独读取。
     pub fn load_warning(&self) -> Option<&str> {
         match &self.state {
@@ -124,6 +128,36 @@ impl SettingsRuntime {
             } => {
                 let mut candidate = service.current();
                 candidate.preferences.auto_save_enabled = enabled;
+                let outcome = service
+                    .commit_and_save(candidate, &self.settings_path)
+                    .map_err(|error| error.to_string())?;
+                self.persistence_warning = outcome.durability_warning;
+                *load_warning = None;
+                Ok(service.current())
+            }
+            SettingsState::ReadOnly { diagnostic, .. } => Err(format!(
+                "settings.read_only_after_load_failure: {diagnostic}"
+            )),
+            SettingsState::Unavailable { diagnostic } => Err(diagnostic.clone()),
+        }
+    }
+
+    /// 原子提交主题与界面语言选择；持久化失败时保留原设置快照。
+    pub fn set_ui_selection(
+        &mut self,
+        theme_id: &str,
+        language: &str,
+        caret_blink_enabled: bool,
+    ) -> Result<UserSettings, String> {
+        match &mut self.state {
+            SettingsState::Ready {
+                service,
+                load_warning,
+            } => {
+                let mut candidate = service.current();
+                candidate.theme_id = theme_id.to_owned();
+                candidate.language = language.to_owned();
+                candidate.preferences.caret_blink_enabled = caret_blink_enabled;
                 let outcome = service
                     .commit_and_save(candidate, &self.settings_path)
                     .map_err(|error| error.to_string())?;
@@ -221,5 +255,36 @@ mod tests {
             runtime.set_caret_blink_enabled(false),
             Err(diagnostic.to_owned())
         );
+    }
+
+    #[test]
+    fn ui_selection_commits_theme_and_language_together_and_persists()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = std::env::temp_dir().join(format!(
+            "caret-settings-ui-selection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory)?;
+        let path = directory.join("settings.json");
+        let mut runtime = SettingsRuntime::open(path.clone());
+
+        let selected = runtime.set_ui_selection("dark", "ja", false)?;
+        assert_eq!(selected.theme_id, "dark");
+        assert_eq!(selected.language, "ja");
+        assert!(!selected.preferences.caret_blink_enabled);
+        let reopened = SettingsRuntime::open(path);
+        assert_eq!(reopened.snapshot()?.theme_id, "dark");
+        assert_eq!(reopened.snapshot()?.language, "ja");
+
+        let original = runtime.snapshot()?;
+        assert!(
+            runtime
+                .set_ui_selection("missing", "zh-Hant", true)
+                .is_err()
+        );
+        assert_eq!(runtime.snapshot()?, original);
+        fs::remove_dir_all(directory)?;
+        Ok(())
     }
 }

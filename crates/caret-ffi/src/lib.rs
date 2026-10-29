@@ -31,8 +31,8 @@ mod generated {
     };
     use crate::settings::{
         SettingsRuntime, builtin_theme_catalog, new_settings_runtime, set_auto_save_enabled,
-        set_caret_blink_enabled, settings_constraints, settings_load_warning, settings_snapshot,
-        settings_theme_catalog,
+        set_caret_blink_enabled, set_ui_selection, settings_constraints, settings_language_catalog,
+        settings_load_warning, settings_snapshot, settings_theme_catalog,
     };
     use crate::version;
 
@@ -242,6 +242,8 @@ mod generated {
             fn settings_snapshot(runtime: &mut SettingsRuntime) -> SettingsSnapshot;
             /// 获取当前 SettingsService 中活动主题对应的完整主题目录。
             fn settings_theme_catalog(runtime: &mut SettingsRuntime) -> String;
+            /// 返回由 Rust LanguageService 提供的语言标识与原生显示名称。
+            fn settings_language_catalog(runtime: &mut SettingsRuntime) -> String;
             /// 返回由 Rust Preferences 校验的窗口尺寸约束。
             fn settings_constraints() -> SettingsConstraints;
             /// 返回启动时设置加载的非致命诊断；无诊断时为空。
@@ -255,6 +257,13 @@ mod generated {
             fn set_auto_save_enabled(
                 runtime: &mut SettingsRuntime,
                 enabled: bool,
+            ) -> SettingsSnapshot;
+            /// 同步持久化主题、应用语言和设置页偏好；失败时保留原快照。
+            fn set_ui_selection(
+                runtime: &mut SettingsRuntime,
+                theme_id: String,
+                language: String,
+                caret_blink_enabled: bool,
             ) -> SettingsSnapshot;
             /// 同步调用期间借用句柄，不得留存引用或跨线程调用；返回 UTF-8 JSON 或 error: 错误。
             fn layout_snapshot_json(runtime: &mut DocumentRuntime) -> String;

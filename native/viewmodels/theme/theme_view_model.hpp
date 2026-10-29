@@ -3,6 +3,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QStringList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
@@ -17,8 +18,8 @@ class ThemeViewModel final : public QObject {
     QML_ELEMENT
     QML_SINGLETON
     Q_PROPERTY(QVariantMap tokens READ tokens NOTIFY tokensChanged)
-    Q_PROPERTY(QStringList availableThemes READ availableThemes CONSTANT)
-    Q_PROPERTY(QString activeTheme READ activeTheme CONSTANT)
+    Q_PROPERTY(QStringList availableThemes READ availableThemes NOTIFY tokensChanged)
+    Q_PROPERTY(QString activeTheme READ activeTheme NOTIFY tokensChanged)
 
   public:
     explicit ThemeViewModel(QObject* parent = nullptr);
@@ -31,6 +32,9 @@ class ThemeViewModel final : public QObject {
     void tokensChanged();
 
   private:
+    friend void install_theme_snapshots(QHash<QString, QVariantMap> themes, QString active_theme);
+    void install(const QHash<QString, QVariantMap>& themes, const QString& active_theme);
+
     QVariantMap m_tokens;
     QStringList m_availableThemes;
     QString m_activeTheme;

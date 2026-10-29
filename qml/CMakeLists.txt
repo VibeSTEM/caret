@@ -35,6 +35,7 @@ set(CARET_SHELL_QML_FILES
     Dialogs/UnsavedChangesDialog.qml
     Dialogs/SettingsDialog.qml
     Dialogs/LanguageSettingsPage.qml
+    Dialogs/ThemeSettingsPage.qml
     Dialogs/PreferencesSettingsPage.qml)
 
 if(UNIX AND NOT APPLE)
@@ -132,6 +133,9 @@ if(BUILD_TESTING)
     target_compile_definitions(caret_shell_load_test PRIVATE CARET_ENABLE_APP=1)
     target_include_directories(caret_shell_load_test PRIVATE "${CARET_FFI_INCLUDE_DIR}")
     target_link_libraries(caret_shell_load_test PRIVATE "${CARET_FFI_STATIC_LIB}")
+    if(TARGET caret_i18n)
+      target_link_libraries(caret_shell_load_test PRIVATE caret_i18n)
+    endif()
     if(UNIX)
       find_package(Threads REQUIRED)
       target_link_libraries(caret_shell_load_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})

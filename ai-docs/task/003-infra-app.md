@@ -32,7 +32,7 @@
 | --- | --- |
 | `schemaVersion` | 必须是 `1` |
 | `themeId` | `light` 或 `dark` |
-| `language` | `en` 或 `zh-CN` |
+| `language` | `en`、`zh-Hans`、`zh-Hant` 或 `ja`；旧值 `zh-CN` 读取时归一为 `zh-Hans` |
 | `windowWidth` | `1280..=16384` |
 | `windowHeight` | `720..=16384` |
 | `windowMaximized` | 布尔 |
