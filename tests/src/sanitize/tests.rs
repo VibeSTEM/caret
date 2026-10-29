@@ -55,7 +55,7 @@ fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_tes
             assert_eq!(
                 ctest_exclusion(*profile, platform),
                 (platform == SanitizerPlatform::Linux && *profile == SanitizerProfile::Thread)
-                    .then_some("^Qml\\.ShellLoad$")
+                    .then_some("^App\\.HeadlessWindowLoads$")
             );
         }
     }
@@ -94,7 +94,7 @@ fn build_command_preserves_locked_target_and_sanitizer_flags() {
 }
 
 #[test]
-fn windows_asan_probe_build_targets_the_qml_smoke_executable() {
+fn windows_asan_probe_build_targets_the_app_executable() {
     let native = Path::new("native build with spaces");
     let command = windows_asan_probe_build_command(native);
     assert_eq!(command.get_program(), "cmake");
@@ -104,22 +104,22 @@ fn windows_asan_probe_build_targets_the_qml_smoke_executable() {
             std::ffi::OsStr::new("--build"),
             native.as_os_str(),
             std::ffi::OsStr::new("--target"),
-            std::ffi::OsStr::new("caret_shell_load_test"),
+            std::ffi::OsStr::new("caret_native_app"),
         ]
     );
 }
 
 #[test]
-fn qml_shell_test_binary_comes_from_the_ctest_manifest() -> Result<(), String> {
+fn windows_asan_probe_binary_comes_from_the_ctest_manifest() -> Result<(), String> {
     let manifest = serde_json::json!({
         "tests": [{
-            "name": "Qml.ShellLoad",
-            "command": ["C:/build/qml/caret_shell_load_test.exe"]
+            "name": "App.Version",
+            "command": ["C:/build/app/caret.exe", "--version"]
         }]
     });
     let binary =
-        qml_shell_test_binary_from_manifest(&manifest).map_err(|error| error.to_string())?;
-    assert_eq!(binary, Path::new("C:/build/qml/caret_shell_load_test.exe"));
+        windows_asan_probe_binary_from_manifest(&manifest).map_err(|error| error.to_string())?;
+    assert_eq!(binary, Path::new("C:/build/app/caret.exe"));
     Ok(())
 }
 

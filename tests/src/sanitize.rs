@@ -85,11 +85,11 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
     }
     if profile == SanitizerProfile::Address && sanitizer_platform() == SanitizerPlatform::Windows {
         let probe = windows_asan_probe_build_command(&native);
-        run("Windows ASan QML import-order probe build", probe)?;
+        run("Windows ASan app import-order probe build", probe)?;
         verify_windows_asan_import_order(&native, &caret_build::resolve_llvm_compilers()?.root)?;
     }
     // Linux Qt 6.11 的预编译 QML loader 在 TSan 下报告 QtCore 内部的分配/释放竞态
-    // （Nightly run 40206639630）；仅该平台的 TSan 排除此测试。升级托管 Qt 后复查。
+    // （Nightly run 40803486240）；仅该平台的 TSan 排除启动 QML 窗口的测试。升级托管 Qt 后复查。
     // 其他 sanitizer、平台和常规测试仍完整运行。
     run_ctest_in(
         &native,
@@ -103,7 +103,7 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
 
 /// 确认 Windows 动态 ASan 在 Qt 模块之前初始化，避免未插桩 DLL 的启动期分配被误报。
 fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(), Box<dyn Error>> {
-    let binary = qml_shell_test_binary(native)?;
+    let binary = windows_asan_probe_binary(native)?;
     let readobj = llvm_root
         .join("bin")
         .join(caret_build::exe_name("llvm-readobj"));
@@ -113,7 +113,7 @@ fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(
         .output()?;
     if !output.status.success() {
         return Err(format!(
-            "llvm-readobj 无法读取 Windows QML 测试导入表：{}\n{}",
+            "llvm-readobj 无法读取 Windows app 导入表：{}\n{}",
             binary.display(),
             String::from_utf8_lossy(&output.stderr)
         )
@@ -129,8 +129,8 @@ fn verify_windows_asan_import_order(native: &Path, llvm_root: &Path) -> Result<(
     Ok(())
 }
 
-/// 从 CTest 注册信息读取 QML smoke test 的实际 executable 路径。
-fn qml_shell_test_binary(native: &Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+/// 从 CTest 注册信息读取 app smoke test 的实际 executable 路径。
+fn windows_asan_probe_binary(native: &Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
     let cmake = caret_build::resolve_cmake()?;
     let ctest = cmake.with_file_name(caret_build::exe_name("ctest"));
     let output = Command::new(ctest)
@@ -140,16 +140,16 @@ fn qml_shell_test_binary(native: &Path) -> Result<std::path::PathBuf, Box<dyn Er
         .output()?;
     if !output.status.success() {
         return Err(format!(
-            "ctest 无法读取 QML smoke test 路径：{}",
+            "ctest 无法读取 app smoke test 路径：{}",
             String::from_utf8_lossy(&output.stderr)
         )
         .into());
     }
     let manifest: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    qml_shell_test_binary_from_manifest(&manifest)
+    windows_asan_probe_binary_from_manifest(&manifest)
 }
 
-fn qml_shell_test_binary_from_manifest(
+fn windows_asan_probe_binary_from_manifest(
     manifest: &serde_json::Value,
 ) -> Result<std::path::PathBuf, Box<dyn Error>> {
     let binary = manifest
@@ -157,14 +157,14 @@ fn qml_shell_test_binary_from_manifest(
         .and_then(serde_json::Value::as_array)
         .and_then(|tests| {
             tests.iter().find(|test| {
-                test.get("name").and_then(serde_json::Value::as_str) == Some("Qml.ShellLoad")
+                test.get("name").and_then(serde_json::Value::as_str) == Some("App.Version")
             })
         })
         .and_then(|test| test.get("command"))
         .and_then(serde_json::Value::as_array)
         .and_then(|command| command.first())
         .and_then(serde_json::Value::as_str)
-        .ok_or("CTest 未注册 Qml.ShellLoad executable")?;
+        .ok_or("CTest 未注册 App.Version executable")?;
     Ok(binary.into())
 }
 
@@ -192,7 +192,7 @@ fn validate_windows_asan_imports(imports: &[String]) -> Result<(), String> {
 
 fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
     (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux)
-        .then_some("^Qml\\.ShellLoad$")
+        .then_some("^App\\.HeadlessWindowLoads$")
 }
 
 /// 托管 LLVM 的符号器和 Windows ASan 运行库加入 PATH；所有问题默认阻断。
@@ -252,13 +252,13 @@ fn sanitizer_build_command(root: &Path, target: &Path, flags: &str) -> Command {
     build
 }
 
-/// 显式构建用于验证 ASan 与 Qt DLL 加载顺序的 QML 测试目标。
+/// 显式构建用于验证 ASan 与 Qt DLL 加载顺序的 app 目标。
 fn windows_asan_probe_build_command(native: &Path) -> Command {
     let mut build = Command::new("cmake");
     build
         .arg("--build")
         .arg(native)
-        .args(["--target", "caret_shell_load_test"]);
+        .args(["--target", "caret_native_app"]);
     build
 }
 
