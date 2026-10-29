@@ -22,39 +22,29 @@ Item {
         opacity: root.candidate.available ? 1 : Theme.disabledOpacity
     }
 
-    ScrollableRow {
+    AutoScrollText {
         id: aliasContents
         x: Theme.spacingSmall
         y: 0
         width: Math.max(0, Math.min(root.aliasColumnWidth, parent.width - Theme.spacingSmall * 2))
         height: parent.height
-        spacing: 0
-
-        Text {
-            height: aliasContents.height
-            color: Theme.colorFocus
-            font.family: "monospace"
-            font.pixelSize: Theme.fontSmall
-            text: root.candidate.alias
-            verticalAlignment: Text.AlignVCenter
-        }
+        text: root.candidate.alias
+        textColor: Theme.colorFocus
+        fontPixelSize: Theme.fontSmall
+        monospaced: true
+        scrollActive: root.selected
     }
 
-    ScrollableRow {
+    AutoScrollText {
         id: labelContents
         x: aliasContents.x + aliasContents.width + Theme.spacingMedium
         y: 0
         width: Math.max(0, Math.min(root.labelColumnWidth, parent.width - x - Theme.spacingSmall))
         height: parent.height
-        spacing: 0
-
-        Text {
-            height: labelContents.height
-            color: Theme.colorText
-            font.pixelSize: Theme.fontBody
-            text: root.label
-            verticalAlignment: Text.AlignVCenter
-        }
+        text: root.label
+        textColor: Theme.colorText
+        fontPixelSize: Theme.fontBody
+        scrollActive: root.selected
     }
 
     TapHandler {

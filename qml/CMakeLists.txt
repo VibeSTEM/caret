@@ -17,9 +17,9 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedSwitch.qml
     Components/Atoms/TitleBarPillButton.qml
     Components/Atoms/CommandCandidateItem.qml
+    Components/Atoms/AutoScrollText.qml
     Components/Atoms/HighlightBackground.qml
     Components/Atoms/ScrollableListView.qml
-    Components/Atoms/ScrollableRow.qml
     Components/Atoms/ThemedRadioButton.qml
     Components/Atoms/ThemedComboBox.qml
     Components/Atoms/ThemedLabel.qml

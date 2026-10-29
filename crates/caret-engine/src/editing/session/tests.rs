@@ -81,6 +81,34 @@ fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {
 }
 
 #[test]
+fn failed_editor_command_keeps_the_active_command_query() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("sec".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    let expected_command_line = session
+        .command_line()
+        .cloned()
+        .unwrap_or_else(|| panic!("command query should remain active"));
+    let invalid_position = Pos {
+        offset: usize::MAX,
+        ..session.selection().focus.clone()
+    };
+
+    let result = session.run(Command::SetSelection(Some(Selection {
+        anchor: invalid_position.clone(),
+        focus: invalid_position,
+    })));
+
+    assert!(matches!(result, Err(EditError::InvalidPosition)));
+    assert_eq!(session.command_line(), Some(&expected_command_line));
+}
+
+#[test]
 fn undo_and_redo_restore_typed_text_and_selection() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));

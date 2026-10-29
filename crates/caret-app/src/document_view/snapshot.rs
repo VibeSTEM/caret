@@ -5,17 +5,6 @@ use caret_engine::DocumentLayoutDeltaView;
 use serde_json::{Value, json};
 
 fn command_line_state(session: &caret_engine::Session) -> Value {
-    let catalog = caret_engine::CommandLine::catalog()
-        .iter()
-        .map(|candidate| {
-            json!({
-                "alias": candidate.alias,
-                "commandId": candidate.command_id,
-                "label": candidate.label,
-                "available": candidate.available,
-            })
-        })
-        .collect::<Vec<_>>();
     session
         .command_line()
         .map(|command_line| {
@@ -37,7 +26,6 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "cursor": command_line.cursor,
                 "selected": command_line.selected,
                 "candidates": candidates,
-                "catalog": catalog,
             })
         })
         .unwrap_or_else(|| {
@@ -47,7 +35,6 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "cursor": 0,
                 "selected": 0,
                 "candidates": [],
-                "catalog": catalog,
             })
         })
 }

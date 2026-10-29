@@ -149,14 +149,15 @@ impl Session {
             return self.run_command_line(command);
         }
         if command == Command::Undo {
+            let effect = self.restore_history(false)?;
             self.command_line = None;
-            return self.restore_history(false);
+            return Ok(effect);
         }
         if command == Command::Redo {
+            let effect = self.restore_history(true)?;
             self.command_line = None;
-            return self.restore_history(true);
+            return Ok(effect);
         }
-        self.command_line = None;
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
@@ -205,6 +206,7 @@ impl Session {
             | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
+        self.command_line = None;
         if breaks_history_merge {
             self.advance_history_merge_epoch();
         }

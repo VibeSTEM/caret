@@ -115,13 +115,12 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     const QJsonValue cursor = command_line.value(QStringLiteral("cursor"));
     const QJsonValue selected = command_line.value(QStringLiteral("selected"));
     const QJsonValue candidates = command_line.value(QStringLiteral("candidates"));
-    const QJsonValue catalog = command_line.value(QStringLiteral("catalog"));
     qsizetype cursor_position = 0;
     qsizetype selected_index = 0;
     if (!active.isBool() || !query.isString() ||
         (!cursor.isUndefined() && !nonnegative_index(cursor, cursor_position)) ||
         !nonnegative_index(selected, selected_index) ||
-        !candidates.isArray() || (!catalog.isUndefined() && !catalog.isArray())) {
+        !candidates.isArray()) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
@@ -153,11 +152,6 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     if (!parse_candidates(candidates.toArray(), parsed_candidates)) {
         return false;
     }
-    QVariantList parsed_catalog;
-    if (!parse_candidates(catalog.isUndefined() ? candidates.toArray() : catalog.toArray(),
-                          parsed_catalog)) {
-        return false;
-    }
     if (active.toBool() && !parsed_candidates.isEmpty() &&
         selected_index >= parsed_candidates.size()) {
         error = QStringLiteral("layout.invalid_command_selection");
@@ -167,8 +161,7 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
               {QStringLiteral("query"), query.toString()},
               {QStringLiteral("cursor"), cursor_position},
               {QStringLiteral("selected"), selected_index},
-              {QStringLiteral("candidates"), parsed_candidates},
-              {QStringLiteral("catalog"), parsed_catalog}};
+              {QStringLiteral("candidates"), parsed_candidates}};
     return true;
 }
 

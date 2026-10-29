@@ -12,10 +12,6 @@ pub struct CommandLine {
 }
 
 impl CommandLine {
-    pub fn catalog() -> &'static [CommandCandidate] {
-        command_registry::candidates()
-    }
-
     pub fn candidates(&self) -> Vec<CommandCandidate> {
         if self.query.is_empty() {
             return command_registry::candidates().to_vec();

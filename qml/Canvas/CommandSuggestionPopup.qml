@@ -2,6 +2,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import Caret.ViewModels
 
 Rectangle {
@@ -16,11 +17,28 @@ Rectangle {
     readonly property real rowHeight: Math.max(Theme.iconSizeSmall, Theme.fontBody + Theme.spacingTiny * 2)
     readonly property real verticalPadding: Theme.spacingTiny * 2
     readonly property int maximumRows: 4
-    // 两列按 \\subsection 的视觉长度估算为整百逻辑像素，长别名和名称分别在列内滚动。
-    readonly property real candidateColumnWidth: 100
+    // 列宽随当前候选收紧，单列上限固定；选中项超出时由文本 Atom 循环展示。
+    readonly property real maximumCandidateColumnWidth: 105
+    readonly property real candidateColumnSpacing: Theme.spacingMedium
     readonly property real maximumEstimatedWidth: 240
-    readonly property real preferredWidth: maximumEstimatedWidth
+    readonly property real aliasColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
+    readonly property real labelColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
+    readonly property real preferredWidth: candidateList.count > 0
+        ? Math.min(maximumEstimatedWidth,
+                   aliasColumnWidth + candidateColumnSpacing + labelColumnWidth
+                   + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
+        : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
     readonly property real preferredHeight: candidateList.count > 0 ? Math.min(maximumRows, candidateList.count) * rowHeight + verticalPadding : emptyMetrics.height + verticalPadding
+
+    function widestTextWidth(measurements) {
+        let widest = 0;
+        for (let index = 0; index < measurements.count; ++index) {
+            const textItem = measurements.itemAt(index);
+            if (textItem)
+                widest = Math.max(widest, textItem.implicitWidth);
+        }
+        return Math.ceil(widest);
+    }
 
     function labelFor(candidate) {
         switch (candidate.alias) {
@@ -75,6 +93,31 @@ Rectangle {
         text: qsTranslate("CommandCompletion", "No matching commands")
     }
 
+    Item {
+        visible: false
+
+        Repeater {
+            id: aliasMeasurements
+            model: root.commandLine.candidates || []
+            delegate: Text {
+                required property var modelData
+                font.family: PlatformFonts.fixedFamily
+                font.pixelSize: Theme.fontSmall
+                text: modelData.alias
+            }
+        }
+
+        Repeater {
+            id: labelMeasurements
+            model: root.commandLine.candidates || []
+            delegate: Text {
+                required property var modelData
+                font.pixelSize: Theme.fontBody
+                text: root.labelFor(modelData)
+            }
+        }
+    }
+
     ScrollableListView {
         id: candidateList
         anchors.fill: parent
@@ -91,8 +134,8 @@ Rectangle {
             candidate: modelData
             label: root.labelFor(modelData)
             selected: index === root.commandLine.selected
-            aliasColumnWidth: root.candidateColumnWidth
-            labelColumnWidth: root.candidateColumnWidth
+            aliasColumnWidth: root.aliasColumnWidth
+            labelColumnWidth: root.labelColumnWidth
             onActivated: {
                 const selectedCandidate = LayoutViewModel.commandLineCommand("select", String(index));
                 if (selectedCandidate.valid && modelData.available)
