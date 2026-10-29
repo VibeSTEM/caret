@@ -433,12 +433,12 @@ Window {
     }
 
     Shortcut {
-        sequences: ["Ctrl+="]
+        sequences: [StandardKey.ZoomIn, "Ctrl+="]
         onActivated: windowStatusBar.zoomIn()
     }
 
     Shortcut {
-        sequences: ["Ctrl+-"]
+        sequences: [StandardKey.ZoomOut]
         onActivated: windowStatusBar.zoomOut()
     }
 

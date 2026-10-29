@@ -71,7 +71,7 @@
 - 2026-10-29：修正 Body 跨段选区穿过环境标题时的几何过滤；结构导航移动会切断连续编辑的 Undo 合并组。
 - 2026-10-29：将画布按键识别拆到 C++ `document_canvas/keyboard.cpp`，IME 查询与预编辑留在 `input.cpp`；Esc、Enter、Shift+Enter 统一转为 Rust 编辑按键意图，由 `session/keyboards/` 按会话状态仲裁，避免命令输入中的 Enter/Shift+Enter 误操作正文。
 - 2026-10-29：状态栏结构路径由 Rust `StructureIndex::at()` 按光标段落 ID 生成，并经布局/交互快照传到 ViewModel；QML 只本地化展示 Heading、Section、Showcase 和 Paragraph，不重复推断结构。
-- 2026-10-29：缩放快捷键明确使用 `Ctrl+=` / `Ctrl+-`；Qt 在 macOS 将 `Ctrl` 映射为 Command。同步快捷键文档，避免 `StandardKey.ZoomIn` 将放大键设为 `Ctrl+Plus`。
+- 2026-10-29：缩放快捷键保留 Qt `StandardKey.ZoomIn/ZoomOut`，放大额外支持 `Ctrl+=`；Qt 在 macOS 将 `Ctrl` 映射为 Command。移除显式 `Ctrl+-`，缩小继续使用 Qt 标准键。
 - 尚未完成：列表项语义/索引增量更新、创建与嵌套环境命令、结构子树删除/提升及撤销补丁、结构导航快捷键与焦点框、跨页环境几何验证。Esc/Enter/Shift+Enter 的事件映射和 Rust 会话仲裁已接入，但尚未替代上述结构导航工作；当前不得标记 implemented 或 done。
 - 性能约束：仅当事务位置映射包含段落拆分/合并时重建结构索引；普通单段输入与 IME 候选事务共享只读 `Arc` 索引。结构拆并目前仍完整重建，增量算法和长文档性能仍需进一步复核。
 

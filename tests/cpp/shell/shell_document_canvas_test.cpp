@@ -57,8 +57,8 @@
 void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
     const caret::CanvasPolicy policy;
     QCOMPARE(policy.defaultZoomPercent(), 100);
-    QCOMPARE(policy.minimumZoomPercent(), 10);
-    QCOMPARE(policy.maximumZoomPercent(), 800);
+    QCOMPARE(policy.minimumZoomPercent(), 50);
+    QCOMPARE(policy.maximumZoomPercent(), 300);
     QCOMPARE(policy.zoomStepPercent(), 10);
 }
 
