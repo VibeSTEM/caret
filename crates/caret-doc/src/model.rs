@@ -24,6 +24,7 @@ pub use run::Run;
 // 保留节点转换函数在 crate 内原有的访问路径。
 #[allow(unused_imports)]
 pub(crate) use codec::{block_from_value, block_to_value, inline_from_value, inline_to_value};
+pub(crate) use validation::custom_display_name_is_valid;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

@@ -86,7 +86,7 @@ fn collect_block_features(block: &Block, features: &mut std::collections::BTreeS
             features.insert(
                 match environment.kind {
                     BlockEnvironmentKind::Section => "caret.env.section",
-                    BlockEnvironmentKind::Showcase => "caret.env.showcase",
+                    BlockEnvironmentKind::Custom => "caret.env.custom",
                 }
                 .to_owned(),
             );

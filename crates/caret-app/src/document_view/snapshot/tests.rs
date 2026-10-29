@@ -15,8 +15,8 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0]["alias"], "\\section");
-    assert_eq!(candidates[0]["commandId"], "para.heading");
-    assert_eq!(candidates[0]["available"], false);
+    assert_eq!(candidates[0]["commandId"], "struct.section.create");
+    assert_eq!(candidates[0]["available"], true);
     assert!(candidates[0].get("label").is_none());
     Ok(())
 }

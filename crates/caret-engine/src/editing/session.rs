@@ -152,6 +152,9 @@ impl Session {
         if matches!(&command, Command::MoveStructure(_) | Command::ExitStructure) {
             return self.run_structure(command);
         }
+        if let Command::CreateBlockEnvironment(kind) = command {
+            return self.create_block_environment(kind);
+        }
         if matches!(
             &command,
             Command::BeginCommandLine
@@ -216,6 +219,9 @@ impl Session {
             Command::MoveCaret(direction) => self.move_caret(direction),
             Command::MoveStructure(_) | Command::ExitStructure => {
                 unreachable!("structure commands returned above")
+            }
+            Command::CreateBlockEnvironment(_) => {
+                unreachable!("structure edit commands returned above")
             }
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
@@ -540,7 +546,8 @@ fn position_map_changes_paragraph_structure(position_map: &PositionMap) -> bool 
         PositionMap::Composite(maps) => maps.iter().any(position_map_changes_paragraph_structure),
         PositionMap::ParagraphSplit { .. }
         | PositionMap::ParagraphMerge { .. }
-        | PositionMap::ParagraphRangeMerge { .. } => true,
+        | PositionMap::ParagraphRangeMerge { .. }
+        | PositionMap::StoryChange { .. } => true,
         PositionMap::TextEdit { .. } => false,
     }
 }

@@ -1,6 +1,6 @@
 //! 定义编辑命令及其稳定命令 ID。
 
-use caret_doc::PageGeometry;
+use caret_doc::{BlockEnvironmentKind, PageGeometry};
 
 use super::Selection;
 
@@ -27,6 +27,7 @@ pub enum Command {
     MoveCaret(Direction),
     MoveStructure(Direction),
     ExitStructure,
+    CreateBlockEnvironment(BlockEnvironmentKind),
     EditorKey(EditorKey),
     SetSelection(Option<Selection>),
     UpdateComposition { id: u64, preedit: String },
@@ -58,6 +59,8 @@ impl Command {
             Self::MoveStructure(Direction::Forward) => "struct.next",
             Self::MoveStructure(Direction::Backward) => "struct.prev",
             Self::ExitStructure => "struct.exit",
+            Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => "struct.section.create",
+            Self::CreateBlockEnvironment(BlockEnvironmentKind::Custom) => "struct.custom.create",
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",

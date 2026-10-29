@@ -551,3 +551,8 @@ message_101:
   src: New paragraph
   tr: New paragraph
   st: finished
+
+message_102:
+  src: Custom environment
+  tr: Custom environment
+  st: finished

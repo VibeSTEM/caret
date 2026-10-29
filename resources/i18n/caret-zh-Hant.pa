@@ -551,3 +551,8 @@ message_101:
   src: New paragraph
   tr: 新段落
   st: finished
+
+message_102:
+  src: Custom environment
+  tr: 自訂環境
+  st: finished

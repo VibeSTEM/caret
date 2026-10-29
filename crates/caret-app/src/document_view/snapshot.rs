@@ -85,7 +85,7 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
         .find(|entry| {
             matches!(
                 entry.kind,
-                caret_engine::StructureKind::Section | caret_engine::StructureKind::Showcase
+                caret_engine::StructureKind::Section | caret_engine::StructureKind::Custom
             )
         })
         .map(|entry| entry.id.clone())

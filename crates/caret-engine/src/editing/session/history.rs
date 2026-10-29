@@ -2,7 +2,9 @@
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
-use caret_doc::{Block, BlockEnvironment, Document, NodeId, PageGeometry, Paragraph};
+use caret_doc::{
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, PageGeometry, Paragraph,
+};
 use caret_layout::VisualAffinity;
 use std::mem::size_of;
 use undo::{Edit, History, Merged};
@@ -32,6 +34,14 @@ pub(super) enum DocumentPatch {
     PageGeometry {
         before: PageGeometry,
         after: PageGeometry,
+    },
+    EnvironmentCreation {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        paragraph: Box<Paragraph>,
+        paragraph_estimated_bytes: usize,
+        environment_id: NodeId,
+        kind: BlockEnvironmentKind,
     },
 }
 
@@ -204,6 +214,20 @@ impl DocumentPatch {
                 .map(ParagraphState::estimated_bytes)
                 .sum(),
             Self::PageGeometry { .. } => size_of::<PageGeometry>(),
+            Self::EnvironmentCreation {
+                parent_environment_ids,
+                paragraph_estimated_bytes,
+                environment_id,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + paragraph_estimated_bytes
+                    + size_of::<Box<Paragraph>>()
+                    + node_id_bytes(environment_id)
+            }
         }
     }
 
@@ -213,6 +237,22 @@ impl DocumentPatch {
                 apply_paragraph_states(document, after, before)
             }
             Self::PageGeometry { before, .. } => set_page_geometry(document, *before),
+            Self::EnvironmentCreation {
+                parent_environment_ids,
+                sibling_index,
+                paragraph,
+                environment_id,
+                kind,
+                ..
+            } => apply_environment_creation(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraph,
+                environment_id,
+                *kind,
+                false,
+            ),
         }
     }
 
@@ -222,6 +262,22 @@ impl DocumentPatch {
                 apply_paragraph_states(document, before, after)
             }
             Self::PageGeometry { after, .. } => set_page_geometry(document, *after),
+            Self::EnvironmentCreation {
+                parent_environment_ids,
+                sibling_index,
+                paragraph,
+                environment_id,
+                kind,
+                ..
+            } => apply_environment_creation(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                paragraph,
+                environment_id,
+                *kind,
+                true,
+            ),
         }
     }
 }
@@ -299,6 +355,7 @@ pub(super) fn state_ids_from_position_map(map: &PositionMap, output: &mut Vec<No
             output.push(end_paragraph_id.clone());
             output.extend(removed_ids.iter().cloned());
         }
+        PositionMap::StoryChange { paragraph_id, .. } => output.push(paragraph_id.clone()),
     }
 }
 
@@ -392,7 +449,7 @@ fn find_environment_mut<'a>(
     None
 }
 
-fn parent_environment_path(
+pub(super) fn parent_environment_path(
     blocks: &[Block],
     location: &ParagraphLocation,
 ) -> Option<(Vec<NodeId>, usize)> {
@@ -418,13 +475,55 @@ fn parent_environment_path(
     Some((environment_ids, sibling_index))
 }
 
+fn apply_environment_creation(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    paragraph: &Paragraph,
+    environment_id: &NodeId,
+    kind: BlockEnvironmentKind,
+    create: bool,
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    let Some(current) = blocks.get(sibling_index) else {
+        return;
+    };
+    let expected = if create {
+        matches!(current, Block::Paragraph(value) if value.id == paragraph.id)
+    } else {
+        matches!(current, Block::Environment(value) if &value.id == environment_id)
+    };
+    if !expected {
+        return;
+    }
+    blocks[sibling_index] = if create {
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind,
+            definition_id: None,
+            props: Default::default(),
+            title: (kind == BlockEnvironmentKind::Section).then(|| paragraph.clone()),
+            children: if kind == BlockEnvironmentKind::Custom {
+                vec![Block::Paragraph(paragraph.clone())]
+            } else {
+                Vec::new()
+            },
+            extra: Default::default(),
+        })
+    } else {
+        Block::Paragraph(paragraph.clone())
+    };
+}
+
 fn set_page_geometry(document: &mut Document, geometry: PageGeometry) {
     if let Some(section) = document.page_sections.first_mut() {
         let _ = section.set_geometry(geometry);
     }
 }
 
-fn paragraph_estimated_bytes(paragraph: &Paragraph) -> usize {
+pub(super) fn paragraph_estimated_bytes(paragraph: &Paragraph) -> usize {
     size_of::<Paragraph>()
         + node_id_bytes(&paragraph.id)
         + paragraph.language.as_ref().map_or(0, String::len)
