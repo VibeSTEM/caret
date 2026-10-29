@@ -463,7 +463,7 @@ fn section_title_enter_at_end_keeps_nested_body_order_and_creates_empty_paragrap
         }),
         children: vec![Block::Environment(BlockEnvironment {
             id: nested_id.clone(),
-            kind: BlockEnvironmentKind::Showcase,
+            kind: BlockEnvironmentKind::Custom,
             definition_id: None,
             props: Default::default(),
             title: None,
@@ -585,10 +585,10 @@ fn cross_environment_selection_rejects_delete_and_replacement_atomically() -> Re
         props: Default::default(),
         extra: Default::default(),
     };
-    let showcase = |paragraph: Paragraph| {
+    let custom_environment = |paragraph: Paragraph| {
         Block::Environment(BlockEnvironment {
             id: NodeId::generate(),
-            kind: BlockEnvironmentKind::Showcase,
+            kind: BlockEnvironmentKind::Custom,
             definition_id: None,
             props: Default::default(),
             title: None,
@@ -601,7 +601,7 @@ fn cross_environment_selection_rejects_delete_and_replacement_atomically() -> Re
     let first_id = first.id.clone();
     let second_id = second.id.clone();
     let mut document = Document::blank();
-    document.body = vec![showcase(first), showcase(second)];
+    document.body = vec![custom_environment(first), custom_environment(second)];
     let mut session = Session::new(document)?;
     session.run(Command::SetSelection(Some(Selection {
         anchor: Pos {

@@ -2,6 +2,7 @@
 
 use super::Session;
 use crate::editing::{Command, CommandLine, Direction, EditError, Effect};
+use caret_doc::BlockEnvironmentKind;
 
 impl Session {
     pub(super) fn run_command_line(&mut self, command: Command) -> Result<Effect, EditError> {
@@ -112,6 +113,12 @@ impl Session {
         let effect = match candidate.command_id {
             "text.soft_break" => self.run(Command::InsertSoftBreak),
             "text.split_paragraph" => self.run(Command::InsertParagraphBreak),
+            "struct.section.create" => self.run(Command::CreateBlockEnvironment(
+                BlockEnvironmentKind::Section,
+            )),
+            "struct.custom.create" => self.run(Command::CreateBlockEnvironment(
+                BlockEnvironmentKind::Custom,
+            )),
             _ => return Ok(Effect::default()),
         };
         let effect = match effect {

@@ -300,7 +300,8 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
             }]
         }]},
         "children": [{
-            "type": "environment", "scope": "block", "kind": "showcase", "id": "showcase",
+            "type": "environment", "scope": "block", "kind": "showcase", "id": "custom",
+            "props": {"displayName": "Example"},
             "children": [{"type": "paragraph", "id": "paragraph", "inlines": [{
                 "type": "environment", "scope": "inline", "kind": "italic", "id": "italic",
                 "children": [{"type": "run", "text": "body"}]
@@ -313,11 +314,11 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
         features.iter().map(String::as_str).collect::<Vec<_>>(),
         [
             "caret.env.bold",
+            "caret.env.custom",
             "caret.env.explicit-format-state",
             "caret.env.font",
             "caret.env.italic",
             "caret.env.section",
-            "caret.env.showcase",
             "caret.env.templates",
             "caret.font.family-preferences",
             "caret.paragraph.layout-settings",
@@ -326,6 +327,68 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
         ]
     );
     Ok(())
+}
+
+#[test]
+fn custom_environment_names_are_optional_and_validated_by_unicode_character_count() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = document.body.remove(0) else {
+        unreachable!();
+    };
+    document
+        .body
+        .push(Block::Environment(super::BlockEnvironment {
+            id: super::NodeId::generate(),
+            kind: super::BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::from([(
+                "displayName".to_owned(),
+                serde_json::Value::String("自定义环境".to_owned()),
+            )]),
+            title: None,
+            children: vec![Block::Paragraph(paragraph)],
+            extra: BTreeMap::new(),
+        }));
+    assert!(document.validate().is_ok());
+
+    let Block::Environment(environment) = &mut document.body[0] else {
+        unreachable!();
+    };
+    environment.props.insert(
+        "displayName".to_owned(),
+        serde_json::Value::String("字".repeat(128)),
+    );
+    assert!(document.validate().is_ok());
+    let Block::Environment(environment) = &mut document.body[0] else {
+        unreachable!();
+    };
+    environment.props.insert(
+        "displayName".to_owned(),
+        serde_json::Value::String("字".repeat(129)),
+    );
+    assert!(document.validate().is_err());
+}
+
+#[test]
+fn custom_environment_display_name_rejects_empty_and_non_text_values() {
+    for value in [serde_json::json!("  "), serde_json::json!(42)] {
+        let mut document = Document::blank();
+        let Block::Paragraph(paragraph) = document.body.remove(0) else {
+            unreachable!();
+        };
+        document
+            .body
+            .push(Block::Environment(super::BlockEnvironment {
+                id: super::NodeId::generate(),
+                kind: super::BlockEnvironmentKind::Custom,
+                definition_id: None,
+                props: BTreeMap::from([("displayName".to_owned(), value)]),
+                title: None,
+                children: vec![Block::Paragraph(paragraph)],
+                extra: BTreeMap::new(),
+            }));
+        assert!(document.validate().is_err());
+    }
 }
 
 #[test]

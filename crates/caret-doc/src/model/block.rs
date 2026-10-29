@@ -14,12 +14,12 @@ pub enum Block {
     Opaque(OpaqueNode),
 }
 
-/// 内置块环境类型；Section 与 Showcase 共享容器结构、保留独立语义。
+/// 内置块环境类型；Section 有章节语义，Custom 是可重命名的通用容器。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockEnvironmentKind {
     Section,
-    Showcase,
+    Custom,
 }
 
 /// 可嵌套的块环境；标题独立于其有序正文子项。

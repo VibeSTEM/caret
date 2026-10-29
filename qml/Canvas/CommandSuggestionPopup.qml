@@ -42,6 +42,8 @@ Rectangle {
             return qsTranslate("CommandCompletion", "Chapter");
         case "\\section":
             return qsTranslate("CommandCompletion", "Section");
+        case "\\environment":
+            return qsTranslate("CommandCompletion", "Custom environment");
         case "\\subsection":
             return qsTranslate("CommandCompletion", "Subsection");
         case "\\subsubsection":

@@ -61,6 +61,11 @@ pub enum PositionMap {
         snap_graphemes: bool,
         result_boundaries: Vec<usize>,
     },
+    StoryChange {
+        paragraph_id: NodeId,
+        from: StoryId,
+        to: StoryId,
+    },
 }
 
 impl PositionMap {
@@ -170,6 +175,14 @@ impl PositionMap {
                     ..position.clone()
                 }
             }
+            Self::StoryChange {
+                paragraph_id,
+                from,
+                to,
+            } if &position.paragraph_id == paragraph_id && &position.story == from => Pos {
+                story: to.clone(),
+                ..position.clone()
+            },
             _ => position.clone(),
         }
     }

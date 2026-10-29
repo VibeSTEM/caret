@@ -17,6 +17,8 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.font",
     "caret.env.italic",
     "caret.env.section",
+    "caret.env.custom",
+    // 旧 Showcase 文件在读取兼容期间仍可编辑；保存时会重算为 caret.env.custom。
     "caret.env.showcase",
     "caret.env.templates",
     "caret.font.family-preferences",

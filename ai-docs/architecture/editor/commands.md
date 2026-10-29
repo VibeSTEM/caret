@@ -29,13 +29,14 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `insert.table` | 插入表格 | 一步 |
 | `table.insert_row` / `table.delete_row` / `table.insert_col` / `table.delete_col` | 改表格形状 | 一步 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
+| `struct.section.create` / `struct.custom.create` | 把当前段落转换为 Section 标题 / 包入可命名的 Custom 容器 | 一步，可撤销 |
 | `interaction.escape` / `interaction.enter` / `interaction.shift_enter` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决 | 视分支而定：Esc/普通 Enter/软换行本身不合并历史；Enter 最终使用段落命令 |
 | `cmdline.begin` / `cmdline.type` / `cmdline.backspace` / `cmdline.move_selection` / `cmdline.select_candidate` / `cmdline.tab` / `cmdline.accept` / `cmdline.cancel` | 命令模式 | 查询和选择是纯命令；`tab`、`accept` 与重复前缀键由 Rust 按当前查询状态决定插入字面字符或执行候选 |
 | `file.save` | 把当前文档写成 `.cdoc` | 不改文档，失败不丢内存里的稿 |
 
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
-注册表条目不代表命令已经可执行。当前结构导航命令 `struct.next`、`struct.prev`、`struct.exit` 已进入 Rust Session；段落标题、列表、块环境创建/嵌套/删除/提升等结构编辑仍由 010 实现，未接入前候选必须标记不可用。010 完成后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
+注册表条目不代表命令已经可执行。当前 `struct.next`、`struct.prev`、`struct.exit`、`struct.section.create` 和 `struct.custom.create` 已进入 Rust Session；Section 将当前段落转成独立环境标题，Custom 将当前段落放入通用可命名容器。标题级别命令、列表、结构删除和提升仍由后续任务实现，未接入前候选必须标记不可用。每次实现后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
 
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
 

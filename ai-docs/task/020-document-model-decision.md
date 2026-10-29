@@ -1,5 +1,7 @@
 # 020 — Paragraph/Run 语义与文档模型细化
 
+> 当前权威模型见[文档模型](../architecture/editor/document-model.md)。2026-10-29 起，块容器的 `Showcase` 名称和专属语义由通用可命名 `Custom` 环境取代；本任务中的 `Showcase` 仅作为早期决策记录，旧 `.cdoc` 仍兼容读取。
+
 - 状态：done
 - 依赖：无
 - 优先级：P2

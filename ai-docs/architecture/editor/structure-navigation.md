@@ -6,7 +6,7 @@
 
 结构类别、页面角色和节点语义的唯一权威定义见[文档模型](document-model.md#页面层级与内容块形态)。本文件只规定结构索引、导航和焦点几何如何消费这些定义，不重述页面/内容分类。结构索引保存具体领域语义；界面只消费稳定 ID 和 Rust 投影，不根据标题文字、QML 节点树或具体 kind 再推断一次。
 
-当前文档模型实现的块结构是 Paragraph、由段落大纲属性识别的 Heading，以及 `BlockEnvironmentKind` 的 `Section`、`Showcase`。`Section` 和 `Showcase` 是具体领域类型，二者共享可嵌套的标题/子项容器；`Section` 另有编号语义。它们都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。环境模板扩展应复用容器模型，不要求新增 QML 类别分支。
+当前文档模型实现的块结构是 Paragraph、由段落大纲属性识别的 Heading，以及 `BlockEnvironmentKind` 的 `Section`、`Custom`。`Section` 和 `Custom` 共享可嵌套的标题/子项容器；`Section` 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。
 
 行内 `EnvironmentNode`（如 Bold、Italic、Font）参与格式和位置映射，不是块级导航停靠点。`InlineMath` 是 Paragraph 的行内原子；公式内部位置用 `MathPos`，不额外插入 Paragraph 之上的结构层级。Equation、Align、Table、Figure 的结构映射在相应文档节点实现并接入索引后启用；不能把计划项描述成已经可导航。
 

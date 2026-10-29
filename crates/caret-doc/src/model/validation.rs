@@ -154,6 +154,17 @@ fn validate_block<'a>(
         Block::Paragraph(paragraph) => validate_paragraph(paragraph, depth, ids, node_count),
         Block::Environment(environment) => {
             insert_id(ids, &environment.id)?;
+            if environment.kind == BlockEnvironmentKind::Custom
+                && environment
+                    .props
+                    .get("displayName")
+                    .is_some_and(|value| !custom_display_name_is_valid(value))
+            {
+                return Err(ModelError::InvalidDocument(
+                    "custom environment displayName must be non-empty text up to 128 characters"
+                        .to_owned(),
+                ));
+            }
             for child in &environment.children {
                 validate_block(child, depth + 1, ids, node_count)?;
             }
@@ -164,6 +175,14 @@ fn validate_block<'a>(
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) => Ok(()),
     }
+}
+
+pub(crate) fn custom_display_name_is_valid(value: &Value) -> bool {
+    value.as_str().is_some_and(|name| {
+        !name.trim().is_empty()
+            && name.chars().count() <= 128
+            && !name.chars().any(char::is_control)
+    })
 }
 
 fn validate_paragraph<'a>(

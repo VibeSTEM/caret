@@ -24,7 +24,7 @@ pub enum StructureKind {
     Paragraph,
     Heading { level: u8 },
     Section,
-    Showcase,
+    Custom,
 }
 
 /// 面向通用界面展示的结构形态，不暴露具体结构语义名称。
@@ -43,7 +43,7 @@ impl StructureKind {
         match self {
             Self::Paragraph => StructureClass::Paragraph,
             Self::Heading { .. } => StructureClass::SingleLine,
-            Self::Section | Self::Showcase => StructureClass::MultiLine,
+            Self::Section | Self::Custom => StructureClass::MultiLine,
         }
     }
 }

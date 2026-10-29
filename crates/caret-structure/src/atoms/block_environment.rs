@@ -20,7 +20,7 @@ impl<'a> BlockEnvironmentAtom<'a> {
     pub(crate) fn kind(&self) -> StructureKind {
         match self.environment.kind {
             BlockEnvironmentKind::Section => StructureKind::Section,
-            BlockEnvironmentKind::Showcase => StructureKind::Showcase,
+            BlockEnvironmentKind::Custom => StructureKind::Custom,
         }
     }
 

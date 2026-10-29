@@ -55,7 +55,7 @@ crates/caret-structure/src/index.rs     唯一结构索引装配入口
 
 页面角色与内容块形态是正交层级。页面角色组织页级内容；Paragraph 承载行内内容并决定段落折行，`SingleLine` 只是语义分类，不保证窄页面上只有一条视觉行。
 
-Heading、Section、Showcase 等具体领域语义由结构索引保留，界面消费索引投影出的通用类别。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 映射为 `SingleLine`，Align 映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](structure-navigation.md)。
+Heading、Section、Custom 等具体领域语义由结构索引保留，界面消费索引投影出的通用类别。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 映射为 `SingleLine`，Align 映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](structure-navigation.md)。
 
 页面组合的语义草案（不是当前 DTO 字段或 `.cdoc` JSON schema）：
 
@@ -102,7 +102,33 @@ Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不�
 
 块级环境的 `title` 始终是单个 Paragraph。标题中按 Enter 时，光标前文本留在标题，后半段移入新建的正文首段，并插到已有正文内容之前；光标在标题开头或末尾时，允许标题前缀或新正文段为空。标题内的选区按“删除选区，再在选区起点拆分”一次提交。跨越标题与正文的选区不由标题 Enter 隐式改写；当前命令拒绝且保留文档、选区和 IME 状态。若正文首项是表格或嵌套环境，也在它之前插入 Paragraph。标题不会被拆成多个标题段。IME composition 尚未提交时 Return 由输入法消费，不触发 Enter 命令。
 
-环境区分内置语义 kind 和可组合定义。`kind` 决定 scope、合法子项和结构行为；主题快照提供每种 kind 的默认模板及命名变体，`definitionId` 选择同 kind 模板，实例 `props` 保存局部覆盖。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版 kind 如下：
+环境区分内置语义 kind 和可组合定义。内置 kind 固定 scope、合法子项和结构行为；Custom 是可跨 scope 选择的定义族，具体实例的 scope 必须与其 `definitionId` 指向的定义一致。主题快照提供内置 kind 默认模板、命名变体和自定义环境定义，实例 `props` 保存局部覆盖。`definitionId` 缺省表示使用 Custom 的通用默认模板；存在时必须能在当前文档嵌入的快照中解析到同 scope 定义。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版内置 kind 如下：
+
+自定义环境定义应允许用户选择三种 scope：`Page`、`Block`、`Inline`，并设置可编辑的显示名。定义使用稳定 `definitionId`；改名不改变引用它的实例身份。实例可通过局部 `displayName` 覆盖定义名称。定义一旦被文档实例引用，其 scope 固定；若要换 scope，必须创建新的 `definitionId` 或执行显式文档结构转换，不能静默改定义使现存节点失效。三种 scope 共用声明式定义模型，但映射到各自合法的内容容器，不在 QML 为每个用户定义新增组件分支。scope 顺序固定为 `Page → Block → Inline`：Page 是 PageContent 的角色定义，只能位于文档页面序列，不能嵌套 Page；Block 实例位于块内容并可按定义递归嵌套；Inline 实例必须位于 Paragraph 的行内序列。较窄 scope 不能包含较宽 scope，因此 Block 内不能放 Page，Inline 内不能放 Block/Page。定义和文档实例均由 Rust 校验这些约束。显式更新文档主题时，必须先对候选快照验证所有已引用的 `definitionId` 和 scope；若引用将丢失或变更，拒绝本次更新并保留旧快照，直到用户显式转换相关实例。不得静默回退到 Custom 通用样式或丢失定义。
+
+概念定义与实例关系如下；实际持久化字段以各 scope 的 Rust DTO 为准：
+
+```text
+ThemeSnapshot.customEnvironmentDefinitions[definitionId]
+└── CustomEnvironmentDefinition { displayName, scope, composition }
+
+Document
+└── PageContent {
+    ├── role: BodyPage | TitlePage
+    ├── definitionId?: PageDefinitionId         # 可选 Page-scope 自定义定义
+    └── children: Vec<Block>
+        └── Custom(Block, definitionId)
+            └── children: Vec<Block>
+                └── Paragraph
+                    └── inlines: Vec<InlineNode>
+                        └── Custom(Inline, definitionId)
+                            └── children: Vec<InlineNode>
+}
+```
+
+Page scope 定义基于 `BodyPage` 或 `TitlePage` 内置角色的 PageContent 模板，不作为可递归嵌套的 Block，也不创造新的页面语义。模板通过独立 `definitionId` 引用，可组合外观与页级约束；Block/Inline 实例只能出现在对应的块序列和 Paragraph 行内序列中。主题文件更新不会自动改变已有文档；显式更新快照时，上述引用校验与原子替换规则同样适用。
+
+当前实现只落地了 Block-scope `Custom` 节点和实例名校验；Page/Inline-scope 自定义实例、定义管理与跨 scope 嵌套校验属于后续实现，不能依据此概念图宣称已可编辑或可序列化。
 
 | kind | scope | 子内容 | 语义 |
 | --- | --- | --- | --- |
@@ -110,11 +136,11 @@ Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不�
 | `Italic` | inline | `InlineNode` | 斜体作用域；可选 `enabled: true|false` 显式开启/关闭继承的斜体，缺省兼容为 true |
 | `Font` | inline | `InlineNode` | 指定字体族的局部作用域；内层字体覆盖外层 |
 | `Section` | block | `Block` | 可选标题、章节结构和编号 |
-| `Showcase` | block | `Block` | 可选标题、可嵌套的展示容器 |
+| `Custom` | Page / Block / Inline（由定义选择；当前实现仅 Block） | `PageContent` / `Block` / `InlineNode` | 可命名的声明式自定义环境定义；scope 决定合法内容容器 |
 
 每种环境的 `props` 只保存其注册语义允许的实例级覆盖；环境模板与命名样式存于所选主题快照。文件可以定义基于内置 kind 的环境模板，但不能任意发明新的结构 kind。模板引用的 `baseKind` 必须与实例 `kind` 一致。
 
-- `kind` 来自内置注册表；模板不能声明新结构语义。遇到未知 kind 或必需能力时，若未知数据可可靠定位，则保留为不透明节点并进入标注清晰的只读安全预览；否则拒绝预览。安全预览不能宣称全文语义或排版正确，并禁用保存及会丢失未知内容的整篇复制/导出。注册表和 `requiredFeatures` 能力登记由本文档维护，020 负责其产品契约。
+- `kind` 来自内置注册表；模板不能声明新结构语义。旧 `showcase` 块环境仅在其字段符合当前 `Custom` 契约时规范化为 `custom`；若旧未知属性与新语义冲突，则保留该原始节点并进入只读安全预览，不丢字段也不强行套用新校验。遇到未知 kind 或必需能力时，若未知数据可可靠定位，则同样保留为不透明节点并进入标注清晰的只读安全预览；否则拒绝预览。安全预览不能宣称全文语义或排版正确，并禁用保存及会丢失未知内容的整篇复制/导出。注册表和 `requiredFeatures` 能力登记由本文档维护，020 负责其产品契约。
 
 首版 `requiredFeatures` 能力标识使用稳定的 `caret.` 命名空间；仅在文档实际依赖该能力时写入。首版登记表：
 
@@ -125,24 +151,42 @@ Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不�
 | `caret.env.font` | 行内字体族环境 |
 | `caret.env.italic` | 行内斜体环境 |
 | `caret.env.section` | 块级章节、层级计数和生成标签 |
-| `caret.env.showcase` | 块级可嵌套展示容器 |
+| `caret.env.custom` | 当前已实现的块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 只列该文档实际用到的非基础能力，去重并按字节序排序。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
 
+Page/Inline 自定义环境尚未实现；接入时应新增 scope 专属的必需能力标识，不能静默扩张当前 `caret.env.custom` 的块级语义。
+
 - 行内格式环境仅在 kind、状态、模板、属性和上下文兼容时压平或合并；拆分时原节点 ID 留在文档顺序靠前的片段，其余片段分配新 ID；合并时保留顺序靠前的 ID，撤销恢复原树与 ID。具体 Bold/Italic/Font 操作见[文字格式语义](text-formatting.md)。
-- `Section`、`Showcase` 是块级 EnvironmentNode，拥有块子项和可选独立标题；`Section` 另有编号规则，`Showcase` 是可嵌套的展示容器。行内环境没有标题。
+- `Section`、`Custom` 是块级 EnvironmentNode，拥有块子项和可选独立标题；`Section` 另有编号规则。`Custom` 是不绑定特定学术/排版语义的可嵌套容器，可通过 `props.displayName` 设置实例显示名，并由 `definitionId` 选择主题模板；不设置时使用通用名称。行内环境没有标题。
+- 一个 Section 的语义层级示例：
+
+```text
+Section(id, props, definitionId?)
+├── heading: Paragraph                 # 独立标题段；模板将其作为 Heading 子结构排版
+│   └── inlines: [Run, InlineEnvironment, ...]
+└── children: Vec<Block>               # 有序正文块
+    ├── Paragraph
+    ├── Section                         # 子 Section，形成层级编号
+    │   ├── heading: Paragraph
+    │   └── children: [Paragraph, ...]
+    └── Custom                          # 通用、可命名的自定义容器
+        └── children: [Paragraph, ...]
+```
+
+这里 `heading` 是 Section 标题的语义角色，不是一个额外持久化 `EnvironmentNode`；当前 DTO 用 `title: Option<Paragraph>` 保存它。编号是 Section 的派生标签，绘制在 heading 段落之前，不作为 Run 或标题文字存储。Heading 的默认视觉样式由 Section 模板提供；单个标题的局部覆盖由其 Paragraph 表达。普通 Paragraph 可带局部 `outlineLevel`，作为不拥有子树的独立大纲标题。
 - 当前环境背景高亮是由光标位置派生的视图叠加，不属于持久化模型；行为见[结构导航](structure-navigation.md)。
-- 章节编号由 `Section` 持有的编号定义生成，并作为标题 Paragraph 前的虚拟标签绘制。启用编号的 Section 构成编号层级与计数流：顶层共用文档级计数流；子级按最近的已编号 Section 祖先和显示层级计数。关闭编号的 Section 和 `Showcase` 对标签路径及计数流都透明，其已编号后代继续使用最近已编号祖先的计数流，因此不同未编号容器下同层后代按文档顺序接续序号。例如 Section `1` 下有未编号容器 A、B，A 内首个编号 Section 为 `1.1`，B 内首个编号 Section 为 `1.2`。关闭编号的节点本身不占序号。模板为编号提供默认显示开关与逐层格式，实例可覆盖；格式至少支持阿拉伯数字、小写/大写罗马数字和中文数字。模板可定制标签显示格式，但不能改变层级和计数关系。`title: None` 的 Section 不显示标签且不占自身序号，作为结构容器对后代编号透明；空标题 Paragraph 则可正常显示标签并占号。编号在视觉上类似行内文本，但不持久化为 Run、不进入标题文本或 UTF-8 偏移，因此插入、移动或删除同一计数流中的 Section 后可重新编号。解除 Section 时，先为整个操作范围快照当前显示标签，再原子提升子树并物化标签，结果不依赖遍历顺序。
+- 章节编号由 `Section` 持有的编号定义生成，并作为标题 Paragraph 前的虚拟标签绘制。启用编号的 Section 构成编号层级与计数流：顶层共用文档级计数流；子级按最近的已编号 Section 祖先和显示层级计数。关闭编号的 Section 和 `Custom` 对标签路径及计数流都透明，其已编号后代继续使用最近已编号祖先的计数流，因此不同未编号容器下同层后代按文档顺序接续序号。例如 Section `1` 下有未编号容器 A、B，A 内首个编号 Section 为 `1.1`，B 内首个编号 Section 为 `1.2`。关闭编号的节点本身不占序号。模板为编号提供默认显示开关与逐层格式，实例可覆盖；格式至少支持阿拉伯数字、小写/大写罗马数字和中文数字。模板可定制标签显示格式，但不能改变层级和计数关系。`title: None` 的 Section 不显示标签且不占自身序号，作为结构容器对后代编号透明；空标题 Paragraph 则可正常显示标签并占号。编号在视觉上类似行内文本，但不持久化为 Run、不进入标题文本或 UTF-8 偏移，因此插入、移动或删除同一计数流中的 Section 后可重新编号。解除 Section 时，先为整个操作范围快照当前显示标签，再原子提升子树并物化标签，结果不依赖遍历顺序。
 - `InlineMath` 是段落内的原子对象；`Equation` 与 `Align` 是块级公式节点，分别表示单行显示公式和多行对齐公式。公式内部位置使用 `MathPos`。自动分页只存在于布局结果。
 - `Title` 属于 `SingleLine` 内容块；`TitlePage` 是 `PageContent` 的一种 role，不是物理页或 `PageSection`。TitlePage 与 BodyPage 共用块模型，页级约束由分页布局兑现。模型接入前不得假设这些后续语义已经可编辑或可导航。
 - `PageSection` 只表示纸张、方向和边距等分页配置，与用户可见的 `EnvironmentNode` 分开，避免把页面分节和内容环境混为一谈。
 
 块级环境可折叠、可选中和通过结构命令整体删除，默认删除该节点、独立标题及子树；若要保留内容，提供明确的“解除环境”操作，按上述规则把标题和正文移回父级。行内格式环境按文字范围编辑和删除。两者都不能让普通文本删除隐式破坏外层结构。命令事务、失败原子性和后续撤销由 018 衔接。环境种类、scope、编号定义、嵌套约束、标题的位置映射及块移动后的 ID/位置映射按本文规则维护，实现任务补充具体 API 和测试。
 
-普通标题仍可以只是带 `outline_level` 的 Paragraph；需要显式拥有/删除一组子内容时才用块级 EnvironmentNode。环境标题中的自动编号和标题样式属于可独立编辑的属性，不是靠解析标题文本推断。
+普通标题仍可以只是带 `outlineLevel` 的 Paragraph；这是 Paragraph 的局部结构属性，不是与 `globalSettings` 并列的文档节点或设置对象。标题的默认视觉样式属于主题全局规则，必要时才由 Paragraph 局部格式覆盖。需要显式拥有/删除一组子内容时才用块级 EnvironmentNode。环境标题中的自动编号和标题样式属于可独立编辑的属性，不是靠解析标题文本推断。
 
 字符样式必须保留“未指定”和“显式关闭”的区别；具体解析规则见[文字格式语义](text-formatting.md)。
 

@@ -26,7 +26,7 @@ fn paragraph(text: &str, level: Option<u64>) -> Paragraph {
 fn nested_environment_stack_is_stable_id_ordered() {
     let mut document = Document::blank();
     let section_id = NodeId::generate();
-    let showcase_id = NodeId::generate();
+    let custom_id = NodeId::generate();
     let text = paragraph("inside", None);
     let text_id = text.id.clone();
     document.body = vec![Block::Environment(BlockEnvironment {
@@ -36,8 +36,8 @@ fn nested_environment_stack_is_stable_id_ordered() {
         props: BTreeMap::new(),
         title: None,
         children: vec![Block::Environment(BlockEnvironment {
-            id: showcase_id.clone(),
-            kind: BlockEnvironmentKind::Showcase,
+            id: custom_id.clone(),
+            kind: BlockEnvironmentKind::Custom,
             definition_id: None,
             props: BTreeMap::new(),
             title: None,
@@ -53,7 +53,7 @@ fn nested_environment_stack_is_stable_id_ordered() {
         offset_utf8: 3,
     });
     assert!(stack.iter().any(|entry| entry.id == section_id));
-    assert!(stack.iter().any(|entry| entry.id == showcase_id));
+    assert!(stack.iter().any(|entry| entry.id == custom_id));
     assert_eq!(
         stack.last().and_then(|entry| entry.paragraph_id.as_ref()),
         Some(&text_id)
@@ -104,7 +104,7 @@ fn structure_stack_orders_heading_and_nested_environment_by_document_tree() {
         Block::Paragraph(heading),
         Block::Environment(BlockEnvironment {
             id: nested_id.clone(),
-            kind: BlockEnvironmentKind::Showcase,
+            kind: BlockEnvironmentKind::Custom,
             definition_id: None,
             props: BTreeMap::new(),
             title: None,
