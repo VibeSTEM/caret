@@ -73,6 +73,49 @@ fn current_structure_state(session: &caret_engine::Session) -> Value {
     )
 }
 
+fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
+    let focus = &session.selection().focus;
+    let stack = session.structure_index().at(&StructurePosition {
+        paragraph_id: focus.paragraph_id.clone(),
+        offset_utf8: focus.offset,
+    });
+    stack
+        .iter()
+        .rev()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                caret_engine::StructureKind::Section | caret_engine::StructureKind::Showcase
+            )
+        })
+        .map(|entry| entry.id.clone())
+}
+
+fn structure_focus_rects(
+    environment_id: Option<&NodeId>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
+    let Some(environment_id) = environment_id else {
+        return Value::Array(Vec::new());
+    };
+    Value::Array(
+        snapshot
+            .environment_ranges
+            .iter()
+            .filter(|range| &range.environment_id == environment_id)
+            .map(|range| {
+                json!({
+                    "pageIndex": range.page_index,
+                    "x0Pt": range.x0_pt,
+                    "y0Pt": range.y0_pt,
+                    "x1Pt": range.x1_pt,
+                    "y1Pt": range.y1_pt,
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -109,6 +152,7 @@ impl DocumentViewRuntime {
             self.base_snapshot()?;
         }
         let composing = self.composition_preview_session.is_some();
+        let focus_environment_id = current_block_environment_id(&self.session);
         let snapshot = if composing {
             self.composition_snapshot
                 .as_ref()
@@ -139,6 +183,12 @@ impl DocumentViewRuntime {
             .insert(
                 "currentStructure".to_owned(),
                 current_structure_state(&self.session),
+            );
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "structureFocusRects".to_owned(),
+                structure_focus_rects(focus_environment_id.as_ref(), snapshot),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -239,6 +289,7 @@ impl DocumentViewRuntime {
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
         let current_structure = current_structure_state(&self.session);
+        let focus_environment_id = current_block_environment_id(&self.session);
         let snapshot = self.current_snapshot()?;
         let rectangles = snapshot
             .selection_geometry(&selection)
@@ -296,6 +347,7 @@ impl DocumentViewRuntime {
             "inputMethodContext": input_method_context,
             "commandLine": command_line,
             "currentStructure": current_structure,
+            "structureFocusRects": structure_focus_rects(focus_environment_id.as_ref(), snapshot),
             "caretGeometry": {
                 "pageIndex": caret.page_index,
                 "xPt": caret.x_pt,

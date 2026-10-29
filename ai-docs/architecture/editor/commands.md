@@ -35,6 +35,8 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 
 结构命令的完整行为和键位见[结构导航](structure-navigation.md)和[快捷键](../interface/keyboard-shortcuts.md)。
 
+注册表条目不代表命令已经可执行。当前结构导航命令 `struct.next`、`struct.prev`、`struct.exit` 已进入 Rust Session；段落标题、列表、块环境创建/嵌套/删除/提升等结构编辑仍由 010 实现，未接入前候选必须标记不可用。010 完成后同步更新可用状态和行为表，不让候选显示与 Rust 实际分发脱节。
+
 新增命令时同时写：它在公式内、表格内、命令模式里是否可用；它会不会改变 `rev`。没写明的命令在公式内先退出公式再执行。`struct.*` 和 `cmdline.*` 必须自己声明，不能靠这个默认。
 
 编辑器按键从 Qt 以 `EditorKey` 意图进入 Rust Session；Session 是命令输入、IME、选区和文档结构状态的唯一权威。按键分发目录、行为优先级、Qt 焦点作用域和扩展规则见[键盘路由](../interface/keyboard-routing.md)。

@@ -217,6 +217,12 @@ bool parse_current_structure(const QJsonValue& value, QVariantList& current_stru
     return parse_current_structure_impl(value, current_structure, error);
 }
 
+bool parse_structure_focus_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                 QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("structure_focus"),
+                                     rectangles, error);
+}
+
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot) {
     return parse(snapshot_json.toUtf8(), parsed_snapshot, error, previous_snapshot);
@@ -518,6 +524,11 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                                  parsed_current_structure, error)) {
         return false;
     }
+    QVariantList parsed_structure_focus_rects;
+    if (!parse_structure_focus_rects(root.value(QStringLiteral("structureFocusRects")),
+                                     parsed_sizes, parsed_structure_focus_rects, error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
@@ -528,6 +539,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.composition_rects = std::move(parsed_composition_rects);
     parsed_snapshot.command_line = std::move(parsed_command_line);
     parsed_snapshot.current_structure = std::move(parsed_current_structure);
+    parsed_snapshot.structure_focus_rects = std::move(parsed_structure_focus_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {

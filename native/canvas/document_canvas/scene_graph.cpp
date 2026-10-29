@@ -117,17 +117,34 @@ class SelectionGroupNode final : public QSGNode {
     QVector<QSGSimpleRectNode*> rectangles;
 };
 
+class StructureFocusGroupNode final : public QSGNode {
+  public:
+    void clearRectangles() {
+        while (firstChild() != nullptr) {
+            QSGNode* child = firstChild();
+            removeChildNode(child);
+            delete child;
+        }
+        rectangles.clear();
+    }
+
+    QVector<QSGSimpleRectNode*> rectangles;
+};
+
 class CanvasRootNode final : public QSGNode {
   public:
     int page_count = -1;
     PageBackgroundGroupNode* page_background_group = nullptr;
     GlyphGroupNode* glyph_group = nullptr;
     SelectionGroupNode* selection_group = nullptr;
+    StructureFocusGroupNode* structure_focus_group = nullptr;
     QSGSimpleRectNode* caret_node = nullptr;
     quint64 glyph_revision = std::numeric_limits<quint64>::max();
     quint64 glyph_geometry_revision = std::numeric_limits<quint64>::max();
     quint64 selection_revision = std::numeric_limits<quint64>::max();
     quint64 selection_geometry_revision = std::numeric_limits<quint64>::max();
+    quint64 structure_focus_revision = std::numeric_limits<quint64>::max();
+    quint64 structure_focus_geometry_revision = std::numeric_limits<quint64>::max();
 };
 
 void update_page_backgrounds(PageBackgroundGroupNode* group, int page_count, int first_page,
@@ -407,11 +424,14 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
             root != nullptr ? root->page_background_group : nullptr;
         GlyphGroupNode* glyph_group = root != nullptr ? root->glyph_group : nullptr;
         SelectionGroupNode* selection_group = root != nullptr ? root->selection_group : nullptr;
+        StructureFocusGroupNode* structure_focus_group =
+            root != nullptr ? root->structure_focus_group : nullptr;
         QSGSimpleRectNode* caret_node = root != nullptr ? root->caret_node : nullptr;
         if (root != nullptr) {
             root->removeChildNode(page_background_group);
             root->removeChildNode(glyph_group);
             root->removeChildNode(selection_group);
+            root->removeChildNode(structure_focus_group);
             root->removeChildNode(caret_node);
         }
         delete root;
@@ -422,10 +442,14 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         root->selection_group =
             selection_group != nullptr ? selection_group : new SelectionGroupNode();
         root->glyph_group = glyph_group != nullptr ? glyph_group : new GlyphGroupNode();
+        root->structure_focus_group = structure_focus_group != nullptr
+                                          ? structure_focus_group
+                                          : new StructureFocusGroupNode();
         root->caret_node = caret_node != nullptr ? caret_node : new QSGSimpleRectNode();
         root->appendChildNode(root->page_background_group);
         root->appendChildNode(root->selection_group);
         root->appendChildNode(root->glyph_group);
+        root->appendChildNode(root->structure_focus_group);
         root->appendChildNode(root->caret_node);
         root->page_count = page_count;
     }
@@ -464,6 +488,55 @@ QSGNode* DocumentCanvas::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
     } else {
         for (QSGSimpleRectNode* rectangle : root->selection_group->rectangles) {
             rectangle->setColor(m_selection_color);
+        }
+    }
+    if (root->structure_focus_revision != m_structure_focus_revision ||
+        root->structure_focus_geometry_revision != m_glyph_geometry_revision) {
+        root->structure_focus_group->clearRectangles();
+        const qreal border_width = static_cast<qreal>(m_structure_focus_border_width_px);
+        if (border_width > 0.0 && m_structure_focus_color.isValid()) {
+            for (const QVariant& value : m_structure_focus_rects) {
+                const QVariantMap focus = value.toMap();
+                const int page_index = focus.value(QStringLiteral("pageIndex")).toInt();
+                if (page_index < m_first_visible_page ||
+                    (m_page_end_visible >= 0 && page_index >= m_page_end_visible)) {
+                    continue;
+                }
+                const QPointF top_left = documentToContent(
+                    page_index, QPointF(focus.value(QStringLiteral("x0Pt")).toReal(),
+                                        focus.value(QStringLiteral("y0Pt")).toReal()));
+                const QPointF bottom_right = documentToContent(
+                    page_index, QPointF(focus.value(QStringLiteral("x1Pt")).toReal(),
+                                        focus.value(QStringLiteral("y1Pt")).toReal()));
+                const QRectF rect =
+                    QRectF(top_left, bottom_right).normalized().intersected(pageRect(page_index));
+                if (rect.isEmpty()) {
+                    continue;
+                }
+                const qreal edge =
+                    std::min({border_width, rect.width() / 2.0, rect.height() / 2.0});
+                const QRectF edges[] = {
+                    QRectF(rect.left(), rect.top(), rect.width(), edge),
+                    QRectF(rect.left(), rect.bottom() - edge, rect.width(), edge),
+                    QRectF(rect.left(), rect.top() + edge, edge, rect.height() - 2.0 * edge),
+                    QRectF(rect.right() - edge, rect.top() + edge, edge,
+                           rect.height() - 2.0 * edge),
+                };
+                for (const QRectF& edge_rect : edges) {
+                    if (edge_rect.isEmpty()) {
+                        continue;
+                    }
+                    auto* node = new QSGSimpleRectNode(edge_rect, m_structure_focus_color);
+                    root->structure_focus_group->rectangles.push_back(node);
+                    root->structure_focus_group->appendChildNode(node);
+                }
+            }
+        }
+        root->structure_focus_revision = m_structure_focus_revision;
+        root->structure_focus_geometry_revision = m_glyph_geometry_revision;
+    } else {
+        for (QSGSimpleRectNode* rectangle : root->structure_focus_group->rectangles) {
+            rectangle->setColor(m_structure_focus_color);
         }
     }
     auto* glyph_group = root->glyph_group;
