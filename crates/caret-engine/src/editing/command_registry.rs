@@ -155,6 +155,12 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         available: true,
     },
     RegisteredCandidate {
+        alias: "\\underline",
+        command_id: "text.format.underline",
+        label: "Underline",
+        available: true,
+    },
+    RegisteredCandidate {
         alias: "\\font",
         command_id: "text.format.font",
         label: "Font family",

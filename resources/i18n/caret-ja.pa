@@ -606,3 +606,8 @@ message_117:
   src: Use language: %1
   tr: 言語を使用：%1
   st: finished
+
+message_118:
+  src: Underline
+  tr: 下線
+  st: finished

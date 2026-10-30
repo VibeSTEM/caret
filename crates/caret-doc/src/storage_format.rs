@@ -23,6 +23,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
+    "caret.text.underline",
     "caret.theme.snapshot",
 ];
 
@@ -78,6 +79,16 @@ impl CdocFile {
         self.document.validate()?;
         validate_media(&self.media)?;
         validate_feature_list(&self.required_features)?;
+        let declared_features = self
+            .required_features
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        if self.document.required_features().iter().any(|feature| {
+            feature == "caret.text.underline" && !declared_features.contains(feature.as_str())
+        }) {
+            return Err(DocumentError::ReadOnlyPreview);
+        }
         if self
             .required_features
             .iter()
@@ -105,9 +116,17 @@ impl CdocFile {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, DocumentError> {
-        self.validate()?;
+        validate_feature_list(&self.required_features)?;
+        if self
+            .required_features
+            .iter()
+            .any(|feature| !KNOWN_FEATURES.contains(&feature.as_str()))
+        {
+            return Err(DocumentError::ReadOnlyPreview);
+        }
         let mut candidate = self.clone();
         candidate.refresh_required_features();
+        candidate.validate()?;
         serde_json::to_vec_pretty(&CdocFileRaw::from(&candidate))
             .map_err(|error| DocumentError::Serialization(error.to_string()))
     }
@@ -200,6 +219,7 @@ impl ReadOnlyPreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewReason {
     UnsupportedRequiredFeature(String),
+    MissingRequiredFeature(String),
     UnsupportedNodeKind,
     UnsupportedThemeVersion(u32),
 }
@@ -288,6 +308,19 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         .filter(|feature| !KNOWN_FEATURES.contains(&feature.as_str()))
         .map(|feature| PreviewReason::UnsupportedRequiredFeature(feature.clone()))
         .collect();
+    let declared_features = features
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    for feature in file.document.required_features() {
+        if feature == "caret.text.underline" && !declared_features.contains(feature.as_str()) {
+            reasons.push(PreviewReason::MissingRequiredFeature(feature.clone()));
+        } else if !KNOWN_FEATURES.contains(&feature.as_str())
+            && !declared_features.contains(feature.as_str())
+        {
+            reasons.push(PreviewReason::UnsupportedRequiredFeature(feature.clone()));
+        }
+    }
     if contains_opaque_block(&file.document.body) {
         reasons.push(PreviewReason::UnsupportedNodeKind);
     }

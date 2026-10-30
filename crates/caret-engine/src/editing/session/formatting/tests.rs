@@ -71,6 +71,230 @@ fn assert_all_format(
     );
 }
 
+fn assert_all_underline(session: &Session, paragraph_id: &NodeId, expected: bool) {
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let paragraph = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    let spans = format_spans(&paragraph.inlines)
+        .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
+    assert!(!spans.is_empty());
+    let text_spans = spans
+        .iter()
+        .filter_map(|span| span.underline)
+        .collect::<Vec<_>>();
+    assert!(!text_spans.is_empty());
+    assert!(text_spans.iter().all(|value| *value == expected));
+    assert!(paragraph.inlines.iter().all(|node| {
+        match node {
+            InlineNode::Run(run) => {
+                run.props
+                    .get("underline")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    == expected
+            }
+            InlineNode::Environment(environment) => {
+                environment.children.iter().all(|child| match child {
+                    InlineNode::Run(run) => {
+                        run.props
+                            .get("underline")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                            == expected
+                    }
+                    _ => true,
+                })
+            }
+            _ => true,
+        }
+    }));
+}
+
+#[test]
+fn underline_toggle_ignores_soft_breaks_when_deciding_mixed_selection_state() {
+    let mut model = paragraph("a");
+    let InlineNode::Run(first_run) = &mut model.inlines[0] else {
+        unreachable!();
+    };
+    first_run
+        .props
+        .insert("underline".to_owned(), Value::Bool(true));
+    model
+        .inlines
+        .push(InlineNode::SoftBreak(caret_doc::SoftBreak::default()));
+    let mut second = run("b");
+    let InlineNode::Run(second_run) = &mut second else {
+        unreachable!();
+    };
+    second_run
+        .props
+        .insert("underline".to_owned(), Value::Bool(true));
+    model.inlines.push(second);
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let start = Pos {
+        offset: 0,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let end = Pos {
+        paragraph_id: paragraph_id.clone(),
+        offset: 3,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+
+    session
+        .run(Command::ToggleRunUnderline)
+        .unwrap_or_else(|error| panic!("underline removal across soft break failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, false);
+    let paragraph = session
+        .paragraph_for(&Pos {
+            paragraph_id: paragraph_id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+            ..session.selection.focus.clone()
+        })
+        .unwrap_or_else(|error| panic!("formatted paragraph lookup failed: {error}"));
+    assert!(matches!(
+        paragraph.inlines.get(1),
+        Some(InlineNode::SoftBreak(_))
+    ));
+}
+
+#[test]
+fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() {
+    let mut session = session_with_paragraphs(vec![paragraph("alpha")]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 5,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+
+    let effect = session
+        .run(Command::ToggleRunUnderline)
+        .unwrap_or_else(|error| panic!("underline command failed: {error}"));
+    assert!(effect.document_changed);
+    assert_eq!(
+        session
+            .selected_text()
+            .unwrap_or_else(|error| panic!("selected text query failed: {error}")),
+        "alpha"
+    );
+    assert_all_underline(&session, &paragraph_id, true);
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, false);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, true);
+}
+
+#[test]
+fn underline_command_unifies_mixed_selection_and_supports_pending_typing() {
+    let mut first = paragraph("on");
+    let InlineNode::Run(run) = &mut first.inlines[0] else {
+        unreachable!();
+    };
+    run.props.insert("underline".to_owned(), Value::Bool(true));
+    let first_id = first.id.clone();
+    let second = paragraph("off");
+    let second_id = second.id.clone();
+    let mut session = session_with_paragraphs(vec![first, second]);
+    let anchor = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let focus = Pos {
+        story: StoryId::Body,
+        paragraph_id: second_id.clone(),
+        offset: 3,
+        affinity: Affinity::Upstream,
+    };
+    select(&mut session, anchor, focus);
+    session
+        .run(Command::ToggleRunUnderline)
+        .unwrap_or_else(|error| panic!("mixed underline command failed: {error}"));
+    assert_all_underline(&session, &first_id, true);
+    assert_all_underline(&session, &second_id, true);
+
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    session
+        .run(Command::ToggleRunUnderline)
+        .unwrap_or_else(|error| panic!("pending underline command failed: {error}"));
+    session
+        .run(Command::InsertText("typed".to_owned()))
+        .unwrap_or_else(|error| panic!("typing with pending underline failed: {error}"));
+    assert_all_underline(&session, &session.selection.focus.paragraph_id, true);
+}
+
+#[test]
+fn pending_underline_survives_undo_redo_and_ime_commit_without_mutating_during_preedit() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    session
+        .run(Command::ToggleRunUnderline)
+        .unwrap_or_else(|error| panic!("pending underline toggle failed: {error}"));
+    assert_eq!(session.pending_inline_style.underline(), Some(true));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("pending underline undo failed: {error}"));
+    assert_eq!(session.pending_inline_style.underline(), None);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("pending underline redo failed: {error}"));
+    assert_eq!(session.pending_inline_style.underline(), Some(true));
+
+    session
+        .run(Command::UpdateComposition {
+            id: 81,
+            preedit: "ni".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+    assert_eq!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::CompositionPending)
+    );
+    assert_eq!(session.pending_inline_style.underline(), Some(true));
+
+    let (preview, _) = session
+        .composition_preview_with_range(2)
+        .unwrap_or_else(|error| panic!("underline composition preview failed: {error}"));
+    let preview_paragraph = preview
+        .paragraph_for(&preview.selection.focus)
+        .unwrap_or_else(|error| panic!("preview paragraph lookup failed: {error}"));
+    assert!(
+        format_spans(&preview_paragraph.inlines)
+            .unwrap_or_else(|error| panic!("preview formatting query failed: {error}"))
+            .iter()
+            .any(|span| span.underline == Some(true))
+    );
+
+    session
+        .run(Command::CommitComposition {
+            id: 81,
+            text: "你".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("underline composition commit failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, true);
+}
+
 #[test]
 fn selection_format_preserves_text_and_undo_restores_the_original_format_tree() {
     let mut session = session_with_paragraphs(vec![paragraph("alpha")]);

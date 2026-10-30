@@ -17,6 +17,7 @@ pub struct PageGlyphSnapshot {
     pub font_generation: u64,
     pub page_index: usize,
     pub runs: Vec<PageGlyphRun>,
+    pub decorations: Vec<PageGlyphDecoration>,
 }
 
 /// 同一页的唯一栅格图片；同字形重复使用时只传输一份像素数据。
@@ -49,6 +50,7 @@ pub struct RasterizedPageGlyphs {
     pub page_index: usize,
     pub images: Vec<PageGlyphImage>,
     pub placements: Vec<PageGlyphPlacement>,
+    pub decorations: Vec<PageGlyphDecoration>,
 }
 
 /// 持有有界 glyph 缓存的页面栅格化入口。
@@ -78,6 +80,14 @@ impl PageGlyphRasterizer {
         }
         let mut images = Vec::new();
         let mut placements = Vec::new();
+        let decorations = page
+            .decorations
+            .iter()
+            .map(|decoration| PageGlyphDecoration {
+                color: Some(decoration.color.unwrap_or(default_foreground)),
+                ..*decoration
+            })
+            .collect();
         let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
         for run in &page.runs {
             let pixels_per_em = run.font_size_pt * pixels_per_pt;
@@ -126,6 +136,7 @@ impl PageGlyphRasterizer {
             page_index: page.page_index,
             images,
             placements,
+            decorations,
         })
     }
 }
@@ -170,6 +181,17 @@ pub struct PageGlyph {
     pub x_pt: f64,
     /// 字形原点的基线 y，包含该 glyph 相对 run baseline 的局部偏移。
     pub baseline_y_pt: f64,
+}
+
+/// 页面中的字符装饰矩形，坐标使用页面局部 pt。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageGlyphDecoration {
+    pub x_pt: f64,
+    pub y_pt: f64,
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub color: Option<[u8; 4]>,
+    pub line_clip_y_pt: Option<[f64; 2]>,
 }
 
 /// 页面或字形来源无效时拒绝整份页面输出，不发布部分字形。
@@ -220,6 +242,7 @@ impl DocumentLayoutSnapshot {
             return Err(PageGlyphError::InvalidLineGeometry);
         }
         let mut runs = Vec::new();
+        let mut decorations = Vec::new();
         for fragment in &page.layout.fragments {
             let paragraph = self
                 .paragraph_by_id(&fragment.paragraph_id)
@@ -272,6 +295,29 @@ impl DocumentLayoutSnapshot {
                     .layout
                     .get(line_index)
                     .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
+                    let x_pt = page.margin_left_pt + bounds.x0;
+                    let y_pt = page_line_top_pt + bounds.y0;
+                    let width_pt = bounds.x1 - bounds.x0;
+                    let height_pt = bounds.y1 - bounds.y0;
+                    if !x_pt.is_finite()
+                        || !y_pt.is_finite()
+                        || !width_pt.is_finite()
+                        || !height_pt.is_finite()
+                        || width_pt <= 0.0
+                        || height_pt <= 0.0
+                    {
+                        return Err(PageGlyphError::InvalidLineGeometry);
+                    }
+                    decorations.push(PageGlyphDecoration {
+                        x_pt,
+                        y_pt,
+                        width_pt,
+                        height_pt,
+                        color,
+                        line_clip_y_pt,
+                    });
+                }
                 for item in line.items() {
                     let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
                         return Err(PageGlyphError::UnsupportedInlineBox);
@@ -332,6 +378,7 @@ impl DocumentLayoutSnapshot {
             font_generation: self.font_generation,
             page_index,
             runs,
+            decorations,
         })
     }
 }

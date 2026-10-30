@@ -191,7 +191,7 @@ impl ParagraphLayouter {
         let mut offset = 0usize;
         for span in &spans {
             let end = offset + span.text.len();
-            span_ranges.push((offset..end, &span.style));
+            span_ranges.push((offset..end, &span.style, span.underline));
             let style_index = *space_style_indices.entry(&span.style).or_insert_with(|| {
                 let index = space_styles.len();
                 space_styles.push(&span.style);
@@ -201,7 +201,7 @@ impl ParagraphLayouter {
             offset = end;
         }
         let emoji_presentation = CodePointSetDataBorrowed::new::<props::EmojiPresentation>();
-        let mut style_ranges: Vec<(Range<usize>, ShapingStyle, Script, bool)> = Vec::new();
+        let mut style_ranges: Vec<(Range<usize>, ShapingStyle, Script, bool, bool)> = Vec::new();
         // 普通空格只保留每种塑形样式的一个测量样本；字距规则应用到连续样式区间，
         // 避免每个空格都创建一个 Parley 样式 run。
         let mut space_samples: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
@@ -221,7 +221,7 @@ impl ParagraphLayouter {
             }
             while span_ranges
                 .get(span_index)
-                .is_some_and(|(span_range, _)| span_range.end <= range.start)
+                .is_some_and(|(span_range, _, _)| span_range.end <= range.start)
             {
                 span_index += 1;
             }
@@ -240,7 +240,7 @@ impl ParagraphLayouter {
             };
             let code_role = span_ranges
                 .get(span_index)
-                .is_some_and(|(_, style)| style.font_role == crate::shaping::FontRole::Code);
+                .is_some_and(|(_, style, _)| style.font_role == crate::shaping::FontRole::Code);
             // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
             // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
             if !code_role
@@ -285,22 +285,28 @@ impl ParagraphLayouter {
                 }
             }
             let mut fragment_index = span_index;
-            while let Some((span_range, style)) = span_ranges.get(fragment_index) {
+            while let Some((span_range, style, underline)) = span_ranges.get(fragment_index) {
                 if span_range.start >= range.end {
                     break;
                 }
                 let fragment = span_range.start.max(range.start)..span_range.end.min(range.end);
                 if fragment.start < fragment.end {
-                    if let Some((previous, previous_style, previous_script, previous_emoji)) =
-                        style_ranges.last_mut()
+                    if let Some((
+                        previous,
+                        previous_style,
+                        previous_script,
+                        previous_emoji,
+                        previous_underline,
+                    )) = style_ranges.last_mut()
                         && previous.end == fragment.start
                         && *previous_style == **style
                         && *previous_script == script
                         && *previous_emoji == emoji
+                        && *previous_underline == *underline
                     {
                         previous.end = fragment.end;
                     } else {
-                        style_ranges.push((fragment, (*style).clone(), script, emoji));
+                        style_ranges.push((fragment, (*style).clone(), script, emoji, *underline));
                     }
                 }
                 if span_range.end <= range.end {
@@ -313,7 +319,7 @@ impl ParagraphLayouter {
         }
         let mut family_names_by_key =
             std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
-        for (_, style, script, emoji) in &style_ranges {
+        for (_, style, script, emoji, _) in &style_ranges {
             let key = (style.clone(), *script, *emoji);
             let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
                 let candidates = settings.font_preferences().family_candidates(
@@ -465,7 +471,7 @@ impl ParagraphLayouter {
 struct ParleyLayoutInput<'a> {
     text: &'a str,
     base_style: &'a ShapingStyle,
-    style_ranges: &'a [(Range<usize>, ShapingStyle, Script, bool)],
+    style_ranges: &'a [(Range<usize>, ShapingStyle, Script, bool, bool)],
     family_names_by_key: &'a std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
     word_spacing_ranges: &'a [(Range<usize>, SpaceStyleKey)],
     em_space_ranges: &'a [(Range<usize>, SpaceStyleKey)],
@@ -502,7 +508,7 @@ fn build_parley_layout(
         WhiteSpaceCollapse::BreakSpaces,
     ));
 
-    for (range, style, script, emoji) in style_ranges {
+    for (range, style, script, emoji, underline) in style_ranges {
         let key = (style.clone(), *script, *emoji);
         let family_names = family_names_by_key
             .get(&key)
@@ -537,6 +543,7 @@ fn build_parley_layout(
             }),
             range.clone(),
         );
+        builder.push(StyleProperty::Underline(*underline), range.clone());
         builder.push(
             StyleProperty::Locale(
                 style

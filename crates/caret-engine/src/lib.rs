@@ -27,6 +27,6 @@ pub use layout_view::{
     ParagraphLayoutView, StoryView,
 };
 pub use page_glyphs::{
-    PageGlyph, PageGlyphError, PageGlyphImage, PageGlyphPlacement, PageGlyphRasterizer,
-    PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
+    PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
+    PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
 };

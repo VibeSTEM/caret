@@ -66,6 +66,7 @@
 | 2026-10-30 | `cargo test --locked --offline -p caret-tests --test document first_line_indent_round_trips_through_cdoc_storage` | 新增首行缩进在 `.cdoc` 编码、重新打开后仍保留 | 通过；断言保存 JSON 和重新打开后的文档均保留 `firstLineIndentChars: 2`。 |
 | 2026-10-30 | `cargo test --locked --offline -p caret-doc code_font_family_default_marker_is_valid_and_empty_family_is_rejected`、`cargo test --locked --offline -p caret-doc default_code_font_family_is_persisted_and_restored`、`cargo test --locked --offline -p caret-app command_line_snapshot_projects_the_document_code_font` | `defaultCodeFontFamily` 默认标记、显式值及系统字体标志通过 Rust 快照投影给 QML | 三项定向测试通过；运行时字体族查询由 Qt `QFontDatabase::FixedFont` 负责，平台映射和限制见[映射目录](../architecture/editor/font-defaults/README.md)。 |
 | 2026-10-30 | `cargo test --locked --offline -p caret-layout`、`cargo clippy --locked --offline -p caret-layout --all-targets -- -D warnings`、`cargo fmt --all`、`git diff --check` | Rust 代码字体角色通过 Parley 布局请求显式族/默认 Monospace；代码空格保持单元宽度，正文仍按既定规则校准 | caret-layout 96 项测试通过，Clippy、格式化和差异检查通过。新增布局级测试使用平台 Monospace 通用族排版 `i W`，确认字母与空格 advance 相等；font-role 继承、显式代码族优先级及 GenericFamily 顺序也有测试。代码块节点本身尚未实现，因此没有实际文档代码块端到端验收。 |
+| 2026-10-30 | `cargo test --locked --offline --workspace`、`cargo lint --check`、`cargo format --check`、`git diff --check` | 下划线序列化、跨软换行切换、Pending/IME、长文档几何精度和行框不变性符合语义；字体弹窗 QML 通过构建、加载和格式检查 | workspace 测试通过；native CTest 8/8 通过（含 `Qml.ShellLoad`、`Qml.FormatCheck`）；跨语言 lint、格式与差异检查通过。分领域评审发现并修复隐藏字体候选测量和关闭项翻译问题。 |
 
 ## 风险与回退
 
@@ -90,6 +91,9 @@
 - 2026-10-30：将 `\font` 接入本机字体目录候选。命令模式接受 `\font` 后切换到 Unicode 字体族查询模式；Rust 持有候选与 UTF-8 光标，QML 快照额外提供 UTF-16 光标索引。动态字体候选不进入 QML 的隐藏全量文本测量器，候选列表继续使用虚拟化显示。
 - 2026-10-30：空格命令采用 `\singlecharspace` 与 `\doublecharspace`，避免 `\onespace` / `\twospace` 被误解为空格个数；正文 Tab 等同于插入两个字符宽空格。普通 U+0020 的目标宽度为半个 em，并在塑形布局中按字体、脚本和相关样式校准；显式字符宽空格按一个 em 校准。单段 100k 密集空格基线见上表；百万字多段布局及分配量仍待测量。
 - 2026-10-30：独立 final review 首轮发现首行缩进持久字段缺少 `.cdoc` 往返行为测试；新增 `first_line_indent_round_trips_through_cdoc_storage`，定向测试通过，Sol medium 复核 approve。Qt reset 后旧 IME commit 的到达顺序属于未确认平台限制，未用可能吞掉有效输入的“忽略下一次 commit”闩锁规避。Reviewer 指出首次校准样式会额外构建一次 Parley layout，字体候选查询会扫描/克隆匹配项并序列化候选快照；单段 100k 密集空格未见相对本机已有基线的显著差异，但没有未修改代码的对照或分配统计，百万字文档与大字体目录成本仍需后续测量。
+- 2026-10-30：实现单线下划线直接属性 `Run.props.underline`、`\underline` 选区/待输入命令、Parley 字形度量几何和独立 QSG 装饰层；文档能力标记为 `caret.text.underline`。跨软换行选择只按文字 spans 决定切换状态；存储序列化先在副本刷新能力标记，拒绝未知能力与未知属性值。独立审阅发现并修复软换行误参与格式状态、首次编辑后保存缺能力标记和长文档几何 `f32` 精度问题。当前实现不改变行框；实现范围和约束以[文字格式语义](../architecture/editor/text-formatting.md#颜色与装饰)为准。
+- 2026-10-30：将普通命令补全和 `\font` / `\defaultfont` 字体选择拆成独立 QML 弹窗，共用 `CommandPopupFrame` 的定位、外框和内边距；字体弹窗用 360 逻辑像素估计宽度、最多显示 8 行并由列表滚动，避免逐个测量系统字体。隐藏分支不创建候选测量委托；字体选择状态和层级仍由 Rust 快照提供。Terra medium 评审发现并修复字体目录隐藏测量开销和关闭项英文未翻译问题。`cargo lint --check`、`cargo test --locked --offline --workspace`、`cargo format --check`、`git diff --check` 均通过；QML 窗口尺寸尚未做人工交互验收。
+- 2026-10-30：Sol medium 最终只读评审检查完整工作树 diff，通过且无 P1/P2。记录两项后续验证限制：字体弹窗尚未实机验收边缘定位/滚动/鼠标行为；underline 装饰缺少跨 FFI/Qt 的像素端到端断言。当前无性能提升声明；同段 underline 选区仍扫描 Story，大文档成本待测量。
 
 ## 完成摘要
 

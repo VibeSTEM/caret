@@ -441,16 +441,19 @@ fn language_tailoring_ignores_same_language_run_boundaries() {
     let flat = [StyledSpan {
         text,
         style: style.clone(),
+        underline: false,
     }];
     let split_at = 12;
     let split = [
         StyledSpan {
             text: &text[..split_at],
             style: style.clone(),
+            underline: false,
         },
         StyledSpan {
             text: &text[split_at..],
             style,
+            underline: false,
         },
     ];
 
@@ -467,16 +470,19 @@ fn language_tailoring_ignores_same_language_run_boundaries() {
     let flat_chinese = [StyledSpan {
         text: chinese_text,
         style: chinese_style.clone(),
+        underline: false,
     }];
     let split_at = "你好".len();
     let split_chinese = [
         StyledSpan {
             text: &chinese_text[..split_at],
             style: chinese_style.clone(),
+            underline: false,
         },
         StyledSpan {
             text: &chinese_text[split_at..],
             style: chinese_style,
+            underline: false,
         },
     ];
     assert_eq!(
@@ -1169,6 +1175,58 @@ fn composition_underline_stays_at_same_height_when_chinese_joins_line() {
     }
     // 单位为 pt：同一字体的预编辑字形不应因同行已有中文而改变下划线高度。
     assert!((underline_y[0] - underline_y[1]).abs() < 0.001);
+}
+
+#[test]
+fn persistent_underline_follows_shaped_runs_across_soft_wrap_without_changing_line_boxes() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let mut model = paragraph("underline中文underline", Some("zh-Hans"));
+    let plain_model = model.clone();
+    let InlineNode::Run(run) = &mut model.inlines[0] else {
+        unreachable!();
+    };
+    run.props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let (_, layout) = layouter
+        .layout(
+            &mut catalog,
+            &model,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(55.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    assert!(layout.paragraph.lines.len() > 1);
+    let mut rectangles = Vec::new();
+    for line_index in 0..layout.layout.len() {
+        rectangles.extend(layout.underline_geometry_for_line(line_index));
+    }
+    assert!(rectangles.len() > 1);
+    assert!(
+        rectangles
+            .iter()
+            .all(|(bounds, _)| bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0)
+    );
+    assert!(rectangles.iter().all(|(bounds, _)| {
+        bounds.y0 >= 0.0 && bounds.y0 <= f64::from(layout.paragraph.total_height_pt)
+    }));
+
+    let (_, plain_layout) = layouter
+        .layout(
+            &mut catalog,
+            &plain_model,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(55.0),
+        )
+        .unwrap_or_else(|error| panic!("plain Parley layout failed: {error}"));
+    assert_eq!(layout.paragraph.lines, plain_layout.paragraph.lines);
+    assert_eq!(
+        layout.paragraph.total_height_pt,
+        plain_layout.paragraph.total_height_pt
+    );
 }
 
 #[test]

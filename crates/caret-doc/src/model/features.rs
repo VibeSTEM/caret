@@ -116,6 +116,16 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
             if run.language.is_some() {
                 features.insert("caret.text.language-tags".to_owned());
             }
+            if let Some(value) = run.props.get("underline") {
+                features.insert(
+                    if value.is_boolean() {
+                        "caret.text.underline"
+                    } else {
+                        "caret.text.underline.extended"
+                    }
+                    .to_owned(),
+                );
+            }
         }
         InlineNode::Environment(environment) => {
             features.insert(environment.kind.required_feature().to_owned());

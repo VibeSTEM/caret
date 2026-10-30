@@ -56,6 +56,7 @@ impl ShapingStyle {
 pub(crate) struct StyledSpan<'a> {
     pub(crate) text: &'a str,
     pub(crate) style: ShapingStyle,
+    pub(crate) underline: bool,
 }
 
 pub(crate) fn paragraph_style_spans<'a>(
@@ -183,6 +184,11 @@ fn append_inlines<'a>(
                     output.push(StyledSpan {
                         text: &run.text,
                         style: run_style,
+                        underline: run
+                            .props
+                            .get("underline")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
                     });
                 }
             }
@@ -218,10 +224,12 @@ fn append_inlines<'a>(
             InlineNode::SoftBreak(_) => output.push(StyledSpan {
                 text: "\n",
                 style: style.clone(),
+                underline: false,
             }),
             InlineNode::Opaque(_) => output.push(StyledSpan {
                 text: "\u{fffc}",
                 style: style.clone(),
+                underline: false,
             }),
         }
     }
@@ -317,6 +325,7 @@ mod tests {
         let spans = [StyledSpan {
             text: "e",
             style: ShapingStyle::new(1200),
+            underline: false,
         }];
 
         assert_eq!(

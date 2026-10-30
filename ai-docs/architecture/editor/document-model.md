@@ -29,7 +29,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。其 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将它们投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`；下划线等字符装饰是 Run 直接属性。下划线字段、能力和样式回退规则以[文字格式语义](text-formatting.md#颜色与装饰)为准。环境 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -164,6 +164,7 @@ Page scope 定义基于 `BodyPage` 或 `TitlePage` 内置角色的 PageContent �
 | `caret.env.custom` | 当前已实现的块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
+| `caret.text.underline` | Run 的显式下划线属性，包括显式开启和关闭 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 只列该文档实际用到的非基础能力，去重并按字节序排序。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。

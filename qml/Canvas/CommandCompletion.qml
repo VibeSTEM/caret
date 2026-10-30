@@ -14,6 +14,7 @@ Item {
     readonly property int minimumCommandFontPixelSize: 1
     readonly property int commandFontSizeStepCentipoints: 100
     readonly property bool requestedCodeFontAvailable: PlatformFonts.containsFamily(root.commandLine.codeFontFamily || "")
+    readonly property bool fontPickerMode: ["fontFamily", "defaultFontTarget", "defaultFontScope", "defaultFontLanguage", "defaultFontFamily"].includes(root.commandLine.mode)
 
     readonly property var caretPoint: {
         const revision = geometryRevision;
@@ -84,9 +85,7 @@ Item {
                 id: queryText
                 height: queryScroll.height
                 color: Theme.colorText
-                font.family: root.commandLine.codeFontFamilyUsesSystemDefault === true || !root.requestedCodeFontAvailable
-                             ? PlatformFonts.fixedFamily
-                             : (root.commandLine.codeFontFamily || PlatformFonts.fixedFamily)
+                font.family: root.commandLine.codeFontFamilyUsesSystemDefault === true || !root.requestedCodeFontAvailable ? PlatformFonts.fixedFamily : (root.commandLine.codeFontFamily || PlatformFonts.fixedFamily)
                 font.pixelSize: root.commandFontPixelSize
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.NoWrap
@@ -140,5 +139,16 @@ Item {
         anchorX: queryBox.x
         anchorY: queryBox.y + queryBox.height + Theme.spacingTiny
         anchorTopY: queryBox.y
+        popupEnabled: !root.fontPickerMode
+    }
+
+    FontPickerPopup {
+        commandLine: root.commandLine
+        availableWidth: root.width
+        availableHeight: root.height
+        anchorX: queryBox.x
+        anchorY: queryBox.y + queryBox.height + Theme.spacingTiny
+        anchorTopY: queryBox.y
+        popupEnabled: root.fontPickerMode
     }
 }

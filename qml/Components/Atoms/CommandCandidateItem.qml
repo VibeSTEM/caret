@@ -12,6 +12,8 @@ Item {
     required property bool selected
     required property real aliasColumnWidth
     required property real labelColumnWidth
+    property real aliasFontPixelSize: Theme.fontSmall
+    property real labelFontPixelSize: Theme.fontBody
 
     signal activated
 
@@ -30,7 +32,7 @@ Item {
         height: parent.height
         text: root.displayAlias
         textColor: root.candidate.available ? Theme.colorFocus : Theme.colorTextMuted
-        fontPixelSize: Theme.fontSmall
+        fontPixelSize: root.aliasFontPixelSize
         monospaced: !root.candidate.commandId.endsWith(".font_family")
         scrollActive: root.selected
     }
@@ -43,7 +45,7 @@ Item {
         height: parent.height
         text: root.label
         textColor: root.candidate.available ? Theme.colorText : Theme.colorTextMuted
-        fontPixelSize: Theme.fontBody
+        fontPixelSize: root.labelFontPixelSize
         scrollActive: root.selected
     }
 

@@ -6,6 +6,79 @@ use super::{HitAffinity, ParagraphHit, ParleyParagraphLayout, VisualAffinity, Vi
 use parley::{Layout, PositionedLayoutItem};
 
 impl ParleyParagraphLayout {
+    fn underline_top_pt(baseline: f32, offset: f32, line_top: f32, adjustment: f32) -> f64 {
+        f64::from(baseline) - f64::from(offset) - f64::from(line_top) + f64::from(adjustment)
+    }
+
+    /// 从已塑形的 glyph run 提取持久下划线几何，不包含输入法预编辑装饰。
+    pub fn underline_geometry_for_line(
+        &self,
+        line_index: usize,
+    ) -> Vec<(parley::BoundingBox, Option<[u8; 4]>)> {
+        let mut rectangles: Vec<(parley::BoundingBox, Option<[u8; 4]>)> = Vec::new();
+        let Some(line) = self.layout.get(line_index) else {
+            return rectangles;
+        };
+        let Some(raw_top) = self.parley_line_tops_pt.get(line_index).copied() else {
+            return rectangles;
+        };
+        let Some(adjustment) = self.baseline_adjustments_pt.get(line_index).copied() else {
+            return rectangles;
+        };
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+            let style = glyph_run.style();
+            let Some(decoration) = style.underline.as_ref() else {
+                continue;
+            };
+            let metrics = glyph_run.run().font_metrics();
+            let offset = decoration.offset.unwrap_or(metrics.underline_offset);
+            if !offset.is_finite() {
+                continue;
+            }
+            let font_size = glyph_run.run().font_size();
+            if !font_size.is_finite() || font_size <= 0.0 {
+                continue;
+            }
+            let thickness = decoration
+                .size
+                .unwrap_or(metrics.underline_size)
+                .is_finite()
+                .then_some(decoration.size.unwrap_or(metrics.underline_size))
+                .filter(|value| *value > 0.0)
+                .unwrap_or(font_size / 18.0);
+            let x0 = f64::from(glyph_run.offset());
+            let x1 = x0 + f64::from(glyph_run.advance());
+            // 先转为 f64 再消去全局基线，避免长文档中的大坐标吞掉字体偏移。
+            let y0 = Self::underline_top_pt(glyph_run.baseline(), offset, raw_top, adjustment);
+            let y1 = y0 + f64::from(thickness);
+            if !x0.is_finite()
+                || !x1.is_finite()
+                || !y0.is_finite()
+                || !y1.is_finite()
+                || x1 <= x0
+                || y1 <= y0
+            {
+                continue;
+            }
+            let foreground = (decoration.brush != [0, 0, 0, 0]).then_some(decoration.brush);
+            let bounds = parley::BoundingBox::new(x0, y0, x1, y1);
+            if let Some((previous, previous_foreground)) = rectangles.last_mut()
+                && *previous_foreground == foreground
+                && (previous.x1 - bounds.x0).abs() < 0.01
+                && (previous.y0 - bounds.y0).abs() < 0.01
+                && (previous.y1 - bounds.y1).abs() < 0.01
+            {
+                previous.x1 = bounds.x1;
+            } else {
+                rectangles.push((bounds, foreground));
+            }
+        }
+        rectangles
+    }
+
     /// 字节偏移必须恰好落在扩展字素簇边界；非法位置不静默吸附。
     pub fn cursor_at(&self, byte_index: usize, affinity: VisualAffinity) -> Option<VisualCursor> {
         self.grapheme_boundaries
@@ -468,5 +541,24 @@ fn hit_affinity(affinity: parley::Affinity) -> HitAffinity {
     match affinity {
         parley::Affinity::Upstream => HitAffinity::Upstream,
         parley::Affinity::Downstream => HitAffinity::Downstream,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParleyParagraphLayout;
+
+    #[test]
+    fn underline_font_offset_survives_large_document_baselines() {
+        let baseline = 1_000_000.0_f32;
+        let offset = 0.03125_f32;
+        let top = 999_988.0_f32;
+        let actual = ParleyParagraphLayout::underline_top_pt(baseline, offset, top, 0.0);
+        assert!((actual - 11.96875).abs() < 0.001);
+        assert_ne!(
+            f64::from(baseline - offset - top),
+            actual,
+            "the regression fixture must expose f32 cancellation"
+        );
     }
 }
