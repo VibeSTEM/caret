@@ -3,8 +3,8 @@
 use super::*;
 use crate::editing::{Command, Direction, Selection, StoryId};
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment, InlineNode, NodeId,
-    Paragraph, Run,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -540,6 +540,554 @@ fn formatting_does_not_merge_environments_with_unknown_extra_fields() {
     assert_eq!(first.id, first_id);
     assert_eq!(second.id, second_id);
     assert_eq!(first.extra, second.extra);
+}
+
+fn collect_font_segments(nodes: &[InlineNode]) -> Vec<(String, Option<String>)> {
+    fn collect(
+        nodes: &[InlineNode],
+        inherited: Option<String>,
+        segments: &mut Vec<(String, Option<String>)>,
+    ) {
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => segments.push((run.text.clone(), inherited.clone())),
+                InlineNode::SoftBreak(_) => {}
+                InlineNode::Opaque(_) => panic!("font formatting must preserve known content"),
+                InlineNode::Environment(environment) => {
+                    let family = if environment.kind == InlineEnvironmentKind::Font {
+                        environment
+                            .props
+                            .get("fontFamily")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                            .or_else(|| inherited.clone())
+                    } else {
+                        inherited.clone()
+                    };
+                    collect(&environment.children, family, segments);
+                }
+            }
+        }
+    }
+
+    let mut segments = Vec::new();
+    collect(nodes, None, &mut segments);
+    segments
+}
+
+fn font_environment(text: &str, family: &str, extra: BTreeMap<String, Value>) -> InlineNode {
+    InlineNode::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Font,
+        definition_id: None,
+        props: BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
+        children: vec![run(text)],
+        extra,
+    })
+}
+
+#[test]
+fn selected_text_gets_a_local_font_environment_without_changing_other_text() {
+    let mut session = session_with_paragraphs(vec![paragraph("before target after")]);
+    let start = Pos {
+        offset: 7,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let end = Pos {
+        offset: 13,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+
+    let effect = session
+        .run(Command::SetInlineFontFamily("Noto Serif".to_owned()))
+        .unwrap_or_else(|error| panic!("font formatting failed: {error}"));
+
+    assert!(effect.document_changed);
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![
+            ("before ".to_owned(), None),
+            ("target".to_owned(), Some("Noto Serif".to_owned())),
+            (" after".to_owned(), None),
+        ]
+    );
+    assert_eq!(
+        session
+            .selected_text()
+            .unwrap_or_else(|error| panic!("selected text query failed: {error}")),
+        "target"
+    );
+    let serialized = serde_json::to_value(session.document())
+        .unwrap_or_else(|error| panic!("document serialization failed: {error}"));
+    let reopened: Document = serde_json::from_value(serialized)
+        .unwrap_or_else(|error| panic!("document deserialization failed: {error}"));
+    assert_eq!(
+        collect_font_segments(
+            reopened
+                .body
+                .iter()
+                .find_map(|block| match block {
+                    Block::Paragraph(paragraph) => Some(paragraph.inlines.as_slice()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("serialized document lost its paragraph")),
+        ),
+        vec![
+            ("before ".to_owned(), None),
+            ("target".to_owned(), Some("Noto Serif".to_owned())),
+            (" after".to_owned(), None),
+        ]
+    );
+}
+
+#[test]
+fn nested_font_environment_overrides_only_its_selected_range_and_undo_restores_it() {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![font_environment("abcdef", "Outer Family", BTreeMap::new())];
+    let mut session = session_with_paragraphs(vec![paragraph]);
+    let start = Pos {
+        offset: 2,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let end = Pos {
+        offset: 4,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+
+    session
+        .run(Command::SetInlineFontFamily("Inner Family".to_owned()))
+        .unwrap_or_else(|error| panic!("nested font formatting failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![
+            ("ab".to_owned(), Some("Outer Family".to_owned())),
+            ("cd".to_owned(), Some("Inner Family".to_owned())),
+            ("ef".to_owned(), Some("Outer Family".to_owned())),
+        ]
+    );
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![("abcdef".to_owned(), Some("Outer Family".to_owned()))]
+    );
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![
+            ("ab".to_owned(), Some("Outer Family".to_owned())),
+            ("cd".to_owned(), Some("Inner Family".to_owned())),
+            ("ef".to_owned(), Some("Outer Family".to_owned())),
+        ]
+    );
+}
+
+#[test]
+fn cross_paragraph_font_format_preserves_selection_and_is_one_undoable_change() {
+    let first = paragraph("alpha");
+    let second = paragraph("beta");
+    let first_id = first.id.clone();
+    let second_id = second.id.clone();
+    let mut session = session_with_paragraphs(vec![first, second]);
+    let before = session.document().clone();
+    let anchor = Pos {
+        paragraph_id: first_id,
+        offset: 2,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let focus = Pos {
+        paragraph_id: second_id,
+        offset: 2,
+        affinity: Affinity::Upstream,
+        ..anchor.clone()
+    };
+    select(&mut session, focus, anchor);
+
+    let effect = session
+        .run(Command::SetInlineFontFamily("Noto Serif".to_owned()))
+        .unwrap_or_else(|error| panic!("cross-paragraph font formatting failed: {error}"));
+    assert!(effect.document_changed);
+    assert_eq!(
+        session
+            .selected_text()
+            .unwrap_or_else(|error| panic!("selected text query failed: {error}")),
+        "pha\nbe"
+    );
+    let first_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: before
+            .body
+            .iter()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("first paragraph missing")),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert_eq!(
+        collect_font_segments(
+            &session
+                .paragraph_for(&first_position)
+                .unwrap_or_else(|error| panic!("first paragraph lookup failed: {error}"))
+                .inlines
+        ),
+        vec![
+            ("al".to_owned(), None),
+            ("pha".to_owned(), Some("Noto Serif".to_owned())),
+        ]
+    );
+    let second_position = session
+        .document()
+        .body
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+            _ => None,
+        })
+        .nth(1)
+        .map(|paragraph_id| Pos {
+            story: StoryId::Body,
+            paragraph_id,
+            offset: 0,
+            affinity: Affinity::Downstream,
+        })
+        .unwrap_or_else(|| panic!("second paragraph missing"));
+    assert_eq!(
+        collect_font_segments(
+            &session
+                .paragraph_for(&second_position)
+                .unwrap_or_else(|error| panic!("second paragraph lookup failed: {error}"))
+                .inlines
+        ),
+        vec![
+            ("be".to_owned(), Some("Noto Serif".to_owned())),
+            ("ta".to_owned(), None),
+        ]
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo failed: {error}"));
+    assert_eq!(session.document(), &before);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo failed: {error}"));
+    assert!(session.document() != &before);
+}
+
+#[test]
+fn pending_font_environment_applies_to_consecutive_input_and_merges() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    session
+        .run(Command::SetInlineFontFamily("Noto Serif".to_owned()))
+        .unwrap_or_else(|error| panic!("pending font style failed: {error}"));
+    for character in ["a", "b", "c"] {
+        session
+            .run(Command::InsertText(character.to_owned()))
+            .unwrap_or_else(|error| panic!("font-styled input failed: {error}"));
+    }
+
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+        panic!(
+            "consecutive font-styled input should share one environment: {:#?}",
+            paragraph.inlines
+        );
+    };
+    assert_eq!(font.kind, InlineEnvironmentKind::Font);
+    assert_eq!(
+        font.props.get("fontFamily").and_then(Value::as_str),
+        Some("Noto Serif")
+    );
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![("abc".to_owned(), Some("Noto Serif".to_owned()))]
+    );
+}
+
+#[test]
+fn font_command_treats_same_offset_with_different_affinity_as_a_caret() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    let mut anchor = session.selection.focus.clone();
+    anchor.affinity = Affinity::Upstream;
+    let mut focus = anchor.clone();
+    focus.affinity = Affinity::Downstream;
+    session
+        .run(Command::SetSelection(Some(Selection { anchor, focus })))
+        .unwrap_or_else(|error| panic!("collapsed selection setup failed: {error}"));
+
+    session
+        .run(Command::SetInlineFontFamily("Noto Serif".to_owned()))
+        .unwrap_or_else(|error| panic!("pending font style failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("font-styled input failed: {error}"));
+
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![("x".to_owned(), Some("Noto Serif".to_owned()))]
+    );
+}
+
+#[test]
+fn pending_font_environment_is_used_by_ime_preview_and_commit() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    session
+        .run(Command::SetInlineFontFamily("Noto Serif CJK".to_owned()))
+        .unwrap_or_else(|error| panic!("pending font style failed: {error}"));
+    session
+        .run(Command::UpdateComposition {
+            id: 73,
+            preedit: "你好".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+
+    let (preview, _) = session
+        .composition_preview_with_range("你好".len())
+        .unwrap_or_else(|error| panic!("composition preview failed: {error}"));
+    let preview_paragraph = preview
+        .paragraph_for(&preview.selection.focus)
+        .unwrap_or_else(|error| panic!("preview paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&preview_paragraph.inlines),
+        vec![("你好".to_owned(), Some("Noto Serif CJK".to_owned()))]
+    );
+
+    session
+        .run(Command::CommitComposition {
+            id: 73,
+            text: "你好".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition commit failed: {error}"));
+    session
+        .run(Command::InsertText("世界".to_owned()))
+        .unwrap_or_else(|error| panic!("typing after composition failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&paragraph.inlines),
+        vec![("你好世界".to_owned(), Some("Noto Serif CJK".to_owned()))]
+    );
+}
+
+#[test]
+fn document_default_font_setting_is_undoable_and_blank_values_are_rejected() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    let generation = session.document_generation();
+    let effect = session
+        .run(Command::SetDefaultFontFamily(Some("Noto Serif".to_owned())))
+        .unwrap_or_else(|error| panic!("default font update failed: {error}"));
+    assert!(effect.document_changed);
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .default_font_family
+            .as_deref(),
+        Some("Noto Serif")
+    );
+    assert!(session.document_generation() > generation);
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo failed: {error}"));
+    assert_eq!(session.document().global_settings.default_font_family, None);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo failed: {error}"));
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .default_font_family
+            .as_deref(),
+        Some("Noto Serif")
+    );
+
+    let before = session.document().clone();
+    assert!(matches!(
+        session.run(Command::SetDefaultFontFamily(Some("  ".to_owned()))),
+        Err(EditError::InvalidFontFamily)
+    ));
+    assert_eq!(session.document(), &before);
+}
+
+#[test]
+fn font_environment_rejects_nesting_overflow_without_mutating_the_document() {
+    fn nested_custom_environment(remaining: usize, child: Block) -> Block {
+        if remaining == 0 {
+            return child;
+        }
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![nested_custom_environment(remaining - 1, child)],
+            extra: BTreeMap::new(),
+        })
+    }
+
+    let mut document = Document::blank();
+    let paragraph = paragraph("x");
+    let paragraph_id = paragraph.id.clone();
+    document.body = vec![nested_custom_environment(63, Block::Paragraph(paragraph))];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid deep document rejected: {error}"));
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+    let before = session.document().clone();
+    let generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::SetInlineFontFamily("Noto Serif".to_owned())),
+        Err(EditError::NestingLimit)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.selection.focus.paragraph_id, paragraph_id);
+}
+
+#[test]
+fn cross_paragraph_font_depth_failure_does_not_partially_change_earlier_paragraphs() {
+    fn nested_custom_environment(remaining: usize, child: Block) -> Block {
+        if remaining == 0 {
+            return child;
+        }
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![nested_custom_environment(remaining - 1, child)],
+            extra: BTreeMap::new(),
+        })
+    }
+
+    let first = paragraph("first");
+    let first_id = first.id.clone();
+    let second = paragraph("x");
+    let second_id = second.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(first),
+        nested_custom_environment(63, Block::Paragraph(second)),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid deep document rejected: {error}"));
+    let start = Pos {
+        paragraph_id: first_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let end = Pos {
+        paragraph_id: second_id,
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+    let before = session.document().clone();
+    let generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::SetInlineFontFamily("Noto Serif".to_owned())),
+        Err(EditError::NestingLimit)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    let first_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let first_paragraph = session
+        .paragraph_for(&first_position)
+        .unwrap_or_else(|error| panic!("first paragraph lookup failed: {error}"));
+    assert_eq!(
+        collect_font_segments(&first_paragraph.inlines),
+        vec![("first".to_owned(), None)]
+    );
+}
+
+#[test]
+fn font_family_updates_do_not_merge_environments_with_unknown_extra_fields() {
+    let extra = BTreeMap::from([("futureHint".to_owned(), serde_json::json!({"keep": true}))]);
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![
+        font_environment("a", "Noto Serif", extra.clone()),
+        font_environment("b", "Noto Serif", extra),
+    ];
+    let mut session = session_with_paragraphs(vec![paragraph]);
+    let end = Pos {
+        offset: 2,
+        affinity: Affinity::Upstream,
+        ..session.selection.focus.clone()
+    };
+    let start = session.selection.focus.clone();
+    select(&mut session, start, end);
+    let effect = session
+        .run(Command::SetInlineFontFamily("Noto Serif".to_owned()))
+        .unwrap_or_else(|error| panic!("same font application failed: {error}"));
+    assert!(!effect.document_changed);
+
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    let [
+        InlineNode::Environment(first),
+        InlineNode::Environment(second),
+    ] = paragraph.inlines.as_slice()
+    else {
+        panic!("unknown extra fields must keep adjacent environments distinct");
+    };
+    assert_eq!(
+        first.extra.get("futureHint"),
+        Some(&serde_json::json!({"keep": true}))
+    );
+    assert_eq!(
+        second.extra.get("futureHint"),
+        Some(&serde_json::json!({"keep": true}))
+    );
 }
 
 #[test]

@@ -9,9 +9,10 @@ mod storage_format;
 
 pub use model::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentSettings, ExplicitBreak,
-    InlineEnvironment, InlineEnvironmentKind, InlineNode, Media, ModelError, NodeId, OpaqueNode,
-    PageSection, Paragraph, ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing,
-    Run, SoftBreak, ThemeSnapshot, default_font_size_centipoints,
+    InlineEnvironment, InlineEnvironmentKind, InlineNode, MAX_DOCUMENT_NESTING_DEPTH, Media,
+    ModelError, NodeId, OpaqueNode, PageSection, Paragraph, ParagraphLayoutOverrides,
+    ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, ThemeSnapshot,
+    default_font_size_centipoints,
 };
 pub use page_geometry::{
     Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,

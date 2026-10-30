@@ -3,6 +3,8 @@
 use super::*;
 use std::collections::HashSet;
 
+pub const MAX_DOCUMENT_NESTING_DEPTH: usize = 64;
+
 impl Document {
     pub fn validate(&self) -> Result<(), ModelError> {
         if self.page_sections.len() != 1 {
@@ -403,7 +405,7 @@ fn is_well_formed_language_tag(tag: &str) -> bool {
 }
 
 fn validate_depth(depth: usize, node_count: &mut usize) -> Result<(), ModelError> {
-    if depth > 64 {
+    if depth > MAX_DOCUMENT_NESTING_DEPTH {
         return Err(ModelError::NestingLimit);
     }
     *node_count = node_count.saturating_add(1);

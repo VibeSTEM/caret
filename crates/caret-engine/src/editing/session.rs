@@ -384,6 +384,12 @@ impl Session {
                     .and_then(|section| section.geometry().ok())
             })
             .flatten();
+        let before_default_font_family = match &command {
+            Command::SetDefaultFontFamily(_) => {
+                Some(self.document.global_settings.default_font_family.clone())
+            }
+            _ => None,
+        };
         let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
             Command::PasteText(text) => self.paste_text(&text),
@@ -402,6 +408,8 @@ impl Session {
                 unreachable!("structure edit commands returned above")
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
+            Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
+            Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
@@ -451,6 +459,11 @@ impl Session {
                         EditError::InvalidDocument("document has no PageSection".to_owned())
                     })?;
                 DocumentPatch::PageGeometry { before, after }
+            } else if let Some(before) = before_default_font_family {
+                DocumentPatch::DefaultFontFamily {
+                    before,
+                    after: self.document.global_settings.default_font_family.clone(),
+                }
             } else {
                 let mut ids = before_paragraph_states
                     .iter()
@@ -752,6 +765,7 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertSoftBreak
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
+            | Command::SetInlineFontFamily(_)
             | Command::Delete(_)
             | Command::CommitComposition { .. }
     )

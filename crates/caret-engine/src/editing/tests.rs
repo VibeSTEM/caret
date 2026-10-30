@@ -1613,6 +1613,14 @@ fn public_command_ids_and_error_codes_remain_stable() {
             Command::SetPageGeometry(PageGeometry::default()),
             "page.geometry.set",
         ),
+        (
+            Command::SetInlineFontFamily("Noto Serif".to_owned()),
+            "text.format.font_family",
+        ),
+        (
+            Command::SetDefaultFontFamily(Some("Noto Serif".to_owned())),
+            "document.default_font_family.set",
+        ),
     ];
     for (command, expected) in commands {
         assert_eq!(command.id(), expected);

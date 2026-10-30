@@ -165,7 +165,7 @@ impl Session {
 
     fn insert_paragraphs_at_environment_exit(
         &mut self,
-        paragraphs: Vec<Paragraph>,
+        mut paragraphs: Vec<Paragraph>,
     ) -> Result<Effect, EditError> {
         let Some((environment_id, direction)) = self.block_environment_exit.clone() else {
             return Ok(Effect::default());
@@ -176,6 +176,11 @@ impl Session {
             self.block_environment_exit = None;
             return Ok(Effect::default());
         };
+        let inline_depth = parent_environment_ids.len() + 1;
+        for paragraph in &mut paragraphs {
+            let text_len = TextMap::new(paragraph)?.text.len();
+            self.apply_pending_style_to_paragraph(paragraph, 0, text_len, inline_depth)?;
+        }
         let sibling_index = match direction {
             Direction::Backward => environment_index,
             Direction::Forward => environment_index.saturating_add(1),

@@ -3,7 +3,6 @@
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::Session;
-use super::formatting::inline_tree::apply_formats_to_range;
 
 impl Session {
     pub(super) fn insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
@@ -44,15 +43,12 @@ impl Session {
             updated_map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
         }
         if !text.is_empty() {
-            let formats: Vec<_> = self.pending_inline_style.active_formats().collect();
-            if !formats.is_empty() {
-                let updated_map = TextMap::new(&paragraph)?;
-                let start =
-                    updated_map.snap_to_grapheme_boundary(insert_offset, Affinity::Upstream);
-                let end = updated_map
-                    .snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
-                apply_formats_to_range(&mut paragraph, start, end, &formats)?;
-            }
+            self.apply_pending_style_to_paragraph(
+                &mut paragraph,
+                insert_offset,
+                insert_offset + text.len(),
+                self.inline_depth_for_paragraph(&anchor.paragraph_id)?,
+            )?;
         }
         self.replace_paragraph(&anchor, paragraph)?;
         let paragraph_id = anchor.paragraph_id.clone();
@@ -66,7 +62,7 @@ impl Session {
         let position_offset =
             result_map.snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
         let result_boundaries = result_map.grapheme_boundaries.clone();
-        let affinity = if self.pending_inline_style.active_formats().next().is_some() {
+        let affinity = if self.pending_inline_style.is_active() {
             Affinity::Upstream
         } else {
             start.affinity

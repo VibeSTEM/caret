@@ -85,7 +85,7 @@ impl Session {
             result.start_offset,
             result.start_offset + text.len(),
         )?;
-        let affinity = if self.pending_inline_style.active_formats().next().is_some() {
+        let affinity = if self.pending_inline_style.is_active() {
             Affinity::Upstream
         } else {
             Affinity::Downstream

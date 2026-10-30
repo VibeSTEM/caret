@@ -26,6 +26,19 @@ pub(in crate::editing::session) fn apply_formats_to_range(
     Ok(())
 }
 
+pub(in crate::editing::session) fn apply_font_family_to_range(
+    paragraph: &mut caret_doc::Paragraph,
+    start: usize,
+    end: usize,
+    family: &str,
+    inline_depth: usize,
+) -> Result<(), EditError> {
+    if start >= end {
+        return Ok(());
+    }
+    wrap_font_family_range(&mut paragraph.inlines, start, end, family, inline_depth)
+}
+
 pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, EditError> {
     fn collect(
         nodes: &[InlineNode],
@@ -217,6 +230,96 @@ fn merge_adjacent_inline_nodes(nodes: &mut Vec<InlineNode>, index: usize) -> boo
         _ => unreachable!("merge compatibility was validated before removing the right node"),
     }
     true
+}
+
+fn wrap_font_family_range(
+    nodes: &mut Vec<InlineNode>,
+    start: usize,
+    end: usize,
+    family: &str,
+    inline_depth: usize,
+) -> Result<(), EditError> {
+    let original = std::mem::take(nodes);
+    let (prefix_and_selected, after) = split_inline_nodes(original, end)?;
+    let (before, selected) = split_inline_nodes(prefix_and_selected, start)?;
+    if selected.is_empty() {
+        return Err(EditError::InvalidPosition);
+    }
+    let mut selected = apply_font_family_at_deepest(selected, family, None, inline_depth)?;
+    normalize_inline_tree(&mut selected);
+    let before_len = before.len();
+    let mut selected_end = before.len() + selected.len();
+    nodes.reserve(before.len() + after.len() + selected.len());
+    nodes.extend(before);
+    nodes.extend(selected);
+    nodes.extend(after);
+    if before_len > 0 && merge_adjacent_inline_nodes(nodes, before_len - 1) {
+        selected_end = selected_end.saturating_sub(1);
+    }
+    merge_adjacent_inline_nodes(nodes, selected_end.saturating_sub(1));
+    Ok(())
+}
+
+fn apply_font_family_at_deepest(
+    nodes: Vec<InlineNode>,
+    family: &str,
+    inherited_family: Option<&str>,
+    depth: usize,
+) -> Result<Vec<InlineNode>, EditError> {
+    let mut output = Vec::with_capacity(nodes.len());
+    let mut pending = Vec::new();
+    let flush_pending = |pending: &mut Vec<InlineNode>, output: &mut Vec<InlineNode>| {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        if depth >= caret_doc::MAX_DOCUMENT_NESTING_DEPTH {
+            return Err(EditError::NestingLimit);
+        }
+        output.push(InlineNode::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Font,
+            definition_id: None,
+            props: BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
+            children: std::mem::take(pending),
+            extra: BTreeMap::new(),
+        }));
+        Ok(())
+    };
+
+    for node in nodes {
+        match node {
+            InlineNode::Run(_) | InlineNode::SoftBreak(_) if inherited_family != Some(family) => {
+                pending.push(node);
+            }
+            InlineNode::Run(_) | InlineNode::SoftBreak(_) => {
+                flush_pending(&mut pending, &mut output)?;
+                output.push(node);
+            }
+            InlineNode::Environment(mut environment) => {
+                flush_pending(&mut pending, &mut output)?;
+                let nested_family = if environment.kind == InlineEnvironmentKind::Font {
+                    environment
+                        .props
+                        .get("fontFamily")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or_else(|| inherited_family.map(str::to_owned))
+                } else {
+                    inherited_family.map(str::to_owned)
+                };
+                environment.children = apply_font_family_at_deepest(
+                    environment.children,
+                    family,
+                    nested_family.as_deref(),
+                    depth + 1,
+                )?;
+                output.push(InlineNode::Environment(environment));
+            }
+            InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+        }
+    }
+    flush_pending(&mut pending, &mut output)?;
+    Ok(output)
 }
 
 fn apply_format_at_deepest(

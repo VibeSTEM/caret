@@ -224,11 +224,7 @@ impl Session {
             .offset
             .checked_add(relative_offset)
             .ok_or(EditError::InvalidPosition)?;
-        let has_pending_inline_style = preview
-            .pending_inline_style
-            .active_formats()
-            .next()
-            .is_some();
+        let has_pending_inline_style = preview.pending_inline_style.is_active();
         let (position, start, end) = {
             let map = preview.text_map_for(&mapped_start)?;
             let position = Pos {

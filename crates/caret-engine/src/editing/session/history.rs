@@ -43,6 +43,10 @@ pub(super) enum DocumentPatch {
         before: PageGeometry,
         after: PageGeometry,
     },
+    DefaultFontFamily {
+        before: Option<String>,
+        after: Option<String>,
+    },
     EnvironmentCreation {
         parent_environment_ids: Vec<NodeId>,
         sibling_index: usize,
@@ -284,6 +288,11 @@ impl DocumentPatch {
                     + size_of::<Box<Paragraph>>()
             }
             Self::PageGeometry { .. } => size_of::<PageGeometry>(),
+            Self::DefaultFontFamily { before, after } => {
+                before.as_ref().map_or(0, String::capacity)
+                    + after.as_ref().map_or(0, String::capacity)
+                    + size_of::<Option<String>>() * 2
+            }
             Self::EnvironmentCreation {
                 parent_environment_ids,
                 paragraph_estimated_bytes,
@@ -374,6 +383,9 @@ impl DocumentPatch {
                 false,
             ),
             Self::PageGeometry { before, .. } => set_page_geometry(document, *before),
+            Self::DefaultFontFamily { before, .. } => {
+                document.global_settings.default_font_family = before.clone();
+            }
             Self::EnvironmentCreation {
                 parent_environment_ids,
                 sibling_index,
@@ -466,6 +478,9 @@ impl DocumentPatch {
                 true,
             ),
             Self::PageGeometry { after, .. } => set_page_geometry(document, *after),
+            Self::DefaultFontFamily { after, .. } => {
+                document.global_settings.default_font_family = after.clone();
+            }
             Self::EnvironmentCreation {
                 parent_environment_ids,
                 sibling_index,

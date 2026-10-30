@@ -17,6 +17,8 @@ mod paragraph;
 mod run;
 mod validation;
 
+pub use validation::MAX_DOCUMENT_NESTING_DEPTH;
+
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
 pub use inline::{InlineNode, SoftBreak};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
