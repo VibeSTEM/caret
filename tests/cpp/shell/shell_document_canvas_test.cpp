@@ -66,12 +66,11 @@
 void ShellLoadTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
     caret::DocumentCanvas canvas;
     int event_count = 0;
-    QObject::connect(
-        &canvas, &caret::DocumentCanvas::inputMethodEventRequested, &canvas,
-        [&canvas, &event_count](const QString&, const QString&, int, int, int) {
-            ++event_count;
-            canvas.cancelPreedit();
-        });
+    QObject::connect(&canvas, &caret::DocumentCanvas::inputMethodEventRequested, &canvas,
+                     [&canvas, &event_count](const QString&, const QString&, int, int, int) {
+                         ++event_count;
+                         canvas.cancelPreedit();
+                     });
 
     canvas.cancelPreedit();
 
