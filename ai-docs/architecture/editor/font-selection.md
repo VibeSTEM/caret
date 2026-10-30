@@ -66,4 +66,4 @@ Common、Inherited 和多脚本标点由段落分析上下文解析，默认沿�
 
 ## 范围
 
-本架构允许全局字体偏好先通过 API/命令设置，不要求本阶段增加字体选择窗口。M0 先覆盖拉丁、CJK 与本机 fallback，并测试 `Cyrl` 中 `bg`/`sr` 与 Latin 引用不串用。公式通过 `defaultMathFontFamily` 使用独立数学排版字体，M3 默认并仅支持 `STIX Two Math`；该设置不属于正文字体候选链，见[公式与表格](math-and-table.md)。逐步增加语言变体时使用已知覆盖的固定测试字体检查实际 glyph/locl 差异；仅有系统字体 smoke 不证明变体字形正确。
+全局字体偏好由 Rust 文档设置/API 持有；本机字体目录由 024 的 Fontique catalog 读取和刷新。面向用户的目录查询与选择入口由 [056](../../task/056-font-settings-and-family-picker.md) 实现，不得在 QML 重复扫描字体文件。M0 先覆盖拉丁、CJK 与本机 fallback，并测试 `Cyrl` 中 `bg`/`sr` 与 Latin 引用不串用。公式通过 `defaultMathFontFamily` 使用独立数学排版字体，M3 默认并仅支持 `STIX Two Math`；该设置不属于正文字体候选链，见[公式与表格](math-and-table.md)。逐步增加语言变体时使用已知覆盖的固定测试字体检查实际 glyph/locl 差异；仅有系统字体 smoke 不证明变体字形正确。

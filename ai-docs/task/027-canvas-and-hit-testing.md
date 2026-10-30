@@ -9,7 +9,7 @@
 
 以单一 LayoutResult 绘制连续多页，并使文字、页面、插入点、选区和命中测试共用同一映射。
 
-当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面 glyph 数据经 CXX 二进制 DTO 到 Qt，Canvas 使用 Qt 管理的纹理图集绘制；行框与页面裁切及设备像素相位已接通，当前视口内所有页面按需请求。插入点已通过主题 token 在 Qt scene graph 呈现。基础键盘输入已接入 Rust Session：文本输入、Enter 拆段、Shift+Enter 软换行、Backspace 字素删除与段首合并；IME、键盘导航和选区交互由 030 承接。027 剩余真实文档文字的完整窗口验收。环境高亮和未知节点安全预览分别由 031、032 承接。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，避免 Qt 重新塑形或重新匹配字体。OpenType BASE 脚本基线和稳定行推进由 033 单独处理，不作为 027 的验收范围。
+当前已完成页面几何切片、Session 布局代际、Parley 段落布局，以及 Rust 页面局部命中、插入点和跨页选区几何。Rust 页面 glyph 数据经 CXX 二进制 DTO 到 Qt，Canvas 使用 Qt 管理的纹理图集绘制；行框与页面裁切及设备像素相位已接通，当前视口内所有页面按需请求。插入点已通过主题 token 在 Qt scene graph 呈现。基础键盘输入已接入 Rust Session：文本输入、Enter 拆段、Shift+Enter 软换行、Backspace 字素删除与段首合并；IME、键盘导航和选区交互由 030 承接。027 剩余真实文档文字的完整窗口验收。环境高亮和未知节点安全预览分别由 031、032 承接。正文渲染采用 Parley glyph ID 与位置；Rust 使用 Swash 按同一字体面栅格化，避免 Qt 重新塑形或重新匹配字体。共享行距网格由 033 验收；OpenType BASE 脚本基线由 055 后续处理，不作为 027 的验收范围。
 
 ## 必读
 
@@ -116,8 +116,9 @@ native/canvas、caret-ffi snapshot DTO、caret-layout 输出与窗口集成。
 - 2026-10-26：`cargo test --offline --locked -p caret-app visible_page_rasterization_returns_binary_glyph_images`、`cmake --build target/native/debug --target caret_shell_load_test -j2`、`ctest --test-dir target/native/debug -R '^Qml\\.ShellLoad$' --output-on-failure` 均通过。Rust 定向测试与真实 Qt 窗口用例覆盖 glyph 栅格化、输入后的文档 generation 和非空 glyph placements；未做真实字体像素截图对照。
 - 2026-10-26：`cargo test --offline --locked -p caret-layout -p caret-engine` 通过；caret-layout 68 项、caret-engine 54 项。全角中文 `！`、混排和阿拉伯用例验证了当时的全局锚点实现；脚本基线与稳定行推进现拆至 033，这些测试不构成 033 的验收证据。
 - 2026-10-26：真实 Qt 窗口测试新增 glyph ink 像素检查，并在 Rust 文档中插入全角 `！` 后确认画布展示新代际字形；定向 CTest、Rust 布局/引擎测试、Clippy、变更格式与 diff 检查通过。脚本基线与大字号/回退字体行框溢出明确交由 033，不阻塞 027。
+- 2026-10-30：此前记录中交由 033 的“脚本基线与大字号/回退字体溢出”现拆分处理：033 仅负责共享行距网格与选区行框几何，OpenType BASE 对齐及 ink 溢出诊断由 055 承接。
 - 2026-10-27：029 将 `DocumentCanvas` 按 scene graph、glyph frames、几何/命中、caret 和输入拆到 `native/canvas/document_canvas/`，保留单一 `caret_canvas` target 与原 QML API。缩放范围/步进归 `CanvasPolicy`，pt/逻辑像素、centipixels 和百分比/倍率换算归 `DocumentUnits`；可见页边界直接使用实际 zoom 的 `documentToContent()`，不再经整数百分比近似。此结构调整不重开 027 的产品验收；本次集成 CMake/CTest 与 workspace 结果记在 029。
 
 ## 完成摘要
 
-027 已完成 Rust 页面布局与 glyph 生成、Swash 栅格化、Qt Canvas 图集绘制、页面命中/插入点/选区几何、焦点与闪烁、基础键盘编辑和事件驱动的画布更新。真实窗口测试确认 Rust 文档插入英文字符和全角 `！` 后，新 glyph 可见于 Qt 窗口像素。定向 Rust 测试、Clippy、格式检查、CTest 与独立评审通过。IME/导航/完整选区交互由 030 承接；环境高亮和未知节点安全预览由 031/032 承接；OpenType BASE 脚本基线与大字号/回退字体行框溢出由单独的 033 处理，不属于 027。
+027 已完成 Rust 页面布局与 glyph 生成、Swash 栅格化、Qt Canvas 图集绘制、页面命中/插入点/选区几何、焦点与闪烁、基础键盘编辑和事件驱动的画布更新。真实窗口测试确认 Rust 文档插入英文字符和全角 `！` 后，新 glyph 可见于 Qt 窗口像素。定向 Rust 测试、Clippy、格式检查、CTest 与独立评审通过。IME/导航/完整选区交互由 030 承接；环境高亮和未知节点安全预览由 031/032 承接；共享行距网格由 033 完成，OpenType BASE 脚本基线与字形溢出诊断由 055 承接，不属于 027。
