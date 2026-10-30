@@ -55,7 +55,7 @@ Use `caret-math` as a low-level adapter crate with no dependency on Qt, Parley, 
 
 - A text-layout provider receives a text run, style, size and caller context, then returns shaped-run identity (font, glyphs, offsets and clusters) plus width/height/depth. Layout must use those dimensions before placing surrounding fractions and scripts, and carry the shaped-run handle in its box tree for rendering.
 - Layout accepts caller-stable Caret math-node IDs and propagates them to output boxes. This mapping enables editable hit testing/caret geometry.
-- Parser token/AST source byte ranges and preprocessing offset mapping support import diagnostics. Source ranges and math-node provenance are separate mappings.
+- Parser token/AST source byte ranges and preprocessing offset mapping support import diagnostics. Source ranges and math-node provenance are separate mappings. The current 043 adapter only provides a whole-formula range; task 044 owns this fine-grained upstream patch and its validation.
 
 The adapter preserves failed input source and a locatable error. On successful import the Caret tree is authoritative; the persistence/export contract decides whether original source bytes are retained after normalization.
 

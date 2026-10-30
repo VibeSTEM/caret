@@ -981,6 +981,157 @@ fn math_vertical_navigation_switches_fraction_and_radical_slots() {
 }
 
 #[test]
+fn math_tab_moves_to_the_next_placeholder_without_wrapping() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("math prefix insertion failed: {error}"));
+    session
+        .run(Command::InsertMathFraction)
+        .unwrap_or_else(|error| panic!("fraction insertion failed: {error}"));
+
+    let (root_id, numerator_id, denominator_id) = {
+        let Block::Paragraph(paragraph) = &session.document.body[0] else {
+            panic!("expected paragraph containing formula");
+        };
+        let InlineNode::Math(math) = &paragraph.inlines[0] else {
+            panic!("expected inline math");
+        };
+        assert_eq!(math.math_tree.root.children.len(), 2);
+        let fraction = &math.math_tree.root.children[1];
+        (
+            math.math_tree.root.id.clone(),
+            fraction.children[0].id.clone(),
+            fraction.children[1].id.clone(),
+        )
+    };
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&numerator_id)
+    );
+
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("Tab should navigate to denominator: {error}"));
+    assert!(effect.selection_changed);
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&denominator_id)
+    );
+
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("Tab after the final slot should be a no-op: {error}"));
+    assert!(!effect.selection_changed);
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&denominator_id)
+    );
+
+    let Some(focus) = session.math_focus.as_mut() else {
+        panic!("formula focus should remain active");
+    };
+    focus.position = MathPos {
+        path: vec![root_id],
+        offset: 1,
+    };
+    session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| {
+            panic!("Tab from the root boundary should find numerator: {error}")
+        });
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&numerator_id)
+    );
+}
+
+#[test]
+fn math_tab_preserves_pending_input_and_rejects_navigation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::TypeMathText(r"\frac{".to_owned()))
+        .unwrap_or_else(|error| panic!("incomplete fraction input should be buffered: {error}"));
+    let before_document = session.document.clone();
+    let before_focus = session.math_focus().cloned();
+
+    assert!(matches!(
+        session.run(Command::EditorKey(EditorKey::Tab)),
+        Err(EditError::InvalidMathText)
+    ));
+    assert_eq!(session.pending_math_input(), Some(r"\frac{"));
+    assert_eq!(session.math_focus(), before_focus.as_ref());
+    assert_eq!(session.document, before_document);
+}
+
+#[test]
+fn math_tab_visits_nested_placeholders_before_outer_slots() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertMathFraction)
+        .unwrap_or_else(|error| panic!("fraction insertion failed: {error}"));
+    session
+        .run(Command::InsertMathRadical)
+        .unwrap_or_else(|error| panic!("radical insertion failed: {error}"));
+
+    let (root_id, fraction_id, index_id, radical_id, radicand_id, denominator_id) = {
+        let Block::Paragraph(paragraph) = &session.document.body[0] else {
+            panic!("expected paragraph containing formula");
+        };
+        let InlineNode::Math(math) = &paragraph.inlines[0] else {
+            panic!("expected inline math");
+        };
+        let fraction = &math.math_tree.root.children[0];
+        let radical = &fraction.children[0];
+        assert_eq!(radical.kind, MathNodeKind::Radical);
+        (
+            math.math_tree.root.id.clone(),
+            fraction.id.clone(),
+            radical.children[0].id.clone(),
+            radical.id.clone(),
+            radical.children[1].id.clone(),
+            fraction.children[1].id.clone(),
+        )
+    };
+    let Some(focus) = session.math_focus.as_mut() else {
+        panic!("formula focus should remain active");
+    };
+    focus.position = MathPos {
+        path: vec![root_id, fraction_id, radical_id, index_id],
+        offset: 0,
+    };
+
+    session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("Tab should visit the nested radicand: {error}"));
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&radicand_id),
+        "position={:?}",
+        current_math_position(&session)
+    );
+    session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("Tab should continue to the outer denominator: {error}"));
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&denominator_id)
+    );
+}
+
+#[test]
 fn fraction_can_be_inserted_after_a_typed_symbol() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));

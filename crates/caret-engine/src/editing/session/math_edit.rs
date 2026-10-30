@@ -197,6 +197,56 @@ impl Session {
         }
     }
 
+    pub(super) fn move_math_caret_to_next_placeholder(&mut self) -> Result<Effect, EditError> {
+        if self.math_input_buffer.is_some() {
+            return Err(EditError::InvalidMathText);
+        }
+        let focus = self.math_focus.clone().ok_or(EditError::InvalidPosition)?;
+        let story = self
+            .paragraph_index
+            .get(&focus.paragraph_id)
+            .map(|location| location.story.clone())
+            .ok_or_else(|| EditError::UnknownParagraph(focus.paragraph_id.to_string()))?;
+        let paragraph_pos = Pos {
+            story,
+            paragraph_id: focus.paragraph_id.clone(),
+            offset: self.selection.focus.offset,
+            affinity: self.selection.focus.affinity,
+        };
+        let paragraph = self.paragraph_for(&paragraph_pos)?;
+        let math = find_inline_math(&paragraph.inlines, &focus.inline_math_id)
+            .ok_or(EditError::InvalidPosition)?;
+        if focus.position.resolve(&math.math_tree).is_none() {
+            return Err(EditError::InvalidPosition);
+        }
+
+        let Some(current_indices) = math_path_indices(&math.math_tree.root, &focus.position.path)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let mut path = vec![&math.math_tree.root.id];
+        let mut indices = Vec::with_capacity(current_indices.len());
+        let next_position = next_placeholder_after(
+            &math.math_tree.root,
+            &current_indices,
+            focus.position.offset,
+            &mut path,
+            &mut indices,
+        );
+        let Some(position) = next_position else {
+            return Ok(Effect::default());
+        };
+        self.advance_history_merge_epoch();
+        self.math_focus
+            .as_mut()
+            .ok_or(EditError::InvalidPosition)?
+            .position = position;
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
     fn exit_math_toward(&mut self, after_object: bool) -> Result<Effect, EditError> {
         let Some(focus) = self.math_focus.clone() else {
             return Ok(Effect::default());
@@ -553,6 +603,70 @@ fn collect_horizontal_positions(node: &MathNode, path: Vec<NodeId>, positions: &
             }
         }
     }
+}
+
+fn math_path_indices(root: &MathNode, path: &[NodeId]) -> Option<Vec<usize>> {
+    let (root_id, descendants) = path.split_first()?;
+    if root_id != &root.id {
+        return None;
+    }
+    let mut node = root;
+    let mut indices = Vec::with_capacity(descendants.len());
+    for id in descendants {
+        let index = node.children.iter().position(|child| &child.id == id)?;
+        node = node.children.get(index)?;
+        indices.push(index);
+    }
+    Some(indices)
+}
+
+fn next_placeholder_after<'tree>(
+    node: &'tree MathNode,
+    current_indices: &[usize],
+    current_offset: usize,
+    path: &mut Vec<&'tree NodeId>,
+    indices: &mut Vec<usize>,
+) -> Option<MathPos> {
+    if node.kind == MathNodeKind::Placeholder
+        && math_position_precedes_child_path(current_indices, current_offset, indices)
+    {
+        return Some(MathPos {
+            path: path.iter().map(|id| (*id).clone()).collect(),
+            offset: 0,
+        });
+    }
+    for (index, child) in node.children.iter().enumerate() {
+        path.push(&child.id);
+        indices.push(index);
+        let result = next_placeholder_after(child, current_indices, current_offset, path, indices);
+        indices.pop();
+        path.pop();
+        if result.is_some() {
+            return result;
+        }
+    }
+    None
+}
+
+fn math_position_precedes_child_path(
+    current_indices: &[usize],
+    current_offset: usize,
+    child_indices: &[usize],
+) -> bool {
+    let common_depth = current_indices
+        .iter()
+        .zip(child_indices)
+        .take_while(|(current, child)| current == child)
+        .count();
+    if common_depth == current_indices.len() {
+        return child_indices
+            .get(common_depth)
+            .is_some_and(|child_index| current_offset <= *child_index);
+    }
+    child_indices
+        .get(common_depth)
+        .zip(current_indices.get(common_depth))
+        .is_some_and(|(child_index, current_index)| child_index > current_index)
 }
 
 fn push_math_position(positions: &mut Vec<MathPos>, position: MathPos) {

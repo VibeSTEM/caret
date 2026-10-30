@@ -300,6 +300,9 @@ impl Session {
                         Direction::Forward => MathDirection::Right,
                     });
                 }
+                Command::EditorKey(EditorKey::Tab) => {
+                    return self.move_math_caret_to_next_placeholder();
+                }
                 Command::InsertMathText(_)
                 | Command::TypeMathText(_)
                 | Command::PasteMathText(_)
