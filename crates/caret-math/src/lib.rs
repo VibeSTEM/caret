@@ -9,10 +9,16 @@ use latex_rust::{
 use std::fmt::{Display, Formatter};
 use std::ops::Range;
 
+pub use math_syntax::{MathSyntaxConversionError, MathSyntaxKind, MathSyntaxNode, MathSyntaxTree};
+
+mod math_syntax;
+
 /// 单个公式允许的最大 UTF-8 源码长度。
 pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
 /// Caret 文档模型允许的最大数学树嵌套预算。
 pub const MAX_MATH_NESTING_DEPTH: usize = 32;
+/// 单次解析允许的最大转换语法节点数，限制临时树的内存放大。
+pub const MAX_MATH_SYNTAX_NODES: usize = 65_536;
 
 /// 调用方文档节点要求的公式形态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,12 +33,14 @@ pub enum MathInputKind {
 
 /// 通过语法与输入种类校验的公式及其原始导入文本范围。
 ///
-/// 上游 AST 在 `caret-math` 内完成校验后销毁，不通过公开 API 暴露或写入 `.cdoc`。
+/// 上游 AST 仅在该值的私有生命周期内保留，不通过公开 API 暴露或写入 `.cdoc`。
 #[derive(Debug)]
 pub struct ParsedMath<'source> {
     source: &'source str,
     source_range: Range<usize>,
     normalized_range: Range<usize>,
+    input_kind: MathInputKind,
+    ast: MathNode,
 }
 
 impl ParsedMath<'_> {
@@ -53,6 +61,14 @@ impl ParsedMath<'_> {
     pub fn normalized_range(&self) -> Range<usize> {
         self.normalized_range.clone()
     }
+
+    /// 将第三方 parser AST 转成 `caret-math` 自有的中间数学树。
+    ///
+    /// 中间树只含稳定值类型，不暴露 `latex-rust` 类型。转换在需要新节点
+    /// kind 时显式失败，避免静默丢弃未来语法。
+    pub fn syntax_tree(&self) -> Result<MathSyntaxTree, MathSyntaxConversionError> {
+        math_syntax::convert(self.input_kind, &self.ast)
+    }
 }
 
 /// 解析或输入约束错误；错误保留完整原文及其可定位字节范围。
@@ -65,6 +81,24 @@ pub enum MathParseError<'source> {
         /// 原文 UTF-8 字节范围。
         source_range: Range<usize>,
         /// 配置的最大字节数。
+        limit: usize,
+    },
+    /// parser 输出树超过 Caret 支持的最大嵌套深度。
+    InputTooDeep {
+        /// 超出限制的原始文本。
+        source: &'source str,
+        /// 原文 UTF-8 字节范围。
+        source_range: Range<usize>,
+        /// 配置的最大嵌套深度。
+        limit: usize,
+    },
+    /// 转换后的语法树超过节点预算。
+    SyntaxTreeTooLarge {
+        /// 超出限制的原始文本。
+        source: &'source str,
+        /// 原文 UTF-8 字节范围。
+        source_range: Range<usize>,
+        /// 允许的最大节点数。
         limit: usize,
     },
     /// 首版不支持编号、交叉引用或标签语义。
@@ -102,6 +136,15 @@ impl Display for MathParseError<'_> {
             Self::InputTooLong { limit, .. } => {
                 write!(formatter, "math.input_too_long: maximum {limit} bytes")
             }
+            Self::InputTooDeep { limit, .. } => {
+                write!(formatter, "math.input_too_deep: maximum depth {limit}")
+            }
+            Self::SyntaxTreeTooLarge { limit, .. } => {
+                write!(
+                    formatter,
+                    "math.syntax_tree_too_large: maximum nodes {limit}"
+                )
+            }
             Self::UnsupportedNumbering { command, .. } => {
                 write!(formatter, "math.unsupported_numbering: \\{command}")
             }
@@ -138,6 +181,31 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
         message: parse_error_message(error),
     })?;
 
+    match math_syntax::check_ast_budget(&ast, MAX_MATH_NESTING_DEPTH, MAX_MATH_SYNTAX_NODES) {
+        Ok(()) => {}
+        Err(math_syntax::AstBudgetError::TooDeep) => {
+            return Err(MathParseError::InputTooDeep {
+                source,
+                source_range: full_range,
+                limit: MAX_MATH_NESTING_DEPTH,
+            });
+        }
+        Err(math_syntax::AstBudgetError::TooManyNodes) => {
+            return Err(MathParseError::SyntaxTreeTooLarge {
+                source,
+                source_range: full_range,
+                limit: MAX_MATH_SYNTAX_NODES,
+            });
+        }
+        Err(math_syntax::AstBudgetError::UnsupportedNode) => {
+            return Err(MathParseError::Parse {
+                source,
+                source_range: full_range,
+                message: "math.syntax_conversion_unsupported: future latex-rust node".to_owned(),
+            });
+        }
+    }
+
     if let Some(command) = unsupported_numbering_semantic(&ast) {
         return Err(MathParseError::UnsupportedNumbering {
             source,
@@ -158,6 +226,8 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
         source,
         source_range: full_range,
         normalized_range,
+        input_kind: kind,
+        ast,
     })
 }
 
@@ -180,7 +250,10 @@ fn unsupported_numbering_semantic(node: &MathNode) -> Option<String> {
                     | MatrixStyle::Multline
             );
             if numbered_environment {
-                return Some(format!("begin{{{}}}", matrix_style_name(*style)));
+                return Some(format!(
+                    "begin{{{}}}",
+                    math_syntax::matrix_style_name(*style)
+                ));
             }
             for row in rows {
                 match row {
@@ -306,130 +379,5 @@ fn unsupported_numbering_in_text(run: &latex_rust::TextRun) -> Option<String> {
     })
 }
 
-fn matrix_style_name(style: MatrixStyle) -> &'static str {
-    match style {
-        MatrixStyle::Align => "align",
-        MatrixStyle::Equation => "equation",
-        MatrixStyle::Gather => "gather",
-        MatrixStyle::Multline => "multline",
-        MatrixStyle::Matrix => "matrix",
-        MatrixStyle::Pmatrix => "pmatrix",
-        MatrixStyle::Bmatrix => "bmatrix",
-        MatrixStyle::Vmatrix => "vmatrix",
-        MatrixStyle::VVmatrix => "Vmatrix",
-        MatrixStyle::BBmatrix => "Bmatrix",
-        MatrixStyle::Cases => "cases",
-        MatrixStyle::Array => "array",
-        MatrixStyle::Aligned => "aligned",
-        MatrixStyle::Split => "split",
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        MAX_MATH_NESTING_DEPTH, MAX_MATH_SOURCE_BYTES, MathInputKind, MathParseError, parse,
-    };
-
-    #[test]
-    fn parses_inline_and_display_math_with_the_locked_depth_budget() {
-        let inline = parse(r"$x^2 + 1$", MathInputKind::Inline);
-        assert!(inline.is_ok());
-
-        let aligned = parse(
-            r"\[\begin{aligned}a &= b \\ c &= d\end{aligned}\]",
-            MathInputKind::Align,
-        );
-        assert!(aligned.is_ok());
-
-        let too_deep = format!(
-            "{}x{}",
-            r"\frac{1}{".repeat(MAX_MATH_NESTING_DEPTH),
-            "}".repeat(MAX_MATH_NESTING_DEPTH)
-        );
-        assert!(matches!(
-            parse(&too_deep, MathInputKind::Equation),
-            Err(MathParseError::Parse { source, .. }) if source == too_deep
-        ));
-    }
-
-    #[test]
-    fn parser_errors_keep_source_and_exact_whole_formula_byte_range() {
-        let source = r"x + \unknown";
-        let Err(MathParseError::Parse {
-            source: preserved,
-            source_range,
-            ..
-        }) = parse(source, MathInputKind::Inline)
-        else {
-            panic!("unknown command must fail parsing");
-        };
-        assert_eq!(preserved, source);
-        assert_eq!(source_range, 0..source.len());
-    }
-
-    #[test]
-    fn rejects_numbering_semantics_and_overlong_source_without_loss() {
-        let source = r"x \label{eq:x}";
-        assert!(matches!(
-            parse(source, MathInputKind::Equation),
-            Err(MathParseError::UnsupportedNumbering {
-                source: preserved,
-                command,
-                ..
-            }) if preserved == source && command == "label"
-        ));
-
-        let source = "x".repeat(MAX_MATH_SOURCE_BYTES + 1);
-        assert!(matches!(
-            parse(&source, MathInputKind::Inline),
-            Err(MathParseError::InputTooLong { source: preserved, .. }) if preserved == source
-        ));
-    }
-
-    #[test]
-    fn rejects_automatically_numbered_environments_and_nested_references() {
-        for source in [
-            r"\begin{equation}x\end{equation}",
-            r"\begin{align}x &= y\end{align}",
-            r"\text{$\ref{eq:x}$}",
-        ] {
-            assert!(matches!(
-                parse(source, MathInputKind::Equation),
-                Err(MathParseError::UnsupportedNumbering { source: preserved, .. })
-                    if preserved == source
-            ));
-        }
-
-        assert!(
-            parse(
-                r"\[\begin{aligned}x &= y\end{aligned}\]",
-                MathInputKind::Align
-            )
-            .is_ok()
-        );
-        assert!(matches!(
-            parse("x", MathInputKind::Align),
-            Err(MathParseError::InputKindMismatch { .. })
-        ));
-        let aligned = r"\begin{aligned}a &= b \\ c &= d\end{aligned}";
-        assert!(matches!(
-            parse(aligned, MathInputKind::Inline),
-            Err(MathParseError::InputKindMismatch { .. })
-        ));
-        assert!(matches!(
-            parse(aligned, MathInputKind::Equation),
-            Err(MathParseError::InputKindMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn normalized_range_maps_trimmed_unicode_input_to_utf8_bytes() {
-        let source = "  α + x  ";
-        let Ok(parsed) = parse(source, MathInputKind::Inline) else {
-            panic!("input should parse");
-        };
-        assert_eq!(&source[parsed.normalized_range()], "α + x");
-        assert_eq!(parsed.source_range(), 0..source.len());
-    }
-}
+mod tests;

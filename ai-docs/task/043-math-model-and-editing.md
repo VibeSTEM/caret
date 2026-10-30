@@ -52,7 +52,8 @@
 
 | 日期       | 环境 / 命令                            | 预期                                   | 实际结果                                             |
 | ---------- | -------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
-| 2026-10-31 | `cargo test -p caret-math --locked --offline` | Parser 适配、深度/长度边界、错误源保留 | 通过，5 项单元测试；尚未覆盖解析结果到 Caret 树的转换 |
+| 2026-10-31 | `cargo test -p caret-math --locked --offline` | Parser 适配、后端无关语法树、深度/节点/长度边界、错误源保留 | 通过，16 项单元测试；尚未覆盖语法树到持久化 Caret schema 的转换 |
+| 2026-10-31 | `cargo clippy --locked --offline -p caret-math --all-targets -- -D warnings`、`cargo fmt --all -- --check` | crate lint 与格式 | 通过 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | 数学 DTO、保存重开、正文原子偏移、Enter 与历史状态 | 通过：`caret-doc` 42 项、`caret-engine` 194 项 |
 | 2026-10-31 | `cargo check --locked --offline --workspace` | 所有 crate 能识别新增持久化节点 | 通过；数学绘制和块级布局仍由 044 实现 |
 | 2026-10-31 | `cargo lint --check` | Rust、依赖、分层、CMake/QML/native lint | 通过全部 9 个检查阶段 |
@@ -71,6 +72,7 @@
 - 2026-10-31：新增 L1 `caret-math`，锁定 `latex-rust 3.0.1`，执行 1 MiB 源码限制、32 层 parser 预算，确保 `Align` 仅接收 `aligned` 树，并通过 AST 检查拒绝自动编号环境以及嵌套的 `\\label`、`\\ref`、`\\tag`、`\\nonumber` 和 `\\notag`。失败对象借用并保留原始输入，当前位置范围目前只能精确到整段公式。
 - 2026-10-31：`latex-rust 3.0.1` 不暴露 token/AST 字节范围；细粒度源跨度及预处理映射仍需上游 adapter patch，本阶段没有自行实现第二套 tokenizer/parser。解析结果到 Caret 数学树的转换、MathPos 与公式编辑事务尚未实现。
 - 2026-10-31：`caret-doc` 加入版本 1 的自有数学树与 `InlineMath`、`Equation`、`Align` DTO；math 节点范围、深度、源码长度和文档全局 ID 在保存入口统一校验，三种节点通过独立 `.cdoc` 能力标记声明。已补保存重开测试。`caret-layout` 暂以原子占位符表达行内公式，块级公式布局返回未支持；正式数学布局、MathPos、解析器到 Caret 树的转换及事务编辑待续。
+- 2026-10-31：`caret-math` 增加独立模块中的临时 `MathSyntaxTree`，不暴露 `latex-rust` 类型，覆盖当前 parser AST 节点、矩阵行/单元格、文本样式和可选槽位；它仍需显式转换为 `caret-doc` schema 才能持久化。迭代式预算检查按转换后的层级计入矩阵行、intertext 和占位节点，限制 32 层及 65,536 节点；尺寸保留精确有理数，定界符编码保留字符与命名类型差别。尚未提供细粒度源跨度或转换到 `.cdoc` 树的实现。
 - 2026-10-31：Terra/medium schema 与编辑边界只读复核发现并促成修复：未知 `sourceRange` 字段往返保留；Align 行进入文档节点预算；公式能力登记；未来 schema/节点 kind 转安全预览；U+FFFC 按 UTF-8 字节计长；公式边界可插软换行；跨段 Enter 失败恢复文档、选区、索引和缓存；数学扩展字段纳入历史大小估算。复验覆盖 schema 源码/深度限制、三种数学节点未来 schema、公式后的跨段 Enter、历史扩展字段估算。仍未验证高节点数预算裁剪及实际 MathPos/布局交互。
 
 ## 完成摘要
