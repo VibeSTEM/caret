@@ -35,6 +35,7 @@ fn visible_text(nodes: &[InlineNode]) -> String {
         .iter()
         .map(|node| match node {
             InlineNode::Run(run) => run.text.clone(),
+            InlineNode::Math(_) => "\u{fffc}".to_owned(),
             InlineNode::Environment(environment) => visible_text(&environment.children),
             InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => String::new(),
         })
@@ -956,6 +957,7 @@ fn collect_font_segments(nodes: &[InlineNode]) -> Vec<(String, Option<String>)> 
         for node in nodes {
             match node {
                 InlineNode::Run(run) => segments.push((run.text.clone(), inherited.clone())),
+                InlineNode::Math(_) => segments.push(("\u{fffc}".to_owned(), inherited.clone())),
                 InlineNode::SoftBreak(_) => {}
                 InlineNode::Opaque(_) => panic!("font formatting must preserve known content"),
                 InlineNode::Environment(environment) => {
@@ -1577,7 +1579,10 @@ fn toggling_inline_format_updates_the_selected_environment_without_growing_depth
                 InlineNode::Environment(environment) => {
                     1 + environment_count(&environment.children)
                 }
-                InlineNode::Run(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => 0,
+                InlineNode::Run(_)
+                | InlineNode::Math(_)
+                | InlineNode::SoftBreak(_)
+                | InlineNode::Opaque(_) => 0,
             })
             .sum()
     }

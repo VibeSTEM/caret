@@ -1048,6 +1048,32 @@ fn block_estimated_bytes(block: &Block) -> usize {
     size_of::<Block>()
         + match block {
             Block::Paragraph(paragraph) => paragraph_estimated_bytes(paragraph),
+            Block::Equation(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + string_value_map_bytes(&value.extra)
+                    + math_tree_estimated_bytes(&value.math_tree)
+            }
+            Block::Align(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + value.source.len()
+                    + string_value_map_bytes(&value.extra)
+                    + value
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            size_of_val(row)
+                                + node_id_bytes(&row.id)
+                                + string_value_map_bytes(&row.extra)
+                                + row
+                                    .cells
+                                    .iter()
+                                    .map(math_tree_estimated_bytes)
+                                    .sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
             Block::Environment(environment) => environment_estimated_bytes(environment),
             Block::ExplicitBreak(value) => {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
@@ -1067,6 +1093,12 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
                     + string_value_map_bytes(&run.props)
                     + string_value_map_bytes(&run.extra)
             }
+            InlineNode::Math(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + string_value_map_bytes(&value.extra)
+                    + math_tree_estimated_bytes(&value.math_tree)
+            }
             InlineNode::Environment(environment) => {
                 size_of_val(environment)
                     + node_id_bytes(&environment.id)
@@ -1084,6 +1116,24 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
             }
             InlineNode::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
         }
+}
+
+fn math_tree_estimated_bytes(tree: &caret_doc::MathTree) -> usize {
+    fn node_bytes(node: &caret_doc::MathNode) -> usize {
+        size_of_val(node)
+            + node_id_bytes(&node.id)
+            + node.text.as_ref().map_or(0, String::len)
+            + node
+                .source_range
+                .as_ref()
+                .map_or(0, |range| string_value_map_bytes(&range.extra))
+            + string_value_map_bytes(&node.extra)
+            + node.children.iter().map(node_bytes).sum::<usize>()
+    }
+    size_of_val(tree)
+        + tree.source.len()
+        + string_value_map_bytes(&tree.extra)
+        + node_bytes(&tree.root)
 }
 
 pub(super) fn history_memory_limit() -> usize {
@@ -1294,4 +1344,83 @@ pub(super) fn restore_history_transition(
         transition.changed_paragraph_id,
         transition.document_changed,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{block_estimated_bytes, inline_estimated_bytes};
+    use caret_doc::{
+        Align, Block, Equation, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathAlignRow,
+        MathNode, MathNodeKind, MathSourceRange, MathTree, NodeId,
+    };
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    fn tree() -> MathTree {
+        MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "x".to_owned(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Symbol,
+                text: Some("x".to_owned()),
+                source_range: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn history_estimate_includes_math_extension_keys_and_values() {
+        let inline = InlineNode::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree(),
+            extra: BTreeMap::new(),
+        });
+        let baseline = inline_estimated_bytes(&inline);
+        let mut extended = inline.clone();
+        let InlineNode::Math(value) = &mut extended else {
+            unreachable!();
+        };
+        let payload = "x".repeat(4096);
+        value
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .root
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value.math_tree.root.source_range = Some(MathSourceRange {
+            start: 0,
+            end: 1,
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(inline_estimated_bytes(&extended) >= baseline + payload.len() * 6);
+
+        let equation = Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree: tree(),
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(block_estimated_bytes(&equation) >= baseline + payload.len() * 2);
+
+        let align = Block::Align(Align {
+            id: NodeId::generate(),
+            source: "x".to_owned(),
+            rows: vec![MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![tree()],
+                extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+            }],
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(block_estimated_bytes(&align) >= baseline + payload.len() * 2);
+    }
 }

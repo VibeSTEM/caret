@@ -4,7 +4,7 @@
 
 ## 当前实现
 
-当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 当前包含 Paragraph、BlockEnvironment、ExplicitBreak 和 Opaque，`InlineNode` 当前包含 Run、InlineEnvironment、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Equation、Align、Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
+当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、Equation、Align、BlockEnvironment、ExplicitBreak 和 Opaque，`InlineNode` 包含 Run、InlineMath、InlineEnvironment、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等仍是后续节点。
 
 本页下文中的 `EnvironmentNode` 是语义层的统称；树形图是目标模型草图。当前 `.cdoc` 的具体字段以 `crates/caret-doc/src/model/` 中的 DTO 和 codec 为准。文档修订、布局缓存代际、焦点和选区属于运行时状态，不序列化进 `Document`。
 
@@ -37,6 +37,7 @@ crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
 crates/caret-doc/src/model/inline.rs    InlineNode 与软换行
+crates/caret-doc/src/model/math.rs      Caret 自有版本化数学树及 InlineMath/Equation/Align DTO
 crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
@@ -104,6 +105,12 @@ Paragraph
 详细的块级/行内环境、格式能力和编辑语义见[环境模型](document-environments.md)。
 
 ## 文本与实现边界
+
+### 数学节点持久化
+
+`MathTree` 是 Caret 持久化数学语义的唯一权威结构，定义在 `caret-doc/src/model/math.rs`；不持久化 `latex-rust` 或其他解析器的 AST。`schemaVersion` 当前为 1，`source` 保存原始公式 UTF-8 文本，`root` 是带稳定 `NodeId` 的有序 `MathNode` 树。节点通过 `kind` 表达符号、文本、运算符、分数、根式、上下标、定界符、重音、空格、样式、分组和占位符；`text` 是可选节点内容，`children` 保存有序操作数。可选 `sourceRange` 使用相对该 `source` 的半开 UTF-8 字节偏移，校验时必须落在字符边界内。
+
+`InlineMath` 位于 `Paragraph.inlines`，`Equation` 是单行显示块，`Align` 保存完整原始公式源码以及有序行和单元格；每个单元格持有独立 `MathTree`，其中的源码范围以该单元格源码为基准。公式容器、对齐行和每个数学节点都使用文档全局唯一 ID。当前实现限制公式源码最多 1 MiB、数学树最大深度 32；`.cdoc` 通过 `caret.math.inline`、`caret.math.equation`、`caret.math.align` 声明所需能力。解析器接入与 DTO 转换仍由任务 043 推进，未完成的输入不得以第三方 AST 代替这份 schema。
 
 Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。相邻 Run 的 `language`、`props`、未知可选字段 `extra` 完全相同时，编辑器可在受影响的局部范围合并它们；这些边界不代表光标停靠点。没有文本且无显式属性/语言/未知字段的默认 Run 是无语义占位，可在局部编辑归一化时移除；不能合并格式不同或带未知字段的 Run，也不在打开文档时重写整棵内容树。
 

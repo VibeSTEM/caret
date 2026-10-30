@@ -27,6 +27,7 @@ fn paragraph_text(paragraph: &Paragraph) -> String {
         for node in nodes {
             match node {
                 InlineNode::Run(run) => text.push_str(&run.text),
+                InlineNode::Math(_) => text.push('\u{fffc}'),
                 InlineNode::Environment(environment) => collect(&environment.children, text),
                 InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
             }

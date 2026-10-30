@@ -140,6 +140,13 @@ fn document_character_count(blocks: &[Block]) -> usize {
             Block::Paragraph(paragraph) => {
                 paragraph.inlines.iter().map(inline_character_count).sum()
             }
+            Block::Equation(equation) => equation.math_tree.source.chars().count(),
+            Block::Align(align) => align
+                .rows
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .map(|tree| tree.source.chars().count())
+                .sum(),
             Block::Environment(environment) => {
                 environment
                     .title
@@ -156,6 +163,7 @@ fn document_character_count(blocks: &[Block]) -> usize {
 fn inline_character_count(inline: &InlineNode) -> usize {
     match inline {
         InlineNode::Run(run) => run.text.chars().count(),
+        InlineNode::Math(_) => 1,
         InlineNode::Environment(environment) => environment
             .children
             .iter()

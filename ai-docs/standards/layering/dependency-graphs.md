@@ -29,6 +29,7 @@ flowchart TB
     foundation["caret-foundation"]
     build["caret-build"]
     dslcore["caret-dsl-core"]
+    math["caret-math"]
   end
 
   launcher --> ffi
@@ -53,6 +54,7 @@ flowchart TB
   doc ~~~ dslc
   foundation ~~~ build
   build ~~~ dslcore
+  dslcore ~~~ math
 ```
 
 ```mermaid

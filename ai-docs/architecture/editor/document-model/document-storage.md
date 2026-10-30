@@ -12,6 +12,9 @@
 | --- | --- |
 | `caret.env.bold` | 行内粗体环境 |
 | `caret.font.family-preferences` | 文档字体族偏好 |
+| `caret.math.align` | 块级多行对齐公式 |
+| `caret.math.equation` | 块级单行显示公式 |
+| `caret.math.inline` | 段落内行内公式对象 |
 | `caret.paragraph.layout-settings` | 段落排版设置 |
 | `caret.env.explicit-format-state` | Bold/Italic 环境中显式的 `enabled` 状态，包括局部关闭及重新开启 |
 | `caret.env.font` | 行内字体族环境 |

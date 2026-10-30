@@ -74,7 +74,7 @@
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
 | 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in-progress |
 | 042 | 数学排版 | [M3：latex-rust 后端验证](task/042-latex-rust-math-backend.md) | P2 | — | M | done |
-| 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | planned |
+| 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | in-progress |
 | 044 | 数学排版 | [M3：公式布局、画布渲染与表格集成](task/044-math-layout-and-rendering.md) | P2 | 012、027、043 | L | planned |
 | 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021 | M | ready |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、045 | M | planned |

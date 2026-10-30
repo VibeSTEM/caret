@@ -167,6 +167,26 @@ fn validate_block<'a>(
     validate_depth(depth, node_count)?;
     match block {
         Block::Paragraph(paragraph) => validate_paragraph(paragraph, depth, ids, node_count),
+        Block::Equation(equation) => {
+            insert_id(ids, &equation.id)?;
+            validate_math_tree(&equation.math_tree, ids, node_count)
+        }
+        Block::Align(align) => {
+            insert_id(ids, &align.id)?;
+            if align.source.len() > MAX_MATH_SOURCE_BYTES {
+                return Err(ModelError::InvalidDocument(
+                    "math source exceeds byte limit".to_owned(),
+                ));
+            }
+            for row in &align.rows {
+                validate_depth(depth + 1, node_count)?;
+                insert_id(ids, &row.id)?;
+                for cell in &row.cells {
+                    validate_math_tree(cell, ids, node_count)?;
+                }
+            }
+            Ok(())
+        }
         Block::Environment(environment) => {
             insert_id(ids, &environment.id)?;
             if environment.kind == BlockEnvironmentKind::Custom
@@ -250,6 +270,10 @@ fn validate_inline<'a>(
             }
             Ok(())
         }
+        InlineNode::Math(math) => {
+            insert_id(ids, &math.id)?;
+            validate_math_tree(&math.math_tree, ids, node_count)
+        }
         InlineNode::Environment(environment) => {
             insert_id(ids, &environment.id)?;
             if environment.kind.supports_enabled()
@@ -279,6 +303,56 @@ fn validate_inline<'a>(
         }
         InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => Ok(()),
     }
+}
+
+fn validate_math_tree<'a>(
+    tree: &'a MathTree,
+    ids: &mut HashSet<&'a str>,
+    node_count: &mut usize,
+) -> Result<(), ModelError> {
+    if tree.schema_version != MATH_TREE_SCHEMA_VERSION {
+        return Err(ModelError::InvalidDocument(format!(
+            "unsupported math tree schema version: {}",
+            tree.schema_version
+        )));
+    }
+    if tree.source.len() > MAX_MATH_SOURCE_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math source exceeds byte limit".to_owned(),
+        ));
+    }
+    validate_math_node(&tree.root, &tree.source, 0, ids, node_count)
+}
+
+fn validate_math_node<'a>(
+    node: &'a MathNode,
+    source: &str,
+    depth: usize,
+    ids: &mut HashSet<&'a str>,
+    node_count: &mut usize,
+) -> Result<(), ModelError> {
+    if depth >= MAX_MATH_TREE_DEPTH {
+        return Err(ModelError::NestingLimit);
+    }
+    validate_depth(depth, node_count)?;
+    insert_id(ids, &node.id)?;
+    if let Some(range) = node.source_range.as_ref() {
+        let start = range.start as usize;
+        let end = range.end as usize;
+        if start > end
+            || end > source.len()
+            || !source.is_char_boundary(start)
+            || !source.is_char_boundary(end)
+        {
+            return Err(ModelError::InvalidDocument(
+                "invalid math source byte range".to_owned(),
+            ));
+        }
+    }
+    for child in &node.children {
+        validate_math_node(child, source, depth + 1, ids, node_count)?;
+    }
+    Ok(())
 }
 
 fn validate_language_tag(tag: &str) -> Result<(), ModelError> {

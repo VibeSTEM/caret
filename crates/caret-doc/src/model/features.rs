@@ -54,7 +54,7 @@ fn block_has_language(block: &Block) -> bool {
                     InlineNode::Environment(environment) => {
                         environment.children.iter().any(inline_has_language)
                     }
-                    InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
+                    InlineNode::Math(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
                 })
         }
         Block::Environment(environment) => {
@@ -62,7 +62,7 @@ fn block_has_language(block: &Block) -> bool {
                 title.language.is_some() || title.inlines.iter().any(inline_has_language)
             }) || environment.children.iter().any(block_has_language)
         }
-        Block::ExplicitBreak(_) | Block::Opaque(_) => false,
+        Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     }
 }
 
@@ -72,7 +72,7 @@ fn inline_has_language(inline: &InlineNode) -> bool {
         InlineNode::Environment(environment) => {
             environment.children.iter().any(inline_has_language)
         }
-        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
+        InlineNode::Math(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
     }
 }
 
@@ -85,6 +85,12 @@ fn collect_block_features(block: &Block, features: &mut std::collections::BTreeS
             for inline in &paragraph.inlines {
                 collect_inline_features(inline, features);
             }
+        }
+        Block::Equation(_) => {
+            features.insert("caret.math.equation".to_owned());
+        }
+        Block::Align(_) => {
+            features.insert("caret.math.align".to_owned());
         }
         Block::Environment(environment) => {
             features.insert(
@@ -129,6 +135,9 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
                     .to_owned(),
                 );
             }
+        }
+        InlineNode::Math(_) => {
+            features.insert("caret.math.inline".to_owned());
         }
         InlineNode::Environment(environment) => {
             features.insert(environment.kind.required_feature().to_owned());

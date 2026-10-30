@@ -18,6 +18,7 @@
 | Python 工具 | uv 0.12.18，CPython 3.14.7 | 只服务质量工具。cmakelang 0.6.13，cppcheck 1.5.1 |
 | 路径与锁 | Rust `Path` / `PathBuf`，fs4 1.1.0 | 逻辑路径服务和安装锁一起移植 |
 | DSL | pest 2.8，`.pa` | `caret-dsl-core` 与 `caret-dslc` |
+| 数学 parser | `latex-rust 3.0.1` | 由 L1 `caret-math` 隔离；STIX Two Math 字体许可随发布保留，适配结论见[研究报告 010](../research/010-latex-rust.md) |
 | 基准计时 | hyperfine 2.0.0 | 按需安装，不进入默认构建 |
 | macOS 部署目标 | 13.0 | LLVM 不替代 Apple SDK；sysroot 仍用系统 SDK |
 | 供给目录 | 仓库根 `.toolchain/` | 预编译工具、Qt、SDK 和 uv / Python。编译产物仍在 `target/` |

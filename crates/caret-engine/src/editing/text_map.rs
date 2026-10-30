@@ -37,6 +37,7 @@ struct Span {
     end: usize,
     path: Vec<usize>,
     is_soft_break: bool,
+    is_math: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +210,27 @@ impl TextMap {
                     }),
                 });
         if let Some(span) = candidate {
+            if span.is_math {
+                let list = inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+                    .ok_or(EditError::InvalidPosition)?;
+                let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
+                let insertion_index = if offset <= span.start {
+                    index
+                } else {
+                    index + 1
+                };
+                list.insert(
+                    insertion_index,
+                    InlineNode::Run(Run {
+                        text: text.to_owned(),
+                        language: None,
+                        props: Default::default(),
+                        extra: Default::default(),
+                    }),
+                );
+                normalize_run_neighborhood(list, insertion_index);
+                return Ok(());
+            }
             let local = offset.saturating_sub(span.start);
             if mutate_inline_at_path(&mut paragraph.inlines, &span.path, &mut |node| {
                 if let InlineNode::Run(run) = node {
@@ -305,6 +327,18 @@ impl TextMap {
             }
             return Ok(());
         };
+        if span.is_math {
+            let list = inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+                .ok_or(EditError::InvalidPosition)?;
+            let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
+            let insertion_index = if offset <= span.start {
+                index
+            } else {
+                index + 1
+            };
+            list.insert(insertion_index, InlineNode::SoftBreak(SoftBreak::default()));
+            return Ok(());
+        }
         let local = offset.saturating_sub(span.start);
         let Some(list) = inline_list_at_path_mut(&mut paragraph.inlines, &span.path) else {
             return Err(EditError::InvalidPosition);
@@ -364,6 +398,9 @@ impl TextMap {
             let overlap_end = end.min(span.end);
             if overlap_start >= overlap_end {
                 continue;
+            }
+            if span.is_math {
+                return Err(EditError::UnsupportedOpaqueContent);
             }
             if span.is_soft_break {
                 let node = inline_at_path(&paragraph.inlines, &span.path)
@@ -427,6 +464,18 @@ fn collect_text(
                     end: text.len(),
                     path: path.clone(),
                     is_soft_break: false,
+                    is_math: false,
+                });
+            }
+            InlineNode::Math(_) => {
+                let start = text.len();
+                text.push('\u{fffc}');
+                spans.push(Span {
+                    start,
+                    end: text.len(),
+                    path: path.clone(),
+                    is_soft_break: false,
+                    is_math: true,
                 });
             }
             InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
@@ -454,6 +503,7 @@ fn collect_text(
                     end: text.len(),
                     path: path.clone(),
                     is_soft_break: true,
+                    is_math: false,
                 });
             }
             InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
@@ -554,6 +604,7 @@ pub(super) fn inline_length(node: &InlineNode) -> Result<usize, EditError> {
                 })
         }
         InlineNode::SoftBreak(_) => Ok(1),
+        InlineNode::Math(_) => Ok('\u{fffc}'.len_utf8()),
         InlineNode::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
 }
@@ -646,7 +697,9 @@ fn split_inline_node(
                 Some(InlineNode::Environment(right_environment)),
             ))
         }
-        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => Err(EditError::InvalidPosition),
+        InlineNode::Math(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {
+            Err(EditError::InvalidPosition)
+        }
     }
 }
 
@@ -711,5 +764,106 @@ fn remove_inline_at_path(nodes: &mut Vec<InlineNode>, path: &[usize]) -> Option<
             remove_inline_at_path(&mut environment.children, rest)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caret_doc::{
+        InlineEnvironment, InlineEnvironmentKind, InlineMath, MATH_TREE_SCHEMA_VERSION, MathNode,
+        MathNodeKind, MathTree,
+    };
+
+    fn math() -> InlineNode {
+        InlineNode::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: MATH_TREE_SCHEMA_VERSION,
+                source: "x".to_owned(),
+                root: MathNode {
+                    id: NodeId::generate(),
+                    kind: MathNodeKind::Symbol,
+                    text: Some("x".to_owned()),
+                    source_range: None,
+                    children: Vec::new(),
+                    extra: Default::default(),
+                },
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        })
+    }
+
+    #[test]
+    fn math_object_uses_utf8_placeholder_length_when_splitting_text() -> Result<(), EditError> {
+        let nodes = vec![
+            InlineNode::Run(Run {
+                text: "a".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }),
+            math(),
+            InlineNode::Run(Run {
+                text: "b".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }),
+        ];
+        let (left, right) = split_inline_nodes(nodes, 4)?;
+        assert_eq!(left.len(), 2);
+        assert_eq!(right.len(), 1);
+        assert!(matches!(left[1], InlineNode::Math(_)));
+        assert!(matches!(&right[0], InlineNode::Run(run) if run.text == "b"));
+        Ok(())
+    }
+
+    #[test]
+    fn soft_break_can_be_inserted_on_both_math_object_edges() -> Result<(), EditError> {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![
+            InlineNode::Run(Run {
+                text: "a".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }),
+            math(),
+            InlineNode::Run(Run {
+                text: "b".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }),
+        ];
+
+        TextMap::new(&paragraph)?.insert_soft_break(&mut paragraph, 1, Affinity::Downstream)?;
+        assert!(matches!(paragraph.inlines[1], InlineNode::SoftBreak(_)));
+        let map = TextMap::new(&paragraph)?;
+        map.insert_soft_break(&mut paragraph, 5, Affinity::Upstream)?;
+        assert!(matches!(paragraph.inlines[3], InlineNode::SoftBreak(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn soft_break_at_nested_math_edge_stays_inside_its_environment() -> Result<(), EditError> {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: Default::default(),
+            children: vec![math()],
+            extra: Default::default(),
+        })];
+        TextMap::new(&paragraph)?.insert_soft_break(&mut paragraph, 0, Affinity::Downstream)?;
+        let InlineNode::Environment(environment) = &paragraph.inlines[0] else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert!(matches!(environment.children[0], InlineNode::SoftBreak(_)));
+        assert!(matches!(environment.children[1], InlineNode::Math(_)));
+        Ok(())
     }
 }

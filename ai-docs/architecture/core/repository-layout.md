@@ -1,6 +1,6 @@
 # 仓库结构
 
-更新日期：2026-10-29。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
+更新日期：2026-10-31。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
 
 ```text
 当前仓库
@@ -64,6 +64,7 @@
 │   ├── caret-foundation/
 │   ├── caret-layout/
 │   │   └── src/paragraph/parley/{interaction.rs,line_mapping.rs}
+│   ├── caret-math/               # latex-rust parser 适配边界
 │   ├── caret-structure/
 │   │   └── src/{index.rs,index/tests.rs}
 │   └── launcher/

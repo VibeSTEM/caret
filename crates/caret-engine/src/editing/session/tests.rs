@@ -4,7 +4,8 @@ use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    InlineEnvironmentKind, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode,
+    MathNodeKind, MathTree, NodeId, Paragraph, Run,
 };
 use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -128,6 +129,74 @@ fn text_map_cache_keeps_both_paragraphs_of_a_cross_paragraph_selection() {
             .iter()
             .any(|(id, _, _)| id == &second_id)
     );
+}
+
+#[test]
+fn paragraph_split_after_inline_math_uses_utf8_placeholder_offset() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    let first_id = paragraph.id.clone();
+    paragraph.inlines = vec![
+        InlineNode::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: MATH_TREE_SCHEMA_VERSION,
+                source: "x".to_owned(),
+                root: MathNode {
+                    id: NodeId::generate(),
+                    kind: MathNodeKind::Symbol,
+                    text: Some("x".to_owned()),
+                    source_range: None,
+                    children: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "x".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut second = Paragraph::empty(NodeId::generate());
+    second.inlines.push(InlineNode::Run(Run {
+        text: "b".to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    }));
+    let second_id = second.id.clone();
+    document.body.push(Block::Paragraph(second));
+
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let selection = Selection {
+        anchor: Pos {
+            paragraph_id: first_id,
+            offset: '\u{fffc}'.len_utf8(),
+            ..session.selection().focus.clone()
+        },
+        focus: Pos {
+            paragraph_id: second_id,
+            offset: 0,
+            ..session.selection().focus.clone()
+        },
+    };
+    session
+        .run(Command::SetSelection(Some(selection)))
+        .unwrap_or_else(|error| panic!("cross-paragraph selection failed: {error}"));
+    session
+        .run(Command::InsertParagraphBreak)
+        .unwrap_or_else(|error| panic!("split after math failed: {error}"));
+
+    assert_eq!(session.document.body.len(), 2);
+    assert_eq!(paragraph_text(&session, 0), "\u{fffc}");
+    assert_eq!(paragraph_text(&session, 1), "b");
 }
 
 #[test]

@@ -1015,7 +1015,9 @@ fn collect_blocks<'a>(
                 }
                 ordered.push(LayoutInput::ExplicitBreak);
             }
-            Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
+            Block::Equation(_) | Block::Align(_) | Block::Opaque(_) => {
+                return Err(DocumentLayoutError::UnsupportedContent);
+            }
         }
     }
     Ok(())

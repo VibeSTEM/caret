@@ -69,4 +69,4 @@ The adapter preserves failed input source and a locatable error. On successful i
 - 英文 `\text{...}` 使用数学字体字形布局；中文返回缺字错误。
 - 上游不支持 `equation*` / `align*` 环境；Caret 输入约定无需采用它们。
 
-记录验证和锁文件 checksums 后，按维护者指示删除临时 probe 源码及构建产物。生产 workspace 还没有加入 `latex-rust` 依赖。
+记录验证和锁文件 checksums 后，按维护者指示删除临时 probe 源码及构建产物。043 的初始适配 crate 已把 `latex-rust 3.0.1` 加入生产 workspace。新增依赖后的全 workspace `cargo-deny --offline check` 已通过 advisories、版本、许可和来源检查，使用的 RustSec 数据库快照为 commit `2295466`（2026-10-30）；沙箱中仓库默认的 advisory DB 锁文件只读，无法通过 `cargo audit` 刷新数据库。重新联网更新 advisory DB 后应再运行一次审计。

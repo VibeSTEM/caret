@@ -13,6 +13,18 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
         ));
     };
     match object.get("type").and_then(Value::as_str) {
+        Some("equation") if supported_tree(object.get("mathTree")) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(Block::Equation)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("equation") => Ok(Block::Opaque(OpaqueNode { raw: value })),
+        Some("align") if supported_align(object) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(Block::Align)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("align") => Ok(Block::Opaque(OpaqueNode { raw: value })),
         Some("paragraph") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(Block::Paragraph)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -37,6 +49,12 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
         ));
     };
     match object.get("type").and_then(Value::as_str) {
+        Some("inlineMath") if supported_tree(object.get("mathTree")) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(InlineNode::Math)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("inlineMath") => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
         Some("run") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(InlineNode::Run)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -56,6 +74,58 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
         }
         _ => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
     }
+}
+
+fn supported_tree(value: Option<&Value>) -> bool {
+    let Some(tree) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    tree.get("schemaVersion").and_then(Value::as_u64)
+        == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
+        && tree.get("root").is_some_and(supported_math_node)
+}
+
+fn supported_align(object: &Map<String, Value>) -> bool {
+    let Some(rows) = object.get("rows").and_then(Value::as_array) else {
+        return false;
+    };
+    rows.iter().all(|row| {
+        row.as_object()
+            .and_then(|row| row.get("cells"))
+            .and_then(Value::as_array)
+            .is_some_and(|cells| cells.iter().all(|cell| supported_tree(Some(cell))))
+    })
+}
+
+fn supported_math_node(value: &Value) -> bool {
+    const KINDS: &[&str] = &[
+        "row",
+        "symbol",
+        "text",
+        "operator",
+        "fraction",
+        "radical",
+        "superscript",
+        "subscript",
+        "sub_sup",
+        "delimited",
+        "accent",
+        "space",
+        "style",
+        "group",
+        "placeholder",
+    ];
+    let Some(node) = value.as_object() else {
+        return false;
+    };
+    node.get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| KINDS.contains(&kind))
+        && node.get("children").is_none_or(|children| {
+            children
+                .as_array()
+                .is_some_and(|children| children.iter().all(supported_math_node))
+        })
 }
 
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
@@ -182,6 +252,8 @@ fn take_map(
 
 pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
     match block {
+        Block::Equation(value) => with_type("equation", value),
+        Block::Align(value) => with_type("align", value),
         Block::Paragraph(value) => with_type("paragraph", value),
         Block::Environment(value) => environment_to_value(
             EnvironmentValue {
@@ -203,6 +275,7 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
 
 pub(crate) fn inline_to_value(inline: &InlineNode) -> Result<Value, ModelError> {
     match inline {
+        InlineNode::Math(value) => with_type("inlineMath", value),
         InlineNode::Run(value) => with_type("run", value),
         InlineNode::Environment(value) => environment_to_value(
             EnvironmentValue {

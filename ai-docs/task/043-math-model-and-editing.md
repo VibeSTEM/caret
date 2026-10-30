@@ -1,6 +1,6 @@
 # 043 — M3：公式文档模型与编辑
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：010、042
 - 优先级：P2
 - 创建 / 更新：2026-10-29 / 2026-10-31
@@ -23,7 +23,7 @@
 
 ## 前置条件与待决策
 
-010 结构导航和 042 后端验证需完成。`caret-math` 位于 Rust L1，不依赖其他 workspace crate；`caret-engine` 可依赖它执行解析，`caret-doc` 的持久化 schema 不依赖它或第三方类型。043 在 parser/Token/AST 边界提供源码字节范围与预处理偏移映射，供失败导入定位；成功导入后以 Caret 树为权威。失败导入保留原公式源与可定位错误；成功解析/规范化后是否保留原始字节由 schema/导出契约决定，不假设源字符串与 Caret 树一一对应。布局盒到 Caret 数学节点的 provenance 由 044 实现，与 parser 源码范围分开。
+010 结构导航和 042 后端验证需完成。`caret-math` 位于 Rust L1，不依赖其他 workspace crate；`caret-engine` 到 `caret-math` 的允许边已登记，`caret-doc` 的持久化 schema 不依赖它或第三方类型。043 在 parser/Token/AST 边界提供源码字节范围与预处理偏移映射，供失败导入定位；成功导入后以 Caret 树为权威。失败导入保留原公式源与可定位错误；成功解析/规范化后是否保留原始字节由 schema/导出契约决定，不假设源字符串与 Caret 树一一对应。布局盒到 Caret 数学节点的 provenance 由 044 实现，与 parser 源码范围分开。
 
 ## 实施步骤
 
@@ -50,11 +50,16 @@
 
 ## 验证计划与结果
 
-| 日期 | 环境 / 命令 | 预期 | 实际结果 |
-| --- | --- | --- | --- |
-| — | caret-doc / caret-engine 公式行为测试 | schema、编辑和位置契约成立 | 未执行 |
-| — | `.cdoc` 保存重开/未知可选字段夹具 | 公式与扩展字段保留 | 未执行 |
-| — | 深度/长度边界及失败原子测试 | 安全拒绝且正文不变 | 未执行 |
+| 日期       | 环境 / 命令                            | 预期                                   | 实际结果                                             |
+| ---------- | -------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
+| 2026-10-31 | `cargo test -p caret-math --locked --offline` | Parser 适配、深度/长度边界、错误源保留 | 通过，5 项单元测试；尚未覆盖解析结果到 Caret 树的转换 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | 数学 DTO、保存重开、正文原子偏移、Enter 与历史状态 | 通过：`caret-doc` 42 项、`caret-engine` 194 项 |
+| 2026-10-31 | `cargo check --locked --offline --workspace` | 所有 crate 能识别新增持久化节点 | 通过；数学绘制和块级布局仍由 044 实现 |
+| 2026-10-31 | `cargo lint --check` | Rust、依赖、分层、CMake/QML/native lint | 通过全部 9 个检查阶段 |
+| 2026-10-31 | `CARGO_HOME=/private/tmp/caret-cargo-audit-home cargo-deny --offline check` | 新增依赖后的 advisories、版本、许可与来源审计 | 通过；使用本地 RustSec 数据库快照 `2295466`（2026-10-30），当前沙箱无法刷新在线数据库 |
+| 2026-10-31 | `cargo lint --check` | crate lint、依赖和分层、CMake/QML/native lint | 通过（最终代码改动后复跑） |
+| —         | caret-engine 公式编辑与位置行为测试     | MathPos、内部编辑和导航契约成立          | 未执行                                               |
+| —         | 高节点数预算与合并后故障注入回滚测试    | 预算边界及失败后正文/选区/历史保持不变  | 未执行                                               |
 
 ## 风险与回退
 
@@ -63,6 +68,10 @@
 ## 决策与工作记录
 
 - 2026-10-29：从 011 拆出文档模型、编辑和导航任务；以 020/011 的产品语义为准。
+- 2026-10-31：新增 L1 `caret-math`，锁定 `latex-rust 3.0.1`，执行 1 MiB 源码限制、32 层 parser 预算，确保 `Align` 仅接收 `aligned` 树，并通过 AST 检查拒绝自动编号环境以及嵌套的 `\\label`、`\\ref`、`\\tag`、`\\nonumber` 和 `\\notag`。失败对象借用并保留原始输入，当前位置范围目前只能精确到整段公式。
+- 2026-10-31：`latex-rust 3.0.1` 不暴露 token/AST 字节范围；细粒度源跨度及预处理映射仍需上游 adapter patch，本阶段没有自行实现第二套 tokenizer/parser。解析结果到 Caret 数学树的转换、MathPos 与公式编辑事务尚未实现。
+- 2026-10-31：`caret-doc` 加入版本 1 的自有数学树与 `InlineMath`、`Equation`、`Align` DTO；math 节点范围、深度、源码长度和文档全局 ID 在保存入口统一校验，三种节点通过独立 `.cdoc` 能力标记声明。已补保存重开测试。`caret-layout` 暂以原子占位符表达行内公式，块级公式布局返回未支持；正式数学布局、MathPos、解析器到 Caret 树的转换及事务编辑待续。
+- 2026-10-31：Terra/medium schema 与编辑边界只读复核发现并促成修复：未知 `sourceRange` 字段往返保留；Align 行进入文档节点预算；公式能力登记；未来 schema/节点 kind 转安全预览；U+FFFC 按 UTF-8 字节计长；公式边界可插软换行；跨段 Enter 失败恢复文档、选区、索引和缓存；数学扩展字段纳入历史大小估算。复验覆盖 schema 源码/深度限制、三种数学节点未来 schema、公式后的跨段 Enter、历史扩展字段估算。仍未验证高节点数预算裁剪及实际 MathPos/布局交互。
 
 ## 完成摘要
 
