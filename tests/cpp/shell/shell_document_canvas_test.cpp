@@ -5,6 +5,10 @@
 #include "layout_view_model.hpp"
 #include "shell_load_test.hpp"
 #include "theme_view_model.hpp"
+#ifdef CARET_ENABLE_APP
+#include "caret_ffi.h"
+#include "document_runtime_bridge.hpp"
+#endif
 #include <QByteArray>
 #include <QChar>
 #include <QClipboard>
@@ -15,6 +19,9 @@
 #include <QHash>
 #include <QImage>
 #include <QInputMethodEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QList>
 #include <QMouseEvent>
@@ -42,6 +49,7 @@
 #include <QtCore/qobject.h>
 #include <QtCore/qobjectdefs.h>
 #include <QtCore/qvariant.h>
+#include <QtGui/qrgb.h>
 #include <QtMath>
 #include <QtQml/qqmlextensionplugin.h>
 #include <QtTest/QTest>
@@ -52,7 +60,117 @@
 #include <qcontainerfwd.h>
 #include <qtestcase.h>
 #include <qtestsupport_core.h>
+#include <string_view>
 #include <utility>
+
+#ifdef CARET_ENABLE_APP
+void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String initial_snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(
+        !std::string_view(initial_snapshot.data(), initial_snapshot.size()).starts_with("error:"));
+    const QJsonObject initial =
+        QJsonDocument::fromJson(
+            QByteArray(initial_snapshot.data(), static_cast<qsizetype>(initial_snapshot.size())))
+            .object();
+    const QJsonArray paragraphs = initial.value(QStringLiteral("paragraphs")).toArray();
+    QVERIFY(!paragraphs.isEmpty());
+    const QString paragraph_id =
+        paragraphs.first().toObject().value(QStringLiteral("paragraphId")).toString();
+    QVERIFY(!paragraph_id.isEmpty());
+    const QJsonObject endpoint{{QStringLiteral("paragraphId"), paragraph_id},
+                               {QStringLiteral("offsetUtf8"), QStringLiteral("0")},
+                               {QStringLiteral("affinity"), QStringLiteral("downstream")},
+                               {QStringLiteral("visualAffinity"), QStringLiteral("downstream")}};
+    const QJsonObject focus{{QStringLiteral("paragraphId"), paragraph_id},
+                            {QStringLiteral("offsetUtf8"), QStringLiteral("10")},
+                            {QStringLiteral("affinity"), QStringLiteral("upstream")},
+                            {QStringLiteral("visualAffinity"), QStringLiteral("upstream")}};
+    const rust::String inserted = caret::ffi::insert_text_json(*runtime, "underlined");
+    QVERIFY(!std::string_view(inserted.data(), inserted.size()).starts_with("error:"));
+    const rust::String selected = caret::ffi::set_selection_json(
+        *runtime, QJsonDocument(QJsonObject{{QStringLiteral("anchor"), endpoint},
+                                            {QStringLiteral("focus"), focus}})
+                      .toJson(QJsonDocument::Compact)
+                      .toStdString());
+    QVERIFY(!std::string_view(selected.data(), selected.size()).starts_with("error:"));
+    for (const auto& [action, text] :
+         {std::pair{QStringLiteral("begin"), QString{}},
+          std::pair{QStringLiteral("type"), QStringLiteral("underline")},
+          std::pair{QStringLiteral("accept"), QString{}}}) {
+        const rust::String response = caret::ffi::command_line_command_json(
+            *runtime, action.toStdString(), text.toStdString());
+        QVERIFY(!std::string_view(response.data(), response.size()).starts_with("error:"));
+    }
+
+    const rust::String updated_snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(
+        !std::string_view(updated_snapshot.data(), updated_snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(QString::fromUtf8(
+        updated_snapshot.data(), static_cast<qsizetype>(updated_snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    caret::LayoutViewModel view_model;
+    const QVariantMap request =
+        view_model.rasterizePageGlyphs(0, 96.0 / 72.0, 0.0, 0.0, 32, 32, 32, 255);
+    QVERIFY2(request.value(QStringLiteral("valid")).toBool(),
+             qPrintable(request.value(QStringLiteral("error")).toString()));
+    const QVariantList decorations = request.value(QStringLiteral("decorations")).toList();
+    QVERIFY(!decorations.isEmpty());
+    const QVariantMap decoration = decorations.first().toMap();
+    QVariantMap decoration_only_request = request;
+    decoration_only_request.insert(QStringLiteral("images"), QVariantList{});
+    decoration_only_request.insert(QStringLiteral("placements"), QVariantList{});
+
+    auto* canvas = new caret::DocumentCanvas();
+    canvas->setPageSizesPt(view_model.pageSizesPt());
+    canvas->setPageMarginsPt(view_model.pageMarginsPt());
+    canvas->setGlyphFrames(QVariantList{decoration_only_request});
+    QCOMPARE(canvas->glyphFrames().size(), 1);
+    QVERIFY(!canvas->pageSizesPt().isEmpty());
+    QQuickWindow window;
+    window.resize(1000, 1200);
+    canvas->setParent(&window);
+    canvas->setParentItem(window.contentItem());
+    canvas->setWidth(1000);
+    canvas->setHeight(1200);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+
+    const int page_index = request.value(QStringLiteral("pageIndex")).toInt();
+    const QPointF decoration_origin = canvas->documentToContent(
+        page_index, QPointF(decoration.value(QStringLiteral("xPt")).toReal(),
+                            decoration.value(QStringLiteral("yPt")).toReal()));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = window.grabWindow();
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
+            const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
+            const qreal left = decoration_origin.x() * scale_x;
+            const qreal top = decoration_origin.y() * scale_y;
+            const qreal logical_scale = request.value(QStringLiteral("rasterPxPerPt")).toReal();
+            const qreal right = left + decoration.value(QStringLiteral("widthPt")).toReal() *
+                                           logical_scale * scale_x;
+            const qreal bottom = top + decoration.value(QStringLiteral("heightPt")).toReal() *
+                                           logical_scale * scale_y;
+            const QRect pixel_rect(QPoint(qFloor(left), qFloor(top)),
+                                   QPoint(qCeil(right), qCeil(bottom)));
+            const QImage region = frame.copy(pixel_rect.intersected(frame.rect()))
+                                      .convertToFormat(QImage::Format_ARGB32);
+            if (region.isNull()) {
+                return false;
+            }
+            const auto* first_pixel = reinterpret_cast<const QRgb*>(region.constBits());
+            const auto* last_pixel = first_pixel + region.sizeInBytes() / sizeof(QRgb);
+            return std::any_of(first_pixel, last_pixel,
+                               [](QRgb pixel) { return qGray(pixel) < 160; });
+        }()),
+        3000);
+}
+#endif
 
 void ShellLoadTest::canvasPolicyPublishesDocumentedZoomLimits() {
     const caret::CanvasPolicy policy;

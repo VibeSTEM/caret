@@ -30,6 +30,17 @@ fn paragraph(text: &str) -> Paragraph {
     paragraph
 }
 
+fn visible_text(nodes: &[InlineNode]) -> String {
+    nodes
+        .iter()
+        .map(|node| match node {
+            InlineNode::Run(run) => run.text.clone(),
+            InlineNode::Environment(environment) => visible_text(&environment.children),
+            InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => String::new(),
+        })
+        .collect()
+}
+
 fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> InlineNode {
     InlineNode::Environment(InlineEnvironment {
         id,
@@ -38,6 +49,21 @@ fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> Inline
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children: vec![run(text)],
         extra,
+    })
+}
+
+fn inline_environment(
+    id: NodeId,
+    kind: InlineEnvironmentKind,
+    children: Vec<InlineNode>,
+) -> InlineNode {
+    InlineNode::Environment(InlineEnvironment {
+        id,
+        kind,
+        definition_id: None,
+        props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
+        children,
+        extra: BTreeMap::new(),
     })
 }
 
@@ -333,6 +359,161 @@ fn selection_format_preserves_text_and_undo_restores_the_original_format_tree() 
         .run(Command::Redo)
         .unwrap_or_else(|error| panic!("redo failed: {error}"));
     assert_all_format(&session, &paragraph_id, InlineEnvironmentKind::Bold, true);
+}
+
+#[test]
+fn mod_backspace_unwraps_nested_inline_environments_one_layer_at_a_time() {
+    let italic_id = NodeId::generate();
+    let bold_id = NodeId::generate();
+    let model = Paragraph {
+        inlines: vec![inline_environment(
+            italic_id,
+            InlineEnvironmentKind::Italic,
+            vec![inline_environment(
+                bold_id,
+                InlineEnvironmentKind::Bold,
+                vec![run("text")],
+            )],
+        )],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let original_document = session.document().clone();
+    let mut caret = session.selection.focus.clone();
+    caret.offset = 2;
+    select(&mut session, caret.clone(), caret);
+
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("first inline environment removal failed: {error}"));
+    assert_eq!(
+        session
+            .selected_text()
+            .unwrap_or_else(|error| panic!("visible text query failed: {error}")),
+        ""
+    );
+    let position = Pos {
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let current = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph query failed: {error}"));
+    assert_eq!(visible_text(&current.inlines), "text");
+    assert_eq!(
+        format_spans(&current.inlines)
+            .unwrap_or_else(|error| panic!("format query failed: {error}"))
+            .iter()
+            .map(|span| (format_value(span, InlineEnvironmentKind::Bold), span.italic))
+            .collect::<Vec<_>>(),
+        vec![(false, true)]
+    );
+    let first_unwrapped_document = session.document().clone();
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo inline environment removal failed: {error}"));
+    assert_eq!(session.document(), &original_document);
+    let restored = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("restored paragraph query failed: {error}"));
+    let restored_spans = format_spans(&restored.inlines)
+        .unwrap_or_else(|error| panic!("restored format query failed: {error}"));
+    assert_eq!(restored_spans.len(), 1);
+    assert!(format_value(
+        &restored_spans[0],
+        InlineEnvironmentKind::Bold
+    ));
+    assert!(restored_spans[0].italic);
+
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo inline environment removal failed: {error}"));
+    assert_eq!(session.document(), &first_unwrapped_document);
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("outer inline environment removal failed: {error}"));
+    let fully_unwrapped_document = session.document().clone();
+    let unformatted = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("unformatted paragraph query failed: {error}"));
+    assert_eq!(visible_text(&unformatted.inlines), "text");
+    assert_all_format(&session, &paragraph_id, InlineEnvironmentKind::Bold, false);
+    assert_eq!(
+        format_spans(&unformatted.inlines)
+            .unwrap_or_else(|error| panic!("unformatted format query failed: {error}"))
+            .iter()
+            .map(|span| span.italic)
+            .collect::<Vec<_>>(),
+        vec![false]
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo outer inline environment removal failed: {error}"));
+    assert_eq!(session.document(), &first_unwrapped_document);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo outer inline environment removal failed: {error}"));
+    assert_eq!(session.document(), &fully_unwrapped_document);
+}
+
+#[test]
+fn mod_backspace_does_not_unwrap_inline_environment_during_ime_or_command_input() {
+    let original = Paragraph {
+        inlines: vec![inline_environment(
+            NodeId::generate(),
+            InlineEnvironmentKind::Bold,
+            vec![run("plain")],
+        )],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let original_id = original.id.clone();
+    let mut session = session_with_paragraphs(vec![original]);
+    let before = session.document().clone();
+
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("inline environment Mod-Backspace failed: {error}"));
+    assert_ne!(session.document(), &before);
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("inline environment restoration failed: {error}"));
+    assert_eq!(session.document(), &before);
+
+    session
+        .run(Command::UpdateComposition {
+            id: 91,
+            preedit: "preedit".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("IME preedit setup failed: {error}"));
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("IME Mod-Backspace failed: {error}"));
+    assert_eq!(session.document(), &before);
+    assert!(session.composition().is_some());
+
+    session
+        .run(Command::CancelComposition { id: 91 })
+        .unwrap_or_else(|error| panic!("IME cancellation failed: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command input setup failed: {error}"));
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("command input Mod-Backspace failed: {error}"));
+    assert_eq!(session.document(), &before);
+    assert!(session.command_line().is_some());
+
+    let position = Pos {
+        paragraph_id: original_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    assert!(session.paragraph_for(&position).is_ok());
 }
 
 #[test]

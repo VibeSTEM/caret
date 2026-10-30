@@ -1,6 +1,6 @@
 # 025 — 字符与段落格式命令
 
-- 状态：in-progress
+- 状态：done
 - 依赖：009、021、022、024
 - 优先级：P2
 - 创建 / 更新：2026-10-25 / 2026-10-30
@@ -9,7 +9,7 @@
 
 提供基于文档语义的字符和段落格式操作。格式状态必须保留继承、显式关闭、混合值和待输入样式等区别；Rust 文档/编辑会话是状态权威，Qt/QML 只传递操作并显示 Rust 投影。
 
-本任务已交付字体基础、粗体/斜体、单线下划线、首行缩进和字符宽空格；当前只负责这些能力的收尾验收、跨层下划线绘制断言和独立最终评审。原计划中尚未实现的字号、字色/底纹、其他段落属性与命名样式已拆到 060–063，不再扩大本任务的实现范围。字体目标和优先级以[字体选择规范](../architecture/editor/font-selection.md)为唯一权威；格式属性归属以[文字格式语义](../architecture/editor/text-formatting.md)为唯一权威。
+本任务交付字体基础、粗体/斜体、单线下划线、首行缩进和字符宽空格，并收尾验证跨层绘制、环境解除行为及长文档格式性能。原计划中尚未实现的字号、字色/底纹、其他段落属性与命名样式已拆到 060–063，不再扩大本任务的实现范围。字体目标和优先级以[字体选择规范](../architecture/editor/font-selection.md)为唯一权威；格式属性归属以[文字格式语义](../architecture/editor/text-formatting.md)为唯一权威。
 
 ## 必读
 
@@ -45,22 +45,20 @@
 
 ## 验收标准
 
-### 已完成
+### 实施与验收状态
 
 - [x] `\bold` / `\italic` 使用行内 `EnvironmentNode`；支持选中文本、混合选区统一应用、显式局部关闭、空选区 pending typing、跨段格式、IME、Undo/Redo、环境拆分/合并和节点 ID 保留。行为测试覆盖格式树与可见文本/位置语义。
 - [x] 文档字体默认值按 Script 与 Script+Language 目标由 Rust 文档设置持有；`\defaultfont` 可键盘导航目标层级并提交设置，`\font` 可查询本机字体并将所选字体应用为局部 Font 环境。字体缺失保留请求并由 shaping fallback 处理；UI 不扫描目录。
 - [x] `defaultCodeFontFamily` 默认值、校验、`.cdoc` 持久化和快照投影已接通；代码 shaping 使用显式字体或平台 Monospace，保持代码角色等宽空格语义。实际代码块节点尚未实现。
-- [x] `\underline` 使用 Run 直接属性，支持选区、混合范围、pending typing、软换行、IME 和 Undo/Redo；Rust/Parley 提供装饰几何，Qt 使用独立 QSG 装饰层，行框不变。
+- [x] `\underline` 使用 Run 直接属性，支持选区、混合范围、pending typing、软换行、IME 和 Undo/Redo；Rust/Parley 提供装饰几何，Qt 使用独立 QSG 装饰层，行框不变。Qt Quick 行为测试从 Rust FFI 生成装饰帧并检查画布装饰区域内的实际像素覆盖。
 - [x] `\firstlineindent`、Tab、`\singlecharspace`、`\doublecharspace` 与普通 U+0020 半字宽排版语义已接通；首行缩进参与布局、光标/选区几何、撤销/重做和 `.cdoc` 往返。
 - [x] 上述已交付能力通过对应 Rust、跨层、QML 加载/格式和持久化测试；字体弹窗初始实现通过构建与加载检查。
+- [x] 下划线装饰跨 Rust FFI/Qt Quick 场景图的像素级行为测试通过；命令字体弹窗的边缘定位、滚动和鼠标行为由 059 验收，不阻塞本任务既有命令状态/API。
+- [x] Mod+Backspace 在行内嵌套环境中逐层解除且保留内容；IME 预编辑和命令输入上下文中不误解除环境，行为由 Rust Session 测试覆盖。
+- [x] 代表性长文档格式操作完成实测并记录绝对耗时。该结果是当前实现的测量，不是优化前后对比，不据此声称性能提升。
+- [x] 基础能力的实现、持久化、失败原子性与 Undo 行为经完整独立 final review。
 
-### 待完成
-
-- [ ] 补足下划线装饰跨 FFI/Qt 的像素级端到端断言；命令字体弹窗的边缘定位、滚动和鼠标行为由 059 验收，不阻塞本任务既有命令状态/API。
-- [ ] 验证 Mod+Backspace 在行内嵌套环境中逐层解除且保留内容，在普通文本/IME/命令输入上下文不误删，并保留块环境原有行为。
-- [ ] 对已交付能力的长文档代表输入完成性能验证；有性能改善结论时提供可复现耗时或分配量对比，不以代码更短或缓存增加作为证据。
-- [ ] 基础能力的实现、持久化、失败原子性与 Undo 行为经完整独立 final review；发现处理并复验后才能将本任务标记 `done`。
-- [ ] 字号、绘制格式、段落格式和文档命名样式分别由 060、061、062、063 实现；它们不属于本任务的未完成验收项。
+字号、绘制格式、段落格式和文档命名样式分别由 060、061、062、063 跟进，不属于本任务范围。
 
 ## 验证计划与结果
 
@@ -70,7 +68,12 @@
 | 2026-10-30 | `cargo test --locked --offline --workspace`、`cargo lint --check`、`cargo format --check`；native CTest | workspace 测试与检查通过，native CTest 8/8。覆盖 underline 序列化/软换行、空格与首行缩进、QML 加载/格式及相关 Qt 输入行为。 |
 | 2026-10-30 | `.cdoc` 首行缩进往返定向测试、代码字体模型/持久化/投影及 `caret-layout` 测试 | 定向测试通过；代码 FontRole 显式族、Monospace fallback 与代码空格 advance 有布局级测试，代码块端到端未覆盖（节点不存在）。 |
 | 2026-10-30 | `cargo bench --locked --offline -p caret-layout --bench layout_criterion -- 'space_dense_100k' --sample-size 10 --warm-up-time 1 --measurement-time 2`（macOS arm64） | 单段 99,996 个 ASCII 字符、密集空格：中位数 16.477 ms，95% 区间 16.350–16.804 ms，5.79 MiB/s；与本机已有基线相比无显著差异（p=0.92）。该结果不是未修改代码对照，也不代表百万字多段文档或分配量。 |
-| 2026-10-30 | Sol medium 独立只读 final review（当前已实现代码 diff） | 通过，无 P1/P2。记录尚待实测字体弹窗边缘/滚动/鼠标行为、underline 跨 FFI/Qt 像素断言和大目录/长文档分配量；因此不代表整个 025 已验收。 |
+| 2026-10-30 | `cargo bench --locked --offline -p caret-app --bench document_view_input_criterion -- 'underline_one_paragraph_in_100k_document' --sample-size 10 --warm-up-time 1 --measurement-time 2`（macOS arm64，release） | 100,499 Unicode 字符、500 段多语言文档中格式化中间段并生成快照：10 样本；Criterion 回归斜率估计 1.5899 ms，95% 置信区间 1.5742–1.6245 ms；2 个 outlier。文档准备和选区在计时外；命令行 begin/type/accept、布局更新与快照在计时内；没有历史对照组，不声称性能提升。复现说明见[性能基准说明](../../tests/performance/rust/README.md)。 |
+| 2026-10-30 | `QT_QPA_PLATFORM=offscreen target/native/debug/qml/caret_shell_load_test underlinedTextRendersTheRustFfiDecorationInTheQtCanvas`；`ctest --test-dir target/native/debug -R '^Qml\.ShellLoad$' --output-on-failure` | 新增的 Rust FFI → ViewModel → QSG 像素断言通过；渲染帧使用真实 Rust 下划线几何，但移除字形图像与位置，避免字形抗锯齿造成假阳性。相关 QML/C++ shell 测试通过。 |
+| 2026-10-30 | `cargo test --locked --offline -p caret-engine -p caret-app`；`cargo fmt --all -- --check`；Clang Format；`git diff --check` | Mod+Backspace、编辑会话和 app 相关测试通过；详细数量以最终命令输出为准。 |
+| 2026-10-30 | Mod+Backspace 修订后：`cargo test --locked --offline -p caret-engine -p caret-app`、`cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings`、格式检查和 `git diff --check` | 191 个 caret-app 测试与 186 个 caret-engine 测试通过；Clippy、Rust 格式和 diff 检查通过。 |
+| 2026-10-30 | `cargo lint --check` | 9 个阶段全部通过：Clippy、依赖检查、CMake 格式/lint、分层、native 构建/QML 元数据、qmllint、clang-tidy、include-cleaner 和 cppcheck。 |
+| 2026-10-30 | Sol medium 独立只读 final review（本次完整实现 diff） | 通过，无需修复项。确认 Mod+Backspace 的树变更与历史测试、下划线 FFI/QSG 装饰绘制测试的隔离方式，以及 Criterion 计时范围和统计值。限制：未重跑 benchmark；像素行为尚未覆盖取消格式和多 DPR/缩放组合；性能数据只代表 100k 文档中单段格式操作。 |
 
 以上记录只说明对应检查当时的结果；后续变更须重跑受影响验证。未记录的本机手工操作不视为自动化验收证据。
 
@@ -90,4 +93,4 @@
 
 ## 完成摘要
 
-已交付字体基础、粗体/斜体、单线下划线、首行缩进和字符宽空格。当前仅剩下划线跨 FFI/Qt 的像素断言、代表性性能验证和本任务范围的 final review；其他格式能力已拆分为 060–063。
+已交付字体基础、粗体/斜体、单线下划线、首行缩进和字符宽空格；补齐了跨 FFI/Qt Quick 的像素行为测试、Mod+Backspace 语义测试及 100k 多语言文档格式性能测量，并通过独立 final review。其他格式能力已拆分为 060–063。

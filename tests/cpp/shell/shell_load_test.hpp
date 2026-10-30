@@ -52,6 +52,7 @@ class ShellLoadTest : public QObject {
     void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
     void recoveryEntriesCanBeRestoredExportedAndDiscarded();
     void documentHistoryUndoRedoTracksRustSession();
+    void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
     void documentCaretNavigationUpdatesObservablePosition();
     void confirmedConflictReplacementWritesCurrentDocument();
     void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();
