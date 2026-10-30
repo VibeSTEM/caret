@@ -1,6 +1,6 @@
 # QML 组件与对话框
 
-更新日期：2026-10-29。本文说明当前 QML 分层、组件边界和验证要求。Qt 对象见 [Qt](qt.md)，图标见[图标](icons.md)，主题源文件见 [DSL](dsl.md)。
+更新日期：2026-10-30。本文说明当前 QML 分层、组件边界和验证要求。Qt 对象见 [Qt](qt.md)，图标见[图标](icons.md)，主题源文件见 [DSL](dsl.md)。
 
 ## 分层
 
@@ -21,6 +21,10 @@ Atoms → Composites → 页面与对话框
 | 文件 | 职责 |
 | --- | --- |
 | `ThemedLabel.qml` | 主题文字与换行 |
+| `AutoScrollText.qml` | 溢出文字循环滚动 |
+| `CommandCandidateItem.qml` | 命令候选项及高亮状态 |
+| `HighlightBackground.qml` | 可复用高亮背景 |
+| `ScrollableListView.qml` | 统一滚动行为的列表容器 |
 | `ThemedButton.qml` | 常规主题按钮 |
 | `ThemedToolButton.qml` | 工具按钮，支持图标、状态、下拉指示和辅助文案 |
 | `ThemedTextField.qml` | 文本输入与校验外观 |

@@ -1,6 +1,6 @@
 # 技术规范索引
 
-更新日期：2026-10-25。这些规范是实现和评审的长期约定。Rust/Cargo、CMake/native、QML 基础设施和 CI 已接入；编辑器正文、布局和结构能力仍按架构与任务逐步规划。不要把尚未落地的 editor crate 或命令写成可用功能。
+更新日期：2026-10-30。这些规范是实现和评审的长期约定。Rust/Cargo、CMake/native、QML 基础设施和 CI 已接入；基础文本编辑、文档存储、段落布局与结构导航已实现，公式、表格及部分高级能力仍在规划或实施。功能状态以[任务索引](../task-index.md)为准，不要把规划中的能力写成可用功能。
 
 工程基础设施从维护者自己的 [panta](https://github.com/Yuki-Nagori/panta) 移植：QML + Rust 桌面栈、工具链、基础库、DSL、测试入口和 CI。移植提交写明来源仓库和 commit，并把 `panta` 前缀改成 `caret`。本规范不写本机绝对路径。
 
@@ -28,7 +28,7 @@
 | 文档与示例 | [文档规范](documentation.md) | 新建或修改文档 |
 | 验证与变更评审 | [验证与评审](validation-and-review.md) | 实施、独立评审和委派 |
 | 测试目录与入口 | [测试规范](testing.md) | 新增或注册测试 |
-| 分层与依赖方向 | [分层](layering.md) | 跨层改动、新 crate 或新适配器 |
+| 分层与依赖方向 | [分层索引](layering.md) | 跨层改动、新 crate 或新适配器；再按范围阅读 Rust、Native 或依赖图专题 |
 | 数值、定点精度与单位 | [数值与单位](numeric-values.md) | 配置、文档属性、跨语言接口和几何换算 |
 | 事件通知与定时器 | [事件驱动与调度](event-driven.md) | UI 刷新、异步通知、定时器和轮询 |
 

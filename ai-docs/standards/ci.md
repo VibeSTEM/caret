@@ -1,6 +1,6 @@
 # 持续集成
 
-更新日期：2026-10-25。CI 配置从 panta `ee84d95` 移植，workflow、action、缓存键和环境变量中的前缀改成 `caret`。保留质量检查机制和矩阵，裁掉不适用的领域目标。
+更新日期：2026-10-30。CI 配置从 panta `ee84d95` 移植，workflow、action、缓存键和环境变量中的前缀改成 `caret`。保留质量检查机制和矩阵，裁掉不适用的领域目标。
 
 四条 workflow 与配套 action 已在本仓库；本地验证和远程运行证据分别记录在[任务 006](../task/006-infra-ci.md)。配置存在不表示远程运行已通过。
 
@@ -24,7 +24,7 @@
 - 检查按路径分成依赖审计、Rust lint、native lint、QML、格式和受影响测试。未知路径扩大到完整范围。
 - 日常 push/PR 的构建、受影响测试、格式和 lint 只在 Ubuntu 运行，减少每次提交的 runner 成本。native lint 把 clang-tidy、include-cleaner 和 cppcheck 分成独立检查；macOS 的手写 Objective-C++ 检查放在 nightly。
 - 格式检查覆盖 Rust、C++ / CXX、CMake、QML 和 `.pa`。
-- 夜间任务在 macOS、Ubuntu 和 Windows 上运行 `cargo test --locked --workspace`。Rust 覆盖率只在夜间阻断，具体门槛见[测试规范](testing.md)。native 覆盖率归档报告。性能基准不设失败阈值。
+- 夜间任务在 macOS、Ubuntu 和 Windows 上运行 `cargo test --locked --workspace`。Rust 和 native C++ 覆盖率都在夜间按门槛阻断，具体范围和门槛见[测试规范](testing.md)。性能基准不设失败阈值。
 - Windows 和 macOS 的常规跨平台构建与测试由 nightly 负责；手动桌面打包、SDK 生产发布仍是三平台矩阵，不能只凭 Ubuntu 成功发布其他平台制品。
 - Linux job 安装 QML 运行所需的系统库。工具、Qt 和 GoogleTest 仍经 Cargo 供给到 `.toolchain/`，不装成系统包，也不写入 `target/`。
 

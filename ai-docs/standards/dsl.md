@@ -1,6 +1,6 @@
 # `.pa` DSL
 
-更新日期：2026-10-24。引擎随 `caret-dsl-core` 和 `caret-dslc` 移植。文法、kind 和诊断契约保持来源行为。改扩展名或改关键字属于单独的不兼容变更。
+更新日期：2026-10-30。引擎随 `caret-dsl-core` 和 `caret-dslc` 移植。文法、kind 和诊断契约保持来源行为。改扩展名或改关键字属于单独的不兼容变更。
 
 `.pa` 是给人读写的 UTF-8 源文件。界面运行时不解析它：语言走编译好的 QM，变量和主题走已经校验的快照。
 
@@ -50,12 +50,12 @@ values:
 
 ## 工具行为
 
-规划入口：
+从仓库根目录运行：
 
 ```text
-caret-dslc check file.pa
-caret-dslc format file.pa
-caret-dslc format --check file.pa
+cargo run --locked -p caret-dslc -- check file.pa
+cargo run --locked -p caret-dslc -- format file.pa
+cargo run --locked -p caret-dslc -- format --check file.pa
 ```
 
 `check` 只读，失败时返回稳定错误码和源码位置。`format` 规范化空白并保留声明顺序，不重排主题键来改变诊断顺序。根 `cargo format` 覆盖 `crates/`、`resources/` 和 `qml/Themes/` 里的生产 `.pa`，跳过名为 `fixtures` 的目录。

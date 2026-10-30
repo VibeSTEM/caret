@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-29。`caret-engine` 已实现 `Session`、UTF-8 位置和基础文本/IME 命令；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。历史、布局缓存和结构索引仍按后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
+更新日期：2026-10-30。`caret-engine` 已实现 `Session`、UTF-8 位置、基础文本/IME 命令及编辑历史；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。结构索引在结构事务提交后重建。按段落修订的增量布局缓存仍由后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
 
 ## 权威与派生
 
@@ -10,7 +10,7 @@
 | 选区、公式内光标 | 导航和编辑命令 | 画布、状态栏 |
 | 命令模式查询 | `cmdline.*`，不进文档 | 补全弹窗 |
 | `DocLayout` | 布局器，按缓存键 | 画布、命中、环境高亮几何 |
-| `StructureIndex` | 结构索引，按段落 `structureRev` 和大纲样式代际 | 结构命令、状态栏 |
+| `StructureIndex` | 结构索引；结构事务提交后按文档树重建 | 结构命令、状态栏 |
 | 应用设置与用户偏好 | `caret-app` 中的 Rust 服务 | QML 经 ViewModel；C++ 只消费当前视图所需的临时值 |
 | 应用主题、界面语言 | `ThemeService`、`LanguageService` | QML 经 ViewModel |
 
@@ -60,7 +60,7 @@ Session
 
 ## 保存
 
-保存走 `.cdoc`，格式和原子写入见[文档模型](../editor/document-model.md)。路径由应用服务解析后再交给引擎，引擎不调用 Qt。保存开始时捕获文档 revision；worker 只写这个快照。同一 Session 对同一已解析目标路径的保存请求按发起顺序串行写入。完成时回报该请求的写入结果并更新对应保存点，不替换当前 `Session`。若期间产生较新的 revision，它仍是未保存修改。
+保存走 `.cdoc`，格式和原子写入见[存储格式](../editor/document-model/document-storage.md)。路径由应用服务解析后再交给引擎，引擎不调用 Qt。保存开始时捕获文档 revision；worker 只写这个快照。同一 Session 对同一已解析目标路径的保存请求按发起顺序串行写入。完成时回报该请求的写入结果并更新对应保存点，不替换当前 `Session`。若期间产生较新的 revision，它仍是未保存修改。
 
 ### AutoSave
 

@@ -52,7 +52,7 @@
 }
 ```
 
-设置新增/改变时声明 `caret.font.family-preferences` required feature。旧文件缺少该字段时按系统默认与现存字段解析；读取器不认识 required feature 时必须拒绝写入，避免静默丢失用户偏好。未知可选字段保留规则见[文档模型](document-model.md)。
+设置新增/改变时声明 `caret.font.family-preferences` required feature。旧文件缺少该字段时按系统默认与现存字段解析；读取器不认识 required feature 时必须拒绝写入，避免静默丢失用户偏好。未知可选字段保留规则见[`.cdoc` 存储格式](document-model/document-storage.md)。
 
 ## 正文字体解析
 

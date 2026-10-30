@@ -1,128 +1,15 @@
 # 分层与依赖方向
 
-更新日期：2026-10-29。本页定义 Rust 与 native 的目标依赖方向。基础设施 crate、`caret-doc`、`caret-structure` 初始索引、CMake 目标和 QML 模块已有一部分落地；其余编辑器领域能力按任务推进。下方图表示成员和允许边；以当前 manifests 与 CMake 图确认实际边。编辑器模块见[仓库结构](../architecture/core/repository-layout.md)，没有消费者之前不建空 crate。
+更新日期：2026-10-30。本文是跨语言依赖规则的入口索引。新增仓库内依赖时先更新[依赖图](layering/dependency-graphs.md)，再对照[Rust crate 分级](layering/rust.md)或[Native 分级](layering/native.md)确认允许边，最后修改 manifest 或 CMake 配置。
 
-层号越小越靠下。生产代码只能依赖更小的层，不能依赖同层的另一个成员，也不能依赖更大的层。Rust 的层号和 Native 的层号各算各的。测试可以依赖被测对象，生产代码不能依赖测试。
+层号越小越靠下；生产代码只能依赖更低层，不能依赖同层成员或更高层。Rust 与 Native 层号各自计算。测试可依赖被测对象，生产代码不能依赖测试。图中的允许边以实际 Cargo manifest 和配置后的 CMake 图校验。
 
-图里的箭头是允许的依赖，从依赖方指向被依赖方；以实际 Cargo manifest 和配置后的 CMake 图确认当前已建立的边。同层成员之间没有边。
-
-## 依赖图
-
-```mermaid
-flowchart TB
-  subgraph L7["L7 组合根"]
-    launcher["launcher"]
-    cli["caret-cli"]
-  end
-  subgraph L6["L6 边界"]
-    ffi["caret-ffi"]
-  end
-  subgraph L5["L5 应用"]
-    app["caret-app"]
-  end
-  subgraph L4["L4 会话"]
-    engine["caret-engine"]
-  end
-  subgraph L3["L3 派生"]
-    layout["caret-layout"]
-    structure["caret-structure"]
-  end
-  subgraph L2["L2 叶子"]
-    doc["caret-doc"]
-    dslc["caret-dslc"]
-  end
-  subgraph L1["L1 基础"]
-    foundation["caret-foundation"]
-    build["caret-build"]
-    dslcore["caret-dsl-core"]
-  end
-
-  launcher --> ffi
-  launcher --> build
-  launcher --> dslcore
-  cli --> app
-  cli --> foundation
-  launcher ~~~ cli
-  ffi --> app
-  ffi --> foundation
-  app --> engine
-  app --> dslcore
-  app --> doc
-  app --> foundation
-  engine --> doc
-  engine --> layout
-  engine --> structure
-  layout --> doc
-  structure --> doc
-  dslc --> dslcore
-  layout ~~~ structure
-  doc ~~~ dslc
-  foundation ~~~ build
-  build ~~~ dslcore
-```
-
-```mermaid
-flowchart TB
-  subgraph N4["N4 入口"]
-    entry["native 入口"]
-  end
-  subgraph N3["N3 界面"]
-    qml["QML"]
-  end
-  subgraph N2["N2 界面能力"]
-    vm["ViewModel"]
-    canvas["画布"]
-  end
-  subgraph N1["N1 适配"]
-    adapter["caret::adapters"]
-  end
-  staticlib["caret-ffi staticlib"]
-
-  entry --> qml
-  entry --> vm
-  entry --> canvas
-  entry --> adapter
-  entry --> staticlib
-  qml --> vm
-  qml --> canvas
-  vm --> adapter
-  vm --> staticlib
-  canvas --> adapter
-  vm ~~~ canvas
-```
-
-`caret-foundation`、`caret-build`、`caret-dsl-core` 没有指向其他 workspace crate 的边。`caret-doc`、布局、结构索引和会话在需要时可以指向 `caret-foundation`，图里不再重复这几条边。画布和 ViewModel 互不依赖，由 native 入口把它们接在一起。逐帧绘制、命中和输入留在画布里；跨到 Rust 的是命令和页面快照，不是每个指针事件。
-
-## Rust 分级
-
-| 级 | 成员 | 允许依赖 |
-| --- | --- | --- |
-| L1 基础 | `caret-foundation`、`caret-build`、`caret-dsl-core` | 不依赖其他 workspace crate |
-| L2 叶子 | `caret-doc`、`caret-dslc` | `caret-doc` 只可到 `caret-foundation`。`caret-dslc` 只可到 `caret-dsl-core`。二者互不依赖 |
-| L3 派生 | `caret-layout`、`caret-structure` | `caret-doc`，以及 `caret-foundation`。二者互不依赖 |
-| L4 会话 | `caret-engine` | `caret-doc`、`caret-layout`、`caret-structure`、`caret-foundation` |
-| L5 应用 | `caret-app` | `caret-engine`、`caret-doc`、`caret-dsl-core`、`caret-foundation` |
-| L6 边界 | `caret-ffi` | `caret-app`、`caret-foundation` |
-| L7 组合根 | launcher、`caret-cli` | launcher 可到 `caret-ffi`、`caret-build`、`caret-dsl-core`。`caret-cli` 可到 `caret-app`、`caret-foundation`。二者互不依赖 |
-
-`caret-dslc` 是独立的 `.pa` 检查和格式化命令，不是应用命令行，也不是桌面程序的组合根。`caret-build` 只供给工具，只有 launcher 和测试可以依赖它。L2 到 L6 和 `caret-cli` 不依赖 `caret-build`。`caret-ffi` 的 build script 可以依赖 `caret-build`，以便 CXX 与 native 使用同一份托管 Clang。运行时依赖 `caret-app`，由应用服务生成并传递带代际的只读布局快照；文档模型、命令事务和排版仍留在 Rust 领域层。
-
-`caret-cli` 把参数适配成 `caret-app` 上的同一批命令。它不依赖 `caret-ffi`、`caret-engine` 或 Qt。`caret-app` 不依赖 `caret-ffi`。`caret-ffi` 不依赖 `caret-engine` 来绕过 `caret-app`。这样不会形成应用和边界之间的环，命令行也不会绕过应用服务。
-
-## Native 分级
-
-| 级 | 成员 | 允许依赖 |
-| --- | --- | --- |
-| N1 适配 | Qt 适配器 | Qt 和系统 API。不依赖 FFI、ViewModel、画布或 QML |
-| N2 界面能力 | 画布、ViewModel | 都可以依赖 N1。ViewModel 还可以链接 `caret-ffi` 的 staticlib。画布和 ViewModel 互不链接 |
-| N3 界面 | QML 模块 | 依赖 ViewModel 暴露的属性和画布公开的声明式绘制项。不链接 Rust；画布不读取文档，文档数据由 ViewModel 提供 |
-| N4 入口 | native 应用 | N1、画布、ViewModel、QML 模块，以及 `caret-ffi` 的 staticlib |
-
-当前 N1 适配模块是 `native/adapters/` 的 `caret_adapters`（`caret::adapters`、QML URI `Caret.Adapters`），集中平台字体、路径、窗口装饰与图标适配。`native/app/` 只负责启动装配。N2 的 `native/viewmodels/` 按 Settings、Theme、Document 分类，Preferences 投影不持有 Theme 或 Language 的状态。Settings 总运行时由独立 bridge 持有；设置窗口的 C++ `QStateMachine` 只管理打开、草稿、提交与失败交互，持久化结果以 Rust 返回值为准。
-
-`caret_shell` 可依赖 `caret_adapters`；Qt 为静态 QML 模块生成的 `caret_shellplugin → caret_adaptersplugin` 只负责注册适配模块。插件包装与其所属层一致，不增加领域依赖。分层检查精确登记该生成边，适配模块仍不能依赖 ViewModel、画布、Shell 或 FFI。
-
-QML 表达意图并装配画布公开项。它不解析 `.pa`，不读写文档存储，不创建 Rust 对象。ViewModel 做 Qt 属性和参数转换，不实现文档事务。用户可见的行为由与 Qt 无关的 Rust 服务提供。界面和 `caret-cli` 提交同一种意图。命令 id 的目录写在[命令](../architecture/editor/commands.md)里。
+| 主题 | 权威文档 |
+| --- | --- |
+| Rust crate 依赖和职责 | [Rust crate 分级](layering/rust.md) |
+| CMake、ViewModel、画布与 QML 边界 | [Native 分级](layering/native.md) |
+| Rust 与 native 总体依赖图 | [依赖图](layering/dependency-graphs.md) |
+| FFI、路径与设置权威边界 | 本页下方 |
 
 ## 边界
 
@@ -133,4 +20,4 @@ QML 表达意图并装配画布公开项。它不解析 `.pa`，不读写文档�
 - 逻辑路径的宿主是 Qt 适配器；Rust 路径服务不包含 Qt 类型。
 - 用户设置和 Preferences 的权威状态、校验与持久化由 `caret-app` 的 Rust 服务负责。QML 只展示和提交意图，ViewModel 只做类型转换与信号桥接；C++ 组件只接收当前操作所需的值，不保存持久化副本。
 
-新增仓库内依赖时先改上面的图和分级表，再改 manifest 或 `target_link_libraries`。`cargo lint` 的 layering 检查读取 Cargo metadata，并配置专用 CMake 夹具核对 native 依赖边；评审仍以本页分级表为准。
+新增仓库内依赖时先更新[依赖图](layering/dependency-graphs.md)和对应的[Rust](layering/rust.md)或[Native](layering/native.md)分级表，再改 manifest 或 `target_link_libraries`。`cargo lint` 的 layering 检查读取 Cargo metadata，并配置专用 CMake 夹具核对 native 依赖边；评审以对应专题的分级表为准。

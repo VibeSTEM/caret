@@ -4,7 +4,7 @@
 
 | 主题 | 文档 |
 | --- | --- |
-| 段落、路径、`.cdoc` | [文档模型](document-model.md) |
+| 文档模型入口 | [文档模型](document-model.md) |
 | 文字格式与颜色 | [格式语义](text-formatting.md) |
 | 字体、shaping 与位置 | [文字塑形](text-shaping.md) |
 | 文档字体目标、映射与 fallback（唯一权威） | [多文字体系字体选择](font-selection.md) |
@@ -16,3 +16,14 @@
 | 公式与表格 | [公式与表格](math-and-table.md) |
 | 外部文档格式 | [文档导入与导出](document-interchange.md) |
 | 缓存键 | [增量排版](incremental-layout.md) |
+
+## 文档模型专题
+
+专题文件集中在 [`document-model/`](document-model/)；下表各主题只在对应文件维护，其他文档引用时直接链接到该文件。
+
+| 权威主题 | 文档 |
+| --- | --- |
+| 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
+| 环境、标题与编号 | [环境模型](document-model/document-environments.md) |
+| 位置与模型上限 | [文档位置](document-model/document-position.md) |
+| `.cdoc` 文件格式与存储边界 | [文档存储](document-model/document-storage.md) |

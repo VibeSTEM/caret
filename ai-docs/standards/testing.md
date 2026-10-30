@@ -1,6 +1,6 @@
 # 测试目录与入口
 
-更新日期：2026-10-28。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
+更新日期：2026-10-30。断言风格见 [GTest](gtest.md)、[Rust](rust.md) 和 [QML](qml.md)。CI 范围见[持续集成](ci.md)。
 
 `caret-tests` 已接入。下面是测试目录约定，不因目录树而提前建立空文件。现有 native 聚合入口为 `tests/integration/native.rs`，`cargo test --workspace --locked` 会同时执行 Rust 测试、qmllint 和 CTest；Qt 相关用例使用 Qt Test。GoogleTest 的生产与消费见[依赖获取](dependency-acquisition.md#googletest-生产与消费)。
 
@@ -60,6 +60,7 @@ cargo format
 cargo lint
 cargo audit
 cargo coverage
+cargo coverage native
 cargo sanitize
 cargo ub-check
 cargo hyperfine <command> [options]
