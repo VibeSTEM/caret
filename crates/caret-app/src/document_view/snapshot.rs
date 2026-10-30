@@ -8,6 +8,8 @@ use caret_engine::{
 use serde_json::{Value, json};
 
 fn command_line_state(session: &caret_engine::Session) -> Value {
+    let code_font_family = &session.document().global_settings.default_code_font_family;
+    let uses_system_code_font = code_font_family == caret_doc::DEFAULT_CODE_FONT_FAMILY;
     session
         .command_line()
         .map(|command_line| {
@@ -19,6 +21,8 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                         "alias": candidate.alias,
                         "commandId": candidate.command_id,
                         "available": candidate.available,
+                        "value": candidate.value,
+                        "hasChildren": candidate.has_children,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -33,6 +37,10 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "mode": match command_line.mode {
                     caret_engine::CommandLineMode::Command => "command",
                     caret_engine::CommandLineMode::FontFamily => "fontFamily",
+                    caret_engine::CommandLineMode::DefaultFontTarget => "defaultFontTarget",
+                    caret_engine::CommandLineMode::DefaultFontScope => "defaultFontScope",
+                    caret_engine::CommandLineMode::DefaultFontLanguage => "defaultFontLanguage",
+                    caret_engine::CommandLineMode::DefaultFontFamily => "defaultFontFamily",
                 },
                 "prefix": command_line.prefix(),
                 "query": &command_line.query,
@@ -40,6 +48,8 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "cursorUtf16": cursor_utf16,
                 "preedit": &command_line.preedit,
                 "preeditCursorUtf16": command_line.preedit_cursor_utf16,
+                "codeFontFamily": code_font_family,
+                "codeFontFamilyUsesSystemDefault": uses_system_code_font,
                 "selected": command_line.selected,
                 "candidates": candidates,
             })
@@ -52,6 +62,8 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "query": "",
                 "cursor": 0,
                 "cursorUtf16": 1,
+                "codeFontFamily": code_font_family,
+                "codeFontFamilyUsesSystemDefault": uses_system_code_font,
                 "selected": 0,
                 "candidates": [],
             })

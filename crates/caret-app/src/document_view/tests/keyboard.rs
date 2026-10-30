@@ -207,6 +207,51 @@ fn tab_with_empty_query_inserts_literal_slash_even_when_font_candidate_is_select
 }
 
 #[test]
+fn font_command_uses_system_catalog_and_applies_the_selected_family_locally()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let family = runtime
+        .layout
+        .font_family_names()
+        .into_iter()
+        .next()
+        .ok_or_else(|| std::io::Error::other("system font catalog is empty"))?;
+
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "font".to_owned())?;
+    let command_candidates = runtime.session.command_line_candidates();
+    assert!(
+        command_candidates
+            .iter()
+            .any(|candidate| { candidate.command_id == "text.format.font" && candidate.available })
+    );
+    let picker: Value =
+        serde_json::from_str(&runtime.command_line_command_json("accept", String::new())?)?;
+    assert_eq!(picker["commandLine"]["mode"], "fontFamily");
+    assert_eq!(picker["commandLine"]["prefix"], "\\font ");
+
+    runtime.command_line_command_json("type", family.clone())?;
+    let candidates = runtime.session.command_line_candidates();
+    assert!(candidates.iter().any(|candidate| {
+        candidate.command_id == "text.format.font_family"
+            && candidate.value.as_deref() == Some(family.as_str())
+    }));
+    runtime.command_line_command_json("accept", String::new())?;
+    runtime.insert_text_json("x".to_owned())?;
+
+    let Some(caret_doc::Block::Paragraph(paragraph)) = runtime.session.document().body.first()
+    else {
+        return Err(std::io::Error::other("font-styled paragraph is missing").into());
+    };
+    let Some(caret_doc::InlineNode::Environment(environment)) = paragraph.inlines.first() else {
+        return Err(std::io::Error::other("font environment was not created").into());
+    };
+    assert_eq!(environment.kind, caret_doc::InlineEnvironmentKind::Font);
+    assert_eq!(environment.props["fontFamily"], family);
+    Ok(())
+}
+
+#[test]
 fn pointer_selection_cancels_command_line_preedit_before_returning_to_document_input()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

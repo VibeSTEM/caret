@@ -18,6 +18,7 @@ impl Document {
         if self.global_settings.default_font_family.is_some()
             || self.global_settings.default_cjk_font_family.is_some()
             || self.global_settings.default_math_font_family.is_some()
+            || self.global_settings.default_code_font_family != DEFAULT_CODE_FONT_FAMILY
             || !self.global_settings.script_font_families.is_empty()
             || !self
                 .global_settings

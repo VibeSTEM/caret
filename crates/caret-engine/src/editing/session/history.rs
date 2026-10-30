@@ -4,7 +4,8 @@ use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_a
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, PageGeometry, Paragraph,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, DocumentSettings,
+    NodeId, PageGeometry, Paragraph,
 };
 use caret_layout::VisualAffinity;
 use std::mem::size_of;
@@ -13,6 +14,58 @@ use undo::{Edit, History, Merged};
 const HISTORY_ACTION_LIMIT: usize = 256;
 const HISTORY_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 const ESTIMATED_BRANCH_OVERHEAD_BYTES: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LatinFontFamilyState {
+    default_family: Option<String>,
+    legacy_script_entries: Vec<(String, String)>,
+}
+
+impl LatinFontFamilyState {
+    pub(super) fn capture(settings: &DocumentSettings) -> Self {
+        Self {
+            default_family: settings.default_font_family.clone(),
+            legacy_script_entries: settings
+                .script_font_families
+                .iter()
+                .filter(|(script, _)| script.eq_ignore_ascii_case("Latn"))
+                .map(|(script, family)| (script.clone(), family.clone()))
+                .collect(),
+        }
+    }
+
+    fn restore(&self, settings: &mut DocumentSettings) {
+        settings
+            .default_font_family
+            .clone_from(&self.default_family);
+        settings
+            .script_font_families
+            .retain(|script, _| !script.eq_ignore_ascii_case("Latn"));
+        settings
+            .script_font_families
+            .extend(self.legacy_script_entries.iter().cloned());
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.default_family.as_ref().map_or(0, String::capacity)
+            + self
+                .legacy_script_entries
+                .iter()
+                .map(|(script, family)| script.capacity() + family.capacity())
+                .sum::<usize>()
+            + size_of::<Self>()
+    }
+}
+
+fn restore_document_font_family(
+    document: &mut Document,
+    target: &DocumentFontTarget,
+    family: Option<String>,
+) {
+    // 撤销记录只由已校验的编辑命令创建，重放时目标应始终有效。
+    let restored = document.global_settings.set_font_family(target, family);
+    debug_assert!(restored.is_ok(), "history contains an invalid font target");
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ParagraphState {
@@ -43,7 +96,12 @@ pub(super) enum DocumentPatch {
         before: PageGeometry,
         after: PageGeometry,
     },
-    DefaultFontFamily {
+    LatinFontFamily {
+        before: LatinFontFamilyState,
+        after: LatinFontFamilyState,
+    },
+    DocumentFontFamily {
+        target: DocumentFontTarget,
         before: Option<String>,
         after: Option<String>,
     },
@@ -288,7 +346,10 @@ impl DocumentPatch {
                     + size_of::<Box<Paragraph>>()
             }
             Self::PageGeometry { .. } => size_of::<PageGeometry>(),
-            Self::DefaultFontFamily { before, after } => {
+            Self::LatinFontFamily { before, after } => {
+                before.estimated_bytes() + after.estimated_bytes()
+            }
+            Self::DocumentFontFamily { before, after, .. } => {
                 before.as_ref().map_or(0, String::capacity)
                     + after.as_ref().map_or(0, String::capacity)
                     + size_of::<Option<String>>() * 2
@@ -383,8 +444,11 @@ impl DocumentPatch {
                 false,
             ),
             Self::PageGeometry { before, .. } => set_page_geometry(document, *before),
-            Self::DefaultFontFamily { before, .. } => {
-                document.global_settings.default_font_family = before.clone();
+            Self::LatinFontFamily { before, .. } => {
+                before.restore(&mut document.global_settings);
+            }
+            Self::DocumentFontFamily { target, before, .. } => {
+                restore_document_font_family(document, target, before.clone());
             }
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -478,8 +542,11 @@ impl DocumentPatch {
                 true,
             ),
             Self::PageGeometry { after, .. } => set_page_geometry(document, *after),
-            Self::DefaultFontFamily { after, .. } => {
-                document.global_settings.default_font_family = after.clone();
+            Self::LatinFontFamily { after, .. } => {
+                after.restore(&mut document.global_settings);
+            }
+            Self::DocumentFontFamily { target, after, .. } => {
+                restore_document_font_family(document, target, after.clone());
             }
             Self::EnvironmentCreation {
                 parent_environment_ids,

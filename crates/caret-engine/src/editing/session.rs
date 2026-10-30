@@ -394,9 +394,32 @@ impl Session {
                     .and_then(|section| section.geometry().ok())
             })
             .flatten();
-        let before_default_font_family = match &command {
+        let mut before_latin_font_family = None;
+        let before_document_font_family = match &command {
             Command::SetDefaultFontFamily(_) => {
-                Some(self.document.global_settings.default_font_family.clone())
+                before_latin_font_family = Some(history::LatinFontFamilyState::capture(
+                    &self.document.global_settings,
+                ));
+                None
+            }
+            Command::SetDocumentFontFamily { target, .. } => {
+                let target = target
+                    .normalized()
+                    .map_err(|_| EditError::InvalidFontFamily)?;
+                if target == caret_doc::DocumentFontTarget::Script("Latn".to_owned()) {
+                    before_latin_font_family = Some(history::LatinFontFamilyState::capture(
+                        &self.document.global_settings,
+                    ));
+                    None
+                } else {
+                    Some((
+                        target.clone(),
+                        self.document
+                            .global_settings
+                            .font_family(&target)
+                            .map(str::to_owned),
+                    ))
+                }
             }
             _ => None,
         };
@@ -425,6 +448,9 @@ impl Session {
                 self.set_paragraph_first_line_indent_chars(chars)
             }
             Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
+            Command::SetDocumentFontFamily { target, family } => {
+                self.set_document_font_family(&target, family)
+            }
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
@@ -475,10 +501,20 @@ impl Session {
                         EditError::InvalidDocument("document has no PageSection".to_owned())
                     })?;
                 DocumentPatch::PageGeometry { before, after }
-            } else if let Some(before) = before_default_font_family {
-                DocumentPatch::DefaultFontFamily {
+            } else if let Some(before) = before_latin_font_family {
+                DocumentPatch::LatinFontFamily {
                     before,
-                    after: self.document.global_settings.default_font_family.clone(),
+                    after: history::LatinFontFamilyState::capture(&self.document.global_settings),
+                }
+            } else if let Some((target, before)) = before_document_font_family {
+                DocumentPatch::DocumentFontFamily {
+                    before,
+                    after: self
+                        .document
+                        .global_settings
+                        .font_family(&target)
+                        .map(str::to_owned),
+                    target,
                 }
             } else {
                 let mut ids = before_paragraph_states

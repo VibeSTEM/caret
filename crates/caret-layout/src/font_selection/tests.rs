@@ -23,6 +23,7 @@ fn context(script_tag: &str) -> FontSelectionContext<'_> {
         language: None,
         math_context: false,
         explicit_family: None,
+        code: false,
     }
 }
 
@@ -98,6 +99,44 @@ fn explicit_math_language_script_and_defaults_keep_their_order() {
     );
     assert_eq!(candidates[0].source, FontPreferenceSource::Explicit);
     assert_eq!(candidates[1].source, FontPreferenceSource::Math);
+}
+
+#[test]
+fn code_font_uses_only_explicit_code_family_then_monospace_fallback() {
+    let settings = DocumentSettings {
+        default_font_family: Some("Body Latin".to_owned()),
+        default_cjk_font_family: Some("Body CJK".to_owned()),
+        default_math_font_family: Some("Math".to_owned()),
+        default_code_font_family: "Code Family".to_owned(),
+        script_font_families: BTreeMap::from([("Latn".to_owned(), "Script Latin".to_owned())]),
+        ..DocumentSettings::default()
+    };
+    let rules = compiled(&settings);
+    let candidates = rules.family_candidates(FontSelectionContext {
+        code: true,
+        math_context: true,
+        explicit_family: Some("Inline Override"),
+        ..context("Latn")
+    });
+
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.family)
+            .collect::<Vec<_>>(),
+        ["Inline Override", "Code Family"]
+    );
+    assert_eq!(candidates[1].source, FontPreferenceSource::Code);
+
+    let default_rules = compiled(&DocumentSettings::default());
+    assert!(
+        default_rules
+            .family_candidates(FontSelectionContext {
+                code: true,
+                ..context("Latn")
+            })
+            .is_empty()
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! 定义编辑命令及其稳定命令 ID。
 
-use caret_doc::{BlockEnvironmentKind, InlineEnvironmentKind, PageGeometry};
+use caret_doc::{BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, PageGeometry};
 
 use super::Selection;
 
@@ -39,11 +39,23 @@ pub enum Command {
     SetInlineFontFamily(String),
     SetParagraphFirstLineIndentChars(u16),
     SetDefaultFontFamily(Option<String>),
+    SetDocumentFontFamily {
+        target: DocumentFontTarget,
+        family: Option<String>,
+    },
     EditorKey(EditorKey),
     SetSelection(Option<Selection>),
-    UpdateComposition { id: u64, preedit: String },
-    CommitComposition { id: u64, text: String },
-    CancelComposition { id: u64 },
+    UpdateComposition {
+        id: u64,
+        preedit: String,
+    },
+    CommitComposition {
+        id: u64,
+        text: String,
+    },
+    CancelComposition {
+        id: u64,
+    },
     SetPageGeometry(PageGeometry),
     BeginCommandLine,
     TypeCommandLine(String),
@@ -84,6 +96,7 @@ impl Command {
             Self::SetInlineFontFamily(_) => "text.format.font_family",
             Self::SetParagraphFirstLineIndentChars(_) => "paragraph.first_line_indent.set",
             Self::SetDefaultFontFamily(_) => "document.default_font_family.set",
+            Self::SetDocumentFontFamily { .. } => "document.font_family.set",
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
             Self::EditorKey(EditorKey::Tab) => "interaction.tab",

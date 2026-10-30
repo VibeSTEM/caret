@@ -21,7 +21,8 @@ Rectangle {
     readonly property real maximumCandidateColumnWidth: 105
     readonly property real candidateColumnSpacing: Theme.spacingMedium
     readonly property real maximumEstimatedWidth: 240
-    readonly property bool fontFamilyMode: commandLine.mode === "fontFamily"
+    readonly property bool fontFamilyMode: commandLine.mode === "fontFamily" || commandLine.mode === "defaultFontFamily"
+    readonly property bool defaultFontTargetMode: commandLine.mode === "defaultFontTarget" || commandLine.mode === "defaultFontScope" || commandLine.mode === "defaultFontLanguage"
     readonly property real aliasColumnWidth: fontFamilyMode ? maximumCandidateColumnWidth : Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
     readonly property real labelColumnWidth: fontFamilyMode ? 0 : Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
     readonly property real preferredWidth: candidateList.count > 0 ? Math.min(maximumEstimatedWidth, aliasColumnWidth + (labelColumnWidth > 0 ? candidateColumnSpacing + labelColumnWidth : 0) + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
@@ -40,6 +41,22 @@ Rectangle {
     function labelFor(candidate) {
         if (fontFamilyMode)
             return "";
+        if (defaultFontTargetMode) {
+            switch (candidate.commandId) {
+            case "command_line.close_font_picker":
+                return qsTranslate("CommandCompletion", "Close");
+            case "document.default_font.target":
+                return qsTranslate("CommandCompletion", "Script");
+            case "document.default_font.script":
+                return qsTranslate("CommandCompletion", "Script font");
+            case "document.default_font.script_language_scope":
+                return qsTranslate("CommandCompletion", "Script + language override");
+            case "document.default_font.language":
+                return qsTranslate("CommandCompletion", "Language override");
+            default:
+                return candidate.label || "";
+            }
+        }
         switch (candidate.alias) {
         case "\\chapter":
             return qsTranslate("CommandCompletion", "Chapter");
@@ -90,6 +107,17 @@ Rectangle {
         }
     }
 
+    function aliasFor(candidate) {
+        switch (candidate.commandId) {
+        case "command_line.close_font_picker":
+            return qsTranslate("CommandCompletion", "Close");
+        case "document.default_font.language":
+            return qsTranslate("CommandCompletion", "Use language: %1").arg(candidate.value || "");
+        default:
+            return candidate.alias || "";
+        }
+    }
+
     x: Math.max(Theme.spacingSmall, Math.min(anchorX, Math.max(Theme.spacingSmall, availableWidth - width - Theme.spacingSmall)))
     y: anchorY + height <= availableHeight - Theme.spacingSmall ? anchorY : Math.max(Theme.spacingSmall, anchorTopY - height - Theme.spacingTiny)
     width: Math.max(0, Math.min(preferredWidth, availableWidth - Theme.spacingMedium * 2))
@@ -116,7 +144,7 @@ Rectangle {
                 required property var modelData
                 font.family: PlatformFonts.fixedFamily
                 font.pixelSize: Theme.fontSmall
-                text: modelData.alias
+                text: root.aliasFor(modelData)
             }
         }
 
@@ -145,6 +173,7 @@ Rectangle {
             width: candidateList.width
             height: root.rowHeight
             candidate: modelData
+            displayAlias: root.aliasFor(modelData)
             label: root.labelFor(modelData)
             selected: index === root.commandLine.selected
             aliasColumnWidth: root.aliasColumnWidth

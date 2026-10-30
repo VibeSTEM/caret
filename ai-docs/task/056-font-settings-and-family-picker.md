@@ -7,7 +7,7 @@
 
 ## 目标与背景
 
-Caret 已通过 Fontique 读取并缓存系统/用户字体目录，也已建立按 Unicode Script 与 BCP 47 语言覆盖选择字体族的规则。025 已提供文档默认字体 API 和局部 `\font` 命令候选；本任务仍负责把默认拉丁、CJK 与脚本覆盖字体接入 Settings 用户界面。
+Caret 已通过 Fontique 读取并缓存系统/用户字体目录，也已建立按 Unicode Script 与 BCP 47 语言覆盖选择字体族的规则。025 已提供文档默认字体 API 和局部 `\font` 命令候选；本任务仍负责把 `Script` 与 `Script+Language` 字体目标接入 Settings 用户界面。字体目标、存储映射、回退链和层级规则以[字体选择规范](../architecture/editor/font-selection.md)为唯一权威；各平台系统回退映射见[平台字体映射目录](../architecture/editor/font-defaults/README.md)。
 
 本任务补齐字体目录到用户可配置入口的链路，不重做字体枚举、字形覆盖判断或 fallback。字体偏好是排版设置：当前文档的值由 Rust 文档会话持有并写入 `.cdoc` 的 `globalSettings`；QML 只负责呈现候选、草稿和交互。应用级 Preferences 不得覆盖已打开文档的显式字体设置。
 
@@ -20,7 +20,8 @@ Caret 已通过 Fontique 读取并缓存系统/用户字体目录，也已建立
 ## 范围与非目标
 
 - 通过 Rust 服务暴露可用字体族/样式的稳定查询 DTO、当前目录代际和显式刷新能力；复用 024 的 Fontique `FontCatalog`，不得让 QML 扫描目录或维护第二份字体目录。
-- 选择器按可配置目标分类：默认拉丁族、默认 CJK 族及 Unicode Script 覆盖。分类依据字符 Script 和字体库提供的覆盖/元数据，不把语言、地区或 Unicode Block 当作字体分类；同一字体可出现在多个适用类别。
+- 选择器只提供 `Script` 与 `Script+Language` 两类目标；所有 Unicode 单一脚本平级，`Latn` 置首。语言覆盖必须位于对应 Script 下。不得另设 Latin/CJK 一级分类；完整映射见[字体选择规范](../architecture/editor/font-selection.md)。
+- 若本任务展示代码字体设置，它是独立的 `defaultCodeFontFamily` 文档字段，和数学字体一样不属于 Script 目标层级；只允许选择等宽字体，默认保留值为 `"<default>"`，由当前平台映射到系统等宽字体。字段与回退定义以[字体选择规范](../architecture/editor/font-selection.md)为准。
 - 选择字体后修改当前文档 Rust `globalSettings`，保留请求族名。字体不存在、刷新后缺失或覆盖不足时显示可理解的状态；实际字体仍由既有 shaping/fallback 路径解析，不静默改写用户请求。
 - 目录读取、刷新、候选过滤和偏好提交需有代际/失败语义；切换候选不得在每次按键时重新扫描磁盘或重复计算全量覆盖信息。
 - 可在既有 Settings 对话框增加文档排版字体页/区域；QML 不成为文档字体设置的权威状态源。界面文案纳入所有已支持 locale 的翻译。
@@ -37,7 +38,7 @@ Caret 已通过 Fontique 读取并缓存系统/用户字体目录，也已建立
 
 1. 审核 024 的 FontCatalog 和 025 的字体设置接口，列出已有能力与缺口，确认目录代际、字体族/样式元数据及覆盖查询成本。
 2. 在 Rust 定义目录查询/搜索 DTO 和刷新结果；字体设置通过投影并调用 025 已有文档字体命令/API 提交，验证候选后原子更新，失败不改变当前设置。
-3. 在 Settings UI 展示字体族，按默认拉丁、CJK 和 Script 覆盖目标选择；搜索、键盘操作、无匹配、字体缺失和刷新状态均可观察。
+3. 在 Settings UI 展示字体族，按[字体选择规范](../architecture/editor/font-selection.md)中的 Script 与 Script+Language 目标选择；代码字体如纳入本页，则作为独立的等宽字体设置，不嵌入脚本目标树。搜索、键盘操作、无匹配、字体缺失和刷新状态均可观察。
 4. 对目录结果和覆盖分类按 FontCatalog generation 缓存；确认刷新替换代际后旧候选不覆盖新状态，热路径不进行文件系统 I/O。
 5. 增加 Rust 服务/持久化、FFI/Qt 投影及用户可见行为测试；验证中英混排、指定 Script 覆盖、缺失字体回退和重启恢复。
 6. 同步所有 locale 翻译、架构文档与任务状态，按验证规范完成独立评审。
@@ -49,7 +50,8 @@ Caret 已通过 Fontique 读取并缓存系统/用户字体目录，也已建立
 ## 验收标准
 
 - [ ] Rust 返回的字体族目录来自 024 的 Fontique catalog；目录刷新有明确 generation，QML 不访问文件系统。
-- [ ] 选择器能查询/选择默认拉丁字体、CJK 字体和 Unicode Script 覆盖；分类基于 Script/字体覆盖，不能把语言或地区标签误当字符脚本。
+- [ ] 选择器能查询/选择所有可配置 `Script` 与 `Script+Language` 目标；目标与 `.cdoc` 字段的映射符合[字体选择规范](../architecture/editor/font-selection.md)，不另行定义 Latin/CJK 分类。
+- [ ] 若本任务实现代码字体 UI，必须读写文档 `defaultCodeFontFamily` 并保证候选是等宽族；数学字体继续固定 STIX Two Math，不加入脚本选择器。
 - [ ] 设置更新只影响当前文档 `globalSettings`，保存重开后保持；文档未选择字体时仍遵循系统默认与既有 fallback 规则。
 - [ ] 不存在/无覆盖字体的请求值被保留并显示状态，实际 fallback 可查询；失败提交不产生部分设置或过期 UI 状态。
 - [ ] 同一字体目录 generation 内的过滤/覆盖元数据可复用；输入与 shaping 热路径没有目录扫描，刷新后缓存正确失效。

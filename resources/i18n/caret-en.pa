@@ -576,3 +576,33 @@ message_111:
   src: Two-character-width space
   tr: Two-character-width space
   st: finished
+
+message_112:
+  src: Close
+  tr: Close
+  st: finished
+
+message_113:
+  src: Script
+  tr: Script
+  st: finished
+
+message_114:
+  src: Script font
+  tr: Script font
+  st: finished
+
+message_115:
+  src: Script + language override
+  tr: Script + language override
+  st: finished
+
+message_116:
+  src: Language override
+  tr: Language override
+  st: finished
+
+message_117:
+  src: Use language: %1
+  tr: Use language: %1
+  st: finished

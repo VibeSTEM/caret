@@ -17,13 +17,16 @@ mod paragraph;
 mod run;
 mod validation;
 
-pub use validation::MAX_DOCUMENT_NESTING_DEPTH;
+pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
 pub use inline::{InlineNode, SoftBreak};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
+
+/// 代码字体使用当前平台的系统等宽字体。
+pub const DEFAULT_CODE_FONT_FAMILY: &str = "<default>";
 
 // 保留节点转换函数在 crate 内原有的访问路径。
 #[allow(unused_imports)]
@@ -140,6 +143,8 @@ pub struct DocumentSettings {
     pub default_cjk_font_family: Option<String>,
     /// 公式上下文使用的默认数学字体族。
     pub default_math_font_family: Option<String>,
+    /// 命令输入与代码块使用的字体族；`<default>` 表示当前平台系统等宽字体。
+    pub default_code_font_family: String,
     /// 全局正文默认字号，单位为百分之一 pt。
     #[serde(default = "default_font_size_centipoints")]
     pub default_font_size_centipoints: u16,
@@ -156,6 +161,43 @@ pub struct DocumentSettings {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// 文档正文默认字体的可配置目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentFontTarget {
+    Script(String),
+    ScriptLanguage { script: String, language: String },
+}
+
+impl DocumentFontTarget {
+    /// 验证并规范化字体目标，使大小写不同的等价键映射到同一身份。
+    pub fn normalized(&self) -> Result<Self, ModelError> {
+        fn normalize_script(script: &str) -> Result<String, ModelError> {
+            if script.len() != 4 || !script.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+                return Err(ModelError::InvalidDocument(format!(
+                    "invalid Unicode Script key: {script}"
+                )));
+            }
+            let mut normalized = script.to_ascii_lowercase();
+            normalized[..1].make_ascii_uppercase();
+            Ok(normalized)
+        }
+
+        match self {
+            Self::Script(script) => Ok(Self::Script(normalize_script(script)?)),
+            Self::ScriptLanguage { script, language } => {
+                let script = normalize_script(script)?;
+                if !validation::is_valid_language_tag(language) {
+                    return Err(ModelError::InvalidLanguageTag(language.clone()));
+                }
+                Ok(Self::ScriptLanguage {
+                    script,
+                    language: language.to_ascii_lowercase(),
+                })
+            }
+        }
+    }
+}
+
 impl Default for DocumentSettings {
     fn default() -> Self {
         Self {
@@ -163,6 +205,7 @@ impl Default for DocumentSettings {
             default_font_family: None,
             default_cjk_font_family: None,
             default_math_font_family: None,
+            default_code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             default_font_size_centipoints: default_font_size_centipoints(),
             script_font_families: BTreeMap::new(),
             language_script_font_families: BTreeMap::new(),
@@ -172,6 +215,74 @@ impl Default for DocumentSettings {
             theme: None,
             extra: BTreeMap::new(),
         }
+    }
+}
+
+impl DocumentSettings {
+    pub fn font_family(&self, target: &DocumentFontTarget) -> Option<&str> {
+        match target.normalized().ok()? {
+            DocumentFontTarget::Script(script) if script == "Latn" => self
+                .script_font_families
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(&script))
+                .map(|(_, family)| family.as_str())
+                .or(self.default_font_family.as_deref()),
+            DocumentFontTarget::Script(script) => self
+                .script_font_families
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(&script))
+                .map(|(_, family)| family.as_str()),
+            DocumentFontTarget::ScriptLanguage { script, language } => self
+                .language_script_font_families
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(&script))
+                .and_then(|(_, languages)| {
+                    languages
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(&language))
+                        .map(|(_, family)| family.as_str())
+                }),
+        }
+    }
+
+    pub fn set_font_family(
+        &mut self,
+        target: &DocumentFontTarget,
+        family: Option<String>,
+    ) -> Result<(), ModelError> {
+        let target = target.normalized()?;
+        match &target {
+            DocumentFontTarget::Script(script) if script == "Latn" => {
+                self.script_font_families
+                    .retain(|key, _| !key.eq_ignore_ascii_case(script));
+                self.default_font_family = family;
+            }
+            DocumentFontTarget::Script(script) => {
+                self.script_font_families
+                    .retain(|key, _| !key.eq_ignore_ascii_case(script));
+                if let Some(family) = family {
+                    self.script_font_families.insert(script.clone(), family);
+                }
+            }
+            DocumentFontTarget::ScriptLanguage { script, language } => {
+                let mut languages = self
+                    .language_script_font_families
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(script))
+                    .map(|(key, _)| key.clone())
+                    .and_then(|key| self.language_script_font_families.remove(&key))
+                    .unwrap_or_default();
+                languages.retain(|key, _| !key.eq_ignore_ascii_case(language));
+                if let Some(family) = family {
+                    languages.insert(language.clone(), family);
+                }
+                if !languages.is_empty() {
+                    self.language_script_font_families
+                        .insert(script.clone(), languages);
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -5,6 +5,7 @@ mod layout;
 mod layout_view;
 mod page_glyphs;
 
+pub use caret_doc::DocumentFontTarget;
 pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,

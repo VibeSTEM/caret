@@ -59,7 +59,7 @@ Caret 的排版默认数值由内置预设定义；OOXML fixture 用于核对数
 
 | 阶段 | 职责 | 不负责 |
 | --- | --- | --- |
-| `font_selection` | 根据默认字体、CJK、Unicode Script 和 BCP 47 语言偏好生成候选字体 | 扫描字体目录、分析字符、替代 Fontique 字形覆盖查询 |
+| `font_selection` | 按[字体选择规范](font-selection.md)中的 `Script`、`Script+Language` 目标与映射生成候选字体 | 扫描字体目录、分析字符、替代 Fontique 字形覆盖查询 |
 | `shaping` | 展平段落行内结构，生成语言相关边界并提供 Parley 样式范围 | 自行选字体、塑形 glyph、生成 cluster、断行或分页 |
 | `shaping/unicode.rs` | 复用 ICU4X 与 `unicode-segmentation` 生成固定数据版本的断行/字素边界，并应用语言 tailoring | 字体查询或 glyph shaping |
 | `paragraph/parley.rs` | 构建并保留 Parley `Layout`；适配字素安全光标、命中、选区和视觉行结果 | 文档持久化、字体目录扫描或分页 |

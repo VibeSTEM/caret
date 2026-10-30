@@ -12,6 +12,6 @@
 | 004 | [WordCraft 编辑器方案参考笔记](004-wordcraft-editor-design-notes.md) | 补充记录 Paragraph/Run、版权边界和 Caret 设计结论 |
 | 005 | [Rust 文档与排版任务的库审查](005-rust-library-audit.md) | 记录 021 和 022–027 的 Rust 库选型及验证边界 |
 | 006 | [CJK 排版规则与学术论文样式](006-cjk-and-academic-layout.md) | 区分 Unicode 断行、CLREQ 中文需求和期刊模板差异 |
-| 007 | [多文字体系字体选择器](007-font-selection.md) | 设计脚本、语言变体、数学字体与 fallback 的分层 |
+| 007 | [多文字体系字体选择器](007-font-selection.md) | 字体选择外部资料与历史调研；当前设计规范见架构文档 |
 | 008 | [Office Open XML 行距、段距与分页语义](008-office-open-xml-spacing-pagination.md) | 以 ECMA-376 / ISO/IEC 29500 为准，记录 WordprocessingML 排版属性及互操作边界 |
 | 009 | [Rust AutoSave 库评估](009-autosave-rust-library-audit.md) | 评估防抖、文件通知与 AutoSave crate 是否适合 Caret 的文档生命周期 |

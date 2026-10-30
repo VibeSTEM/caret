@@ -3,7 +3,7 @@
 use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
 };
 use std::collections::BTreeMap;
@@ -369,6 +369,102 @@ fn font_picker_cursor_never_stops_inside_a_combining_grapheme() {
     assert!(line.query.is_char_boundary(line.cursor));
     assert!(!line.query[..line.cursor].is_empty());
     assert_eq!(line.query[..line.cursor].graphemes(true).count(), 1);
+}
+
+#[test]
+fn default_font_picker_navigates_script_and_script_language_targets() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    let font_targets = vec![
+        (
+            "Latn · Latin".to_owned(),
+            DocumentFontTarget::Script("Latn".to_owned()),
+        ),
+        (
+            "Cyrl · Cyrillic".to_owned(),
+            DocumentFontTarget::Script("Cyrl".to_owned()),
+        ),
+    ];
+    let fonts = vec!["Avenir Next".to_owned()];
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("defaultfont".to_owned()))
+        .unwrap_or_else(|error| panic!("default-font query failed: {error}"));
+    session
+        .run_command_line_with_font_choices(Command::AcceptCommandLine, fonts.clone(), font_targets)
+        .unwrap_or_else(|error| panic!("default-font picker did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontTarget)
+    );
+    assert_eq!(
+        session.command_line_candidates()[0].command_id,
+        "command_line.close_font_picker"
+    );
+
+    session
+        .run(Command::SelectCommandLineCandidate(2))
+        .unwrap_or_else(|error| panic!("Cyrillic script selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("script scope did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontScope)
+    );
+
+    session
+        .run(Command::SelectCommandLineCandidate(2))
+        .unwrap_or_else(|error| panic!("Script+ selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language override input did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontLanguage)
+    );
+    assert_eq!(
+        session.command_line().map(|line| line.prefix()),
+        Some("\\defaultfont Cyrl: ".to_owned())
+    );
+
+    session
+        .run(Command::TypeCommandLine("sr".to_owned()))
+        .unwrap_or_else(|error| panic!("language tag input failed: {error}"));
+    session
+        .run(Command::MoveCommandLineSelection(Direction::Forward))
+        .unwrap_or_else(|error| panic!("language target selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language font list did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.prefix()),
+        Some("\\defaultfont Cyrl:sr ".to_owned())
+    );
+
+    session
+        .run(Command::TypeCommandLine("Avenir".to_owned()))
+        .unwrap_or_else(|error| panic!("family query failed: {error}"));
+    session
+        .run(Command::MoveCommandLineSelection(Direction::Forward))
+        .unwrap_or_else(|error| panic!("family selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language font preference failed: {error}"));
+
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .language_script_font_families["Cyrl"]["sr"],
+        "Avenir Next"
+    );
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontTarget)
+    );
 }
 
 #[test]

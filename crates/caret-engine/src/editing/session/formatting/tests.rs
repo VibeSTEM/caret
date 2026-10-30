@@ -943,6 +943,134 @@ fn document_default_font_setting_is_undoable_and_blank_values_are_rejected() {
 }
 
 #[test]
+fn invalid_document_font_language_target_is_rejected_without_mutation() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    let before = session.document().clone();
+    assert!(matches!(
+        session.run(Command::SetDocumentFontFamily {
+            target: caret_doc::DocumentFontTarget::ScriptLanguage {
+                script: "Latn".to_owned(),
+                language: "en-a".to_owned(),
+            },
+            family: Some("Example Font".to_owned()),
+        }),
+        Err(EditError::InvalidFontFamily)
+    ));
+    assert_eq!(session.document(), &before);
+}
+
+#[test]
+fn latin_font_update_and_undo_preserve_legacy_script_override_behavior() {
+    let mut document = Document::blank();
+    document.global_settings.default_font_family = Some("Document Default".to_owned());
+    document.global_settings.script_font_families =
+        BTreeMap::from([("Latn".to_owned(), "Legacy Latin".to_owned())]);
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid legacy font document rejected: {error}"));
+    let target = caret_doc::DocumentFontTarget::Script("latn".to_owned());
+
+    assert!(
+        session
+            .run(Command::SetDocumentFontFamily {
+                target: target.clone(),
+                family: Some("Updated Latin".to_owned()),
+            })
+            .is_ok()
+    );
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        Some("Updated Latin")
+    );
+    assert!(session.run(Command::Undo).is_ok());
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        Some("Legacy Latin")
+    );
+    assert!(session.document().validate().is_ok());
+}
+
+#[test]
+fn clearing_legacy_latin_font_restores_both_fields_through_undo_and_redo() {
+    let mut document = Document::blank();
+    document.global_settings.default_font_family = Some("Document Default".to_owned());
+    document.global_settings.script_font_families =
+        BTreeMap::from([("Latn".to_owned(), "Legacy Latin".to_owned())]);
+    let target = caret_doc::DocumentFontTarget::Script("Latn".to_owned());
+    let mut session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("valid legacy font document rejected: {error}"));
+
+    assert!(
+        session
+            .run(Command::SetDocumentFontFamily {
+                target: target.clone(),
+                family: None,
+            })
+            .is_ok()
+    );
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        None
+    );
+    assert!(session.run(Command::Undo).is_ok());
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .default_font_family
+            .as_deref(),
+        Some("Document Default")
+    );
+    assert_eq!(
+        session.document().global_settings.script_font_families["Latn"],
+        "Legacy Latin"
+    );
+    assert!(session.run(Command::Redo).is_ok());
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        None
+    );
+
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid legacy font document rejected: {error}"));
+    assert!(
+        session
+            .run(Command::SetDefaultFontFamily(Some(
+                "New Default".to_owned()
+            )))
+            .is_ok()
+    );
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        Some("New Default")
+    );
+    assert!(
+        session
+            .document()
+            .global_settings
+            .script_font_families
+            .is_empty()
+    );
+    assert!(session.run(Command::Undo).is_ok());
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .default_font_family
+            .as_deref(),
+        Some("Document Default")
+    );
+    assert_eq!(
+        session.document().global_settings.script_font_families["Latn"],
+        "Legacy Latin"
+    );
+    assert!(session.run(Command::Redo).is_ok());
+    assert_eq!(
+        session.document().global_settings.font_family(&target),
+        Some("New Default")
+    );
+}
+
+#[test]
 fn font_environment_rejects_nesting_overflow_without_mutating_the_document() {
     fn nested_custom_environment(remaining: usize, child: Block) -> Block {
         if remaining == 0 {

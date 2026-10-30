@@ -126,6 +126,9 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     const QJsonValue preedit = command_line.value(QStringLiteral("preedit"));
     const QJsonValue preedit_cursor_utf16 =
         command_line.value(QStringLiteral("preeditCursorUtf16"));
+    const QJsonValue code_font_family = command_line.value(QStringLiteral("codeFontFamily"));
+    const QJsonValue code_font_family_uses_system_default =
+        command_line.value(QStringLiteral("codeFontFamilyUsesSystemDefault"));
     qsizetype cursor_position = 0;
     qsizetype selected_index = 0;
     qsizetype cursor_position_utf16 = 0;
@@ -137,6 +140,9 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         (!prefix.isUndefined() && !prefix.isString()) ||
         (!cursor_utf16.isUndefined() && !nonnegative_index(cursor_utf16, cursor_position_utf16)) ||
         (!preedit.isUndefined() && !preedit.isString()) ||
+        (!code_font_family.isUndefined() && !code_font_family.isString()) ||
+        (!code_font_family_uses_system_default.isUndefined() &&
+         !code_font_family_uses_system_default.isBool()) ||
         (!preedit_cursor_utf16.isUndefined() &&
          !nonnegative_index(preedit_cursor_utf16, preedit_cursor_position_utf16))) {
         error = QStringLiteral("layout.invalid_command_line");
@@ -149,16 +155,35 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
     }
     const QString normalized_mode = mode.toString(QStringLiteral("command"));
     if (normalized_mode != QStringLiteral("command") &&
-        normalized_mode != QStringLiteral("fontFamily")) {
+        normalized_mode != QStringLiteral("fontFamily") &&
+        normalized_mode != QStringLiteral("defaultFontTarget") &&
+        normalized_mode != QStringLiteral("defaultFontScope") &&
+        normalized_mode != QStringLiteral("defaultFontLanguage") &&
+        normalized_mode != QStringLiteral("defaultFontFamily")) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
-    const QString normalized_prefix =
-        prefix.toString(normalized_mode == QStringLiteral("fontFamily") ? QStringLiteral("\\font ")
-                                                                        : QStringLiteral("\\"));
-    if (normalized_prefix != (normalized_mode == QStringLiteral("fontFamily")
-                                  ? QStringLiteral("\\font ")
-                                  : QStringLiteral("\\"))) {
+    const QString normalized_prefix = prefix.toString(
+        normalized_mode == QStringLiteral("fontFamily")
+            ? QStringLiteral("\\font ")
+            : (normalized_mode == QStringLiteral("command") ? QStringLiteral("\\")
+                                                             : QStringLiteral("\\defaultfont ")));
+    const bool valid_prefix = normalized_mode == QStringLiteral("defaultFontTarget")
+                                  ? normalized_prefix == QStringLiteral("\\defaultfont ")
+                              : normalized_mode == QStringLiteral("defaultFontLanguage")
+                                  ? normalized_prefix.startsWith(QStringLiteral("\\defaultfont ")) &&
+                                        normalized_prefix.endsWith(QStringLiteral(": "))
+                              : normalized_mode == QStringLiteral("defaultFontScope") ||
+                                        normalized_mode == QStringLiteral("defaultFontFamily")
+                                  ? normalized_prefix.startsWith(QStringLiteral("\\defaultfont ")) &&
+                                        normalized_prefix.endsWith(QLatin1Char(' '))
+                                  : normalized_prefix ==
+                                        (normalized_mode == QStringLiteral("fontFamily")
+                                             ? QStringLiteral("\\font ")
+                                             : (normalized_mode == QStringLiteral("command")
+                                                    ? QStringLiteral("\\")
+                                                    : QStringLiteral("\\defaultfont ")));
+    if (!valid_prefix) {
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
@@ -214,6 +239,10 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
               {QStringLiteral("cursorUtf16"), cursor_position_utf16},
               {QStringLiteral("preedit"), normalized_preedit},
               {QStringLiteral("preeditCursorUtf16"), preedit_cursor_position_utf16},
+              {QStringLiteral("codeFontFamily"),
+               code_font_family.toString()},
+              {QStringLiteral("codeFontFamilyUsesSystemDefault"),
+               code_font_family_uses_system_default.toBool(true)},
               {QStringLiteral("selected"), selected_index},
               {QStringLiteral("candidates"), parsed_candidates}};
     return true;

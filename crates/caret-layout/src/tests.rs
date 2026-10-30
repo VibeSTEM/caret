@@ -217,6 +217,39 @@ fn ordinary_and_em_spaces_use_font_relative_advances() {
 }
 
 #[test]
+fn code_font_keeps_native_monospace_space_advance() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source_text = "i W";
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph(source_text, Some("en")),
+            &document_settings(),
+            &ShapingStyle::code(1200),
+            layout_options(200.0),
+        )
+        .unwrap_or_else(|error| panic!("code paragraph failed to layout: {error}"));
+
+    let advances: Vec<_> = result
+        .layout
+        .lines()
+        .flat_map(|line| line.runs())
+        .flat_map(|run| run.clusters())
+        .map(|cluster| (&source_text[cluster.text_range()], cluster.advance()))
+        .collect();
+    assert_eq!(advances.len(), 3);
+    let cell_width = advances[0].1;
+    assert!(cell_width > 0.0);
+    assert!(
+        advances
+            .iter()
+            .all(|(_, advance)| (*advance - cell_width).abs() < 0.01),
+        "code glyphs and spaces should occupy one native monospace cell: {advances:?}"
+    );
+}
+
+#[test]
 fn ordinary_space_calibration_does_not_change_nbsp_width_on_a_reused_layouter() {
     let mut catalog = font_catalog();
     let mut layouter = ParagraphLayouter::new();

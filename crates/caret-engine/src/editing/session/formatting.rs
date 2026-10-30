@@ -5,7 +5,7 @@ use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionH
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, Pos};
 use super::Session;
-use caret_doc::{InlineEnvironmentKind, NodeId, Paragraph};
+use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
 use inline_tree::{
     apply_font_family_to_range, apply_formats_to_range, effective_format_at, format_spans,
     format_value, wrap_format_range,
@@ -70,6 +70,36 @@ impl PendingInlineStyle {
 }
 
 impl Session {
+    pub(super) fn set_document_font_family(
+        &mut self,
+        target: &DocumentFontTarget,
+        family: Option<String>,
+    ) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        let target = target
+            .normalized()
+            .map_err(|_| EditError::InvalidFontFamily)?;
+        if family
+            .as_deref()
+            .is_some_and(|family| family.trim().is_empty())
+        {
+            return Err(EditError::InvalidFontFamily);
+        }
+        if self.document.global_settings.font_family(&target) == family.as_deref() {
+            return Ok(Effect::default());
+        }
+        self.document
+            .global_settings
+            .set_font_family(&target, family)
+            .map_err(|_| EditError::InvalidFontFamily)?;
+        Ok(Effect {
+            document_changed: true,
+            ..Effect::default()
+        })
+    }
+
     pub(super) fn inline_depth_for_paragraph(
         &self,
         paragraph_id: &NodeId,
@@ -85,23 +115,7 @@ impl Session {
         &mut self,
         family: Option<String>,
     ) -> Result<Effect, EditError> {
-        if self.composition.is_some() {
-            return Err(EditError::CompositionPending);
-        }
-        if family
-            .as_deref()
-            .is_some_and(|family| family.trim().is_empty())
-        {
-            return Err(EditError::InvalidFontFamily);
-        }
-        if self.document.global_settings.default_font_family == family {
-            return Ok(Effect::default());
-        }
-        self.document.global_settings.default_font_family = family;
-        Ok(Effect {
-            document_changed: true,
-            ..Effect::default()
-        })
+        self.set_document_font_family(&DocumentFontTarget::Script("Latn".to_owned()), family)
     }
 
     pub(super) fn set_inline_font_family(&mut self, family: &str) -> Result<Effect, EditError> {

@@ -2,6 +2,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import Caret.Canvas
 
 Item {
@@ -12,6 +13,7 @@ Item {
     required property int geometryRevision
     readonly property int minimumCommandFontPixelSize: 1
     readonly property int commandFontSizeStepCentipoints: 100
+    readonly property bool requestedCodeFontAvailable: PlatformFonts.containsFamily(root.commandLine.codeFontFamily || "")
 
     readonly property var caretPoint: {
         const revision = geometryRevision;
@@ -82,6 +84,9 @@ Item {
                 id: queryText
                 height: queryScroll.height
                 color: Theme.colorText
+                font.family: root.commandLine.codeFontFamilyUsesSystemDefault === true || !root.requestedCodeFontAvailable
+                             ? PlatformFonts.fixedFamily
+                             : (root.commandLine.codeFontFamily || PlatformFonts.fixedFamily)
                 font.pixelSize: root.commandFontPixelSize
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.NoWrap

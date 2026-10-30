@@ -10,6 +10,24 @@ fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn default_code_font_family_is_persisted_and_restored() -> Result<(), Box<dyn std::error::Error>> {
+    let file = CdocFile::new(Document::blank())?;
+    let bytes = file.to_bytes()?;
+    let json: Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(
+        json["document"]["globalSettings"]["defaultCodeFontFamily"],
+        "<default>"
+    );
+
+    let reopened = open(&bytes)?;
+    assert_eq!(
+        reopened.document().global_settings.default_code_font_family,
+        "<default>"
+    );
+    Ok(())
+}
+
+#[test]
 fn malformed_envelope_metadata_is_rejected_before_document_decoding()
 -> Result<(), Box<dyn std::error::Error>> {
     assert!(matches!(

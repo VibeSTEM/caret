@@ -1,6 +1,6 @@
 //! 验证文档模型、结构约束和默认值。
 
-use super::{Block, Document, DocumentSettings};
+use super::{Block, Document, DocumentFontTarget, DocumentSettings, is_valid_language_tag};
 use std::collections::BTreeMap;
 
 #[test]
@@ -40,6 +40,115 @@ fn document_validation_retains_well_formed_unknown_script_keys() {
 }
 
 #[test]
+fn font_targets_match_case_insensitively_and_updates_canonicalize_keys() {
+    let mut settings = DocumentSettings {
+        script_font_families: BTreeMap::from([("cyrl".to_owned(), "Old Font".to_owned())]),
+        language_script_font_families: BTreeMap::from([(
+            "cYRL".to_owned(),
+            BTreeMap::from([("SR-latn-rs".to_owned(), "Serbian Font".to_owned())]),
+        )]),
+        ..DocumentSettings::default()
+    };
+
+    assert_eq!(
+        settings.font_family(&DocumentFontTarget::Script("Cyrl".to_owned())),
+        Some("Old Font")
+    );
+    assert_eq!(
+        settings.font_family(&DocumentFontTarget::ScriptLanguage {
+            script: "CYRL".to_owned(),
+            language: "sr-Latn-RS".to_owned(),
+        }),
+        Some("Serbian Font")
+    );
+
+    assert!(
+        settings
+            .set_font_family(
+                &DocumentFontTarget::Script("CYRL".to_owned()),
+                Some("New Font".to_owned()),
+            )
+            .is_ok()
+    );
+    assert!(
+        settings
+            .set_font_family(
+                &DocumentFontTarget::ScriptLanguage {
+                    script: "cyrl".to_owned(),
+                    language: "SR-latn-RS".to_owned(),
+                },
+                Some("Updated Serbian Font".to_owned()),
+            )
+            .is_ok()
+    );
+
+    assert_eq!(settings.script_font_families.len(), 1);
+    assert!(settings.script_font_families.contains_key("Cyrl"));
+    assert_eq!(settings.language_script_font_families.len(), 1);
+    assert!(settings.language_script_font_families.contains_key("Cyrl"));
+    assert_eq!(
+        settings.language_script_font_families["Cyrl"]
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["sr-latn-rs"]
+    );
+    assert!(
+        Document {
+            global_settings: settings,
+            ..Document::blank()
+        }
+        .validate()
+        .is_ok()
+    );
+}
+
+#[test]
+fn font_target_language_validation_matches_document_language_validation() {
+    assert!(is_valid_language_tag("en-US"));
+    assert!(is_valid_language_tag("x-private"));
+    assert!(is_valid_language_tag("i-klingon"));
+    assert!(!is_valid_language_tag("en-a"));
+
+    let mut settings = DocumentSettings::default();
+    let before = settings.clone();
+    let result = settings.set_font_family(
+        &DocumentFontTarget::ScriptLanguage {
+            script: "Latn".to_owned(),
+            language: "en-a".to_owned(),
+        },
+        Some("Example Font".to_owned()),
+    );
+    assert!(result.is_err());
+    assert_eq!(settings, before);
+}
+
+#[test]
+fn legacy_latin_script_mapping_remains_the_effective_latin_target() {
+    let mut settings = DocumentSettings {
+        default_font_family: Some("Document Default".to_owned()),
+        script_font_families: BTreeMap::from([("Latn".to_owned(), "Legacy Latin".to_owned())]),
+        ..DocumentSettings::default()
+    };
+    let target = DocumentFontTarget::Script("Latn".to_owned());
+
+    assert_eq!(settings.font_family(&target), Some("Legacy Latin"));
+    assert!(
+        settings
+            .set_font_family(&target, Some("Updated Latin".to_owned()))
+            .is_ok()
+    );
+    assert_eq!(settings.font_family(&target), Some("Updated Latin"));
+    assert!(!settings.script_font_families.contains_key("Latn"));
+    assert_eq!(
+        settings.default_font_family.as_deref(),
+        Some("Updated Latin")
+    );
+    assert!(settings.set_font_family(&target, None).is_ok());
+    assert_eq!(settings.font_family(&target), None);
+}
+
+#[test]
 fn missing_global_text_and_paragraph_settings_use_bundled_defaults()
 -> Result<(), Box<dyn std::error::Error>> {
     let settings: DocumentSettings = serde_json::from_str("{}")?;
@@ -50,7 +159,37 @@ fn missing_global_text_and_paragraph_settings_use_bundled_defaults()
     assert_eq!(settings.paragraph_layout.space_before_centipoints, 0);
     assert_eq!(settings.paragraph_layout.space_after_centipoints, 800);
     assert!(settings.paragraph_layout.widow_orphan_control);
+    assert_eq!(
+        settings.default_code_font_family,
+        super::DEFAULT_CODE_FONT_FAMILY
+    );
     Ok(())
+}
+
+#[test]
+fn code_font_family_default_marker_is_valid_and_empty_family_is_rejected() {
+    let mut document = Document::blank();
+    assert_eq!(
+        document.global_settings.default_code_font_family,
+        super::DEFAULT_CODE_FONT_FAMILY
+    );
+    assert!(document.validate().is_ok());
+
+    document.global_settings.default_code_font_family = "Noto Sans Mono".to_owned();
+    assert!(document.validate().is_ok());
+    assert!(
+        document
+            .required_features()
+            .iter()
+            .any(|feature| feature == "caret.font.family-preferences")
+    );
+
+    document.global_settings.default_code_font_family = "  ".to_owned();
+    assert!(matches!(
+        document.validate(),
+        Err(super::ModelError::InvalidDocument(reason))
+            if reason.contains("defaultCodeFontFamily")
+    ));
 }
 
 #[test]

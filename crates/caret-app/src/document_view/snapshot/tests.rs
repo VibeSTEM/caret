@@ -22,6 +22,29 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
 }
 
 #[test]
+fn command_line_snapshot_projects_the_document_code_font() -> Result<(), String> {
+    let mut document = caret_doc::Document::blank();
+    document.global_settings.default_code_font_family = "Noto Sans Mono".to_owned();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.command_line_command_json("begin", String::new())?;
+    let explicit: Value = serde_json::from_str(&runtime.command_line_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(explicit["codeFontFamily"], "Noto Sans Mono");
+    assert_eq!(explicit["codeFontFamilyUsesSystemDefault"], false);
+
+    let mut default_document = caret_doc::Document::blank();
+    default_document.global_settings.default_code_font_family =
+        caret_doc::DEFAULT_CODE_FONT_FAMILY.to_owned();
+    let mut default_runtime = DocumentViewRuntime::new(default_document)?;
+    default_runtime.command_line_command_json("begin", String::new())?;
+    let default: Value = serde_json::from_str(&default_runtime.command_line_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(default["codeFontFamily"], "<default>");
+    assert_eq!(default["codeFontFamilyUsesSystemDefault"], true);
+    Ok(())
+}
+
+#[test]
 fn font_command_snapshot_exposes_unicode_picker_mode_and_utf16_cursor() -> Result<(), String> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;

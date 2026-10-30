@@ -238,9 +238,15 @@ impl ParagraphLayouter {
             } else {
                 None
             };
+            let code_role = span_ranges
+                .get(span_index)
+                .is_some_and(|(_, style)| style.font_role == crate::shaping::FontRole::Code);
             // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
             // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
-            if span_ranges.get(span_index).is_some() && !cluster_text.contains('\u{00a0}') {
+            if !code_role
+                && span_ranges.get(span_index).is_some()
+                && !cluster_text.contains('\u{00a0}')
+            {
                 let key = SpaceStyleKey {
                     style_index: span_space_style_indices[span_index],
                     script,
@@ -257,6 +263,7 @@ impl ParagraphLayouter {
                 }
             }
             if let Some(kind) = space_kind
+                && !code_role
                 && span_ranges.get(span_index).is_some()
             {
                 let space_end = range.start
@@ -315,6 +322,7 @@ impl ParagraphLayouter {
                         language: style.language.as_deref(),
                         math_context: false,
                         explicit_family: style.requested_family.as_deref(),
+                        code: style.font_role == crate::shaping::FontRole::Code,
                     },
                 );
                 requested_family_missing |= candidates.first().is_some_and(|candidate| {
@@ -500,7 +508,11 @@ fn build_parley_layout(
             .get(&key)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let families = font_families(family_names, *emoji);
+        let families = font_families(
+            family_names,
+            *emoji,
+            key.0.font_role == crate::shaping::FontRole::Code,
+        );
         builder.push(
             StyleProperty::FontFamily(families.as_slice().into()),
             range.clone(),
@@ -613,12 +625,15 @@ fn font_size_pt(font_size_centipoints: u16) -> f32 {
     f32::from(font_size_centipoints) * 0.01
 }
 
-fn font_families(names: &[String], emoji: bool) -> Vec<FontFamilyName<'_>> {
-    let mut families = Vec::with_capacity(names.len() + 2);
+fn font_families(names: &[String], emoji: bool, code: bool) -> Vec<FontFamilyName<'_>> {
+    let mut families = Vec::with_capacity(names.len() + 3);
     if emoji {
         families.push(FontFamilyName::Generic(GenericFamily::Emoji));
     }
     families.extend(names.iter().map(|family| FontFamilyName::named(family)));
+    if code {
+        families.push(FontFamilyName::Generic(GenericFamily::Monospace));
+    }
     families.push(FontFamilyName::Generic(GenericFamily::SystemUi));
     families
 }
@@ -732,7 +747,7 @@ mod tests {
     fn emoji_generic_family_precedes_named_preferences() {
         let names = vec!["Preferred Text Family".to_owned()];
         assert_eq!(
-            font_families(&names, true),
+            font_families(&names, true, false),
             vec![
                 FontFamilyName::Generic(GenericFamily::Emoji),
                 FontFamilyName::named("Preferred Text Family"),
@@ -740,9 +755,29 @@ mod tests {
             ]
         );
         assert_eq!(
-            font_families(&names, false),
+            font_families(&names, false, false),
             vec![
                 FontFamilyName::named("Preferred Text Family"),
+                FontFamilyName::Generic(GenericFamily::SystemUi),
+            ]
+        );
+    }
+
+    #[test]
+    fn code_font_places_monospace_after_named_preference() {
+        let names = vec!["Preferred Code Family".to_owned()];
+        assert_eq!(
+            font_families(&names, false, true),
+            vec![
+                FontFamilyName::named("Preferred Code Family"),
+                FontFamilyName::Generic(GenericFamily::Monospace),
+                FontFamilyName::Generic(GenericFamily::SystemUi),
+            ]
+        );
+        assert_eq!(
+            font_families(&[], false, true),
+            vec![
+                FontFamilyName::Generic(GenericFamily::Monospace),
                 FontFamilyName::Generic(GenericFamily::SystemUi),
             ]
         );

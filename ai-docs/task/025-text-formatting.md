@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-先支持文档默认字体设置和局部 Font EnvironmentNode 命令，再逐步支持字号、粗体/斜体、单线下划线、字色、高亮、字符底纹和基本段落格式。`\firstlineindent` 在当前段落任意光标位置设置首行缩进为 2 个字符宽度，以段落属性存储并进入正常撤销历史；正文 Tab 与 `\doublecharspace` 共用插入两个字符宽空格的编辑动作，`\singlecharspace` 插入一个字符宽空格。正文普通 U+0020 空格按半字宽排版。`\bold`、`\italic`、`\font` 等行内环境命令必须能作用于当前非空文本选区：按字素边界包裹所选文字，保留内容、位置映射和 Undo；空选区时按对应命令定义 pending typing style 或插入点行为。字体族不作为 Run 直接属性：文档默认拉丁族通过命令/API 修改，局部族由 `\font` 命令创建或应用 inline Font EnvironmentNode；字体名从 024 的本机字体目录获取。全局可设置 `defaultCjkFontFamily`，并按 ISO 15924 脚本标签配置细粒度覆盖；CJK 默认包含 `Hani`、`Hira`、`Kana`、`Hang` 和 `Bopo`。数学公式字体由 011 的 `defaultMathFontFamily` 独立设置，不属于正文字体选择器或正文脚本字体候选链；首版默认并仅支持 STIX Two Math。语言继续使用 BCP 47 标签，不能用字体族配置代替语言元数据。当前不做独立字体选择窗口或新工具栏控件。粗体/斜体范围由行内 EnvironmentNode 包裹，格式操作注册到命令系统，不增加环境工具按钮。实现文档全局格式设置、主题选择和默认 Run/Paragraph 样式；主题加载及显式更新走命令/API，主题快照更新失败必须保留旧快照和样式引用。块级 EnvironmentNode 的创建、嵌套、选择和删除由 010 通过命令与结构快捷键处理；将命令应用于非空文本选区并包装成块环境由 [057](057-block-environment-selection-commands.md) 定义，本任务不重复实现。当前环境背景高亮不由格式命令设置，随光标位置派生。保留嵌套继承，并在移除格式环境时 unwrap 子内容。保留继承状态，格式查询表达 uniform/mixed/unavailable；空选区更新 pending typing style。一次确认对应一个事务。
+先支持文档默认字体设置和局部 Font EnvironmentNode 命令，再逐步支持字号、粗体/斜体、单线下划线、字色、高亮、字符底纹和基本段落格式。`\firstlineindent` 在当前段落任意光标位置设置首行缩进为 2 个字符宽度，以段落属性存储并进入正常撤销历史；正文 Tab 与 `\doublecharspace` 共用插入两个字符宽空格的编辑动作，`\singlecharspace` 插入一个字符宽空格。正文普通 U+0020 空格按半字宽排版。`\bold`、`\italic`、`\font` 等行内环境命令必须能作用于当前非空文本选区：按字素边界包裹所选文字，保留内容、位置映射和 Undo；空选区时按对应命令定义 pending typing style 或插入点行为。字体目标层级、脚本/语言映射、本机字体选择器和字体回退全部以[多文字体系字体选择](../architecture/editor/font-selection.md)为唯一权威；Run 不直接保存字体族，`\font` 创建或应用局部 Font EnvironmentNode，`\defaultfont` 使用键盘可操作的脚本与语言层级选择器。代码字体使用独立的 `defaultCodeFontFamily` 等宽字体设置，应用于命令输入和后续代码块；数学字体由 011 的 `defaultMathFontFamily` 独立设置。二者都不属于正文 Script 字体选择器，字段映射和回退只在字体选择规范维护。粗体/斜体范围由行内 EnvironmentNode 包裹，格式操作注册到命令系统，不增加环境工具按钮。实现文档全局格式设置、主题选择和默认 Run/Paragraph 样式；主题加载及显式更新走命令/API，主题快照更新失败必须保留旧快照和样式引用。块级 EnvironmentNode 的创建、嵌套、选择和删除由 010 通过命令与结构快捷键处理；将命令应用于非空文本选区并包装成块环境由 [057](057-block-environment-selection-commands.md) 定义，本任务不重复实现。当前环境背景高亮不由格式命令设置，随光标位置派生。保留嵌套继承，并在移除格式环境时 unwrap 子内容。保留继承状态，格式查询表达 uniform/mixed/unavailable；空选区更新 pending typing style。一次确认对应一个事务。
 
 不包含完整 Word 样式兼容、所有 underline 枚举、透明色或工具栏视觉细节。
 
@@ -27,10 +27,11 @@
 ## 实施步骤
 
 1. 定义属性的继承、显式关闭和清除行为。
-2. 实现默认字体命令和 Font EnvironmentNode 命令，基于 024 字体目录提供命令补全，不增加字体选择窗口。
-3. 实现其他范围格式命令、inline environment wrap/unwrap 和格式查询。
-4. 覆盖混合选区、空选区、空段、嵌套粗斜体、unwrap 边界与属性合并。
-5. 独立评审并复验。
+2. 实现默认字体脚本/语言目标选择器和 Font EnvironmentNode 命令，基于 024 字体目录提供键盘命令补全。
+3. 将 `defaultCodeFontFamily` 加入文档全局设置并作用于画布命令输入文本；缺省值 `"<default>"` 由 Qt 平台固定宽度字体服务解析，显式值使用指定等宽族。为未来代码块预先接入 Rust `FontRole::Code` 与 Fontique `GenericFamily::Monospace`，复用同一字段和字体回退，不在代码块或 QML 中另存重复默认值。代码块节点尚未实现，接入节点时只需传递代码字体角色。各平台 Script/Language fallback 和代码字体入口见[平台字体映射目录](../architecture/editor/font-defaults/README.md)。
+4. 实现其他范围格式命令、inline environment wrap/unwrap 和格式查询。
+5. 覆盖混合选区、空选区、空段、嵌套粗斜体、unwrap 边界与属性合并。
+6. 独立评审并复验。
 
 ## 预计改动
 
@@ -40,7 +41,8 @@
 
 - [ ] 字色/高亮/底纹/页面色/工作区色语义互不覆盖。
 - [ ] 默认字体命令修改文档全局默认；局部字体命令创建/应用 Font EnvironmentNode；Run 不直接保存字体族；不新增字体选择窗口或工具栏控件。
-- [ ] 文档默认字体设置支持默认拉丁字体、CJK 默认字体、按 Unicode Script 短标签覆盖字体、脚本内 BCP 47 语言覆盖；混合文字能在 shaping 边界选择对应字体，并在 glyph 缺失时使用系统回退。
+- [ ] 默认与局部字体命令符合[字体选择规范](../architecture/editor/font-selection.md)；目标类型、候选层级、完整映射、持久化字段和 fallback 规则只在该规范维护。混合文字按 shaping 上下文选择字体，并在 glyph 缺失时使用系统回退。
+- [ ] `defaultCodeFontFamily` 作为独立文档全局字段持久化，默认保留值为 `"<default>"`；画布命令输入文本按当前平台系统等宽字体显示，显式值使用指定字体，当前设备缺少显式族时回退为平台等宽字体且保留文档请求。Rust shaping 的 `FontRole::Code` 使用同一字段：显式族优先于 Monospace fallback，默认标记直接请求 Fontique Monospace；Emoji presentation 仍使用 Emoji generic。代码角色保留等宽字体原生空格宽度。代码块文档节点尚未实现。Theme UI 字体和数学字体不受其覆盖。平台默认映射和数据范围见[映射目录](../architecture/editor/font-defaults/README.md)。
 - [ ] 不同字体族的 Font 环境局部嵌套覆盖；同族范围合并/压平并按 020 保留节点 ID。
 - [ ] `\firstlineindent` 在当前段落任意光标位置将首行缩进设为 2 em；Tab 与 `\doublecharspace` 共用插入两个字符宽空格的编辑动作，`\singlecharspace` 插入一个字符宽空格。首行缩进作为段落属性参与 Parley 换行、光标几何、选区绘制、撤销/重做和 `.cdoc` 往返。
 - [ ] `\bold`、`\italic`、`\font` 等行内命令可作用于当前选中文本；按字素边界切分并包裹目标范围，保留未选内容、方向与位置映射。混合格式选区按[格式语义](../architecture/editor/text-formatting.md#选区与待输入格式)统一应用；空选区切换 pending typing，移动光标后按上下文重算；交叉范围按 020 的保序树化规则切分；只有状态、`definitionId`、`props` 和语义上下文兼容的同类型相邻环境才合并。行为测试覆盖主题/外层粗斜体的局部显式关闭、不同模板嵌套时保留已有属性优先级、空段标记格式、拆分、合并和 Undo ID 恢复。优先级命令测试固定全局字号 14 pt、Section 默认模板字号 18 pt 且实例无覆盖时环境内结果为 18 pt；实例变体/props 覆盖和环境未设置该属性时的全局/主题回退也分别断言。不同有效树形按正文、计算格式和位置映射断言，不以树完全相同作为通过条件。
@@ -62,6 +64,8 @@
 | 2026-10-30 | `cargo fmt --all -- --check`、`cargo test --locked --offline --workspace`、`cargo clippy --locked --offline --workspace --all-targets -- -D warnings`、`git diff --check`；跨层行为测试含 CTest | 空格命令名、Tab 行为、U+0020 半字宽排版、空格塑形缓存及命令/IME 路由符合契约；workspace 回归通过 | 格式、workspace 测试、Clippy 与差异检查通过；native CTest 8/8 通过。覆盖 Rust 命令与布局、Qt IME 取消后恢复输入、QML 加载/格式及资源加载。命令别名统一为 `\singlecharspace` / `\doublecharspace`；普通 U+0020 以半个 em 校准，显式字符宽空格按一个 em 校准，Tab 插入两个字符宽空格。100k 密集空格单段实测另见下行；尚未复测百万字多段文档或统计分配量。Qt 输入法 reset 后可能已排队的旧 commit 没有 generation 过滤，当前测试仅验证取消后新 commit 可正常提交，平台事件顺序仍需实机验证。完整 025 仍未完成。 |
 | 2026-10-30 | `cargo bench --locked --offline -p caret-layout --bench layout_criterion -- 'space_dense_100k' --sample-size 10 --warm-up-time 1 --measurement-time 2`；优化 bench（macOS arm64） | 约 100k ASCII 字符、密集普通空格，检查空间校准后的 100k 单段布局耗时 | Release 下 99,996 个 ASCII 字符布局中位数 16.477 ms，95% 区间 16.350–16.804 ms，5.79 MiB/s；Criterion 与本机已有基线相比未检测到显著变化（p=0.92）。这是单机基线，不等于证明相对未修改代码无退化；尚未测量百万字多段文档和分配量。 |
 | 2026-10-30 | `cargo test --locked --offline -p caret-tests --test document first_line_indent_round_trips_through_cdoc_storage` | 新增首行缩进在 `.cdoc` 编码、重新打开后仍保留 | 通过；断言保存 JSON 和重新打开后的文档均保留 `firstLineIndentChars: 2`。 |
+| 2026-10-30 | `cargo test --locked --offline -p caret-doc code_font_family_default_marker_is_valid_and_empty_family_is_rejected`、`cargo test --locked --offline -p caret-doc default_code_font_family_is_persisted_and_restored`、`cargo test --locked --offline -p caret-app command_line_snapshot_projects_the_document_code_font` | `defaultCodeFontFamily` 默认标记、显式值及系统字体标志通过 Rust 快照投影给 QML | 三项定向测试通过；运行时字体族查询由 Qt `QFontDatabase::FixedFont` 负责，平台映射和限制见[映射目录](../architecture/editor/font-defaults/README.md)。 |
+| 2026-10-30 | `cargo test --locked --offline -p caret-layout`、`cargo clippy --locked --offline -p caret-layout --all-targets -- -D warnings`、`cargo fmt --all`、`git diff --check` | Rust 代码字体角色通过 Parley 布局请求显式族/默认 Monospace；代码空格保持单元宽度，正文仍按既定规则校准 | caret-layout 96 项测试通过，Clippy、格式化和差异检查通过。新增布局级测试使用平台 Monospace 通用族排版 `i W`，确认字母与空格 advance 相等；font-role 继承、显式代码族优先级及 GenericFamily 顺序也有测试。代码块节点本身尚未实现，因此没有实际文档代码块端到端验收。 |
 
 ## 风险与回退
 
@@ -70,11 +74,12 @@
 ## 决策与工作记录
 
 - 2026-10-25：从原 008 编辑范围拆出格式命令。
+- 2026-10-30：在 025 中直接完成未来代码块字体策略的 Rust 接线。新增 `FontRole::Code` 与 `ShapingStyle::code`，使用文档 `defaultCodeFontFamily`，默认请求 Fontique Monospace，显式族先尝试，emoji presentation 继续使用 Emoji generic；代码角色不继承正文 Script/CJK/数学字体，并跳过正文空格宽度校准以保留等宽列对齐。代码块模型仍由后续结构任务实现。
 - 2026-10-25：用户决定粗体/斜体的混合选区采用统一应用；规则维护在格式语义文档。
 - 2026-10-25：用户决定合并同类型粗体或斜体环境，不保留冗余嵌套。
 - 2026-10-25：用户决定空选区的粗体/斜体命令切换 pending typing；移动光标后按新位置上下文重新计算，输入时局部切分/合并格式环境。
 - 2026-10-25：文档级全局格式与主题选择/更新归入本任务；更新失败保留旧快照，缓存按格式影响分类失效。
-- 2026-10-26：用户决定正文默认字体按文字体系而非语言拆分：默认拉丁字体供英语等拉丁文字共用，CJK 有通用默认字体并可按 `Hani` 等脚本覆盖。
+- 2026-10-26：旧决策曾使用默认拉丁与 CJK 字体分类；2026-10-30 改为在选择器中只保留 `Script` / `Script+语言`，映射规则以[字体选择规范](../architecture/editor/font-selection.md)为准。
 - 2026-10-29：修订数学字体决策：保留 `defaultMathFontFamily` 作为数学字体的稳定扩展入口，011 首版默认并仅支持内嵌 STIX Two Math；不增加多字体切换 UI。
 - 2026-10-30：明确行内环境命令必须支持作用于已选文本；块环境命令的选区包装由 057 单独定义，避免与行内字素范围操作混为一体。
 - 2026-10-30：开始实现行内粗体/斜体命令；新增 Rust Session 格式事务、通用 `\bold`/`\italic` 候选分发、QML 标签及四种语言文案。发现关闭格式必须置于既有环境链内侧，已通过显式 `enabled: false` 行为测试固定；PendingStyle 状态纳入会话撤销历史且不改变文档修订代际。默认字体、Font 命令、其他字符和段落属性及格式查询尚未实现。

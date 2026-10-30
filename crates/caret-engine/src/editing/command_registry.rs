@@ -6,9 +6,10 @@ use std::borrow::Cow;
 pub struct CommandCandidate {
     pub alias: Cow<'static, str>,
     pub command_id: &'static str,
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     pub available: bool,
     pub value: Option<String>,
+    pub has_children: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -24,9 +25,10 @@ impl RegisteredCandidate {
         CommandCandidate {
             alias: Cow::Borrowed(self.alias),
             command_id: self.command_id,
-            label: self.label,
+            label: Cow::Borrowed(self.label),
             available: self.available,
             value: None,
+            has_children: false,
         }
     }
 }
@@ -156,6 +158,12 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         alias: "\\font",
         command_id: "text.format.font",
         label: "Font family",
+        available: true,
+    },
+    RegisteredCandidate {
+        alias: "\\defaultfont",
+        command_id: "document.default_font",
+        label: "Default font",
         available: true,
     },
 ];

@@ -576,3 +576,33 @@ message_111:
   src: Two-character-width space
   tr: 全角2文字分の空白
   st: finished
+
+message_112:
+  src: Close
+  tr: 閉じる
+  st: finished
+
+message_113:
+  src: Script
+  tr: 文字体系
+  st: finished
+
+message_114:
+  src: Script font
+  tr: 文字体系のフォント
+  st: finished
+
+message_115:
+  src: Script + language override
+  tr: 文字体系と言語の上書き
+  st: finished
+
+message_116:
+  src: Language override
+  tr: 言語の上書き
+  st: finished
+
+message_117:
+  src: Use language: %1
+  tr: 言語を使用：%1
+  st: finished

@@ -71,8 +71,10 @@ impl DocumentViewRuntime {
             _ => return Err("cmdline.unknown_action".to_owned()),
         };
         if is_font_picker_request(&self.session, &command) {
+            let font_families = self.layout.font_family_names();
+            let font_targets = font_target_choices(self.layout.font_script_choices());
             self.session
-                .run_command_line_with_font_families(command, self.layout.font_family_names())
+                .run_command_line_with_font_choices(command, font_families, font_targets)
                 .map_err(|error| format!("cmdline.{action}: {error}"))?;
             return self.interaction_state_json();
         }
@@ -290,24 +292,48 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
     }
     let candidates = session.command_line_candidates();
     let selected = candidates.get(line.selected);
-    if line.mode == caret_engine::CommandLineMode::FontFamily {
+    if matches!(
+        line.mode,
+        caret_engine::CommandLineMode::DefaultFontTarget
+            | caret_engine::CommandLineMode::DefaultFontScope
+            | caret_engine::CommandLineMode::DefaultFontLanguage
+    ) {
+        return false;
+    }
+    if matches!(
+        line.mode,
+        caret_engine::CommandLineMode::FontFamily
+            | caret_engine::CommandLineMode::DefaultFontFamily
+    ) {
         return matches!(
             command,
             Command::AcceptCommandLine | Command::TabCommandLine
         ) && selected.is_some_and(|candidate| {
-            candidate.available && candidate.command_id == "text.format.font_family"
+            candidate.available
+                && matches!(
+                    candidate.command_id,
+                    "text.format.font_family" | "document.default_font.family"
+                )
         });
     }
     match command {
         Command::TypeCommandLine(text) if text == "\\" => {
             line.query.is_empty()
                 || selected.is_some_and(|candidate| {
-                    candidate.available && candidate.command_id != "text.format.font"
+                    candidate.available
+                        && !matches!(
+                            candidate.command_id,
+                            "text.format.font" | "document.default_font"
+                        )
                 })
         }
         Command::TabCommandLine => line.query.is_empty(),
         Command::AcceptCommandLine => selected.is_some_and(|candidate| {
-            candidate.available && candidate.command_id != "text.format.font"
+            candidate.available
+                && !matches!(
+                    candidate.command_id,
+                    "text.format.font" | "document.default_font"
+                )
         }),
         _ => false,
     }
@@ -325,7 +351,29 @@ fn is_font_picker_request(session: &caret_engine::Session, command: &Command) ->
     session
         .command_line_candidates()
         .get(line.selected)
-        .is_some_and(|candidate| candidate.available && candidate.command_id == "text.format.font")
+        .is_some_and(|candidate| {
+            candidate.available
+                && matches!(
+                    candidate.command_id,
+                    "text.format.font" | "document.default_font"
+                )
+        })
+}
+
+fn font_target_choices(
+    scripts: Vec<(String, String)>,
+) -> Vec<(String, caret_doc::DocumentFontTarget)> {
+    let mut scripts = scripts;
+    scripts.sort_by_key(|(tag, _)| (tag != "Latn", tag.clone()));
+    scripts
+        .into_iter()
+        .map(|(tag, name)| {
+            (
+                format!("{tag} · {name}"),
+                caret_doc::DocumentFontTarget::Script(tag),
+            )
+        })
+        .collect()
 }
 
 fn is_editor_key_document_edit(session: &caret_engine::Session, key: EditorKey) -> bool {

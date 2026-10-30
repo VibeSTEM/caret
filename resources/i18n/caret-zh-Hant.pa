@@ -576,3 +576,33 @@ message_111:
   src: Two-character-width space
   tr: 兩個全字寬空格
   st: finished
+
+message_112:
+  src: Close
+  tr: 關閉
+  st: finished
+
+message_113:
+  src: Script
+  tr: 文字系統
+  st: finished
+
+message_114:
+  src: Script font
+  tr: 文字系統字型
+  st: finished
+
+message_115:
+  src: Script + language override
+  tr: 文字系統 + 語言覆寫
+  st: finished
+
+message_116:
+  src: Language override
+  tr: 語言覆寫
+  st: finished
+
+message_117:
+  src: Use language: %1
+  tr: 使用語言：%1
+  st: finished

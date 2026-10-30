@@ -156,6 +156,7 @@ void ShellLoadTest::autoScrollTextMovesOnlyWhenActiveAndOverflowing() {
                           "        objectName: \"candidateRow\"\n"
                           "        width: 160; height: 28\n"
                           "        candidate: ({ alias: \"\\\\subsection\", available: true })\n"
+                          "        displayAlias: \"\\\\subsection\"\n"
                           "        label: \"A long localized candidate label\"\n"
                           "        selected: false\n"
                           "        aliasColumnWidth: 40\n"

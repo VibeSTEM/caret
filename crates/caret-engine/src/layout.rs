@@ -964,6 +964,11 @@ impl DocumentLayoutRuntime {
             .map(|family| family.name.clone())
             .collect()
     }
+
+    /// 当前 ICU Unicode 数据定义的脚本组，供文档默认字体选择器展示。
+    pub fn font_script_choices(&self) -> Vec<(String, String)> {
+        caret_layout::font_selection::unicode_script_choices()
+    }
 }
 
 enum LayoutInput<'a> {

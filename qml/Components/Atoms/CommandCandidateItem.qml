@@ -7,6 +7,7 @@ Item {
     id: root
 
     required property var candidate
+    required property string displayAlias
     required property string label
     required property bool selected
     required property real aliasColumnWidth
@@ -27,10 +28,10 @@ Item {
         y: 0
         width: Math.max(0, Math.min(root.aliasColumnWidth, parent.width - Theme.spacingSmall * 2))
         height: parent.height
-        text: root.candidate.alias
+        text: root.displayAlias
         textColor: root.candidate.available ? Theme.colorFocus : Theme.colorTextMuted
         fontPixelSize: Theme.fontSmall
-        monospaced: root.candidate.commandId !== "text.format.font_family"
+        monospaced: !root.candidate.commandId.endsWith(".font_family")
         scrollActive: root.selected
     }
 
@@ -44,6 +45,16 @@ Item {
         textColor: root.candidate.available ? Theme.colorText : Theme.colorTextMuted
         fontPixelSize: Theme.fontBody
         scrollActive: root.selected
+    }
+
+    ThemedIcon {
+        anchors.right: parent.right
+        anchors.rightMargin: Theme.spacingSmall
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.candidate.hasChildren === true
+        name: "right"
+        iconSize: Theme.iconSizeSmall
+        color: Theme.colorTextMuted
     }
 
     TapHandler {

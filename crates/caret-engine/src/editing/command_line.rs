@@ -1,15 +1,22 @@
 //! 保存临时命令查询、候选顺序及其当前高亮项。
 
+mod font_picker;
+
 use super::command_registry::{self, CommandCandidate};
 use super::position::Pos;
 use crate::EditError;
-use std::borrow::Cow;
+use caret_doc::DocumentFontTarget;
+use font_picker::FontPicker;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandLineMode {
     Command,
     FontFamily,
+    DefaultFontTarget,
+    DefaultFontScope,
+    DefaultFontLanguage,
+    DefaultFontFamily,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +26,7 @@ pub struct CommandLine {
     pub cursor: usize,
     pub selected: usize,
     pub mode: CommandLineMode,
-    pub font_families: Vec<String>,
+    font_picker: Option<FontPicker>,
     pub preedit: String,
     pub preedit_cursor_utf16: usize,
 }
@@ -32,7 +39,7 @@ impl CommandLine {
             cursor: 0,
             selected: 0,
             mode: CommandLineMode::Command,
-            font_families: Vec::new(),
+            font_picker: None,
             preedit: String::new(),
             preedit_cursor_utf16: 0,
         }
@@ -45,10 +52,122 @@ impl CommandLine {
             cursor: 0,
             selected: 0,
             mode: CommandLineMode::FontFamily,
-            font_families,
+            font_picker: Some(FontPicker::local_family(font_families)),
             preedit: String::new(),
             preedit_cursor_utf16: 0,
         }
+    }
+
+    pub fn default_font_target_picker(
+        &self,
+        font_targets: Vec<(String, caret_doc::DocumentFontTarget)>,
+        font_families: Vec<String>,
+    ) -> Self {
+        Self {
+            at: self.at.clone(),
+            query: String::new(),
+            cursor: 0,
+            selected: 0,
+            mode: CommandLineMode::DefaultFontTarget,
+            font_picker: Some(FontPicker::default_targets(font_targets, font_families)),
+            preedit: String::new(),
+            preedit_cursor_utf16: 0,
+        }
+    }
+
+    pub fn default_font_family_picker(&self, target: caret_doc::DocumentFontTarget) -> Self {
+        Self {
+            at: self.at.clone(),
+            query: String::new(),
+            cursor: 0,
+            selected: 0,
+            mode: CommandLineMode::DefaultFontFamily,
+            font_picker: self
+                .font_picker
+                .as_ref()
+                .map(|picker| picker.default_family(target)),
+            preedit: String::new(),
+            preedit_cursor_utf16: 0,
+        }
+    }
+
+    pub fn default_font_scope_picker(&self, script: String) -> Self {
+        let mut next = self.clone();
+        if let Some(picker) = &mut next.font_picker {
+            picker.set_script(script);
+        }
+        next.mode = CommandLineMode::DefaultFontScope;
+        next.query.clear();
+        next.cursor = 0;
+        next.selected = 0;
+        next.preedit.clear();
+        next.preedit_cursor_utf16 = 0;
+        next
+    }
+
+    pub fn default_font_language_picker(&self) -> Self {
+        let mut next = self.clone();
+        next.mode = CommandLineMode::DefaultFontLanguage;
+        next.query.clear();
+        next.cursor = 0;
+        next.selected = 0;
+        next.preedit.clear();
+        next.preedit_cursor_utf16 = 0;
+        next
+    }
+
+    pub fn return_to_default_font_scope(&mut self) {
+        if !matches!(
+            self.mode,
+            CommandLineMode::DefaultFontLanguage | CommandLineMode::DefaultFontFamily
+        ) {
+            return;
+        }
+        if let Some(picker) = &mut self.font_picker {
+            picker.take_target();
+        }
+        self.mode = CommandLineMode::DefaultFontScope;
+        self.query.clear();
+        self.cursor = 0;
+        self.selected = 0;
+    }
+
+    pub fn return_to_default_font_language(&mut self) {
+        if self.mode != CommandLineMode::DefaultFontFamily {
+            return;
+        }
+        let language = self
+            .font_picker
+            .as_mut()
+            .and_then(FontPicker::take_target)
+            .and_then(|target| match target {
+                DocumentFontTarget::ScriptLanguage { language, .. } => Some(language),
+                _ => None,
+            });
+        self.mode = CommandLineMode::DefaultFontLanguage;
+        self.query = language.unwrap_or_default();
+        self.cursor = self.query.len();
+        self.selected = 0;
+    }
+
+    pub fn return_to_default_font_targets(&mut self) {
+        if !matches!(
+            self.mode,
+            CommandLineMode::DefaultFontFamily
+                | CommandLineMode::DefaultFontScope
+                | CommandLineMode::DefaultFontLanguage
+        ) {
+            return;
+        }
+        self.font_picker
+            .as_mut()
+            .and_then(FontPicker::return_to_targets);
+        self.mode = CommandLineMode::DefaultFontTarget;
+        self.query.clear();
+        self.cursor = 0;
+        self.selected = 0;
+        self.preedit.clear();
+        self.preedit_cursor_utf16 = 0;
     }
 
     pub fn update_preedit(&mut self, preedit: String, cursor_utf16: usize) {
@@ -56,11 +175,57 @@ impl CommandLine {
         self.preedit = preedit;
     }
 
-    pub fn prefix(&self) -> &'static str {
+    pub fn prefix(&self) -> String {
         match self.mode {
-            CommandLineMode::Command => "\\",
-            CommandLineMode::FontFamily => "\\font ",
+            CommandLineMode::Command => "\\".to_owned(),
+            CommandLineMode::FontFamily => "\\font ".to_owned(),
+            CommandLineMode::DefaultFontTarget => "\\defaultfont ".to_owned(),
+            CommandLineMode::DefaultFontScope => format!(
+                "\\defaultfont {} ",
+                self.font_picker
+                    .as_ref()
+                    .map_or_else(String::new, FontPicker::script)
+            ),
+            CommandLineMode::DefaultFontLanguage => format!(
+                "\\defaultfont {}: ",
+                self.font_picker
+                    .as_ref()
+                    .map_or_else(String::new, FontPicker::script)
+            ),
+            CommandLineMode::DefaultFontFamily => format!(
+                "\\defaultfont {} ",
+                self.font_picker
+                    .as_ref()
+                    .map_or_else(String::new, FontPicker::target_prefix)
+            ),
         }
+    }
+
+    pub fn is_font_picker(&self) -> bool {
+        matches!(
+            self.mode,
+            CommandLineMode::FontFamily
+                | CommandLineMode::DefaultFontTarget
+                | CommandLineMode::DefaultFontScope
+                | CommandLineMode::DefaultFontLanguage
+                | CommandLineMode::DefaultFontFamily
+        )
+    }
+
+    pub fn target_for_candidate(
+        &self,
+        candidate: &CommandCandidate,
+    ) -> Option<caret_doc::DocumentFontTarget> {
+        self.font_picker.as_ref()?.target_for_candidate(candidate)
+    }
+
+    pub fn selected_default_font_target(&self) -> Option<DocumentFontTarget> {
+        self.font_picker.as_ref()?.target().cloned()
+    }
+
+    pub fn enter_font_target(&mut self, target: caret_doc::DocumentFontTarget) {
+        let next = self.default_font_family_picker(target);
+        *self = next;
     }
 }
 
@@ -73,25 +238,10 @@ impl CommandLine {
         &self,
         mut is_available: impl FnMut(&CommandCandidate) -> bool,
     ) -> Vec<CommandCandidate> {
-        if self.mode == CommandLineMode::FontFamily {
-            let query = self.query.to_lowercase();
-            return self
-                .font_families
-                .iter()
-                .filter(|family| family.to_lowercase().starts_with(&query))
-                .map(|family| {
-                    let mut candidate = CommandCandidate {
-                        alias: Cow::Owned(family.clone()),
-                        command_id: "text.format.font_family",
-                        label: "Font family",
-                        available: true,
-                        value: Some(family.clone()),
-                    };
-                    candidate.available &= is_available(&candidate);
-                    candidate
-                })
-                .filter(|candidate| candidate.available)
-                .collect();
+        if self.is_font_picker() {
+            return self.font_picker.as_ref().map_or_else(Vec::new, |picker| {
+                picker.candidates(self.mode, &self.query, &mut is_available)
+            });
         }
 
         let mut candidates = Vec::new();
@@ -144,7 +294,16 @@ impl CommandLine {
             {
                 text.to_ascii_lowercase()
             }
-            CommandLineMode::FontFamily if !text.chars().any(char::is_control) => text.to_owned(),
+            CommandLineMode::DefaultFontTarget | CommandLineMode::DefaultFontLanguage
+                if !text.chars().any(char::is_control) =>
+            {
+                text.to_owned()
+            }
+            CommandLineMode::FontFamily | CommandLineMode::DefaultFontFamily
+                if !text.chars().any(char::is_control) =>
+            {
+                text.to_owned()
+            }
             _ => return,
         };
         if self.query.is_char_boundary(self.cursor) {
