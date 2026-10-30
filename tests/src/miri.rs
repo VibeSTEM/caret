@@ -43,12 +43,18 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
         "theme::tests::",
         "--skip",
         "document_view::tests::",
+        // 字体目录快照测试会通过 fontdb/libloading 调用系统 dlopen；该 FFI 不受 Miri 支持。
+        "--skip",
+        "document_view::snapshot::tests::",
         "--skip",
         "document_session::tests::",
         "--skip",
         "settings::tests::",
         "--skip",
         "settings::runtime::tests::",
+        // 该用例通过 pest 解析翻译资源；pest/stacker 的外部栈指针汇编不受 Miri 支持。
+        "--skip",
+        "settings::language::tests::supported_locale_metadata_matches_the_built_in_translation_files",
     ])?;
     // 保留诊断、文档格式化、TS 输出和 parser 前置限额等纯 Rust DSL 测试。
     for test in [

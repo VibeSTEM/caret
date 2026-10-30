@@ -350,16 +350,20 @@ void ShellLoadTest::preferencesPersistAndRefreshUserFacingSwitches() {
 void ShellLoadTest::preferencesKeepTheLastSnapshotWhenPersistenceIsUnavailable() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    QFile blocker(directory.filePath(QStringLiteral("not-a-directory")));
-    QVERIFY(blocker.open(QIODevice::WriteOnly));
-    QCOMPARE(blocker.write(QByteArrayLiteral("file")), qint64(4));
-    blocker.close();
-    const QByteArray path = (blocker.fileName() + QStringLiteral("/settings.json")).toUtf8();
+    const QString settings_parent = directory.filePath(QStringLiteral("settings-parent"));
+    const QByteArray path = (settings_parent + QStringLiteral("/settings.json")).toUtf8();
     auto runtime = caret::ffi::new_settings_runtime(
         rust::String(path.constData(), static_cast<std::size_t>(path.size())));
     QVERIFY(caret::install_settings_runtime(std::move(runtime)));
+
+    // Runtime 先在缺失配置目录上初始化为可用；再用普通文件占据父目录，保证写入跨平台失败。
+    QFile blocker(settings_parent);
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    QCOMPARE(blocker.write(QByteArrayLiteral("file")), qint64(4));
+    blocker.close();
+
     caret::PreferencesViewModel preferences;
-    QVERIFY(!preferences.error().isEmpty());
+    QVERIFY(preferences.error().isEmpty());
 
     QVERIFY(!preferences.setCaretBlinkEnabled(false));
     QVERIFY(preferences.caretBlinkEnabled());

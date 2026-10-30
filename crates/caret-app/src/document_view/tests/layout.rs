@@ -77,6 +77,69 @@ fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 }
 
 #[test]
+fn block_environment_geometry_is_emitted_as_page_fragments()
+-> Result<(), Box<dyn std::error::Error>> {
+    let environment_id = NodeId::generate();
+    let children = (0..80)
+        .map(|_| Block::Paragraph(Paragraph::empty(NodeId::generate())))
+        .collect();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(Paragraph::empty(NodeId::generate())),
+        children,
+        extra: BTreeMap::new(),
+    })];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let ranges = snapshot["blockEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("focus rectangles were omitted"))?;
+
+    let page_indices = ranges
+        .iter()
+        .filter_map(|range| range["pageIndex"].as_u64())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(page_indices.len() > 1, "the environment should span pages");
+    assert!(ranges.iter().all(|range| {
+        range["x1Pt"].as_f64() > range["x0Pt"].as_f64()
+            && range["y1Pt"].as_f64() > range["y0Pt"].as_f64()
+    }));
+
+    let layout = runtime.current_snapshot()?;
+    let environment_ranges = layout
+        .environment_ranges
+        .iter()
+        .filter(|range| range.environment_id == environment_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ranges.len(), environment_ranges.len());
+    assert_eq!(environment_ranges.len(), page_indices.len());
+    for (snapshot_range, layout_range) in ranges.iter().zip(&environment_ranges) {
+        assert_eq!(
+            snapshot_range["pageIndex"].as_u64(),
+            Some(layout_range.page_index as u64)
+        );
+        assert_eq!(snapshot_range["x0Pt"].as_f64(), Some(layout_range.x0_pt));
+        assert_eq!(snapshot_range["y0Pt"].as_f64(), Some(layout_range.y0_pt));
+        assert_eq!(snapshot_range["x1Pt"].as_f64(), Some(layout_range.x1_pt));
+        assert_eq!(snapshot_range["y1Pt"].as_f64(), Some(layout_range.y1_pt));
+        let page = &layout.pages[layout_range.page_index];
+        assert!(layout_range.x0_pt >= 0.0 && layout_range.x1_pt <= page.width_pt);
+        assert!(layout_range.y0_pt >= 0.0 && layout_range.y1_pt <= page.height_pt);
+    }
+    assert!(environment_ranges.windows(2).all(|ranges| {
+        ranges[0].page_index < ranges[1].page_index
+            && ranges[0].y0_pt < ranges[0].y1_pt
+            && ranges[1].y0_pt < ranges[1].y1_pt
+    }));
+    Ok(())
+}
+
+#[test]
 fn visible_page_rasterization_returns_binary_glyph_images() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut document = Document::blank();
