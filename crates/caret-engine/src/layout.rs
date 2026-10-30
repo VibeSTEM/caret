@@ -738,6 +738,7 @@ impl DocumentLayoutService {
                         spacing: style.line_spacing,
                         line_grid_metrics,
                         line_grid_font_size_centipoints: base_style.font_size_centipoints,
+                        first_line_indent_chars: style.first_line_indent_chars,
                     },
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
@@ -953,6 +954,15 @@ impl DocumentLayoutRuntime {
     /// 当前字体目录代际，用于丢弃过期异步结果。
     pub const fn font_generation(&self) -> u64 {
         self.catalog.generation()
+    }
+
+    /// 复制已排序的本机字体族名称，供命令选择器创建短生命周期候选快照。
+    pub fn font_family_names(&self) -> Vec<String> {
+        self.catalog
+            .families()
+            .iter()
+            .map(|family| family.name.clone())
+            .collect()
     }
 }
 

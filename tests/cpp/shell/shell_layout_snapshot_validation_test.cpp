@@ -77,6 +77,27 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
     heading.insert(QStringLiteral("label"), QStringLiteral("Section"));
     QVERIFY(!parse_structure(heading));
 
+    QVariantMap parsed_command_line;
+    QString command_line_error;
+    const QJsonObject unicode_command_line{{QStringLiteral("active"), true},
+                                           {QStringLiteral("mode"), QStringLiteral("fontFamily")},
+                                           {QStringLiteral("prefix"), QStringLiteral("\\font ")},
+                                           {QStringLiteral("query"), QStringLiteral("字")},
+                                           {QStringLiteral("cursor"), 3},
+                                           {QStringLiteral("cursorUtf16"), 7},
+                                           {QStringLiteral("selected"), 0},
+                                           {QStringLiteral("candidates"), QJsonArray{}}};
+    QVERIFY(caret::layout_snapshot::parse_command_line_state(
+        unicode_command_line, parsed_command_line, command_line_error));
+    QJsonObject invalid_command_prefix = unicode_command_line;
+    invalid_command_prefix.insert(QStringLiteral("prefix"), QStringLiteral("\\"));
+    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
+        invalid_command_prefix, parsed_command_line, command_line_error));
+    QJsonObject invalid_command_cursor = unicode_command_line;
+    invalid_command_cursor.insert(QStringLiteral("cursorUtf16"), 6);
+    QVERIFY(!caret::layout_snapshot::parse_command_line_state(
+        invalid_command_cursor, parsed_command_line, command_line_error));
+
     QJsonObject invalid_partial = root;
     invalid_partial.insert(QStringLiteral("partial"), QStringLiteral("yes"));
     QVERIFY(reject(invalid_partial));

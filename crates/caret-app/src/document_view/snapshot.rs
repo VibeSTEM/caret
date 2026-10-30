@@ -22,10 +22,24 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                     })
                 })
                 .collect::<Vec<_>>();
+            let query_prefix = command_line
+                .query
+                .get(..command_line.cursor)
+                .unwrap_or_default();
+            let cursor_utf16 =
+                command_line.prefix().encode_utf16().count() + query_prefix.encode_utf16().count();
             json!({
                 "active": true,
+                "mode": match command_line.mode {
+                    caret_engine::CommandLineMode::Command => "command",
+                    caret_engine::CommandLineMode::FontFamily => "fontFamily",
+                },
+                "prefix": command_line.prefix(),
                 "query": &command_line.query,
                 "cursor": command_line.cursor,
+                "cursorUtf16": cursor_utf16,
+                "preedit": &command_line.preedit,
+                "preeditCursorUtf16": command_line.preedit_cursor_utf16,
                 "selected": command_line.selected,
                 "candidates": candidates,
             })
@@ -33,8 +47,11 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
         .unwrap_or_else(|| {
             json!({
                 "active": false,
+                "mode": "command",
+                "prefix": "\\",
                 "query": "",
                 "cursor": 0,
+                "cursorUtf16": 1,
                 "selected": 0,
                 "candidates": [],
             })
@@ -403,7 +420,8 @@ impl DocumentViewRuntime {
             "cursorPosition": cursor_position,
             "anchorPosition": anchor_position,
         });
-        self.last_interaction_context = Some((snapshot.document_generation, context.id.clone()));
+        self.last_interaction_context =
+            Some((snapshot.document_generation, context.id.clone(), false));
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("inputMethodContext".to_owned(), input_method_context);
@@ -414,12 +432,23 @@ impl DocumentViewRuntime {
     pub fn interaction_state_json(&mut self) -> Result<String, String> {
         let selection = self.session.selection().clone();
         let visual_affinity = self.session.selection_visual_affinity();
+        let command_input_context = self.session.command_line();
         let context_key = (
             self.session.document_generation(),
             selection.focus.paragraph_id.clone(),
+            command_input_context.is_some(),
         );
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
+        let command_input_context = command_input_context.map(|line| {
+            let mut surrounding_text = line.prefix().to_owned();
+            surrounding_text.push_str(&line.query);
+            (
+                surrounding_text,
+                line.prefix().encode_utf16().count()
+                    + line.query[..line.cursor].encode_utf16().count(),
+            )
+        });
         let current_structure = current_structure_state(&self.session);
         let inline_environment = self
             .composition_preview_session
@@ -478,6 +507,20 @@ impl DocumentViewRuntime {
             "anchorPosition".to_owned(),
             serde_json::Value::from(anchor_position),
         );
+        if let Some((query, cursor_utf16)) = command_input_context {
+            input_method_context.insert(
+                "surroundingText".to_owned(),
+                serde_json::Value::String(query),
+            );
+            input_method_context.insert(
+                "cursorPosition".to_owned(),
+                serde_json::Value::from(cursor_utf16),
+            );
+            input_method_context.insert(
+                "anchorPosition".to_owned(),
+                serde_json::Value::from(cursor_utf16),
+            );
+        }
         let caret = snapshot
             .caret_geometry(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;

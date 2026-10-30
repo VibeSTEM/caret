@@ -35,6 +35,7 @@ class ShellLoadTest : public QObject {
     void preferencesWithoutRuntimeRejectChangesAndKeepDefaults();
     void environmentHighlightSnapshotSelectsAndClearsActiveRects();
     void commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument();
+    void cancelledInputMethodStateAllowsTheNextCommit();
     void documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior();
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();

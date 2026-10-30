@@ -10,6 +10,7 @@ use crate::LineSpacing;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedParagraphStyle {
     pub line_spacing: LineSpacing,
+    pub first_line_indent_chars: Option<u16>,
     pub space_before_pt: f32,
     pub space_after_pt: f32,
     pub widow_orphan_control: bool,
@@ -62,6 +63,7 @@ pub fn resolve_paragraph_style(
 
     Ok(ResolvedParagraphStyle {
         line_spacing,
+        first_line_indent_chars: overrides.and_then(|value| value.first_line_indent_chars),
         space_before_pt: centipoints_to_points(
             overrides
                 .and_then(|value| value.space_before_centipoints)
@@ -132,6 +134,20 @@ mod tests {
         assert_eq!(style.space_after_pt, 5.0);
         assert!(style.widow_orphan_control);
         assert!(style.keep_with_next);
+    }
+
+    #[test]
+    fn paragraph_first_line_indent_is_preserved_as_character_count() {
+        let style = resolve_paragraph_style(
+            &DocumentSettings::default(),
+            Some(&ParagraphLayoutOverrides {
+                first_line_indent_chars: Some(2),
+                ..ParagraphLayoutOverrides::default()
+            }),
+        )
+        .unwrap_or_else(|error| panic!("valid defaults rejected: {error}"));
+
+        assert_eq!(style.first_line_indent_chars, Some(2));
     }
 
     #[test]

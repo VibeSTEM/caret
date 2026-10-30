@@ -2,10 +2,67 @@
 
 use super::super::StoryId;
 use super::Session;
-use crate::editing::{Command, CommandCandidate, CommandLine, Direction, EditError, Effect};
+use crate::editing::{
+    Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError, Effect,
+};
 use caret_doc::BlockEnvironmentKind;
 
 impl Session {
+    /// 接受 `\\font` 时打开由布局字体目录填充的字体族候选模式。
+    pub fn run_command_line_with_font_families(
+        &mut self,
+        command: Command,
+        font_families: Vec<String>,
+    ) -> Result<Effect, EditError> {
+        let accepts_candidate = command == Command::AcceptCommandLine
+            || matches!(&command, Command::TypeCommandLine(text) if text == "\\");
+        let opens_font_picker = self.command_line.as_ref().is_some_and(|line| {
+            let command_line_has_query = !line.query.is_empty();
+            accepts_candidate
+                && line.mode == CommandLineMode::Command
+                && line.preedit.is_empty()
+                && (!matches!(&command, Command::TypeCommandLine(_)) || command_line_has_query)
+                && line
+                    .selected_candidate_with(|candidate| {
+                        self.command_candidate_available(candidate)
+                    })
+                    .is_some_and(|candidate| candidate.command_id == "text.format.font")
+        });
+
+        if opens_font_picker {
+            if let Some(command_line) = &self.command_line {
+                self.command_line = Some(command_line.font_family_picker(font_families));
+            }
+            return Ok(Effect::default());
+        }
+
+        self.run_command_line(command)
+    }
+
+    /// 将输入法预编辑和提交文本路由到字体族查询，不触碰正文会话内容。
+    pub fn input_method_command_line(
+        &mut self,
+        preedit: String,
+        commit: String,
+        replacement_start: i32,
+        replacement_length: i32,
+        cursor_utf16: usize,
+    ) -> Result<(), EditError> {
+        let Some(command_line) = &mut self.command_line else {
+            return Ok(());
+        };
+        let has_replacement =
+            !commit.is_empty() || replacement_start != 0 || replacement_length != 0;
+        let accepts_commit = command_line.mode == CommandLineMode::FontFamily
+            || (command_line.mode == CommandLineMode::Command
+                && commit.chars().all(|character| character.is_ascii_graphic()));
+        if has_replacement && accepts_commit {
+            command_line.replace_from_ime(replacement_start, replacement_length, &commit)?;
+        }
+        command_line.update_preedit(preedit, cursor_utf16);
+        Ok(())
+    }
+
     /// 当前命令查询在编辑上下文中的候选；领域可用性由 Session 统一裁决。
     pub fn command_line_candidates(&self) -> Vec<CommandCandidate> {
         let Some(command_line) = &self.command_line else {
@@ -29,20 +86,38 @@ impl Session {
     }
 
     pub(super) fn run_command_line(&mut self, command: Command) -> Result<Effect, EditError> {
+        if command == Command::CancelCommandLine {
+            let had_preedit = self
+                .command_line
+                .as_ref()
+                .is_some_and(|line| !line.preedit.is_empty());
+            self.command_line = None;
+            return Ok(Effect {
+                composition_changed: had_preedit,
+                ..Effect::default()
+            });
+        }
+        if self
+            .command_line
+            .as_ref()
+            .is_some_and(|line| !line.preedit.is_empty())
+        {
+            return Ok(Effect::default());
+        }
         match command {
             Command::BeginCommandLine => {
                 if self.composition.is_some() {
                     return Ok(Effect::default());
                 }
-                self.command_line = Some(CommandLine {
-                    at: self.selection.focus.clone(),
-                    query: String::new(),
-                    cursor: 0,
-                    selected: 0,
-                });
+                self.command_line = Some(CommandLine::new(self.selection.focus.clone()));
             }
             Command::TypeCommandLine(text) => {
-                if text == "\\" {
+                if text == "\\"
+                    && self
+                        .command_line
+                        .as_ref()
+                        .is_none_or(|line| line.mode == CommandLineMode::Command)
+                {
                     return self.repeat_command_line_prefix();
                 }
                 if let Some(command_line) = &mut self.command_line {
@@ -83,6 +158,9 @@ impl Session {
                 let Some(command_line) = self.command_line.clone() else {
                     return Ok(Effect::default());
                 };
+                if command_line.mode == CommandLineMode::FontFamily {
+                    return self.accept_command_line(false);
+                }
                 if command_line.query.is_empty() {
                     self.command_line = None;
                     return match self.run(Command::InsertText("\\".to_owned())) {
@@ -103,7 +181,7 @@ impl Session {
                     current.selected = 0;
                 }
             }
-            Command::CancelCommandLine => self.command_line = None,
+            Command::CancelCommandLine => unreachable!("command cancellation returned above"),
             Command::AcceptCommandLine => return self.accept_command_line(false),
             _ => unreachable!("only command-line commands are handled here"),
         }
@@ -137,6 +215,9 @@ impl Session {
         else {
             return Ok(Effect::default());
         };
+        if !command_line.preedit.is_empty() {
+            return Ok(Effect::default());
+        }
         if !candidate.available {
             return Ok(Effect::default());
         }
@@ -144,12 +225,25 @@ impl Session {
         let effect = match candidate.command_id {
             "text.soft_break" => self.run(Command::InsertSoftBreak),
             "text.split_paragraph" => self.run(Command::InsertParagraphBreak),
+            "text.insert.one_character_width_space" => {
+                self.run(Command::InsertOneCharacterWidthSpace)
+            }
+            "text.insert.two_character_width_space" => {
+                self.run(Command::InsertTwoCharacterWidthSpace)
+            }
             "text.format.bold" => self.run(Command::ToggleInlineFormat(
                 caret_doc::InlineEnvironmentKind::Bold,
             )),
             "text.format.italic" => self.run(Command::ToggleInlineFormat(
                 caret_doc::InlineEnvironmentKind::Italic,
             )),
+            "text.format.font_family" => candidate
+                .value
+                .map(|family| self.run(Command::SetInlineFontFamily(family)))
+                .unwrap_or_else(|| Ok(Effect::default())),
+            "paragraph.first_line_indent.set" => {
+                self.run(Command::SetParagraphFirstLineIndentChars(2))
+            }
             "struct.section.create" => self.run(Command::CreateBlockEnvironment(
                 BlockEnvironmentKind::Section,
             )),
@@ -163,12 +257,7 @@ impl Session {
             }
         };
         if continue_after {
-            self.command_line = Some(CommandLine {
-                at: self.selection.focus.clone(),
-                query: String::new(),
-                cursor: 0,
-                selected: 0,
-            });
+            self.command_line = Some(CommandLine::new(self.selection.focus.clone()));
         }
         Ok(effect)
     }

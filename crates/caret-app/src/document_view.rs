@@ -30,7 +30,7 @@ pub struct DocumentViewRuntime {
     composition_preview_session: Option<Session>,
     composition_snapshot: Option<DocumentLayoutSnapshot>,
     composition_range: Option<Selection>,
-    last_interaction_context: Option<(u64, caret_doc::NodeId)>,
+    last_interaction_context: Option<(u64, caret_doc::NodeId, bool)>,
 }
 
 impl DocumentViewRuntime {

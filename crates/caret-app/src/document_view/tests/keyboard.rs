@@ -102,18 +102,164 @@ fn editor_escape_cancels_ime_preview_and_publishes_the_base_layout()
 }
 
 #[test]
-fn editor_escape_reports_ime_cancellation_to_the_view() -> Result<(), Box<dyn std::error::Error>> {
+fn editor_escape_cancels_command_line_ime_preedit_without_starting_document_composition()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    let preedit: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "preedit".to_owned(),
+        String::new(),
+        0,
+        0,
+        3,
+    )?)?;
+    assert_eq!(preedit["commandLine"]["preedit"], "preedit");
+    assert!(runtime.session.command_line().is_some());
+    assert!(runtime.session.composition().is_none());
+
+    let command_line_cancelled: Value =
+        serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
+    assert_eq!(command_line_cancelled["commandLine"]["active"], false);
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(
+        command_line_cancelled["inputMethodContext"]["surroundingText"],
+        ""
+    );
+    Ok(())
+}
+
+#[test]
+fn command_line_cancel_api_publishes_ime_cancellation() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;
     runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
-    assert!(runtime.session.command_line().is_none());
-    assert!(runtime.session.composition().is_some());
 
-    let composition_cancelled: Value =
-        serde_json::from_str(&runtime.handle_editor_key_json("escape")?)?;
-    assert_eq!(composition_cancelled["compositionCancelled"], true);
-    assert!(runtime.session.composition().is_none());
-    assert_eq!(composition_cancelled["paragraphs"][0]["text"], "");
+    let cancelled: Value =
+        serde_json::from_str(&runtime.command_line_command_json("cancel", String::new())?)?;
+
+    assert_eq!(cancelled["compositionCancelled"], true);
+    assert_eq!(cancelled["commandLine"]["active"], false);
+    assert_eq!(cancelled["inputMethodContext"]["surroundingText"], "");
+    Ok(())
+}
+
+#[test]
+fn invalid_empty_preedit_replacement_can_be_cancelled_and_recovered()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)?;
+
+    assert!(
+        runtime
+            .input_method_event_json(String::new(), String::new(), -1, 1, 0)
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .session
+            .command_line()
+            .map(|line| line.preedit.as_str()),
+        Some("ni")
+    );
+
+    let recovered: Value = serde_json::from_str(&runtime.input_method_event_json(
+        String::new(),
+        String::new(),
+        0,
+        0,
+        0,
+    )?)?;
+    assert_eq!(recovered["commandLine"]["preedit"], "");
+    runtime.command_line_command_json("type", "section".to_owned())?;
+    assert_eq!(
+        runtime
+            .session
+            .command_line()
+            .map(|line| line.query.as_str()),
+        Some("section")
+    );
+    Ok(())
+}
+
+#[test]
+fn tab_with_empty_query_inserts_literal_slash_even_when_font_candidate_is_selected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    let font_candidate_index = runtime
+        .session
+        .command_line_candidates()
+        .iter()
+        .position(|candidate| candidate.command_id == "text.format.font")
+        .ok_or_else(|| std::io::Error::other("font command candidate is missing"))?;
+    runtime.command_line_command_json("select", font_candidate_index.to_string())?;
+
+    runtime.command_line_command_json("tab", String::new())?;
+
+    assert!(runtime.session.command_line().is_none());
+    let Some(caret_doc::Block::Paragraph(paragraph)) = runtime.session.document().body.first()
+    else {
+        return Err(std::io::Error::other("literal slash paragraph is missing").into());
+    };
+    assert_eq!(paragraph_text(paragraph), "\\");
+    Ok(())
+}
+
+#[test]
+fn pointer_selection_cancels_command_line_preedit_before_returning_to_document_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "section".to_owned())?;
+    runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
+    let focus = runtime.session.selection().focus.clone();
+    let selection = serde_json::json!({
+        "anchor": {
+            "paragraphId": focus.paragraph_id.to_string(),
+            "offsetUtf8": focus.offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream"
+        },
+        "focus": {
+            "paragraphId": focus.paragraph_id.to_string(),
+            "offsetUtf8": focus.offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream"
+        }
+    });
+
+    let response: Value =
+        serde_json::from_str(&runtime.set_selection_json(&serde_json::to_string(&selection)?)?)?;
+
+    assert_eq!(response["compositionCancelled"], true);
+    assert_eq!(response["commandLine"]["active"], false);
+    assert_eq!(response["inputMethodContext"]["surroundingText"], "");
+    assert!(runtime.session.command_line().is_none());
+    Ok(())
+}
+
+#[test]
+fn accepting_font_candidate_during_preedit_keeps_the_ime_context_active()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "font".to_owned())?;
+    runtime.command_line_command_json("accept", String::new())?;
+    runtime.command_line_command_json("type", "Avenir".to_owned())?;
+    runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
+
+    let response: Value =
+        serde_json::from_str(&runtime.command_line_command_json("accept", String::new())?)?;
+
+    assert_eq!(response["commandLine"]["mode"], "fontFamily");
+    assert_eq!(response["commandLine"]["preedit"], "preedit");
+    assert_eq!(
+        response["inputMethodContext"]["surroundingText"],
+        "\\font Avenir"
+    );
+    assert!(runtime.session.document().body.len() == 1);
+    assert!(runtime.session.command_line().is_some());
     Ok(())
 }
 

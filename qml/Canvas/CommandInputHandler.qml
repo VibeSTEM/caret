@@ -13,6 +13,8 @@ Item {
         const result = LayoutViewModel.commandLineCommand(action, text || "");
         if (!result.valid)
             console.warn("Document command input failed:", result.error);
+        else if (result.compositionCancelled === true)
+            root.canvas.cancelPreedit();
         return result;
     }
 

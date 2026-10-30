@@ -211,6 +211,31 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     QVERIFY(view_model->commandLineCommand(QStringLiteral("begin"))
                 .value(QStringLiteral("valid"))
                 .toBool());
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("font"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QVariantMap open_font_picker = view_model->handleEditorKey(QStringLiteral("enter"));
+    QVERIFY2(open_font_picker.value(QStringLiteral("valid")).toBool(),
+             qPrintable(open_font_picker.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model->commandLine().value(QStringLiteral("mode")).toString(),
+             QStringLiteral("fontFamily"));
+    QCOMPARE(view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
+             QStringLiteral("\\font "));
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("思源"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QCOMPARE(view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
+             QStringLiteral("\\font 思源"));
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("cancel"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QVERIFY(!view_model->commandLine().value(QStringLiteral("active")).toBool());
+    QCOMPARE(view_model->inputMethodContext().value(QStringLiteral("surroundingText")).toString(),
+             QString());
+
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("begin"))
+                .value(QStringLiteral("valid"))
+                .toBool());
     QVERIFY(view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("newline"))
                 .value(QStringLiteral("valid"))
                 .toBool());
@@ -233,6 +258,28 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
         view_model->paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
         QStringLiteral("\n\\"));
     delete probe;
+}
+
+void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {
+    caret::DocumentCanvas canvas;
+    QSignalSpy input_method_spy(&canvas, &caret::DocumentCanvas::inputMethodEventRequested);
+    QVERIFY(input_method_spy.isValid());
+
+    QInputMethodEvent preedit(QStringLiteral("ni"), {});
+    QCoreApplication::sendEvent(&canvas, &preedit);
+    QCOMPARE(input_method_spy.size(), 1);
+    QCOMPARE(canvas.preeditText(), QStringLiteral("ni"));
+
+    canvas.cancelPreedit();
+    const qsizetype cancellation_count = input_method_spy.size();
+    QVERIFY(cancellation_count >= 2);
+
+    QCoreApplication::processEvents();
+    QInputMethodEvent fresh_commit;
+    fresh_commit.setCommitString(QStringLiteral("new"));
+    QCoreApplication::sendEvent(&canvas, &fresh_commit);
+    QCOMPARE(input_method_spy.size(), cancellation_count + 1);
+    QCOMPARE(input_method_spy.last().at(1).toString(), QStringLiteral("new"));
 }
 
 void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior() {
@@ -293,8 +340,13 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     };
     for (const auto& [key, expected] : command_key_cases) {
         QTest::keyClick(&window, key);
-        QCOMPARE(command_keys.size(), 1);
-        QCOMPARE(command_keys.takeFirst().at(0).toString(), expected);
+        if (key == Qt::Key_Tab) {
+            QCOMPARE(editor_keys.size(), 1);
+            QCOMPARE(editor_keys.takeFirst().at(0).toString(), expected);
+        } else {
+            QCOMPARE(command_keys.size(), 1);
+            QCOMPARE(command_keys.takeFirst().at(0).toString(), expected);
+        }
     }
     QTest::keyClick(&window, Qt::Key_Escape);
     QCOMPARE(editor_keys.size(), 1);
@@ -305,8 +357,26 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTest::keyClick(&window, Qt::Key_Enter, Qt::ShiftModifier);
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
-
     canvas->setCommandMode(false);
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("tab"));
+    QInputMethodEvent preedit(QStringLiteral("ni"), {});
+    QCoreApplication::sendEvent(canvas, &preedit);
+    QCOMPARE(canvas->preeditText(), QStringLiteral("ni"));
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QVERIFY2(editor_keys.isEmpty(), "Tab during IME preedit must not insert a document space");
+    canvas->setCommandMode(true);
+    QTest::keyClick(&window, Qt::Key_Left);
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QVERIFY2(command_keys.isEmpty(), "IME preedit keys must not move or edit the command query");
+    QVERIFY2(navigation.isEmpty(), "IME preedit keys must not move the document caret");
+    QVERIFY2(editing_commands.isEmpty(), "IME preedit keys must not edit document text");
+    QVERIFY2(text_input.isEmpty(), "IME preedit keys must not commit fallback key text");
+    canvas->setCommandMode(false);
+    QInputMethodEvent cancel_preedit;
+    QCoreApplication::sendEvent(canvas, &cancel_preedit);
+    QVERIFY(canvas->preeditText().isEmpty());
     QTest::keyClick(&window, Qt::Key_A);
     QCOMPARE(text_input.size(), 1);
     QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("a"));

@@ -13,6 +13,17 @@ namespace caret {
 void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
     const Qt::KeyboardModifiers modifiers = event->modifiers();
     const Qt::KeyboardModifiers semantic_modifiers = modifiers & ~Qt::KeypadModifier;
+    if (!m_preedit_text.isEmpty() && event->key() == Qt::Key_Escape &&
+        (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier)) {
+        emit editorKeyRequested(QStringLiteral("escape"));
+        event->accept();
+        return;
+    }
+    if (!m_preedit_text.isEmpty()) {
+        // 组字按键由输入法处理；未被平台输入法消费的按键不得改动命令或正文。
+        event->accept();
+        return;
+    }
     const Qt::KeyboardModifiers command_modifiers =
         semantic_modifiers & (Qt::ControlModifier | Qt::MetaModifier);
     if (command_modifiers != Qt::NoModifier &&
@@ -40,12 +51,14 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
+    if (semantic_modifiers == Qt::NoModifier && event->key() == Qt::Key_Tab) {
+        emit editorKeyRequested(QStringLiteral("tab"));
+        event->accept();
+        return;
+    }
     if (m_command_mode && semantic_modifiers == Qt::NoModifier) {
         QString command_key;
         switch (event->key()) {
-        case Qt::Key_Tab:
-            command_key = QStringLiteral("tab");
-            break;
         case Qt::Key_Backspace:
             command_key = QStringLiteral("backspace");
             break;

@@ -556,3 +556,23 @@ message_107:
   src: Italic
   tr: 斜体
   st: finished
+
+message_108:
+  src: Font family
+  tr: フォントファミリー
+  st: finished
+
+message_109:
+  src: First-line indent
+  tr: 最初の行のインデント
+  st: finished
+
+message_110:
+  src: One-character-width space
+  tr: 全角1文字分の空白
+  st: finished
+
+message_111:
+  src: Two-character-width space
+  tr: 全角2文字分の空白
+  st: finished

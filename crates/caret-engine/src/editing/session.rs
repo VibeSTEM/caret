@@ -10,6 +10,7 @@ mod inline_content;
 mod keyboards;
 mod navigation;
 mod paragraph_edit;
+mod paragraph_formatting;
 mod range_edit;
 mod selection;
 mod structure;
@@ -230,8 +231,13 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
-        if let Command::InsertText(text) | Command::PasteText(text) = &command
-            && !text.is_empty()
+        let inserted_text = match &command {
+            Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
+            Command::InsertOneCharacterWidthSpace => Some("\u{2003}"),
+            Command::InsertTwoCharacterWidthSpace => Some("\u{2003}\u{2003}"),
+            _ => None,
+        };
+        if let Some(text) = inserted_text
             && self.block_environment_exit.is_some()
         {
             return self.insert_text_at_environment_exit(text);
@@ -351,6 +357,10 @@ impl Session {
             return Ok(effect);
         }
         let before_selection = self.selection.clone();
+        let cancels_command_line_preedit = self
+            .command_line
+            .as_ref()
+            .is_some_and(|line| !line.preedit.is_empty());
         let before_visual_affinity = self.selection_visual_affinity;
         let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
@@ -392,6 +402,8 @@ impl Session {
         };
         let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
+            Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
+            Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::InsertParagraphBreak => self.split_paragraph(),
@@ -409,6 +421,9 @@ impl Session {
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
             Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
+            Command::SetParagraphFirstLineIndentChars(chars) => {
+                self.set_paragraph_first_line_indent_chars(chars)
+            }
             Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
@@ -427,6 +442,7 @@ impl Session {
             | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
+        effect.composition_changed |= cancels_command_line_preedit;
         self.command_line = None;
         if effect.selection_changed && resets_pending_style {
             self.pending_inline_style.clear();
@@ -761,11 +777,14 @@ fn is_paragraph_edit(command: &Command) -> bool {
     matches!(
         command,
         Command::InsertText(_)
+            | Command::InsertOneCharacterWidthSpace
+            | Command::InsertTwoCharacterWidthSpace
             | Command::PasteText(_)
             | Command::InsertSoftBreak
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
             | Command::SetInlineFontFamily(_)
+            | Command::SetParagraphFirstLineIndentChars(_)
             | Command::Delete(_)
             | Command::CommitComposition { .. }
     )

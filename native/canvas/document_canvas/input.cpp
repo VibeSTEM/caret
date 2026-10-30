@@ -18,6 +18,20 @@ namespace caret {
 
 QVariantMap DocumentCanvas::inputMethodContext() const { return m_input_method_context; }
 
+QRectF DocumentCanvas::inputMethodCursorRectangle() const {
+    return m_input_method_cursor_rectangle;
+}
+
+void DocumentCanvas::setInputMethodCursorRectangle(const QRectF& rectangle) {
+    const QRectF normalized = rectangle.isValid() ? rectangle : QRectF{};
+    if (m_input_method_cursor_rectangle == normalized) {
+        return;
+    }
+    m_input_method_cursor_rectangle = normalized;
+    emit inputMethodCursorRectangleChanged();
+    updateInputMethodCursorRectangle();
+}
+
 void DocumentCanvas::setInputMethodContext(const QVariantMap& context) {
     if (m_input_method_context == context) {
         return;
@@ -75,7 +89,8 @@ QVariant DocumentCanvas::inputMethodQuery(Qt::InputMethodQuery query) const {
     case Qt::ImEnabled:
         return true;
     case Qt::ImCursorRectangle:
-        return caretRect(m_caret_geometry);
+        return m_input_method_cursor_rectangle.isEmpty() ? caretRect(m_caret_geometry)
+                                                         : m_input_method_cursor_rectangle;
     case Qt::ImSurroundingText:
         return m_input_method_context.value(QStringLiteral("surroundingText"));
     case Qt::ImCursorPosition:

@@ -13,6 +13,18 @@ impl DocumentViewRuntime {
         replacement_length: i32,
         cursor_position_utf16: usize,
     ) -> Result<String, String> {
+        if self.session.command_line().is_some() {
+            self.session
+                .input_method_command_line(
+                    preedit,
+                    commit,
+                    replacement_start,
+                    replacement_length,
+                    cursor_position_utf16,
+                )
+                .map_err(|error| format!("ime.font_picker: {error}"))?;
+            return self.interaction_state_json();
+        }
         let had_composition = self.composition_id.is_some();
         let has_commit = !commit.is_empty();
         let has_replacement = replacement_start != 0 || replacement_length != 0;

@@ -21,6 +21,8 @@
 - Enter 对段落标记的继承、粘贴后的 pending 状态，由命令规格统一定义。
 - 正文 Paragraph 中 Enter 新建段落；Shift+Enter 是段内软换行，不触发段间距。块环境标题中的 Enter 规则见[文档模型](document-model.md)。
 - 清除字符格式与清除段落格式是不同命令，不连带清除正文或页面设置。
+
+- 首行缩进通过 Paragraph 的 `layout.firstLineIndentChars` 持久化；`\firstlineindent` 在当前段落任意光标位置设置为 2 个基础字号宽度（2 em），实际缩进由 Rust 段落样式解析并交给 Parley 排版。正文中的 Tab 与 `\doublecharspace` 共用插入两个字符宽空格的编辑动作，`\singlecharspace` 插入一个字符宽空格；命令输入期间 Tab 仍用于候选补全。普通 U+0020 空格在布局时采用半字宽排版策略。
 - 删除行内格式环境只 unwrap 或删除明确选择的文字范围，不得连带删除外层块级环境。
 
 ## 颜色与装饰

@@ -21,9 +21,10 @@ Rectangle {
     readonly property real maximumCandidateColumnWidth: 105
     readonly property real candidateColumnSpacing: Theme.spacingMedium
     readonly property real maximumEstimatedWidth: 240
-    readonly property real aliasColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
-    readonly property real labelColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
-    readonly property real preferredWidth: candidateList.count > 0 ? Math.min(maximumEstimatedWidth, aliasColumnWidth + candidateColumnSpacing + labelColumnWidth + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
+    readonly property bool fontFamilyMode: commandLine.mode === "fontFamily"
+    readonly property real aliasColumnWidth: fontFamilyMode ? maximumCandidateColumnWidth : Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
+    readonly property real labelColumnWidth: fontFamilyMode ? 0 : Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
+    readonly property real preferredWidth: candidateList.count > 0 ? Math.min(maximumEstimatedWidth, aliasColumnWidth + (labelColumnWidth > 0 ? candidateColumnSpacing + labelColumnWidth : 0) + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
     readonly property real preferredHeight: candidateList.count > 0 ? Math.min(maximumRows, candidateList.count) * rowHeight + verticalPadding : emptyMetrics.height + verticalPadding
 
     function widestTextWidth(measurements) {
@@ -37,6 +38,8 @@ Rectangle {
     }
 
     function labelFor(candidate) {
+        if (fontFamilyMode)
+            return "";
         switch (candidate.alias) {
         case "\\chapter":
             return qsTranslate("CommandCompletion", "Chapter");
@@ -58,10 +61,18 @@ Rectangle {
             return qsTranslate("CommandCompletion", "Line break");
         case "text.split_paragraph":
             return qsTranslate("CommandCompletion", "New paragraph");
+        case "text.insert.one_character_width_space":
+            return qsTranslate("CommandCompletion", "One-character-width space");
+        case "text.insert.two_character_width_space":
+            return qsTranslate("CommandCompletion", "Two-character-width space");
         case "text.format.bold":
             return qsTranslate("CommandCompletion", "Bold");
         case "text.format.italic":
             return qsTranslate("CommandCompletion", "Italic");
+        case "text.format.font":
+            return qsTranslate("CommandCompletion", "Font family");
+        case "paragraph.first_line_indent.set":
+            return qsTranslate("CommandCompletion", "First-line indent");
         case "insert.inline_math":
             return qsTranslate("CommandCompletion", "Inline math");
         case "insert.equation":
@@ -100,7 +111,7 @@ Rectangle {
 
         Repeater {
             id: aliasMeasurements
-            model: root.commandLine.candidates || []
+            model: root.fontFamilyMode ? [] : root.commandLine.candidates || []
             delegate: Text {
                 required property var modelData
                 font.family: PlatformFonts.fixedFamily
@@ -111,7 +122,7 @@ Rectangle {
 
         Repeater {
             id: labelMeasurements
-            model: root.commandLine.candidates || []
+            model: root.fontFamilyMode ? [] : root.commandLine.candidates || []
             delegate: Text {
                 required property var modelData
                 font.pixelSize: Theme.fontBody
@@ -139,6 +150,8 @@ Rectangle {
             aliasColumnWidth: root.aliasColumnWidth
             labelColumnWidth: root.labelColumnWidth
             onActivated: {
+                if ((root.commandLine.preedit || "").length > 0)
+                    return;
                 const selectedCandidate = LayoutViewModel.commandLineCommand("select", String(index));
                 if (selectedCandidate.valid && modelData.available)
                     LayoutViewModel.commandLineCommand("accept", "");

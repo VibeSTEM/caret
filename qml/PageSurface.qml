@@ -257,13 +257,16 @@ Item {
             environmentHighlightRadius: Theme.radiusSmall
             environmentHighlightPaddingPx: Theme.spacingTiny
             inputMethodContext: LayoutViewModel.inputMethodContext
+            inputMethodCursorRectangle: commandCompletion.inputMethodCursorRectangle
             onActiveFocusChanged: if (!activeFocus && preeditText.length > 0)
                 cancelPreedit()
 
             onInputMethodEventRequested: function (preedit, commit, replacementStart, replacementLength, cursorPositionUtf16) {
                 const result = LayoutViewModel.inputMethodEvent(preedit, commit, replacementStart, replacementLength, cursorPositionUtf16);
-                if (!result.valid)
+                if (!result.valid) {
                     console.warn("Document input method event failed:", result.error);
+                    pageCanvas.cancelPreedit();
+                }
             }
 
             onVisualNavigationRequested: function (forward, extend) {
@@ -349,6 +352,7 @@ Item {
     }
 
     CommandCompletion {
+        id: commandCompletion
         anchors.fill: parent
         canvas: pageCanvas
         commandLine: LayoutViewModel.commandLine

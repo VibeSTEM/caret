@@ -556,3 +556,23 @@ message_107:
   src: Italic
   tr: Italic
   st: finished
+
+message_108:
+  src: Font family
+  tr: Font family
+  st: finished
+
+message_109:
+  src: First-line indent
+  tr: First-line indent
+  st: finished
+
+message_110:
+  src: One-character-width space
+  tr: One-character-width space
+  st: finished
+
+message_111:
+  src: Two-character-width space
+  tr: Two-character-width space
+  st: finished

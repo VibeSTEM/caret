@@ -1071,6 +1071,8 @@ pub(super) fn edit_group(command: &super::super::Command) -> Option<EditGroup> {
         {
             Some(EditGroup::InsertText)
         }
+        super::super::Command::InsertOneCharacterWidthSpace
+        | super::super::Command::InsertTwoCharacterWidthSpace => Some(EditGroup::InsertText),
         super::super::Command::Delete(super::super::Direction::Backward) => {
             Some(EditGroup::DeleteBackward)
         }

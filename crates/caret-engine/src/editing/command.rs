@@ -14,6 +14,7 @@ pub enum Direction {
 pub enum EditorKey {
     Escape,
     Enter,
+    Tab,
     ShiftEnter,
     ModBackspace,
 }
@@ -21,6 +22,8 @@ pub enum EditorKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
+    InsertOneCharacterWidthSpace,
+    InsertTwoCharacterWidthSpace,
     PasteText(String),
     InsertSoftBreak,
     InsertParagraphBreak,
@@ -34,6 +37,7 @@ pub enum Command {
     CreateBlockEnvironment(BlockEnvironmentKind),
     ToggleInlineFormat(InlineEnvironmentKind),
     SetInlineFontFamily(String),
+    SetParagraphFirstLineIndentChars(u16),
     SetDefaultFontFamily(Option<String>),
     EditorKey(EditorKey),
     SetSelection(Option<Selection>),
@@ -58,6 +62,8 @@ impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
             Self::InsertText(_) => "text.insert",
+            Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
+            Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
             Self::InsertParagraphBreak => "text.split_paragraph",
@@ -76,9 +82,11 @@ impl Command {
             Self::ToggleInlineFormat(InlineEnvironmentKind::Italic) => "text.format.italic",
             Self::ToggleInlineFormat(InlineEnvironmentKind::Font) => "text.format.font",
             Self::SetInlineFontFamily(_) => "text.format.font_family",
+            Self::SetParagraphFirstLineIndentChars(_) => "paragraph.first_line_indent.set",
             Self::SetDefaultFontFamily(_) => "document.default_font_family.set",
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
+            Self::EditorKey(EditorKey::Tab) => "interaction.tab",
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
             Self::SetSelection(_) => "selection.set",

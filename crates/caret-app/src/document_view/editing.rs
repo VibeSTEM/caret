@@ -8,10 +8,17 @@ impl DocumentViewRuntime {
         let key = match key {
             "escape" => EditorKey::Escape,
             "enter" => EditorKey::Enter,
+            "tab" => EditorKey::Tab,
             "shift-enter" => EditorKey::ShiftEnter,
             "mod-backspace" => EditorKey::ModBackspace,
             _ => return Err("interaction.unknown_editor_key".to_owned()),
         };
+        if key == EditorKey::Enter
+            && is_font_picker_request(&self.session, &Command::AcceptCommandLine)
+        {
+            self.command_line_command_json("accept", String::new())?;
+            return self.interaction_state_json();
+        }
         let command = Command::EditorKey(key);
         if is_editor_key_document_edit(&self.session, key) {
             let error_context = command.id();
@@ -63,13 +70,27 @@ impl DocumentViewRuntime {
             "accept" => Command::AcceptCommandLine,
             _ => return Err("cmdline.unknown_action".to_owned()),
         };
+        if is_font_picker_request(&self.session, &command) {
+            self.session
+                .run_command_line_with_font_families(command, self.layout.font_family_names())
+                .map_err(|error| format!("cmdline.{action}: {error}"))?;
+            return self.interaction_state_json();
+        }
         if is_command_line_document_edit(&self.session, &command) {
             return self.run_edit_command(command, &format!("cmdline.{action}"));
         }
-        self.session
+        let effect = self
+            .session
             .run(command)
             .map_err(|error| format!("cmdline.{action}: {error}"))?;
-        self.command_line_state_json()
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+            return self.layout_snapshot_json_after_composition_cancel();
+        }
+        self.interaction_state_json()
     }
 
     /// 在 Rust Session 中撤销最近一次可撤销编辑并发布更新后的布局。
@@ -264,22 +285,57 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
     let Some(line) = session.command_line() else {
         return false;
     };
+    if !line.preedit.is_empty() {
+        return false;
+    }
     let candidates = session.command_line_candidates();
-    let selected = candidates.get(line.selected).copied();
+    let selected = candidates.get(line.selected);
+    if line.mode == caret_engine::CommandLineMode::FontFamily {
+        return matches!(
+            command,
+            Command::AcceptCommandLine | Command::TabCommandLine
+        ) && selected.is_some_and(|candidate| {
+            candidate.available && candidate.command_id == "text.format.font_family"
+        });
+    }
     match command {
         Command::TypeCommandLine(text) if text == "\\" => {
-            line.query.is_empty() || selected.is_some_and(|candidate| candidate.available)
+            line.query.is_empty()
+                || selected.is_some_and(|candidate| {
+                    candidate.available && candidate.command_id != "text.format.font"
+                })
         }
         Command::TabCommandLine => line.query.is_empty(),
-        Command::AcceptCommandLine => selected.is_some_and(|candidate| candidate.available),
+        Command::AcceptCommandLine => selected.is_some_and(|candidate| {
+            candidate.available && candidate.command_id != "text.format.font"
+        }),
         _ => false,
     }
+}
+
+fn is_font_picker_request(session: &caret_engine::Session, command: &Command) -> bool {
+    let Some(line) = session.command_line() else {
+        return false;
+    };
+    let accepts_candidate = matches!(command, Command::AcceptCommandLine)
+        || matches!(command, Command::TypeCommandLine(text) if text == "\\" && !line.query.is_empty());
+    if line.mode != caret_engine::CommandLineMode::Command || !accepts_candidate {
+        return false;
+    }
+    session
+        .command_line_candidates()
+        .get(line.selected)
+        .is_some_and(|candidate| candidate.available && candidate.command_id == "text.format.font")
 }
 
 fn is_editor_key_document_edit(session: &caret_engine::Session, key: EditorKey) -> bool {
     match key {
         EditorKey::Enter if session.command_line().is_some() => {
             is_command_line_document_edit(session, &Command::AcceptCommandLine)
+        }
+        EditorKey::Tab => {
+            session.command_line().is_none()
+                || is_command_line_document_edit(session, &Command::TabCommandLine)
         }
         EditorKey::Enter => true,
         EditorKey::ShiftEnter => session.command_line().is_none(),

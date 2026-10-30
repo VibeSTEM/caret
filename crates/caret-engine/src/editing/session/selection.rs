@@ -338,7 +338,12 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
-        if self.composition.is_some() || self.command_line.is_some() {
+        if self.composition.is_some()
+            || self
+                .command_line
+                .as_ref()
+                .is_some_and(|line| line.preedit.is_empty())
+        {
             return Err(EditError::InvalidPosition);
         }
         self.text_map_for(&anchor)?.validate_pos(&anchor)?;
@@ -347,6 +352,10 @@ impl Session {
         if selected.is_empty() {
             return Err(EditError::InvalidPosition);
         }
+        let cancels_command_line_preedit = self
+            .command_line
+            .as_ref()
+            .is_some_and(|line| !line.preedit.is_empty());
         let changed = self.selected_block_environments != selected
             || self
                 .structure_selection
@@ -363,8 +372,12 @@ impl Session {
         self.selected_block_environments = selected;
         self.structure_selection = Some(super::StructureSelection { anchor, focus });
         self.block_environment_exit = None;
+        if cancels_command_line_preedit {
+            self.command_line = None;
+        }
         Ok(Effect {
             selection_changed: changed,
+            composition_changed: cancels_command_line_preedit,
             ..Effect::default()
         })
     }

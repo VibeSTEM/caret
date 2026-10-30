@@ -30,7 +30,7 @@ Item {
         text: root.candidate.alias
         textColor: root.candidate.available ? Theme.colorFocus : Theme.colorTextMuted
         fontPixelSize: Theme.fontSmall
-        monospaced: true
+        monospaced: root.candidate.commandId !== "text.format.font_family"
         scrollActive: root.selected
     }
 

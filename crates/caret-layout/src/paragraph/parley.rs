@@ -12,8 +12,8 @@ use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    FontFamilyName, GenericFamily, Language, Layout, LayoutContext, StyleProperty,
-    WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, Language, Layout,
+    LayoutContext, StyleProperty, WhiteSpaceCollapse,
 };
 
 use crate::{
@@ -86,6 +86,8 @@ pub struct ParleyParagraphLayout {
     pub parley_line_heights_pt: Vec<f32>,
     /// 每条行框的文档级基线锚点相对 Parley baseline 的调整量。
     pub baseline_adjustments_pt: Vec<f32>,
+    /// 空段落首行的缩进位置，用于放置没有字形锚点的插入点。
+    pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
 }
@@ -99,6 +101,8 @@ pub struct ParagraphLayoutOptions {
     pub line_grid_metrics: FontLineMetrics,
     /// 段落默认字号；同字号的脚本 fallback 不得扩大行距网格。
     pub line_grid_font_size_centipoints: u16,
+    /// 首行缩进的字符数；字符宽度按段落基础字号的 em 计算。
+    pub first_line_indent_chars: Option<u16>,
 }
 
 /// 可复用 Parley LayoutContext；字体目录和字体数据由 FontCatalog 共享。
@@ -106,7 +110,28 @@ pub struct ParagraphLayoutOptions {
 pub struct ParagraphLayouter {
     context: LayoutContext<[u8; 4]>,
     font_generation: Option<u64>,
+    space_adjustments_pt: std::collections::HashMap<SpaceStyleKey, f32>,
+    space_font_preferences: Option<crate::FontPreferenceRules>,
+    space_style_signature: Option<Vec<ShapingStyle>>,
 }
+
+/// ASCII 与显式全字宽空格分别使用可观察的字符语义，但都按实际字体宽度校准。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SpaceKind {
+    Ordinary,
+    Em,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SpaceStyleKey {
+    style_index: usize,
+    script: Script,
+    emoji: bool,
+    kind: SpaceKind,
+}
+
+const ORDINARY_SPACE_EM_PERCENT: u16 = 50;
+const EM_SPACE_EM_PERCENT: u16 = 100;
 
 impl ParagraphLayouter {
     pub fn new() -> Self {
@@ -126,13 +151,22 @@ impl ParagraphLayouter {
         if self.font_generation != Some(font_generation) {
             self.context = LayoutContext::default();
             self.font_generation = Some(font_generation);
+            self.space_adjustments_pt.clear();
+        }
+        if self.space_font_preferences.as_ref() != Some(settings.font_preferences()) {
+            self.space_font_preferences = Some(settings.font_preferences().clone());
+            self.space_adjustments_pt.clear();
         }
         let ParagraphLayoutOptions {
             width_pt,
             spacing,
             line_grid_metrics,
             line_grid_font_size_centipoints,
+            first_line_indent_chars,
         } = options;
+        let empty_line_indent_pt = first_line_indent_chars
+            .map(|chars| font_size_pt(base_style.font_size_centipoints) * f32::from(chars))
+            .unwrap_or(0.0);
         if !width_pt.is_finite() || width_pt <= 0.0 {
             return Err(ParagraphLayoutError::InvalidWidth);
         }
@@ -140,31 +174,40 @@ impl ParagraphLayouter {
             return Err(ParagraphLayoutError::InvalidFontSize);
         }
         let spans = paragraph_style_spans(paragraph, settings, base_style);
+        let space_style_signature: Vec<_> = spans.iter().map(|span| span.style.clone()).collect();
+        if self.space_style_signature.as_ref() != Some(&space_style_signature) {
+            self.space_style_signature = Some(space_style_signature);
+            self.space_adjustments_pt.clear();
+        }
         let text: String = spans.iter().map(|span| span.text).collect();
         let boundaries = boundaries_for_spans(&text, &spans);
         let decisions = Arc::new(line_break_decisions(&text, &boundaries));
         let available_families = Arc::clone(&catalog.family_names_lowercase);
         let mut requested_family_missing = false;
-        let mut builder = self
-            .context
-            .ranged_builder(catalog.parley_context(), &text, 1.0, false);
-        builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
-        builder.push_default(StyleProperty::FontSize(
-            f32::from(base_style.font_size_centipoints) * 0.01,
-        ));
-        builder.push_default(StyleProperty::WhiteSpaceCollapse(
-            WhiteSpaceCollapse::BreakSpaces,
-        ));
-
         let mut span_ranges = Vec::with_capacity(spans.len());
+        let mut span_space_style_indices = Vec::with_capacity(spans.len());
+        let mut space_styles = Vec::new();
+        let mut space_style_indices = std::collections::HashMap::new();
         let mut offset = 0usize;
         for span in &spans {
             let end = offset + span.text.len();
             span_ranges.push((offset..end, &span.style));
+            let style_index = *space_style_indices.entry(&span.style).or_insert_with(|| {
+                let index = space_styles.len();
+                space_styles.push(&span.style);
+                index
+            });
+            span_space_style_indices.push(style_index);
             offset = end;
         }
         let emoji_presentation = CodePointSetDataBorrowed::new::<props::EmojiPresentation>();
         let mut style_ranges: Vec<(Range<usize>, ShapingStyle, Script, bool)> = Vec::new();
+        // 普通空格只保留每种塑形样式的一个测量样本；字距规则应用到连续样式区间，
+        // 避免每个空格都创建一个 Parley 样式 run。
+        let mut space_samples: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+        let mut word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+        let mut em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+        let mut sampled_space_keys = std::collections::HashSet::new();
         let mut span_index = 0usize;
         let first_script = boundaries
             .grapheme
@@ -188,6 +231,52 @@ impl ParagraphLayouter {
                 .unwrap_or_else(default_script);
             previous_script = Some(script);
             let emoji = is_emoji_grapheme(&text[range.clone()], &emoji_presentation);
+            let space_kind = if cluster_text.starts_with(' ') {
+                Some(SpaceKind::Ordinary)
+            } else if cluster_text.starts_with('\u{2003}') {
+                Some(SpaceKind::Em)
+            } else {
+                None
+            };
+            // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
+            // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
+            if span_ranges.get(span_index).is_some() && !cluster_text.contains('\u{00a0}') {
+                let key = SpaceStyleKey {
+                    style_index: span_space_style_indices[span_index],
+                    script,
+                    emoji,
+                    kind: SpaceKind::Ordinary,
+                };
+                if let Some((previous_range, previous_key)) = word_spacing_ranges.last_mut()
+                    && previous_range.end == range.start
+                    && *previous_key == key
+                {
+                    previous_range.end = range.end;
+                } else {
+                    word_spacing_ranges.push((range.clone(), key));
+                }
+            }
+            if let Some(kind) = space_kind
+                && span_ranges.get(span_index).is_some()
+            {
+                let space_end = range.start
+                    + match kind {
+                        SpaceKind::Ordinary => ' '.len_utf8(),
+                        SpaceKind::Em => '\u{2003}'.len_utf8(),
+                    };
+                let key = SpaceStyleKey {
+                    style_index: span_space_style_indices[span_index],
+                    script,
+                    emoji,
+                    kind,
+                };
+                if sampled_space_keys.insert(key) {
+                    space_samples.push((range.start..space_end, key));
+                }
+                if kind == SpaceKind::Em {
+                    em_space_ranges.push((range.start..space_end, key));
+                }
+            }
             let mut fragment_index = span_index;
             while let Some((span_range, style)) = span_ranges.get(fragment_index) {
                 if span_range.start >= range.end {
@@ -217,12 +306,12 @@ impl ParagraphLayouter {
         }
         let mut family_names_by_key =
             std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
-        for (range, style, script, emoji) in style_ranges {
-            let key = (style.clone(), script, emoji);
-            let family_names = family_names_by_key.entry(key).or_insert_with(|| {
+        for (_, style, script, emoji) in &style_ranges {
+            let key = (style.clone(), *script, *emoji);
+            let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
                 let candidates = settings.font_preferences().family_candidates(
                     crate::font_selection::FontSelectionContext {
-                        script,
+                        script: *script,
                         language: style.language.as_deref(),
                         math_context: false,
                         explicit_family: style.requested_family.as_deref(),
@@ -237,51 +326,49 @@ impl ParagraphLayouter {
                 }
                 names
             });
-            let families = font_families(family_names, emoji);
-            builder.push(
-                StyleProperty::FontFamily(families.as_slice().into()),
-                range.clone(),
-            );
-            builder.push(
-                StyleProperty::FontSize(f32::from(style.font_size_centipoints) * 0.01),
-                range.clone(),
-            );
-            builder.push(
-                StyleProperty::FontWeight(if style.bold {
-                    fontique::FontWeight::BOLD
-                } else {
-                    fontique::FontWeight::NORMAL
-                }),
-                range.clone(),
-            );
-            builder.push(
-                StyleProperty::FontStyle(if style.italic {
-                    fontique::FontStyle::Italic
-                } else {
-                    fontique::FontStyle::Normal
-                }),
-                range.clone(),
-            );
-            builder.push(
-                StyleProperty::Locale(
-                    style
-                        .language
-                        .as_deref()
-                        .and_then(|language| Language::parse(language).ok()),
-                ),
-                range,
-            );
         }
 
-        let callback_index = Arc::new(AtomicUsize::new(0));
-        let callback_cursor = Arc::clone(&callback_index);
-        let callback_decisions = Arc::clone(&decisions);
-        let line_break_override =
-            move |_| callback_decisions.get(callback_cursor.fetch_add(1, Ordering::Relaxed));
-        builder.set_line_break_override(Some(&line_break_override));
-        let mut layout = builder.build(&text);
-        layout.break_all_lines(Some(width_pt));
-        if callback_index.load(Ordering::Relaxed) != decisions.len {
+        let has_uncalibrated_spaces = space_samples
+            .iter()
+            .any(|(_, key)| !self.space_adjustments_pt.contains_key(key));
+        let (mut layout, mut callback_count) = {
+            let layout_input = ParleyLayoutInput {
+                text: &text,
+                base_style,
+                style_ranges: &style_ranges,
+                family_names_by_key: &family_names_by_key,
+                word_spacing_ranges: &word_spacing_ranges,
+                em_space_ranges: &em_space_ranges,
+                space_adjustments_pt: &self.space_adjustments_pt,
+                decisions: &decisions,
+                width_pt,
+                first_line_indent_chars,
+            };
+            build_parley_layout(&mut self.context, catalog, &layout_input)
+        };
+        if has_uncalibrated_spaces {
+            cache_space_adjustments(
+                &layout,
+                &space_samples,
+                &space_styles,
+                &mut self.space_adjustments_pt,
+            );
+            let layout_input = ParleyLayoutInput {
+                text: &text,
+                base_style,
+                style_ranges: &style_ranges,
+                family_names_by_key: &family_names_by_key,
+                word_spacing_ranges: &word_spacing_ranges,
+                em_space_ranges: &em_space_ranges,
+                space_adjustments_pt: &self.space_adjustments_pt,
+                decisions: &decisions,
+                width_pt,
+                first_line_indent_chars,
+            };
+            (layout, callback_count) =
+                build_parley_layout(&mut self.context, catalog, &layout_input);
+        }
+        if callback_count != decisions.len {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
         let ParagraphLineMapping {
@@ -309,6 +396,7 @@ impl ParagraphLayouter {
                 parley_line_tops_pt,
                 parley_line_heights_pt,
                 baseline_adjustments_pt,
+                empty_line_indent_pt,
                 requested_family_missing,
             },
         ))
@@ -353,6 +441,7 @@ impl ParagraphLayouter {
                 spacing: LineSpacing::Natural,
                 line_grid_metrics: fallback,
                 line_grid_font_size_centipoints: base_style.font_size_centipoints,
+                first_line_indent_chars: None,
             },
         )?;
         result
@@ -365,6 +454,165 @@ impl ParagraphLayouter {
     }
 }
 
+struct ParleyLayoutInput<'a> {
+    text: &'a str,
+    base_style: &'a ShapingStyle,
+    style_ranges: &'a [(Range<usize>, ShapingStyle, Script, bool)],
+    family_names_by_key: &'a std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
+    word_spacing_ranges: &'a [(Range<usize>, SpaceStyleKey)],
+    em_space_ranges: &'a [(Range<usize>, SpaceStyleKey)],
+    space_adjustments_pt: &'a std::collections::HashMap<SpaceStyleKey, f32>,
+    decisions: &'a Arc<PackedLineBreakDecisions>,
+    width_pt: f32,
+    first_line_indent_chars: Option<u16>,
+}
+
+/// 构建 Parley 布局，并在对应空白范围应用由实际字体度量得出的 advance 修正。
+fn build_parley_layout(
+    context: &mut LayoutContext<[u8; 4]>,
+    catalog: &mut FontCatalog,
+    input: &ParleyLayoutInput<'_>,
+) -> (Layout<[u8; 4]>, usize) {
+    let ParleyLayoutInput {
+        text,
+        base_style,
+        style_ranges,
+        family_names_by_key,
+        word_spacing_ranges,
+        em_space_ranges,
+        space_adjustments_pt,
+        decisions,
+        width_pt,
+        first_line_indent_chars,
+    } = *input;
+    let mut builder = context.ranged_builder(catalog.parley_context(), text, 1.0, false);
+    builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
+    builder.push_default(StyleProperty::FontSize(font_size_pt(
+        base_style.font_size_centipoints,
+    )));
+    builder.push_default(StyleProperty::WhiteSpaceCollapse(
+        WhiteSpaceCollapse::BreakSpaces,
+    ));
+
+    for (range, style, script, emoji) in style_ranges {
+        let key = (style.clone(), *script, *emoji);
+        let family_names = family_names_by_key
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let families = font_families(family_names, *emoji);
+        builder.push(
+            StyleProperty::FontFamily(families.as_slice().into()),
+            range.clone(),
+        );
+        builder.push(
+            StyleProperty::FontSize(font_size_pt(style.font_size_centipoints)),
+            range.clone(),
+        );
+        builder.push(
+            StyleProperty::FontWeight(if style.bold {
+                fontique::FontWeight::BOLD
+            } else {
+                fontique::FontWeight::NORMAL
+            }),
+            range.clone(),
+        );
+        builder.push(
+            StyleProperty::FontStyle(if style.italic {
+                fontique::FontStyle::Italic
+            } else {
+                fontique::FontStyle::Normal
+            }),
+            range.clone(),
+        );
+        builder.push(
+            StyleProperty::Locale(
+                style
+                    .language
+                    .as_deref()
+                    .and_then(|language| Language::parse(language).ok()),
+            ),
+            range.clone(),
+        );
+    }
+    for (range, key) in word_spacing_ranges {
+        let key = SpaceStyleKey {
+            kind: SpaceKind::Ordinary,
+            ..*key
+        };
+        let Some(adjustment_pt) = space_adjustments_pt.get(&key).copied() else {
+            continue;
+        };
+        builder.push(StyleProperty::WordSpacing(adjustment_pt), range.clone());
+    }
+    for (range, key) in em_space_ranges {
+        let Some(adjustment_pt) = space_adjustments_pt.get(key).copied() else {
+            continue;
+        };
+        builder.push(StyleProperty::LetterSpacing(adjustment_pt), range.clone());
+    }
+
+    let callback_index = Arc::new(AtomicUsize::new(0));
+    let callback_cursor = Arc::clone(&callback_index);
+    let callback_decisions = Arc::clone(decisions);
+    let line_break_override =
+        move |_| callback_decisions.get(callback_cursor.fetch_add(1, Ordering::Relaxed));
+    builder.set_line_break_override(Some(&line_break_override));
+    let mut layout = builder.build(text);
+    if let Some(chars) = first_line_indent_chars {
+        let indent_pt = font_size_pt(base_style.font_size_centipoints) * f32::from(chars);
+        layout.set_text_indent(indent_pt, IndentOptions::default());
+    }
+    layout.break_all_lines(Some(width_pt));
+    if first_line_indent_chars.is_some() {
+        layout.align(Alignment::Start, AlignmentOptions::default());
+    }
+    (layout, callback_index.load(Ordering::Relaxed))
+}
+
+/// 从未校准布局的实际塑形 advance 缓存 U+0020 与 U+2003 的目标宽度修正。
+fn cache_space_adjustments(
+    layout: &Layout<[u8; 4]>,
+    space_samples: &[(Range<usize>, SpaceStyleKey)],
+    space_styles: &[&ShapingStyle],
+    adjustments: &mut std::collections::HashMap<SpaceStyleKey, f32>,
+) {
+    let spaces_by_start: std::collections::HashMap<_, _> = space_samples
+        .iter()
+        .map(|(range, key)| (range.start, (range.end, key)))
+        .collect();
+    for line in layout.lines() {
+        for run in line.runs() {
+            for cluster in run.clusters() {
+                let range = cluster.text_range();
+                let Some((end, key)) = spaces_by_start.get(&range.start) else {
+                    continue;
+                };
+                if range.end < *end || adjustments.contains_key(*key) {
+                    continue;
+                }
+                let target_percent = match key.kind {
+                    SpaceKind::Ordinary => ORDINARY_SPACE_EM_PERCENT,
+                    SpaceKind::Em => EM_SPACE_EM_PERCENT,
+                };
+                let Some(style) = space_styles.get(key.style_index) else {
+                    continue;
+                };
+                let target_advance =
+                    font_size_pt(style.font_size_centipoints) * f32::from(target_percent) * 0.01;
+                let adjustment = target_advance - cluster.advance();
+                if target_advance.is_finite() && adjustment.is_finite() {
+                    adjustments.insert(**key, adjustment);
+                }
+            }
+        }
+    }
+}
+
+fn font_size_pt(font_size_centipoints: u16) -> f32 {
+    f32::from(font_size_centipoints) * 0.01
+}
+
 fn font_families(names: &[String], emoji: bool) -> Vec<FontFamilyName<'_>> {
     let mut families = Vec::with_capacity(names.len() + 2);
     if emoji {
@@ -375,6 +623,7 @@ fn font_families(names: &[String], emoji: bool) -> Vec<FontFamilyName<'_>> {
     families
 }
 
+#[derive(Clone)]
 struct PackedLineBreakDecisions {
     words: Vec<u64>,
     len: usize,

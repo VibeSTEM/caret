@@ -256,7 +256,7 @@ impl ParleyParagraphLayout {
         range: Range<usize>,
     ) -> Option<Vec<(parley::BoundingBox, usize)>> {
         let selection = self.selection_text_geometry(text, range)?;
-        let mut result = Vec::new();
+        let mut result: Vec<(parley::BoundingBox, usize)> = Vec::new();
         for (bounds, line_index) in selection {
             let line = self.layout.get(line_index)?;
             let raw_top = f64::from(*self.parley_line_tops_pt.get(line_index)?);
@@ -281,10 +281,19 @@ impl ParleyParagraphLayout {
                 let y0 = f64::from(glyph_run.baseline() - metrics.underline_offset) - raw_top
                     + adjustment;
                 if y0.is_finite() && thickness.is_finite() && thickness > 0.0 {
-                    result.push((
-                        parley::BoundingBox::new(x0, y0, x1, y0 + thickness),
-                        line_index,
-                    ));
+                    if let Some((previous, previous_line)) = result.last_mut()
+                        && *previous_line == line_index
+                        && (previous.x1 - x0).abs() < 0.01
+                        && (previous.y0 - y0).abs() < 0.01
+                        && (previous.y1 - (y0 + thickness)).abs() < 0.01
+                    {
+                        previous.x1 = x1;
+                    } else {
+                        result.push((
+                            parley::BoundingBox::new(x0, y0, x1, y0 + thickness),
+                            line_index,
+                        ));
+                    }
                 }
             }
         }
@@ -311,13 +320,9 @@ impl ParleyParagraphLayout {
         if self.layout.text_len() == 0
             && let Some(line) = self.paragraph.lines.first()
         {
+            let caret_x = f64::from(self.empty_line_indent_pt);
             return Some((
-                parley::BoundingBox::new(
-                    0.0,
-                    0.0,
-                    f64::from(width_pt),
-                    f64::from(line.metrics.height_pt),
-                ),
+                parley::BoundingBox::new(caret_x, 0.0, caret_x, f64::from(line.metrics.height_pt)),
                 0,
             ));
         }

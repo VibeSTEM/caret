@@ -109,7 +109,9 @@ QVariantMap LayoutViewModel::installInteractionResponse(const QByteArray& respon
     if (!installInteraction(document.object())) {
         return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
     }
-    return {{QStringLiteral("valid"), true}};
+    return {{QStringLiteral("valid"), true},
+            {QStringLiteral("compositionCancelled"),
+             document.object().value(QStringLiteral("compositionCancelled")).toBool()}};
 #else
     Q_UNUSED(response_bytes)
     return {{QStringLiteral("valid"), false},
