@@ -41,6 +41,30 @@ pub(in crate::editing::session) fn apply_font_family_to_range(
     wrap_font_family_range(&mut paragraph.inlines, start, end, family, inline_depth)
 }
 
+/// 移除指定行内环境外壳，保留其子节点并归一化新相邻的行内节点。
+pub(super) fn unwrap_inline_environment(nodes: &mut Vec<InlineNode>, target: &NodeId) -> bool {
+    for index in 0..nodes.len() {
+        if matches!(
+            nodes.get(index),
+            Some(InlineNode::Environment(environment)) if &environment.id == target
+        ) {
+            let Some(InlineNode::Environment(environment)) = nodes.get(index).cloned() else {
+                return false;
+            };
+            nodes.splice(index..=index, environment.children);
+            normalize_inline_tree(nodes);
+            return true;
+        }
+        if let Some(InlineNode::Environment(environment)) = nodes.get_mut(index)
+            && unwrap_inline_environment(&mut environment.children, target)
+        {
+            normalize_inline_tree(&mut environment.children);
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, EditError> {
     fn collect(
         nodes: &[InlineNode],

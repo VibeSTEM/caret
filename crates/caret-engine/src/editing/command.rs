@@ -1,6 +1,8 @@
 //! 定义编辑命令及其稳定命令 ID。
 
-use caret_doc::{BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, PageGeometry};
+use caret_doc::{
+    BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, NodeId, PageGeometry,
+};
 
 use super::Selection;
 
@@ -32,6 +34,7 @@ pub enum Command {
     MoveStructure(Direction),
     ExitBlockEnvironment(Direction),
     RemoveBlockEnvironmentPreservingContent,
+    RemoveInlineEnvironmentPreservingContent(NodeId),
     ExpandStructureSelection,
     ExitStructure,
     CreateBlockEnvironment(BlockEnvironmentKind),
@@ -87,6 +90,9 @@ impl Command {
             Self::ExitBlockEnvironment(Direction::Forward) => "struct.exit_forward",
             Self::ExitBlockEnvironment(Direction::Backward) => "struct.exit_backward",
             Self::RemoveBlockEnvironmentPreservingContent => "struct.remove_preserving_content",
+            Self::RemoveInlineEnvironmentPreservingContent(_) => {
+                "text.format.remove_environment_preserving_content"
+            }
             Self::ExpandStructureSelection => "selection.expand_structure",
             Self::ExitStructure => "struct.exit",
             Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => "struct.section.create",

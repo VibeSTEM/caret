@@ -24,6 +24,7 @@
 
 - 首行缩进通过 Paragraph 的 `layout.firstLineIndentChars` 持久化；`\firstlineindent` 在当前段落任意光标位置设置为 2 个基础字号宽度（2 em），实际缩进由 Rust 段落样式解析并交给 Parley 排版。正文中的 Tab 与 `\doublecharspace` 共用插入两个字符宽空格的编辑动作，`\singlecharspace` 插入一个字符宽空格；命令输入期间 Tab 仍用于候选补全。普通 U+0020 空格在布局时采用半字宽排版策略。
 - 删除行内格式环境只 unwrap 或删除明确选择的文字范围，不得连带删除外层块级环境。
+- 折叠光标位于行内环境时，Mod+Backspace 解除最内层行内环境并保留其内容；嵌套环境按最内层优先，重复使用可逐层解除。没有活动行内环境时，Mod+Backspace 继续交给块环境解除规则；命令输入、IME 组字和普通文本位置不删除正文。
 
 ## 颜色与装饰
 

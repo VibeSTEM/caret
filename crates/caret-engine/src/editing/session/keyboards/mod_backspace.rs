@@ -1,11 +1,21 @@
-//! 按平台抽象修饰键与退格键移除当前块环境并保留内容。
+//! 按平台抽象修饰键与退格键移除当前行内或块环境并保留内容。
 
 use super::super::Session;
 use crate::editing::{Command, EditError, Effect};
 
 impl Session {
-    /// 移除当前块环境外壳，将标题和正文保留在父级内容流中。
+    /// 优先解除光标所在的行内环境，否则解除当前块环境并保留其内容。
     pub(super) fn handle_mod_backspace(&mut self) -> Result<Effect, EditError> {
+        if self.composition.is_some() || self.command_line.is_some() {
+            return self.run(Command::RemoveBlockEnvironmentPreservingContent);
+        }
+        if self.selection.anchor == self.selection.focus
+            && let Some(environment) = self.current_inline_environment()?
+        {
+            return self.run(Command::RemoveInlineEnvironmentPreservingContent(
+                environment.environment_id,
+            ));
+        }
         self.run(Command::RemoveBlockEnvironmentPreservingContent)
     }
 }

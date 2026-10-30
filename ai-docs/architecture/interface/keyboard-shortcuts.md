@@ -28,7 +28,7 @@ Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层�
 | 缩小画布 | Ctrl+Minus | Command+Minus |
 | 撤销 | Ctrl+Z | Command+Z |
 | 重做 | Ctrl+Shift+Z | Command+Shift+Z |
-| 移除块环境并保留内容 | Ctrl+Backspace | Command+Backspace |
+| 移除当前行内/块环境并保留内容 | Ctrl+Backspace | Command+Backspace |
 | 左右 / 上下移动插入点 | 方向键 | 方向键 |
 | 扩展选区 | Shift+方向键 | Shift+方向键 |
 | 移至视觉行首 / 行尾 | Home / End | Home / End |

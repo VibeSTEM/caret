@@ -444,6 +444,9 @@ impl Session {
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
             Command::ToggleRunUnderline => self.toggle_run_underline(),
+            Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
+                self.remove_inline_environment_preserving_content(&environment_id)
+            }
             Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
             Command::SetParagraphFirstLineIndentChars(chars) => {
                 self.set_paragraph_first_line_indent_chars(chars)
@@ -821,6 +824,7 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
             | Command::ToggleRunUnderline
+            | Command::RemoveInlineEnvironmentPreservingContent(_)
             | Command::SetInlineFontFamily(_)
             | Command::SetParagraphFirstLineIndentChars(_)
             | Command::Delete(_)

@@ -8,7 +8,7 @@ use super::Session;
 use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
 use inline_tree::{
     apply_font_family_to_range, apply_formats_to_range, effective_format_at, format_spans,
-    format_value, set_run_underline_to_range, wrap_format_range,
+    format_value, set_run_underline_to_range, unwrap_inline_environment, wrap_format_range,
 };
 
 fn is_collapsed_text_range(anchor: &Pos, focus: &Pos) -> bool {
@@ -83,6 +83,29 @@ impl PendingInlineStyle {
 }
 
 impl Session {
+    pub(super) fn remove_inline_environment_preserving_content(
+        &mut self,
+        environment_id: &NodeId,
+    ) -> Result<Effect, EditError> {
+        if self.composition.is_some() || self.command_line.is_some() {
+            return Ok(Effect::default());
+        }
+        let position = self.selection.focus.clone();
+        let mut paragraph = self.paragraph_for(&position)?.clone();
+        if !unwrap_inline_environment(&mut paragraph.inlines, environment_id) {
+            return Ok(Effect::default());
+        }
+        self.replace_paragraph(&position, paragraph)?;
+        self.text_map_cache.clear();
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            document_changed: true,
+            changed_paragraph_id: Some(position.paragraph_id),
+            ..Effect::default()
+        })
+    }
+
     pub(super) fn toggle_run_underline(&mut self) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
