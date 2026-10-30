@@ -202,11 +202,12 @@ impl ParleyParagraphLayout {
                 .geometry(&self.layout)
                 .into_iter()
                 .map(|(mut bounds, line_index)| {
-                    if let (Some(top_offset), Some(line)) = (
-                        self.line_top_offsets_pt.get(line_index),
+                    if let (Some(line_top), Some(line)) = (
+                        self.line_box_tops_pt.get(line_index),
                         self.paragraph.lines.get(line_index),
                     ) {
-                        bounds.y0 += f64::from(*top_offset);
+                        // 选区背景使用共享行框，而不是 Parley 按实际字形返回的 run 边界。
+                        bounds.y0 = f64::from(*line_top);
                         bounds.y1 = bounds.y0 + f64::from(line.metrics.height_pt);
                     }
                     (bounds, line_index)

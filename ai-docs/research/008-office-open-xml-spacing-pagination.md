@@ -4,7 +4,7 @@
 
 ## 结论
 
-Caret 采用 Word Normal 模板的行距、段距与默认分页配置作为新文档默认，数值保存于 Caret 自有 `.cdoc` 模型，不直接存成 OOXML。要达到可验证的 Word 数值/效果一致性，Exactly 定位和相邻段距仍需按 ECMA-376 明确语义实现并通过 Word/OOXML fixture 对照；布局结果也受字体度量和页面几何影响。期刊模板以后在 Caret 模型上覆盖这些默认值；不定义一个试图代表所有 LaTeX 文档类的通用配置。
+Caret 将 Word 官方文档公开的行距语义与 ECMA-376 文件格式语义作为参考，新文档数值由 Caret 自有 `.cdoc` 默认预设管理。要达到可验证的 Word 数值/效果一致性，Exactly 定位和相邻段距仍需按 ECMA-376 明确语义实现并通过 Word/OOXML fixture 对照；布局结果也受字体度量和页面几何影响。期刊模板以后在 Caret 模型上覆盖这些默认值；不定义一个试图代表所有 LaTeX 文档类的通用配置。
 
 ## OOXML 的明确规则
 
@@ -18,7 +18,7 @@ WordprocessingML 在 ECMA-376 Part 1 §17.3.1.33 (`w:spacing`) 中定义段落�
 - 固定高度大于内容需求时，文本在可用空间垂直居中；固定高度小于内容时，文本靠行框底部放置，超出的上部被裁切。
 - 相邻段落间距按两段的 inter-line spacing、前段段后距和后段段前距的最大值确定。将标准里的 inter-line spacing/net spacing 映射到 Caret 的 line box advance、baseline 距离与段落间净空白，需要先统一度量口径，再用 Word/OOXML fixture 核对；不能只按变量名称推断是否额外累加。
 
-Microsoft Word 的公开帮助把用户可见选项描述为 Single、1.5、Double、At least、Exactly 和 Multiple。At least 要容纳该行最大字体或图形；Exactly 固定为点值；Multiple 是单倍行距的倍数。Word 当前 Normal 模板默认通常为 1.15 行距并在段后留空，但模板和用户设置可以覆盖默认值，这不是所有文档都必须使用的标准常量。
+Microsoft Word 官方帮助列出 Single、1.5、Double、At least、Exactly 和 Multiple。At least 需要容纳该行最大字体或图形；Exactly 是固定点值；Multiple 按数值倍乘行距。Microsoft 当前支持页说明 Word 默认行距为 1.15，段落默认后接空白；页面允许用户修改段前、段后数值，但没有指定统一的默认 pt 数值。这里不从非官方来源推断 Normal 模板的具体段距。
 
 Word 的分页选项至少包括 Keep lines together、Keep with next、Page break before 和 Widow/Orphan control；官方帮助说明 Widow/Orphan control 默认开启。它们是段落级分页约束，不应与显式分页符混为一谈。
 
@@ -52,7 +52,7 @@ Caret 现在**没有以 OOXML 作为存储格式或直接扩展 OOXML schema**�
 | Exactly 低于内容高度 | 行框底部对齐，顶部裁切 | baseline 按行框高度减最大 descent 定位，使内容底边对齐；行内溢出范围由行框提供给绘制裁切 | 基线规则已接近；待渲染器接入时验证裁切范围。 |
 | 相邻段距 | 取两段的 inter-line spacing、前段 after、后段 before 中最大值 | 每行按 line box advance 推进，再额外增加 max(after, before) | **需 fixture 核对**。先明确标准 inter-line spacing 与 Caret 行框推进、基线距离、净空白之间的对应关系；在同一测量口径下比较，不从字段名直接断言重复累加或行为不一致。 |
 | 新页首段 | OOXML 还受段距属性、分页规则及 Word 兼容行为影响；不能据 UI 摘要推断所有场景都清零 | 忽略新页首段 before | 属于 Caret 明确简化规则；需要用 Word fixture 验证目标行为后再决定是否保留。 |
-| 默认样式 | 当前 Word Normal 常见默认是 1.15 行距与 10 pt 段后距 | 新文档采用 Word Normal 数值配置 | 这是 Caret 的默认模板决定，不是 ECMA-376 强制值；数值应保存于 `.cdoc` 并允许期刊模板覆盖。 |
+| 默认样式 | Microsoft 支持文档说明默认行距为 1.15，段后有空白；未指定统一的段前/段后 pt 数值 | Caret 默认 1.15 倍、段前 0 pt、段后 8 pt | Caret 数值是产品预设，不是 ECMA-376 强制值或 Microsoft 规定的所有模板默认；保存于 `.cdoc` 并允许期刊模板覆盖。 |
 | 分页约束 | 可设置 widow/orphan、keep lines、keep with next、page break before | 分页器消费这些独立段落标记，并对无法满足的孤行约束放宽后按页高推进 | 已有 M0 规则实现；仍需 fixture 对照具体兼容行为，不宣称完整 Word 分页兼容。 |
 
 ## 建议实施边界
@@ -60,7 +60,7 @@ Caret 现在**没有以 OOXML 作为存储格式或直接扩展 OOXML schema**�
 1. 将 OOXML 的 `w:spacing` 规则作为 Caret 行距/段距的互操作基线，而不是承诺 DOCX 整页逐像素一致。字体、shaping、分页例外仍会造成差异。
 2. Exactly 短行框采用底对齐、顶部裁切；基线计算已有测试，渲染器接入时仍需确认按行框裁切。
 3. 为段落间距建立 Word/OOXML 对照 fixture，覆盖两段行距不同、仅设置前段 after、仅设置后段 before、两者均设置及跨页等情形。先分别记录 line box advance、baseline 距离和段落间净空白，再按标准解释结果；确认语义映射后才调整分页公式。
-4. 新建 `.cdoc` 使用选定的数值配置（1.15 倍、段前 0 pt、段后 10 pt、孤行/寡行控制开启），配置保存在独立的 `crates/caret-doc/resources/layout-themes/default.json`；已保存文档会保存完整配置快照。
+4. 新建 `.cdoc` 使用 Caret 数值配置（1.15 倍、段前 0 pt、段后 8 pt、孤行/寡行控制开启），配置保存在独立的 `crates/caret-doc/resources/layout-themes/default.json`；已保存文档会保存完整配置快照。段距数字是产品设置，不宣称为 Word 通用默认。
 5. 将 widow/orphan、keep-with-next、keep-lines-together、page-break-before 设计成独立段落分页约束，避免把它们编码成额外空段或硬分页符。
 6. 中文断行仍由 Unicode UAX #14 与 CLREQ tailoring 管理；OOXML 行距/分页标准不替代 CJK 断行规则。
 7. 不定义通用 LaTeX 排版配置；后续期刊模板按其明确文档类、字号、字体和分页规则映射到 Caret 的自有样式模型。

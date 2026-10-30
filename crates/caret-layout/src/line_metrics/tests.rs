@@ -2,7 +2,7 @@
 
 use super::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetricsError, LineSpacing,
-    calculate_line_metrics,
+    calculate_line_metrics, calculate_line_metrics_with_grid,
 };
 use std::ops::Range;
 
@@ -47,6 +47,39 @@ fn natural_height_uses_max_font_metrics_and_centers_leading()
     assert_eq!(result.baseline_pt, 9.0);
     assert!(!result.content_metrics_overflow_line_box);
     assert!(!result.clip_ink_to_line_height);
+    Ok(())
+}
+
+#[test]
+fn larger_font_content_is_a_floor_not_part_of_the_multiple_grid()
+-> Result<(), Box<dyn std::error::Error>> {
+    let result = calculate_line_metrics_with_grid(
+        metrics(9.6, 2.4, 0.0),
+        &[metrics(16.0, 4.0, 0.0)],
+        &[],
+        LineSpacing::Multiple { percent: 115 },
+    )?;
+
+    assert_eq!(result.height_pt, 20.0);
+    assert_eq!(result.baseline_pt, 16.0);
+    assert!(!result.content_metrics_overflow_line_box);
+    Ok(())
+}
+
+#[test]
+fn exactly_keeps_the_base_grid_baseline_when_larger_content_overflows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let result = calculate_line_metrics_with_grid(
+        metrics(9.6, 2.4, 0.0),
+        &[metrics(16.0, 4.0, 0.0)],
+        &[],
+        LineSpacing::Exactly { centipoints: 1400 },
+    )?;
+
+    assert_eq!(result.height_pt, 14.0);
+    assert!((result.baseline_pt - 10.6).abs() < 0.001);
+    assert!(result.content_metrics_overflow_line_box);
+    assert!(result.clip_ink_to_line_height);
     Ok(())
 }
 

@@ -15,7 +15,7 @@ pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
 pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, RasterizedGlyphKey};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
-    calculate_line_metrics,
+    calculate_line_metrics, calculate_line_metrics_with_grid,
 };
 pub use pagination::{
     PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
@@ -24,8 +24,7 @@ pub use pagination::{
 pub use paragraph::{
     HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
     ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
-    first_strong_script_sample, has_empty_line, paragraph_first_strong_script_sample,
-    paragraph_has_empty_line,
+    has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};

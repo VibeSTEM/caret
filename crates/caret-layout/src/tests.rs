@@ -106,8 +106,8 @@ fn layout_options(width_pt: f32) -> ParagraphLayoutOptions {
     ParagraphLayoutOptions {
         width_pt,
         spacing: LineSpacing::Natural,
-        empty_mark_metrics: empty_metrics(),
-        baseline_anchor_metrics: empty_metrics(),
+        line_grid_metrics: empty_metrics(),
+        line_grid_font_size_centipoints: 1200,
     }
 }
 
@@ -966,6 +966,32 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
             "hit returned a non-grapheme byte offset {}",
             hit.cursor.byte_index()
         );
+    }
+}
+
+#[test]
+fn selection_background_follows_shared_line_box_not_font_ink_bounds() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let settings = document_settings();
+    for text in ["Latin text", "中文正文"] {
+        let paragraph_model = paragraph(text, Some("en"));
+        let (_, layout) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph_model,
+                &settings,
+                &ShapingStyle::new(1200),
+                layout_options(240.0),
+            )
+            .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+        let line_height = f64::from(layout.paragraph.lines[0].metrics.height_pt);
+        let selection = layout
+            .selection_geometry(0..text.len())
+            .unwrap_or_else(|| panic!("selection geometry failed for {text}"));
+        assert_eq!(selection.len(), 1);
+        assert!(selection[0].0.y0.abs() < 0.01);
+        assert!((selection[0].0.y1 - line_height).abs() < 0.01);
     }
 }
 
