@@ -178,6 +178,8 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            math_input_changed: false,
+            math_input_error: false,
             changed_paragraph_id: None,
             position_map: Some(if replaced_start == replaced_end {
                 PositionMap::ParagraphSplit {

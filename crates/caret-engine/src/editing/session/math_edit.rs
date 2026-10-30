@@ -19,10 +19,120 @@ use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Session {
+    pub(super) fn insert_math_text(
+        &mut self,
+        text: &str,
+        buffer_incomplete: bool,
+    ) -> Result<Effect, EditError> {
+        if self.math_focus.is_none() {
+            return Err(EditError::InvalidPosition);
+        }
+        let pending_input = self.math_input_buffer.take();
+        let prior_input = pending_input.clone();
+        let previous_error = self.math_input_error;
+        let had_pending_input = pending_input.is_some();
+        let mut input = pending_input.unwrap_or_default();
+        if input.len().saturating_add(text.len()) > caret_math::MAX_MATH_SOURCE_BYTES {
+            self.math_input_buffer = prior_input;
+            self.math_input_error = previous_error;
+            return Err(EditError::InvalidMathText);
+        }
+        input.push_str(text);
+        if buffer_incomplete
+            && caret_math::classify_input(&input, caret_math::MathInputKind::Inline)
+                == caret_math::MathInputStatus::Incomplete
+        {
+            self.math_input_buffer = Some(input);
+            self.math_input_error = false;
+            return Ok(Effect {
+                math_input_changed: true,
+                ..Effect::default()
+            });
+        }
+        match self.insert_math_edit(MathEdit::InsertText(input.clone())) {
+            Ok(mut effect) => {
+                self.math_input_error = false;
+                effect.math_input_changed = had_pending_input;
+                Ok(effect)
+            }
+            Err(EditError::InvalidMathText) => {
+                let incomplete = buffer_incomplete
+                    && caret_math::classify_input(&input, caret_math::MathInputKind::Inline)
+                        == caret_math::MathInputStatus::Incomplete;
+                self.math_input_buffer = Some(input);
+                self.math_input_error = !incomplete;
+                Ok(Effect {
+                    math_input_changed: true,
+                    math_input_error: !incomplete,
+                    ..Effect::default()
+                })
+            }
+            Err(error) => {
+                self.math_input_buffer = prior_input;
+                self.math_input_error = previous_error;
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn backspace_math_input(&mut self) -> Result<Effect, EditError> {
+        let Some(mut input) = self.math_input_buffer.take() else {
+            return Err(EditError::InvalidMathText);
+        };
+        let previous_input = input.clone();
+        let previous_error = self.math_input_error;
+        if let Some((offset, _)) = input.grapheme_indices(true).next_back() {
+            input.truncate(offset);
+        }
+        if input.is_empty() {
+            self.math_input_error = false;
+            return Ok(Effect {
+                math_input_changed: true,
+                ..Effect::default()
+            });
+        }
+        match caret_math::classify_input(&input, caret_math::MathInputKind::Inline) {
+            caret_math::MathInputStatus::Complete => {
+                self.math_input_error = false;
+                match self.run(super::super::Command::InsertMathText(input)) {
+                    Ok(mut effect) => {
+                        effect.math_input_changed = true;
+                        Ok(effect)
+                    }
+                    Err(error) => {
+                        self.math_input_buffer = Some(previous_input);
+                        self.math_input_error = previous_error;
+                        Err(error)
+                    }
+                }
+            }
+            caret_math::MathInputStatus::Incomplete => {
+                self.math_input_buffer = Some(input);
+                self.math_input_error = false;
+                Ok(Effect {
+                    math_input_changed: true,
+                    ..Effect::default()
+                })
+            }
+            caret_math::MathInputStatus::Invalid => {
+                self.math_input_buffer = Some(input);
+                self.math_input_error = true;
+                Ok(Effect {
+                    math_input_changed: true,
+                    math_input_error: true,
+                    ..Effect::default()
+                })
+            }
+        }
+    }
+
     pub(super) fn move_math_caret(
         &mut self,
         direction: MathDirection,
     ) -> Result<Effect, EditError> {
+        if self.math_input_buffer.is_some() {
+            return Err(EditError::InvalidMathText);
+        }
         let focus = self.math_focus.clone().ok_or(EditError::InvalidPosition)?;
         let story = self
             .paragraph_index
@@ -216,6 +326,9 @@ impl Session {
     }
 
     pub(super) fn insert_math_edit(&mut self, edit: MathEdit) -> Result<Effect, EditError> {
+        if self.math_input_buffer.is_some() {
+            return Err(EditError::InvalidMathText);
+        }
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -254,6 +367,9 @@ impl Session {
     }
 
     pub(super) fn exit_math(&mut self) -> Result<Effect, EditError> {
+        if self.math_input_buffer.is_some() {
+            return Err(EditError::InvalidMathText);
+        }
         if self.math_focus.take().is_none() {
             return Ok(Effect::default());
         }

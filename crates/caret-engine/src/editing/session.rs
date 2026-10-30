@@ -57,6 +57,8 @@ pub struct Session {
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
     math_focus: Option<MathFocus>,
+    math_input_buffer: Option<String>,
+    math_input_error: bool,
     command_line: Option<CommandLine>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
@@ -101,6 +103,8 @@ impl Session {
             composition: None,
             pending_inline_style: PendingInlineStyle::default(),
             math_focus: None,
+            math_input_buffer: None,
+            math_input_error: false,
             command_line: None,
             block_environment_exit: None,
             selected_block_environment: None,
@@ -137,6 +141,16 @@ impl Session {
     /// 当前公式焦点；数学输入路由到该 MathPos，正文 Selection 保持在公式对象边界。
     pub fn math_focus(&self) -> Option<&MathFocus> {
         self.math_focus.as_ref()
+    }
+
+    /// 当前尚未组成有效公式语法的原始输入；错误输入保留到继续输入、退格或 Escape。
+    pub fn pending_math_input(&self) -> Option<&str> {
+        self.math_input_buffer.as_deref()
+    }
+
+    /// 暂存数学输入当前是否为 parser 拒绝的完整语法；原文仍可通过 `pending_math_input` 读取。
+    pub fn math_input_error(&self) -> bool {
+        self.math_input_error
     }
 
     /// 按稳定段落 ID 返回 Rust 索引中的正文或环境标题归属。
@@ -249,15 +263,36 @@ impl Session {
             _ => None,
         };
         if self.math_focus.is_some() {
+            if matches!(&command, Command::EditorKey(EditorKey::Escape))
+                && (self.math_input_buffer.take().is_some() || self.math_input_error)
+            {
+                self.math_input_error = false;
+                return Ok(Effect {
+                    math_input_changed: true,
+                    ..Effect::default()
+                });
+            }
+            if matches!(&command, Command::Undo | Command::Redo)
+                && (self.math_input_buffer.take().is_some() || self.math_input_error)
+            {
+                self.math_input_error = false;
+                return Ok(Effect {
+                    math_input_changed: true,
+                    ..Effect::default()
+                });
+            }
             match &command {
-                Command::InsertText(text) | Command::PasteText(text) => {
-                    return self.run(Command::InsertMathText(text.clone()));
+                Command::InsertText(text) => {
+                    return self.run(Command::TypeMathText(text.clone()));
+                }
+                Command::PasteText(text) => {
+                    return self.run(Command::PasteMathText(text.clone()));
                 }
                 Command::InsertOneCharacterWidthSpace => {
-                    return self.run(Command::InsertMathText("\u{2003}".to_owned()));
+                    return self.run(Command::TypeMathText("\u{2003}".to_owned()));
                 }
                 Command::InsertTwoCharacterWidthSpace => {
-                    return self.run(Command::InsertMathText("\u{2003}\u{2003}".to_owned()));
+                    return self.run(Command::TypeMathText("\u{2003}\u{2003}".to_owned()));
                 }
                 Command::MoveCaret(direction) => {
                     return self.move_math_caret(match direction {
@@ -266,6 +301,8 @@ impl Session {
                     });
                 }
                 Command::InsertMathText(_)
+                | Command::TypeMathText(_)
+                | Command::PasteMathText(_)
                 | Command::InsertMathFraction
                 | Command::InsertMathRadical
                 | Command::MoveMathCaret(_)
@@ -273,6 +310,9 @@ impl Session {
                 | Command::Undo
                 | Command::Redo
                 | Command::EditorKey(EditorKey::Escape) => {}
+                Command::Delete(Direction::Backward) if self.math_input_buffer.is_some() => {
+                    return self.backspace_math_input();
+                }
                 Command::UpdateComposition { .. }
                 | Command::CommitComposition { .. }
                 | Command::CancelComposition { .. }
@@ -503,9 +543,9 @@ impl Session {
         let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
             Command::InsertInlineMath => self.insert_inline_math(),
-            Command::InsertMathText(text) => {
-                self.insert_math_edit(crate::math_edit::MathEdit::InsertText(text))
-            }
+            Command::InsertMathText(text) => self.insert_math_text(&text, false),
+            Command::TypeMathText(text) => self.insert_math_text(&text, true),
+            Command::PasteMathText(text) => self.insert_math_text(&text, false),
             Command::InsertMathFraction => {
                 self.insert_math_edit(crate::math_edit::MathEdit::InsertFraction)
             }
@@ -892,6 +932,8 @@ impl Clone for Session {
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
             math_focus: self.math_focus.clone(),
+            math_input_buffer: self.math_input_buffer.clone(),
+            math_input_error: self.math_input_error,
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
@@ -916,6 +958,8 @@ fn is_paragraph_edit(command: &Command) -> bool {
         Command::InsertText(_)
             | Command::InsertInlineMath
             | Command::InsertMathText(_)
+            | Command::TypeMathText(_)
+            | Command::PasteMathText(_)
             | Command::InsertMathFraction
             | Command::InsertMathRadical
             | Command::InsertOneCharacterWidthSpace

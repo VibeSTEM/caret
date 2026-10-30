@@ -83,6 +83,8 @@ impl Session {
             document_changed: !text.is_empty() || anchor.offset != focus.offset,
             selection_changed: true,
             composition_changed: false,
+            math_input_changed: false,
+            math_input_error: false,
             changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,
@@ -191,6 +193,8 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            math_input_changed: false,
+            math_input_error: false,
             changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,

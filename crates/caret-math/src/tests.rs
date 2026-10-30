@@ -3,8 +3,85 @@
 use super::math_syntax::{AstBudgetError, check_ast_budget};
 use super::{
     MAX_MATH_NESTING_DEPTH, MAX_MATH_SOURCE_BYTES, MAX_MATH_SYNTAX_NODES, MathInputKind,
-    MathParseError, MathSyntaxKind, MathSyntaxNode, parse,
+    MathInputStatus, MathParseError, MathSyntaxKind, MathSyntaxNode, classify_input,
+    is_incomplete_input_prefix, parse,
 };
+
+#[test]
+fn incomplete_input_prefix_detection_only_tracks_open_latex_boundaries() {
+    for source in ["\\", r"\alph", r"\frac{a}{", r"x + \sqrt{"] {
+        assert!(
+            is_incomplete_input_prefix(source),
+            "expected incomplete: {source}"
+        );
+    }
+    for source in ["x", r"\{x\}", r"\alpha ", r"x + y"] {
+        assert!(
+            !is_incomplete_input_prefix(source),
+            "unexpected incomplete: {source}"
+        );
+    }
+    assert_eq!(
+        classify_input(r"\frac{x}", MathInputKind::Inline),
+        MathInputStatus::Incomplete
+    );
+    assert_eq!(
+        classify_input(r"\unknown{x}", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input(r"\unknown{", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input("x}{", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input(r"\unknown{x}\alpha", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input(r"x}\alpha", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input(r"\unknown{x}\", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input("x}\\", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input("\\", MathInputKind::Inline),
+        MathInputStatus::Incomplete
+    );
+    assert_eq!(
+        classify_input(r"\frac{a}{", MathInputKind::Inline),
+        MathInputStatus::Incomplete
+    );
+    assert_eq!(
+        classify_input(r"\{x\}", MathInputKind::Inline),
+        MathInputStatus::Complete
+    );
+    assert_eq!(
+        classify_input(r"\frac{x}{y}", MathInputKind::Inline),
+        MathInputStatus::Complete
+    );
+    assert_eq!(
+        classify_input(r"\left(x", MathInputKind::Inline),
+        MathInputStatus::Incomplete
+    );
+    assert_eq!(
+        classify_input(r"\leftarrow\leftarrow\right)", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+    assert_eq!(
+        classify_input(r"\right)\left(x", MathInputKind::Inline),
+        MathInputStatus::Invalid
+    );
+}
 
 #[test]
 fn parses_inline_and_display_math_with_the_locked_depth_budget() {

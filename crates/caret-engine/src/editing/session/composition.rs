@@ -164,6 +164,8 @@ impl Session {
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
             math_focus: self.math_focus.clone(),
+            math_input_buffer: self.math_input_buffer.clone(),
+            math_input_error: self.math_input_error,
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),

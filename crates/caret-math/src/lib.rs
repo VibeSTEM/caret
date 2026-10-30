@@ -127,7 +127,20 @@ pub enum MathParseError<'source> {
         source_range: Range<usize>,
         /// 上游解析器的诊断。
         message: String,
+        /// parser 的明确语法边界表明继续追加输入仍可能完成表达式。
+        incomplete: bool,
     },
+}
+
+/// 单次公式输入目前能否提交、继续输入或需要错误提示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathInputStatus {
+    /// 当前完整输入可由 parser 接受。
+    Complete,
+    /// parser 明确指出仍缺少输入，或输入停在可延长的 LaTeX 前缀。
+    Incomplete,
+    /// 当前输入被 parser 拒绝，追加内容不能按已知语法边界安全推断为补全。
+    Invalid,
 }
 
 impl Display for MathParseError<'_> {
@@ -175,10 +188,14 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
     let start = source.find(&normalized).unwrap_or(0);
     let normalized_range = start..start + normalized.len();
     let options = ParseOptions::new().with_max_depth(MAX_MATH_NESTING_DEPTH);
-    let (ast, _) = parse_with_options(source, &options).map_err(|error| MathParseError::Parse {
-        source,
-        source_range: full_range.clone(),
-        message: parse_error_message(error),
+    let (ast, _) = parse_with_options(source, &options).map_err(|error| {
+        let incomplete = parse_error_is_incomplete(source, &error);
+        MathParseError::Parse {
+            source,
+            source_range: full_range.clone(),
+            message: parse_error_message(error),
+            incomplete,
+        }
     })?;
 
     match math_syntax::check_ast_budget(&ast, MAX_MATH_NESTING_DEPTH, MAX_MATH_SYNTAX_NODES) {
@@ -202,6 +219,7 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
                 source,
                 source_range: full_range,
                 message: "math.syntax_conversion_unsupported: future latex-rust node".to_owned(),
+                incomplete: false,
             });
         }
     }
@@ -229,6 +247,165 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
         input_kind: kind,
         ast,
     })
+}
+
+/// 判断 parser 拒绝的输入是否还可能因后续键入而成为完整表达式。
+///
+/// 仅识别输入边界状态，不推断数学语义；最终接受始终由 [`parse`] 决定。
+pub fn is_incomplete_input_prefix(source: &str) -> bool {
+    let mut brace_depth = 0usize;
+    let mut consecutive_backslashes = 0usize;
+    for character in source.chars() {
+        if character == '\\' {
+            consecutive_backslashes = consecutive_backslashes.saturating_add(1);
+            continue;
+        }
+        let escaped = consecutive_backslashes % 2 == 1;
+        if !escaped {
+            match character {
+                '{' => brace_depth = brace_depth.saturating_add(1),
+                '}' if brace_depth > 0 => brace_depth -= 1,
+                _ => {}
+            }
+        }
+        consecutive_backslashes = 0;
+    }
+    if brace_depth > 0 || consecutive_backslashes % 2 == 1 {
+        return true;
+    }
+
+    let Some(command_start) = source.rfind('\\') else {
+        return false;
+    };
+    let command = &source[command_start + 1..];
+    if command.is_empty() || !command.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return false;
+    }
+    let preceding_slashes = source[..command_start]
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'\\')
+        .count();
+    preceding_slashes % 2 == 0
+}
+
+/// 用 parser 和有限的输入边界规则分类当前缓冲。
+pub fn classify_input(source: &str, kind: MathInputKind) -> MathInputStatus {
+    match parse(source, kind) {
+        Ok(_) if trailing_control_word_prefix_start(source).is_some() => {
+            MathInputStatus::Incomplete
+        }
+        Ok(_) => MathInputStatus::Complete,
+        Err(MathParseError::Parse {
+            incomplete: true,
+            message,
+            ..
+        }) if message == "trailing backslash"
+            && !source
+                .strip_suffix('\\')
+                .is_some_and(|prefix| parse_prefix_is_viable(prefix, kind)) =>
+        {
+            MathInputStatus::Invalid
+        }
+        Err(MathParseError::Parse {
+            incomplete: true, ..
+        }) => MathInputStatus::Incomplete,
+        Err(MathParseError::Parse { .. })
+            if trailing_control_word_prefix_is_viable(source, kind) =>
+        {
+            MathInputStatus::Incomplete
+        }
+        Err(_) => MathInputStatus::Invalid,
+    }
+}
+
+fn trailing_control_word_prefix_start(source: &str) -> Option<usize> {
+    let command_start = source.rfind('\\')?;
+    let command = &source[command_start + 1..];
+    if command.is_empty() || !command.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    let preceding_slashes = source[..command_start]
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'\\')
+        .count();
+    (preceding_slashes % 2 == 0).then_some(command_start)
+}
+
+fn trailing_control_word_prefix_is_viable(source: &str, kind: MathInputKind) -> bool {
+    let Some(command_start) = trailing_control_word_prefix_start(source) else {
+        return false;
+    };
+    let prefix = &source[..command_start];
+    parse_prefix_is_viable(prefix, kind)
+}
+
+fn parse_prefix_is_viable(prefix: &str, kind: MathInputKind) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    matches!(
+        parse(prefix, kind),
+        Ok(_)
+            | Err(MathParseError::Parse {
+                incomplete: true,
+                ..
+            })
+    )
+}
+
+fn parse_error_is_incomplete(source: &str, error: &ParseError) -> bool {
+    match error {
+        ParseError::TrailingBackslash => true,
+        ParseError::Malformed(message) => {
+            matches!(
+                message.as_str(),
+                "missing argument" | "unexpected end of input" | "unmatched '{'"
+            )
+        }
+        ParseError::UnmatchedDelimiter => has_unmatched_left_delimiter(source),
+        ParseError::Unknown(_) | ParseError::Unsupported(_) | ParseError::RowBreakOutside => false,
+        _ => false,
+    }
+}
+
+fn has_unmatched_left_delimiter(source: &str) -> bool {
+    let mut left_depth = 0usize;
+    let mut backslash_run = 0usize;
+    let mut characters = source.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        if character != '\\' {
+            backslash_run = 0;
+            continue;
+        }
+        if backslash_run % 2 == 1 {
+            backslash_run += 1;
+            continue;
+        }
+        let mut end = index + character.len_utf8();
+        while let Some((next_index, next)) = characters.peek().copied() {
+            if !next.is_ascii_alphabetic() {
+                break;
+            }
+            end = next_index + next.len_utf8();
+            characters.next();
+        }
+        match &source[index + 1..end] {
+            "left" => {
+                left_depth = left_depth.saturating_add(1);
+                backslash_run = 0;
+            }
+            "right" if left_depth > 0 => {
+                left_depth -= 1;
+                backslash_run = 0;
+            }
+            "right" => return false,
+            _ if end == index + character.len_utf8() => backslash_run = 1,
+            _ => backslash_run = 0,
+        }
+    }
+    left_depth > 0
 }
 
 fn parse_error_message(error: ParseError) -> String {

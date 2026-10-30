@@ -1223,6 +1223,9 @@ pub(super) fn edit_group(command: &super::super::Command) -> Option<EditGroup> {
         super::super::Command::InsertMathText(text) if !text.is_empty() => {
             Some(EditGroup::InsertText)
         }
+        super::super::Command::TypeMathText(text) if !text.is_empty() => {
+            Some(EditGroup::InsertText)
+        }
         super::super::Command::InsertOneCharacterWidthSpace
         | super::super::Command::InsertTwoCharacterWidthSpace => Some(EditGroup::InsertText),
         super::super::Command::Delete(super::super::Direction::Backward) => {
