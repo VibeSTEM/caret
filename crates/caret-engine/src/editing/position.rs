@@ -28,6 +28,16 @@ pub struct Selection {
     pub focus: Pos,
 }
 
+/// 当前插入点所在的行内环境范围，使用段落内 UTF-8 半开偏移。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineEnvironmentRange {
+    pub environment_id: NodeId,
+    pub paragraph_id: NodeId,
+    pub story: StoryId,
+    pub start_utf8: usize,
+    pub end_utf8: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PositionMap {
     Composite(Vec<PositionMap>),

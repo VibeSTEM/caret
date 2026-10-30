@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-10-29。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-10-30。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -66,9 +66,9 @@
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | done |
 | 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | done |
-| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027 | M | in-progress |
+| 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027、033 | M | done |
 | 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
-| 033 | 排版基线 | [OpenType BASE 脚本基线与行框溢出](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | in-progress |
+| 033 | 排版 | [多语言共享行距网格与选区几何](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | done |
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
 | 035 | 文档模式 | [Editing、Review、View 模式语义与行为](task/035-document-work-modes.md) | P2 | 018 | L | planned |
 | 036 | 图标与致谢 | [Icons8 图标替换与 Settings 关于页面署名](task/036-icons8-icons-and-attribution.md) | P1 | 018 | M | planned |
@@ -90,12 +90,18 @@
 | 052 | 文档模型 | [图片节点、媒体资源与编辑](task/052-image-model-and-editing.md) | P2 | 021 | M | planned |
 | 053 | 画布 | [图片布局与画布呈现](task/053-image-layout-and-canvas.md) | P2 | 024、027、052 | M | planned |
 | 054 | 结构命令 | [APA 标题层级命令与默认样式](task/054-apa-heading-commands.md) | P2 | 010、024、025、026、027 | M | planned |
+| 055 | 排版基线 | [OpenType BASE 脚本基线与字形溢出诊断](task/055-opentype-base-script-alignment.md) | P2 | 024、026、027、033 | L | ready |
+| 056 | 字体设置 | [字体设置与字体族选择器](task/056-font-settings-and-family-picker.md) | P2 | 024、025、039 | M | planned |
+| 057 | 结构命令 | [块环境命令作用于文本选区](task/057-block-environment-selection-commands.md) | P2 | 010、022 | M | planned |
 
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
 004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011 是 M3 公式总体验收；042 验证并锁定数学后端，043 实现公式模型与编辑，044 负责公式布局渲染及[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)。012 是表格总体验收，由 045 实现模型与交互、046 实现布局与画布。011、012、044 全部验收通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
 
-031 的颜色语义区分行内环境、块级环境和命令输入提示。009 负责命令提示 token，010 提供块级 EnvironmentNode 的布局范围；块级淡绿色高亮已接入，031 继续完成行内高亮和整体验收。三类颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
+031 负责当前环境背景高亮：010 已提供块环境结构及分页几何，块与行内高亮已接入同一 QSG 图层，031 已完成专项与最终评审。025 负责对选中文本应用行内格式环境命令；057 补充对选中文本执行块环境命令。009 负责独立的命令提示 token。行内、块级和命令提示颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
+
+033 已完成共享行距网格及选区行框几何；当前实现不读取 OpenType BASE。脚本基线对齐、实际字体 BASE 解析和 ink 溢出诊断单独由 055 承接，不把 033 的完成表述成已支持 BASE。
+024 已完成系统/用户字体目录读取、显式刷新和 shaping 字体回退；025 仍计划实现文档默认字体与局部 Font 环境命令，尚未提供字体选择 UI。056 负责复用已有目录和脚本分类能力，补齐 Rust 字体族目录查询及用户字体设置流程，不重复实现系统字体扫描。
 
 008 的 Windows、macOS、Linux Nightly 合成 IME/Unicode 矩阵已通过并完成验收；009 可直接基于已完成的 008 开始。
 

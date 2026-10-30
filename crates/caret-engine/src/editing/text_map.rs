@@ -40,8 +40,16 @@ struct Span {
 pub(super) struct TextMap {
     pub(super) text: String,
     spans: Vec<Span>,
-    pub(super) environment_spans: Vec<(usize, usize)>,
+    pub(super) environment_spans: Vec<EnvironmentSpan>,
     pub(super) grapheme_boundaries: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct EnvironmentSpan {
+    pub(super) id: NodeId,
+    pub(super) start: usize,
+    pub(super) end: usize,
+    depth: usize,
 }
 
 impl TextMap {
@@ -55,6 +63,7 @@ impl TextMap {
             &mut text,
             &mut spans,
             &mut environment_spans,
+            0,
         )?;
         let mut grapheme_boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
         grapheme_boundaries.push(text.len());
@@ -75,6 +84,37 @@ impl TextMap {
             return Err(EditError::InvalidPosition);
         }
         Ok(())
+    }
+
+    pub(super) fn inline_environment_at(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+    ) -> Option<(NodeId, usize, usize)> {
+        self.environment_spans
+            .iter()
+            .filter(|span| {
+                span.start < span.end
+                    && ((span.start < offset && offset < span.end)
+                        || (offset == span.start && affinity == Affinity::Downstream)
+                        || (offset == span.end && affinity == Affinity::Upstream))
+            })
+            .max_by_key(|span| span.depth)
+            .map(|span| (span.id.clone(), span.start, span.end))
+    }
+
+    pub(super) fn has_environment_start(&self, offset: usize) -> bool {
+        self.environment_spans
+            .iter()
+            .any(|span| span.start == offset)
+    }
+
+    pub(super) fn has_environment_end(&self, offset: usize) -> bool {
+        self.environment_spans.iter().any(|span| span.end == offset)
+    }
+
+    pub(super) fn has_environment_boundary(&self, offset: usize) -> bool {
+        self.has_environment_start(offset) || self.has_environment_end(offset)
     }
 
     pub(super) fn snap_to_grapheme_boundary(&self, offset: usize, affinity: Affinity) -> usize {
@@ -370,7 +410,8 @@ fn collect_text(
     path: &mut Vec<usize>,
     text: &mut String,
     spans: &mut Vec<Span>,
-    environment_spans: &mut Vec<(usize, usize)>,
+    environment_spans: &mut Vec<EnvironmentSpan>,
+    environment_depth: usize,
 ) -> Result<(), EditError> {
     for (index, node) in nodes.iter().enumerate() {
         path.push(index);
@@ -385,10 +426,22 @@ fn collect_text(
                     is_soft_break: false,
                 });
             }
-            InlineNode::Environment(InlineEnvironment { children, .. }) => {
+            InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
                 let start = text.len();
-                collect_text(children, path, text, spans, environment_spans)?;
-                environment_spans.push((start, text.len()));
+                collect_text(
+                    children,
+                    path,
+                    text,
+                    spans,
+                    environment_spans,
+                    environment_depth + 1,
+                )?;
+                environment_spans.push(EnvironmentSpan {
+                    id: id.clone(),
+                    start,
+                    end: text.len(),
+                    depth: environment_depth,
+                });
             }
             InlineNode::SoftBreak(_) => {
                 let start = text.len();

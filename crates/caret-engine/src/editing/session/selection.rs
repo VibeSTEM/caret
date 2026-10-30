@@ -259,11 +259,7 @@ impl Session {
         if let Some(direction) = direction {
             let at_environment_boundary = self
                 .text_map_for(&selection.focus)?
-                .environment_spans
-                .iter()
-                .any(|(start, end)| {
-                    *start == selection.focus.offset || *end == selection.focus.offset
-                });
+                .has_environment_boundary(selection.focus.offset);
             if at_environment_boundary {
                 selection.focus.affinity = match direction {
                     Direction::Backward => Affinity::Downstream,

@@ -1,6 +1,6 @@
 # 文档模型
 
-更新日期：2026-10-29。
+更新日期：2026-10-30。
 
 > 产品已决定使用 Paragraph/Run 作为文本表示。本文是文档持久化语义、页面层级和结构类别的权威来源；实现任务可补实现细节，但不得另立冲突的产品语义。本文的语义草图不等于当前 Rust DTO/JSON 的逐字段描述，不等于照搬 OOXML，也不承诺 DOCX 兼容。
 
@@ -14,17 +14,22 @@
 
 ## 文档树与内容模型
 
-### Block、Inline 与行内内容插入
+### Block 与 Inline 节点
 
-这三个概念分属不同层次，不能把“行内插入”误认为第三种节点容器：
+`Block` 和 `InlineNode` 是文档树的两类内容节点，归属不同的容器：
 
-| 概念 | 含义 | 文档模型 / 操作 |
+| 节点层级 | 所属容器 | 当前及规划中的内容 |
 | --- | --- | --- |
-| `Block` | 正文流中的块级内容，参与块顺序、分页和结构导航 | `Paragraph`、块级 `EnvironmentNode`、显式分页；块环境拥有有序 `children`，可嵌套 |
-| `Inline` | 一个 `Paragraph` 内按顺序排布的内容，参与同一段逻辑文本、塑形和字素偏移 | `Run`、行内 `EnvironmentNode`、`SoftBreak`、未知行内节点；行内格式环境保存嵌套子节点 |
-| 行内内容插入 | 编辑命令在光标或选区处插入/替换行内节点的行为，不是节点类型 | `\\newline` 与 Shift+Enter 都插入 `SoftBreak`，段落 ID 不变；Enter 调用段落拆分，创建新的 `Paragraph` / 块序列位置 |
+| `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `InlineNode` | `Paragraph.inlines` 的有序行内流 | `Run`、行内 `EnvironmentNode`、`SoftBreak`、未知行内节点；行内格式环境通过子节点保存作用范围 |
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
+页面角色组织块流；`Paragraph` 承载行内流并负责段落级排版。行内节点共享段落逻辑文本坐标，Run 边界和行内环境边界不改变 UTF-8 偏移或跨节点字素分段。实际 DTO 以本节开头列出的 `caret-doc` 类型为准。
+
+### 编辑命令与内容插入
+
+“行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](command-input.md)定义；节点本身及其持久化语义仍由本文定义。
+
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。其 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将它们投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -33,7 +38,8 @@ crates/caret-doc/src/model.rs           文档根 DTO 与公开导出
 crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
-crates/caret-doc/src/model/inline.rs    InlineNode、行内环境和软换行
+crates/caret-doc/src/model/inline.rs    InlineNode 与软换行
+crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
 crates/caret-structure/src/index.rs     唯一结构索引装配入口

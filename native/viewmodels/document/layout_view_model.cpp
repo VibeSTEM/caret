@@ -59,6 +59,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
                       {QStringLiteral("candidates"), QVariantList{}}};
     m_current_structure = parsed_snapshot.current_structure;
     m_block_environment_highlight_rects = parsed_snapshot.block_environment_highlight_rects;
+    m_inline_environment_highlight_rects = parsed_snapshot.inline_environment_highlight_rects;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
 }
@@ -76,6 +77,9 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
             error = QStringLiteral("layout.invalid_snapshot");
         }
         m_error = std::move(error);
+        if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
+            clearEnvironmentHighlightRects();
+        }
         return false;
     }
     return installSnapshot(std::move(parsed_snapshot));
@@ -89,6 +93,9 @@ bool LayoutViewModel::installSnapshot(const QJsonDocument& snapshot_document,
         !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
     if (!layout_snapshot::parse(snapshot_document, parsed_snapshot, error, previous_snapshot)) {
         m_error = std::move(error);
+        if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
+            clearEnvironmentHighlightRects();
+        }
         return false;
     }
     return installSnapshot(std::move(parsed_snapshot));
@@ -100,7 +107,8 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
         m_input_method_context != parsed_snapshot.input_method_context ||
         m_command_line != parsed_snapshot.command_line ||
         m_current_structure != parsed_snapshot.current_structure ||
-        m_block_environment_highlight_rects != parsed_snapshot.block_environment_highlight_rects;
+        m_block_environment_highlight_rects != parsed_snapshot.block_environment_highlight_rects ||
+        m_inline_environment_highlight_rects != parsed_snapshot.inline_environment_highlight_rects;
     installed_snapshot() = parsed_snapshot;
     has_installed_snapshot() = true;
     m_page_sizes_pt = std::move(parsed_snapshot.page_sizes);
@@ -114,6 +122,8 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     m_current_structure = std::move(parsed_snapshot.current_structure);
     m_block_environment_highlight_rects =
         std::move(parsed_snapshot.block_environment_highlight_rects);
+    m_inline_environment_highlight_rects =
+        std::move(parsed_snapshot.inline_environment_highlight_rects);
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
@@ -131,6 +141,7 @@ bool LayoutViewModel::installInteraction(const QString& interaction_json) {
     const QJsonDocument document = QJsonDocument::fromJson(interaction_json.toUtf8(), &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
         m_error = QStringLiteral("layout.invalid_interaction");
+        clearEnvironmentHighlightRects();
         return false;
     }
     return installInteraction(document.object());
@@ -147,11 +158,21 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     const QJsonValue rectangles_value = root.value(QStringLiteral("selectionRects"));
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     const QJsonValue caret_value = root.value(QStringLiteral("caretGeometry"));
-    if (!document_generation_ok || !font_generation_ok || !rectangles_value.isArray() ||
-        !input_context_value.isObject() || !caret_value.isObject() ||
-        document_generation_value != m_document_generation ||
+    if (!document_generation_ok || !font_generation_ok) {
+        m_error = QStringLiteral("layout.stale_interaction");
+        clearEnvironmentHighlightRects();
+        return false;
+    }
+    // 丢弃迟到的旧交互结果；不能让旧 generation 清除当前有效状态。
+    if (document_generation_value != m_document_generation ||
         font_generation_value != m_font_generation) {
         m_error = QStringLiteral("layout.stale_interaction");
+        return false;
+    }
+    if (!rectangles_value.isArray() || !input_context_value.isObject() ||
+        !caret_value.isObject()) {
+        m_error = QStringLiteral("layout.stale_interaction");
+        clearEnvironmentHighlightRects();
         return false;
     }
 
@@ -160,6 +181,7 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     if (!input_context.contains(QStringLiteral("surroundingText"))) {
         if (!m_input_method_context.contains(QStringLiteral("surroundingText"))) {
             m_error = QStringLiteral("layout.interaction_context_unavailable");
+            clearEnvironmentHighlightRects();
             return false;
         }
         input_context.insert(QStringLiteral("surroundingText"),
@@ -168,6 +190,7 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     const QVariantMap command_line =
         root.value(QStringLiteral("commandLine")).toObject().toVariantMap();
     QVariantList block_environment_highlight_rects = m_block_environment_highlight_rects;
+    QVariantList inline_environment_highlight_rects = m_inline_environment_highlight_rects;
     const QJsonValue block_environment_highlight_value =
         root.value(QStringLiteral("blockEnvironmentHighlightRects"));
     if (!block_environment_highlight_value.isUndefined()) {
@@ -175,25 +198,41 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         if (!layout_snapshot::parse_block_environment_highlight_rects(
                 block_environment_highlight_value, m_page_sizes_pt,
                 parsed_block_environment_highlight_rects, m_error)) {
+            clearEnvironmentHighlightRects();
             return false;
         }
         block_environment_highlight_rects = std::move(parsed_block_environment_highlight_rects);
+    }
+    const QJsonValue inline_environment_highlight_value =
+        root.value(QStringLiteral("inlineEnvironmentHighlightRects"));
+    if (!inline_environment_highlight_value.isUndefined()) {
+        QVariantList parsed_inline_environment_highlight_rects;
+        if (!layout_snapshot::parse_inline_environment_highlight_rects(
+                inline_environment_highlight_value, m_page_sizes_pt,
+                parsed_inline_environment_highlight_rects, m_error)) {
+            clearEnvironmentHighlightRects();
+            return false;
+        }
+        inline_environment_highlight_rects = std::move(parsed_inline_environment_highlight_rects);
     }
     QVariantList current_structure = m_current_structure;
     const QJsonValue current_structure_value = root.value(QStringLiteral("currentStructure"));
     if (!current_structure_value.isUndefined() &&
         !layout_snapshot::parse_current_structure(current_structure_value, current_structure,
                                                   m_error)) {
+        clearEnvironmentHighlightRects();
         return false;
     }
     if (m_selection_rects != selection_rectangles || m_input_method_context != input_context ||
         m_command_line != command_line || m_current_structure != current_structure ||
-        m_block_environment_highlight_rects != block_environment_highlight_rects) {
+        m_block_environment_highlight_rects != block_environment_highlight_rects ||
+        m_inline_environment_highlight_rects != inline_environment_highlight_rects) {
         m_selection_rects = selection_rectangles;
         m_input_method_context = input_context;
         m_command_line = command_line;
         m_current_structure = std::move(current_structure);
         m_block_environment_highlight_rects = std::move(block_environment_highlight_rects);
+        m_inline_environment_highlight_rects = std::move(inline_environment_highlight_rects);
         emit interactionChanged();
     }
     installCaretGeometry(caret_value.toObject().toVariantMap());
@@ -207,6 +246,16 @@ void LayoutViewModel::installCaretGeometry(const QVariantMap& geometry) {
     }
     m_caret_geometry = geometry;
     emit caretGeometryChanged();
+}
+
+void LayoutViewModel::clearEnvironmentHighlightRects() {
+    if (m_block_environment_highlight_rects.isEmpty() &&
+        m_inline_environment_highlight_rects.isEmpty()) {
+        return;
+    }
+    m_block_environment_highlight_rects.clear();
+    m_inline_environment_highlight_rects.clear();
+    emit interactionChanged();
 }
 
 } // namespace caret

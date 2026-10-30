@@ -4,6 +4,8 @@ Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界
 
 只阅读当前任务相关的文档。工程栈以规范为准。外部调查只放在 [research](ai-docs/research/)。
 
+非平凡代码、架构或文档改动开始前，必须阅读并执行[验证与评审标准](ai-docs/standards/validation-and-review.md)：按分支实际涉及的评审项分别委派 Terra/medium 领域检查，完成修复后由未参与实现的 Sol/medium subagent 对最终完整 diff 做只读 final review。纯格式或单行拼写修复可按该标准豁免。
+
 ## 入口
 
 | 工作 | 文档 |

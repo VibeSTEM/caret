@@ -38,10 +38,7 @@ impl Session {
         map.validate_pos(&pos)?;
         if direction == Direction::Forward
             && pos.affinity == Affinity::Upstream
-            && map
-                .environment_spans
-                .iter()
-                .any(|(_, end)| *end == pos.offset)
+            && map.has_environment_end(pos.offset)
         {
             let target = Pos {
                 affinity: Affinity::Downstream,
@@ -58,10 +55,7 @@ impl Session {
         }
         if direction == Direction::Backward
             && pos.affinity == Affinity::Downstream
-            && map
-                .environment_spans
-                .iter()
-                .any(|(start, _)| *start == pos.offset)
+            && map.has_environment_start(pos.offset)
         {
             let target = Pos {
                 affinity: Affinity::Upstream,
@@ -80,11 +74,7 @@ impl Session {
             Direction::Backward => map.previous_boundary(pos.offset),
             Direction::Forward => map.next_boundary(pos.offset),
         };
-        let affinity = if map
-            .environment_spans
-            .iter()
-            .any(|(start, end)| *start == offset || *end == offset)
-        {
+        let affinity = if map.has_environment_boundary(offset) {
             match direction {
                 Direction::Backward => Affinity::Downstream,
                 Direction::Forward => Affinity::Upstream,

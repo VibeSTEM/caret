@@ -42,9 +42,13 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
         Some("environment") if object.get("scope").and_then(Value::as_str) == Some("inline") => {
             let kind = object.get("kind").and_then(Value::as_str);
-            match kind {
-                Some("bold") | Some("italic") | Some("font") => parse_inline_environment(value),
-                _ => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
+            if kind
+                .and_then(InlineEnvironmentKind::from_storage_name)
+                .is_some()
+            {
+                parse_inline_environment(value)
+            } else {
+                Ok(InlineNode::Opaque(OpaqueNode { raw: value }))
             }
         }
         _ => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
@@ -95,12 +99,8 @@ fn parse_inline_environment(value: Value) -> Result<InlineNode, ModelError> {
         .ok_or_else(|| ModelError::InvalidDocument("environment kind is missing".to_owned()))?;
     object.remove("type");
     object.remove("scope");
-    let kind = match kind.as_str() {
-        "bold" => InlineEnvironmentKind::Bold,
-        "italic" => InlineEnvironmentKind::Italic,
-        "font" => InlineEnvironmentKind::Font,
-        _ => return Err(ModelError::InvalidEnvironmentScope(kind)),
-    };
+    let kind = InlineEnvironmentKind::from_storage_name(&kind)
+        .ok_or_else(|| ModelError::InvalidEnvironmentScope(kind.clone()))?;
     let children = take_nodes(&mut object, "children", inline_from_value)?;
     let node = InlineEnvironment {
         id: parse_id_field(&mut object)?,
@@ -237,11 +237,7 @@ trait EnvironmentKindName {
 
 impl EnvironmentKindName for InlineEnvironmentKind {
     fn name(self) -> &'static str {
-        match self {
-            Self::Bold => "bold",
-            Self::Italic => "italic",
-            Self::Font => "font",
-        }
+        self.storage_name()
     }
 }
 

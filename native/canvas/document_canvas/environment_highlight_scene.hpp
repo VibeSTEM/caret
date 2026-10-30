@@ -1,4 +1,4 @@
-// 管理当前块环境高亮的跨页场景图节点。
+// 管理当前文档环境高亮的跨页场景图节点。
 #pragma once
 
 #include <QColor>
@@ -11,19 +11,19 @@
 
 namespace caret {
 
-struct BlockEnvironmentHighlightStyle {
+struct EnvironmentHighlightStyle {
     QColor color;
     qreal radius = 0.0;
     qreal padding_px = 0.0;
 };
 
-class BlockEnvironmentHighlightLayer final : public QSGNode {
+class EnvironmentHighlightLayer final : public QSGNode {
   public:
     using DocumentToContent = std::function<QPointF(int, const QPointF&)>;
     using PageRect = std::function<QRectF(int)>;
 
     void update(const QList<QVariant>& rectangles, int first_page, int page_end,
-                const BlockEnvironmentHighlightStyle& style,
+                const EnvironmentHighlightStyle& style,
                 const DocumentToContent& document_to_content, const PageRect& page_rect);
     void setColor(const QColor& color);
 

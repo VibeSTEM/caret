@@ -2,7 +2,10 @@
 
 use super::*;
 use crate::editing::EditorKey;
-use caret_doc::{Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph};
+use caret_doc::{
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+};
 use std::collections::BTreeMap;
 
 fn paragraph_text(session: &Session, block_index: usize) -> String {
@@ -12,6 +15,67 @@ fn paragraph_text(session: &Session, block_index: usize) -> String {
     TextMap::new(paragraph)
         .unwrap_or_else(|error| panic!("paragraph text map failed: {error}"))
         .text
+}
+
+#[test]
+fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
+    let mut document = Document::blank();
+    let outer_id = NodeId::generate();
+    let inner_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+        id: outer_id,
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![InlineNode::Environment(InlineEnvironment {
+            id: inner_id.clone(),
+            kind: InlineEnvironmentKind::Italic,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![InlineNode::Run(Run {
+                text: "inside".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let focus = session.selection().focus.clone();
+    let paragraph_id = focus.paragraph_id.clone();
+
+    let inside = session
+        .current_inline_environment()
+        .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+        .unwrap_or_else(|| panic!("caret should inherit nested inline environments"));
+
+    assert_eq!(inside.environment_id, inner_id);
+    assert_eq!(inside.paragraph_id, paragraph_id);
+    assert_eq!(inside.start_utf8, 0);
+    assert_eq!(inside.end_utf8, "inside".len());
+
+    let outside_start = Pos {
+        affinity: Affinity::Upstream,
+        ..focus.clone()
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: outside_start.clone(),
+            focus: outside_start,
+        })))
+        .unwrap_or_else(|error| panic!("moving outside the environment failed: {error}"));
+    assert!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+            .is_none()
+    );
 }
 
 #[test]

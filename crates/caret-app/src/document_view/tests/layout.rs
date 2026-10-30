@@ -1,7 +1,10 @@
 //! 验证文档视图布局快照、绘制与错误隔离。
 
 use super::*;
-use caret_doc::{BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph};
+use caret_doc::{
+    BlockEnvironment, BlockEnvironmentKind, InlineEnvironment, InlineEnvironmentKind, InlineNode,
+    NodeId, Paragraph, Run,
+};
 use std::collections::BTreeMap;
 
 #[test]
@@ -72,6 +75,205 @@ fn block_environment_highlight_geometry_tracks_the_active_block_environment()
     assert_eq!(
         interaction["blockEnvironmentHighlightRects"],
         snapshot["blockEnvironmentHighlightRects"]
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highlight()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let prefix = "outside ";
+    let text = "Latin العربية 日本語 mixed content ".repeat(24);
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![
+        InlineNode::Run(Run {
+            text: prefix.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![InlineNode::Run(Run {
+                text: text.clone(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: " outside".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: prefix.len(),
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))?;
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let rectangles = snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline environment rectangles were omitted"))?;
+    assert!(
+        rectangles.len() > 1,
+        "wrapped text should produce per-line rectangles"
+    );
+    assert_eq!(
+        snapshot["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle["x1Pt"].as_f64() > rectangle["x0Pt"].as_f64()
+            && rectangle["y1Pt"].as_f64() > rectangle["y0Pt"].as_f64()
+    }));
+    let range = runtime
+        .session
+        .current_inline_environment()?
+        .ok_or_else(|| std::io::Error::other("caret did not resolve the inline environment"))?;
+    assert_eq!(range.start_utf8, prefix.len());
+    assert_eq!(range.end_utf8, prefix.len() + text.len());
+    let selection = caret_engine::Selection {
+        anchor: caret_engine::Pos {
+            story: range.story.clone(),
+            paragraph_id: range.paragraph_id.clone(),
+            offset: range.start_utf8,
+            affinity: caret_engine::Affinity::Downstream,
+        },
+        focus: caret_engine::Pos {
+            story: range.story,
+            paragraph_id: range.paragraph_id,
+            offset: range.end_utf8,
+            affinity: caret_engine::Affinity::Upstream,
+        },
+    };
+    let expected = runtime
+        .current_snapshot()?
+        .selection_geometry(&selection)
+        .ok_or_else(|| std::io::Error::other("bidi environment selection has no geometry"))?
+        .into_iter()
+        .map(|rectangle| {
+            serde_json::json!({
+                "pageIndex": rectangle.page_index,
+                "x0Pt": rectangle.x0_pt,
+                "y0Pt": rectangle.y0_pt,
+                "x1Pt": rectangle.x1_pt,
+                "y1Pt": rectangle.y1_pt,
+            })
+        })
+        .collect::<Vec<_>>();
+    let actual = snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline highlight snapshot is not an array"))?;
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual["pageIndex"], expected["pageIndex"]);
+        for coordinate in ["x0Pt", "y0Pt", "x1Pt", "y1Pt"] {
+            let actual = actual[coordinate]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("inline rectangle coordinate is missing"))?;
+            let expected = expected[coordinate]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("expected rectangle coordinate is missing"))?;
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "{coordinate} differs: {actual} != {expected}"
+            );
+        }
+    }
+
+    let outside = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: prefix.len() + text.len(),
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: outside.clone(),
+                focus: outside,
+            },
+        )))?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert_eq!(
+        interaction["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_inline_environment_does_not_hide_visible_block_highlight()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let section_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: Vec::new(),
+        extra: BTreeMap::new(),
+    })];
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: section_id,
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(Paragraph::empty(NodeId::generate())),
+        children: vec![Block::Paragraph(paragraph)],
+        extra: BTreeMap::new(),
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))?;
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(
+        snapshot["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    assert!(
+        snapshot["blockEnvironmentHighlightRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
     );
     Ok(())
 }

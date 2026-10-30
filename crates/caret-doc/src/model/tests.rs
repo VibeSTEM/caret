@@ -192,6 +192,18 @@ fn known_environment_fields_with_wrong_types_are_rejected_instead_of_becoming_op
 }
 
 #[test]
+fn unknown_inline_environment_kinds_remain_opaque_and_round_trip()
+-> Result<(), Box<dyn std::error::Error>> {
+    let raw = serde_json::json!({
+        "type": "environment", "scope": "inline", "kind": "future_style",
+        "id": "future", "children": [{"type": "run", "text": "kept"}]
+    });
+    let node: super::InlineNode = serde_json::from_value(raw.clone())?;
+    assert_eq!(serde_json::to_value(node)?, raw);
+    Ok(())
+}
+
+#[test]
 fn recognized_nodes_reject_non_object_or_malformed_content() {
     for invalid in [serde_json::json!(null), serde_json::json!([])] {
         assert!(serde_json::from_value::<Block>(invalid.clone()).is_err());

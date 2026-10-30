@@ -237,19 +237,17 @@ fn validate_inline<'a>(
         }
         InlineNode::Environment(environment) => {
             insert_id(ids, &environment.id)?;
-            if matches!(
-                environment.kind,
-                InlineEnvironmentKind::Bold | InlineEnvironmentKind::Italic
-            ) && environment
-                .props
-                .get("enabled")
-                .is_some_and(|value| !value.is_boolean())
+            if environment.kind.supports_enabled()
+                && environment
+                    .props
+                    .get("enabled")
+                    .is_some_and(|value| !value.is_boolean())
             {
                 return Err(ModelError::InvalidDocument(
                     "Bold/Italic enabled must be boolean".to_owned(),
                 ));
             }
-            if environment.kind == InlineEnvironmentKind::Font
+            if environment.kind.supports_font_family()
                 && environment
                     .props
                     .get("fontFamily")

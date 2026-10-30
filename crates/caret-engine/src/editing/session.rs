@@ -3,6 +3,7 @@
 mod clipboard;
 mod command_line;
 mod composition;
+mod current_environment;
 mod history;
 mod inline_content;
 mod keyboards;

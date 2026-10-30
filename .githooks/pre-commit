@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""只在 main 分支提交时运行 Rust 格式检查。"""
+
+import os
+import subprocess
+import sys
+
+root = subprocess.run(
+    ["git", "rev-parse", "--show-toplevel"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+branch = subprocess.run(
+    ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+    cwd=root,
+    check=False,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+if branch == "main":
+    result = subprocess.run(
+        [sys.executable, os.path.join(root, "tools", "git-hooks", "check_format.py")],
+        cwd=root,
+        check=False,
+    )
+    raise SystemExit(result.returncode)

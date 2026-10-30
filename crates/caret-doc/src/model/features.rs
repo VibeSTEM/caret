@@ -117,22 +117,11 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
             }
         }
         InlineNode::Environment(environment) => {
-            features.insert(
-                match environment.kind {
-                    InlineEnvironmentKind::Bold => "caret.env.bold",
-                    InlineEnvironmentKind::Italic => "caret.env.italic",
-                    InlineEnvironmentKind::Font => "caret.env.font",
-                }
-                .to_owned(),
-            );
+            features.insert(environment.kind.required_feature().to_owned());
             if environment.definition_id.is_some() {
                 features.insert("caret.env.templates".to_owned());
             }
-            if matches!(
-                environment.kind,
-                InlineEnvironmentKind::Bold | InlineEnvironmentKind::Italic
-            ) && environment.props.contains_key("enabled")
-            {
+            if environment.kind.supports_enabled() && environment.props.contains_key("enabled") {
                 features.insert("caret.env.explicit-format-state".to_owned());
             }
             for child in &environment.children {

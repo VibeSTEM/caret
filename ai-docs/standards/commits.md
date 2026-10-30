@@ -12,6 +12,8 @@
 4. 受影响的 task 和索引一起更新。状态没变时不必为了制造 diff 重写索引。
 5. 暂存 diff 里没有无关产物。
 
+在 `main` 分支提交或推送前，仓库 Git hook 会运行 `cargo format --check`。克隆后先运行一次 `cargo format` 供给 `.toolchain` Python，再用其安装 hook：macOS/Linux 使用 `.toolchain/tools/python/venv/bin/python tools/git-hooks/install.py`，Windows 使用 `.toolchain/tools/python/venv/Scripts/python.exe tools/git-hooks/install.py`。hook 入口由 Python 编写，并将检查交给 `.toolchain` 中的解释器执行。提交检查仅在当前分支为 `main` 时运行，推送检查在当前分支或推送目标涉及 `main` 时运行。Hook 只提供本地快速保护，CI 仍负责远端验证。
+
 从 panta 移植时，正文写来源仓库和 commit。
 
 ## 消息

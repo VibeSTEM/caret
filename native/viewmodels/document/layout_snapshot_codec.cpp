@@ -230,6 +230,13 @@ bool parse_block_environment_highlight_rects(const QJsonValue& value,
         value, page_sizes, QStringLiteral("block_environment_highlight"), rectangles, error);
 }
 
+bool parse_inline_environment_highlight_rects(const QJsonValue& value,
+                                              const QVariantList& page_sizes,
+                                              QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(
+        value, page_sizes, QStringLiteral("inline_environment_highlight"), rectangles, error);
+}
+
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot) {
     return parse(snapshot_json.toUtf8(), parsed_snapshot, error, previous_snapshot);
@@ -537,6 +544,12 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
             parsed_block_environment_highlight_rects, error)) {
         return false;
     }
+    QVariantList parsed_inline_environment_highlight_rects;
+    if (!parse_inline_environment_highlight_rects(
+            root.value(QStringLiteral("inlineEnvironmentHighlightRects")), parsed_sizes,
+            parsed_inline_environment_highlight_rects, error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
@@ -549,6 +562,8 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.current_structure = std::move(parsed_current_structure);
     parsed_snapshot.block_environment_highlight_rects =
         std::move(parsed_block_environment_highlight_rects);
+    parsed_snapshot.inline_environment_highlight_rects =
+        std::move(parsed_inline_environment_highlight_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {

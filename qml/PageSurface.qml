@@ -252,10 +252,10 @@ Item {
             caretPreviewGeometry: pointerHandler.selectionDragActive ? pointerHandler.dragFocusCaretGeometry : ({})
             selectionRects: pointerHandler.selectionDragActive ? [] : LayoutViewModel.selectionRects
             selectionColor: Theme.colorSelected
-            blockEnvironmentHighlightRects: LayoutViewModel.blockEnvironmentHighlightRects
-            blockEnvironmentHighlightColor: Theme.colorBlockEnvironmentHighlight
-            blockEnvironmentHighlightRadius: Theme.radiusSmall
-            blockEnvironmentHighlightPaddingPx: Theme.spacingTiny
+            environmentHighlightRects: LayoutViewModel.environmentHighlightRects
+            environmentHighlightColor: LayoutViewModel.environmentHighlightKind === "inline" ? Theme.colorInlineEnvironmentHighlight : Theme.colorBlockEnvironmentHighlight
+            environmentHighlightRadius: Theme.radiusSmall
+            environmentHighlightPaddingPx: Theme.spacingTiny
             inputMethodContext: LayoutViewModel.inputMethodContext
             onActiveFocusChanged: if (!activeFocus && preeditText.length > 0)
                 cancelPreedit()

@@ -47,8 +47,10 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext NOTIFY interactionChanged)
     Q_PROPERTY(QVariantMap commandLine READ commandLine NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList currentStructure READ currentStructure NOTIFY interactionChanged)
-    Q_PROPERTY(QVariantList blockEnvironmentHighlightRects READ blockEnvironmentHighlightRects
-                   NOTIFY interactionChanged)
+    Q_PROPERTY(QVariantList environmentHighlightRects READ environmentHighlightRects NOTIFY
+                   interactionChanged)
+    Q_PROPERTY(
+        QString environmentHighlightKind READ environmentHighlightKind NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
     Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
@@ -81,8 +83,16 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] const QVariantMap& inputMethodContext() const { return m_input_method_context; }
     [[nodiscard]] const QVariantMap& commandLine() const { return m_command_line; }
     [[nodiscard]] const QVariantList& currentStructure() const { return m_current_structure; }
-    [[nodiscard]] const QVariantList& blockEnvironmentHighlightRects() const {
-        return m_block_environment_highlight_rects;
+    [[nodiscard]] const QVariantList& environmentHighlightRects() const {
+        return m_inline_environment_highlight_rects.isEmpty()
+                   ? m_block_environment_highlight_rects
+                   : m_inline_environment_highlight_rects;
+    }
+    [[nodiscard]] QString environmentHighlightKind() const {
+        if (!m_inline_environment_highlight_rects.isEmpty()) {
+            return QStringLiteral("inline");
+        }
+        return m_block_environment_highlight_rects.isEmpty() ? QString{} : QStringLiteral("block");
     }
     [[nodiscard]] QString documentGeneration() const {
         return QString::number(m_document_generation);
@@ -175,6 +185,9 @@ class LayoutViewModel final : public QObject {
                                                 int foreground_alpha);
 
   private:
+    // 测试直接验证失效交互快照对公开投影属性的影响，不把协议入口暴露给 QML。
+    friend struct LayoutViewModelTestProbe;
+
     bool installSnapshot(const QString& snapshot_json, bool replace_document = false);
     bool installSnapshot(const QJsonDocument& snapshot_document, bool replace_document = false);
     bool installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot);
@@ -185,6 +198,7 @@ class LayoutViewModel final : public QObject {
     bool installInteraction(const QString& interaction_json);
     bool installInteraction(const QJsonObject& interaction_object);
     void installCaretGeometry(const QVariantMap& geometry);
+    void clearEnvironmentHighlightRects();
     void refreshDocumentFileStatus();
     void clearSaveConflict();
     void setDocumentFileBusy(bool busy);
@@ -212,6 +226,7 @@ class LayoutViewModel final : public QObject {
     QVariantMap m_command_line;
     QVariantList m_current_structure;
     QVariantList m_block_environment_highlight_rects;
+    QVariantList m_inline_environment_highlight_rects;
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     qulonglong m_layout_revision = 0;
