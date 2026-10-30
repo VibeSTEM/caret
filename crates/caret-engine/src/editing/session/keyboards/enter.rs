@@ -1,4 +1,7 @@
 //! 按当前编辑上下文处理 Enter 与 Shift+Enter。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::Session;
 use crate::editing::{Command, EditError, Effect};

@@ -1,4 +1,8 @@
 // 将页面点击转换为 Rust 文档中的插入点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

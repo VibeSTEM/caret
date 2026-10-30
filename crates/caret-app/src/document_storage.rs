@@ -1,4 +1,7 @@
 //! `.cdoc` 文件 I/O。领域模型与 JSON 编解码由 `caret-doc` 提供。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::storage::atomic_file::{self, AtomicFileError};
 use caret_doc::{CdocFile, DocumentError, OpenedDocument, open};

@@ -1,4 +1,8 @@
 // 把 Qt 输入法事件与 UTF-16 替换范围提交给 Rust。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

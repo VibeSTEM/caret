@@ -1,4 +1,7 @@
 //! 文档运行时句柄、布局命令转发与 glyph 二进制快照转换。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::generated::bridge;
 

@@ -1,4 +1,7 @@
 //! 将段落行按页面高度切分为稳定节点 ID 与行范围引用。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::ops::Range;
 

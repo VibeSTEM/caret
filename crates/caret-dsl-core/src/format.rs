@@ -1,4 +1,7 @@
 //! 数据文档的规范格式；声明顺序与 TS 的索引顺序相互独立。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeSet;
 

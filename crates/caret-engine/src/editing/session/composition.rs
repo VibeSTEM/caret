@@ -1,4 +1,7 @@
 //! 管理 IME 组字的更新、幂等提交与取消，提交正文仍复用文本编辑事务。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};

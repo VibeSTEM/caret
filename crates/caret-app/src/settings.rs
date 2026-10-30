@@ -1,4 +1,7 @@
 //! Settings 总入口，组合偏好、主题、语言与持久化运行时。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 pub mod language;
 mod model;

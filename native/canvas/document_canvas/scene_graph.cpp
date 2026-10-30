@@ -1,4 +1,8 @@
 // 在场景图线程维护纸张、字形纹理和插入点节点，并复用未变化页面。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include "environment_highlight_scene.hpp"
 #include "scene_graph_geometry.hpp"

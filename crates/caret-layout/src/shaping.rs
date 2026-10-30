@@ -1,4 +1,7 @@
 //! 展平段落行内结构、解析格式环境并计算 Caret 的 Unicode 映射输入。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{InlineEnvironmentKind, InlineNode, Paragraph};
 

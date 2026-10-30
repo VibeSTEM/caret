@@ -1,4 +1,8 @@
 // 负责恢复条目列表、丢弃及异步恢复会话安装。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

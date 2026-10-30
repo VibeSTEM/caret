@@ -1,4 +1,7 @@
 //! 执行 Rust 结构索引上的段落停靠导航与跳出容器。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::text_map::TextMap;
 use super::super::{

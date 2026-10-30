@@ -1,4 +1,8 @@
 // Rust Settings 的主题与界面语言投影及确认提交入口。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

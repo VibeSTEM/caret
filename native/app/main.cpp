@@ -1,8 +1,11 @@
-/// 桌面入口：加载 Caret.Shell 的文档窗口。关闭窗口后事件循环结束。
-///
-/// `--version` 打印 caret-ffi 的版本字符串后退出。`--quit-after-load` 在根窗口
-/// 创建后走同一条 close 路径，供无交互环境确认进程会退出。其余参数必须写在 `--` 之后，
-/// 交给 QGuiApplication。
+// 桌面入口：加载 Caret.Shell 的文档窗口。关闭窗口后事件循环结束。
+//
+// `--version` 打印 caret-ffi 的版本字符串后退出。`--quit-after-load` 在根窗口
+// 创建后走同一条 close 路径，供无交互环境确认进程会退出。其余参数必须写在 `--` 之后，
+// 交给 QGuiApplication。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 #include "application_translator.hpp"
 #include "caret_ffi.h"

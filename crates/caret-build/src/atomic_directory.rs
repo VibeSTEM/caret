@@ -1,4 +1,7 @@
 //! 在同一文件系统中准备完整目录后替换构建产物集合。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::fs;

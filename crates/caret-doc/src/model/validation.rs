@@ -1,4 +1,7 @@
 //! 校验文档设置、节点树和语言标签。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::*;
 use std::collections::HashSet;

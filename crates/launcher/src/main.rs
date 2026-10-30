@@ -1,6 +1,9 @@
 //! 桌面入口。启动 CMake 产物并转发参数与退出码。
 //!
 //! 产物路径由 build.rs 注入（`CARET_NATIVE_BIN`），不依赖启动时的当前目录。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

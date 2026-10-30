@@ -1,4 +1,7 @@
 //! 按唯一优先级裁决编辑器 Escape，避免多个交互层重复消费按键。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::Session;
 use crate::editing::{Command, EditError, Effect};

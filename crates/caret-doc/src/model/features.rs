@@ -1,4 +1,7 @@
 //! 根据文档内容推导所需功能标识。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::*;
 

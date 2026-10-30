@@ -1,4 +1,8 @@
 // 主题文本输入原子：保留 TextField 的键盘、焦点和可访问性行为。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

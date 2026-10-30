@@ -1,4 +1,8 @@
 // 显示崩溃或写入冲突留下的本机文档恢复项。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

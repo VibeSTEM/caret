@@ -1,4 +1,8 @@
 // 圆形模式选择控件；互斥分组和当前模式由调用方提供。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

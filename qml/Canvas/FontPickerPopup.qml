@@ -1,4 +1,8 @@
 // 显示字体族和文档默认字体目标的专用候选布局。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

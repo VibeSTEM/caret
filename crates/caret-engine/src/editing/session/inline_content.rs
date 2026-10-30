@@ -1,4 +1,7 @@
 //! 处理 Paragraph 内的文本和软换行插入。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};

@@ -1,4 +1,7 @@
 //! 构建与质量工具的入口定位；托管安装和显式系统旁路共用公开契约。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,4 +1,8 @@
 //! 管理文档布局快照的缓存、复用与 composition 增量。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::{DocumentLayoutDeltaView, DocumentLayoutSnapshot, Selection, Session};

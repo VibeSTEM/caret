@@ -1,4 +1,8 @@
 // 显示命令输入光标、查询文本与可滚动候选列表。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

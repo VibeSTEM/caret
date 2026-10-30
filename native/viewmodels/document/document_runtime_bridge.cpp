@@ -1,4 +1,8 @@
 // 持有由应用入口注入的唯一 Rust 文档运行时。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_runtime_bridge.hpp"
 
 #ifdef CARET_ENABLE_APP

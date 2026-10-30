@@ -1,3 +1,8 @@
+// 将文档保存路径转换为 Qt 文件对话框使用的路径。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_path_adapter.hpp"
 
 #include <QDir>

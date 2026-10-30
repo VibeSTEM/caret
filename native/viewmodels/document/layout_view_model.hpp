@@ -1,4 +1,8 @@
-/// 把 Rust 生成的只读页面快照转换为 QML 可绑定的值。
+// 把 Rust 生成的只读页面快照转换为 QML 可绑定的值。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QByteArray>

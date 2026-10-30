@@ -1,4 +1,7 @@
 //! 持锁安装、归档校验编排、裁剪与完成标记发布。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fs;
 use std::path::{Path, PathBuf};

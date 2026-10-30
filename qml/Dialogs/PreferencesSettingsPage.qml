@@ -1,4 +1,8 @@
 // Settings 窗口中的用户偏好；当前只暴露 Rust 管理的光标闪烁开关。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

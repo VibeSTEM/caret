@@ -1,4 +1,7 @@
 //! 唯一 Pest grammar、入口识别与语法错误转换；FSM 与数据文档共用。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use pest::error::{Error as PestError, InputLocation};
 use pest_derive::Parser;

@@ -1,4 +1,8 @@
 // 文档 pt 与 Qt 逻辑像素的边界换算，结果按百分之一逻辑像素传递。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

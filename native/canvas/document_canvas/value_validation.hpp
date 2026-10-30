@@ -1,4 +1,8 @@
 // 校验画布几何和跨层快照中的有限数值与布尔类型。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QMetaType>

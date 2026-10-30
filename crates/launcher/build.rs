@@ -1,6 +1,9 @@
 //! Cargo 调度 CMake。CMake 消费已经生成的 staticlib，本脚本不再启动 Cargo。
 //!
 //! 产物在 `target/native/<profile>`。Qt 安装在 `.toolchain/qt`，不写入 `target/`。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};

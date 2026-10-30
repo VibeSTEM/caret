@@ -1,5 +1,8 @@
 //! 锁定 Qt 6.11.2 与 Linux ICU。归档表在 `native/cmake/qt-provision.cmake`，
 //! 安装根是 `.toolchain/qt`，不写入 `target/`。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

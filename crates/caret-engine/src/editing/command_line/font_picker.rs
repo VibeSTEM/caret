@@ -1,4 +1,7 @@
 //! 管理本机字体目录、文档字体目标及弹窗层级候选。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::CommandLineMode;
 use crate::editing::command_registry::CommandCandidate;

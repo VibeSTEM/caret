@@ -1,4 +1,7 @@
 //! Pest 节点到数据文档的转换；构造后统一执行语义校验。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::{BTreeMap, HashSet};
 

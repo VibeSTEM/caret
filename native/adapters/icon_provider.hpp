@@ -1,3 +1,8 @@
+// 管理供 QML 使用的内置图标资源与图标 provider。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QSet>

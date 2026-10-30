@@ -1,4 +1,8 @@
 // 把文本输入、段落拆分与删除命令提交给 Rust。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

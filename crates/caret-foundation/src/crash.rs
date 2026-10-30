@@ -8,6 +8,9 @@
 //! 非严格安全——崩溃点位于分配器内时回溯可能缺失或阻塞。日志句柄与路径
 //! 字节在安装时准备并常驻进程生命周期；除 best-effort 回溯外，POSIX
 //! 处理器不解析路径、不分配内存。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 #[cfg(unix)]
 use std::os::fd::IntoRawFd;

@@ -1,4 +1,7 @@
 //! Settings 的持久化快照、版本与校验错误。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::language::LanguageService;
 use super::preferences::{PreferencesError, UserPreferences};

@@ -1,4 +1,8 @@
 // 持有应用级 Rust SettingsRuntime，供各设置分类投影转发意图。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "settings_runtime_bridge.hpp"
 
 #ifdef CARET_ENABLE_APP

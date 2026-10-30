@@ -1,4 +1,7 @@
 //! 在行内节点树中计算格式范围、拆分节点并按语义嵌套格式环境。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::super::text_map::split_inline_nodes;
 use super::super::{Affinity, EditError};

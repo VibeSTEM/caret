@@ -1,4 +1,8 @@
 // 预加载并原子替换应用级 Qt 翻译器。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QString>

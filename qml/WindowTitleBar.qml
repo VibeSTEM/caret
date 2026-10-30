@@ -1,5 +1,9 @@
 // 自定义标题栏。高度锁在 Theme.titlebarHeight，控件在这一行里垂直居中。
 // 文档文件操作由 ViewModel 执行，搜索仍为界面占位。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

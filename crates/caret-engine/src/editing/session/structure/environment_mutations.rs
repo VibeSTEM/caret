@@ -1,4 +1,7 @@
 //! 创建块环境、解除环境外壳并提交对应文档事务。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::*;
 use crate::editing::paragraph_ops;

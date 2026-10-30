@@ -1,4 +1,8 @@
 // 多页文档画布及页面坐标映射。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QColor>

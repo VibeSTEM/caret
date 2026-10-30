@@ -1,4 +1,7 @@
 //! 固定工具版本、官方资产 URL 与 SHA256；不执行安装或平台进程。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 /// 单个工具的官方资产：URL 与首次下载实测的 SHA256（升级时同步回填
 /// standards/dependency-acquisition.md）。

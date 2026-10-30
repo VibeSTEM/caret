@@ -1,4 +1,7 @@
 //! 用户可调偏好及其领域校验；应用设置总协调由 `settings` 模块负责。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

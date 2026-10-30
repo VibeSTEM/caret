@@ -1,4 +1,8 @@
 // 集中定义 Qt 修饰键到物理键意图的跨平台映射。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <Qt>

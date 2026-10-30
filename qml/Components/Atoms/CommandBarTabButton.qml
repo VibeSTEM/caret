@@ -1,4 +1,8 @@
 // 命令栏页签按钮：选中态字重变化不改变相邻标签的位置。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 ThemedToolButton {

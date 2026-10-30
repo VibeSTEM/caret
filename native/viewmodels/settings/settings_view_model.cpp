@@ -1,4 +1,8 @@
 // 转换 Rust 设置目录并在确认后发布主题与界面语言变更。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "settings_view_model.hpp"
 
 #include "application_translator.hpp"

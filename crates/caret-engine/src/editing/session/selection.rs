@@ -1,4 +1,7 @@
 //! 校验选区位置并维护逻辑亲和性与视觉亲和性。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::text_map::TextMap;

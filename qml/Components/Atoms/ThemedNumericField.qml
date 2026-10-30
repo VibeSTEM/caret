@@ -1,4 +1,8 @@
 // 数值输入原子；浮点格式与输入状态统一，业务范围由调用方指定。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 ThemedTextField {

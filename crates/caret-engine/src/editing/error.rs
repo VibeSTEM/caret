@@ -1,4 +1,7 @@
 //! 定义编辑命令使用的结构化错误。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fmt::{Display, Formatter};
 

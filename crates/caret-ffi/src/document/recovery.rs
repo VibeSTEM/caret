@@ -1,4 +1,8 @@
 //! 恢复条目、冲突快照与恢复会话的 FFI 持久化边界。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::{
     DocumentRuntime, PreparedDocument, bridge, next_prepared_document_ticket, prepared_documents,
 };

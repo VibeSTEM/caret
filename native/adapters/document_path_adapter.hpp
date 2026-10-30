@@ -1,3 +1,8 @@
+// 提供平台文档目录与保存目标路径适配。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

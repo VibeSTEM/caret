@@ -1,4 +1,7 @@
 //! 变量文档的有界类型检查、依赖排序与确定性求值。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

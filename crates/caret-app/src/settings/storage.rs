@@ -1,4 +1,7 @@
 //! Settings 快照的 JSON 读写与无效文件隔离，原子替换复用应用存储机制。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{SettingsError, SettingsService, UserSettings};
 use crate::storage::atomic_file::{self, AtomicFileError};

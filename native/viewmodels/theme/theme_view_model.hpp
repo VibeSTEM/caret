@@ -1,4 +1,8 @@
-/// 测试宿主或入口注入的主题快照。Theme.qml 只读这些属性，不保存第二份默认值。
+// 测试宿主或入口注入的主题快照。Theme.qml 只读这些属性，不保存第二份默认值。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QHash>

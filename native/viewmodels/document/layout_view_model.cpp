@@ -1,4 +1,8 @@
 // 安装 Rust 布局快照，并发布只读页面与插入点属性。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 
 #include "layout_snapshot_codec.hpp"

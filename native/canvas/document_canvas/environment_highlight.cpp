@@ -1,4 +1,8 @@
 // 校验并发布 Rust 提供的当前环境高亮几何。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include <QColor>
 #include <QString>

@@ -1,4 +1,8 @@
 // 紧凑开关。默认关闭，轨道为灰色；打开后轨道使用强调色。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

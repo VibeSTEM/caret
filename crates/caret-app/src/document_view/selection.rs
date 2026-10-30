@@ -1,4 +1,7 @@
 //! 生成拖选命中映射并提交、清除或提取 Rust 文档选区。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
 use caret_engine::{Affinity, Pos, Selection, VisualAffinity};

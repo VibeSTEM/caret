@@ -1,4 +1,8 @@
 // 维护页面前缀几何、坐标转换、页面命中和设备像素栅格请求。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "canvas_policy.hpp"
 #include "document_canvas.hpp"
 #include "document_units.hpp"

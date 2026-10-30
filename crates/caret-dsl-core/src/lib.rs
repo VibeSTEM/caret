@@ -1,4 +1,7 @@
 //! `.pa` DSL 公共门面；内部模块分离模型、诊断、解析、校验及输出。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod artifact;
 mod ast;

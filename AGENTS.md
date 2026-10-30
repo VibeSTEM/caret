@@ -6,6 +6,8 @@ Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界
 
 非平凡代码、架构或文档改动开始前，必须阅读并执行[验证与评审标准](ai-docs/standards/validation-and-review.md)：按分支实际涉及的评审项分别委派 Terra/medium 领域检查，完成修复后由未参与实现的 Sol/medium subagent 对最终完整 diff 做只读 final review。纯格式或单行拼写修复可按该标准豁免。
 
+新增或重构第一方 Rust、QML、C++ 核心源码时，必须按[源码署名规范](ai-docs/standards/source-attribution.md)的文件头样例添加 SPDX 许可证标识和项目署名；始终照仓库中经维护者确认的源码样例使用统一署名值。若尚无已确认的源码样例，先向维护者确认并建立样例。不得猜测或原样使用文档占位符，也不得给生成文件或第三方源码添加署名。批量补齐既有文件署名时单独提交，不与功能改动混合。
+
 ## 入口
 
 | 工作 | 文档 |
@@ -19,4 +21,5 @@ Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界
 | 验证、独立评审与委派 | [验证与评审](ai-docs/standards/validation-and-review.md) |
 | 提交、分支与 GitHub | [提交规范](ai-docs/standards/commits.md) |
 | 注释、文件和兼容例外 | [注释](ai-docs/standards/comments.md)、[仓库文件](ai-docs/standards/repository-hygiene.md)、[代码生命周期](ai-docs/standards/code-lifecycle.md) |
+| 源码署名 | [署名规范](ai-docs/standards/source-attribution.md) |
 | 快捷键 | [快捷键](ai-docs/architecture/interface/keyboard-shortcuts.md) |

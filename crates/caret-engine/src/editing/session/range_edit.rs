@@ -1,4 +1,7 @@
 //! 执行跨段选区合并、删除与文本替换事务。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{
     ParagraphLocation, ParagraphRangeMergeResult, build_paragraph_index, merge_paragraph_range,

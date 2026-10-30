@@ -1,4 +1,7 @@
 //! 实现段落定位、拆分、合并及块环境标题操作。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::text_map::{TextMap, inline_length};
 use super::{Affinity, Direction, EditError, Pos, StoryId};

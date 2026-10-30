@@ -1,4 +1,8 @@
 // 管理当前文档环境高亮的跨页场景图节点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QColor>

@@ -1,4 +1,7 @@
 //! 将 Rust 内部布局结果投影为供 FFI 与界面消费的稳定只读数据。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::{
     Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageEnvironmentRange, PageHit,

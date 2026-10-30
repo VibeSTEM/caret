@@ -2,6 +2,9 @@
 //!
 //! 文档视图创建 Rust `Session` 并持有字体/布局运行时；存储路径和设置文件路径由调用方传入。
 //! 主题不读文件，语言目录不依赖 Qt。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 pub mod autosave;
 pub mod document_lifecycle;

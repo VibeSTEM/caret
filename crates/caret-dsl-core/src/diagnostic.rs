@@ -1,4 +1,7 @@
 //! 共享结构化诊断及源码位置；不依赖具体 grammar 或输出格式。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;

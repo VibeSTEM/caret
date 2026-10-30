@@ -1,4 +1,8 @@
 // 管理画布接收的 Qt 输入法上下文、预编辑文本和光标查询。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include <QGuiApplication>
 #include <QInputMethod>

@@ -1,4 +1,7 @@
 //! 执行纯文本粘贴及多段落替换事务。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{build_paragraph_index, replace_paragraph_with_many};
 use super::super::text_map::{TextMap, split_inline_nodes};

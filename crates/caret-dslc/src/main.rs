@@ -1,3 +1,8 @@
+//! `.pa` DSL 命令行编译器入口。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use std::env;
 use std::fs;
 use std::io::{Read, Write};

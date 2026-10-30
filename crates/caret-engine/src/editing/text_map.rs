@@ -1,4 +1,7 @@
 //! 将 Paragraph 展平为逻辑文本并映射 UTF-8 字素边界与节点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{Affinity, EditError, Pos};
 use caret_doc::{InlineEnvironment, InlineNode, NodeId, Paragraph, Run, SoftBreak};

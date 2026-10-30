@@ -1,4 +1,7 @@
 //! 执行字素删除与相邻段落合并。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{
     ParagraphMergeResult, merge_adjacent_paragraph, merge_paragraph_after_empty_section_into_title,

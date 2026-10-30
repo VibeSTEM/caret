@@ -1,4 +1,8 @@
 // 仅在内容溢出且所属候选高亮时循环展示单行文本。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

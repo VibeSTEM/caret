@@ -1,5 +1,8 @@
 //! 托管构建支持公共门面：固定资产、安装事务、编译器与平台环境各归其模块。
 //! 下载只在消费者请求工具路径时发生；Cargo 与 CMake 共用已校验的安装树。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::path::PathBuf;
 

@@ -1,4 +1,7 @@
 //! 协调单文档的自动保存与恢复快照刷新策略。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::autosave::{AutoSaveDeadline, AutoSavePolicy};
 use std::time::Duration;

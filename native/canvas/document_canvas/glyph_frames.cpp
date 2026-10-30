@@ -1,4 +1,8 @@
 // 原子校验并安装页面字形帧，不创建场景图或纹理资源。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include "value_validation.hpp"
 #include <QByteArray>

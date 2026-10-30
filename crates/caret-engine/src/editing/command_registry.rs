@@ -1,4 +1,7 @@
 //! 维护命令别名、稳定 ID、显示名称和当前可执行状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::borrow::Cow;
 

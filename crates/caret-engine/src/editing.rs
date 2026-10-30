@@ -1,4 +1,7 @@
 //! 编辑会话的命令、位置、文本映射与段落操作模块。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod command;
 mod command_line;

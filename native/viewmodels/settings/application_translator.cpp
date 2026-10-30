@@ -1,4 +1,8 @@
 // 管理 Qt 翻译器生命周期，资源路径由 Rust 语言目录映射到构建产物。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "application_translator.hpp"
 
 #include <QCoreApplication>

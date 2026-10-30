@@ -1,4 +1,8 @@
 //! 文档 AutoSave deadline、revision 合并与异步写入回报。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::{
     DocumentRuntime, bridge, clear_recovery_after_saved, document_save_snapshot,
     document_status_json, empty_save_snapshot, stale_deadline_snapshot,

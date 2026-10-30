@@ -4,6 +4,9 @@
 //! 顶层仅允许 `version / kind / name / initial` 与 `states / transitions`
 //! 两节。格式化、CLI 与消费者 build script 共用本模块的解析与校验；
 //! 确定性 Rust 元数据生成见 [`generate_rust`]。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod generate;
 

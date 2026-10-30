@@ -1,4 +1,7 @@
 //! 组合文档、字体塑形、段落行布局与分页，生成供视图消费的只读快照。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::{Affinity, Pos, Selection, Session, StoryId};
 use caret_doc::{Block, Document, NodeId, Paragraph};

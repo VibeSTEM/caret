@@ -1,4 +1,7 @@
 //! 用 Parley 高层 Layout 生成段落塑形、行断和视觉几何，并映射回 Caret 行框。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::{
     ops::Range,

@@ -1,4 +1,8 @@
 // 提供跨页面场景图图层共用的坐标转换与可见区域裁剪。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QPointF>

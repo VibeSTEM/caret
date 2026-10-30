@@ -1,4 +1,8 @@
 // 装饰性图标：单色符号由宿主着色，彩色符号保留资源配色；动作语义由宿主承担。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 Image {

@@ -1,4 +1,7 @@
 //! 合并 CMake 与 CXX 的真实编译命令；静态检查只选择自有翻译单元。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

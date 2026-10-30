@@ -1,4 +1,8 @@
 // Rust 布局 JSON 到只读 Qt 页面投影的内部转换边界。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QByteArray>

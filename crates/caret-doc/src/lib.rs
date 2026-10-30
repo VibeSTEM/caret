@@ -2,6 +2,9 @@
 //!
 //! 本 crate 不执行文件 I/O，也不依赖 Qt、布局或会话状态。未知可选字段
 //! 随对应对象保留；未知节点或必需能力产生只读安全预览。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod model;
 mod page_geometry;

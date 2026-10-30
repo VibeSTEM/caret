@@ -1,4 +1,8 @@
 // 负责系统剪贴板读写，并通过 Rust 执行文稿粘贴事务。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

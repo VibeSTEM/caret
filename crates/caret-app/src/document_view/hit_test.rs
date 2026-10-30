@@ -1,4 +1,8 @@
 //! 提供 caret 几何、字形栅格化和页面命中接口。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::{DocumentViewRuntime, snapshot::caret_geometry_with_environment_exit};
 use caret_engine::{PageCaretView, RasterizedPageGlyphs, Selection};
 

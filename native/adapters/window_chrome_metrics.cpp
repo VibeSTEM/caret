@@ -1,3 +1,8 @@
+// 计算并应用各平台窗口标题栏系统控件的避让区域。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "window_chrome_metrics.hpp"
 
 #include <QEvent>

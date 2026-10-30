@@ -23,6 +23,7 @@
 | 无死代码与兼容例外 | [代码生命周期](code-lifecycle.md) | 替换或删除功能 |
 | 每次 commit 的一致性 | [提交规范](commits.md) | 提交、分支和 GitHub |
 | 注释与接口契约 | [注释规范](comments.md) | 新增或修改代码 |
+| 源码署名 | [源码署名](source-attribution.md) | 新增源码或批量补署名 |
 | 文件、产物与忽略规则 | [仓库文件规范](repository-hygiene.md) | 添加配置、目录或资源 |
 | 文档与示例 | [文档规范](documentation.md) | 新建或修改文档 |
 | 验证与变更评审 | [验证与评审](validation-and-review.md) | 实施、独立评审和委派 |

@@ -1,4 +1,8 @@
 // 公共标题与内容布局；内容显式注入，关闭请求交给窗口守卫。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Layouts
 

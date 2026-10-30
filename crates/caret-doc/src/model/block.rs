@@ -1,4 +1,7 @@
 //! 定义文档级块序列、块环境与显式分页节点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{NodeId, OpaqueNode, Paragraph};
 use serde::{Deserialize, Serialize};

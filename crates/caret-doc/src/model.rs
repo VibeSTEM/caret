@@ -1,4 +1,7 @@
 //! 定义文档树、节点 DTO、字段校验与语义节点序列化。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

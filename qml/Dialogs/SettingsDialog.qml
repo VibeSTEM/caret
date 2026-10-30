@@ -1,4 +1,8 @@
 // 三端共享的设置窗口外壳；复用应用 DialogFrame 与按钮样式，页面由路由注册。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

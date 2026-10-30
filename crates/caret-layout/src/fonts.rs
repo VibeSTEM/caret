@@ -1,4 +1,7 @@
 //! 枚举、缓存和显式刷新系统及当前用户可用字体。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use fontique::{Collection, CollectionOptions, SourceCache};
 use std::collections::HashSet;

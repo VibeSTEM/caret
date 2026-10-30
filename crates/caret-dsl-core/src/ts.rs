@@ -1,4 +1,7 @@
 //! 确定性 Qt TS 输出；公共 AST 可手工修改，输出前复核目标 locale 与占位符。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;

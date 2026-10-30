@@ -1,4 +1,7 @@
 //! Settings 分类服务的组合、候选校验与原子状态发布。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::language::LanguageService;
 use super::model::{SETTINGS_SCHEMA_VERSION, SettingsError, UserSettings};

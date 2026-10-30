@@ -1,4 +1,7 @@
 //! 将 Parley 视觉行映射为分页行框和基线偏移。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use parley::Layout;
 

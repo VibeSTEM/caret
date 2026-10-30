@@ -1,3 +1,8 @@
+// 实现 macOS 原生标题栏按钮布局和双击行为。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "window_chrome_metrics.hpp"
 #import <AppKit/AppKit.h>
 #include <QGuiApplication>
