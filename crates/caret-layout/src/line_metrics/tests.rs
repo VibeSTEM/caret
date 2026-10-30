@@ -67,6 +67,22 @@ fn larger_font_content_is_a_floor_not_part_of_the_multiple_grid()
 }
 
 #[test]
+fn multiple_uses_combined_metrics_when_larger_font_ascent_and_descent_cross()
+-> Result<(), Box<dyn std::error::Error>> {
+    let result = calculate_line_metrics_with_grid(
+        metrics(10.0, 4.0, 0.0),
+        &[metrics(12.0, 1.0, 0.0)],
+        &[],
+        LineSpacing::Multiple { percent: 100 },
+    )?;
+
+    assert_eq!(result.height_pt, 16.0);
+    assert_eq!(result.baseline_pt, 12.0);
+    assert!(!result.content_metrics_overflow_line_box);
+    Ok(())
+}
+
+#[test]
 fn exactly_keeps_the_base_grid_baseline_when_larger_content_overflows()
 -> Result<(), Box<dyn std::error::Error>> {
     let result = calculate_line_metrics_with_grid(

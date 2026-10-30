@@ -102,23 +102,12 @@ pub fn calculate_line_metrics_with_grid(
 ) -> Result<LineMetrics, LineMetricsError> {
     validate_font_metrics(line_grid)?;
     let mut content_metrics = line_grid;
-    let mut additional_metrics = FontLineMetrics {
-        ascent_pt: 0.0,
-        descent_pt: 0.0,
-        leading_pt: 0.0,
-    };
     for font in fonts {
         validate_font_metrics(*font)?;
         content_metrics.ascent_pt = content_metrics.ascent_pt.max(font.ascent_pt);
         content_metrics.descent_pt = content_metrics.descent_pt.max(font.descent_pt);
         content_metrics.leading_pt = content_metrics.leading_pt.max(font.leading_pt);
-        additional_metrics.ascent_pt = additional_metrics.ascent_pt.max(font.ascent_pt);
-        additional_metrics.descent_pt = additional_metrics.descent_pt.max(font.descent_pt);
-        additional_metrics.leading_pt = additional_metrics.leading_pt.max(font.leading_pt);
     }
-    let additional_text_height_pt = additional_metrics.ascent_pt
-        + additional_metrics.descent_pt
-        + additional_metrics.leading_pt;
     if objects.iter().any(|object| {
         object.source_bytes.start >= object.source_bytes.end
             || !object.advance_pt.is_finite()
@@ -168,8 +157,13 @@ pub fn calculate_line_metrics_with_grid(
             } else {
                 content_height_pt.max(object_height_pt)
             };
+            let larger_font_floor_pt = if fonts.is_empty() {
+                0.0
+            } else {
+                required_height_pt
+            };
             grid_height_pt
-                .max(additional_text_height_pt)
+                .max(larger_font_floor_pt)
                 .max(object_floor_pt)
         }
         LineSpacing::AtLeast { min_centipoints } => {
