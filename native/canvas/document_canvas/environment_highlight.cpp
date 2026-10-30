@@ -1,4 +1,4 @@
-// 校验并发布 Rust 提供的当前块环境高亮几何。
+// 校验并发布 Rust 提供的当前环境高亮几何。
 #include "document_canvas.hpp"
 #include <QColor>
 #include <QString>
@@ -9,11 +9,11 @@
 
 namespace caret {
 
-QVariantList DocumentCanvas::blockEnvironmentHighlightRects() const {
-    return m_block_environment_highlight_rects;
+QVariantList DocumentCanvas::environmentHighlightRects() const {
+    return m_environment_highlight_rects;
 }
 
-void DocumentCanvas::setBlockEnvironmentHighlightRects(const QVariantList& rectangles) {
+void DocumentCanvas::setEnvironmentHighlightRects(const QVariantList& rectangles) {
     for (const QVariant& value : rectangles) {
         const QVariantMap rectangle = value.toMap();
         bool page_ok = false;
@@ -36,53 +36,49 @@ void DocumentCanvas::setBlockEnvironmentHighlightRects(const QVariantList& recta
             return;
         }
     }
-    if (m_block_environment_highlight_rects == rectangles) {
+    if (m_environment_highlight_rects == rectangles) {
         return;
     }
-    m_block_environment_highlight_rects = rectangles;
-    ++m_block_environment_highlight_revision;
-    emit blockEnvironmentHighlightRectsChanged();
+    m_environment_highlight_rects = rectangles;
+    ++m_environment_highlight_revision;
+    emit environmentHighlightRectsChanged();
     update();
 }
 
-QColor DocumentCanvas::blockEnvironmentHighlightColor() const {
-    return m_block_environment_highlight_color;
-}
+QColor DocumentCanvas::environmentHighlightColor() const { return m_environment_highlight_color; }
 
-void DocumentCanvas::setBlockEnvironmentHighlightColor(const QColor& color) {
-    if (m_block_environment_highlight_color == color) {
+void DocumentCanvas::setEnvironmentHighlightColor(const QColor& color) {
+    if (m_environment_highlight_color == color) {
         return;
     }
-    m_block_environment_highlight_color = color;
+    m_environment_highlight_color = color;
     emit appearanceChanged();
     update();
 }
 
-qreal DocumentCanvas::blockEnvironmentHighlightRadius() const {
-    return m_block_environment_highlight_radius;
-}
+qreal DocumentCanvas::environmentHighlightRadius() const { return m_environment_highlight_radius; }
 
-void DocumentCanvas::setBlockEnvironmentHighlightRadius(qreal radius) {
-    if (!std::isfinite(radius) || radius < 0.0 || m_block_environment_highlight_radius == radius) {
+void DocumentCanvas::setEnvironmentHighlightRadius(qreal radius) {
+    if (!std::isfinite(radius) || radius < 0.0 || m_environment_highlight_radius == radius) {
         return;
     }
-    m_block_environment_highlight_radius = radius;
-    ++m_block_environment_highlight_revision;
+    m_environment_highlight_radius = radius;
+    ++m_environment_highlight_revision;
     emit appearanceChanged();
     update();
 }
 
-qreal DocumentCanvas::blockEnvironmentHighlightPaddingPx() const {
-    return m_block_environment_highlight_padding_px;
+qreal DocumentCanvas::environmentHighlightPaddingPx() const {
+    return m_environment_highlight_padding_px;
 }
 
-void DocumentCanvas::setBlockEnvironmentHighlightPaddingPx(qreal padding_px) {
+void DocumentCanvas::setEnvironmentHighlightPaddingPx(qreal padding_px) {
     if (!std::isfinite(padding_px) || padding_px < 0.0 ||
-        m_block_environment_highlight_padding_px == padding_px) {
+        m_environment_highlight_padding_px == padding_px) {
         return;
     }
-    m_block_environment_highlight_padding_px = padding_px;
-    ++m_block_environment_highlight_revision;
+    m_environment_highlight_padding_px = padding_px;
+    ++m_environment_highlight_revision;
     emit appearanceChanged();
     update();
 }

@@ -29,7 +29,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。其 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将它们投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -38,7 +38,8 @@ crates/caret-doc/src/model.rs           文档根 DTO 与公开导出
 crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
-crates/caret-doc/src/model/inline.rs    InlineNode、行内环境和软换行
+crates/caret-doc/src/model/inline.rs    InlineNode 与软换行
+crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
 crates/caret-structure/src/index.rs     唯一结构索引装配入口

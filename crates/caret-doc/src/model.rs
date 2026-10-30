@@ -12,12 +12,14 @@ mod block;
 mod codec;
 mod features;
 mod inline;
+mod inline_environment;
 mod paragraph;
 mod run;
 mod validation;
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
-pub use inline::{InlineEnvironment, InlineEnvironmentKind, InlineNode, SoftBreak};
+pub use inline::{InlineNode, SoftBreak};
+pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
 

@@ -15,7 +15,7 @@ pub use command::{Command, Direction, EditorKey};
 pub use command_line::CommandLine;
 pub use command_registry::CommandCandidate;
 pub use error::EditError;
-pub use position::{Affinity, Pos, PositionMap, Selection, StoryId};
+pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
 pub use session::Session;
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};

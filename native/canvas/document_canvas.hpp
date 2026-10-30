@@ -51,16 +51,16 @@ class DocumentCanvas : public QQuickItem {
                    selectionRectsChanged)
     Q_PROPERTY(QVariantList selectionPreviewRects READ selectionPreviewRects WRITE
                    setSelectionPreviewRects NOTIFY selectionPreviewRectsChanged)
-    Q_PROPERTY(QVariantList blockEnvironmentHighlightRects READ blockEnvironmentHighlightRects WRITE
-                   setBlockEnvironmentHighlightRects NOTIFY blockEnvironmentHighlightRectsChanged)
+    Q_PROPERTY(QVariantList environmentHighlightRects READ environmentHighlightRects WRITE
+                   setEnvironmentHighlightRects NOTIFY environmentHighlightRectsChanged)
     Q_PROPERTY(
         QColor selectionColor READ selectionColor WRITE setSelectionColor NOTIFY appearanceChanged)
-    Q_PROPERTY(QColor blockEnvironmentHighlightColor READ blockEnvironmentHighlightColor WRITE
-                   setBlockEnvironmentHighlightColor NOTIFY appearanceChanged)
-    Q_PROPERTY(qreal blockEnvironmentHighlightRadius READ blockEnvironmentHighlightRadius WRITE
-                   setBlockEnvironmentHighlightRadius NOTIFY appearanceChanged)
-    Q_PROPERTY(qreal blockEnvironmentHighlightPaddingPx READ blockEnvironmentHighlightPaddingPx
-                   WRITE setBlockEnvironmentHighlightPaddingPx NOTIFY appearanceChanged)
+    Q_PROPERTY(QColor environmentHighlightColor READ environmentHighlightColor WRITE
+                   setEnvironmentHighlightColor NOTIFY appearanceChanged)
+    Q_PROPERTY(qreal environmentHighlightRadius READ environmentHighlightRadius WRITE
+                   setEnvironmentHighlightRadius NOTIFY appearanceChanged)
+    Q_PROPERTY(qreal environmentHighlightPaddingPx READ environmentHighlightPaddingPx WRITE
+                   setEnvironmentHighlightPaddingPx NOTIFY appearanceChanged)
     Q_PROPERTY(QColor caretColor READ caretColor WRITE setCaretColor NOTIFY appearanceChanged)
     Q_PROPERTY(int caretWidthCentipixels READ caretWidthCentipixels WRITE setCaretWidthCentipixels
                    NOTIFY caretWidthCentipixelsChanged)
@@ -112,16 +112,16 @@ class DocumentCanvas : public QQuickItem {
     void setSelectionRects(const QVariantList& rectangles);
     [[nodiscard]] QVariantList selectionPreviewRects() const;
     void setSelectionPreviewRects(const QVariantList& rectangles);
-    [[nodiscard]] QVariantList blockEnvironmentHighlightRects() const;
-    void setBlockEnvironmentHighlightRects(const QVariantList& rectangles);
+    [[nodiscard]] QVariantList environmentHighlightRects() const;
+    void setEnvironmentHighlightRects(const QVariantList& rectangles);
     [[nodiscard]] QColor selectionColor() const;
     void setSelectionColor(const QColor& color);
-    [[nodiscard]] QColor blockEnvironmentHighlightColor() const;
-    void setBlockEnvironmentHighlightColor(const QColor& color);
-    [[nodiscard]] qreal blockEnvironmentHighlightRadius() const;
-    void setBlockEnvironmentHighlightRadius(qreal radius);
-    [[nodiscard]] qreal blockEnvironmentHighlightPaddingPx() const;
-    void setBlockEnvironmentHighlightPaddingPx(qreal padding_px);
+    [[nodiscard]] QColor environmentHighlightColor() const;
+    void setEnvironmentHighlightColor(const QColor& color);
+    [[nodiscard]] qreal environmentHighlightRadius() const;
+    void setEnvironmentHighlightRadius(qreal radius);
+    [[nodiscard]] qreal environmentHighlightPaddingPx() const;
+    void setEnvironmentHighlightPaddingPx(qreal padding_px);
     [[nodiscard]] QColor caretColor() const;
     void setCaretColor(const QColor& color);
     [[nodiscard]] int caretWidthCentipixels() const;
@@ -175,7 +175,7 @@ class DocumentCanvas : public QQuickItem {
     void visiblePageRangeChanged();
     void selectionRectsChanged();
     void selectionPreviewRectsChanged();
-    void blockEnvironmentHighlightRectsChanged();
+    void environmentHighlightRectsChanged();
     void glyphRasterMetricsChanged();
     void caretWidthCentipixelsChanged();
     void appearanceChanged();
@@ -216,15 +216,15 @@ class DocumentCanvas : public QQuickItem {
     int m_page_end_visible = -1;
     QVariantList m_selection_rects;
     QVariantList m_selection_preview_rects;
-    QVariantList m_block_environment_highlight_rects;
-    quint64 m_block_environment_highlight_revision = 0;
+    QVariantList m_environment_highlight_rects;
+    quint64 m_environment_highlight_revision = 0;
     quint64 m_glyph_frame_revision = 0;
     quint64 m_glyph_geometry_revision = 0;
     QColor m_caret_color;
     QColor m_selection_color;
-    QColor m_block_environment_highlight_color;
-    qreal m_block_environment_highlight_radius = 0.0;
-    qreal m_block_environment_highlight_padding_px = 0.0;
+    QColor m_environment_highlight_color;
+    qreal m_environment_highlight_radius = 0.0;
+    qreal m_environment_highlight_padding_px = 0.0;
     quint64 m_selection_revision = 0;
     int m_caret_width_centipixels = 0;
     bool m_caret_blink_enabled = true;

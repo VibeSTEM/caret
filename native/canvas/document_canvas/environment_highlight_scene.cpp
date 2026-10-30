@@ -1,5 +1,5 @@
-// 绘制块环境的圆角跨页高亮，并复用软件与 GPU 后端均支持的矩形节点。
-#include "block_environment_highlight_scene.hpp"
+// 绘制行内与块环境共用的圆角跨页高亮。
+#include "environment_highlight_scene.hpp"
 
 #include "scene_graph_geometry.hpp"
 #include <QColor>
@@ -84,11 +84,10 @@ class RoundedRectSlices final : public QSGNode {
 
 } // namespace
 
-void BlockEnvironmentHighlightLayer::update(const QList<QVariant>& rectangles, int first_page,
-                                            int page_end,
-                                            const BlockEnvironmentHighlightStyle& style,
-                                            const DocumentToContent& document_to_content,
-                                            const PageRect& page_rect) {
+void EnvironmentHighlightLayer::update(const QList<QVariant>& rectangles, int first_page,
+                                       int page_end, const EnvironmentHighlightStyle& style,
+                                       const DocumentToContent& document_to_content,
+                                       const PageRect& page_rect) {
     qsizetype next_rectangle = 0;
     if (style.color.isValid()) {
         for (const QVariant& value : rectangles) {
@@ -127,7 +126,7 @@ void BlockEnvironmentHighlightLayer::update(const QList<QVariant>& rectangles, i
     }
 }
 
-void BlockEnvironmentHighlightLayer::setColor(const QColor& color) {
+void EnvironmentHighlightLayer::setColor(const QColor& color) {
     for (QSGNode* node : m_rectangles) {
         static_cast<RoundedRectSlices*>(node)->setColor(color);
     }

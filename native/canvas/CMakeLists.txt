@@ -27,8 +27,8 @@ qt_add_qml_module(
   document_canvas/input.cpp
   document_canvas/keyboard.cpp
   document_canvas/selection.cpp
-  document_canvas/block_environment_highlight.cpp
-  document_canvas/block_environment_highlight_scene.cpp
+  document_canvas/environment_highlight.cpp
+  document_canvas/environment_highlight_scene.cpp
   document_canvas/scene_graph.cpp
   document_canvas/scene_graph_geometry.hpp
   document_canvas/value_validation.hpp)

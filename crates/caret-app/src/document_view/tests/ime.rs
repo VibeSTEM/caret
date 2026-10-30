@@ -2,7 +2,8 @@
 
 use super::*;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineNode, NodeId, Paragraph, Run,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
 };
 use caret_engine::Command;
 use std::collections::BTreeMap;
@@ -195,6 +196,101 @@ fn ime_preedit_updates_only_the_composition_paragraph() -> Result<(), Box<dyn st
     let full_view = caret_engine::DocumentLayoutView::from(&full);
     assert_eq!(reused_view.pages, full_view.pages);
     assert_eq!(reused_view.paragraphs, full_view.paragraphs);
+    Ok(())
+}
+
+#[test]
+fn ime_preedit_inline_highlight_uses_the_preview_session_geometry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![InlineNode::Run(Run {
+            text: "abcdef".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: 3,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))?;
+
+    let actual: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "preedit text longer than the original".to_owned(),
+        String::new(),
+        0,
+        0,
+        37,
+    )?)?;
+    let range = runtime
+        .composition_preview_session
+        .as_mut()
+        .ok_or("IME preview session was not installed")?
+        .current_inline_environment()?
+        .ok_or("IME preview lost the inline environment")?;
+    let selection = caret_engine::Selection {
+        anchor: caret_engine::Pos {
+            story: range.story.clone(),
+            paragraph_id: range.paragraph_id.clone(),
+            offset: range.start_utf8,
+            affinity: caret_engine::Affinity::Downstream,
+        },
+        focus: caret_engine::Pos {
+            story: range.story,
+            paragraph_id: range.paragraph_id,
+            offset: range.end_utf8,
+            affinity: caret_engine::Affinity::Upstream,
+        },
+    };
+    let expected = runtime
+        .composition_snapshot
+        .as_ref()
+        .ok_or("IME composition snapshot was not installed")?
+        .selection_geometry(&selection)
+        .ok_or("preview inline range had no selection geometry")?
+        .into_iter()
+        .map(|rectangle| {
+            serde_json::json!({
+                "pageIndex": rectangle.page_index,
+                "x0Pt": rectangle.x0_pt,
+                "y0Pt": rectangle.y0_pt,
+                "x1Pt": rectangle.x1_pt,
+                "y1Pt": rectangle.y1_pt,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual["inlineEnvironmentHighlightRects"],
+        serde_json::json!(expected)
+    );
+    assert!(!expected.is_empty());
+    assert!(
+        actual["blockEnvironmentHighlightRects"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
     Ok(())
 }
 

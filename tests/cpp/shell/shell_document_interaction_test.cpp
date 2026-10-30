@@ -64,7 +64,15 @@
 #include <utility>
 
 #ifdef CARET_ENABLE_APP
-void ShellLoadTest::blockEnvironmentHighlightSnapshotReplacesAndClearsRects() {
+namespace caret {
+struct LayoutViewModelTestProbe final {
+    static bool installInteraction(LayoutViewModel& view_model, const QJsonObject& interaction) {
+        return view_model.installInteraction(interaction);
+    }
+};
+} // namespace caret
+
+void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
@@ -72,37 +80,69 @@ void ShellLoadTest::blockEnvironmentHighlightSnapshotReplacesAndClearsRects() {
                            QByteArray(snapshot.data(), static_cast<qsizetype>(snapshot.size())))
                            .object();
     QVERIFY(!root.isEmpty());
+    root.insert(QStringLiteral("documentGeneration"), QStringLiteral("10"));
     const QJsonObject focus_rect{{QStringLiteral("pageIndex"), 0},
                                  {QStringLiteral("x0Pt"), 1.0},
                                  {QStringLiteral("y0Pt"), 1.0},
                                  {QStringLiteral("x1Pt"), 2.0},
                                  {QStringLiteral("y1Pt"), 2.0}};
+    const QJsonObject inline_rect{{QStringLiteral("pageIndex"), 0},
+                                  {QStringLiteral("x0Pt"), 3.0},
+                                  {QStringLiteral("y0Pt"), 3.0},
+                                  {QStringLiteral("x1Pt"), 4.0},
+                                  {QStringLiteral("y1Pt"), 4.0}};
     root.insert(QStringLiteral("blockEnvironmentHighlightRects"), QJsonArray{focus_rect});
+    root.insert(QStringLiteral("inlineEnvironmentHighlightRects"), QJsonArray{inline_rect});
     QVERIFY(caret::install_layout_snapshot(
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    caret::LayoutViewModel inline_view_model;
+    QCOMPARE(inline_view_model.environmentHighlightKind(), QStringLiteral("inline"));
+    QCOMPARE(inline_view_model.environmentHighlightRects().size(), 1);
+    QCOMPARE(inline_view_model.environmentHighlightRects().first().toMap().value(
+                 QStringLiteral("x0Pt")),
+             3.0);
 
-    QQmlApplicationEngine engine;
-    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
-    QQmlComponent component(&engine);
-    component.setData(
-        QByteArrayLiteral("import QtQuick\n"
-                          "import Caret.ViewModels\n"
-                          "Item { objectName: \"blockEnvironmentHighlightProbe\" }\n"),
-        QUrl());
-    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
-    QObject* probe = component.create();
-    QVERIFY2(probe != nullptr, qPrintable(component.errorString()));
-    auto* view_model =
-        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
-    QVERIFY(view_model != nullptr);
-    QCOMPARE(view_model->blockEnvironmentHighlightRects().size(), 1);
+    const QVariantList visible_environment_rects = inline_view_model.environmentHighlightRects();
+    const QVariantList visible_pages = inline_view_model.pageLayouts();
+    QSignalSpy interaction_changed(&inline_view_model,
+                                   &caret::LayoutViewModel::interactionChanged);
+    const QJsonObject stale_malformed_interaction{
+        {QStringLiteral("documentGeneration"), QStringLiteral("9")},
+        {QStringLiteral("fontGeneration"), QStringLiteral("0")},
+        {QStringLiteral("selectionRects"), QStringLiteral("invalid")},
+        {QStringLiteral("inputMethodContext"), QJsonArray{}},
+        {QStringLiteral("caretGeometry"), false}};
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
+        inline_view_model, stale_malformed_interaction));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
+    QCOMPARE(interaction_changed.size(), 0);
 
-    const QVariantMap placement = view_model->placeCaretAtPage(0, 100.0, 100.0);
-    QVERIFY2(placement.value(QStringLiteral("valid")).toBool(),
-             qPrintable(placement.value(QStringLiteral("error")).toString()));
-    QVERIFY(view_model->blockEnvironmentHighlightRects().isEmpty());
-    delete probe;
+    const QJsonObject invalid_current_interaction{
+        {QStringLiteral("documentGeneration"), inline_view_model.documentGeneration()},
+        {QStringLiteral("fontGeneration"), inline_view_model.fontGeneration()},
+        {QStringLiteral("selectionRects"), QStringLiteral("invalid")},
+        {QStringLiteral("inputMethodContext"), QJsonObject{}},
+        {QStringLiteral("caretGeometry"), QJsonObject{}}};
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
+        inline_view_model, invalid_current_interaction));
+    QVERIFY(inline_view_model.environmentHighlightRects().isEmpty());
+    QCOMPARE(interaction_changed.size(), 1);
+
+    root.insert(QStringLiteral("inlineEnvironmentHighlightRects"), QJsonArray{});
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
+    caret::LayoutViewModel block_view_model;
+    QCOMPARE(block_view_model.environmentHighlightKind(), QStringLiteral("block"));
+    QCOMPARE(block_view_model.environmentHighlightRects().size(), 1);
+
+    root.insert(QStringLiteral("blockEnvironmentHighlightRects"), QJsonArray{});
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
+    caret::LayoutViewModel empty_view_model;
+    QVERIFY(empty_view_model.environmentHighlightRects().isEmpty());
+    QVERIFY(empty_view_model.environmentHighlightKind().isEmpty());
 }
 
 void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument() {
