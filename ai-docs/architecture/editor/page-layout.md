@@ -1,6 +1,6 @@
 # 页面与段落排版
 
-更新日期：2026-10-30。本文定义 `.cdoc` 页面几何、行框、段落间距和分页的产品规则，以及布局层的职责。文档属性属于 `Document`；页、行和屏幕上的字形位置均为派生结果。文档树与样式归属见[文档模型](document-model.md)，缓存失效见[增量排版](incremental-layout.md)，Caret 默认数值见[默认排版预设](../../../crates/caret-doc/resources/layout-themes/default.json)，OOXML 映射见[008 标准研究](../../research/008-office-open-xml-spacing-pagination.md)。
+更新日期：2026-10-30。本文定义 `.cdoc` 页面几何、行框、段落间距和分页的产品规则，以及布局层的职责。文档属性属于 `Document`；页、行和屏幕上的字形位置均为派生结果。文档树与样式归属见[文档模型](document-model.md)，缓存失效见[增量排版](incremental-layout.md)，Caret 默认数值见[默认排版预设](../../../crates/caret-doc/resources/layout-themes/default.json)，OOXML 映射依据见[008 研究](../../research/008-office-open-xml-spacing-pagination.md)。
 
 ## 页面几何与单位
 
