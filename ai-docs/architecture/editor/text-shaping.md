@@ -18,7 +18,7 @@ Windows、macOS 和 Linux 共用同一 Unicode 数据版本及字素、双向和
 
 Latin、East Asian 和 Complex Script 可以有不同字体。实际字体选择必须考虑系统可用性和许可证；不随应用分发未获许可的字体。请求字体、实际字体文件/实例、合成字重和语言方向都可能影响度量和缓存键。
 
-字体目录从操作系统枚举当前用户和系统已安装字体；用户安装的字体可被文档使用，但不会被 Caret 复制进安装包或 `.cdoc`。应用默认字体族是系统默认文本字体，具体解析受平台和文字脚本影响。字体目录在启动或显式刷新时更新并缓存，不在每次输入或塑形时扫描文件系统。字体环境保留请求的字体族；粗体/斜体环境优先选同族对应字形，没有对应字形时允许合成或回退，并保留语义环境。
+字体目录、字体目标映射、请求族与实际匹配族、Font EnvironmentNode 以及字体 fallback 的权威规则见[多文字体系字体选择](font-selection.md)。本节只要求 shaping 使用 Rust `caret-layout` 提供的候选和字体实例；不能因本地缺字而改写文档保存的请求字体。
 
 Glyph run 是排版结果，不取代文档中的文字和格式片段。布局需保留 cluster 到文本位置的映射：多个码点可能组成一个字素或 glyph，一个连字也可能覆盖多个字符。需处理组合附加符、emoji ZWJ、阿拉伯连接、RTL/LTR 混排和中文标点禁则。Unicode 17 官方 grapheme、bidi-character、line-break 测试集位于 [`tests/fixtures/unicode-17`](../../../tests/fixtures/unicode-17/)；规范断行将复杂上下文脚本的词典切分作为显式语言 tailoring。
 

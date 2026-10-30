@@ -29,7 +29,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`。其 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将它们投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。因此格式命令分成两种文档变更：环境格式命令在 Inline 子树上包裹、拆分、合并或解除节点；直接格式命令只更新目标 Run/Paragraph 的属性。两者由同一个 Rust 编辑会话提交原子事务、位置映射和 Undo 记录，QML 不自行修改格式树或决定属性继承。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`；下划线等字符装饰是 Run 直接属性。各属性的语义和编辑规则见[文字格式语义](text-formatting.md)。环境 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -110,7 +110,11 @@ Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不�
 
 Section 首个正文 Paragraph 的段首 Backspace 删除标题与正文之间的段落边界：把正文首段的行内内容追加到 Section 标题，移除该正文段，并将插入点放到标题原内容之后；Section 本身保留。若标题与正文段落的段落级属性不兼容，操作原子失败，不静默丢弃属性。该操作必须作为单个撤销单元，并通过位置映射把焦点从正文 `Body` story 转到所属 `EnvironmentTitle` story。
 
-块环境首尾分别提供环境内、外的键盘停靠位置。方向键到达外侧停靠点时不立即改写文档；若外侧已有相邻段落，再按一次同方向进入该段落；若没有相邻段落，则继续保留外侧停靠状态，直到用户输入时才创建外部 Paragraph。此时 Enter 创建一个外部空段落，Shift+Enter 创建一个含软换行的外部段落；之后输入留在该段落。空段落执行 `\section` 时转换为 Section 标题；非空段落执行时保留原段，并在其后创建一个空 Section。普通 Backspace 在折叠光标位于空环境起点，或从环境末尾外侧停靠点向回删除时可移除空环境；在空 Section 后继外部段落的段首按 Backspace 时，将该段内容合并到 Section 标题末尾并移除外部段落。非空环境不会因普通 Backspace 被删除。若用户通过 Shift+方向键或指针拖选选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。第一次 Escape 收起整个环境选区，第二次才离开当前结构。撤销或重做后清除不再对应当前文档的虚拟环境外侧停靠状态。Mod+Backspace 解除当前环境外壳并保留标题和正文，按一次结构编辑撤销；内部按键意图名为 `mod-backspace`，领域命令 ID 为 `struct.remove_preserving_content`。
+块环境首尾分别提供环境内、外的键盘停靠位置。方向键到达外侧停靠点时不立即改写文档；若外侧已有相邻段落，再按一次同方向进入该段落；若没有相邻段落，则保留外侧停靠状态，直到用户输入时才创建外部 Paragraph。此时 Enter 创建一个外部空段落，Shift+Enter 创建一个含软换行的外部段落；之后输入留在该段落。空段落执行 `\section` 时转换为 Section 标题；非空段落执行时保留原段，并在其后创建一个空 Section。
+
+普通 Backspace 在折叠光标位于空环境起点，或从环境末尾外侧停靠点向回删除时可移除空环境；在空 Section 后继外部段落的段首按 Backspace 时，将该段内容合并到 Section 标题末尾并移除外部段落。非空环境不会因普通 Backspace 被删除。若用户通过 Shift+方向键或指针拖选选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。第一次 Escape 收起整个环境选区，第二次才离开当前结构。撤销或重做后清除不再对应当前文档的虚拟环境外侧停靠状态。
+
+Mod+Backspace 在折叠光标位于行内环境时优先解除最内层行内环境并保留子内容；否则解除当前块环境并保留标题和正文。两种解除均为单次编辑撤销；Rust 根据当前编辑上下文仲裁行内与块环境动作。上述结构编辑由 Rust 事务维护位置映射与撤销状态；索引和导航几何的消费方式见[结构导航](structure-navigation.md)。
 
 环境区分内置语义 kind 和可组合定义。内置 kind 固定 scope、合法子项和结构行为；Custom 是可跨 scope 选择的定义族，具体实例的 scope 必须与其 `definitionId` 指向的定义一致。主题快照提供内置 kind 默认模板、命名变体和自定义环境定义，实例 `props` 保存局部覆盖。`definitionId` 缺省表示使用 Custom 的通用默认模板；存在时必须能在当前文档嵌入的快照中解析到同 scope 定义。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版内置 kind 如下：
 
@@ -164,6 +168,7 @@ Page scope 定义基于 `BodyPage` 或 `TitlePage` 内置角色的 PageContent �
 | `caret.env.custom` | 当前已实现的块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
+| `caret.text.underline` | Run 的显式下划线属性，包括显式开启和关闭 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 只列该文档实际用到的非基础能力，去重并按字节序排序。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。

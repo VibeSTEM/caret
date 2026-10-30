@@ -2,6 +2,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Caret.Adapters
 import Caret.Canvas
 
 Item {
@@ -12,6 +13,8 @@ Item {
     required property int geometryRevision
     readonly property int minimumCommandFontPixelSize: 1
     readonly property int commandFontSizeStepCentipoints: 100
+    readonly property bool requestedCodeFontAvailable: PlatformFonts.containsFamily(root.commandLine.codeFontFamily || "")
+    readonly property bool fontPickerMode: ["fontFamily", "defaultFontTarget", "defaultFontScope", "defaultFontLanguage", "defaultFontFamily"].includes(root.commandLine.mode)
 
     readonly property var caretPoint: {
         const revision = geometryRevision;
@@ -30,6 +33,17 @@ Item {
         return Qt.rect(topLeft.x, topLeft.y, rect.width, rect.height);
     }
     readonly property real queryCaretX: queryScroll.x + queryBox.x + queryCursorMetrics.advanceWidth - queryScroll.contentX
+    readonly property string queryWithoutPreedit: (root.commandLine.prefix || "\\") + (root.commandLine.query || "")
+    readonly property int queryCursorPositionUtf16: Number(root.commandLine.cursorUtf16 || 0)
+    readonly property int preeditCursorPositionUtf16: Number(root.commandLine.preeditCursorUtf16 || 0)
+    readonly property string queryPreedit: root.commandLine.preedit || ""
+    readonly property string queryDisplayText: queryWithoutPreedit.slice(0, queryCursorPositionUtf16) + queryPreedit + queryWithoutPreedit.slice(queryCursorPositionUtf16)
+    readonly property rect inputMethodCursorRectangle: {
+        if (!root.commandLine.active || root.caretDisplayRect.height <= 0)
+            return Qt.rect(0, 0, 0, 0);
+        const point = root.canvas.mapFromItem(root, root.queryCaretX, root.caretDisplayRect.y);
+        return Qt.rect(point.x, point.y, Math.max(root.caretDisplayRect.width, 1), root.caretDisplayRect.height);
+    }
     readonly property real commandFontPixelSize: {
         const fontSizeCentipoints = Number(canvas.caretGeometry.fontSizeCentipoints);
         if (!Number.isFinite(fontSizeCentipoints) || fontSizeCentipoints <= 0)
@@ -71,17 +85,40 @@ Item {
                 id: queryText
                 height: queryScroll.height
                 color: Theme.colorText
+                font.family: root.commandLine.codeFontFamilyUsesSystemDefault === true || !root.requestedCodeFontAvailable ? PlatformFonts.fixedFamily : (root.commandLine.codeFontFamily || PlatformFonts.fixedFamily)
                 font.pixelSize: root.commandFontPixelSize
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.NoWrap
-                text: "\\" + (root.commandLine.query || "")
+                text: root.queryDisplayText
             }
+
+            Rectangle {
+                x: queryPreeditStartMetrics.advanceWidth
+                y: (queryScroll.height - queryText.implicitHeight) / 2 + queryText.implicitHeight - height
+                width: queryPreeditMetrics.advanceWidth
+                height: Math.max(1, Theme.borderWidth)
+                color: Theme.colorText
+                visible: root.queryPreedit.length > 0
+                z: 1
+            }
+        }
+
+        TextMetrics {
+            id: queryPreeditStartMetrics
+            font: queryText.font
+            text: root.queryWithoutPreedit.slice(0, root.queryCursorPositionUtf16)
+        }
+
+        TextMetrics {
+            id: queryPreeditMetrics
+            font: queryText.font
+            text: root.queryPreedit
         }
 
         TextMetrics {
             id: queryCursorMetrics
             font: queryText.font
-            text: queryText.text.slice(0, Number(root.commandLine.cursor || 0) + 1)
+            text: queryText.text.slice(0, root.queryCursorPositionUtf16 + root.preeditCursorPositionUtf16)
         }
     }
 
@@ -102,5 +139,16 @@ Item {
         anchorX: queryBox.x
         anchorY: queryBox.y + queryBox.height + Theme.spacingTiny
         anchorTopY: queryBox.y
+        popupEnabled: !root.fontPickerMode
+    }
+
+    FontPickerPopup {
+        commandLine: root.commandLine
+        availableWidth: root.width
+        availableHeight: root.height
+        anchorX: queryBox.x
+        anchorY: queryBox.y + queryBox.height + Theme.spacingTiny
+        anchorTopY: queryBox.y
+        popupEnabled: root.fontPickerMode
     }
 }

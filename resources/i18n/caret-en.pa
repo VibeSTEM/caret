@@ -546,3 +546,68 @@ message_105:
   src: New paragraph
   tr: New paragraph
   st: finished
+
+message_106:
+  src: Bold
+  tr: Bold
+  st: finished
+
+message_107:
+  src: Italic
+  tr: Italic
+  st: finished
+
+message_108:
+  src: Font family
+  tr: Font family
+  st: finished
+
+message_109:
+  src: First-line indent
+  tr: First-line indent
+  st: finished
+
+message_110:
+  src: One-character-width space
+  tr: One-character-width space
+  st: finished
+
+message_111:
+  src: Two-character-width space
+  tr: Two-character-width space
+  st: finished
+
+message_112:
+  src: Close
+  tr: Close
+  st: finished
+
+message_113:
+  src: Script
+  tr: Script
+  st: finished
+
+message_114:
+  src: Script font
+  tr: Script font
+  st: finished
+
+message_115:
+  src: Script + language override
+  tr: Script + language override
+  st: finished
+
+message_116:
+  src: Language override
+  tr: Language override
+  st: finished
+
+message_117:
+  src: Use language: %1
+  tr: Use language: %1
+  st: finished
+
+message_118:
+  src: Underline
+  tr: Underline
+  st: finished

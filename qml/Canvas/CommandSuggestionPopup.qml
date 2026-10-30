@@ -1,30 +1,23 @@
-// 显示命令候选；宽度按候选内容伸缩，受可视区域限制。
+// 显示普通命令的候选别名、说明和可用状态。
 pragma ComponentBehavior: Bound
 
 import QtQuick
 import Caret.Adapters
 import Caret.ViewModels
 
-Rectangle {
+CommandPopupFrame {
     id: root
 
-    required property var commandLine
-    required property real availableWidth
-    required property real availableHeight
-    property real anchorX: 0
-    property real anchorY: 0
-    property real anchorTopY: 0
     readonly property real rowHeight: Math.max(Theme.iconSizeSmall, Theme.fontBody + Theme.spacingTiny * 2)
     readonly property real verticalPadding: Theme.spacingTiny * 2
     readonly property int maximumRows: 4
-    // 列宽随当前候选收紧，单列上限固定；选中项超出时由文本 Atom 循环展示。
-    readonly property real maximumCandidateColumnWidth: 105
-    readonly property real candidateColumnSpacing: Theme.spacingMedium
-    readonly property real maximumEstimatedWidth: 240
-    readonly property real aliasColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(aliasMeasurements))
-    readonly property real labelColumnWidth: Math.min(maximumCandidateColumnWidth, widestTextWidth(labelMeasurements))
-    readonly property real preferredWidth: candidateList.count > 0 ? Math.min(maximumEstimatedWidth, aliasColumnWidth + candidateColumnSpacing + labelColumnWidth + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumEstimatedWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
-    readonly property real preferredHeight: candidateList.count > 0 ? Math.min(maximumRows, candidateList.count) * rowHeight + verticalPadding : emptyMetrics.height + verticalPadding
+    readonly property real maximumColumnWidth: 105
+    readonly property real columnSpacing: Theme.spacingMedium
+    readonly property real maximumPopupWidth: 240
+    readonly property real aliasColumnWidth: Math.min(maximumColumnWidth, widestTextWidth(aliasMeasurements))
+    readonly property real labelColumnWidth: Math.min(maximumColumnWidth, widestTextWidth(labelMeasurements))
+    preferredWidth: candidateList.count > 0 ? Math.min(maximumPopupWidth, aliasColumnWidth + (labelColumnWidth > 0 ? columnSpacing + labelColumnWidth : 0) + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumPopupWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
+    preferredHeight: candidateList.count > 0 ? Math.min(maximumRows, candidateList.count) * rowHeight + verticalPadding : emptyMetrics.height + verticalPadding
 
     function widestTextWidth(measurements) {
         let widest = 0;
@@ -58,6 +51,20 @@ Rectangle {
             return qsTranslate("CommandCompletion", "Line break");
         case "text.split_paragraph":
             return qsTranslate("CommandCompletion", "New paragraph");
+        case "text.insert.one_character_width_space":
+            return qsTranslate("CommandCompletion", "One-character-width space");
+        case "text.insert.two_character_width_space":
+            return qsTranslate("CommandCompletion", "Two-character-width space");
+        case "text.format.bold":
+            return qsTranslate("CommandCompletion", "Bold");
+        case "text.format.italic":
+            return qsTranslate("CommandCompletion", "Italic");
+        case "text.format.underline":
+            return qsTranslate("CommandCompletion", "Underline");
+        case "text.format.font":
+            return qsTranslate("CommandCompletion", "Font family");
+        case "paragraph.first_line_indent.set":
+            return qsTranslate("CommandCompletion", "First-line indent");
         case "insert.inline_math":
             return qsTranslate("CommandCompletion", "Inline math");
         case "insert.equation":
@@ -75,16 +82,6 @@ Rectangle {
         }
     }
 
-    x: Math.max(Theme.spacingSmall, Math.min(anchorX, Math.max(Theme.spacingSmall, availableWidth - width - Theme.spacingSmall)))
-    y: anchorY + height <= availableHeight - Theme.spacingSmall ? anchorY : Math.max(Theme.spacingSmall, anchorTopY - height - Theme.spacingTiny)
-    width: Math.max(0, Math.min(preferredWidth, availableWidth - Theme.spacingMedium * 2))
-    height: Math.max(0, Math.min(preferredHeight, availableHeight - Theme.spacingSmall * 2))
-    radius: Theme.radiusSmall
-    border.width: Theme.borderWidth
-    border.color: Theme.colorPanelLine
-    color: Theme.colorPanel
-    visible: commandLine.active === true && PreferencesViewModel.commandSuggestionsEnabled
-
     TextMetrics {
         id: emptyMetrics
         font.pixelSize: Theme.fontSmall
@@ -96,18 +93,18 @@ Rectangle {
 
         Repeater {
             id: aliasMeasurements
-            model: root.commandLine.candidates || []
+            model: root.popupEnabled ? root.commandLine.candidates || [] : []
             delegate: Text {
                 required property var modelData
                 font.family: PlatformFonts.fixedFamily
                 font.pixelSize: Theme.fontSmall
-                text: modelData.alias
+                text: modelData.alias || ""
             }
         }
 
         Repeater {
             id: labelMeasurements
-            model: root.commandLine.candidates || []
+            model: root.popupEnabled ? root.commandLine.candidates || [] : []
             delegate: Text {
                 required property var modelData
                 font.pixelSize: Theme.fontBody
@@ -119,22 +116,24 @@ Rectangle {
     ScrollableListView {
         id: candidateList
         anchors.fill: parent
-        anchors.margins: Theme.spacingTiny
         interactive: true
         currentIndex: root.commandLine.selected || 0
         visible: root.commandLine.candidates && root.commandLine.candidates.length > 0
-        model: root.commandLine.candidates || []
+        model: root.popupEnabled ? root.commandLine.candidates || [] : []
         delegate: CommandCandidateItem {
             required property var modelData
             required property int index
             width: candidateList.width
             height: root.rowHeight
             candidate: modelData
+            displayAlias: modelData.alias || ""
             label: root.labelFor(modelData)
             selected: index === root.commandLine.selected
             aliasColumnWidth: root.aliasColumnWidth
             labelColumnWidth: root.labelColumnWidth
             onActivated: {
+                if ((root.commandLine.preedit || "").length > 0)
+                    return;
                 const selectedCandidate = LayoutViewModel.commandLineCommand("select", String(index));
                 if (selectedCandidate.valid && modelData.available)
                     LayoutViewModel.commandLineCommand("accept", "");

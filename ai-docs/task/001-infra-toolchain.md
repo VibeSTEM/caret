@@ -9,7 +9,7 @@
 
 仓库还没有 Cargo 工程。本任务建立可编译的 workspace，并把工具下载到 `.toolchain/`。完成后，`caret-build` 能把锁定版本的 CMake、Ninja、LLVM 装进仓库根的 `.toolchain/`，`cargo clean` 不清这棵目录。`caret-foundation` 能单独编译。
 
-来源是任务索引里的 panta 提交。移植时改 `panta` 前缀为 `caret`，并改掉来源里把工具装进 `target/` 的路径。
+来源为 panta `ee84d95`。移植时改 `panta` 前缀为 `caret`，并改掉来源里把工具装进 `target/` 的路径；移植细节记录在本任务工作记录中。
 
 ## 必读
 
@@ -66,7 +66,7 @@
 
 ## 决策与工作记录
 
-- 2026-10-25：创建任务。来源提交以索引为准。
+- 2026-10-25：创建任务。来源提交记录在本任务工作记录中；任务索引只维护依赖、状态与分类。
 - 2026-10-25：从 panta `ee84d95` 整份复制 `caret-build`、`caret-foundation` 和 `caret-tests` 调度入口，再改名并把安装根改到仓库根 `.toolchain/`。`CARET_TOOLCHAIN_ROOT` 未设置时不读 `target/`。`cc` 锁在 `1.4.6`，与来源一致。同一工作区里还放了 002 的 DSL 和 003 的应用服务，见对应任务。
 - 2026-10-25：独立评审没有验收缺陷。成功发布后删除安装归档，与来源一致，规范改成不靠常驻压缩包离线重装。`paths` 注释和 `deny.toml` 里过时的 syn 理由已改正。`cargo quality`、`cargo lint`、`cargo format` 仍会找尚未存在的 launcher、Qt 和 native 工程，那是 004–006 的范围。
 

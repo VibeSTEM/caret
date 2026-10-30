@@ -4,11 +4,13 @@ mod clipboard;
 mod command_line;
 mod composition;
 mod current_environment;
+mod formatting;
 mod history;
 mod inline_content;
 mod keyboards;
 mod navigation;
 mod paragraph_edit;
+mod paragraph_formatting;
 mod range_edit;
 mod selection;
 mod structure;
@@ -29,7 +31,8 @@ use caret_structure::StructureIndex;
 use std::{collections::VecDeque, sync::Arc};
 use undo::History;
 
-use self::history::{DocumentPatch, SessionHistoryEdit};
+use self::formatting::PendingInlineStyle;
+use self::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
@@ -48,6 +51,7 @@ pub struct Session {
     session_id: NodeId,
     document_generation: u64,
     composition: Option<InputComposition>,
+    pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
@@ -90,6 +94,7 @@ impl Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: None,
+            pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
             block_environment_exit: None,
             selected_block_environment: None,
@@ -226,8 +231,13 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
-        if let Command::InsertText(text) | Command::PasteText(text) = &command
-            && !text.is_empty()
+        let inserted_text = match &command {
+            Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
+            Command::InsertOneCharacterWidthSpace => Some("\u{2003}"),
+            Command::InsertTwoCharacterWidthSpace => Some("\u{2003}\u{2003}"),
+            _ => None,
+        };
+        if let Some(text) = inserted_text
             && self.block_environment_exit.is_some()
         {
             return self.insert_text_at_environment_exit(text);
@@ -347,7 +357,12 @@ impl Session {
             return Ok(effect);
         }
         let before_selection = self.selection.clone();
+        let cancels_command_line_preedit = self
+            .command_line
+            .as_ref()
+            .is_some_and(|line| !line.preedit.is_empty());
         let before_visual_affinity = self.selection_visual_affinity;
+        let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
         let adjacent_delete_paragraph = match &command {
             Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
@@ -357,6 +372,8 @@ impl Session {
         };
         let edit_group = history::edit_group(&command);
         let breaks_history_merge = edit_group.is_none();
+        let resets_pending_style =
+            matches!(&command, Command::MoveCaret(_) | Command::SetSelection(_));
         let mut before_paragraph_states = if is_paragraph_edit(&command) {
             let mut ids = history::before_selection_ids(&self.paragraph_index, &self.selection);
             if let Command::Delete(_) = &command
@@ -377,8 +394,39 @@ impl Session {
                     .and_then(|section| section.geometry().ok())
             })
             .flatten();
+        let mut before_latin_font_family = None;
+        let before_document_font_family = match &command {
+            Command::SetDefaultFontFamily(_) => {
+                before_latin_font_family = Some(history::LatinFontFamilyState::capture(
+                    &self.document.global_settings,
+                ));
+                None
+            }
+            Command::SetDocumentFontFamily { target, .. } => {
+                let target = target
+                    .normalized()
+                    .map_err(|_| EditError::InvalidFontFamily)?;
+                if target == caret_doc::DocumentFontTarget::Script("Latn".to_owned()) {
+                    before_latin_font_family = Some(history::LatinFontFamilyState::capture(
+                        &self.document.global_settings,
+                    ));
+                    None
+                } else {
+                    Some((
+                        target.clone(),
+                        self.document
+                            .global_settings
+                            .font_family(&target)
+                            .map(str::to_owned),
+                    ))
+                }
+            }
+            _ => None,
+        };
         let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
+            Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
+            Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::InsertParagraphBreak => self.split_paragraph(),
@@ -393,6 +441,19 @@ impl Session {
             }
             Command::CreateBlockEnvironment(_) => {
                 unreachable!("structure edit commands returned above")
+            }
+            Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
+            Command::ToggleRunUnderline => self.toggle_run_underline(),
+            Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
+                self.remove_inline_environment_preserving_content(&environment_id)
+            }
+            Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
+            Command::SetParagraphFirstLineIndentChars(chars) => {
+                self.set_paragraph_first_line_indent_chars(chars)
+            }
+            Command::SetDefaultFontFamily(family) => self.set_default_font_family(family),
+            Command::SetDocumentFontFamily { target, family } => {
+                self.set_document_font_family(&target, family)
             }
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
@@ -411,7 +472,11 @@ impl Session {
             | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
+        effect.composition_changed |= cancels_command_line_preedit;
         self.command_line = None;
+        if effect.selection_changed && resets_pending_style {
+            self.pending_inline_style.clear();
+        }
         if breaks_history_merge {
             self.advance_history_merge_epoch();
         }
@@ -440,6 +505,21 @@ impl Session {
                         EditError::InvalidDocument("document has no PageSection".to_owned())
                     })?;
                 DocumentPatch::PageGeometry { before, after }
+            } else if let Some(before) = before_latin_font_family {
+                DocumentPatch::LatinFontFamily {
+                    before,
+                    after: history::LatinFontFamilyState::capture(&self.document.global_settings),
+                }
+            } else if let Some((target, before)) = before_document_font_family {
+                DocumentPatch::DocumentFontFamily {
+                    before,
+                    after: self
+                        .document
+                        .global_settings
+                        .font_family(&target)
+                        .map(str::to_owned),
+                    target,
+                }
             } else {
                 let mut ids = before_paragraph_states
                     .iter()
@@ -465,12 +545,18 @@ impl Session {
             effect.changed_paragraph_id = patch.single_changed_paragraph_id();
             let edit = SessionHistoryEdit::new(
                 patch,
-                before_selection,
-                self.selection.clone(),
-                before_visual_affinity,
-                self.selection_visual_affinity,
-                before_state_id,
-                after_state_id,
+                SessionHistoryState::new(
+                    before_selection,
+                    before_visual_affinity,
+                    before_pending_style,
+                    before_state_id,
+                ),
+                SessionHistoryState::new(
+                    self.selection.clone(),
+                    self.selection_visual_affinity,
+                    self.pending_inline_style.clone(),
+                    after_state_id,
+                ),
             );
             self.record_history_edit(edit);
             self.history_state_id = after_state_id;
@@ -547,26 +633,36 @@ impl Session {
         let Some(transition) = transition else {
             return Ok(Effect::default());
         };
-        let (selection, visual_affinity, state_id, changed_paragraph_id) =
-            history::restore_history_transition(transition);
+        let (
+            selection,
+            visual_affinity,
+            pending_style,
+            state_id,
+            changed_paragraph_id,
+            document_changed,
+        ) = history::restore_history_transition(transition);
+        let selection_changed = self.selection != selection;
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
+        self.pending_inline_style = pending_style;
         self.selected_block_environment = None;
         self.block_environment_exit = None;
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
-        self.paragraph_index = build_paragraph_index(&self.document.body);
-        self.structure_index = Arc::new(StructureIndex::build(&self.document));
-        self.text_map_cache.clear();
-        if let Some(next) = self.document_generation.checked_add(1) {
-            self.document_generation = next;
-        } else {
-            self.session_id = NodeId::generate();
-            self.document_generation = 0;
+        if document_changed {
+            self.paragraph_index = build_paragraph_index(&self.document.body);
+            self.structure_index = Arc::new(StructureIndex::build(&self.document));
+            self.text_map_cache.clear();
+            if let Some(next) = self.document_generation.checked_add(1) {
+                self.document_generation = next;
+            } else {
+                self.session_id = NodeId::generate();
+                self.document_generation = 0;
+            }
         }
         Ok(Effect {
-            document_changed: true,
-            selection_changed: true,
+            document_changed,
+            selection_changed,
             changed_paragraph_id,
             ..Effect::default()
         })
@@ -698,6 +794,7 @@ impl Clone for Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: self.composition.clone(),
+            pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
@@ -720,9 +817,16 @@ fn is_paragraph_edit(command: &Command) -> bool {
     matches!(
         command,
         Command::InsertText(_)
+            | Command::InsertOneCharacterWidthSpace
+            | Command::InsertTwoCharacterWidthSpace
             | Command::PasteText(_)
             | Command::InsertSoftBreak
             | Command::InsertParagraphBreak
+            | Command::ToggleInlineFormat(_)
+            | Command::ToggleRunUnderline
+            | Command::RemoveInlineEnvironmentPreservingContent(_)
+            | Command::SetInlineFontFamily(_)
+            | Command::SetParagraphFirstLineIndentChars(_)
             | Command::Delete(_)
             | Command::CommitComposition { .. }
     )

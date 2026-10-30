@@ -43,6 +43,7 @@ impl Paragraph {
 #[serde(default, rename_all = "camelCase")]
 pub struct ParagraphLayoutOverrides {
     pub line_spacing: Option<ParagraphLineSpacing>,
+    pub first_line_indent_chars: Option<u16>,
     pub space_before_centipoints: Option<u32>,
     pub space_after_centipoints: Option<u32>,
     pub widow_orphan_control: Option<bool>,

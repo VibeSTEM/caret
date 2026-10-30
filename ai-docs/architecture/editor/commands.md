@@ -1,6 +1,6 @@
 # 命令
 
-更新日期：2026-10-29。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
+更新日期：2026-10-30。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
 
 ## 注册表
 
@@ -16,7 +16,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 
 | id | 作用 | 撤销 |
 | --- | --- | --- |
-| `text.insert` / `text.delete` | 在插入点输入或删除；Backspace 在完整块环境结构选区上删除环境子树 | 打字合并成一步；结构删除一步 |
+| `text.insert` / `text.insert.one_character_width_space` / `text.insert.two_character_width_space` / `text.delete` | 在插入点输入、插入空格或删除；Tab 与 `\doublecharspace` 共用插入两个字符宽空格动作；`\singlecharspace` / `\doublecharspace` 表示字符宽度，不表示 U+0020 空格个数；Backspace 在完整块环境结构选区上删除环境子树 | 打字合并成一步；结构删除一步 |
 | `text.soft_break` / `text.split_paragraph` | 插入软换行 / 拆分或合并段落 | 一步 |
 | `caret.move` / `selection.set` | 移动插入点 / 设置选区 | 纯命令 |
 | `clipboard.copy` / `clipboard.paste` | 复制所选纯文本 / 以单一 Rust 事务粘贴系统剪贴板文本 | 复制纯命令；粘贴一次文档变更 |
@@ -30,8 +30,11 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `table.insert_row` / `table.delete_row` / `table.insert_col` / `table.delete_col` | 改表格形状 | 一步 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
 | `struct.section.create` | 把当前段落转换为 Section 标题 | 一步，可撤销 |
-| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决；Mod+Backspace 解除当前块环境并保留内容 | 视分支而定；解除环境作为一个结构编辑撤销 |
+| `text.format.bold` / `text.format.italic` / `text.format.font_family` | 应用粗体、斜体或所选字体族行内环境 | 一步，可撤销；空选区的待输入样式亦可撤销 |
+| `paragraph.first_line_indent.set` | 将当前段落首行缩进设为 2 个字符宽度 | 一步，可撤销；由 `\firstlineindent` 调用，与 Tab 插入空格无关 |
+| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.tab` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决，优先级见[键盘路由](../interface/keyboard-routing.md) | 视分支而定；文档变更各作为一个编辑撤销 |
 | `struct.remove_preserving_content` | 将当前块环境标题与正文提升为父级内容并移除环境外壳 | 一步，可撤销 |
+| `text.format.remove_environment_preserving_content` | 移除指定行内环境外壳并保留子节点；由 Mod+Backspace 的 Rust 仲裁调用 | 一步，可撤销 |
 | `cmdline.begin` / `cmdline.type` / `cmdline.backspace` / `cmdline.move_selection` / `cmdline.select_candidate` / `cmdline.tab` / `cmdline.accept` / `cmdline.cancel` | 命令模式 | 查询和选择是纯命令；`tab`、`accept` 与重复前缀键由 Rust 按当前查询状态决定插入字面字符或执行候选 |
 | `file.save` | 把当前文档写成 `.cdoc` | 不改文档，失败不丢内存里的稿 |
 

@@ -28,7 +28,9 @@ set(CARET_SHELL_QML_FILES
     Components/Atoms/ThemedIcon.qml
     Canvas/DocumentCanvasPointerHandler.qml
     Canvas/CommandCompletion.qml
+    Canvas/CommandPopupFrame.qml
     Canvas/CommandSuggestionPopup.qml
+    Canvas/FontPickerPopup.qml
     Canvas/CommandInputHandler.qml
     Components/Composites/DocumentModeSelector.qml
     Components/Composites/ShareButton.qml

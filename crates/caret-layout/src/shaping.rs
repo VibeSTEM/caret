@@ -10,10 +10,20 @@ pub(crate) use unicode::is_mandatory_line_break;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShapingStyle {
     pub requested_family: Option<String>,
+    /// 代码内容请求文档代码字体；普通正文按 Script 字体规则选择。
+    pub font_role: FontRole,
     pub font_size_centipoints: u16,
     pub bold: bool,
     pub italic: bool,
     pub language: Option<String>,
+}
+
+/// 文字的语义字体角色；代码块等宽策略由布局层统一解析。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontRole {
+    #[default]
+    Body,
+    Code,
 }
 
 impl ShapingStyle {
@@ -21,6 +31,19 @@ impl ShapingStyle {
     pub const fn new(font_size_centipoints: u16) -> Self {
         Self {
             requested_family: None,
+            font_role: FontRole::Body,
+            font_size_centipoints,
+            bold: false,
+            italic: false,
+            language: None,
+        }
+    }
+
+    /// 创建使用文档等宽代码字体的基础塑形样式。
+    pub const fn code(font_size_centipoints: u16) -> Self {
+        Self {
+            requested_family: None,
+            font_role: FontRole::Code,
             font_size_centipoints,
             bold: false,
             italic: false,
@@ -33,6 +56,7 @@ impl ShapingStyle {
 pub(crate) struct StyledSpan<'a> {
     pub(crate) text: &'a str,
     pub(crate) style: ShapingStyle,
+    pub(crate) underline: bool,
 }
 
 pub(crate) fn paragraph_style_spans<'a>(
@@ -160,6 +184,11 @@ fn append_inlines<'a>(
                     output.push(StyledSpan {
                         text: &run.text,
                         style: run_style,
+                        underline: run
+                            .props
+                            .get("underline")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
                     });
                 }
             }
@@ -195,10 +224,12 @@ fn append_inlines<'a>(
             InlineNode::SoftBreak(_) => output.push(StyledSpan {
                 text: "\n",
                 style: style.clone(),
+                underline: false,
             }),
             InlineNode::Opaque(_) => output.push(StyledSpan {
                 text: "\u{fffc}",
                 style: style.clone(),
+                underline: false,
             }),
         }
     }
@@ -294,11 +325,27 @@ mod tests {
         let spans = [StyledSpan {
             text: "e",
             style: ShapingStyle::new(1200),
+            underline: false,
         }];
 
         assert_eq!(
             boundaries_for_spans(text, &spans),
             UnicodeBoundaries::new(text)
         );
+    }
+
+    #[test]
+    fn code_font_role_is_preserved_through_paragraph_style_inheritance() {
+        let settings =
+            ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings::default())
+                .unwrap_or_else(|error| panic!("settings rejected: {error}"));
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![run("let answer = 42;", None)];
+
+        let spans = paragraph_style_spans(&paragraph, &settings, &ShapingStyle::code(1100));
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.font_role, FontRole::Code);
+        assert_eq!(spans[0].style.font_size_centipoints, 1100);
     }
 }

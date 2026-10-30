@@ -18,6 +18,7 @@ impl Document {
         if self.global_settings.default_font_family.is_some()
             || self.global_settings.default_cjk_font_family.is_some()
             || self.global_settings.default_math_font_family.is_some()
+            || self.global_settings.default_code_font_family != DEFAULT_CODE_FONT_FAMILY
             || !self.global_settings.script_font_families.is_empty()
             || !self
                 .global_settings
@@ -114,6 +115,16 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
         InlineNode::Run(run) => {
             if run.language.is_some() {
                 features.insert("caret.text.language-tags".to_owned());
+            }
+            if let Some(value) = run.props.get("underline") {
+                features.insert(
+                    if value.is_boolean() {
+                        "caret.text.underline"
+                    } else {
+                        "caret.text.underline.extended"
+                    }
+                    .to_owned(),
+                );
             }
         }
         InlineNode::Environment(environment) => {

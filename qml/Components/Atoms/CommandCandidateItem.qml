@@ -7,10 +7,13 @@ Item {
     id: root
 
     required property var candidate
+    required property string displayAlias
     required property string label
     required property bool selected
     required property real aliasColumnWidth
     required property real labelColumnWidth
+    property real aliasFontPixelSize: Theme.fontSmall
+    property real labelFontPixelSize: Theme.fontBody
 
     signal activated
 
@@ -27,10 +30,10 @@ Item {
         y: 0
         width: Math.max(0, Math.min(root.aliasColumnWidth, parent.width - Theme.spacingSmall * 2))
         height: parent.height
-        text: root.candidate.alias
+        text: root.displayAlias
         textColor: root.candidate.available ? Theme.colorFocus : Theme.colorTextMuted
-        fontPixelSize: Theme.fontSmall
-        monospaced: true
+        fontPixelSize: root.aliasFontPixelSize
+        monospaced: !root.candidate.commandId.endsWith(".font_family")
         scrollActive: root.selected
     }
 
@@ -42,8 +45,18 @@ Item {
         height: parent.height
         text: root.label
         textColor: root.candidate.available ? Theme.colorText : Theme.colorTextMuted
-        fontPixelSize: Theme.fontBody
+        fontPixelSize: root.labelFontPixelSize
         scrollActive: root.selected
+    }
+
+    ThemedIcon {
+        anchors.right: parent.right
+        anchors.rightMargin: Theme.spacingSmall
+        anchors.verticalCenter: parent.verticalCenter
+        visible: root.candidate.hasChildren === true
+        name: "right"
+        iconSize: Theme.iconSizeSmall
+        color: Theme.colorTextMuted
     }
 
     TapHandler {

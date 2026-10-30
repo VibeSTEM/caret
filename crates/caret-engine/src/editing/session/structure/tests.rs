@@ -23,14 +23,19 @@ fn paragraph_with_text(text: &str) -> Paragraph {
 }
 
 fn paragraph_text(paragraph: &Paragraph) -> String {
-    paragraph
-        .inlines
-        .iter()
-        .filter_map(|inline| match inline {
-            caret_doc::InlineNode::Run(run) => Some(run.text.as_str()),
-            _ => None,
-        })
-        .collect()
+    fn collect(nodes: &[InlineNode], text: &mut String) {
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => text.push_str(&run.text),
+                InlineNode::Environment(environment) => collect(&environment.children, text),
+                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
+            }
+        }
+    }
+
+    let mut text = String::new();
+    collect(&paragraph.inlines, &mut text);
+    text
 }
 
 fn environment(kind: BlockEnvironmentKind, children: Vec<Block>) -> Block {
@@ -193,6 +198,7 @@ fn composition_at_virtual_environment_exit_is_one_undoable_edit()
         BlockEnvironmentKind::Section,
     ))?;
     session.run(Command::ExitBlockEnvironment(Direction::Forward))?;
+    session.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     let generation_before_composition = session.document_generation();
     session.run(Command::UpdateComposition {
         id: 42,
@@ -209,10 +215,24 @@ fn composition_at_virtual_environment_exit_is_one_undoable_edit()
         generation_before_composition + 1
     );
     assert_eq!(session.document.body.len(), 2);
+    let paragraph = match &session.document.body[1] {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => return Err("组字提交应在环境外创建段落".into()),
+    };
+    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+        return Err("虚拟环境外的组字提交应继承待输入字体环境".into());
+    };
+    assert_eq!(font.kind, caret_doc::InlineEnvironmentKind::Font);
     assert_eq!(
-        paragraph_text(match &session.document.body[1] {
-            Block::Paragraph(paragraph) => paragraph,
-            _ => return Err("组字提交应在环境外创建段落".into()),
+        font.props
+            .get("fontFamily")
+            .and_then(serde_json::Value::as_str),
+        Some("Noto Serif")
+    );
+    assert_eq!(
+        paragraph_text(&Paragraph {
+            inlines: font.children.clone(),
+            ..Paragraph::empty(NodeId::generate())
         }),
         "你好"
     );
@@ -1132,13 +1152,28 @@ fn typing_at_virtual_environment_exit_materializes_one_outside_paragraph()
     assert_eq!(session.document.body.len(), 1);
     assert!(session.block_environment_exit().is_some());
 
+    session.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     let inserted = session.run(Command::InsertText("outside".to_owned()))?;
     assert!(inserted.document_changed);
     assert_eq!(session.document.body.len(), 2);
+    let paragraph = match &session.document.body[0] {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => return Err("环境外输入应在 Section 前创建段落".into()),
+    };
+    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+        return Err("虚拟环境外输入应继承待输入字体环境".into());
+    };
+    assert_eq!(font.kind, caret_doc::InlineEnvironmentKind::Font);
     assert_eq!(
-        paragraph_text(match &session.document.body[0] {
-            Block::Paragraph(paragraph) => paragraph,
-            _ => return Err("环境外输入应在 Section 前创建段落".into()),
+        font.props
+            .get("fontFamily")
+            .and_then(serde_json::Value::as_str),
+        Some("Noto Serif")
+    );
+    assert_eq!(
+        paragraph_text(&Paragraph {
+            inlines: font.children.clone(),
+            ..Paragraph::empty(NodeId::generate())
         }),
         "outside"
     );

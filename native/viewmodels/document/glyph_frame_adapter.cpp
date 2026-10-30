@@ -113,13 +113,40 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
             {QStringLiteral("clipY1Pt"), placement.clip_y1_pt},
         });
     }
+    QVariantList decorations;
+    decorations.reserve(static_cast<qsizetype>(frame.decorations.size()));
+    for (const auto& decoration : frame.decorations) {
+        if (!std::isfinite(decoration.x_pt) || !std::isfinite(decoration.y_pt) ||
+            !std::isfinite(decoration.width_pt) || !std::isfinite(decoration.height_pt) ||
+            decoration.width_pt <= 0.0 || decoration.height_pt <= 0.0 ||
+            (decoration.clip_enabled &&
+             (!std::isfinite(decoration.clip_y0_pt) || !std::isfinite(decoration.clip_y1_pt) ||
+              decoration.clip_y0_pt < 0.0 || decoration.clip_y1_pt <= decoration.clip_y0_pt))) {
+            return {{QStringLiteral("valid"), false},
+                    {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
+        }
+        decorations.push_back(QVariantMap{
+            {QStringLiteral("xPt"), decoration.x_pt},
+            {QStringLiteral("yPt"), decoration.y_pt},
+            {QStringLiteral("widthPt"), decoration.width_pt},
+            {QStringLiteral("heightPt"), decoration.height_pt},
+            {QStringLiteral("colorRed"), decoration.color_red},
+            {QStringLiteral("colorGreen"), decoration.color_green},
+            {QStringLiteral("colorBlue"), decoration.color_blue},
+            {QStringLiteral("colorAlpha"), decoration.color_alpha},
+            {QStringLiteral("clipEnabled"), decoration.clip_enabled},
+            {QStringLiteral("clipY0Pt"), decoration.clip_y0_pt},
+            {QStringLiteral("clipY1Pt"), decoration.clip_y1_pt},
+        });
+    }
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), QString::number(frame.document_generation)},
             {QStringLiteral("fontGeneration"), QString::number(frame.font_generation)},
             {QStringLiteral("rasterPxPerPt"), px_per_pt},
             {QStringLiteral("pageIndex"), frame.page_index},
             {QStringLiteral("images"), images},
-            {QStringLiteral("placements"), placements}};
+            {QStringLiteral("placements"), placements},
+            {QStringLiteral("decorations"), decorations}};
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(px_per_pt)

@@ -89,6 +89,284 @@ fn invalid_layout_requests_leave_the_reusable_layouter_available() {
     assert!(!result.paragraph.lines.is_empty());
 }
 
+#[test]
+fn first_line_indent_offsets_only_the_first_visual_line() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source = paragraph("one two three four five six seven eight", Some("en"));
+    let style = ShapingStyle::new(1200);
+    let settings = document_settings();
+    let (_, layout) = layouter
+        .layout(
+            &mut catalog,
+            &source,
+            &settings,
+            &style,
+            ParagraphLayoutOptions {
+                width_pt: 90.0,
+                first_line_indent_chars: Some(2),
+                ..layout_options(90.0)
+            },
+        )
+        .unwrap_or_else(|error| panic!("indented paragraph failed to layout: {error}"));
+
+    let glyph_x = layout
+        .layout
+        .lines()
+        .map(|line| {
+            line.items()
+                .filter_map(|item| match item {
+                    parley::PositionedLayoutItem::GlyphRun(run) => {
+                        run.positioned_glyphs().next().map(|glyph| glyph.x)
+                    }
+                    parley::PositionedLayoutItem::InlineBox(_) => None,
+                })
+                .next()
+                .unwrap_or_else(|| panic!("visual line has no glyph"))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(glyph_x.len() > 1, "fixture must wrap to multiple lines");
+    assert!(
+        glyph_x[0] >= 23.9,
+        "first line should begin after a 2 em indent: {glyph_x:?}"
+    );
+    assert!(
+        glyph_x[1] < 1.0,
+        "continuation lines should keep the normal margin"
+    );
+    let first_cursor = layout
+        .cursor_at(0, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("paragraph start is not a cursor boundary"));
+    let cursor_x = layout.cursor_geometry(first_cursor, 0.0).x0;
+    assert!(
+        cursor_x >= 23.9,
+        "the first-line caret should follow the indent: {cursor_x}"
+    );
+}
+
+#[test]
+fn empty_first_line_indent_places_the_caret_after_the_indent() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source = paragraph("", Some("en"));
+    let style = ShapingStyle::new(1200);
+    let (_, layout) = layouter
+        .layout(
+            &mut catalog,
+            &source,
+            &document_settings(),
+            &style,
+            ParagraphLayoutOptions {
+                first_line_indent_chars: Some(2),
+                ..layout_options(240.0)
+            },
+        )
+        .unwrap_or_else(|error| panic!("empty indented paragraph failed to layout: {error}"));
+    let cursor = layout
+        .cursor_at(0, crate::VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("empty paragraph has no cursor boundary"));
+    let cursor_x = layout.cursor_geometry(cursor, 0.0).x0;
+    assert!(
+        cursor_x >= 23.9,
+        "empty first-line caret should follow the 2 em indent: {cursor_x}"
+    );
+}
+
+#[test]
+fn ordinary_and_em_spaces_use_font_relative_advances() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source = paragraph("a a\u{2003}a", Some("en"));
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &source,
+            &document_settings(),
+            &ShapingStyle::new(1200),
+            layout_options(200.0),
+        )
+        .unwrap_or_else(|error| panic!("space paragraph failed to layout: {error}"));
+
+    let mut advances = Vec::new();
+    for line in result.layout.lines() {
+        for run in line.runs() {
+            for cluster in run.clusters() {
+                let range = cluster.text_range();
+                let cluster_text = &"a a\u{2003}a"[range];
+                if cluster_text == " " || cluster_text == "\u{2003}" {
+                    advances.push((cluster_text, cluster.advance()));
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        advances.len(),
+        2,
+        "both source spaces remain separate clusters"
+    );
+    assert!(
+        (advances[0].1 - 6.0).abs() < 0.1,
+        "U+0020 should occupy half of the 12 pt em: {advances:?}"
+    );
+    assert!(
+        (advances[1].1 - 12.0).abs() < 0.1,
+        "U+2003 should occupy one 12 pt em: {advances:?}"
+    );
+}
+
+#[test]
+fn code_font_keeps_native_monospace_space_advance() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source_text = "i W";
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph(source_text, Some("en")),
+            &document_settings(),
+            &ShapingStyle::code(1200),
+            layout_options(200.0),
+        )
+        .unwrap_or_else(|error| panic!("code paragraph failed to layout: {error}"));
+
+    let advances: Vec<_> = result
+        .layout
+        .lines()
+        .flat_map(|line| line.runs())
+        .flat_map(|run| run.clusters())
+        .map(|cluster| (&source_text[cluster.text_range()], cluster.advance()))
+        .collect();
+    assert_eq!(advances.len(), 3);
+    let cell_width = advances[0].1;
+    assert!(cell_width > 0.0);
+    assert!(
+        advances
+            .iter()
+            .all(|(_, advance)| (*advance - cell_width).abs() < 0.01),
+        "code glyphs and spaces should occupy one native monospace cell: {advances:?}"
+    );
+}
+
+#[test]
+fn ordinary_space_calibration_does_not_change_nbsp_width_on_a_reused_layouter() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let mut measure = |layouter: &mut ParagraphLayouter, text: &str, target: &str| {
+        let (_, result) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph(text, Some("en")),
+                &settings,
+                &style,
+                layout_options(240.0),
+            )
+            .unwrap_or_else(|error| panic!("space test text failed to layout: {error}"));
+        result
+            .layout
+            .lines()
+            .flat_map(|line| line.runs())
+            .flat_map(|run| run.clusters())
+            .filter(|cluster| &text[cluster.text_range()] == target)
+            .map(|cluster| cluster.advance())
+            .next()
+    };
+
+    let before = measure(&mut layouter, "a\u{00a0}b", "\u{00a0}")
+        .unwrap_or_else(|| panic!("NBSP cluster was not shaped"));
+    let ordinary = measure(&mut layouter, "a b", " ")
+        .unwrap_or_else(|| panic!("ordinary space cluster was not shaped"));
+    let after = measure(&mut layouter, "a\u{00a0}b", "\u{00a0}")
+        .unwrap_or_else(|| panic!("NBSP cluster was not shaped after calibration"));
+
+    assert!((ordinary - 6.0).abs() < 0.1);
+    assert!(
+        (before - after).abs() < 0.01,
+        "NBSP width must not depend on earlier layouts: before={before}, after={after}"
+    );
+}
+
+#[test]
+fn space_calibration_preserves_shaping_across_equal_style_runs() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let mut split = paragraph("", Some("en"));
+    split.inlines = vec![
+        InlineNode::Run(Run {
+            text: "a off".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "ice".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let (_, flat) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("a office", Some("en")),
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("flat text failed to layout: {error}"));
+    let (_, split) = layouter
+        .layout(
+            &mut catalog,
+            &split,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("equal-style runs failed to layout: {error}"));
+
+    assert_eq!(
+        glyph_signature(&flat.layout),
+        glyph_signature(&split.layout),
+        "splitting equal-style text at a space must preserve glyph shaping and advances"
+    );
+}
+
+#[test]
+fn ordinary_space_width_includes_combining_marks_in_its_grapheme() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source_text = "a \u{301}a";
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph(source_text, Some("en")),
+            &document_settings(),
+            &ShapingStyle::new(1200),
+            layout_options(200.0),
+        )
+        .unwrap_or_else(|error| panic!("combining-space paragraph failed to layout: {error}"));
+
+    let cluster = result
+        .layout
+        .lines()
+        .flat_map(|line| line.runs())
+        .flat_map(|run| run.clusters())
+        .find(|cluster| {
+            let range = cluster.text_range();
+            source_text[range].starts_with(' ')
+        })
+        .unwrap_or_else(|| panic!("space grapheme cluster is missing"));
+    assert!(
+        (cluster.advance() - 6.0).abs() < 0.1,
+        "space and its combining mark must occupy half an em: {} pt",
+        cluster.advance()
+    );
+}
+
 fn document_settings() -> ResolvedDocumentTextSettings {
     ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings::default())
         .unwrap_or_else(|error| panic!("document settings failed: {error}"))
@@ -108,6 +386,7 @@ fn layout_options(width_pt: f32) -> ParagraphLayoutOptions {
         spacing: LineSpacing::Natural,
         line_grid_metrics: empty_metrics(),
         line_grid_font_size_centipoints: 1200,
+        first_line_indent_chars: None,
     }
 }
 
@@ -162,16 +441,19 @@ fn language_tailoring_ignores_same_language_run_boundaries() {
     let flat = [StyledSpan {
         text,
         style: style.clone(),
+        underline: false,
     }];
     let split_at = 12;
     let split = [
         StyledSpan {
             text: &text[..split_at],
             style: style.clone(),
+            underline: false,
         },
         StyledSpan {
             text: &text[split_at..],
             style,
+            underline: false,
         },
     ];
 
@@ -188,16 +470,19 @@ fn language_tailoring_ignores_same_language_run_boundaries() {
     let flat_chinese = [StyledSpan {
         text: chinese_text,
         style: chinese_style.clone(),
+        underline: false,
     }];
     let split_at = "你好".len();
     let split_chinese = [
         StyledSpan {
             text: &chinese_text[..split_at],
             style: chinese_style.clone(),
+            underline: false,
         },
         StyledSpan {
             text: &chinese_text[split_at..],
             style: chinese_style,
+            underline: false,
         },
     ];
     assert_eq!(
@@ -890,6 +1175,58 @@ fn composition_underline_stays_at_same_height_when_chinese_joins_line() {
     }
     // 单位为 pt：同一字体的预编辑字形不应因同行已有中文而改变下划线高度。
     assert!((underline_y[0] - underline_y[1]).abs() < 0.001);
+}
+
+#[test]
+fn persistent_underline_follows_shaped_runs_across_soft_wrap_without_changing_line_boxes() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = ParagraphLayouter::new();
+    let mut model = paragraph("underline中文underline", Some("zh-Hans"));
+    let plain_model = model.clone();
+    let InlineNode::Run(run) = &mut model.inlines[0] else {
+        unreachable!();
+    };
+    run.props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    let (_, layout) = layouter
+        .layout(
+            &mut catalog,
+            &model,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(55.0),
+        )
+        .unwrap_or_else(|error| panic!("Parley layout failed: {error}"));
+    assert!(layout.paragraph.lines.len() > 1);
+    let mut rectangles = Vec::new();
+    for line_index in 0..layout.layout.len() {
+        rectangles.extend(layout.underline_geometry_for_line(line_index));
+    }
+    assert!(rectangles.len() > 1);
+    assert!(
+        rectangles
+            .iter()
+            .all(|(bounds, _)| bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0)
+    );
+    assert!(rectangles.iter().all(|(bounds, _)| {
+        bounds.y0 >= 0.0 && bounds.y0 <= f64::from(layout.paragraph.total_height_pt)
+    }));
+
+    let (_, plain_layout) = layouter
+        .layout(
+            &mut catalog,
+            &plain_model,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(55.0),
+        )
+        .unwrap_or_else(|error| panic!("plain Parley layout failed: {error}"));
+    assert_eq!(layout.paragraph.lines, plain_layout.paragraph.lines);
+    assert_eq!(
+        layout.paragraph.total_height_pt,
+        plain_layout.paragraph.total_height_pt
+    );
 }
 
 #[test]

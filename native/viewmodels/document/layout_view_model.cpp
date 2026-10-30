@@ -186,8 +186,12 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         input_context.insert(QStringLiteral("surroundingText"),
                              m_input_method_context.value(QStringLiteral("surroundingText")));
     }
-    const QVariantMap command_line =
-        root.value(QStringLiteral("commandLine")).toObject().toVariantMap();
+    QVariantMap command_line;
+    if (!layout_snapshot::parse_command_line_state(root.value(QStringLiteral("commandLine")),
+                                                   command_line, m_error)) {
+        clearEnvironmentHighlightRects();
+        return false;
+    }
     QVariantList block_environment_highlight_rects = m_block_environment_highlight_rects;
     QVariantList inline_environment_highlight_rects = m_inline_environment_highlight_rects;
     const QJsonValue block_environment_highlight_value =

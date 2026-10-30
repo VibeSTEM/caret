@@ -43,11 +43,16 @@ Item {
                 const result = LayoutViewModel.clearSelection();
                 if (!result.valid)
                     console.warn("Document selection clear failed:", result.error);
+                else if (result.compositionCancelled === true)
+                    inputHandler.canvas.cancelPreedit();
                 return;
             }
             const result = LayoutViewModel.placeCaretAtPage(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
-            if (result.valid)
+            if (result.valid) {
+                if (result.compositionCancelled === true)
+                    inputHandler.canvas.cancelPreedit();
                 inputHandler.documentPositionHit(result);
+            }
         }
     }
 
@@ -75,6 +80,8 @@ Item {
                     const result = LayoutViewModel.setSelection(inputHandler.dragAnchor, inputHandler.dragFocus);
                     if (!result.valid)
                         console.warn("Document selection failed:", result.error);
+                    else if (result.compositionCancelled === true)
+                        inputHandler.canvas.cancelPreedit();
                 }
                 inputHandler.selectionDragActive = false;
                 inputHandler.resetDragPreview();

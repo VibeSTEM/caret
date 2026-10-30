@@ -77,7 +77,8 @@ impl DocumentViewRuntime {
             (hit.clone(), snapshot.view_for_hit(&hit))
         };
         let position = hit.position;
-        self.session
+        let effect = self
+            .session
             .set_selection_with_visual_affinity(
                 Some(Selection {
                     anchor: position.clone(),
@@ -88,6 +89,22 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.set: {error}"))?;
         self.anchor_visual_affinity = hit.visual_affinity;
         self.preferred_visual_x_pt = None;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+        }
+        let mut result = serde_json::to_value(result)
+            .map_err(|error| format!("layout.place_caret_serialize: {error}"))?;
+        if effect.composition_changed
+            && let Some(object) = result.as_object_mut()
+        {
+            object.insert(
+                "compositionCancelled".to_owned(),
+                serde_json::Value::Bool(true),
+            );
+        }
         serde_json::to_string(&result)
             .map_err(|error| format!("layout.place_caret_serialize: {error}"))
     }

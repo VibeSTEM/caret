@@ -4,6 +4,7 @@
 #include <QInputMethod>
 #include <QInputMethodEvent>
 #include <QQuickItem>
+#include <QScopedValueRollback>
 #include <QString>
 #include <QVariant>
 #include <Qt>
@@ -17,6 +18,20 @@
 namespace caret {
 
 QVariantMap DocumentCanvas::inputMethodContext() const { return m_input_method_context; }
+
+QRectF DocumentCanvas::inputMethodCursorRectangle() const {
+    return m_input_method_cursor_rectangle;
+}
+
+void DocumentCanvas::setInputMethodCursorRectangle(const QRectF& rectangle) {
+    const QRectF normalized = rectangle.isValid() ? rectangle : QRectF{};
+    if (m_input_method_cursor_rectangle == normalized) {
+        return;
+    }
+    m_input_method_cursor_rectangle = normalized;
+    emit inputMethodCursorRectangleChanged();
+    updateInputMethodCursorRectangle();
+}
 
 void DocumentCanvas::setInputMethodContext(const QVariantMap& context) {
     if (m_input_method_context == context) {
@@ -37,6 +52,10 @@ void DocumentCanvas::updateInputMethodCursorRectangle() {
     }
 }
 void DocumentCanvas::cancelPreedit() {
+    if (m_preedit_cancellation_in_progress) {
+        return;
+    }
+    const QScopedValueRollback cancellation_guard(m_preedit_cancellation_in_progress, true);
     if (!m_preedit_text.isEmpty() || m_preedit_cursor_position != 0) {
         m_preedit_text.clear();
         m_preedit_cursor_position = 0;
@@ -75,7 +94,8 @@ QVariant DocumentCanvas::inputMethodQuery(Qt::InputMethodQuery query) const {
     case Qt::ImEnabled:
         return true;
     case Qt::ImCursorRectangle:
-        return caretRect(m_caret_geometry);
+        return m_input_method_cursor_rectangle.isEmpty() ? caretRect(m_caret_geometry)
+                                                         : m_input_method_cursor_rectangle;
     case Qt::ImSurroundingText:
         return m_input_method_context.value(QStringLiteral("surroundingText"));
     case Qt::ImCursorPosition:

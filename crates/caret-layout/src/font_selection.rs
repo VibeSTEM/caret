@@ -4,12 +4,15 @@ use std::collections::{BTreeMap, btree_map::Entry};
 
 use caret_doc::DocumentSettings;
 use icu_locale_core::{Locale, subtags::Script};
-use icu_properties::{PropertyNamesShort, PropertyParser, props::Script as UnicodeScript};
+use icu_properties::{
+    PropertyNamesLong, PropertyNamesShort, PropertyParser, props::Script as UnicodeScript,
+};
 
 /// 候选字体族来自哪一层文档偏好；实际字体覆盖由字体后端检查。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontPreferenceSource {
     Explicit,
+    Code,
     Math,
     LanguageScript,
     Script,
@@ -24,6 +27,42 @@ pub struct FontFamilyCandidate<'a> {
     pub source: FontPreferenceSource,
 }
 
+/// 返回 ICU 当前 Unicode 数据中的真实单一脚本短标签。
+pub fn unicode_script_tags() -> Vec<String> {
+    let names = PropertyNamesShort::<UnicodeScript>::new();
+    #[allow(deprecated)]
+    UnicodeScript::ALL_VALUES
+        .iter()
+        .filter_map(|script| names.get_locale_script(*script))
+        .map(|script| script.as_str().to_owned())
+        .filter(|tag| {
+            !matches!(
+                tag.as_str(),
+                "Zyyy" | "Zinh" | "Zzzz" | "Jpan" | "Kore" | "Hanb"
+            )
+        })
+        .collect()
+}
+
+/// 返回 Unicode 单一脚本的规范短标签与英文名称，供脚本选择列表直接展示。
+pub fn unicode_script_choices() -> Vec<(String, String)> {
+    let short_names = PropertyNamesShort::<UnicodeScript>::new();
+    let long_names = PropertyNamesLong::<UnicodeScript>::new();
+    #[allow(deprecated)]
+    UnicodeScript::ALL_VALUES
+        .iter()
+        .filter_map(|script| {
+            let locale_script = short_names.get_locale_script(*script)?;
+            let short = locale_script.as_str();
+            if matches!(short, "Zyyy" | "Zinh" | "Zzzz" | "Jpan" | "Kore" | "Hanb") {
+                return None;
+            }
+            let long = long_names.get(*script)?.to_owned();
+            Some((short.to_owned(), long))
+        })
+        .collect()
+}
+
 /// 已完成文字分析后的字体选择上下文；不在这里重新分类字符。
 #[derive(Debug, Clone, Copy)]
 pub struct FontSelectionContext<'a> {
@@ -34,6 +73,8 @@ pub struct FontSelectionContext<'a> {
     pub math_context: bool,
     /// Font EnvironmentNode 等局部显式请求，优先于所有文档默认值。
     pub explicit_family: Option<&'a str>,
+    /// 代码文本使用文档代码字体和等宽通用族，不继承正文脚本字体。
+    pub code: bool,
 }
 
 /// 偏好键规范化失败；不因本机缺少某字体而返回此错误。
@@ -66,6 +107,7 @@ pub struct FontPreferenceRules {
     default_family: Option<String>,
     cjk_family: Option<String>,
     math_family: Option<String>,
+    code_family: Option<String>,
     scripts: BTreeMap<Script, String>,
     language_scripts: BTreeMap<Script, BTreeMap<String, String>>,
 }
@@ -104,10 +146,17 @@ impl FontPreferenceRules {
     pub fn from_document_settings(
         settings: &DocumentSettings,
     ) -> Result<Self, FontPreferenceError> {
+        let code_family =
+            if settings.default_code_font_family == caret_doc::DEFAULT_CODE_FONT_FAMILY {
+                None
+            } else {
+                checked_family(Some(&settings.default_code_font_family))?
+            };
         let mut result = Self {
             default_family: checked_family(settings.default_font_family.as_deref())?,
             cjk_family: checked_family(settings.default_cjk_font_family.as_deref())?,
             math_family: checked_family(settings.default_math_font_family.as_deref())?,
+            code_family,
             ..Self::default()
         };
         for (raw_script, family) in &settings.script_font_families {
@@ -161,6 +210,14 @@ impl FontPreferenceRules {
             context.explicit_family,
             FontPreferenceSource::Explicit,
         );
+        if context.code {
+            push_candidate(
+                &mut result,
+                self.code_family.as_deref(),
+                FontPreferenceSource::Code,
+            );
+            return result;
+        }
         if context.math_context {
             push_candidate(
                 &mut result,

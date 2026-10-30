@@ -26,6 +26,45 @@ fn prepare_runtime(text: &str) -> (DocumentViewRuntime, usize) {
     (runtime, initial_snapshot.len())
 }
 
+fn prepare_formatting_runtime(text: &str) -> DocumentViewRuntime {
+    let mut runtime = prepare_runtime(text).0;
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &runtime
+            .layout_snapshot_json()
+            .unwrap_or_else(|error| panic!("无法读取格式性能基准文档快照：{error}")),
+    )
+    .unwrap_or_else(|error| panic!("无法解析格式性能基准文档快照：{error}"));
+    let paragraphs = snapshot["paragraphs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("格式性能基准文档没有段落：{snapshot}"));
+    let paragraph = paragraphs
+        .get(paragraphs.len() / 2)
+        .unwrap_or_else(|| panic!("格式性能基准文档中间段落不存在：{}", paragraphs.len()));
+    let paragraph_id = paragraph["paragraphId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("格式性能基准段落缺少 ID：{paragraph}"));
+    let text_length = paragraph["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("格式性能基准段落缺少文本：{paragraph}"))
+        .len();
+    let anchor = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream"
+    });
+    let focus = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": text_length.to_string(),
+        "affinity": "upstream",
+        "visualAffinity": "upstream"
+    });
+    runtime
+        .set_selection_json(&serde_json::json!({"anchor": anchor, "focus": focus}).to_string())
+        .unwrap_or_else(|error| panic!("无法选择格式性能基准段落：{error}"));
+    runtime
+}
+
 fn prepare_ime_runtime(text: &str) -> DocumentViewRuntime {
     let mut runtime = prepare_runtime(text).0;
     let page_index = current_caret_page_index(&mut runtime);
@@ -200,6 +239,24 @@ fn long_document_input(criterion: &mut Criterion) {
                 let response = runtime
                     .split_paragraph_json()
                     .unwrap_or_else(|error| panic!("长文档拆分段落失败：{error}"));
+                black_box(response.len())
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("underline_one_paragraph_in_100k_document", |bencher| {
+        bencher.iter_batched_ref(
+            || prepare_formatting_runtime(&text),
+            |runtime| {
+                runtime
+                    .command_line_command_json("begin", String::new())
+                    .unwrap_or_else(|error| panic!("无法打开格式命令：{error}"));
+                runtime
+                    .command_line_command_json("type", "underline".to_owned())
+                    .unwrap_or_else(|error| panic!("无法查询下划线命令：{error}"));
+                let response = runtime
+                    .command_line_command_json("accept", String::new())
+                    .unwrap_or_else(|error| panic!("应用长文档下划线格式失败：{error}"));
                 black_box(response.len())
             },
             BatchSize::LargeInput,

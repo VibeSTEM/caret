@@ -3,10 +3,11 @@
 use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
 };
 use std::collections::BTreeMap;
+use unicode_segmentation::UnicodeSegmentation;
 
 fn paragraph_text(session: &Session, block_index: usize) -> String {
     let Some(Block::Paragraph(paragraph)) = session.document.body.get(block_index) else {
@@ -276,7 +277,7 @@ fn tab_completes_a_filtered_command_without_editing_the_document() {
         command_line
             .selected_candidate()
             .map(|candidate| candidate.alias),
-        Some("\\section")
+        Some(std::borrow::Cow::Borrowed("\\section"))
     );
     let revision = session.document_generation();
 
@@ -299,6 +300,319 @@ fn tab_completes_a_filtered_command_without_editing_the_document() {
             .command_line()
             .map(|command_line| command_line.query.as_str()),
         Some("section")
+    );
+}
+
+#[test]
+fn command_line_preedit_blocks_tab_and_cancel_reports_composition_change() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .input_method_command_line("ni".to_owned(), String::new(), 0, 0, 2)
+        .unwrap_or_else(|error| panic!("command-line preedit failed: {error}"));
+    let generation = session.document_generation();
+
+    session
+        .run(Command::TabCommandLine)
+        .unwrap_or_else(|error| panic!("Tab during preedit should be ignored: {error}"));
+
+    let line = session
+        .command_line()
+        .unwrap_or_else(|| panic!("preedit should keep command line active"));
+    assert_eq!(line.preedit, "ni");
+    assert_eq!(line.query, "");
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(paragraph_text(&session, 0), "");
+
+    let effect = session
+        .run(Command::CancelCommandLine)
+        .unwrap_or_else(|error| panic!("command-line cancellation failed: {error}"));
+    assert!(effect.composition_changed);
+    assert!(session.command_line().is_none());
+    assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
+fn font_picker_cursor_never_stops_inside_a_combining_grapheme() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("font".to_owned()))
+        .unwrap_or_else(|error| panic!("font command query failed: {error}"));
+    session
+        .run_command_line_with_font_families(
+            Command::AcceptCommandLine,
+            vec!["Avenir Next".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("font picker did not open: {error}"));
+    session
+        .run(Command::TypeCommandLine("\u{301}".to_owned()))
+        .unwrap_or_else(|error| panic!("combining mark input failed: {error}"));
+    session
+        .run(Command::MoveCommandLineCursor(Direction::Backward))
+        .unwrap_or_else(|error| panic!("font query cursor move failed: {error}"));
+    session
+        .run(Command::TypeCommandLine("e".to_owned()))
+        .unwrap_or_else(|error| panic!("base character input failed: {error}"));
+
+    let line = session
+        .command_line()
+        .unwrap_or_else(|| panic!("font picker should remain active"));
+    assert_eq!(line.query, "e\u{301}");
+    assert_eq!(line.cursor, line.query.len());
+    assert!(line.query.is_char_boundary(line.cursor));
+    assert!(!line.query[..line.cursor].is_empty());
+    assert_eq!(line.query[..line.cursor].graphemes(true).count(), 1);
+}
+
+#[test]
+fn default_font_picker_navigates_script_and_script_language_targets() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    let font_targets = vec![
+        (
+            "Latn · Latin".to_owned(),
+            DocumentFontTarget::Script("Latn".to_owned()),
+        ),
+        (
+            "Cyrl · Cyrillic".to_owned(),
+            DocumentFontTarget::Script("Cyrl".to_owned()),
+        ),
+    ];
+    let fonts = vec!["Avenir Next".to_owned()];
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("defaultfont".to_owned()))
+        .unwrap_or_else(|error| panic!("default-font query failed: {error}"));
+    session
+        .run_command_line_with_font_choices(Command::AcceptCommandLine, fonts.clone(), font_targets)
+        .unwrap_or_else(|error| panic!("default-font picker did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontTarget)
+    );
+    assert_eq!(
+        session.command_line_candidates()[0].command_id,
+        "command_line.close_font_picker"
+    );
+
+    session
+        .run(Command::SelectCommandLineCandidate(2))
+        .unwrap_or_else(|error| panic!("Cyrillic script selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("script scope did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontScope)
+    );
+
+    session
+        .run(Command::SelectCommandLineCandidate(2))
+        .unwrap_or_else(|error| panic!("Script+ selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language override input did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontLanguage)
+    );
+    assert_eq!(
+        session.command_line().map(|line| line.prefix()),
+        Some("\\defaultfont Cyrl: ".to_owned())
+    );
+
+    session
+        .run(Command::TypeCommandLine("sr".to_owned()))
+        .unwrap_or_else(|error| panic!("language tag input failed: {error}"));
+    session
+        .run(Command::MoveCommandLineSelection(Direction::Forward))
+        .unwrap_or_else(|error| panic!("language target selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language font list did not open: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.prefix()),
+        Some("\\defaultfont Cyrl:sr ".to_owned())
+    );
+
+    session
+        .run(Command::TypeCommandLine("Avenir".to_owned()))
+        .unwrap_or_else(|error| panic!("family query failed: {error}"));
+    session
+        .run(Command::MoveCommandLineSelection(Direction::Forward))
+        .unwrap_or_else(|error| panic!("family selection failed: {error}"));
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("language font preference failed: {error}"));
+
+    assert_eq!(
+        session
+            .document()
+            .global_settings
+            .language_script_font_families["Cyrl"]["sr"],
+        "Avenir Next"
+    );
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::DefaultFontTarget)
+    );
+}
+
+#[test]
+fn font_command_opens_unicode_family_picker_and_applies_selected_family() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("font".to_owned()))
+        .unwrap_or_else(|error| panic!("font command query failed: {error}"));
+
+    session
+        .run_command_line_with_font_families(
+            Command::TabCommandLine,
+            vec!["Avenir Next".to_owned(), "思源 宋体".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("font command alias completion failed: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.mode),
+        Some(crate::editing::CommandLineMode::Command)
+    );
+
+    session
+        .run_command_line_with_font_families(
+            Command::AcceptCommandLine,
+            vec!["Avenir Next".to_owned(), "思源 宋体".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("font picker did not open: {error}"));
+    let command_line = session
+        .command_line()
+        .unwrap_or_else(|| panic!("font picker should stay active"));
+    assert_eq!(
+        command_line.mode,
+        crate::editing::CommandLineMode::FontFamily
+    );
+    assert_eq!(command_line.prefix(), "\\font ");
+
+    session
+        .run(Command::TypeCommandLine("\\".to_owned()))
+        .unwrap_or_else(|error| panic!("font picker slash input failed: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.query.as_str()),
+        Some("\\")
+    );
+    session
+        .run(Command::BackspaceCommandLine)
+        .unwrap_or_else(|error| panic!("font picker slash removal failed: {error}"));
+
+    session
+        .input_method_command_line("拼音".to_owned(), String::new(), 0, 0, 1)
+        .unwrap_or_else(|error| panic!("font picker preedit failed: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.preedit.as_str()),
+        Some("拼音")
+    );
+    session
+        .input_method_command_line(String::new(), "思源 宋体".to_owned(), 0, 0, 0)
+        .unwrap_or_else(|error| panic!("font picker IME commit failed: {error}"));
+    assert_eq!(
+        session.command_line().map(|line| line.query.as_str()),
+        Some("思源 宋体")
+    );
+
+    let candidate = session
+        .command_line_candidates()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("matching family should be suggested"));
+    assert_eq!(candidate.command_id, "text.format.font_family");
+    assert_eq!(candidate.value.as_deref(), Some("思源 宋体"));
+
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("font family command failed: {error}"));
+    assert!(session.command_line().is_none());
+    session
+        .run(Command::InsertText("字".to_owned()))
+        .unwrap_or_else(|error| panic!("font-styled input failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection.focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    let Some(InlineNode::Environment(environment)) = paragraph.inlines.first() else {
+        panic!("font command should create a Font environment");
+    };
+    assert_eq!(environment.kind, InlineEnvironmentKind::Font);
+}
+
+#[test]
+fn literal_slash_at_empty_query_does_not_open_highlighted_font_picker() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    let font_candidate_index = session
+        .command_line_candidates()
+        .iter()
+        .position(|candidate| candidate.command_id == "text.format.font")
+        .unwrap_or_else(|| panic!("font command candidate is missing"));
+    session
+        .run(Command::SelectCommandLineCandidate(font_candidate_index))
+        .unwrap_or_else(|error| panic!("font candidate selection failed: {error}"));
+
+    session
+        .run_command_line_with_font_families(
+            Command::TypeCommandLine("\\".to_owned()),
+            vec!["Avenir Next".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("literal slash input failed: {error}"));
+
+    assert!(session.command_line().is_none());
+    assert_eq!(paragraph_text(&session, 0), "\\");
+}
+
+#[test]
+fn font_picker_ime_replacement_replaces_the_requested_query_range() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run_command_line_with_font_families(
+            Command::BeginCommandLine,
+            vec!["Avenir Next".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("font".to_owned()))
+        .unwrap_or_else(|error| panic!("font command query failed: {error}"));
+    session
+        .run_command_line_with_font_families(
+            Command::AcceptCommandLine,
+            vec!["Avenir Next".to_owned()],
+        )
+        .unwrap_or_else(|error| panic!("font picker did not open: {error}"));
+    session
+        .run(Command::TypeCommandLine("ABCD".to_owned()))
+        .unwrap_or_else(|error| panic!("font picker query failed: {error}"));
+    session
+        .run(Command::MoveCommandLineCursor(Direction::Backward))
+        .unwrap_or_else(|error| panic!("font picker cursor move failed: {error}"));
+    session
+        .input_method_command_line(String::new(), "界".to_owned(), -1, 1, 0)
+        .unwrap_or_else(|error| panic!("font picker replacement failed: {error}"));
+
+    assert_eq!(
+        session.command_line().map(|line| line.query.as_str()),
+        Some("AB界D")
     );
 }
 
@@ -478,6 +792,112 @@ fn accepting_newparagraph_command_creates_a_paragraph_and_is_one_undo_step() {
         .run(Command::Redo)
         .unwrap_or_else(|error| panic!("redoing new paragraph failed: {error}"));
     assert_eq!(paragraph_text(&session, 1), "");
+}
+
+#[test]
+fn first_line_indent_command_is_available_anywhere_and_is_undoable() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("hello".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    let text_before = paragraph_text(&session, 0);
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("firstlineindent".to_owned()))
+        .unwrap_or_else(|error| panic!("command query failed: {error}"));
+    assert!(
+        session
+            .command_line_candidates()
+            .iter()
+            .any(|candidate| { candidate.alias == "\\firstlineindent" && candidate.available })
+    );
+    let applied = session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("first-line indent command failed: {error}"));
+
+    assert!(applied.document_changed);
+    assert_eq!(paragraph_text(&session, 0), text_before);
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph");
+    };
+    assert_eq!(
+        paragraph
+            .layout
+            .as_ref()
+            .and_then(|layout| layout.first_line_indent_chars),
+        Some(2)
+    );
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph");
+    };
+    assert_eq!(paragraph.layout, None);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph");
+    };
+    assert_eq!(
+        paragraph
+            .layout
+            .as_ref()
+            .and_then(|layout| layout.first_line_indent_chars),
+        Some(2)
+    );
+}
+
+#[test]
+fn tab_inserts_two_character_width_spaces_at_the_current_caret_position() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("abcd".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("first caret move failed: {error}"));
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("second caret move failed: {error}"));
+    let effect = session
+        .run(Command::EditorKey(EditorKey::Tab))
+        .unwrap_or_else(|error| panic!("Tab insertion failed: {error}"));
+    assert!(effect.document_changed);
+    assert_eq!(paragraph_text(&session, 0), "ab\u{2003}\u{2003}cd");
+}
+
+#[test]
+fn width_commands_insert_spaces_with_their_named_widths() {
+    for (query, expected_text) in [
+        ("singlecharspace", "\u{2003}"),
+        ("doublecharspace", "\u{2003}\u{2003}"),
+    ] {
+        let mut session = Session::new(Document::blank())
+            .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+        session
+            .run(Command::BeginCommandLine)
+            .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+        session
+            .run(Command::TypeCommandLine(query.to_owned()))
+            .unwrap_or_else(|error| panic!("space command query failed: {error}"));
+        let candidate = session
+            .command_line_candidates()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("\\{query} candidate missing"));
+        assert!(candidate.available);
+        session
+            .run(Command::AcceptCommandLine)
+            .unwrap_or_else(|error| panic!("{query} command failed: {error}"));
+        assert_eq!(paragraph_text(&session, 0), expected_text);
+    }
 }
 
 #[test]

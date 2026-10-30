@@ -70,6 +70,20 @@ mod generated {
             clip_y1_pt: f64,
         }
 
+        struct GlyphDecoration {
+            x_pt: f64,
+            y_pt: f64,
+            width_pt: f64,
+            height_pt: f64,
+            color_red: u8,
+            color_green: u8,
+            color_blue: u8,
+            color_alpha: u8,
+            clip_enabled: bool,
+            clip_y0_pt: f64,
+            clip_y1_pt: f64,
+        }
+
         struct PageGlyphFrame {
             document_generation: u64,
             font_generation: u64,
@@ -77,6 +91,7 @@ mod generated {
             error: String,
             images: Vec<GlyphImage>,
             placements: Vec<GlyphPlacement>,
+            decorations: Vec<GlyphDecoration>,
         }
 
         struct DocumentOpenResult {

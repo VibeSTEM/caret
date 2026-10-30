@@ -90,6 +90,35 @@ fn nested_environment_tree_round_trips() {
 }
 
 #[test]
+fn first_line_indent_round_trips_through_cdoc_storage() {
+    let source = minimal_document(json!([{
+        "type": "paragraph",
+        "id": "p-1",
+        "layout": {"firstLineIndentChars": 2},
+        "inlines": [{"type": "run", "text": "indented", "props": {}}]
+    }]));
+    let OpenedDocument::Editable(file) = must(open(source.as_bytes())) else {
+        panic!("known first-line indent data should be editable");
+    };
+
+    let saved = must(file.to_bytes());
+    let encoded: Value = must(serde_json::from_slice(&saved));
+    assert_eq!(
+        encoded["document"]["body"][0]["layout"]["firstLineIndentChars"],
+        2
+    );
+
+    let OpenedDocument::Editable(reopened) = must(open(&saved)) else {
+        panic!("saved first-line indent data should remain editable");
+    };
+    let reopened_value: Value = must(serde_json::from_slice(&must(reopened.to_bytes())));
+    assert_eq!(
+        reopened_value["document"]["body"][0]["layout"]["firstLineIndentChars"],
+        2
+    );
+}
+
+#[test]
 fn unicode_is_preserved_without_normalization() {
     let source = minimal_document(json!([{
         "type": "paragraph",

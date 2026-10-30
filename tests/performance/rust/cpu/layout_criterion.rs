@@ -49,6 +49,7 @@ fn layout_options() -> ParagraphLayoutOptions {
         spacing: LineSpacing::Natural,
         line_grid_metrics: metrics,
         line_grid_font_size_centipoints: BASE_FONT_SIZE_CENTIPOINTS,
+        first_line_indent_chars: None,
     }
 }
 
@@ -62,6 +63,8 @@ fn benchmark_paragraph_layout(criterion: &mut Criterion) {
     for (name, fragment, repeats, language) in [
         ("latin_8k", LATIN_FRAGMENT, 96, Some("en-US")),
         ("mixed_scripts_8k", MIXED_FRAGMENT, 96, None),
+        ("space_dense_100k", "ab cd ", 16666, Some("en-US")),
+        ("latin_spaces_100k", LATIN_FRAGMENT, 1152, Some("en-US")),
     ] {
         let text = fragment.repeat(repeats);
         let source = paragraph(text, language);

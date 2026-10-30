@@ -7,7 +7,13 @@ impl Session {
     /// 按命令输入、输入法组字、选区和结构的顺序处理 Escape。
     pub(super) fn handle_escape(&mut self) -> Result<Effect, EditError> {
         if self.command_line.is_some() {
-            return self.run_command_line(Command::CancelCommandLine);
+            let had_preedit = self
+                .command_line
+                .as_ref()
+                .is_some_and(|command_line| !command_line.preedit.is_empty());
+            let mut effect = self.run_command_line(Command::CancelCommandLine)?;
+            effect.composition_changed = had_preedit;
+            return Ok(effect);
         }
         if let Some(composition) = &self.composition {
             return self.cancel_composition(composition.id);

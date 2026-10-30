@@ -465,6 +465,32 @@ pub(crate) fn rasterize_page_glyphs(
             clip_y1_pt,
         });
     }
+    let mut decorations = Vec::with_capacity(rasterized.decorations.len());
+    for decoration in rasterized.decorations {
+        let Some(color) = decoration.color else {
+            return empty_glyph_frame(
+                page_index,
+                "layout.glyphs_missing_decoration_color".to_owned(),
+            );
+        };
+        let (clip_enabled, clip_y0_pt, clip_y1_pt) = decoration
+            .line_clip_y_pt
+            .map(|clip| (true, clip[0], clip[1]))
+            .unwrap_or((false, 0.0, 0.0));
+        decorations.push(bridge::GlyphDecoration {
+            x_pt: decoration.x_pt,
+            y_pt: decoration.y_pt,
+            width_pt: decoration.width_pt,
+            height_pt: decoration.height_pt,
+            color_red: color[0],
+            color_green: color[1],
+            color_blue: color[2],
+            color_alpha: color[3],
+            clip_enabled,
+            clip_y0_pt,
+            clip_y1_pt,
+        });
+    }
     bridge::PageGlyphFrame {
         document_generation: rasterized.document_generation,
         font_generation: rasterized.font_generation,
@@ -472,6 +498,7 @@ pub(crate) fn rasterize_page_glyphs(
         error: String::new(),
         images,
         placements,
+        decorations,
     }
 }
 
@@ -483,6 +510,7 @@ fn empty_glyph_frame(page_index: u32, error: String) -> bridge::PageGlyphFrame {
         error,
         images: Vec::new(),
         placements: Vec::new(),
+        decorations: Vec::new(),
     }
 }
 

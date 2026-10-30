@@ -6,7 +6,7 @@ use super::super::{
     Affinity, Command, EditError, Effect, InputComposition, Pos, PositionMap, Selection,
 };
 use super::Session;
-use super::history::{self, DocumentPatch, SessionHistoryEdit};
+use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use std::mem;
 
 impl Session {
@@ -104,12 +104,18 @@ impl Session {
                     merge_group: None,
                     merge_epoch: candidate.history_merge_epoch,
                 },
-                before_selection,
-                candidate.selection.clone(),
-                before_visual_affinity,
-                candidate.selection_visual_affinity,
-                before_state_id,
-                after_state_id,
+                SessionHistoryState::new(
+                    before_selection,
+                    before_visual_affinity,
+                    self.pending_inline_style.clone(),
+                    before_state_id,
+                ),
+                SessionHistoryState::new(
+                    candidate.selection.clone(),
+                    candidate.selection_visual_affinity,
+                    candidate.pending_inline_style.clone(),
+                    after_state_id,
+                ),
             );
             candidate.record_history_edit(edit);
             candidate.document_generation = self
@@ -153,6 +159,7 @@ impl Session {
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
             composition: self.composition.clone(),
+            pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
@@ -217,11 +224,16 @@ impl Session {
             .offset
             .checked_add(relative_offset)
             .ok_or(EditError::InvalidPosition)?;
+        let has_pending_inline_style = preview.pending_inline_style.is_active();
         let (position, start, end) = {
             let map = preview.text_map_for(&mapped_start)?;
             let position = Pos {
                 offset: map.snap_to_grapheme_boundary(offset, Affinity::Downstream),
-                affinity: Affinity::Downstream,
+                affinity: if has_pending_inline_style && relative_offset > 0 {
+                    Affinity::Upstream
+                } else {
+                    Affinity::Downstream
+                },
                 ..mapped_start.clone()
             };
             let start = map.snap_to_grapheme_boundary(mapped_start.offset, Affinity::Upstream);

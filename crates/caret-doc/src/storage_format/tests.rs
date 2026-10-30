@@ -1,12 +1,75 @@
 //! 验证文档文件格式、往返和兼容边界。
 
 use super::{CdocFile, DocumentError, OpenedDocument, PreviewReason, open};
-use crate::Document;
+use crate::{Block, Document, InlineNode, Run};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
     let file = CdocFile::new(Document::blank())?;
     Ok(serde_json::from_slice(&file.to_bytes()?)?)
+}
+
+#[test]
+fn default_code_font_family_is_persisted_and_restored() -> Result<(), Box<dyn std::error::Error>> {
+    let file = CdocFile::new(Document::blank())?;
+    let bytes = file.to_bytes()?;
+    let json: Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(
+        json["document"]["globalSettings"]["defaultCodeFontFamily"],
+        "<default>"
+    );
+
+    let reopened = open(&bytes)?;
+    assert_eq!(
+        reopened.document().global_settings.default_code_font_family,
+        "<default>"
+    );
+    Ok(())
+}
+
+#[test]
+fn underline_property_round_trips_with_its_required_feature()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{"type": "run", "text": "underlined", "props": {"underline": true}}]
+    }]);
+    envelope["requiredFeatures"] = json!(["caret.text.underline"]);
+
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::Editable(file) = opened else {
+        panic!("supported underline data should be editable");
+    };
+    let saved: Value = serde_json::from_slice(&file.to_bytes()?)?;
+    assert!(
+        saved["requiredFeatures"]
+            .as_array()
+            .is_some_and(|features| features
+                .iter()
+                .any(|feature| feature == "caret.text.underline"))
+    );
+    assert_eq!(
+        saved["document"]["body"][0]["inlines"][0]["props"]["underline"],
+        json!(true)
+    );
+
+    envelope["requiredFeatures"] = json!([]);
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("unmarked underline property must be read-only");
+    };
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::MissingRequiredFeature(
+                "caret.text.underline".to_owned()
+            ))
+    );
+    assert!(!preview.can_save());
+    Ok(())
 }
 
 #[test]
@@ -193,6 +256,49 @@ fn serialization_recalculates_features_for_an_edited_document_without_mutating_i
             .iter()
             .any(|feature| feature == "caret.text.language-tags")
     );
+    Ok(())
+}
+
+#[test]
+fn serialization_adds_underline_feature_after_first_edit_and_rejects_unknown_values()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut file = CdocFile::new(Document::blank())?;
+    let Block::Paragraph(paragraph) = &mut file.document_mut().body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    paragraph.inlines.push(InlineNode::Run(Run {
+        text: "text".to_owned(),
+        language: None,
+        props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
+        extra: BTreeMap::new(),
+    }));
+
+    let bytes = file.to_bytes()?;
+    assert!(
+        !file
+            .required_features()
+            .iter()
+            .any(|feature| feature == "caret.text.underline"),
+        "serializing an edited document must not mutate the open session"
+    );
+    let json: Value = serde_json::from_slice(&bytes)?;
+    assert!(json["requiredFeatures"].as_array().is_some_and(|features| {
+        features
+            .iter()
+            .any(|feature| feature == "caret.text.underline")
+    }));
+    assert!(!open(&bytes)?.is_read_only());
+
+    let mut invalid = file;
+    let Block::Paragraph(paragraph) = &mut invalid.document_mut().body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let InlineNode::Run(run) = &mut paragraph.inlines[0] else {
+        return Err("edited paragraph should contain a run".into());
+    };
+    run.props
+        .insert("underline".to_owned(), serde_json::json!("extended"));
+    assert_eq!(invalid.to_bytes(), Err(DocumentError::ReadOnlyPreview));
     Ok(())
 }
 

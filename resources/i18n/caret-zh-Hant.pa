@@ -546,3 +546,68 @@ message_105:
   src: New paragraph
   tr: 新段落
   st: finished
+
+message_106:
+  src: Bold
+  tr: 粗體
+  st: finished
+
+message_107:
+  src: Italic
+  tr: 斜體
+  st: finished
+
+message_108:
+  src: Font family
+  tr: 字體
+  st: finished
+
+message_109:
+  src: First-line indent
+  tr: 首行縮排
+  st: finished
+
+message_110:
+  src: One-character-width space
+  tr: 一個全字寬空格
+  st: finished
+
+message_111:
+  src: Two-character-width space
+  tr: 兩個全字寬空格
+  st: finished
+
+message_112:
+  src: Close
+  tr: 關閉
+  st: finished
+
+message_113:
+  src: Script
+  tr: 文字系統
+  st: finished
+
+message_114:
+  src: Script font
+  tr: 文字系統字型
+  st: finished
+
+message_115:
+  src: Script + language override
+  tr: 文字系統 + 語言覆寫
+  st: finished
+
+message_116:
+  src: Language override
+  tr: 語言覆寫
+  st: finished
+
+message_117:
+  src: Use language: %1
+  tr: 使用語言：%1
+  st: finished
+
+message_118:
+  src: Underline
+  tr: 底線
+  st: finished

@@ -38,6 +38,8 @@ class DocumentCanvas : public QQuickItem {
                    setCaretPreviewGeometry NOTIFY caretPreviewGeometryChanged)
     Q_PROPERTY(QVariantMap inputMethodContext READ inputMethodContext WRITE setInputMethodContext
                    NOTIFY inputMethodContextChanged)
+    Q_PROPERTY(QRectF inputMethodCursorRectangle READ inputMethodCursorRectangle WRITE
+                   setInputMethodCursorRectangle NOTIFY inputMethodCursorRectangleChanged)
     Q_PROPERTY(QString preeditText READ preeditText NOTIFY preeditTextChanged)
     Q_PROPERTY(bool commandMode READ commandMode WRITE setCommandMode NOTIFY commandModeChanged)
     Q_PROPERTY(int preeditCursorPosition READ preeditCursorPosition NOTIFY preeditTextChanged)
@@ -90,6 +92,8 @@ class DocumentCanvas : public QQuickItem {
     void setCaretPreviewGeometry(const QVariantMap& geometry);
     [[nodiscard]] QVariantMap inputMethodContext() const;
     void setInputMethodContext(const QVariantMap& context);
+    [[nodiscard]] QRectF inputMethodCursorRectangle() const;
+    void setInputMethodCursorRectangle(const QRectF& rectangle);
     [[nodiscard]] QString preeditText() const;
     [[nodiscard]] int preeditCursorPosition() const;
     [[nodiscard]] bool commandMode() const { return m_command_mode; }
@@ -170,6 +174,7 @@ class DocumentCanvas : public QQuickItem {
     void caretVisualChanged();
     void caretPreviewGeometryChanged();
     void inputMethodContextChanged();
+    void inputMethodCursorRectangleChanged();
     void caretBlinkEnabledChanged();
     void glyphFramesChanged();
     void visiblePageRangeChanged();
@@ -208,8 +213,10 @@ class DocumentCanvas : public QQuickItem {
     QVariantMap m_caret_geometry;
     QVariantMap m_caret_preview_geometry;
     QVariantMap m_input_method_context;
+    QRectF m_input_method_cursor_rectangle;
     QString m_preedit_text;
     bool m_command_mode = false;
+    bool m_preedit_cancellation_in_progress = false;
     int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
     int m_first_visible_page = 0;

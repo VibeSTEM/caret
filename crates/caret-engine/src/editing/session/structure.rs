@@ -5,7 +5,7 @@ use super::super::{
     Affinity, Command, Direction, EditError, Effect, Pos, PositionMap, Selection, StoryId,
 };
 use super::Session;
-use super::history::{self, DocumentPatch, SessionHistoryEdit};
+use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use crate::editing::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, InlineNode, NodeId, Paragraph, Run, SoftBreak,
@@ -38,12 +38,18 @@ impl Session {
         let after_state_id = self.allocate_history_state_id();
         self.record_history_edit(SessionHistoryEdit::new(
             patch,
-            before_selection,
-            self.selection.clone(),
-            before_visual_affinity,
-            self.selection_visual_affinity,
-            before_state_id,
-            after_state_id,
+            SessionHistoryState::new(
+                before_selection,
+                before_visual_affinity,
+                self.pending_inline_style.clone(),
+                before_state_id,
+            ),
+            SessionHistoryState::new(
+                self.selection.clone(),
+                self.selection_visual_affinity,
+                self.pending_inline_style.clone(),
+                after_state_id,
+            ),
         ));
         self.history_state_id = after_state_id;
         self.advance_document_generation();
@@ -159,7 +165,7 @@ impl Session {
 
     fn insert_paragraphs_at_environment_exit(
         &mut self,
-        paragraphs: Vec<Paragraph>,
+        mut paragraphs: Vec<Paragraph>,
     ) -> Result<Effect, EditError> {
         let Some((environment_id, direction)) = self.block_environment_exit.clone() else {
             return Ok(Effect::default());
@@ -170,6 +176,11 @@ impl Session {
             self.block_environment_exit = None;
             return Ok(Effect::default());
         };
+        let inline_depth = parent_environment_ids.len() + 1;
+        for paragraph in &mut paragraphs {
+            let text_len = TextMap::new(paragraph)?.text.len();
+            self.apply_pending_style_to_paragraph(paragraph, 0, text_len, inline_depth)?;
+        }
         let sibling_index = match direction {
             Direction::Backward => environment_index,
             Direction::Forward => environment_index.saturating_add(1),

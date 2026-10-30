@@ -28,7 +28,7 @@ pub use paragraph::{
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
-pub use shaping::{ShapingStyle, UnicodeBoundaries, paragraph_text};
+pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text};
 
 #[cfg(test)]
 mod tests;

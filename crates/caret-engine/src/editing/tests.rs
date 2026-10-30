@@ -1588,6 +1588,14 @@ fn ime_cancel_is_transient_and_enter_is_rejected_while_composing() {
 fn public_command_ids_and_error_codes_remain_stable() {
     let commands = [
         (Command::InsertText("text".to_owned()), "text.insert"),
+        (
+            Command::InsertOneCharacterWidthSpace,
+            "text.insert.one_character_width_space",
+        ),
+        (
+            Command::InsertTwoCharacterWidthSpace,
+            "text.insert.two_character_width_space",
+        ),
         (Command::PasteText("text".to_owned()), "clipboard.paste"),
         (Command::InsertSoftBreak, "text.soft_break"),
         (Command::InsertParagraphBreak, "text.split_paragraph"),
@@ -1612,6 +1620,14 @@ fn public_command_ids_and_error_codes_remain_stable() {
         (
             Command::SetPageGeometry(PageGeometry::default()),
             "page.geometry.set",
+        ),
+        (
+            Command::SetInlineFontFamily("Noto Serif".to_owned()),
+            "text.format.font_family",
+        ),
+        (
+            Command::SetDefaultFontFamily(Some("Noto Serif".to_owned())),
+            "document.default_font_family.set",
         ),
     ];
     for (command, expected) in commands {

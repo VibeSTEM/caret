@@ -190,22 +190,38 @@ impl DocumentViewRuntime {
             .map_err(|error| format!("selection.invalid_payload: {error}"))?;
         let (anchor, anchor_visual) = to_position(&self.session, dto.anchor)?;
         let (focus, focus_visual) = to_position(&self.session, dto.focus)?;
-        self.session
+        let effect = self
+            .session
             .set_pointer_selection_range(anchor, focus, focus_visual)
             .map_err(|error| format!("selection.set: {error}"))?;
         self.anchor_visual_affinity = anchor_visual;
         self.preferred_visual_x_pt = None;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+            return self.layout_snapshot_json_after_composition_cancel();
+        }
         self.interaction_state_json()
     }
 
     /// 清除当前选区并保留焦点位置，供画布空白处点击使用。
     pub fn clear_selection_json(&mut self) -> Result<String, String> {
         let visual_affinity = self.session.selection_visual_affinity();
-        self.session
+        let effect = self
+            .session
             .set_selection_with_visual_affinity(None, visual_affinity)
             .map_err(|error| format!("selection.clear: {error}"))?;
         self.anchor_visual_affinity = visual_affinity;
         self.preferred_visual_x_pt = None;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+            return self.layout_snapshot_json_after_composition_cancel();
+        }
         self.interaction_state_json()
     }
 

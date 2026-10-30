@@ -3,6 +3,8 @@
 use super::*;
 use std::collections::HashSet;
 
+pub const MAX_DOCUMENT_NESTING_DEPTH: usize = 64;
+
 impl Document {
     pub fn validate(&self) -> Result<(), ModelError> {
         if self.page_sections.len() != 1 {
@@ -32,6 +34,16 @@ impl Document {
             self.global_settings.default_math_font_family.as_deref(),
             "defaultMathFontFamily",
         )?;
+        if self
+            .global_settings
+            .default_code_font_family
+            .trim()
+            .is_empty()
+        {
+            return Err(ModelError::InvalidDocument(
+                "defaultCodeFontFamily must not be empty".to_owned(),
+            ));
+        }
         self.global_settings.paragraph_layout.validate()?;
         validate_unique_script_keys(self.global_settings.script_font_families.keys())?;
         validate_unique_script_keys(self.global_settings.language_script_font_families.keys())?;
@@ -267,14 +279,14 @@ fn validate_inline<'a>(
 }
 
 fn validate_language_tag(tag: &str) -> Result<(), ModelError> {
-    if is_well_formed_language_tag(tag) {
+    if is_valid_language_tag(tag) {
         Ok(())
     } else {
         Err(ModelError::InvalidLanguageTag(tag.to_owned()))
     }
 }
 
-fn is_well_formed_language_tag(tag: &str) -> bool {
+pub fn is_valid_language_tag(tag: &str) -> bool {
     const GRANDFATHERED: &[&str] = &[
         "art-lojban",
         "cel-gaulish",
@@ -403,7 +415,7 @@ fn is_well_formed_language_tag(tag: &str) -> bool {
 }
 
 fn validate_depth(depth: usize, node_count: &mut usize) -> Result<(), ModelError> {
-    if depth > 64 {
+    if depth > MAX_DOCUMENT_NESTING_DEPTH {
         return Err(ModelError::NestingLimit);
     }
     *node_count = node_count.saturating_add(1);

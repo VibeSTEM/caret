@@ -62,6 +62,9 @@ QVariantMap LayoutViewModel::installCommandLineResponse(const QByteArray& respon
     if (response.object().contains(QStringLiteral("pages"))) {
         return installEditResponse(response);
     }
+    if (response.object().contains(QStringLiteral("commandLine"))) {
+        return installInteractionResponse(response_bytes);
+    }
     QVariantMap command_line;
     QString error;
     if (!layout_snapshot::parse_command_line_state(response.object(), command_line, error)) {

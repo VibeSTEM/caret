@@ -33,14 +33,18 @@ using canvas_detail::is_finite_positive;
 
 class PageGlyphNode final : public QSGNode {
   public:
+    PageGlyphNode() {
+        glyph_nodes = new QSGNode();
+        decoration_nodes = new QSGNode();
+        appendChildNode(glyph_nodes);
+        appendChildNode(decoration_nodes);
+    }
+
     ~PageGlyphNode() override { clearGlyphResources(); }
 
     void clearGlyphNodes() {
-        while (firstChild() != nullptr) {
-            QSGNode* child = firstChild();
-            removeChildNode(child);
-            delete child;
-        }
+        clearNodeChildren(glyph_nodes);
+        clearNodeChildren(decoration_nodes);
     }
 
     void clearGlyphResources() {
@@ -53,6 +57,17 @@ class PageGlyphNode final : public QSGNode {
     QMap<QString, QVariant> frame;
     QVariantList images;
     QVector<QSGTexture*> textures;
+    QSGNode* glyph_nodes = nullptr;
+    QSGNode* decoration_nodes = nullptr;
+
+  private:
+    static void clearNodeChildren(QSGNode* node) {
+        while (node != nullptr && node->firstChild() != nullptr) {
+            QSGNode* child = node->firstChild();
+            node->removeChildNode(child);
+            delete child;
+        }
+    }
 };
 
 class GlyphGroupNode final : public QSGNode {
@@ -223,11 +238,12 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
     const int page_index = frame.value(QStringLiteral("pageIndex")).toInt();
     const QList<QVariant> image_values = frame.value(QStringLiteral("images")).toList();
     const QList<QVariant> placement_values = frame.value(QStringLiteral("placements")).toList();
+    const QList<QVariant> decoration_values = frame.value(QStringLiteral("decorations")).toList();
     const qreal dpr = window->effectiveDevicePixelRatio();
     const qreal raster_pixels_per_point = frame.value(QStringLiteral("rasterPxPerPt")).toReal();
     const QRectF page_clip_rect = page_rect(page_index);
     if (page_clip_rect.isEmpty() || !is_finite_positive(dpr) ||
-        !is_finite_positive(raster_pixels_per_point) || image_values.isEmpty()) {
+        !is_finite_positive(raster_pixels_per_point)) {
         group->clearGlyphNodes();
         return;
     }
@@ -273,7 +289,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         qDeleteAll(previous_textures);
     }
 
-    QSGNode* reusable_node = group->firstChild();
+    QSGNode* reusable_node = group->glyph_nodes->firstChild();
     for (const QVariant& value : placement_values) {
         const QVariantMap placement = value.toMap();
         const quint32 image_index = placement.value(QStringLiteral("imageIndex")).toUInt();
@@ -334,7 +350,7 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
             glyph_node =
                 make_glyph_node(window, group->textures[static_cast<int>(image_index)], rectangles);
             if (glyph_node != nullptr) {
-                group->appendChildNode(glyph_node);
+                group->glyph_nodes->appendChildNode(glyph_node);
             }
         } else {
             update_glyph_node(glyph_node, group->textures[static_cast<int>(image_index)],
@@ -343,7 +359,61 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
     }
     while (reusable_node != nullptr) {
         QSGNode* next_node = reusable_node->nextSibling();
-        group->removeChildNode(reusable_node);
+        group->glyph_nodes->removeChildNode(reusable_node);
+        delete reusable_node;
+        reusable_node = next_node;
+    }
+
+    reusable_node = group->decoration_nodes->firstChild();
+    for (const QVariant& value : decoration_values) {
+        const QVariantMap decoration = value.toMap();
+        const qreal x_pt = decoration.value(QStringLiteral("xPt")).toReal();
+        const qreal y_pt = decoration.value(QStringLiteral("yPt")).toReal();
+        const qreal width_pt = decoration.value(QStringLiteral("widthPt")).toReal();
+        const qreal height_pt = decoration.value(QStringLiteral("heightPt")).toReal();
+        if (!std::isfinite(x_pt) || !std::isfinite(y_pt) || !is_finite_positive(width_pt) ||
+            !is_finite_positive(height_pt)) {
+            continue;
+        }
+        const QPointF top_left = document_to_content(page_index, QPointF(x_pt, y_pt));
+        const QRectF decoration_rect(top_left.x(), top_left.y(), width_pt * logical_scale,
+                                     height_pt * logical_scale);
+        QRectF clip_rect = page_clip_rect;
+        if (decoration.value(QStringLiteral("clipEnabled")).toBool()) {
+            const qreal clip_y0 = decoration.value(QStringLiteral("clipY0Pt")).toReal();
+            const qreal clip_y1 = decoration.value(QStringLiteral("clipY1Pt")).toReal();
+            if (!std::isfinite(clip_y0) || !std::isfinite(clip_y1) || clip_y0 < 0.0 ||
+                clip_y1 <= clip_y0) {
+                continue;
+            }
+            const QPointF clip_top = document_to_content(page_index, QPointF(0.0, clip_y0));
+            const QRectF line_clip_rect(page_clip_rect.left(), clip_top.y(), page_clip_rect.width(),
+                                        (clip_y1 - clip_y0) * logical_scale);
+            clip_rect = clip_rect.intersected(line_clip_rect);
+        }
+        const QRectF visible_rect = decoration_rect.intersected(clip_rect);
+        if (visible_rect.isEmpty()) {
+            continue;
+        }
+        QColor color(decoration.value(QStringLiteral("colorRed")).toInt(),
+                     decoration.value(QStringLiteral("colorGreen")).toInt(),
+                     decoration.value(QStringLiteral("colorBlue")).toInt(),
+                     decoration.value(QStringLiteral("colorAlpha")).toInt());
+        auto* rect_node = static_cast<QSGSimpleRectNode*>(reusable_node);
+        if (reusable_node != nullptr) {
+            reusable_node = reusable_node->nextSibling();
+        }
+        if (rect_node == nullptr) {
+            rect_node = new QSGSimpleRectNode(visible_rect, color);
+            group->decoration_nodes->appendChildNode(rect_node);
+        } else {
+            rect_node->setRect(visible_rect);
+            rect_node->setColor(color);
+        }
+    }
+    while (reusable_node != nullptr) {
+        QSGNode* next_node = reusable_node->nextSibling();
+        group->decoration_nodes->removeChildNode(reusable_node);
         delete reusable_node;
         reusable_node = next_node;
     }

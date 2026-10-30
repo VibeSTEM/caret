@@ -28,6 +28,7 @@ class ShellLoadTest : public QObject {
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
+    void preeditCancellationDoesNotReenterTheInputMethodHandler();
     void documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation();
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();
@@ -35,6 +36,7 @@ class ShellLoadTest : public QObject {
     void preferencesWithoutRuntimeRejectChangesAndKeepDefaults();
     void environmentHighlightSnapshotSelectsAndClearsActiveRects();
     void commandLineQueryProjectsRustCandidatesWithoutEditingTheDocument();
+    void cancelledInputMethodStateAllowsTheNextCommit();
     void documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior();
     void themeCatalogInstallsTypedTokensAndRejectsInvalidSnapshotsAtomically();
     void settingsDialogCommitsPreferencesThroughRust();
@@ -51,6 +53,7 @@ class ShellLoadTest : public QObject {
     void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
     void recoveryEntriesCanBeRestoredExportedAndDiscarded();
     void documentHistoryUndoRedoTracksRustSession();
+    void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
     void documentCaretNavigationUpdatesObservablePosition();
     void confirmedConflictReplacementWritesCurrentDocument();
     void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();

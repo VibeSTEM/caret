@@ -1,6 +1,8 @@
 //! 定义编辑命令及其稳定命令 ID。
 
-use caret_doc::{BlockEnvironmentKind, PageGeometry};
+use caret_doc::{
+    BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, NodeId, PageGeometry,
+};
 
 use super::Selection;
 
@@ -14,6 +16,7 @@ pub enum Direction {
 pub enum EditorKey {
     Escape,
     Enter,
+    Tab,
     ShiftEnter,
     ModBackspace,
 }
@@ -21,6 +24,8 @@ pub enum EditorKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
+    InsertOneCharacterWidthSpace,
+    InsertTwoCharacterWidthSpace,
     PasteText(String),
     InsertSoftBreak,
     InsertParagraphBreak,
@@ -29,14 +34,32 @@ pub enum Command {
     MoveStructure(Direction),
     ExitBlockEnvironment(Direction),
     RemoveBlockEnvironmentPreservingContent,
+    RemoveInlineEnvironmentPreservingContent(NodeId),
     ExpandStructureSelection,
     ExitStructure,
     CreateBlockEnvironment(BlockEnvironmentKind),
+    ToggleInlineFormat(InlineEnvironmentKind),
+    ToggleRunUnderline,
+    SetInlineFontFamily(String),
+    SetParagraphFirstLineIndentChars(u16),
+    SetDefaultFontFamily(Option<String>),
+    SetDocumentFontFamily {
+        target: DocumentFontTarget,
+        family: Option<String>,
+    },
     EditorKey(EditorKey),
     SetSelection(Option<Selection>),
-    UpdateComposition { id: u64, preedit: String },
-    CommitComposition { id: u64, text: String },
-    CancelComposition { id: u64 },
+    UpdateComposition {
+        id: u64,
+        preedit: String,
+    },
+    CommitComposition {
+        id: u64,
+        text: String,
+    },
+    CancelComposition {
+        id: u64,
+    },
     SetPageGeometry(PageGeometry),
     BeginCommandLine,
     TypeCommandLine(String),
@@ -55,6 +78,8 @@ impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
             Self::InsertText(_) => "text.insert",
+            Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
+            Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
             Self::InsertParagraphBreak => "text.split_paragraph",
@@ -65,12 +90,24 @@ impl Command {
             Self::ExitBlockEnvironment(Direction::Forward) => "struct.exit_forward",
             Self::ExitBlockEnvironment(Direction::Backward) => "struct.exit_backward",
             Self::RemoveBlockEnvironmentPreservingContent => "struct.remove_preserving_content",
+            Self::RemoveInlineEnvironmentPreservingContent(_) => {
+                "text.format.remove_environment_preserving_content"
+            }
             Self::ExpandStructureSelection => "selection.expand_structure",
             Self::ExitStructure => "struct.exit",
             Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => "struct.section.create",
             Self::CreateBlockEnvironment(BlockEnvironmentKind::Custom) => "struct.custom.create",
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Bold) => "text.format.bold",
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Italic) => "text.format.italic",
+            Self::ToggleInlineFormat(InlineEnvironmentKind::Font) => "text.format.font",
+            Self::ToggleRunUnderline => "text.format.underline",
+            Self::SetInlineFontFamily(_) => "text.format.font_family",
+            Self::SetParagraphFirstLineIndentChars(_) => "paragraph.first_line_indent.set",
+            Self::SetDefaultFontFamily(_) => "document.default_font_family.set",
+            Self::SetDocumentFontFamily { .. } => "document.font_family.set",
             Self::EditorKey(EditorKey::Escape) => "interaction.escape",
             Self::EditorKey(EditorKey::Enter) => "interaction.enter",
+            Self::EditorKey(EditorKey::Tab) => "interaction.tab",
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
             Self::SetSelection(_) => "selection.set",

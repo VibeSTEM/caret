@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
@@ -16,9 +17,11 @@ class PlatformFonts final : public QObject {
   public:
     explicit PlatformFonts(QObject* parent = nullptr);
     [[nodiscard]] auto fixedFamily() const -> const QString&;
+    Q_INVOKABLE [[nodiscard]] auto containsFamily(const QString& family) const -> bool;
 
   private:
     const QString m_fixedFamily;
+    const QSet<QString> m_familyNames;
 };
 
 } // namespace caret

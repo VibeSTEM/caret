@@ -24,13 +24,9 @@
 | deferred | 暂不排入 |
 | cancelled | 已取消，保留编号与原因 |
 
-## 执行顺序
+## 规划约定
 
-基础设施已接入，QML 窗口外壳按 007 当前形态冻结。编辑先从 020 文档模型、021 存储和 022 基础文本输入开始，再补齐 023/024/026/027 的最小编辑布局和画布能力；030 补齐 Qt IME、导航与选区交互，最后由 008 集成输入、保存、重开并完成 M0 验收。025 格式命令不阻塞 M0，先实现默认字体设置与局部 Font 环境命令，不新增字体选择窗口或环境工具按钮。009 建立 `\` 命令入口，010 通过命令和快捷键创建、嵌套与操作环境。只有编辑纵向切片确实需要时才改动 QML 外观，并先写静态原型再落成 QML。
-
-来源是 [panta](https://github.com/Yuki-Nagori/panta) `ee84d95`。移植提交写明实际复制的 commit。不移植几何、网格、VTK、求解协议，以及只服务于这些领域的 crate 和对话框。
-
-优先级：P0 基础设施，P1 当前里程碑的界面，P2 该里程碑的编辑器实现。规模是草估：S 不超过 1 天，M 为 2–5 天，L 超过 1 周。
+依赖列决定任务顺序；优先级和规模用于排期估算（S 不超过 1 天，M 为 2–5 天，L 超过 1 周，均为粗略估计）。产品行为以[架构文档](architecture/README.md)为准，工程与验证要求以[规范文档](standards/README.md)为准。本索引只维护任务状态、依赖和分类，不复制设计细节或进度摘要。
 
 ## 任务队列
 
@@ -60,7 +56,7 @@
 | 022 | 输入编辑 | [文本编辑、选择与 IME](task/022-text-editing-and-ime.md) | P2 | 021 | L | done |
 | 023 | 页面几何 | [页面尺寸、节与几何](task/023-page-geometry.md) | P2 | 021 | M | done |
 | 024 | 字体塑形 | [字体回退与文字塑形](task/024-text-shaping.md) | P2 | 022、023 | L | done |
-| 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 009、021、022、024 | M | planned |
+| 025 | 格式命令 | [字符与段落格式命令](task/025-text-formatting.md) | P2 | 009、021、022、024 | M | done |
 | 026 | 段落排版 | [行距、段间距与分页](task/026-paragraph-layout.md) | P2 | 023、024 | L | done |
 | 027 | 画布命中 | [页面画布、命中与布局快照](task/027-canvas-and-hit-testing.md) | P2 | 022、024、026 | L | done |
 | 028 | 文档治理 | [文档一致性与职责整理](task/028-documentation-consolidation.md) | P1 | — | M | done |
@@ -76,7 +72,7 @@
 | 038 | 窗口架构 | [多窗口文档会话与全局操作协调](task/038-multiwindow-document-sessions.md) | P2 | 037 | L | planned |
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | done |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
-| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in_progress |
+| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in-progress |
 | 042 | 数学排版 | [M3：latex-rust 后端验证](task/042-latex-rust-math-backend.md) | P2 | — | M | ready |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | planned |
 | 044 | 数学排版 | [M3：公式布局、画布渲染与表格集成](task/044-math-layout-and-rendering.md) | P2 | 012、027、043 | L | planned |
@@ -91,26 +87,13 @@
 | 053 | 画布 | [图片布局与画布呈现](task/053-image-layout-and-canvas.md) | P2 | 024、027、052 | M | planned |
 | 054 | 结构命令 | [APA 标题层级命令与默认样式](task/054-apa-heading-commands.md) | P2 | 010、024、025、026、027 | M | planned |
 | 055 | 排版基线 | [OpenType BASE 脚本基线与字形溢出诊断](task/055-opentype-base-script-alignment.md) | P2 | 024、026、027、033 | L | ready |
-| 056 | 字体设置 | [字体设置与字体族选择器](task/056-font-settings-and-family-picker.md) | P2 | 024、025、039 | M | planned |
+| 056 | 字体设置 UI | [文档字体设置专用布局](task/056-font-settings-and-family-picker.md) | P2 | 024、025、039 | M | deferred |
 | 057 | 结构命令 | [块环境命令作用于文本选区](task/057-block-environment-selection-commands.md) | P2 | 010、022 | M | planned |
+| 058 | QML 架构 | [QML 主题令牌与固定常量分层](task/058-qml-theme-tokens-and-constants.md) | P2 | 029、039 | M | ready |
+| 059 | 字体命令 | [命令字体选择器交互与布局优化](task/059-command-font-picker.md) | P2 | 024、025 | M | planned |
+| 060 | 字符格式 | [字号命令与局部字号格式](task/060-font-size-formatting.md) | P2 | 022、024、026、027 | M | ready |
+| 061 | 字符格式 | [字色、高亮与字符底纹](task/061-text-paint-formatting.md) | P2 | 022、024、027 | M | ready |
+| 062 | 段落格式 | [段落格式命令](task/062-paragraph-formatting.md) | P2 | 022、026、027 | M | ready |
+| 063 | 文档样式 | [文档排版主题与命名样式](task/063-document-typography-styles.md) | P2 | 020、021 | L | ready |
 
-分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
-
-004 负责 Qt 供给与最小 QML 构建和加载测试，005 在该工程上接桌面入口和 FFI。011 是 M3 公式总体验收；042 验证并锁定数学后端，043 实现公式模型与编辑，044 负责公式布局渲染及[单元格公式集成验收](architecture/editor/math-and-table.md#m3-集成验收)。012 是表格总体验收，由 045 实现模型与交互、046 实现布局与画布。011、012、044 全部验收通过后 013 才可开始。015 是本次文档维护，不作为基础设施或产品里程碑的实现证据。
-
-031 负责当前环境背景高亮：010 已提供块环境结构及分页几何，块与行内高亮已接入同一 QSG 图层，031 已完成专项与最终评审。025 负责对选中文本应用行内格式环境命令；057 补充对选中文本执行块环境命令。009 负责独立的命令提示 token。行内、块级和命令提示颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
-
-033 已完成共享行距网格及选区行框几何；当前实现不读取 OpenType BASE。脚本基线对齐、实际字体 BASE 解析和 ink 溢出诊断单独由 055 承接，不把 033 的完成表述成已支持 BASE。
-024 已完成系统/用户字体目录读取、显式刷新和 shaping 字体回退；025 仍计划实现文档默认字体与局部 Font 环境命令，尚未提供字体选择 UI。056 负责复用已有目录和脚本分类能力，补齐 Rust 字体族目录查询及用户字体设置流程，不重复实现系统字体扫描。
-
-008 的 Windows、macOS、Linux Nightly 合成 IME/Unicode 矩阵已通过并完成验收；009 可直接基于已完成的 008 开始。
-
-021 的 done 只表示文档树、`.cdoc` 校验和 `caret-app` 存储边界完成，不表示 M0 编辑器已完成；M0 仍需 022–024、026、027 和 008 集成验收。025 格式命令不阻塞 M0。`caret-doc` 已落地；`caret-layout`、`caret-structure`、`caret-engine` 和 `caret-cli` 按各自任务的依赖顺序创建，不提前建立空 crate。019 定义 AutoSave 策略并通过独立评审后，037 实现单窗口偏好、触发、保存冲突和恢复；未命名文档开启 AutoSave 必须先让用户选择保存路径。038 在 037 完成后迁移为窗口级文档运行时，并实现跨窗口 AutoSave 开启协调。
-
-外部格式使用 [Caret 规范文档树](architecture/editor/document-interchange.md) 作为唯一中间模型，禁止引入通用最低公分母 AST；格式专属 IR 只存在于适配器边界。050–053 补齐代码、引用、链接、图片及画布能力；011/012 补齐公式和表格。047 必须等编辑会话、关闭保护、全部节点/媒体和布局画布能力完成后，才实现完整 Markdown 导入导出；048/049 在 047 之后分别实现完整 DOCX 与 TeX 映射。
-
-034 的本机性能测量与有数据支持的热点优化已完成；Qt GPU nightly 核验、真实窗口大文档端到端测量及额外基准补齐移交 041，由 041 独立推进。039 接通现有 Rust Settings、Theme、Language 服务与设置 UI，并确保 locale 选项对应真实构建资源。040 承接架构审计中需要独立迁移或回归验证的整改；可直接安全清理的孤儿组件在发现后及时删除。
-
-## 待决策
-
-020 已通过最终独立评审。后续实现任务须遵守其定稿的产品语义；产品行为以架构为准，版本和移植边界以规范为准。
+分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
