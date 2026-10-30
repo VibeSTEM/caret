@@ -6,6 +6,7 @@
 mod editing;
 mod layout;
 mod layout_view;
+mod math_edit;
 mod math_import;
 mod page_glyphs;
 
@@ -30,6 +31,7 @@ pub use layout_view::{
     LayoutLineView, PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
     ParagraphLayoutView, StoryView,
 };
+pub use math_edit::{MathEdit, MathEditError, MathEditResult, apply_math_edit};
 pub use math_import::{ImportedMath, MathImportError, import_parsed_math};
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,

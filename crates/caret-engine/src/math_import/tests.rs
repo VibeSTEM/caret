@@ -37,6 +37,31 @@ fn converts_inline_math_to_caret_owned_schema_with_unique_ids() {
 }
 
 #[test]
+fn large_parser_accepted_formula_also_passes_caret_tree_validation() {
+    let source = "x+".repeat(20_000);
+    let Ok(parsed) = parse(&source, MathInputKind::Inline) else {
+        panic!("large formula should stay within the parser's node budget");
+    };
+    let Ok(ImportedMath::Inline(inline)) = import_parsed_math(&parsed) else {
+        panic!("large parser result should fit the persistent schema budgets");
+    };
+    assert!(inline.math_tree.validate().is_ok());
+}
+
+#[test]
+fn parser_classification_remains_authoritative_for_plain_punctuation() {
+    for source in ["x/y", "|x|"] {
+        let Ok(parsed) = parse(source, MathInputKind::Inline) else {
+            panic!("parser should accept {source:?}");
+        };
+        assert!(
+            import_parsed_math(&parsed).is_ok(),
+            "Caret schema should preserve the parser's atom classes for {source:?}"
+        );
+    }
+}
+
+#[test]
 fn converts_display_equation_and_retains_parser_specific_structure() {
     let source = r"\sum_{i=0}^n i";
     let Ok(parsed) = parse(source, MathInputKind::Equation) else {

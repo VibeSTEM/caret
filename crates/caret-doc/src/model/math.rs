@@ -14,6 +14,10 @@ pub const MATH_TREE_SCHEMA_VERSION: u16 = 1;
 pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
 /// 数学树允许的最大根到叶深度。
 pub const MAX_MATH_TREE_DEPTH: usize = 32;
+/// 单棵公式树允许的最大节点数。
+pub const MAX_MATH_TREE_NODES: usize = 65_536;
+/// 单棵公式树的可变长度字符串及扩展值预算。
+pub const MAX_MATH_TREE_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 
 /// Caret 自有、版本化且不依赖解析器 AST 的数学表达式。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

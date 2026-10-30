@@ -28,7 +28,8 @@ pub use inline::{InlineNode, SoftBreak};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES,
-    MAX_MATH_TREE_DEPTH, MathAlignRow, MathNode, MathNodeKind, MathSourceRange, MathTree,
+    MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathNode,
+    MathNodeKind, MathSourceRange, MathTree,
 };
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;

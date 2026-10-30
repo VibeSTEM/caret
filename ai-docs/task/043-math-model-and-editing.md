@@ -66,6 +66,9 @@
 | 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo clippy --locked --offline -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 全工作区构建、直接消费者 lint、分层/native/QML 与格式检查 | 通过；cargo lint 9 阶段全部完成 |
 | —         | caret-engine 公式编辑与位置行为测试     | MathPos、内部编辑和导航契约成立          | 未执行                                               |
 | —         | 高节点数预算与合并后故障注入回滚测试    | 预算边界及失败后正文/选区/历史保持不变  | 未执行                                               |
+| 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | MathTree payload/内容预算、导入返回校验、编辑后端节点/深度预算 | 通过：`caret-doc` 44 项、`caret-engine` 224 项；不覆盖 Session 数学焦点、撤销/重做、公式导航或整公式回写 |
+| 2026-10-31 | `cargo lint --check` | workspace lint、依赖、CMake/QML/native 检查 | 未完整通过：第 1 阶段 Clippy 和第 2 阶段未使用依赖检查通过；第 4 阶段 CMake layering fixture 启动 `/usr/bin/c++` 探测时 ABI 配置失败，检查提前退出；第 3 阶段通过，5–9 阶段未运行 |
+| 2026-10-31 | `cargo fmt --all -- --check`、`git diff --check HEAD` | Rust 格式与补丁空白检查 | 通过 |
 
 ## 风险与回退
 
@@ -83,6 +86,9 @@
 - 2026-10-31：Sol/medium 最终只读复核曾指出 MathNode 可伪造自动编号 matrix style；移除 `align/equation/gather/multline`，补充只读预览用例和 schema 文档 allowlist。最终复核通过，未发现阻断问题；最终改动后重跑 `caret-doc` 44 项、`caret-engine` 201 项、目标 clippy、格式和 diff 检查通过。workspace check 与全 `cargo lint --check` 在 allowlist 变更前已通过；本次仅改变 Rust 枚举 allowlist、文档和安全预览测试。
 - 2026-10-31：首版 `MathPos` 在 `caret-engine` 提供稳定 NodeId 路径解析和节点偏移校验：Ord/TextContent 按本叶 extended grapheme cluster，命名数学/文本符号按单原子 0/1 边缘，结构节点按子节点边界，Placeholder 固定 offset 0；拒绝空/失配路径和路径上的重复兄弟 ID。保留分数等结构操作数两侧各自的位置。公式内部移动、命中、结构编辑后的映射、线性 Row 等价位置规范化、跨叶组合字素与 bidi 视觉 affinity 仍未实现。`caret-engine` 205 项测试通过，覆盖 UTF-8/字素边界、分数两槽端点、命名符号、占位符及重复 ID。
 - 2026-10-31：Terra/medium schema 与编辑边界只读复核发现并促成修复：未知 `sourceRange` 字段往返保留；Align 行进入文档节点预算；公式能力登记；未来 schema/节点 kind 转安全预览；U+FFFC 按 UTF-8 字节计长；公式边界可插软换行；跨段 Enter 失败恢复文档、选区、索引和缓存；数学扩展字段纳入历史大小估算。复验覆盖 schema 源码/深度限制、三种数学节点未来 schema、公式后的跨段 Enter、历史扩展字段估算。仍未验证高节点数预算裁剪及实际 MathPos/布局交互。
+- 2026-10-31：新增无副作用 `apply_math_edit` 原子编辑原语，支持 Row/普通 Ord/TextContent/参数槽的文本插入，以及 Row 或 Placeholder 中插入分数、根式；候选树在克隆前及返回前执行 schema 深度/节点/payload 预算验证，失败不改变输入。输入须由 `latex-rust` 解析为普通 Ord 且拼接后与原字节完全一致，避免定界符、空白、命令归一化被误存为字符；编辑后的源与范围按导入溯源保留，不代表当前编辑树的 LaTeX。覆盖累计/单次文本预算及插入后组合字素光标边界。尚未接入 Session 命令、历史状态或键盘导航，结构插入限制在 Row/Placeholder，不能据此宣称公式交互完成。
+- 2026-10-31：追加编辑预算交叉检查：Ord 字符合并后按 parser 展开节点计数，多字符 Ord 结构操作数计入必要 Row 包装，防止数学树可保存但超过锁定 parser 的 65,536 临时节点/32 层上限；文档 payload 预算也包含 ID、属性、sourceRange 与未知扩展值，并独立限制节点文字总量为 1 MiB，限制超长字段及多次 TextContent 插入在编辑克隆前放大内存。schema v1 尚随 043 保持未合并、未发布，故本次在稳定前确立每公式 65,536 节点/8 MiB payload 上限；若之后需提高，必须新增 schema/能力迁移，不改变已发布 v1。扩展 JSON 深度受文档最大嵌套限制；导入桥在返回前校验持久化树，避免解析成功后才在保存时失败。`atomClass` 保持 parser 导入时的权威分类；存储层不复制字符分类规则。
+- 2026-10-31：对齐模型能力边界：编辑树仍执行 parser 结构展开节点/深度预算，但当前没有 Caret 树到 LaTeX 的序列化器；保留原始 source 与 sourceRange 作为溯源，节点文本限额不声称等价于含命令、定界符和转义后的 1 MiB parser 源码上限。当前编辑基础尚不能满足整公式导出或 Session 交互验收。
 
 ## 完成摘要
 

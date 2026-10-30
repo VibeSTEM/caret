@@ -45,6 +45,15 @@ pub enum MathImportError<'source> {
         /// 当前 parser 能提供的最精确 UTF-8 源范围。
         source_range: std::ops::Range<usize>,
     },
+    /// 转换后未通过当前 Caret 文档 schema 的预算或不变量。
+    InvalidSchema {
+        /// schema 拒绝原因。
+        reason: String,
+        /// 导入的完整原始公式。
+        source: &'source str,
+        /// 当前 parser 能提供的最精确 UTF-8 源范围。
+        source_range: std::ops::Range<usize>,
+    },
 }
 
 impl Display for MathImportError<'_> {
@@ -54,6 +63,9 @@ impl Display for MathImportError<'_> {
             Self::UnsupportedAlignRow { row_kind, .. } => {
                 write!(formatter, "math.import_unsupported_align_row: {row_kind:?}")
             }
+            Self::InvalidSchema { reason, .. } => {
+                write!(formatter, "math.import_invalid_schema: {reason}")
+            }
         }
     }
 }
@@ -62,7 +74,7 @@ impl std::error::Error for MathImportError<'_> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Syntax { error, .. } => Some(error),
-            Self::UnsupportedAlignRow { .. } => None,
+            Self::UnsupportedAlignRow { .. } | Self::InvalidSchema { .. } => None,
         }
     }
 }
@@ -82,7 +94,7 @@ pub fn import_parsed_math<'source>(
             source: parsed.source(),
             source_range: parsed.source_range(),
         })?;
-    match syntax.input_kind {
+    let imported = match syntax.input_kind {
         MathInputKind::Inline => Ok(ImportedMath::Inline(InlineMath {
             id: NodeId::generate(),
             math_tree: into_math_tree(syntax.root, parsed.source()),
@@ -94,6 +106,23 @@ pub fn import_parsed_math<'source>(
             extra: BTreeMap::new(),
         })),
         MathInputKind::Align => import_align(syntax.root, parsed.source(), parsed.source_range()),
+    }?;
+    for tree in imported_trees(&imported) {
+        tree.validate()
+            .map_err(|error| MathImportError::InvalidSchema {
+                reason: error.to_string(),
+                source: parsed.source(),
+                source_range: parsed.source_range(),
+            })?;
+    }
+    Ok(imported)
+}
+
+fn imported_trees(imported: &ImportedMath) -> Vec<&MathTree> {
+    match imported {
+        ImportedMath::Inline(value) => vec![&value.math_tree],
+        ImportedMath::Equation(value) => vec![&value.math_tree],
+        ImportedMath::Align(value) => value.rows.iter().flat_map(|row| row.cells.iter()).collect(),
     }
 }
 

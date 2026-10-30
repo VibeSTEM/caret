@@ -2,8 +2,9 @@
 
 use super::{
     Align, Block, Document, DocumentFontTarget, DocumentSettings, Equation,
-    MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MathAlignRow, MathNode,
-    MathNodeKind, MathTree, NodeId, is_valid_language_tag,
+    MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathNode, MathNodeKind, MathSourceRange, MathTree,
+    NodeId, is_valid_language_tag,
 };
 use std::collections::BTreeMap;
 
@@ -572,6 +573,71 @@ fn math_validation_enforces_source_and_tree_limits() {
         extra: BTreeMap::new(),
     })];
     assert!(too_long.validate().is_err());
+
+    let mut oversized_columns = Document::blank();
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: String::new(),
+        root: MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Matrix,
+            text: None,
+            attributes: BTreeMap::from([
+                ("style".to_owned(), "aligned".to_owned()),
+                (
+                    "columns".to_owned(),
+                    "l".repeat(MAX_MATH_TREE_PAYLOAD_BYTES + 1),
+                ),
+            ]),
+            source_range: None,
+            children: vec![MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Row,
+                text: None,
+                attributes: BTreeMap::new(),
+                source_range: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    oversized_columns.body = vec![Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: tree,
+        extra: BTreeMap::new(),
+    })];
+    assert!(oversized_columns.validate().is_err());
+
+    let oversized_range_extra = MathSourceRange {
+        start: 0,
+        end: 1,
+        extra: BTreeMap::from([(
+            "future".to_owned(),
+            serde_json::Value::String("x".repeat(MAX_MATH_TREE_PAYLOAD_BYTES + 1)),
+        )]),
+    };
+    let mut oversized_range = Document::blank();
+    oversized_range.body = vec![Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "x".to_owned(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Symbol,
+                text: Some("x".to_owned()),
+                attributes: BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
+                source_range: Some(oversized_range_extra),
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    })];
+    assert!(oversized_range.validate().is_err());
 }
 
 #[test]

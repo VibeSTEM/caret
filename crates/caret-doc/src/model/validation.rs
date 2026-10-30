@@ -74,6 +74,13 @@ impl Document {
     }
 }
 
+impl MathTree {
+    /// 校验独立数学树的 schema、深度、源范围、节点属性、操作数形状和树内 ID 唯一性。
+    pub fn validate(&self) -> Result<(), ModelError> {
+        validate_math_tree(self, &mut HashSet::new(), &mut 0)
+    }
+}
+
 fn validate_font_family(family: Option<&str>, field: &str) -> Result<(), ModelError> {
     if family.is_some_and(|family| family.trim().is_empty()) {
         return Err(ModelError::InvalidDocument(format!(
@@ -321,7 +328,24 @@ fn validate_math_tree<'a>(
             "math source exceeds byte limit".to_owned(),
         ));
     }
-    validate_math_node(&tree.root, &tree.source, 0, None, ids, node_count)
+    let mut budget = MathValidationBudget::default();
+    add_math_extra_bytes(&tree.extra, &mut budget.payload_bytes)?;
+    validate_math_node(
+        &tree.root,
+        &tree.source,
+        0,
+        None,
+        ids,
+        node_count,
+        &mut budget,
+    )
+}
+
+#[derive(Default)]
+struct MathValidationBudget {
+    node_count: usize,
+    payload_bytes: usize,
+    content_bytes: usize,
 }
 
 fn validate_math_node<'a>(
@@ -331,9 +355,37 @@ fn validate_math_node<'a>(
     parent: Option<MathNodeKind>,
     ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
+    budget: &mut MathValidationBudget,
 ) -> Result<(), ModelError> {
     if depth >= MAX_MATH_TREE_DEPTH {
         return Err(ModelError::NestingLimit);
+    }
+    budget.node_count = budget.node_count.saturating_add(1);
+    if budget.node_count > MAX_MATH_TREE_NODES {
+        return Err(ModelError::InvalidDocument(
+            "math tree exceeds node limit".to_owned(),
+        ));
+    }
+    budget.payload_bytes = budget
+        .payload_bytes
+        .saturating_add(node.id.0.len())
+        .saturating_add(node.text.as_ref().map_or(0, String::len))
+        .saturating_add(node.attributes.iter().fold(0usize, |bytes, (key, value)| {
+            bytes.saturating_add(key.len()).saturating_add(value.len())
+        }));
+    budget.content_bytes = budget
+        .content_bytes
+        .saturating_add(node.text.as_ref().map_or(0, String::len));
+    if budget.content_bytes > MAX_MATH_SOURCE_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math tree content exceeds byte limit".to_owned(),
+        ));
+    }
+    add_math_extra_bytes(&node.extra, &mut budget.payload_bytes)?;
+    if budget.payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math tree payload exceeds byte limit".to_owned(),
+        ));
     }
     validate_depth(depth, node_count)?;
     if !super::math::math_node_attributes_supported(
@@ -356,6 +408,7 @@ fn validate_math_node<'a>(
     }
     insert_id(ids, &node.id)?;
     if let Some(range) = node.source_range.as_ref() {
+        add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
         let start = range.start as usize;
         let end = range.end as usize;
         if start > end
@@ -369,7 +422,77 @@ fn validate_math_node<'a>(
         }
     }
     for child in &node.children {
-        validate_math_node(child, source, depth + 1, Some(node.kind), ids, node_count)?;
+        validate_math_node(
+            child,
+            source,
+            depth + 1,
+            Some(node.kind),
+            ids,
+            node_count,
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn add_math_extra_bytes(
+    extra: &std::collections::BTreeMap<String, Value>,
+    total: &mut usize,
+) -> Result<(), ModelError> {
+    *total = total.saturating_add(extra.len());
+    if *total > MAX_MATH_TREE_PAYLOAD_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math tree payload exceeds byte limit".to_owned(),
+        ));
+    }
+    let mut pending = extra
+        .iter()
+        .map(|(key, value)| {
+            *total = total.saturating_add(key.len());
+            (value, 1usize)
+        })
+        .collect::<Vec<_>>();
+    while let Some((value, depth)) = pending.pop() {
+        if depth > MAX_DOCUMENT_NESTING_DEPTH {
+            return Err(ModelError::NestingLimit);
+        }
+        match value {
+            Value::String(text) => *total = total.saturating_add(text.len()),
+            Value::Array(values) => {
+                *total = total.saturating_add(values.len());
+                if *total > MAX_MATH_TREE_PAYLOAD_BYTES {
+                    return Err(ModelError::InvalidDocument(
+                        "math tree payload exceeds byte limit".to_owned(),
+                    ));
+                }
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            Value::Object(values) => {
+                *total = total.saturating_add(values.len());
+                if *total > MAX_MATH_TREE_PAYLOAD_BYTES {
+                    return Err(ModelError::InvalidDocument(
+                        "math tree payload exceeds byte limit".to_owned(),
+                    ));
+                }
+                for (key, value) in values {
+                    *total = total.saturating_add(key.len());
+                    pending.push((value, depth + 1));
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {
+                *total = total.saturating_add(1);
+            }
+        }
+        if *total > MAX_MATH_TREE_PAYLOAD_BYTES {
+            return Err(ModelError::InvalidDocument(
+                "math tree payload exceeds byte limit".to_owned(),
+            ));
+        }
+    }
+    if *total > MAX_MATH_TREE_PAYLOAD_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math tree payload exceeds byte limit".to_owned(),
+        ));
     }
     Ok(())
 }
