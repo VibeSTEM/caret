@@ -27,7 +27,7 @@ use super::paragraph_ops::{
 use super::text_map::TextMap;
 use super::{
     Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, InputComposition,
-    MathFocus, Pos, PositionMap, Selection, StoryId,
+    MathDirection, MathFocus, Pos, PositionMap, Selection, StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -259,9 +259,16 @@ impl Session {
                 Command::InsertTwoCharacterWidthSpace => {
                     return self.run(Command::InsertMathText("\u{2003}\u{2003}".to_owned()));
                 }
+                Command::MoveCaret(direction) => {
+                    return self.move_math_caret(match direction {
+                        Direction::Backward => MathDirection::Left,
+                        Direction::Forward => MathDirection::Right,
+                    });
+                }
                 Command::InsertMathText(_)
                 | Command::InsertMathFraction
                 | Command::InsertMathRadical
+                | Command::MoveMathCaret(_)
                 | Command::ExitMath
                 | Command::Undo
                 | Command::Redo
@@ -271,7 +278,6 @@ impl Session {
                 | Command::CancelComposition { .. }
                 | Command::SetSelection(_)
                 | Command::Delete(_)
-                | Command::MoveCaret(_)
                 | Command::MoveStructure(_)
                 | Command::ExitBlockEnvironment(_)
                 | Command::RemoveBlockEnvironmentPreservingContent
@@ -300,6 +306,9 @@ impl Session {
                 | Command::AcceptCommandLine
                 | Command::CancelCommandLine => return Err(EditError::UnsupportedMathTarget),
             }
+        }
+        if let Command::MoveMathCaret(direction) = &command {
+            return self.move_math_caret(*direction);
         }
         if let Some(text) = inserted_text
             && self.block_environment_exit.is_some()
@@ -504,6 +513,9 @@ impl Session {
                 self.insert_math_edit(crate::math_edit::MathEdit::InsertRadical)
             }
             Command::ExitMath => unreachable!("math exit returned before editing dispatch"),
+            Command::MoveMathCaret(_) => {
+                unreachable!("math navigation returned before editing dispatch")
+            }
             Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),

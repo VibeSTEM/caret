@@ -16,6 +16,14 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorKey {
     Escape,
     Enter,
@@ -31,6 +39,7 @@ pub enum Command {
     InsertMathText(String),
     InsertMathFraction,
     InsertMathRadical,
+    MoveMathCaret(MathDirection),
     ExitMath,
     InsertOneCharacterWidthSpace,
     InsertTwoCharacterWidthSpace,
@@ -90,6 +99,7 @@ impl Command {
             Self::InsertMathText(_) => "math.insert.text",
             Self::InsertMathFraction => "math.insert.fraction",
             Self::InsertMathRadical => "math.insert.radical",
+            Self::MoveMathCaret(_) => "math.caret.move",
             Self::ExitMath => "math.exit",
             Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",

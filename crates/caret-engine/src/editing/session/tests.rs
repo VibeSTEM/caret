@@ -1,7 +1,7 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
-use crate::editing::EditorKey;
+use crate::editing::{EditorKey, MathDirection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode,
@@ -17,6 +17,13 @@ fn paragraph_text(session: &Session, block_index: usize) -> String {
     TextMap::new(paragraph)
         .unwrap_or_else(|error| panic!("paragraph text map failed: {error}"))
         .text
+}
+
+fn current_math_position(session: &Session) -> &crate::editing::MathPos {
+    &session
+        .math_focus()
+        .unwrap_or_else(|| panic!("expected active math focus"))
+        .position
 }
 
 #[test]
@@ -416,7 +423,6 @@ fn unsupported_body_navigation_and_ime_are_rejected_while_math_has_focus() {
 
     let commands = [
         Command::Delete(Direction::Backward),
-        Command::MoveCaret(Direction::Backward),
         Command::SetSelection(Some(Selection {
             anchor: selection.focus.clone(),
             focus: selection.focus.clone(),
@@ -465,6 +471,279 @@ fn inline_math_edge_stays_a_grapheme_boundary_before_combining_text() {
         .run(Command::Delete(Direction::Backward))
         .unwrap_or_else(|error| panic!("formula edge deletion failed: {error}"));
     assert_eq!(paragraph_text(&session, 0), "\u{301}");
+}
+
+#[test]
+fn math_horizontal_navigation_moves_inside_text_and_exits_at_object_edges() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("formula input failed: {error}"));
+
+    let effect = session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("left movement inside formula failed: {error}"));
+    assert!(effect.selection_changed);
+    let math_focus = session
+        .math_focus()
+        .unwrap_or_else(|| panic!("left movement should retain formula focus"));
+    assert_eq!(math_focus.position.offset, 0);
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("left movement should exit at formula edge: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(session.selection().focus.offset, 0);
+
+    let mut rightward = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    rightward
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    rightward
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("right movement should exit at formula edge: {error}"));
+    assert!(rightward.math_focus().is_none());
+    assert_eq!(rightward.selection().focus.offset, "\u{fffc}".len());
+}
+
+#[test]
+fn math_vertical_navigation_switches_fraction_and_radical_slots() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertMathFraction)
+        .unwrap_or_else(|error| panic!("fraction insertion failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    let fraction = &math.math_tree.root.children[0];
+    let numerator_id = fraction.children[0].id.clone();
+    let denominator_id = fraction.children[1].id.clone();
+
+    session
+        .run(Command::MoveMathCaret(MathDirection::Down))
+        .unwrap_or_else(|error| panic!("move to denominator failed: {error}"));
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&denominator_id)
+    );
+    session
+        .run(Command::MoveMathCaret(MathDirection::Up))
+        .unwrap_or_else(|error| panic!("move to numerator failed: {error}"));
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&numerator_id)
+    );
+
+    session
+        .run(Command::InsertMathRadical)
+        .unwrap_or_else(|error| panic!("radical insertion into numerator failed: {error}"));
+    let focus_path = current_math_position(&session).path.clone();
+    let (index_id, radicand_id) = {
+        let Block::Paragraph(paragraph) = &session.document.body[0] else {
+            panic!("expected paragraph containing formula");
+        };
+        let InlineNode::Math(math) = &paragraph.inlines[0] else {
+            panic!("expected inline math");
+        };
+        assert!(focus_path.last().is_some());
+        let radical = &math.math_tree.root.children[0].children[0];
+        assert_eq!(radical.kind, MathNodeKind::Radical);
+        (
+            radical.children[0].id.clone(),
+            radical.children[1].id.clone(),
+        )
+    };
+    session
+        .run(Command::MoveMathCaret(MathDirection::Up))
+        .unwrap_or_else(|error| panic!("radical index navigation failed: {error}"));
+    assert_eq!(current_math_position(&session).path.last(), Some(&index_id));
+    session
+        .run(Command::MoveMathCaret(MathDirection::Down))
+        .unwrap_or_else(|error| panic!("radicand navigation failed: {error}"));
+    assert_eq!(
+        current_math_position(&session).path.last(),
+        Some(&radicand_id)
+    );
+}
+
+#[test]
+fn fraction_can_be_inserted_after_a_typed_symbol() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("formula input failed: {error}"));
+    session
+        .run(Command::InsertMathFraction)
+        .unwrap_or_else(|error| panic!("fraction should insert at the symbol edge: {error}"));
+
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    assert_eq!(math.math_tree.root.children.len(), 2);
+    assert_eq!(math.math_tree.root.children[0].text.as_deref(), Some("x"));
+    assert_eq!(math.math_tree.root.children[1].kind, MathNodeKind::Fraction);
+}
+
+#[test]
+fn nested_math_structure_edit_is_undoable_without_losing_operand_text() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertMathFraction)
+        .unwrap_or_else(|error| panic!("fraction insertion failed: {error}"));
+    session
+        .run(Command::InsertText("n".to_owned()))
+        .unwrap_or_else(|error| panic!("numerator input failed: {error}"));
+    session
+        .run(Command::InsertMathRadical)
+        .unwrap_or_else(|error| panic!("radical insertion failed: {error}"));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo nested structure failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    assert_eq!(
+        math.math_tree.root.children[0].children[0].text.as_deref(),
+        Some("n")
+    );
+    assert!(session.math_focus().is_some());
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo nested structure failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula after redo");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math after redo");
+    };
+    assert_eq!(
+        math.math_tree.root.children[0].children[0].kind,
+        MathNodeKind::Row
+    );
+    assert!(session.math_focus().is_some());
+}
+
+#[test]
+fn moving_within_math_separates_history_typing_groups() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("first formula input failed: {error}"));
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("left movement failed: {error}"));
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("right movement failed: {error}"));
+    session
+        .run(Command::InsertText("y".to_owned()))
+        .unwrap_or_else(|error| panic!("second formula input failed: {error}"));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo after movement failed: {error}"));
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    assert_eq!(math.math_tree.root.children[0].text.as_deref(), Some("x"));
+}
+
+#[test]
+fn math_horizontal_navigation_treats_non_ordinary_symbols_as_single_atoms() {
+    let mut document = Document::blank();
+    let math_id = NodeId::generate();
+    let root_id = NodeId::generate();
+    let symbol_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![InlineNode::Math(InlineMath {
+        id: math_id.clone(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "\\alpha".to_owned(),
+            root: MathNode {
+                id: root_id.clone(),
+                kind: MathNodeKind::Row,
+                text: None,
+                attributes: Default::default(),
+                source_range: None,
+                children: vec![MathNode {
+                    id: symbol_id.clone(),
+                    kind: MathNodeKind::Symbol,
+                    text: Some("alpha".to_owned()),
+                    attributes: BTreeMap::from([("atomClass".to_owned(), "rel".to_owned())]),
+                    source_range: None,
+                    children: Vec::new(),
+                    extra: Default::default(),
+                }],
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    })];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("document with named math atom rejected: {error}"));
+    session.math_focus = Some(crate::editing::MathFocus {
+        paragraph_id: session.selection.focus.paragraph_id.clone(),
+        inline_math_id: math_id,
+        position: crate::editing::MathPos {
+            path: vec![root_id, symbol_id],
+            offset: 0,
+        },
+    });
+    session.selection.focus.offset = "\u{fffc}".len();
+    session.selection.anchor = session.selection.focus.clone();
+
+    session
+        .run(Command::MoveMathCaret(MathDirection::Right))
+        .unwrap_or_else(|error| panic!("named atom right movement failed: {error}"));
+    let focus = session
+        .math_focus()
+        .unwrap_or_else(|| panic!("named atom movement should retain math focus"));
+    assert_eq!(focus.position.offset, 1);
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    assert!(focus.position.resolve(&math.math_tree).is_some());
 }
 
 #[test]
