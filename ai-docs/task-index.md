@@ -91,8 +91,10 @@
 | 053 | 画布 | [图片布局与画布呈现](task/053-image-layout-and-canvas.md) | P2 | 024、027、052 | M | planned |
 | 054 | 结构命令 | [APA 标题层级命令与默认样式](task/054-apa-heading-commands.md) | P2 | 010、024、025、026、027 | M | planned |
 | 055 | 排版基线 | [OpenType BASE 脚本基线与字形溢出诊断](task/055-opentype-base-script-alignment.md) | P2 | 024、026、027、033 | L | ready |
-| 056 | 字体设置 | [字体设置与字体族选择器](task/056-font-settings-and-family-picker.md) | P2 | 024、025、039 | M | planned |
+| 056 | 字体设置 UI | [文档字体设置专用布局](task/056-font-settings-and-family-picker.md) | P2 | 024、025、039 | M | deferred |
 | 057 | 结构命令 | [块环境命令作用于文本选区](task/057-block-environment-selection-commands.md) | P2 | 010、022 | M | planned |
+| 058 | QML 架构 | [QML 主题令牌与固定常量分层](task/058-qml-theme-tokens-and-constants.md) | P2 | 029、039 | M | ready |
+| 059 | 字体命令 | [命令字体选择器交互与布局优化](task/059-command-font-picker.md) | P2 | 024、025 | M | planned |
 
 分类列描述实现主题，优先级列使用 P0–P2；产品里程碑用 M0–M4 标记在任务标题和需求文档中。020 的模型决策已定稿；M3 公式由 011 总体验收及 042–044 子任务推进；表格由 012 总体验收及 045/046 拆分推进；按依赖推进 021/022 与编辑所需的页面布局链，之后由 008 集成基础文本编辑；025 的格式命令不阻塞 M0。018 依赖 008；019 在 018 后单独设计 AutoSave。009 建立通用命令入口，010 增加环境命令和结构状态。公式和表格画在画布里。014 不挡后续里程碑。
 
@@ -101,7 +103,7 @@
 031 负责当前环境背景高亮：010 已提供块环境结构及分页几何，块与行内高亮已接入同一 QSG 图层，031 已完成专项与最终评审。025 负责对选中文本应用行内格式环境命令；057 补充对选中文本执行块环境命令。009 负责独立的命令提示 token。行内、块级和命令提示颜色均属于 GUI Theme，不写入文档排版主题或 `.cdoc`。
 
 033 已完成共享行距网格及选区行框几何；当前实现不读取 OpenType BASE。脚本基线对齐、实际字体 BASE 解析和 ink 溢出诊断单独由 055 承接，不把 033 的完成表述成已支持 BASE。
-024 已完成系统/用户字体目录读取、显式刷新和 shaping 字体回退；025 已实现文档默认字体 API、局部 `\\font` 命令与 `\\defaultfont` 脚本/语言选择流程，并接入 Rust 代码字体 shaping 角色。056 仍负责把现有字体目录与文档设置接入 Settings UI，不重复实现字体扫描或字体选择规则。
+024 已完成系统/用户字体目录读取、显式刷新和 shaping 字体回退；025 已实现文档默认字体 API、局部 `\\font` 命令与 `\\defaultfont` 脚本/语言选择流程，并接入 Rust 代码字体 shaping 角色。059 负责优化命令中的字体候选交互；056 负责未来的文档字体设置专用界面，须等待独立布局设计，不直接并入通用 Settings 对话框，也不重复实现字体扫描或字体选择规则。
 
 008 的 Windows、macOS、Linux Nightly 合成 IME/Unicode 矩阵已通过并完成验收；009 可直接基于已完成的 008 开始。
 
