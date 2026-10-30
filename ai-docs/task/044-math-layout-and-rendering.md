@@ -3,11 +3,11 @@
 - 状态：planned
 - 依赖：012、027、043
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-10-29
+- 创建 / 更新：2026-10-29 / 2026-10-31
 
 ## 目标与背景
 
-把 `latex-rust` 的数学盒布局精确、高效地呈现到 Caret 页面画布。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。完成 M3 规定的表格内公式可视集成。总体验收由 [011 M3 公式](011-impl-math.md)管理。
+通过独立 `caret-math` crate 适配 `latex-rust` 的数学盒布局，并精确、高效地呈现到 Caret 页面画布。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。完成 M3 规定的表格内公式可视集成。总体验收由 [011 M3 公式](011-impl-math.md)管理。
 
 ## 必读
 
@@ -16,7 +16,7 @@
 
 ## 范围与非目标
 
-实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
+在 043 创建的低层 `caret-math` workspace crate 中扩展 `latex-rust` pin/patch、输入适配和 MathBox 快照 API。`caret-math` 不依赖 Qt、Parley 或 `caret-doc`，向 `caret-layout` 暴露调用方注入的 shaping provider 与稳定节点 provenance。实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
 
 覆盖段落行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的唯一支持值与诊断回退；公式内 `\text{...}` 使用 Caret 正文 shaping。接通表格单元格内公式的绘制、命中、光标与布局。
 
@@ -24,7 +24,7 @@
 
 ## 前置条件与待决策
 
-依赖 043 的稳定公式树和 042 的 MathBox API 结论。依赖 012、027 已完成；如果后端不能提供编辑命中所需映射，先记录上游最小扩展方案，不用异步 SVG/PNG 绘制绕开契约。
+依赖 043 创建的 parser crate、源码范围映射和稳定公式树，以及 042 的后端边界结论。依赖 012、027 已完成；在 1.99 工具链验证补丁包和依赖树，增加正文 shaping provider 与布局盒到 Caret 节点的 provenance。Caret 树到 parser/layout 的深度预算映射须验证；超过上游默认预算的导入或编辑须原子拒绝。输入采用 `\[...\]` 和 `\[\begin{aligned}...\end{aligned}\]`；不为未发布的公式语法增加星号环境 parser patch。如果上游 patch 不能满足契约，暂停集成并复核 patch 范围，不另写 TeX parser/layout，也不用 SVG/PNG 绘制绕开契约。
 
 ## 实施步骤
 
