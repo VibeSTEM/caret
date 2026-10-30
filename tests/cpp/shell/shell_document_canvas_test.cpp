@@ -322,6 +322,11 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                                                   {QStringLiteral("x0Pt"), 10},
                                                                   {QStringLiteral("y0Pt"), 10},
                                                                   {QStringLiteral("x1Pt"), 50},
+                                                                  {QStringLiteral("y1Pt"), 20}},
+                                                      QVariantMap{{QStringLiteral("pageIndex"), 1},
+                                                                  {QStringLiteral("x0Pt"), 10},
+                                                                  {QStringLiteral("y0Pt"), 10},
+                                                                  {QStringLiteral("x1Pt"), 50},
                                                                   {QStringLiteral("y1Pt"), 20}}}));
     QVERIFY(rendered_canvas->setProperty("blockEnvironmentHighlightColor",
                                          QColor(QStringLiteral("#fff2cc"))));
@@ -390,7 +395,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
         return count;
     };
     const QColor block_environment_highlight_color(QStringLiteral("#fff2cc"));
-    QCOMPARE(rendered_canvas->property("blockEnvironmentHighlightRects").toList().size(), 1);
+    QCOMPARE(rendered_canvas->property("blockEnvironmentHighlightRects").toList().size(), 2);
     QCOMPARE(rendered_canvas->property("blockEnvironmentHighlightColor").value<QColor>(),
              block_environment_highlight_color);
     QCOMPARE(rendered_canvas->property("blockEnvironmentHighlightRadius").toReal(), 4.0);
@@ -402,7 +407,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY(count_color_pixels(highlight_frame, block_environment_highlight_color) > 0);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{1, 2}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), block_environment_highlight_color) == 0,
+        count_color_pixels(render_window.grabWindow(), block_environment_highlight_color) > 0,
         3000);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 2}));
     QTRY_VERIFY_WITH_TIMEOUT(
@@ -415,7 +420,12 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     };
     const QPointF highlight_origin = rendered_canvas->documentToContent(0, QPointF(10.0, 10.0));
     const QPointF highlight_center = rendered_canvas->documentToContent(0, QPointF(30.0, 15.0));
+    const QPointF next_page_highlight_center =
+        rendered_canvas->documentToContent(1, QPointF(30.0, 15.0));
     QCOMPARE(pixel_at_logical_point(highlight_frame, highlight_center.x(), highlight_center.y()),
+             block_environment_highlight_color);
+    QCOMPARE(pixel_at_logical_point(highlight_frame, next_page_highlight_center.x(),
+                                    next_page_highlight_center.y()),
              block_environment_highlight_color);
     const QColor rounded_highlight_edge = pixel_at_logical_point(
         highlight_frame, highlight_origin.x() + 1.0, highlight_origin.y() + 1.0);
@@ -429,6 +439,27 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QVERIFY(rounded_highlight_inner_edge.green() >= block_environment_highlight_color.green());
     QVERIFY(rounded_highlight_inner_edge.blue() >= block_environment_highlight_color.blue());
     QVERIFY(rounded_highlight_inner_edge != block_environment_highlight_color);
+    QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{1, 2}));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), block_environment_highlight_color) > 0,
+        3000);
+    const QImage second_page_frame = render_window.grabWindow();
+    QCOMPARE(pixel_at_logical_point(second_page_frame, next_page_highlight_center.x(),
+                                    next_page_highlight_center.y()),
+             block_environment_highlight_color);
+    QVERIFY(pixel_at_logical_point(second_page_frame, highlight_center.x(), highlight_center.y()) !=
+            block_environment_highlight_color);
+    QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 1}));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), block_environment_highlight_color) > 0,
+        3000);
+    const QImage first_page_frame = render_window.grabWindow();
+    QCOMPARE(pixel_at_logical_point(first_page_frame, highlight_center.x(), highlight_center.y()),
+             block_environment_highlight_color);
+    QVERIFY(pixel_at_logical_point(first_page_frame, next_page_highlight_center.x(),
+                                   next_page_highlight_center.y()) !=
+            block_environment_highlight_color);
+    QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 2}));
     QVERIFY(rendered_canvas->setProperty("blockEnvironmentHighlightRects", QVariantList{}));
     QTRY_VERIFY_WITH_TIMEOUT(
         count_color_pixels(render_window.grabWindow(), block_environment_highlight_color) == 0,
