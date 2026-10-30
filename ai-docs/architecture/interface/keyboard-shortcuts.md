@@ -1,6 +1,6 @@
 # 快捷键
 
-更新日期：2026-10-29。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航、复制粘贴、撤销/重做和上一块/下一块/跳出结构已接入。结构内移动、结构首尾和表格快捷键仍是后续目标。命令 id 见[命令](../editor/commands.md)。
+更新日期：2026-10-30。正文文本输入、Enter 拆分段落、Shift+Enter 插入软换行、Backspace 删除/段落合并、方向键/Home/End 导航、复制粘贴、撤销/重做和上一块/下一块/跳出结构已接入。结构内移动、结构首尾和表格快捷键仍是后续目标。命令 id 见[命令](../editor/commands.md)。
 
 本文中的 `Mod` 是平台抽象修饰键：macOS 映射为 Command，Windows/Linux 映射为 Ctrl。快捷键和代码使用 `Mod` 表示这一映射；平台差异只在本说明中定义。
 
@@ -14,7 +14,7 @@
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
-Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层；否则由 Rust 依次取消命令输入、IME 预编辑、收起选区、跳出结构。收起选区不会同时退出环境。详见[键盘路由](keyboard-routing.md)与[结构导航](../editor/structure-navigation.md)。
+Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 Rust 仲裁。具体优先级见[键盘路由](keyboard-routing.md)，结构选区行为见[结构导航](../editor/structure-navigation.md)。
 
 ## 正文与结构
 
@@ -65,6 +65,6 @@ Esc 和 Shift+Esc 执行同一上下文动作：先关闭有焦点的 UI 弹层�
 | 行内公式 / 显示公式 | `$` / `$$` |
 | 字面 `$` | `$` 然后 Tab |
 | 插入 2×2 表格 | Alt+T |
-| 下一格 / 上一格 | Tab / Shift+Tab |
+| 表格内下一格 / 上一格（后续目标） | Tab / Shift+Tab |
 
 中文标点下用 `、` 或 `¥` 进入命令和公式，是设置里的开关，默认关。见[命令输入](../editor/command-input.md)。

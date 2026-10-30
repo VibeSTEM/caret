@@ -12,12 +12,9 @@
 
 **总计：3 个桌面平台；3 种正文系统回退后端；3 个 Qt 固定宽度字体入口；3 种 Fontique 等宽族映射。**Rust shaping 已提供代码字体角色并接入 `defaultCodeFontFamily` 与 Fontique 等宽通用族；代码块文档节点尚未实现。此解析与 Qt 命令输入字体不保证相同。正文脚本目标不在此复制成静态字体族表：有效 Script 集合由锁定版本的 ICU4X Unicode 数据生成，具体字体名由运行设备的字体后端解析。Fontique 对特定 Script+Language 对的显式追踪是有限集合，未追踪的合法语言仍保留在文档设置中，但不能据此声称系统 fallback 一定按该语言区分。
 
-## 规则
+## 记录边界
 
-- 平台映射文件记录“键到系统解析器”的关系，不记录某一 OS 版本预装字体名称作为永久默认值。
-- `defaultCodeFontFamily: "<default>"` 在 Qt 命令输入中解析为 Qt 系统 FixedFont，在 Rust 代码角色中解析为 Fontique `GenericFamily::Monospace`。macOS 与 Windows 的 Fontique Monospace 当前是库内静态候选名，Linux 使用 Fontconfig `monospace`；不要把它们描述为所有平台都会动态选择相同的系统推荐值。解析后的字体名不回写 `.cdoc`。
-- 正文用户偏好仍按 `Script` → `Script+Language` 配置；空缺时使用底层系统 fallback。系统 fallback 得到的字体不是文档持久化偏好。
-- 字体族具体名称仅能作为带 OS 版本和字体目录快照的观测结果，不可作为跨设备保证。
+本目录只记录各平台的回退后端、默认通用族映射及其观测来源，不承诺固定的预装字体名。`.cdoc` 字段、用户偏好优先级、`<default>` 语义与解析行为以[字体选择规范](../font-selection.md)为准。
 
 ## 参考
 

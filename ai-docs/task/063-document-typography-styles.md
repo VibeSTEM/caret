@@ -19,7 +19,7 @@
 - 定义命名 Run/Paragraph 样式稳定 ID、属性白名单、文档默认样式引用和 `globalSettings` 覆盖语义。
 - 完成主题快照载入、校验、显式更新、引用检查、原子替换及 `.cdoc` 保存/重开行为。
 - 按样式变化的实际影响推进 generation 和缓存失效；无效主题不得破坏旧快照。
-- 保持优先级：Run/Paragraph 直接属性 → EnvironmentNode 有效设置 → 文档全局覆盖 → 主题命名样式 → 应用默认值。
+- 严格复用[格式语义](../architecture/editor/text-formatting.md)定义的属性解析优先级；本任务不另立优先级规则。
 - 不实现 Office/DOCX 兼容、056 字体设置 UI、应用 GUI Theme 或外部主题路径依赖。
 
 ## 前置条件与待决策

@@ -1,6 +1,6 @@
 # 命令
 
-更新日期：2026-10-29。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
+更新日期：2026-10-30。执行规则见[运行时](../core/runtime.md)。`\` 的交互见[命令输入](command-input.md)。
 
 ## 注册表
 
@@ -32,7 +32,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `struct.section.create` | 把当前段落转换为 Section 标题 | 一步，可撤销 |
 | `text.format.bold` / `text.format.italic` / `text.format.font_family` | 应用粗体、斜体或所选字体族行内环境 | 一步，可撤销；空选区的待输入样式亦可撤销 |
 | `paragraph.first_line_indent.set` | 将当前段落首行缩进设为 2 个字符宽度 | 一步，可撤销；由 `\firstlineindent` 调用，与 Tab 插入空格无关 |
-| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决；Mod+Backspace 优先解除光标所在最内层行内环境，否则解除当前块环境，均保留内容 | 视分支而定；解除环境作为一个编辑撤销 |
+| `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.tab` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决，优先级见[键盘路由](../interface/keyboard-routing.md) | 视分支而定；文档变更各作为一个编辑撤销 |
 | `struct.remove_preserving_content` | 将当前块环境标题与正文提升为父级内容并移除环境外壳 | 一步，可撤销 |
 | `text.format.remove_environment_preserving_content` | 移除指定行内环境外壳并保留子节点；由 Mod+Backspace 的 Rust 仲裁调用 | 一步，可撤销 |
 | `cmdline.begin` / `cmdline.type` / `cmdline.backspace` / `cmdline.move_selection` / `cmdline.select_candidate` / `cmdline.tab` / `cmdline.accept` / `cmdline.cancel` | 命令模式 | 查询和选择是纯命令；`tab`、`accept` 与重复前缀键由 Rust 按当前查询状态决定插入字面字符或执行候选 |
