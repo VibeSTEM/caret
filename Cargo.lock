@@ -150,6 +150,7 @@ dependencies = [
  "caret-math",
  "caret-structure",
  "criterion",
+ "libc",
  "serde",
  "serde_json",
  "undo",

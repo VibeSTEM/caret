@@ -41,7 +41,7 @@
 ## 验收标准
 
 - [ ] 三种公式类型在 `.cdoc` 中为 Caret 自有 schema，往返后节点、源内容、ID 与位置语义稳定。
-- [ ] 数学树避免每个符号单独分配字符串与堆对象；使用典型、深层及大量公式样本记录节点数、堆分配数和驻留内存后再确定紧凑布局。
+- [x] 普通连续 `ord` 字符合并为一个 Text-bearing node，MathNode 子节点存储在父节点 `Vec` 中而不是逐节点 `Box`；典型、深层和 1,000 个公式样本已记录节点数、堆分配数及内存，并决定本阶段不额外建立运行时 arena。后续若真实公式文档显著超过 1,000 个，或完整布局接入后 RSS 超预算，再评估 schema v2/arena。
 - [ ] 自动编号、编号版 `equation`/`align`、label/ref 明确不支持且不会静默丢失源文本或编号语义。
 - [ ] 键盘进入、内部移动、占位符跳转、离开和插入点落位符合 011。
 - [ ] 失败原子；超深/过长输入不能导致进程崩溃；未知 `defaultMathFontFamily` 原样保留，实际回退到 STIX 时有诊断。
@@ -74,6 +74,7 @@
 | 2026-10-31 | `cargo test --locked --offline -p caret-math -p caret-doc -p caret-engine`、`cargo clippy --locked --offline -p caret-math -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo check --locked --offline -p caret-app`、`cargo fmt --all -- --check`、`git diff --check HEAD` | parser 三态输入分类与错误优先级、未知命令/尾反斜线拒绝、定界符完整控制词/顺序、退格修复合法输入并进入撤销历史 | 通过：`caret-math` 17 项、`caret-doc` 44 项、`caret-engine` 257 项；Clippy、app check、格式及 diff 检查通过 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-engine parser_expansion_budget_failure_keeps_session_document_and_history_atomic -- --exact editing::session::tests::parser_expansion_budget_failure_keeps_session_document_and_history_atomic` | Parser 展开节点预算临界值上的合并失败；确认正文、选区、MathFocus、历史和 generation 不变 | 通过，1 项；该预算边界失败路径已验证 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-math -p caret-doc -p caret-engine --quiet`、`cargo clippy --locked --offline -p caret-math -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo check --locked --offline -p caret-app`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 输入错误恢复与 parser 展开预算临界失败的完整目标验证 | 通过：`caret-math` 17 项、`caret-doc` 44 项、`caret-engine` 258 项；Clippy、app check、格式及 diff 检查通过 |
+| 2026-10-31 | `cargo build --locked --offline --release -p caret-engine --example math_tree_memory`；独立运行 `typical`、`deep`、`many` | Caret 节点布局、导入分配调用/字节、保留堆字节与峰值 RSS | 通过；结果与决策见下方工作记录 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | MathTree payload/内容预算、导入返回校验、编辑后端节点/深度预算 | 通过：`caret-doc` 44 项、`caret-engine` 224 项；不覆盖 Session 数学焦点、撤销/重做、公式导航或整公式回写 |
 | 2026-10-31 | `cargo lint --check` | workspace lint、依赖、CMake/QML/native 检查 | 未完整通过：第 1 阶段 Clippy 和第 2 阶段未使用依赖检查通过；第 4 阶段 CMake layering fixture 启动 `/usr/bin/c++` 探测时 ABI 配置失败，检查提前退出；第 3 阶段通过，5–9 阶段未运行 |
 | 2026-10-31 | `cargo fmt --all -- --check`、`git diff --check HEAD` | Rust 格式与补丁空白检查 | 通过 |
@@ -104,6 +105,7 @@
 
 - 2026-10-31：接入逐键公式输入缓冲：不完整反斜线命令和开放参数组暂存于 Session，不改树或 history；控制词等到非字母分隔符再解析，避免 `\\sin` 抢先于 `\\sinh`；parser 接受完整 chunk 后一次提交。Backspace 按 grapheme 删除暂存尾部并重算未完成状态，Escape 优先清除缓冲，Undo/Redo 首次清缓冲且不回退文档；语法错误原文保留，effect 暴露 `math_input_error`，Session getter 提供输入文本。长度超限返回错误且保持先前缓冲/error 状态不变；非语法编辑错误仍按原错误返回且恢复先前缓冲。数学粘贴走统一事务和独立撤销历史；无 MathFocus 时数学输入命令拒绝且不创建缓冲。对 parser 拒绝的输入仅使用 `caret-math` 边界分类识别可能前缀，语义仍由锁定 parser 判定。新增 `\\alpha`、逐键 `\\frac{x}{y}`、命令名歧义、粘贴历史、超限原子性和输入错误恢复测试。
 - 2026-10-31：独立复核后将 `caret-math` 输入状态显式分成 Complete/Incomplete/Invalid；Unknown/Unsupported 命令不会因闭合或开放花括号被误判为可补全，尾部控制词与反斜线只有此前缀本身可解析或明确不完整时才等待。UnmatchedDelimiter 按控制词边界、转义反斜线及左右顺序检查，避免把 `\\leftarrow` 当 `\\left`。Backspace 将错误缓冲修正为合法公式时，通过 `Session::run(InsertMathText)` 提交到文档和撤销历史；添加未知命令、尾部命令词与反斜线优先级、定界符顺序及修复后 Undo 回归。Terra/medium 领域复核已确认修复闭环；保留风险为 parser 的 `Malformed` 文字是输入缺参判定的一部分，及预算边缘的非语法提交故障注入尚未覆盖。
-- 2026-10-31：Session 层新增 parser 展开节点预算临界失败用例：构造恰在预算内的 Ord 叶并尝试合并一个字符，验证 `InvalidMathTree` 返回后文档、选区、MathFocus、history id、generation、undo/redo 可用性、merge epoch 与输入缓冲均不变；测试从含预算边界公式的合法 Document 建立 Session，避免修改已有历史快照。单测通过。仍未覆盖大规模文档性能和节点分配测量。
+- 2026-10-31：Session 层新增 parser 展开节点预算临界失败用例：构造恰在预算内的 Ord 叶并尝试合并一个字符，验证 `InvalidMathTree` 返回后文档、选区、MathFocus、history id、generation、undo/redo 可用性、merge epoch 与输入缓冲均不变；测试从含预算边界公式的合法 Document 建立 Session，避免修改已有历史快照。单测通过；当时未覆盖大规模文档性能和节点分配测量，后续追加 release 内存探针。
+- 2026-10-31：release 数学树导入探针测量于 macOS 27.0 arm64 (Apple T8132), Rust 1.99.0。典型公式为 54 B 源码、23 nodes/深度 6、155 次导入分配/15,889 B 累计、11,319 B 保留堆、6,553,600 B 进程峰值 RSS；10 层嵌套分数为 101 B、21 nodes/深度 11、177 次/19,838 B、16,454 B 保留堆、6,438,912 B RSS；重复典型公式 1,000 次为 23,000 nodes、154,001 次/15,817,000 B、11,271,000 B 保留堆、19,988,480 B RSS。`MathNode` 为 168 B，`NodeId` 为 24 B；根和 child `Vec` 中的节点内联存储，无逐节点 `Box`，普通 `ord` 字符合并；保留堆差值在 parser parse 及首次 import warm-up 后采集，包含外层公式 Vec 容量和内联根节点，不含预解析的 `ParsedMath`。分配字节为 allocator 请求大小，不含其元数据；RSS 为进程启动以来的历史高水位，包含解析与预热阶段，运行间可能波动。此组数字修正了早期未计入外层 Vec 的测量。决定沿用可读、树形 `.cdoc` schema 和 `Vec` 子节点布局，不增加重复 arena；Arena 会增加运行时表示与持久化 DTO 的转换/双份存储，而 1,000 个典型公式当前 RSS 约 19 MiB。完整排版与真实文档数据未进入测量；超过 1,000 公式或 044 布局集成暴露内存预算后再评估 schema v2/arena。
 
 未完成。

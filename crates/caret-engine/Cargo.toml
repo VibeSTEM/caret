@@ -19,11 +19,16 @@ undo.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+libc.workspace = true
 
 [[bench]]
 name = "novel_document_criterion"
 path = "../../tests/performance/rust/cpu/novel_document_criterion.rs"
 harness = false
+
+[[example]]
+name = "math_tree_memory"
+path = "../../tests/performance/rust/cpu/math_tree_memory.rs"
 
 [lints]
 workspace = true
