@@ -46,10 +46,51 @@ fn run(product: Option<&Path>, arguments: &[OsString]) -> Result<ExitCode, Strin
 
     let mut command = std::process::Command::new(product);
     command.args(arguments);
+    // Windows 开发构建不部署 Qt DLL：ctest 有 native_test_env 兜底，桌面入口
+    // 只能自己把托管 Qt 的 bin 前置到子进程 PATH；macOS/Linux 依靠构建 rpath。
+    if let Some(qt_bin) = qt_bin_for(option_env!("CARET_QT_BIN"), cfg!(windows)) {
+        let path = prepared_qt_path(&qt_bin, std::env::var_os("PATH"))?;
+        command.env("PATH", path);
+    }
     match command.status() {
         Ok(status) => Ok(exit_code_of(&status)),
         Err(error) => Err(format!("无法启动 {}：{error}", product.display())),
     }
+}
+
+/// Windows 上返回注入的托管 Qt bin 目录；其余平台返回 None，不碰 PATH。
+fn qt_bin_for(injected: Option<&str>, windows: bool) -> Option<PathBuf> {
+    if !windows {
+        return None;
+    }
+    injected
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// 前置目录后的子进程 PATH；继承 PATH 缺失时只含前置目录本身。
+fn runtime_path(
+    front: PathBuf,
+    inherited: Option<OsString>,
+) -> Result<OsString, std::env::JoinPathsError> {
+    let mut paths = vec![front];
+    if let Some(inherited) = inherited {
+        paths.extend(std::env::split_paths(&inherited));
+    }
+    std::env::join_paths(paths)
+}
+
+/// staging 被事后清理时构建脚本不会重跑供给；此时给出可操作错误，而不是
+/// 让 Windows 弹出找不到 Qt DLL 的系统对话框。
+fn prepared_qt_path(qt_bin: &Path, inherited: Option<OsString>) -> Result<OsString, String> {
+    if !qt_bin.is_dir() {
+        return Err(format!(
+            "托管 Qt 运行库目录不存在：{}；重装 Qt 需重跑 launcher 构建脚本（如 cargo clean -p caret-launcher）",
+            qt_bin.display()
+        ));
+    }
+    runtime_path(qt_bin.to_path_buf(), inherited)
+        .map_err(|error| format!("拼接 Qt 运行库 PATH：{error}"))
 }
 
 /// 平台退出码取低 8 位。信号终止映射为 128+信号号。

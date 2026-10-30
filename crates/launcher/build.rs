@@ -56,8 +56,9 @@ fn main() -> ExitCode {
     }
 
     match orchestrate() {
-        Ok(product) => {
+        Ok((product, qt_bin)) => {
             println!("cargo:rustc-env=CARET_NATIVE_BIN={}", product.display());
+            println!("cargo:rustc-env=CARET_QT_BIN={}", qt_bin.display());
             ExitCode::SUCCESS
         }
         Err(message) => {
@@ -67,7 +68,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn orchestrate() -> Result<PathBuf, String> {
+fn orchestrate() -> Result<(PathBuf, PathBuf), String> {
     let manifest_dir = required_var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(required_var("OUT_DIR")?);
     let profile = required_var("PROFILE")?;
@@ -236,7 +237,9 @@ fn orchestrate() -> Result<PathBuf, String> {
     );
     println!("cargo:rustc-env=CARET_NATIVE_BUILD_TYPE={build_type}");
 
-    locate_product(&binary_dir, build_type, &provision::exe_name("caret"))
+    let qt_bin = staging.join("bin");
+    let product = locate_product(&binary_dir, build_type, &provision::exe_name("caret"))?;
+    Ok((product, qt_bin))
 }
 
 fn locate_product(binary_dir: &Path, build_type: &str, exe_name: &str) -> Result<PathBuf, String> {
