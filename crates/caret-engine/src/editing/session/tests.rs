@@ -1,7 +1,7 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
-use crate::editing::{EditorKey, MathDirection};
+use crate::editing::{EditorKey, MathDirection, MathPos};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode,
@@ -644,6 +644,75 @@ fn oversized_math_input_returns_error_without_changing_buffer_state() {
         Err(EditError::InvalidMathText)
     ));
     assert_eq!(session.pending_math_input(), Some("\\"));
+    assert!(!session.math_input_error());
+}
+
+#[test]
+fn parser_expansion_budget_failure_keeps_session_document_and_history_atomic() {
+    let mut seed = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    seed.run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    let mut document = seed.document().clone();
+    let mut focus = seed
+        .math_focus()
+        .cloned()
+        .unwrap_or_else(|| panic!("expected math focus"));
+    let selection = seed.selection().clone();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("expected paragraph containing inline math");
+    };
+    let InlineNode::Math(math) = &mut paragraph.inlines[0] else {
+        panic!("expected inline math");
+    };
+    let root_id = math.math_tree.root.id.clone();
+    let source = "x".repeat(caret_math::MAX_MATH_SYNTAX_NODES - 1);
+    math.math_tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: source.clone(),
+        root: MathNode {
+            id: root_id.clone(),
+            kind: MathNodeKind::Symbol,
+            text: Some(source),
+            attributes: BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
+            source_range: None,
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let position = MathPos {
+        path: vec![root_id],
+        offset: caret_math::MAX_MATH_SYNTAX_NODES - 1,
+    };
+    focus.position = position;
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("budget boundary document rejected: {error}"));
+    session.selection = selection;
+    session.math_focus = Some(focus);
+    assert!(session.document.validate().is_ok());
+
+    let document = session.document().clone();
+    let selection = session.selection().clone();
+    let focus = session.math_focus().cloned();
+    let history_state_id = session.history_state_id();
+    let generation = session.document_generation();
+    let can_undo = session.can_undo();
+    let can_redo = session.can_redo();
+    let history_merge_epoch = session.history_merge_epoch;
+    assert_eq!(
+        session.run(Command::TypeMathText("x".to_owned())),
+        Err(EditError::InvalidMathTree)
+    );
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.selection(), &selection);
+    assert_eq!(session.math_focus(), focus.as_ref());
+    assert_eq!(session.history_state_id(), history_state_id);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.can_undo(), can_undo);
+    assert_eq!(session.can_redo(), can_redo);
+    assert_eq!(session.history_merge_epoch, history_merge_epoch);
+    assert!(session.pending_math_input().is_none());
     assert!(!session.math_input_error());
 }
 
