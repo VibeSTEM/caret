@@ -234,6 +234,7 @@ fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
     for root in [
         json!({"id": "root", "kind": "sized_delimiter", "text": "char:(", "attributes": {"atomClass": "open"}, "children": []}),
         json!({"id": "root", "kind": "fraction", "attributes": {"style": "frac"}, "children": []}),
+        json!({"id": "root", "kind": "text", "text": "中文", "attributes": {"style": "text"}, "children": []}),
         json!({"id": "root", "kind": "matrix", "attributes": {"style": "equation", "columns": ""}, "children": []}),
         json!({"id": "root", "kind": "hline", "children": []}),
     ] {

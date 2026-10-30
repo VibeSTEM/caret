@@ -61,6 +61,8 @@
 | 2026-10-31 | `CARGO_HOME=/private/tmp/caret-cargo-audit-home cargo-deny --offline check` | 新增依赖后的 advisories、版本、许可与来源审计 | 通过；使用本地 RustSec 数据库快照 `2295466`（2026-10-30），当前沙箱无法刷新在线数据库 |
 | 2026-10-31 | `cargo lint --check` | crate lint、依赖和分层、CMake/QML/native lint | 通过（最终代码改动后复跑） |
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | typed 属性与树形校验、导入、矩阵单元格边界及存储往返 | 通过：`caret-doc` 44 项、`caret-engine` 201 项 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-engine` | MathPos 路径与节点偏移边界原语 | 通过：205 项；不覆盖公式内导航、编辑事务、命中或修改后的路径映射 |
+| 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | MathPos 导出、MathNode 文本约束及全仓构建/lint/格式 | 通过：workspace check 与 lint 9 阶段通过 |
 | 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo clippy --locked --offline -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 全工作区构建、直接消费者 lint、分层/native/QML 与格式检查 | 通过；cargo lint 9 阶段全部完成 |
 | —         | caret-engine 公式编辑与位置行为测试     | MathPos、内部编辑和导航契约成立          | 未执行                                               |
 | —         | 高节点数预算与合并后故障注入回滚测试    | 预算边界及失败后正文/选区/历史保持不变  | 未执行                                               |
@@ -79,6 +81,7 @@
 - 2026-10-31：`caret-engine` 增加 parser 结果到 `caret-doc` schema 的导入桥，创建文档 ID，并将 kind 和受校验的参数写入正式 `MathNode.kind/attributes`；新语义要求 `caret.math.syntax.v1`，未知 kind/属性值转只读安全预览。连续同类普通原子合并后才创建持久化 ID。InlineMath、Equation 和普通 Align 行已转换并通过 `.cdoc` 往返；Align 完整源放在容器，因 3.0.1 无 cell 源范围，cell 树当前源码为空；含环境级 `intertext`/`hline` 行会明确拒绝，错误携带类别、完整源及整公式字节范围。紧凑 arena 与典型/大量文档内存测量仍未完成。
 - 2026-10-31：独立 schema/import 复核后，typed 数学属性补齐必需字段与 delimiter allowlist，schema 校验同时约束节点文字、操作数槽位和 Hline/Intertext 的 Matrix 父级；不完整或结构非法数据进入只读预览。Ord 字符序列才可合并，Bin/Rel/Punct 等原子保留节点边界，Matrix 行不跨 cell 合并；新增矩阵单元格回归和无效 schema 预览测试。能力扫描改为迭代遍历，避免保存前递归栈风险；所有导入错误都携带完整输入和 parser 可提供的范围。权威 schema 文档现列出节点槽位、必需属性和 Ord 合并含义。复验 `caret-doc` 44 项、`caret-engine` 201 项、workspace check、目标 clippy、全 lint 和格式检查通过。
 - 2026-10-31：Sol/medium 最终只读复核曾指出 MathNode 可伪造自动编号 matrix style；移除 `align/equation/gather/multline`，补充只读预览用例和 schema 文档 allowlist。最终复核通过，未发现阻断问题；最终改动后重跑 `caret-doc` 44 项、`caret-engine` 201 项、目标 clippy、格式和 diff 检查通过。workspace check 与全 `cargo lint --check` 在 allowlist 变更前已通过；本次仅改变 Rust 枚举 allowlist、文档和安全预览测试。
+- 2026-10-31：首版 `MathPos` 在 `caret-engine` 提供稳定 NodeId 路径解析和节点偏移校验：Ord/TextContent 按本叶 extended grapheme cluster，命名数学/文本符号按单原子 0/1 边缘，结构节点按子节点边界，Placeholder 固定 offset 0；拒绝空/失配路径和路径上的重复兄弟 ID。保留分数等结构操作数两侧各自的位置。公式内部移动、命中、结构编辑后的映射、线性 Row 等价位置规范化、跨叶组合字素与 bidi 视觉 affinity 仍未实现。`caret-engine` 205 项测试通过，覆盖 UTF-8/字素边界、分数两槽端点、命名符号、占位符及重复 ID。
 - 2026-10-31：Terra/medium schema 与编辑边界只读复核发现并促成修复：未知 `sourceRange` 字段往返保留；Align 行进入文档节点预算；公式能力登记；未来 schema/节点 kind 转安全预览；U+FFFC 按 UTF-8 字节计长；公式边界可插软换行；跨段 Enter 失败恢复文档、选区、索引和缓存；数学扩展字段纳入历史大小估算。复验覆盖 schema 源码/深度限制、三种数学节点未来 schema、公式后的跨段 Enter、历史扩展字段估算。仍未验证高节点数预算裁剪及实际 MathPos/布局交互。
 
 ## 完成摘要

@@ -322,13 +322,26 @@ pub(crate) fn math_node_structure_supported(
 ) -> bool {
     let arity = |expected| children.len() == expected;
     let text_present = text.is_some();
+    if text_present
+        && !matches!(
+            kind,
+            MathNodeKind::Symbol
+                | MathNodeKind::Operator
+                | MathNodeKind::SizedDelimiter
+                | MathNodeKind::TextContent
+                | MathNodeKind::TextSpace
+                | MathNodeKind::TextSymbol
+        )
+    {
+        return false;
+    }
     match kind {
         MathNodeKind::Row
         | MathNodeKind::Substack
         | MathNodeKind::Text
         | MathNodeKind::TextStyle
         | MathNodeKind::Style
-        | MathNodeKind::Group => true,
+        | MathNodeKind::Group => text.is_none(),
         MathNodeKind::Symbol
         | MathNodeKind::Operator
         | MathNodeKind::TextContent
