@@ -169,8 +169,7 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
         m_error = QStringLiteral("layout.stale_interaction");
         return false;
     }
-    if (!rectangles_value.isArray() || !input_context_value.isObject() ||
-        !caret_value.isObject()) {
+    if (!rectangles_value.isArray() || !input_context_value.isObject() || !caret_value.isObject()) {
         m_error = QStringLiteral("layout.stale_interaction");
         clearEnvironmentHighlightRects();
         return false;
