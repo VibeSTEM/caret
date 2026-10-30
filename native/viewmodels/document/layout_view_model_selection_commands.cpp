@@ -1,4 +1,8 @@
 // 把画布命中与拖选命令适配到 Rust Session。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

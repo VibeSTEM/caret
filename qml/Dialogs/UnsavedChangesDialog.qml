@@ -1,4 +1,8 @@
 // 文档关闭前询问如何处理未保存的修改。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

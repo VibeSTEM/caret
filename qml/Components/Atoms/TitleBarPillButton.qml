@@ -1,4 +1,8 @@
 // 标题栏胶囊按钮：统一描边操作按钮与强调色分享按钮的形状、焦点和悬停反馈。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 ThemedToolButton {

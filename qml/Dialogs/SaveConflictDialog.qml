@@ -1,4 +1,8 @@
 // 外部程序改写文档后，明确选择另存副本、备份后替换或取消。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

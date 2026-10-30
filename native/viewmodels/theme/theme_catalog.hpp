@@ -1,3 +1,8 @@
+// 提供启动阶段安装主题目录快照的内部入口。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QByteArray>

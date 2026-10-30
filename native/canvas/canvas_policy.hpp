@@ -1,4 +1,8 @@
 // 提供画布缩放交互策略，独立于文档单位换算。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

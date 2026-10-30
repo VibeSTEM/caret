@@ -1,4 +1,7 @@
 //! 编解码语义节点并保留未知字段。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::*;
 use serde_json::Map;

@@ -1,4 +1,8 @@
 // 将 Qt 画布按键映射为编辑器意图，并按焦点作用域交给对应处理层。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include "keyboard_modifier_policy.hpp"
 #include <QChar>

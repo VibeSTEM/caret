@@ -1,3 +1,8 @@
+// 查询当前平台已安装并可供 Qt 使用的字体族。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "platform_fonts.hpp"
 
 #include <QFontDatabase>

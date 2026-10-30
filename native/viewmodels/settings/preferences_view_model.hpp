@@ -1,4 +1,8 @@
 // Rust Preferences 快照到 QML 的只读属性与候选提交桥接。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

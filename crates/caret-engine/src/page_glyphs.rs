@@ -1,4 +1,7 @@
 //! 按分页片段提取同一 Parley 布局的字形资源和页面局部基线坐标。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::NodeId;
 use caret_layout::{

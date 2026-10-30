@@ -1,4 +1,8 @@
 // 可复用的裁剪滚动列表，统一列表滚动与当前项定位行为。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

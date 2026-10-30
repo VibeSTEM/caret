@@ -1,4 +1,7 @@
 //! 组合文档编辑会话、文件路径与保存点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::document_view::DocumentViewRuntime;
 use caret_doc::{CdocFile, Document, OpenedDocument, open};

@@ -1,4 +1,8 @@
 // Rust 文档运行时在桌面入口和文档投影之间的单一所有权桥接。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #ifdef CARET_ENABLE_APP

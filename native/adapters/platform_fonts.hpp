@@ -1,3 +1,8 @@
+// 提供供 QML 查询系统字体族的 Qt 适配器。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QObject>

@@ -1,4 +1,7 @@
 //! native 与 Rust 的类型桥接入口；手写转发按文档和设置分类。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod document;
 mod settings;

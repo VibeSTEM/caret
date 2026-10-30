@@ -1,4 +1,7 @@
 //! 定义命令执行结果和输入法组字状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::position::PositionMap;
 use caret_doc::NodeId;

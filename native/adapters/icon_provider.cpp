@@ -1,3 +1,8 @@
+// 从资源载入 SVG 图标并按需应用单色化。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "icon_provider.hpp"
 
 #include <QColor>

@@ -2,6 +2,9 @@
 //!
 //! 上下文由应用服务持有，不保存 UI 引擎对象。任务捕获共享快照后，后续
 //! 变量提交不会改变其输入；会话替换或关闭会协作取消旧作用域。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::path::{PathError, PathService, ResourceRef, RootCategory};
 use std::collections::BTreeMap;

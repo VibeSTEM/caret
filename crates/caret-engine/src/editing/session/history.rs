@@ -1,4 +1,7 @@
 //! 管理会话的分支编辑历史及其局部文档补丁。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};

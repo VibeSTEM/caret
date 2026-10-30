@@ -1,3 +1,8 @@
+//! 识别链接器输出中的 caret-ffi Rust 静态库。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 /// Cargo staticlib 的文件名。`caret_ffi` 与带哈希的 `caret_ffi-<hash>` 都算。
 /// cxx 的 `caret_ffi_bridge` 归档不含 Rust，不能当成链接产物。
 pub(crate) fn is_caret_ffi_staticlib(name: &str) -> bool {

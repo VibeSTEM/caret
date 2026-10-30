@@ -1,4 +1,8 @@
 //! 将文本编辑命令应用到 Rust 会话并更新布局。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::DocumentViewRuntime;
 use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey};
 

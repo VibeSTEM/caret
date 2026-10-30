@@ -1,4 +1,8 @@
 // 提供命令与字体候选弹窗共用的外框、定位和内容留白。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

@@ -1,4 +1,7 @@
 //! 执行段落级格式命令并更新段落覆盖值。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::Session;
 use crate::editing::{EditError, Effect};

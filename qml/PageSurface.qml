@@ -1,4 +1,8 @@
 // 可滚动多页工作区；尺寸由 Rust 页面几何快照提供，缩放只改变视图映射。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

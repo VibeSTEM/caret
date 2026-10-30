@@ -1,4 +1,7 @@
 //! 应用语言标识、支持目录与当前选择；不依赖 Qt 翻译器或资源系统。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use serde::Serialize;
 use std::fmt;

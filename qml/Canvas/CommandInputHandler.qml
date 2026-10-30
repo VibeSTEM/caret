@@ -1,4 +1,8 @@
 // 将画布普通按键和命令模式按键映射到 Rust 命令会话。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

@@ -1,4 +1,7 @@
 //! 从文档块树派生稳定 ID 结构索引和段落顺序范围。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{Block, Document, NodeId};
 use std::{collections::HashMap, ops::Range};

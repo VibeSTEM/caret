@@ -1,4 +1,8 @@
 // 校验并发布 Rust 提供的页面选区几何。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 #include <QString>
 #include <QVariant>

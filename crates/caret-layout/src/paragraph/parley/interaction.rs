@@ -1,4 +1,7 @@
 //! 将段落布局映射为视觉光标、命中测试和交互几何。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::ops::Range;
 

@@ -1,4 +1,7 @@
 //! 为界面提供由 Rust 文档会话生成的只读布局快照。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::Document;
 use caret_engine::{

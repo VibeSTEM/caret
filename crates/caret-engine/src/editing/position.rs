@@ -1,4 +1,7 @@
 //! 定义文档位置、边界亲和性、选区及事务位置映射。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::NodeId;
 

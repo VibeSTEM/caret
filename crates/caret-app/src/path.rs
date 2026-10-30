@@ -10,6 +10,9 @@
 //! `resolve_write_target` 以规范化包含检查拒绝。qrc 是只读内置资源，
 //! 永远不会解析为本机路径。逻辑根检查降低误操作风险，不构成对恶意
 //! 并发文件系统操作的安全隔离。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};

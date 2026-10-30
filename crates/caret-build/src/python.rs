@@ -1,4 +1,8 @@
 //! Python 仅服务开发工具；解释器、环境和缓存都位于 `.toolchain/tools/python`。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use std::path::Path;
 use std::process::Command;
 

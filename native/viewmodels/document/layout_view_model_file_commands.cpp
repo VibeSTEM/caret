@@ -1,4 +1,8 @@
 // 负责文档文件的后台读取、顺序原子写入和 Rust 会话状态投影。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 // 独立 QML 测试目标不链接 Rust 应用库；桌面应用构建才启用文件会话转发。
 #ifdef CARET_ENABLE_APP

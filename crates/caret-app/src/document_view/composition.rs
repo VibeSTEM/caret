@@ -1,4 +1,7 @@
 //! 将 Qt 输入法生命周期转换为 Rust 文档 composition 命令。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
 use caret_engine::Command;

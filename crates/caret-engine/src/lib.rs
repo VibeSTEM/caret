@@ -1,4 +1,7 @@
-//! Qt-agnostic editing commands and session state for Caret documents.
+//! 管理 Caret 文档的编辑命令与会话状态，不依赖 Qt。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod editing;
 mod layout;

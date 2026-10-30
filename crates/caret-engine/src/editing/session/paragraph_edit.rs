@@ -1,4 +1,7 @@
 //! 执行 Enter 段落拆分及跨段选区结构变更。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{
     build_paragraph_index, insert_paragraph_after, replace_paragraph_with_many,

@@ -1,4 +1,7 @@
 //! 提供 Unicode 文字分析、系统字体目录、字体回退与 glyph/cluster 位置映射。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 pub mod font_selection;
 mod fonts;

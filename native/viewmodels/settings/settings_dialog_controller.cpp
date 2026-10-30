@@ -1,4 +1,8 @@
 // 用事件驱动设置窗口生命周期，并只在确认时提交偏好草稿。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "settings_dialog_controller.hpp"
 
 #include "preferences_view_model.hpp"

@@ -1,4 +1,7 @@
 //! 保存临时命令查询、候选顺序及其当前高亮项。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod font_picker;
 

@@ -1,4 +1,8 @@
 // 将 Rust glyph 栅格投影为 Qt 二进制图像与绘制片段。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

@@ -1,4 +1,8 @@
 // 无边框对话框标题栏：提供系统级移动尝试、键盘焦点和关闭语义。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Layouts
 

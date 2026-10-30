@@ -1,4 +1,8 @@
 // 将 Rust SettingsService 的偏好投影桥接到 QML，并提交单项用户意图。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "preferences_view_model.hpp"
 
 #include <QString>

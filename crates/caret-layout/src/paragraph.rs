@@ -1,4 +1,7 @@
 //! 将 Parley 行数据映射为 Caret 分页使用的 UTF-8 源范围与行框。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{InlineNode, Paragraph};
 use std::ops::Range;

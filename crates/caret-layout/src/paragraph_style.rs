@@ -1,4 +1,7 @@
 //! 将 `.cdoc` 的全局段落样式与段落覆盖解析为布局可直接消费的单位。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{
     DocumentSettings, ParagraphLayoutOverrides, ParagraphLineSpacing as StoredLineSpacing,

@@ -1,4 +1,7 @@
 //! 计算行框高度、基线位置以及固定行距下的溢出状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::ops::Range;
 

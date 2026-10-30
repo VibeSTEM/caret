@@ -1,4 +1,8 @@
 // 新建文档窗口壳。草稿和校验留在窗口内，通过信号提交文档信息。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Dialogs
 import QtQuick.Layouts

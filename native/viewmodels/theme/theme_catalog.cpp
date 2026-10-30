@@ -1,3 +1,8 @@
+// 将 Rust 校验后的内置主题目录安装到 Qt 资源上下文。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "theme_catalog.hpp"
 
 #include "theme_view_model.hpp"

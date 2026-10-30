@@ -1,4 +1,7 @@
 //! 按 Parley 视觉几何移动 Rust Session 中的光标和选区。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;

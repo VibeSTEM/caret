@@ -1,4 +1,8 @@
 // 共用 Import 的 Basic 下拉外观；高度和实心三角由原子层统一。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

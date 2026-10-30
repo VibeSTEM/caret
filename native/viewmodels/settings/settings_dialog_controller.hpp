@@ -1,4 +1,8 @@
 // 设置窗口的交互状态机；草稿属于视图，提交结果由 Rust 设置服务决定。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include "preferences_view_model.hpp"

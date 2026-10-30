@@ -1,4 +1,8 @@
 // 文档工作模式选择器：展示 Edit、Review、View 三种模式及其当前选择。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

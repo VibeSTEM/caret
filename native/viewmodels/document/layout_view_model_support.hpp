@@ -1,4 +1,8 @@
 // 集中 ViewModel 文档命令的 GUI 线程、Rust 运行时与 FFI 字符串适配。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #ifdef CARET_ENABLE_APP

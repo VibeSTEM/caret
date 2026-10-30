@@ -1,4 +1,7 @@
 //! 从当前焦点解析其所属的最内层行内环境。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::Session;
 use crate::editing::{EditError, InlineEnvironmentRange};

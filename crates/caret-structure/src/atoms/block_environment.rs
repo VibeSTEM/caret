@@ -1,4 +1,7 @@
 //! 提供块环境参与结构装配所需的语义字段。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{BlockEnvironment, BlockEnvironmentKind};
 

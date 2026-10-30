@@ -1,4 +1,8 @@
 // 普通操作按钮；业务命令和按钮排列由调用方负责。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 ThemedToolButton {

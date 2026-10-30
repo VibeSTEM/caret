@@ -1,4 +1,7 @@
 //! 工具安装布局、可执行文件查找及可执行权限。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};

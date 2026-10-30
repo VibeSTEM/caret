@@ -1,4 +1,7 @@
 //! 使用 Parley 已解析的字体面和 glyph ID 栅格化单个字形。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use parley::FontData;
 use std::{

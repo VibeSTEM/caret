@@ -1,4 +1,8 @@
 // 校验 Rust 布局快照中的页面、文本范围、几何与代际。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_snapshot_codec.hpp"
 
 #include <QByteArray>

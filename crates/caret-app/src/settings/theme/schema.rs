@@ -1,4 +1,7 @@
 //! Theme token 单一 schema：键、QML 属性名、类型和允许范围。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::settings::theme::ThemeTokenKind;
 

@@ -1,4 +1,8 @@
 // 对话框窗口约束与定位；打开条件和关闭守卫由具体业务窗口处理。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 
 Window {

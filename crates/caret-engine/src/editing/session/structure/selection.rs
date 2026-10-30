@@ -1,4 +1,7 @@
 //! 删除结构选区中的块环境子树并管理其恢复位置。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::*;
 use crate::editing::paragraph_ops;

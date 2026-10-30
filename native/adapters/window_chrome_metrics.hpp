@@ -1,3 +1,8 @@
+// 管理窗口标题栏系统控件度量与窗口行为。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #include <QEvent>

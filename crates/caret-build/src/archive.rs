@@ -1,4 +1,7 @@
 //! 归档下载、解包与 SHA256；限制安装子进程墙钟时间并回收超时进程。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fs;
 use std::path::Path;

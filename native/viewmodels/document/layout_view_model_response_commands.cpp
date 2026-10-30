@@ -1,4 +1,8 @@
 // 安装 Rust 编辑与交互命令返回的布局或交互状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"

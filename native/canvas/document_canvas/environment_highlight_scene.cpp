@@ -1,4 +1,8 @@
 // 绘制行内与块环境共用的圆角跨页高亮。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "environment_highlight_scene.hpp"
 
 #include "scene_graph_geometry.hpp"

@@ -1,4 +1,7 @@
 //! Theme DSL 的应用级校验与不可变快照；不依赖 Qt 或桌面持久化。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};

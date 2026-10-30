@@ -1,4 +1,7 @@
 //! 数据文档语义、locale 和占位符规则；不依赖 Pest 或 XML。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 

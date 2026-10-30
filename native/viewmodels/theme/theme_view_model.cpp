@@ -1,3 +1,8 @@
+// 将 Rust 主题快照投影为 QML 可绑定的主题属性。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "theme_view_model.hpp"
 
 #include <QHash>

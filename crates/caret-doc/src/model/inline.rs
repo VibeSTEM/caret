@@ -1,4 +1,7 @@
 //! 定义行内内容节点、格式环境和软换行节点。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{InlineEnvironment, OpaqueNode, Run};
 use serde::{Deserialize, Serialize};

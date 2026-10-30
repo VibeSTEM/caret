@@ -1,4 +1,7 @@
 //! Settings 的显式可用状态、加载恢复与用户意图提交，不依赖 Qt。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{SettingsFileError, SettingsService, UserSettings};
 use std::path::PathBuf;

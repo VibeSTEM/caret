@@ -1,4 +1,8 @@
 // 将页面尺寸从 pt 转换为 Qt 逻辑像素的整数百分之一。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_units.hpp"
 
 #include <cmath>

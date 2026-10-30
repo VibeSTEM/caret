@@ -1,4 +1,7 @@
 //! 执行命令面板状态迁移，并把可用候选分派给编辑命令。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::StoryId;
 use super::Session;

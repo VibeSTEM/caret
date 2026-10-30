@@ -1,4 +1,7 @@
 //! 按平台抽象修饰键与退格键移除当前行内或块环境并保留内容。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::Session;
 use crate::editing::{Command, EditError, Effect};

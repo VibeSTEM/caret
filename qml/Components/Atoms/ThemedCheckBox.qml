@@ -1,4 +1,8 @@
 // 蓝底白勾的主题选择控件；保留 CheckBox 的键盘与可访问性语义。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

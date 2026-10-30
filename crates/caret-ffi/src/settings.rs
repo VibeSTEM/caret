@@ -1,4 +1,7 @@
 //! Settings 运行时句柄、偏好快照与设置意图的边界转换。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::generated::bridge;
 

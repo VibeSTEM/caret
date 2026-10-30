@@ -1,4 +1,8 @@
 // 共用工具按钮：图文、下拉指示、悬停和键盘焦点均由同一内容区域承载。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 import QtQuick
 import QtQuick.Controls
 

@@ -1,4 +1,8 @@
 // 命令候选行；显示别名、翻译名称与当前选择状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

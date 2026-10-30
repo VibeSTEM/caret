@@ -1,4 +1,7 @@
 //! 定义 A4/A3 纸张几何、pt/mm 换算与经过校验的 PageSection 属性读写。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};

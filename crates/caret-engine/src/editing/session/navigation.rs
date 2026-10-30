@@ -1,4 +1,7 @@
 //! 提交光标与选区导航，保持逻辑环境亲和性和选区校验规则。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::compare_positions;
 use super::super::{Affinity, Direction, EditError, Effect, Pos, Selection};

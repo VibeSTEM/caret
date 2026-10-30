@@ -1,4 +1,8 @@
 // Settings 内的语言选择页；locale 列表由应用设置服务提供。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

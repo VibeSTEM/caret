@@ -3,6 +3,9 @@
 //! 只生成结构元数据（状态 / 事件种类 / guard / 带边 ID 的转移表），不生成
 //! 执行引擎；手写行为与生成表的一致性由消费者 crate 的双向结构测试保证。
 //! 输出顺序由文档声明顺序决定，不嵌入时间戳或本机路径。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fmt::Write;
 

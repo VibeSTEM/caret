@@ -1,4 +1,7 @@
 //! language / theme / variables 的数据模型及只读查询。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 

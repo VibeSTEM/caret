@@ -1,4 +1,8 @@
 // 工具栏高度锁在 Theme.menubarHeight；当前显示 Home 标签。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

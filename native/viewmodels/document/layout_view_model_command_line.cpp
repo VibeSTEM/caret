@@ -1,4 +1,8 @@
 // 把命令查询与候选选择交给 Rust Session。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "layout_snapshot_codec.hpp"
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP

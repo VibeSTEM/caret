@@ -1,3 +1,8 @@
+//! 准备 caret-ffi 构建所需的受管工具和 CXX 桥接配置。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use std::env;
 use std::fs;
 use std::io;

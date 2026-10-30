@@ -1,4 +1,7 @@
 //! 编译文档字体偏好，并按实际脚本、语言和公式上下文生成候选字体族。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::{BTreeMap, btree_map::Entry};
 

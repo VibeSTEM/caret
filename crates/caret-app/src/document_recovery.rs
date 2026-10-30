@@ -1,4 +1,7 @@
 //! 冲突与显式覆盖前的本机恢复 envelope 原子存储。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use crate::storage::atomic_file::{self, AtomicFileError};
 use base64::Engine;

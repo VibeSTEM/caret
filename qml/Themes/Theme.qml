@@ -1,4 +1,8 @@
 // Shell 唯一主题门面；默认值和主题覆盖经 Rust schema 校验后由 ViewModel 发布。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma Singleton
 
 import QtQuick

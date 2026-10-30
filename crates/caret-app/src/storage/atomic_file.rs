@@ -1,4 +1,7 @@
 //! 同目录临时写入与原子替换；替换后的目录同步失败作为持久性警告返回。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};

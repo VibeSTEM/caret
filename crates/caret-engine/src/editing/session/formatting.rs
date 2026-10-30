@@ -1,4 +1,7 @@
 //! 执行行内格式环境命令并管理当前插入点的待输入格式。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};

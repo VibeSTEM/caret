@@ -1,4 +1,8 @@
 // 底栏高度来自主题；左侧展示页面与当前结构信息，右侧提供缩放控制。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

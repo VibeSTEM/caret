@@ -1,4 +1,8 @@
 // 文档窗口外壳。页面、字数和语言是占位，设置齿轮打开已有的设置对话框。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

@@ -1,4 +1,7 @@
 //! 定义 Run 文本及 Run 局部直接格式属性。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

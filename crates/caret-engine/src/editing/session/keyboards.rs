@@ -1,4 +1,7 @@
 //! 将带上下文优先级的编辑器按键意图分派到独立行为模块。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod enter;
 mod escape;

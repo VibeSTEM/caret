@@ -1,4 +1,8 @@
 // 显示普通命令的候选别名、说明和可用状态。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

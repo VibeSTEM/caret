@@ -1,4 +1,7 @@
 //! 定义行内格式环境的节点类型与稳定文档标识。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{InlineNode, NodeId};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,7 @@
 //! 管理编辑 Session 状态并执行输入、选区和 IME 命令。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 mod clipboard;
 mod command_line;

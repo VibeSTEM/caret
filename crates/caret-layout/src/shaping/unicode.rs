@@ -1,4 +1,7 @@
 //! 使用 ICU4X 和 Unicode 分段库计算 Caret 固定版本的字素与行断边界。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::borrow::Cow;
 use std::cell::RefCell;

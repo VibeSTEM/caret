@@ -1,4 +1,7 @@
 //! 平台 SDK、native 子进程环境与 Cargo 输出目录；不维护第二份资产清单。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::fs;
 use std::path::{Path, PathBuf};

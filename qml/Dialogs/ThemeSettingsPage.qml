@@ -1,4 +1,8 @@
 // Settings 内的主题选择页；主题目录和当前值由 Rust Settings 投影提供。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 pragma ComponentBehavior: Bound
 
 import QtQuick

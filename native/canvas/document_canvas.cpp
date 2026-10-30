@@ -1,4 +1,8 @@
 // 装配多页画布的生命周期与外观属性，具体行为由职责文件实现。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #include "document_canvas.hpp"
 
 #include <QQuickItem>

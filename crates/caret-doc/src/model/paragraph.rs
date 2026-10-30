@@ -1,4 +1,7 @@
 //! 定义段落、Run 与直接段落格式覆盖的数据结构。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::{InlineNode, NodeId, ParagraphLineSpacing};
 use serde::{Deserialize, Serialize};

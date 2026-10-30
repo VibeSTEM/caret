@@ -1,4 +1,8 @@
 // Settings 总运行时的唯一 Qt 所有权桥接，分类投影不互相持有。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 #pragma once
 
 #ifdef CARET_ENABLE_APP

@@ -1,4 +1,7 @@
 //! 将 Tab 映射为候选补全或两个字宽的排版空格命令。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use super::super::Session;
 use crate::editing::{Command, EditError, Effect};

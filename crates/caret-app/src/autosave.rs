@@ -1,4 +1,7 @@
 //! Rust 权威管理单文档 AutoSave 的事件 deadline 与写入合并。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::time::Duration;
 

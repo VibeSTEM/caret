@@ -1,4 +1,7 @@
 //! 提供段落与大纲标题的结构语义。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::Paragraph;
 

@@ -1,4 +1,8 @@
 //! 序列化完整布局与轻量交互快照。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
+
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::{

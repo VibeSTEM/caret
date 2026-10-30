@@ -1,4 +1,7 @@
 //! 多文档 Artifact 快照聚合及来源关联。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
