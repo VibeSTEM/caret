@@ -99,22 +99,21 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     caret::LayoutViewModel inline_view_model;
     QCOMPARE(inline_view_model.environmentHighlightKind(), QStringLiteral("inline"));
     QCOMPARE(inline_view_model.environmentHighlightRects().size(), 1);
-    QCOMPARE(inline_view_model.environmentHighlightRects().first().toMap().value(
-                 QStringLiteral("x0Pt")),
-             3.0);
+    QCOMPARE(
+        inline_view_model.environmentHighlightRects().first().toMap().value(QStringLiteral("x0Pt")),
+        3.0);
 
     const QVariantList visible_environment_rects = inline_view_model.environmentHighlightRects();
     const QVariantList visible_pages = inline_view_model.pageLayouts();
-    QSignalSpy interaction_changed(&inline_view_model,
-                                   &caret::LayoutViewModel::interactionChanged);
+    QSignalSpy interaction_changed(&inline_view_model, &caret::LayoutViewModel::interactionChanged);
     const QJsonObject stale_malformed_interaction{
         {QStringLiteral("documentGeneration"), QStringLiteral("9")},
         {QStringLiteral("fontGeneration"), QStringLiteral("0")},
         {QStringLiteral("selectionRects"), QStringLiteral("invalid")},
         {QStringLiteral("inputMethodContext"), QJsonArray{}},
         {QStringLiteral("caretGeometry"), false}};
-    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
-        inline_view_model, stale_malformed_interaction));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
+                                                                 stale_malformed_interaction));
     QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
     QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
     QCOMPARE(interaction_changed.size(), 0);
@@ -125,8 +124,8 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
         {QStringLiteral("selectionRects"), QStringLiteral("invalid")},
         {QStringLiteral("inputMethodContext"), QJsonObject{}},
         {QStringLiteral("caretGeometry"), QJsonObject{}}};
-    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
-        inline_view_model, invalid_current_interaction));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
+                                                                 invalid_current_interaction));
     QVERIFY(inline_view_model.environmentHighlightRects().isEmpty());
     QCOMPARE(interaction_changed.size(), 1);
 
