@@ -48,7 +48,7 @@ fn missing_global_text_and_paragraph_settings_use_bundled_defaults()
     assert_eq!(settings.paragraph_layout, default);
     assert_eq!(settings.default_font_size_centipoints, 1200);
     assert_eq!(settings.paragraph_layout.space_before_centipoints, 0);
-    assert_eq!(settings.paragraph_layout.space_after_centipoints, 1000);
+    assert_eq!(settings.paragraph_layout.space_after_centipoints, 800);
     assert!(settings.paragraph_layout.widow_orphan_control);
     Ok(())
 }

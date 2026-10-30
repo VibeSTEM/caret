@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use caret_doc::{InlineNode, Paragraph};
+use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
@@ -90,14 +90,15 @@ pub struct ParleyParagraphLayout {
     pub requested_family_missing: bool,
 }
 
-/// 段落布局的版心宽度、行距、空段度量和段落级基线锚点。
+/// 段落布局的版心宽度、行距和共享行网格度量。
 #[derive(Debug, Clone, Copy)]
 pub struct ParagraphLayoutOptions {
     pub width_pt: f32,
     pub spacing: LineSpacing,
-    pub empty_mark_metrics: FontLineMetrics,
-    /// 由段落有效语言和段落首个强脚本测得，在该段所有软换行间保持不变。
-    pub baseline_anchor_metrics: FontLineMetrics,
+    /// 来自文档/段落基础样式字体的行距网格，不随正文语言或 Script 改变。
+    pub line_grid_metrics: FontLineMetrics,
+    /// 段落默认字号；同字号的脚本 fallback 不得扩大行距网格。
+    pub line_grid_font_size_centipoints: u16,
 }
 
 /// 可复用 Parley LayoutContext；字体目录和字体数据由 FontCatalog 共享。
@@ -129,8 +130,8 @@ impl ParagraphLayouter {
         let ParagraphLayoutOptions {
             width_pt,
             spacing,
-            empty_mark_metrics,
-            baseline_anchor_metrics,
+            line_grid_metrics,
+            line_grid_font_size_centipoints,
         } = options;
         if !width_pt.is_finite() || width_pt <= 0.0 {
             return Err(ParagraphLayoutError::InvalidWidth);
@@ -294,8 +295,8 @@ impl ParagraphLayouter {
             &text,
             &layout,
             spacing,
-            empty_mark_metrics,
-            baseline_anchor_metrics,
+            line_grid_metrics,
+            line_grid_font_size_centipoints,
         )?;
         Ok((
             text,
@@ -350,8 +351,8 @@ impl ParagraphLayouter {
             ParagraphLayoutOptions {
                 width_pt: 1000.0,
                 spacing: LineSpacing::Natural,
-                empty_mark_metrics: fallback,
-                baseline_anchor_metrics: fallback,
+                line_grid_metrics: fallback,
+                line_grid_font_size_centipoints: base_style.font_size_centipoints,
             },
         )?;
         result
@@ -459,48 +460,6 @@ fn strong_script(text: &str) -> Option<Script> {
         }
         names.get_locale_script(script)
     })
-}
-
-/// 返回段落中第一个强脚本及其代表字符，供段落级度量选择稳定锚点。
-pub fn first_strong_script_sample(text: &str) -> Option<(Script, char)> {
-    let script_map = CodePointMapData::<props::Script>::new();
-    let names = PropertyNamesShort::<props::Script>::new();
-    text.chars().find_map(|character| {
-        let script = script_map.get(character);
-        if matches!(
-            script,
-            props::Script::Common | props::Script::Inherited | props::Script::Unknown
-        ) {
-            return None;
-        }
-        names
-            .get_locale_script(script)
-            .map(|script| (script, character))
-    })
-}
-
-/// 不展平段落文本，返回其行内树中第一个强脚本及代表字符。
-pub fn paragraph_first_strong_script_sample(paragraph: &Paragraph) -> Option<(Script, char)> {
-    fn find(nodes: &[InlineNode], sample: &mut Option<(Script, char)>) {
-        for node in nodes {
-            match node {
-                InlineNode::Run(run) => {
-                    if sample.is_none() {
-                        *sample = first_strong_script_sample(&run.text);
-                    }
-                }
-                InlineNode::Environment(environment) => find(&environment.children, sample),
-                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
-            }
-            if sample.is_some() {
-                return;
-            }
-        }
-    }
-
-    let mut sample = None;
-    find(&paragraph.inlines, &mut sample);
-    sample
 }
 
 fn default_script() -> Script {

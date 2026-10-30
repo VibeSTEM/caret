@@ -78,20 +78,35 @@ pub fn calculate_line_metrics(
     empty_mark: FontLineMetrics,
     spacing: LineSpacing,
 ) -> Result<LineMetrics, LineMetricsError> {
-    let fonts = if fonts.is_empty() {
-        std::slice::from_ref(&empty_mark)
+    for font in fonts {
+        validate_font_metrics(*font)?;
+    }
+    let line_grid = if fonts.is_empty() {
+        empty_mark
     } else {
-        fonts
+        FontLineMetrics {
+            ascent_pt: fonts.iter().map(|font| font.ascent_pt).fold(0.0, f32::max),
+            descent_pt: fonts.iter().map(|font| font.descent_pt).fold(0.0, f32::max),
+            leading_pt: fonts.iter().map(|font| font.leading_pt).fold(0.0, f32::max),
+        }
     };
-    if fonts.iter().any(|metrics| {
-        !metrics.ascent_pt.is_finite()
-            || !metrics.descent_pt.is_finite()
-            || !metrics.leading_pt.is_finite()
-            || metrics.ascent_pt < 0.0
-            || metrics.descent_pt < 0.0
-            || metrics.leading_pt < 0.0
-    }) {
-        return Err(LineMetricsError::InvalidFontMetrics);
+    calculate_line_metrics_with_grid(line_grid, &[], objects, spacing)
+}
+
+/// 将基础行距网格与需要扩展行框的字体度量分开计算。
+pub fn calculate_line_metrics_with_grid(
+    line_grid: FontLineMetrics,
+    fonts: &[FontLineMetrics],
+    objects: &[InlineObjectMetrics],
+    spacing: LineSpacing,
+) -> Result<LineMetrics, LineMetricsError> {
+    validate_font_metrics(line_grid)?;
+    let mut content_metrics = line_grid;
+    for font in fonts {
+        validate_font_metrics(*font)?;
+        content_metrics.ascent_pt = content_metrics.ascent_pt.max(font.ascent_pt);
+        content_metrics.descent_pt = content_metrics.descent_pt.max(font.descent_pt);
+        content_metrics.leading_pt = content_metrics.leading_pt.max(font.leading_pt);
     }
     if objects.iter().any(|object| {
         object.source_bytes.start >= object.source_bytes.end
@@ -105,27 +120,15 @@ pub fn calculate_line_metrics(
     }) {
         return Err(LineMetricsError::InvalidObjectMetrics);
     }
-
-    let font_ascent_pt = fonts
-        .iter()
-        .map(|metrics| metrics.ascent_pt)
-        .fold(0.0_f32, f32::max);
-    let font_descent_pt = fonts
-        .iter()
-        .map(|metrics| metrics.descent_pt)
-        .fold(0.0_f32, f32::max);
-    let leading_pt = fonts
-        .iter()
-        .map(|metrics| metrics.leading_pt)
-        .fold(0.0_f32, f32::max);
-    let text_height_pt = font_ascent_pt + font_descent_pt + leading_pt;
-    let ascent_pt = font_ascent_pt.max(
+    let font_height_pt = content_metrics.ascent_pt + content_metrics.descent_pt;
+    let natural_text_height_pt = font_height_pt + content_metrics.leading_pt;
+    let ascent_pt = content_metrics.ascent_pt.max(
         objects
             .iter()
             .map(|object| object.ascent_pt)
             .fold(0.0, f32::max),
     );
-    let descent_pt = font_descent_pt.max(
+    let descent_pt = content_metrics.descent_pt.max(
         objects
             .iter()
             .map(|object| object.descent_pt)
@@ -136,17 +139,32 @@ pub fn calculate_line_metrics(
         .iter()
         .map(|object| object.ascent_pt + object.descent_pt)
         .fold(0.0_f32, f32::max);
-    let required_height_pt = content_height_pt.max(text_height_pt).max(object_height_pt);
-
+    let required_height_pt = content_height_pt
+        .max(natural_text_height_pt)
+        .max(object_height_pt);
+    if !required_height_pt.is_finite() || required_height_pt <= 0.0 {
+        return Err(LineMetricsError::InvalidFontMetrics);
+    }
     let height_pt = match spacing {
         LineSpacing::Natural => required_height_pt,
         LineSpacing::Multiple { percent } if percent > 0 => {
-            let scaled_text_height_pt = text_height_pt * f32::from(percent) / 100.0;
-            if objects.is_empty() {
-                scaled_text_height_pt
+            let grid_height_pt =
+                (line_grid.ascent_pt + line_grid.descent_pt + line_grid.leading_pt)
+                    * f32::from(percent)
+                    / 100.0;
+            let object_floor_pt = if objects.is_empty() {
+                0.0
             } else {
-                scaled_text_height_pt.max(content_height_pt)
-            }
+                content_height_pt.max(object_height_pt)
+            };
+            let larger_font_floor_pt = if fonts.is_empty() {
+                0.0
+            } else {
+                required_height_pt
+            };
+            grid_height_pt
+                .max(larger_font_floor_pt)
+                .max(object_floor_pt)
         }
         LineSpacing::AtLeast { min_centipoints } => {
             required_height_pt.max(min_centipoints as f32 * 0.01)
@@ -157,28 +175,43 @@ pub fn calculate_line_metrics(
     if !height_pt.is_finite() || height_pt <= 0.0 {
         return Err(LineMetricsError::InvalidFontMetrics);
     }
-    let content_overflows = height_pt < content_height_pt || height_pt < text_height_pt;
-    let baseline_pt = match spacing {
-        LineSpacing::Exactly { .. } if content_overflows => height_pt - descent_pt,
-        _ if content_overflows => ascent_pt,
-        _ => {
-            let extra_space_pt = (height_pt - content_height_pt).max(0.0);
-            ascent_pt + extra_space_pt / 2.0
+    let content_overflows = height_pt < required_height_pt;
+    let baseline_pt = if matches!(spacing, LineSpacing::Exactly { .. }) {
+        let grid_content_height_pt = line_grid.ascent_pt + line_grid.descent_pt;
+        let grid_overflows = height_pt < grid_content_height_pt + line_grid.leading_pt;
+        if grid_overflows {
+            height_pt - line_grid.descent_pt
+        } else {
+            line_grid.ascent_pt + (height_pt - grid_content_height_pt).max(0.0) / 2.0
         }
+    } else if content_overflows {
+        ascent_pt
+    } else {
+        ascent_pt + (height_pt - content_height_pt).max(0.0) / 2.0
     };
     Ok(LineMetrics {
         height_pt,
         baseline_pt,
-        content_metrics_overflow_line_box: content_overflows
-            || objects
-                .iter()
-                .any(|object| object.ascent_pt + object.descent_pt > height_pt),
+        content_metrics_overflow_line_box: content_overflows,
         object_ink_overflows_line_box: objects.iter().any(|object| {
             object.ink_bounds.top < -baseline_pt
                 || object.ink_bounds.bottom > height_pt - baseline_pt
         }),
         clip_ink_to_line_height: matches!(spacing, LineSpacing::Exactly { .. }),
     })
+}
+
+fn validate_font_metrics(metrics: FontLineMetrics) -> Result<(), LineMetricsError> {
+    if !metrics.ascent_pt.is_finite()
+        || !metrics.descent_pt.is_finite()
+        || !metrics.leading_pt.is_finite()
+        || metrics.ascent_pt < 0.0
+        || metrics.descent_pt < 0.0
+        || metrics.leading_pt < 0.0
+    {
+        return Err(LineMetricsError::InvalidFontMetrics);
+    }
+    Ok(())
 }
 
 fn valid_ink_bounds(bounds: InkBounds) -> bool {

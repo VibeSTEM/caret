@@ -47,8 +47,8 @@ fn layout_options() -> ParagraphLayoutOptions {
     ParagraphLayoutOptions {
         width_pt: PAGE_WIDTH_POINTS,
         spacing: LineSpacing::Natural,
-        empty_mark_metrics: metrics,
-        baseline_anchor_metrics: metrics,
+        line_grid_metrics: metrics,
+        line_grid_font_size_centipoints: BASE_FONT_SIZE_CENTIPOINTS,
     }
 }
 

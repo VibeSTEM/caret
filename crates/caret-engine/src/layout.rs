@@ -8,11 +8,10 @@ use caret_layout::{
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
     paragraph_has_empty_line, resolve_paragraph_style,
 };
-use icu_locale_core::subtags::Script;
 use std::{collections::HashMap, sync::Arc};
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
-const MAX_BASELINE_ANCHOR_VARIANTS: usize = 32;
+const LINE_GRID_LATIN_SAMPLE: char = 'M';
 
 /// 文档布局失败时返回稳定的错误类别；不产生部分快照。
 #[derive(Debug)]
@@ -548,24 +547,15 @@ fn font_size_centipoints(font_size_pt: f32) -> Option<u16> {
 #[derive(Default)]
 pub struct DocumentLayoutService {
     layouter: ParagraphLayouter,
-    baseline_anchor_cache: Option<BaselineAnchorCache>,
+    line_grid_metrics_cache: Option<LineGridMetricsCache>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct BaselineAnchorCache {
+struct LineGridMetricsCache {
     font_generation: u64,
     settings: ResolvedDocumentTextSettings,
     style: ShapingStyle,
-    metrics_by_language_script:
-        HashMap<String, HashMap<Option<(Script, char)>, CachedBaselineMetrics>>,
-    metrics_count: usize,
-    access_clock: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct CachedBaselineMetrics {
     metrics: caret_layout::FontLineMetrics,
-    last_used: u64,
 }
 
 impl DocumentLayoutService {
@@ -573,37 +563,20 @@ impl DocumentLayoutService {
         Self::default()
     }
 
-    fn resolve_baseline_anchor_metrics(
+    fn resolve_line_grid_metrics(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
         style: &ShapingStyle,
         language: Option<&str>,
-        script_sample: Option<&(Script, char)>,
     ) -> Result<caret_layout::FontLineMetrics, DocumentLayoutError> {
         let font_generation = catalog.generation();
-        let language_key = language.unwrap_or("");
-        let script_key = script_sample.copied();
-        let context_matches = self.baseline_anchor_cache.as_ref().is_some_and(|cache| {
-            cache.font_generation == font_generation
-                && cache.settings == *settings
-                && cache.style == *style
-        });
-        if context_matches {
-            let cache = self
-                .baseline_anchor_cache
-                .as_mut()
-                .unwrap_or_else(|| unreachable!("cache context was checked above"));
-            cache.access_clock = cache.access_clock.saturating_add(1);
-            let last_used = cache.access_clock;
-            if let Some(entry) = cache
-                .metrics_by_language_script
-                .get_mut(language_key)
-                .and_then(|scripts| scripts.get_mut(&script_key))
-            {
-                entry.last_used = last_used;
-                return Ok(entry.metrics);
-            }
+        if let Some(cache) = &self.line_grid_metrics_cache
+            && cache.font_generation == font_generation
+            && cache.settings == *settings
+            && cache.style == *style
+        {
+            return Ok(cache.metrics);
         }
         let metrics = self
             .layouter
@@ -612,44 +585,15 @@ impl DocumentLayoutService {
                 settings,
                 style,
                 language,
-                script_sample.map(|(_, character)| *character),
+                Some(LINE_GRID_LATIN_SAMPLE),
             )
             .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
-        if context_matches {
-            let cache = self
-                .baseline_anchor_cache
-                .as_mut()
-                .unwrap_or_else(|| unreachable!("cache context was checked above"));
-            if cache.metrics_count >= MAX_BASELINE_ANCHOR_VARIANTS {
-                cache.evict_least_recent();
-            }
-            cache.access_clock = cache.access_clock.saturating_add(1);
-            let last_used = cache.access_clock;
-            cache
-                .metrics_by_language_script
-                .entry(language_key.to_owned())
-                .or_default()
-                .insert(script_key, CachedBaselineMetrics { metrics, last_used });
-            cache.metrics_count += 1;
-        } else {
-            self.baseline_anchor_cache = Some(BaselineAnchorCache {
-                font_generation,
-                settings: settings.clone(),
-                style: style.clone(),
-                metrics_by_language_script: HashMap::from([(
-                    language_key.to_owned(),
-                    HashMap::from([(
-                        script_key,
-                        CachedBaselineMetrics {
-                            metrics,
-                            last_used: 1,
-                        },
-                    )]),
-                )]),
-                metrics_count: 1,
-                access_clock: 1,
-            });
-        }
+        self.line_grid_metrics_cache = Some(LineGridMetricsCache {
+            font_generation,
+            settings: settings.clone(),
+            style: style.clone(),
+            metrics,
+        });
         Ok(metrics)
     }
 
@@ -772,32 +716,16 @@ impl DocumentLayoutService {
                 resolved_styles.push(style);
                 continue;
             }
-            let anchor_language = paragraph
-                .language
-                .as_deref()
-                .or(text_settings.default_language());
-            let script_sample = caret_layout::paragraph_first_strong_script_sample(paragraph);
-            let baseline_anchor_metrics = self.resolve_baseline_anchor_metrics(
+            let line_grid_metrics = self.resolve_line_grid_metrics(
                 catalog,
                 &text_settings,
                 base_style,
-                anchor_language,
-                script_sample.as_ref(),
+                text_settings.default_language(),
             )?;
-            let placeholder_metrics = caret_layout::FontLineMetrics {
-                ascent_pt: 9.6,
-                descent_pt: 2.4,
-                leading_pt: 0.0,
-            };
             let needs_mark_metrics = paragraph_has_empty_line(paragraph);
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
-            let empty_mark_metrics = if !needs_mark_metrics {
-                placeholder_metrics
-            } else {
-                baseline_anchor_metrics
-            };
             let (text, layout) = self
                 .layouter
                 .layout(
@@ -808,8 +736,8 @@ impl DocumentLayoutService {
                     ParagraphLayoutOptions {
                         width_pt: content_width_pt as f32,
                         spacing: style.line_spacing,
-                        empty_mark_metrics,
-                        baseline_anchor_metrics,
+                        line_grid_metrics,
+                        line_grid_font_size_centipoints: base_style.font_size_centipoints,
                     },
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
@@ -898,31 +826,6 @@ impl DocumentLayoutService {
             pages,
             environment_ranges,
         })
-    }
-}
-
-impl BaselineAnchorCache {
-    fn evict_least_recent(&mut self) {
-        let Some((language, script)) = self
-            .metrics_by_language_script
-            .iter()
-            .flat_map(|(language, scripts)| {
-                scripts
-                    .iter()
-                    .map(move |(script, entry)| (language, script, entry.last_used))
-            })
-            .min_by_key(|(_, _, last_used)| *last_used)
-            .map(|(language, script, _)| (language.clone(), *script))
-        else {
-            return;
-        };
-        if let Some(scripts) = self.metrics_by_language_script.get_mut(&language) {
-            scripts.remove(&script);
-            if scripts.is_empty() {
-                self.metrics_by_language_script.remove(&language);
-            }
-        }
-        self.metrics_count = self.metrics_count.saturating_sub(1);
     }
 }
 

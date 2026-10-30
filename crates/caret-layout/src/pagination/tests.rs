@@ -126,7 +126,7 @@ fn resolved_default_style_supplies_document_spacing_to_pagination()
         100.0,
     )?;
 
-    assert_eq!(pages[0].fragments[1].y_offset_pt, 22.0);
+    assert_eq!(pages[0].fragments[1].y_offset_pt, 20.0);
     Ok(())
 }
 

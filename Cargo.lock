@@ -149,7 +149,6 @@ dependencies = [
  "caret-layout",
  "caret-structure",
  "criterion",
- "icu_locale_core",
  "serde",
  "serde_json",
  "undo",

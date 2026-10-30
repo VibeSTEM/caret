@@ -4,7 +4,7 @@ use parley::Layout;
 
 use crate::{
     FontLineMetrics, LineMetricsError, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ParagraphLine, calculate_line_metrics,
+    ParagraphLine, calculate_line_metrics_with_grid,
 };
 
 pub(super) fn font_line_metrics(metrics: parley::FontMetrics) -> FontLineMetrics {
@@ -28,14 +28,13 @@ pub(super) fn make_paragraph_lines(
     text: &str,
     layout: &Layout<[u8; 4]>,
     spacing: LineSpacing,
-    empty_mark_metrics: FontLineMetrics,
-    baseline_anchor_metrics: FontLineMetrics,
+    line_grid_metrics: FontLineMetrics,
+    line_grid_font_size_centipoints: u16,
 ) -> Result<ParagraphLineMapping, ParagraphLayoutError> {
-    let baseline_anchor =
-        calculate_line_metrics(&[baseline_anchor_metrics], &[], empty_mark_metrics, spacing)?;
+    let line_grid = calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], spacing)?;
     if text.is_empty() {
-        let mut metrics = calculate_line_metrics(&[], &[], empty_mark_metrics, spacing)?;
-        metrics.baseline_pt = baseline_anchor.baseline_pt;
+        // 空段落与有文字的段落共用行网格，避免输入前后行高发生跳变。
+        let metrics = line_grid;
         return Ok(ParagraphLineMapping {
             paragraph: ParagraphLayout {
                 lines: vec![ParagraphLine {
@@ -65,6 +64,7 @@ pub(super) fn make_paragraph_lines(
     let mut parley_line_heights_pt = Vec::with_capacity(lines.len());
     let mut baseline_adjustments_pt = Vec::with_capacity(lines.len());
     let mut font_metrics = Vec::new();
+    let line_grid_font_size_pt = f32::from(line_grid_font_size_centipoints) / 100.0;
     let mut top_pt = 0.0f32;
     for (index, line) in lines.iter().enumerate() {
         let metrics = line.metrics();
@@ -88,24 +88,23 @@ pub(super) fn make_paragraph_lines(
         font_metrics.clear();
         font_metrics.extend(
             line.runs()
+                .filter(|run| run.font_size() > line_grid_font_size_pt)
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
-        let mut line_metrics =
-            calculate_line_metrics(&font_metrics, &[], empty_mark_metrics, spacing).map_err(
-                |error| match error {
+        let line_metrics =
+            calculate_line_metrics_with_grid(line_grid_metrics, &font_metrics, &[], spacing)
+                .map_err(|error| match error {
                     LineMetricsError::InvalidFontMetrics
                     | LineMetricsError::InvalidObjectMetrics
                     | LineMetricsError::InvalidLineSpacing => {
                         ParagraphLayoutError::InvalidLineMetrics(error)
                     }
-                },
-            )?;
+                })?;
         let raw_top = metrics.block_min_coord;
         let raw_baseline_from_top = metrics.baseline - raw_top;
         if !raw_top.is_finite() || !raw_baseline_from_top.is_finite() {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
-        line_metrics.baseline_pt = baseline_anchor.baseline_pt;
         line_top_offsets_pt.push(top_pt - raw_top);
         line_box_tops_pt.push(top_pt);
         parley_line_tops_pt.push(raw_top);

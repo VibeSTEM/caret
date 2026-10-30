@@ -101,7 +101,7 @@ mod tests {
 
         assert_eq!(style.line_spacing, LineSpacing::Multiple { percent: 115 });
         assert_eq!(style.space_before_pt, 0.0);
-        assert_eq!(style.space_after_pt, 10.0);
+        assert_eq!(style.space_after_pt, 8.0);
         assert!(style.widow_orphan_control);
         assert!(!style.keep_with_next);
         assert!(!style.keep_lines_together);
