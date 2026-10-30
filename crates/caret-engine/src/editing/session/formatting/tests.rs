@@ -1518,6 +1518,170 @@ fn font_environment_rejects_nesting_overflow_without_mutating_the_document() {
 }
 
 #[test]
+fn inline_format_rejects_nesting_overflow_without_mutating_the_document() {
+    fn nested_custom_environment(remaining: usize, child: Block) -> Block {
+        if remaining == 0 {
+            return child;
+        }
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![nested_custom_environment(remaining - 1, child)],
+            extra: BTreeMap::new(),
+        })
+    }
+
+    let mut document = Document::blank();
+    let paragraph = paragraph("x");
+    let paragraph_id = paragraph.id.clone();
+    document.body = vec![nested_custom_environment(63, Block::Paragraph(paragraph))];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid deep document rejected: {error}"));
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+    let before = session.document().clone();
+    let generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold)),
+        Err(EditError::NestingLimit)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.selection.focus.paragraph_id, paragraph_id);
+}
+
+#[test]
+fn toggling_inline_format_updates_the_selected_environment_without_growing_depth() {
+    let mut session = session_with_paragraphs(vec![paragraph("x")]);
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+
+    fn environment_count(nodes: &[InlineNode]) -> usize {
+        nodes
+            .iter()
+            .map(|node| match node {
+                InlineNode::Environment(environment) => {
+                    1 + environment_count(&environment.children)
+                }
+                InlineNode::Run(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => 0,
+            })
+            .sum()
+    }
+
+    for index in 0..128 {
+        session
+            .run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))
+            .unwrap_or_else(|error| panic!("bold toggle failed: {error}"));
+        session
+            .document()
+            .validate()
+            .unwrap_or_else(|error| panic!("toggle produced invalid document: {error}"));
+        let paragraph = session
+            .paragraph_for(&session.selection.focus)
+            .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+        assert_eq!(environment_count(&paragraph.inlines), 1);
+        assert_all_format(
+            &session,
+            &session.selection.focus.paragraph_id,
+            InlineEnvironmentKind::Bold,
+            index % 2 == 0,
+        );
+    }
+}
+
+#[test]
+fn cross_paragraph_inline_depth_failure_does_not_commit_earlier_paragraphs() {
+    fn nested_custom_environment(remaining: usize, child: Block) -> Block {
+        if remaining == 0 {
+            return child;
+        }
+        Block::Environment(BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![nested_custom_environment(remaining - 1, child)],
+            extra: BTreeMap::new(),
+        })
+    }
+
+    let first = paragraph("first");
+    let first_id = first.id.clone();
+    let second = paragraph("second");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(first),
+        nested_custom_environment(63, Block::Paragraph(second)),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid deep document rejected: {error}"));
+    session
+        .run(Command::InsertText("!".to_owned()))
+        .unwrap_or_else(|error| panic!("history setup edit failed: {error}"));
+
+    let anchor = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let focus = Pos {
+        story: StoryId::Body,
+        paragraph_id: match &session.document().body[1] {
+            Block::Environment(environment) => {
+                let mut node = environment;
+                loop {
+                    match node.children.first() {
+                        Some(Block::Environment(child)) => node = child,
+                        Some(Block::Paragraph(paragraph)) => break paragraph.id.clone(),
+                        _ => panic!("expected the nested paragraph"),
+                    }
+                }
+            }
+            _ => panic!("expected the nested environment"),
+        },
+        offset: 6,
+        affinity: Affinity::Upstream,
+    };
+    select(&mut session, anchor, focus);
+    let before = session.document().clone();
+    let before_generation = session.document_generation();
+    let before_state_id = session.history_state_id();
+
+    assert!(matches!(
+        session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold)),
+        Err(EditError::NestingLimit)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), before_generation);
+    assert_eq!(session.history_state_id(), before_state_id);
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo after rejected format failed: {error}"));
+    let first_paragraph = match &session.document().body[0] {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => panic!("expected the first paragraph"),
+    };
+    assert_eq!(visible_text(&first_paragraph.inlines), "first");
+}
+
+#[test]
 fn cross_paragraph_font_depth_failure_does_not_partially_change_earlier_paragraphs() {
     fn nested_custom_environment(remaining: usize, child: Block) -> Block {
         if remaining == 0 {

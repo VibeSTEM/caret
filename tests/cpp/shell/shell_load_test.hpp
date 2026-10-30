@@ -28,6 +28,7 @@ class ShellLoadTest : public QObject {
     void documentCanvasMapsPageCoordinatesAndHitsPages();
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
+    void preeditCancellationDoesNotReenterTheInputMethodHandler();
     void documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation();
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();

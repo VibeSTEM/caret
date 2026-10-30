@@ -4,6 +4,7 @@
 #include <QInputMethod>
 #include <QInputMethodEvent>
 #include <QQuickItem>
+#include <QScopedValueRollback>
 #include <QString>
 #include <QVariant>
 #include <Qt>
@@ -51,6 +52,10 @@ void DocumentCanvas::updateInputMethodCursorRectangle() {
     }
 }
 void DocumentCanvas::cancelPreedit() {
+    if (m_preedit_cancellation_in_progress) {
+        return;
+    }
+    const QScopedValueRollback cancellation_guard(m_preedit_cancellation_in_progress, true);
     if (!m_preedit_text.isEmpty() || m_preedit_cursor_position != 0) {
         m_preedit_text.clear();
         m_preedit_cursor_position = 0;

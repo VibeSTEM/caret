@@ -131,7 +131,7 @@ impl Session {
             let before_state_id = self.history_state_id;
             self.pending_inline_style.set_underline(!current);
             self.advance_history_merge_epoch();
-            let after_state_id = self.allocate_history_state_id();
+            let after_state_id = before_state_id;
             self.record_history_edit(SessionHistoryEdit::new(
                 DocumentPatch::PendingStyle,
                 SessionHistoryState::new(
@@ -339,7 +339,7 @@ impl Session {
             let before_state_id = self.history_state_id;
             self.pending_inline_style.font_family = Some(family.to_owned());
             self.advance_history_merge_epoch();
-            let after_state_id = self.allocate_history_state_id();
+            let after_state_id = before_state_id;
             self.record_history_edit(SessionHistoryEdit::new(
                 DocumentPatch::PendingStyle,
                 SessionHistoryState::new(
@@ -518,7 +518,7 @@ impl Session {
             let before_state_id = self.history_state_id;
             self.pending_inline_style.set(kind, !current)?;
             self.advance_history_merge_epoch();
-            let after_state_id = self.allocate_history_state_id();
+            let after_state_id = before_state_id;
             self.record_history_edit(SessionHistoryEdit::new(
                 DocumentPatch::PendingStyle,
                 SessionHistoryState::new(
@@ -617,6 +617,7 @@ impl Session {
                 location.clone(),
                 range_start,
                 range_end,
+                location.block_path.len() + usize::from(location.is_title),
             ));
         }
         if !any_content {
@@ -626,7 +627,7 @@ impl Session {
 
         // 先在段落副本中完成所有切分；任何一处失败都不会留下部分格式修改。
         let mut edits = Vec::with_capacity(ranges.len());
-        for (paragraph_id, location, range_start, range_end) in ranges {
+        for (paragraph_id, location, range_start, range_end, inline_depth) in ranges {
             let mut paragraph = paragraph_at_location(&self.document.body, &location)
                 .ok_or(EditError::InvalidPosition)?
                 .clone();
@@ -636,6 +637,7 @@ impl Session {
                 range_end,
                 kind,
                 enabled,
+                inline_depth,
             )?;
             edits.push((
                 Pos {
@@ -710,7 +712,13 @@ impl Session {
         let map = TextMap::new(paragraph)?;
         let snapped_start = map.snap_to_grapheme_boundary(start, Affinity::Upstream);
         let snapped_end = map.snap_to_grapheme_boundary(end, Affinity::Downstream);
-        apply_formats_to_range(paragraph, snapped_start, snapped_end, &formats)?;
+        apply_formats_to_range(
+            paragraph,
+            snapped_start,
+            snapped_end,
+            &formats,
+            inline_depth,
+        )?;
         if let Some(enabled) = underline {
             set_run_underline_to_range(
                 &mut paragraph.inlines,

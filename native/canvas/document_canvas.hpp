@@ -216,6 +216,7 @@ class DocumentCanvas : public QQuickItem {
     QRectF m_input_method_cursor_rectangle;
     QString m_preedit_text;
     bool m_command_mode = false;
+    bool m_preedit_cancellation_in_progress = false;
     int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
     int m_first_visible_page = 0;

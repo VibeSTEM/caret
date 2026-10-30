@@ -177,6 +177,40 @@ fn undo_to_saved_history_state_restores_saved_status_and_redo_marks_edited() -> 
 }
 
 #[test]
+fn pending_formatting_does_not_mark_saved_document_dirty() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    let saved_snapshot = service.save_snapshot()?;
+    assert!(service.mark_saved(
+        saved_snapshot.session_generation,
+        saved_snapshot.document_generation,
+        saved_snapshot.history_state_id,
+        std::path::Path::new("document.cdoc"),
+        &saved_snapshot.content_digest,
+    ));
+
+    for (action, text) in [("begin", ""), ("type", "bold"), ("accept", "")] {
+        service
+            .view_mut()
+            .command_line_command_json(action, text.to_owned())?;
+    }
+
+    let formatted: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(formatted["dirty"], false);
+    assert_eq!(
+        formatted["historyStateId"],
+        saved_snapshot.history_state_id.to_string()
+    );
+
+    service.view_mut().undo_json()?;
+    service.view_mut().redo_json()?;
+    let restored: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(restored["dirty"], false);
+    Ok(())
+}
+
+#[test]
 fn delayed_save_completion_from_replaced_session_is_ignored() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     let stale = service.save_snapshot()?;

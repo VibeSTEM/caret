@@ -21,9 +21,17 @@ pub(in crate::editing::session) fn apply_formats_to_range(
     start: usize,
     end: usize,
     formats: &[(InlineEnvironmentKind, bool)],
+    inline_depth: usize,
 ) -> Result<(), EditError> {
     for (kind, enabled) in formats {
-        wrap_format_range(&mut paragraph.inlines, start, end, *kind, *enabled)?;
+        wrap_format_range(
+            &mut paragraph.inlines,
+            start,
+            end,
+            *kind,
+            *enabled,
+            inline_depth,
+        )?;
     }
     Ok(())
 }
@@ -218,6 +226,7 @@ pub(super) fn wrap_format_range(
     end: usize,
     kind: InlineEnvironmentKind,
     enabled: bool,
+    inline_depth: usize,
 ) -> Result<(), EditError> {
     if start >= end {
         return Ok(());
@@ -228,7 +237,7 @@ pub(super) fn wrap_format_range(
     if selected.is_empty() {
         return Err(EditError::InvalidPosition);
     }
-    let mut selected = apply_format_at_deepest(selected, kind, enabled, None)?;
+    let mut selected = apply_format_at_deepest(selected, kind, enabled, None, inline_depth)?;
     normalize_inline_tree(&mut selected);
     let before_len = before.len();
     let mut selected_end = before.len() + selected.len();
@@ -404,12 +413,16 @@ fn apply_format_at_deepest(
     kind: InlineEnvironmentKind,
     enabled: bool,
     inherited_state: Option<bool>,
+    depth: usize,
 ) -> Result<Vec<InlineNode>, EditError> {
     let mut output = Vec::with_capacity(nodes.len());
     let mut pending = Vec::new();
     let flush_pending = |pending: &mut Vec<InlineNode>, output: &mut Vec<InlineNode>| {
         if pending.is_empty() {
-            return;
+            return Ok(());
+        }
+        if depth >= caret_doc::MAX_DOCUMENT_NESTING_DEPTH {
+            return Err(EditError::NestingLimit);
         }
         let mut props = BTreeMap::new();
         props.insert("enabled".to_owned(), Value::Bool(enabled));
@@ -421,6 +434,7 @@ fn apply_format_at_deepest(
             children: std::mem::take(pending),
             extra: BTreeMap::new(),
         }));
+        Ok(())
     };
 
     for node in nodes {
@@ -429,29 +443,31 @@ fn apply_format_at_deepest(
                 pending.push(node);
             }
             InlineNode::Run(_) | InlineNode::SoftBreak(_) => {
-                flush_pending(&mut pending, &mut output);
+                flush_pending(&mut pending, &mut output)?;
                 output.push(node);
             }
             InlineNode::Environment(mut environment) => {
-                flush_pending(&mut pending, &mut output);
+                flush_pending(&mut pending, &mut output)?;
                 let child_state = if environment.kind == kind {
-                    Some(
-                        environment
-                            .props
-                            .get("enabled")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(true),
-                    )
+                    environment
+                        .props
+                        .insert("enabled".to_owned(), Value::Bool(enabled));
+                    Some(enabled)
                 } else {
                     inherited_state
                 };
-                environment.children =
-                    apply_format_at_deepest(environment.children, kind, enabled, child_state)?;
+                environment.children = apply_format_at_deepest(
+                    environment.children,
+                    kind,
+                    enabled,
+                    child_state,
+                    depth + 1,
+                )?;
                 output.push(InlineNode::Environment(environment));
             }
             InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
         }
     }
-    flush_pending(&mut pending, &mut output);
+    flush_pending(&mut pending, &mut output)?;
     Ok(output)
 }

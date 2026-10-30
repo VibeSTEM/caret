@@ -67,13 +67,15 @@
 | 2026-10-30 | `cargo test --locked --offline -p caret-engine -p caret-app`；对应 Clippy、格式和 `cargo lint --check` | 字体命令、候选快照、Unicode 查询、跨段选区、pending/IME、Undo/Redo 及相关跨层检查通过；测试数随后续能力变更，具体以命令输出为准。 |
 | 2026-10-30 | `cargo test --locked --offline --workspace`、`cargo lint --check`、`cargo format --check`；native CTest | workspace 测试与检查通过，native CTest 8/8。覆盖 underline 序列化/软换行、空格与首行缩进、QML 加载/格式及相关 Qt 输入行为。 |
 | 2026-10-30 | `.cdoc` 首行缩进往返定向测试、代码字体模型/持久化/投影及 `caret-layout` 测试 | 定向测试通过；代码 FontRole 显式族、Monospace fallback 与代码空格 advance 有布局级测试，代码块端到端未覆盖（节点不存在）。 |
-| 2026-10-30 | `cargo bench --locked --offline -p caret-layout --bench layout_criterion -- 'space_dense_100k' --sample-size 10 --warm-up-time 1 --measurement-time 2`（macOS arm64） | 单段 99,996 个 ASCII 字符、密集空格：中位数 16.477 ms，95% 区间 16.350–16.804 ms，5.79 MiB/s；与本机已有基线相比无显著差异（p=0.92）。该结果不是未修改代码对照，也不代表百万字多段文档或分配量。 |
+| 2026-10-30 | `cargo bench --locked --offline -p caret-layout --bench layout_criterion -- 'space_dense_100k' --sample-size 10 --warm-up-time 1 --measurement-time 2`（macOS arm64） | 单段 99,996 个 ASCII 字符、密集空格：回归斜率估计 16.477 ms，95% 置信区间 16.350–16.804 ms，5.79 MiB/s；与本机已有基线相比无显著差异（p=0.92）。该结果不是未修改代码对照，也不代表百万字多段文档或分配量。 |
 | 2026-10-30 | `cargo bench --locked --offline -p caret-app --bench document_view_input_criterion -- 'underline_one_paragraph_in_100k_document' --sample-size 10 --warm-up-time 1 --measurement-time 2`（macOS arm64，release） | 100,499 Unicode 字符、500 段多语言文档中格式化中间段并生成快照：10 样本；Criterion 回归斜率估计 1.5899 ms，95% 置信区间 1.5742–1.6245 ms；2 个 outlier。文档准备和选区在计时外；命令行 begin/type/accept、布局更新与快照在计时内；没有历史对照组，不声称性能提升。复现说明见[性能基准说明](../../tests/performance/rust/README.md)。 |
 | 2026-10-30 | `QT_QPA_PLATFORM=offscreen target/native/debug/qml/caret_shell_load_test underlinedTextRendersTheRustFfiDecorationInTheQtCanvas`；`ctest --test-dir target/native/debug -R '^Qml\.ShellLoad$' --output-on-failure` | 新增的 Rust FFI → ViewModel → QSG 像素断言通过；渲染帧使用真实 Rust 下划线几何，但移除字形图像与位置，避免字形抗锯齿造成假阳性。相关 QML/C++ shell 测试通过。 |
 | 2026-10-30 | `cargo test --locked --offline -p caret-engine -p caret-app`；`cargo fmt --all -- --check`；Clang Format；`git diff --check` | Mod+Backspace、编辑会话和 app 相关测试通过；详细数量以最终命令输出为准。 |
 | 2026-10-30 | Mod+Backspace 修订后：`cargo test --locked --offline -p caret-engine -p caret-app`、`cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings`、格式检查和 `git diff --check` | 191 个 caret-app 测试与 186 个 caret-engine 测试通过；Clippy、Rust 格式和 diff 检查通过。 |
 | 2026-10-30 | `cargo lint --check` | 9 个阶段全部通过：Clippy、依赖检查、CMake 格式/lint、分层、native 构建/QML 元数据、qmllint、clang-tidy、include-cleaner 和 cppcheck。 |
 | 2026-10-30 | Sol medium 独立只读 final review（本次完整实现 diff） | 通过，无需修复项。确认 Mod+Backspace 的树变更与历史测试、下划线 FFI/QSG 装饰绘制测试的隔离方式，以及 Criterion 计时范围和统计值。限制：未重跑 benchmark；像素行为尚未覆盖取消格式和多 DPR/缩放组合；性能数据只代表 100k 文档中单段格式操作。 |
+| 2026-10-30 | review 后修复：`cargo test --locked --offline -p caret-engine -p caret-app`；构建 `caret_shell_load_test` 并运行 `ctest --test-dir target/native/debug -R '^Qml\.ShellLoad$' --output-on-failure`；`cargo lint --check` | caret-app 192 项、caret-engine 189 项通过；ShellLoad 通过；9 阶段 lint 全部通过。新增覆盖行内环境深度溢出原子拒绝、重复 Bold 切换不增长环境深度、跨段格式失败原子性与 Undo 历史、待输入格式不污染保存状态，以及同步重入时 IME 取消只发出一次事件。修复后未重跑性能基准，既有数据仍是单次测量。 |
+| 2026-10-30 | Sol medium 独立只读 final review（修复后完整分支 diff） | 通过，无新增 findings。复核 Bold/Italic 原位更新同类环境、嵌套深度检查、PendingStyle 保存状态、IME 同步重入保护、Criterion 统计术语和新增回归测试。限制：评审未重跑测试或 GUI；多 DPR/缩放组合未确认。 |
 
 以上记录只说明对应检查当时的结果；后续变更须重跑受影响验证。未记录的本机手工操作不视为自动化验收证据。
 
@@ -90,6 +92,7 @@
 - 2026-10-30：空格命令命名为 `\singlecharspace` / `\doublecharspace`；正文 Tab 插入两个字符宽空格，普通 U+0020 的目标 advance 为半个 em，按字体/脚本校准。
 - 2026-10-30：命令弹窗分为普通命令与字体专用 QML 展示，共用弹窗 frame；命令字体选择器后续交互优化转入 059，Settings 专用字体布局由 056 等待独立设计。
 - 2026-10-30：独立审查修正虚拟环境外 pending 样式、字体嵌套深度、软换行格式状态、首次编辑能力标记和长文档几何精度问题；当前已完成能力的限制见验收与验证记录。
+- 2026-10-30：复核发现并修复四项问题：Bold/Italic 更新选区内已有同类环境并限制新增嵌套深度；pending 样式保留撤销历史但不推进文档保存状态 ID；IME 取消事件增加同步重入保护；性能表将 16.477 ms 正确标为回归斜率估计。
 
 ## 完成摘要
 

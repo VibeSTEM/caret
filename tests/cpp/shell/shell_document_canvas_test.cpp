@@ -63,6 +63,21 @@
 #include <string_view>
 #include <utility>
 
+void ShellLoadTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
+    caret::DocumentCanvas canvas;
+    int event_count = 0;
+    QObject::connect(
+        &canvas, &caret::DocumentCanvas::inputMethodEventRequested, &canvas,
+        [&canvas, &event_count](const QString&, const QString&, int, int, int) {
+            ++event_count;
+            canvas.cancelPreedit();
+        });
+
+    canvas.cancelPreedit();
+
+    QCOMPARE(event_count, 1);
+}
+
 #ifdef CARET_ENABLE_APP
 void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     auto runtime = caret::ffi::new_blank_document_runtime();
