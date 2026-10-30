@@ -518,8 +518,9 @@ fn math_validation_enforces_source_and_tree_limits() {
     fn tree_with_depth(depth: usize) -> MathTree {
         let mut root = MathNode {
             id: NodeId::generate(),
-            kind: MathNodeKind::Symbol,
+            kind: MathNodeKind::Group,
             text: None,
+            attributes: BTreeMap::new(),
             source_range: None,
             children: Vec::new(),
             extra: BTreeMap::new(),
@@ -529,6 +530,7 @@ fn math_validation_enforces_source_and_tree_limits() {
                 id: NodeId::generate(),
                 kind: MathNodeKind::Group,
                 text: None,
+                attributes: BTreeMap::new(),
                 source_range: None,
                 children: vec![root],
                 extra: BTreeMap::new(),

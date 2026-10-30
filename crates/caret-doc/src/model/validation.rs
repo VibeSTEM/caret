@@ -321,13 +321,14 @@ fn validate_math_tree<'a>(
             "math source exceeds byte limit".to_owned(),
         ));
     }
-    validate_math_node(&tree.root, &tree.source, 0, ids, node_count)
+    validate_math_node(&tree.root, &tree.source, 0, None, ids, node_count)
 }
 
 fn validate_math_node<'a>(
     node: &'a MathNode,
     source: &str,
     depth: usize,
+    parent: Option<MathNodeKind>,
     ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
@@ -335,6 +336,24 @@ fn validate_math_node<'a>(
         return Err(ModelError::NestingLimit);
     }
     validate_depth(depth, node_count)?;
+    if !super::math::math_node_attributes_supported(
+        node.kind,
+        node.text.as_deref(),
+        &node.attributes,
+    ) || !super::math::math_node_structure_supported(
+        parent,
+        node.kind,
+        node.text.as_deref(),
+        &node
+            .children
+            .iter()
+            .map(|child| child.kind)
+            .collect::<Vec<_>>(),
+    ) {
+        return Err(ModelError::InvalidDocument(
+            "invalid math node attributes".to_owned(),
+        ));
+    }
     insert_id(ids, &node.id)?;
     if let Some(range) = node.source_range.as_ref() {
         let start = range.start as usize;
@@ -350,7 +369,7 @@ fn validate_math_node<'a>(
         }
     }
     for child in &node.children {
-        validate_math_node(child, source, depth + 1, ids, node_count)?;
+        validate_math_node(child, source, depth + 1, Some(node.kind), ids, node_count)?;
     }
     Ok(())
 }

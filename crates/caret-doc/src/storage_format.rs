@@ -26,6 +26,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.math.align",
     "caret.math.equation",
     "caret.math.inline",
+    "caret.math.syntax.v1",
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
@@ -36,7 +37,11 @@ const KNOWN_FEATURES: &[&str] = &[
 fn requires_explicit_feature_declaration(feature: &str) -> bool {
     matches!(
         feature,
-        "caret.text.underline" | "caret.math.inline" | "caret.math.equation" | "caret.math.align"
+        "caret.text.underline"
+            | "caret.math.inline"
+            | "caret.math.equation"
+            | "caret.math.align"
+            | "caret.math.syntax.v1"
     )
 }
 

@@ -1124,6 +1124,11 @@ fn math_tree_estimated_bytes(tree: &caret_doc::MathTree) -> usize {
             + node_id_bytes(&node.id)
             + node.text.as_ref().map_or(0, String::len)
             + node
+                .attributes
+                .iter()
+                .map(|(key, value)| key.len() + value.len())
+                .sum::<usize>()
+            + node
                 .source_range
                 .as_ref()
                 .map_or(0, |range| string_value_map_bytes(&range.extra))
@@ -1364,6 +1369,7 @@ mod tests {
                 id: NodeId::generate(),
                 kind: MathNodeKind::Symbol,
                 text: Some("x".to_owned()),
+                attributes: BTreeMap::new(),
                 source_range: None,
                 children: Vec::new(),
                 extra: BTreeMap::new(),
@@ -1397,12 +1403,17 @@ mod tests {
             .root
             .extra
             .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .root
+            .attributes
+            .insert(payload.clone(), payload.clone());
         value.math_tree.root.source_range = Some(MathSourceRange {
             start: 0,
             end: 1,
             extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
         });
-        assert!(inline_estimated_bytes(&extended) >= baseline + payload.len() * 6);
+        assert!(inline_estimated_bytes(&extended) >= baseline + payload.len() * 8);
 
         let equation = Block::Equation(Equation {
             id: NodeId::generate(),

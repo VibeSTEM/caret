@@ -28,7 +28,7 @@ pub struct MathSyntaxTree {
 /// Sum/Product/Integral=[lower, upper]；Limit=[lower]；OverUnder=[base, over, under]；
 /// Accent/Intertext/Color/TextColor/ColorBox/Phantom=[body]；CancelTo=[value, body]；
 /// FColorBox=[body]。Radical、算子上下限、OverUnder 的可选槽位使用 `Placeholder`，
-/// 仅表示 parser AST 中缺少该参数，不代表可编辑公式占位符。
+/// 表示 parser AST 中缺少该参数；导入后映射为 Caret 可编辑树的空参数槽位。
 ///
 /// 节点字段约定：Atom 生成的 Symbol 携带 atomClass；命名 Symbol 携带命令名；Operator 携带
 /// limits。Fraction.style 为 frac/dfrac/tfrac/cfrac；Delimited.left/right 与

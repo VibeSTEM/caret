@@ -82,7 +82,9 @@ fn supported_tree(value: Option<&Value>) -> bool {
     };
     tree.get("schemaVersion").and_then(Value::as_u64)
         == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
-        && tree.get("root").is_some_and(supported_math_node)
+        && tree
+            .get("root")
+            .is_some_and(|root| supported_math_node(root, None))
 }
 
 fn supported_align(object: &Map<String, Value>) -> bool {
@@ -97,35 +99,67 @@ fn supported_align(object: &Map<String, Value>) -> bool {
     })
 }
 
-fn supported_math_node(value: &Value) -> bool {
-    const KINDS: &[&str] = &[
-        "row",
-        "symbol",
-        "text",
-        "operator",
-        "fraction",
-        "radical",
-        "superscript",
-        "subscript",
-        "sub_sup",
-        "delimited",
-        "accent",
-        "space",
-        "style",
-        "group",
-        "placeholder",
-    ];
+fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
     let Some(node) = value.as_object() else {
         return false;
     };
-    node.get("kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| KINDS.contains(&kind))
-        && node.get("children").is_none_or(|children| {
+    let Some(kind_name) = node.get("kind").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(kind) =
+        serde_json::from_value::<super::MathNodeKind>(Value::String(kind_name.to_owned()))
+    else {
+        return false;
+    };
+    let mut attributes = BTreeMap::new();
+    if let Some(values) = node.get("attributes") {
+        let Some(values) = values.as_object() else {
+            return false;
+        };
+        for (key, value) in values {
+            let Some(value) = value.as_str() else {
+                return false;
+            };
+            attributes.insert(key.clone(), value.to_owned());
+        }
+    }
+    let children = match node.get("children") {
+        None => Vec::new(),
+        Some(Value::Array(children)) => {
+            let Some(children) = children
+                .iter()
+                .map(|child| {
+                    child.as_object()?.get("kind")?.as_str().and_then(|kind| {
+                        serde_json::from_value::<super::MathNodeKind>(Value::String(
+                            kind.to_owned(),
+                        ))
+                        .ok()
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return false;
+            };
             children
-                .as_array()
-                .is_some_and(|children| children.iter().all(supported_math_node))
+        }
+        Some(_) => return false,
+    };
+    super::math::math_node_attributes_supported(
+        kind,
+        node.get("text").and_then(Value::as_str),
+        &attributes,
+    ) && super::math::math_node_structure_supported(
+        parent,
+        kind,
+        node.get("text").and_then(Value::as_str),
+        &children,
+    ) && node.get("children").is_none_or(|children| {
+        children.as_array().is_some_and(|children| {
+            children
+                .iter()
+                .all(|child| supported_math_node(child, Some(kind)))
         })
+    })
 }
 
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {

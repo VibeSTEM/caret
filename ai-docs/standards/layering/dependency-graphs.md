@@ -45,6 +45,7 @@ flowchart TB
   app --> doc
   app --> foundation
   engine --> doc
+  engine --> math
   engine --> layout
   engine --> structure
   layout --> doc

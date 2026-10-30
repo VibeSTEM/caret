@@ -43,9 +43,9 @@ pub struct ParsedMath<'source> {
     ast: MathNode,
 }
 
-impl ParsedMath<'_> {
+impl<'source> ParsedMath<'source> {
     /// 返回导入时的原始公式源码。
-    pub fn source(&self) -> &str {
+    pub fn source(&self) -> &'source str {
         self.source
     }
 

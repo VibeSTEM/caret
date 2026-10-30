@@ -148,6 +148,7 @@ fn paragraph_split_after_inline_math_uses_utf8_placeholder_offset() {
                     id: NodeId::generate(),
                     kind: MathNodeKind::Symbol,
                     text: Some("x".to_owned()),
+                    attributes: BTreeMap::new(),
                     source_range: None,
                     children: Vec::new(),
                     extra: BTreeMap::new(),

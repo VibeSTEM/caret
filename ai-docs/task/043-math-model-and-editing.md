@@ -53,12 +53,15 @@
 | 日期       | 环境 / 命令                            | 预期                                   | 实际结果                                             |
 | ---------- | -------------------------------------- | -------------------------------------- | ---------------------------------------------------- |
 | 2026-10-31 | `cargo test -p caret-math --locked --offline` | Parser 适配、后端无关语法树、深度/节点/长度边界、错误源保留 | 通过，16 项单元测试；尚未覆盖语法树到持久化 Caret schema 的转换 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | 数学属性安全预览、模型校验、行内/显示/Align 转换及 `.cdoc` 往返 | 通过：`caret-doc` 43 项、`caret-engine` 200 项；Align cell 源码范围仍不可用 |
 | 2026-10-31 | `cargo clippy --locked --offline -p caret-math --all-targets -- -D warnings`、`cargo fmt --all -- --check` | crate lint 与格式 | 通过 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | 数学 DTO、保存重开、正文原子偏移、Enter 与历史状态 | 通过：`caret-doc` 42 项、`caret-engine` 194 项 |
 | 2026-10-31 | `cargo check --locked --offline --workspace` | 所有 crate 能识别新增持久化节点 | 通过；数学绘制和块级布局仍由 044 实现 |
 | 2026-10-31 | `cargo lint --check` | Rust、依赖、分层、CMake/QML/native lint | 通过全部 9 个检查阶段 |
 | 2026-10-31 | `CARGO_HOME=/private/tmp/caret-cargo-audit-home cargo-deny --offline check` | 新增依赖后的 advisories、版本、许可与来源审计 | 通过；使用本地 RustSec 数据库快照 `2295466`（2026-10-30），当前沙箱无法刷新在线数据库 |
 | 2026-10-31 | `cargo lint --check` | crate lint、依赖和分层、CMake/QML/native lint | 通过（最终代码改动后复跑） |
+| 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | typed 属性与树形校验、导入、矩阵单元格边界及存储往返 | 通过：`caret-doc` 44 项、`caret-engine` 201 项 |
+| 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo clippy --locked --offline -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 全工作区构建、直接消费者 lint、分层/native/QML 与格式检查 | 通过；cargo lint 9 阶段全部完成 |
 | —         | caret-engine 公式编辑与位置行为测试     | MathPos、内部编辑和导航契约成立          | 未执行                                               |
 | —         | 高节点数预算与合并后故障注入回滚测试    | 预算边界及失败后正文/选区/历史保持不变  | 未执行                                               |
 
@@ -72,7 +75,10 @@
 - 2026-10-31：新增 L1 `caret-math`，锁定 `latex-rust 3.0.1`，执行 1 MiB 源码限制、32 层 parser 预算，确保 `Align` 仅接收 `aligned` 树，并通过 AST 检查拒绝自动编号环境以及嵌套的 `\\label`、`\\ref`、`\\tag`、`\\nonumber` 和 `\\notag`。失败对象借用并保留原始输入，当前位置范围目前只能精确到整段公式。
 - 2026-10-31：`latex-rust 3.0.1` 不暴露 token/AST 字节范围；细粒度源跨度及预处理映射仍需上游 adapter patch，本阶段没有自行实现第二套 tokenizer/parser。解析结果到 Caret 数学树的转换、MathPos 与公式编辑事务尚未实现。
 - 2026-10-31：`caret-doc` 加入版本 1 的自有数学树与 `InlineMath`、`Equation`、`Align` DTO；math 节点范围、深度、源码长度和文档全局 ID 在保存入口统一校验，三种节点通过独立 `.cdoc` 能力标记声明。已补保存重开测试。`caret-layout` 暂以原子占位符表达行内公式，块级公式布局返回未支持；正式数学布局、MathPos、解析器到 Caret 树的转换及事务编辑待续。
-- 2026-10-31：`caret-math` 增加独立模块中的临时 `MathSyntaxTree`，不暴露 `latex-rust` 类型，覆盖当前 parser AST 节点、矩阵行/单元格、文本样式和可选槽位；它仍需显式转换为 `caret-doc` schema 才能持久化。迭代式预算检查按转换后的层级计入矩阵行、intertext 和占位节点，限制 32 层及 65,536 节点；尺寸保留精确有理数，定界符编码保留字符与命名类型差别。尚未提供细粒度源跨度或转换到 `.cdoc` 树的实现。
+- 2026-10-31：`caret-math` 增加独立模块中的临时 `MathSyntaxTree`，不暴露 `latex-rust` 类型，覆盖当前 parser AST 节点、矩阵行/单元格、文本样式和可选槽位。迭代式预算检查按转换后的层级计入矩阵行、intertext 和占位节点，限制 32 层及 65,536 节点；尺寸保留精确有理数，定界符编码保留字符与命名类型差别。尚未提供细粒度源跨度。
+- 2026-10-31：`caret-engine` 增加 parser 结果到 `caret-doc` schema 的导入桥，创建文档 ID，并将 kind 和受校验的参数写入正式 `MathNode.kind/attributes`；新语义要求 `caret.math.syntax.v1`，未知 kind/属性值转只读安全预览。连续同类普通原子合并后才创建持久化 ID。InlineMath、Equation 和普通 Align 行已转换并通过 `.cdoc` 往返；Align 完整源放在容器，因 3.0.1 无 cell 源范围，cell 树当前源码为空；含环境级 `intertext`/`hline` 行会明确拒绝，错误携带类别、完整源及整公式字节范围。紧凑 arena 与典型/大量文档内存测量仍未完成。
+- 2026-10-31：独立 schema/import 复核后，typed 数学属性补齐必需字段与 delimiter allowlist，schema 校验同时约束节点文字、操作数槽位和 Hline/Intertext 的 Matrix 父级；不完整或结构非法数据进入只读预览。Ord 字符序列才可合并，Bin/Rel/Punct 等原子保留节点边界，Matrix 行不跨 cell 合并；新增矩阵单元格回归和无效 schema 预览测试。能力扫描改为迭代遍历，避免保存前递归栈风险；所有导入错误都携带完整输入和 parser 可提供的范围。权威 schema 文档现列出节点槽位、必需属性和 Ord 合并含义。复验 `caret-doc` 44 项、`caret-engine` 201 项、workspace check、目标 clippy、全 lint 和格式检查通过。
+- 2026-10-31：Sol/medium 最终只读复核曾指出 MathNode 可伪造自动编号 matrix style；移除 `align/equation/gather/multline`，补充只读预览用例和 schema 文档 allowlist。最终复核通过，未发现阻断问题；最终改动后重跑 `caret-doc` 44 项、`caret-engine` 201 项、目标 clippy、格式和 diff 检查通过。workspace check 与全 `cargo lint --check` 在 allowlist 变更前已通过；本次仅改变 Rust 枚举 allowlist、文档和安全预览测试。
 - 2026-10-31：Terra/medium schema 与编辑边界只读复核发现并促成修复：未知 `sourceRange` 字段往返保留；Align 行进入文档节点预算；公式能力登记；未来 schema/节点 kind 转安全预览；U+FFFC 按 UTF-8 字节计长；公式边界可插软换行；跨段 Enter 失败恢复文档、选区、索引和缓存；数学扩展字段纳入历史大小估算。复验覆盖 schema 源码/深度限制、三种数学节点未来 schema、公式后的跨段 Enter、历史扩展字段估算。仍未验证高节点数预算裁剪及实际 MathPos/布局交互。
 
 ## 完成摘要

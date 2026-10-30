@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 caret-doc.workspace = true
+caret-math.workspace = true
 caret-layout.workspace = true
 caret-structure.workspace = true
 serde.workspace = true

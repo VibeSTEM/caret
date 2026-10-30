@@ -86,11 +86,17 @@ fn collect_block_features(block: &Block, features: &mut std::collections::BTreeS
                 collect_inline_features(inline, features);
             }
         }
-        Block::Equation(_) => {
+        Block::Equation(equation) => {
             features.insert("caret.math.equation".to_owned());
+            collect_math_tree_features(&equation.math_tree, features);
         }
-        Block::Align(_) => {
+        Block::Align(align) => {
             features.insert("caret.math.align".to_owned());
+            for row in &align.rows {
+                for cell in &row.cells {
+                    collect_math_tree_features(cell, features);
+                }
+            }
         }
         Block::Environment(environment) => {
             features.insert(
@@ -136,8 +142,9 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
                 );
             }
         }
-        InlineNode::Math(_) => {
+        InlineNode::Math(math) => {
             features.insert("caret.math.inline".to_owned());
+            collect_math_tree_features(&math.math_tree, features);
         }
         InlineNode::Environment(environment) => {
             features.insert(environment.kind.required_feature().to_owned());
@@ -152,5 +159,40 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
             }
         }
         InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
+    }
+}
+
+fn collect_math_tree_features(tree: &MathTree, features: &mut std::collections::BTreeSet<String>) {
+    let mut pending = vec![&tree.root];
+    while let Some(node) = pending.pop() {
+        if !node.attributes.is_empty()
+            || matches!(
+                node.kind,
+                MathNodeKind::SizedDelimiter
+                    | MathNodeKind::Matrix
+                    | MathNodeKind::Substack
+                    | MathNodeKind::Intertext
+                    | MathNodeKind::Hline
+                    | MathNodeKind::Sum
+                    | MathNodeKind::Integral
+                    | MathNodeKind::Product
+                    | MathNodeKind::Limit
+                    | MathNodeKind::OverUnder
+                    | MathNodeKind::CancelTo
+                    | MathNodeKind::TextContent
+                    | MathNodeKind::TextSpace
+                    | MathNodeKind::TextSymbol
+                    | MathNodeKind::TextStyle
+                    | MathNodeKind::Color
+                    | MathNodeKind::TextColor
+                    | MathNodeKind::ColorBox
+                    | MathNodeKind::FColorBox
+                    | MathNodeKind::Strut
+                    | MathNodeKind::Phantom
+            )
+        {
+            features.insert("caret.math.syntax.v1".to_owned());
+        }
+        pending.extend(node.children.iter());
     }
 }

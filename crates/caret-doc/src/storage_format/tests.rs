@@ -24,6 +24,7 @@ fn math_nodes_round_trip_with_caret_owned_schema_and_features()
                     "root": {"id": "inline-root", "kind": "row", "children": [
                         {"id": "inline-x", "kind": "symbol", "text": "x", "sourceRange": {"start": 0, "end": 1, "vendorRangeHint": 42}},
                         {"id": "inline-power", "kind": "superscript", "children": [
+                            {"id": "inline-base", "kind": "symbol", "text": "x"},
                             {"id": "inline-2", "kind": "symbol", "text": "2", "sourceRange": {"start": 2, "end": 3}}
                         ]}
                     ]}
@@ -197,6 +198,64 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
         };
         assert!(!preview.can_save());
         assert!(preview.to_json_value()?["document"]["body"][0].is_object());
+    }
+    Ok(())
+}
+
+#[test]
+fn unknown_math_attribute_value_opens_as_read_only_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": 1, "source": "\\frac{a}{b}",
+                "root": {"id": "root", "kind": "fraction", "attributes": {"style": "future_fraction"}, "children": []}
+            }
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.inline",
+        "caret.math.syntax.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("unknown math attribute values must not be editable");
+    };
+    assert!(!preview.can_save());
+    Ok(())
+}
+
+#[test]
+fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    for root in [
+        json!({"id": "root", "kind": "sized_delimiter", "text": "char:(", "attributes": {"atomClass": "open"}, "children": []}),
+        json!({"id": "root", "kind": "fraction", "attributes": {"style": "frac"}, "children": []}),
+        json!({"id": "root", "kind": "matrix", "attributes": {"style": "equation", "columns": ""}, "children": []}),
+        json!({"id": "root", "kind": "hline", "children": []}),
+    ] {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type": "paragraph", "id": "paragraph", "inlines": [{
+                "type": "inlineMath", "id": "inline", "mathTree": {
+                    "schemaVersion": 1, "source": "x", "root": root
+                }
+            }]
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.inline",
+            "caret.math.syntax.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let opened = open(envelope.to_string().as_bytes())?;
+        let OpenedDocument::SafePreview(preview) = opened else {
+            panic!("incomplete or malformed math nodes must not be editable");
+        };
+        assert!(!preview.can_save());
     }
     Ok(())
 }

@@ -785,6 +785,7 @@ mod tests {
                     id: NodeId::generate(),
                     kind: MathNodeKind::Symbol,
                     text: Some("x".to_owned()),
+                    attributes: Default::default(),
                     source_range: None,
                     children: Vec::new(),
                     extra: Default::default(),
