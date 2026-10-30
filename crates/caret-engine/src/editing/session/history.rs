@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
-use super::super::{PositionMap, Selection, StoryId};
+use super::super::{MathFocus, PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, DocumentSettings,
@@ -161,6 +161,7 @@ pub(super) struct SessionHistoryEdit {
 #[derive(Debug, Clone)]
 pub(super) struct SessionHistoryState {
     selection: Selection,
+    math_focus: Option<MathFocus>,
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
     state_id: u64,
@@ -175,6 +176,23 @@ impl SessionHistoryState {
     ) -> Self {
         Self {
             selection,
+            math_focus: None,
+            visual_affinity,
+            pending_style,
+            state_id,
+        }
+    }
+
+    pub(super) fn with_math_focus(
+        selection: Selection,
+        math_focus: Option<MathFocus>,
+        visual_affinity: VisualAffinity,
+        pending_style: PendingInlineStyle,
+        state_id: u64,
+    ) -> Self {
+        Self {
+            selection,
+            math_focus,
             visual_affinity,
             pending_style,
             state_id,
@@ -185,6 +203,7 @@ impl SessionHistoryState {
 #[derive(Debug, Clone)]
 pub(super) struct HistoryTransition {
     pub selection: Selection,
+    pub math_focus: Option<MathFocus>,
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
     pub state_id: u64,
@@ -210,6 +229,8 @@ impl SessionHistoryEdit {
             + self.patch.estimated_bytes()
             + selection_id_bytes(&self.before.selection)
             + selection_id_bytes(&self.after.selection)
+            + math_focus_bytes(self.before.math_focus.as_ref())
+            + math_focus_bytes(self.after.math_focus.as_ref())
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -223,6 +244,7 @@ impl SessionHistoryEdit {
     fn before_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.before.selection.clone(),
+            math_focus: self.before.math_focus.clone(),
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
             state_id: self.before.state_id,
@@ -234,6 +256,7 @@ impl SessionHistoryEdit {
     fn after_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.after.selection.clone(),
+            math_focus: self.after.math_focus.clone(),
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
             state_id: self.after.state_id,
@@ -285,6 +308,7 @@ impl Edit for SessionHistoryEdit {
             || current_epoch != next_epoch
             || self.after.state_id != other.before.state_id
             || self.after.selection != other.before.selection
+            || self.after.math_focus != other.before.math_focus
             || self.after.visual_affinity != other.before.visual_affinity
             || self.before.selection.anchor == self.before.selection.focus
                 && other.before.selection.anchor != other.before.selection.focus
@@ -1196,6 +1220,9 @@ pub(super) fn edit_group(command: &super::super::Command) -> Option<EditGroup> {
         {
             Some(EditGroup::InsertText)
         }
+        super::super::Command::InsertMathText(text) if !text.is_empty() => {
+            Some(EditGroup::InsertText)
+        }
         super::super::Command::InsertOneCharacterWidthSpace
         | super::super::Command::InsertTwoCharacterWidthSpace => Some(EditGroup::InsertText),
         super::super::Command::Delete(super::super::Direction::Backward) => {
@@ -1273,6 +1300,15 @@ fn selection_id_bytes(selection: &Selection) -> usize {
         + story_id_bytes(&selection.focus.story)
 }
 
+fn math_focus_bytes(focus: Option<&MathFocus>) -> usize {
+    focus.map_or(0, |focus| {
+        size_of::<MathFocus>()
+            + node_id_bytes(&focus.paragraph_id)
+            + node_id_bytes(&focus.inline_math_id)
+            + focus.position.path.iter().map(node_id_bytes).sum::<usize>()
+    })
+}
+
 fn story_id_bytes(story: &StoryId) -> usize {
     match story {
         StoryId::Body => 0,
@@ -1335,6 +1371,7 @@ pub(super) fn restore_history_transition(
     transition: HistoryTransition,
 ) -> (
     Selection,
+    Option<MathFocus>,
     VisualAffinity,
     PendingInlineStyle,
     u64,
@@ -1343,6 +1380,7 @@ pub(super) fn restore_history_transition(
 ) {
     (
         transition.selection,
+        transition.math_focus,
         transition.visual_affinity,
         transition.pending_style,
         transition.state_id,

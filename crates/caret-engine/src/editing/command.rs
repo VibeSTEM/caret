@@ -27,6 +27,11 @@ pub enum EditorKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
+    InsertInlineMath,
+    InsertMathText(String),
+    InsertMathFraction,
+    InsertMathRadical,
+    ExitMath,
     InsertOneCharacterWidthSpace,
     InsertTwoCharacterWidthSpace,
     PasteText(String),
@@ -81,6 +86,11 @@ impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
             Self::InsertText(_) => "text.insert",
+            Self::InsertInlineMath => "insert.inline_math",
+            Self::InsertMathText(_) => "math.insert.text",
+            Self::InsertMathFraction => "math.insert.fraction",
+            Self::InsertMathRadical => "math.insert.radical",
+            Self::ExitMath => "math.exit",
             Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",

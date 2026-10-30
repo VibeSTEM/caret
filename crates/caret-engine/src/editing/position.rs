@@ -40,6 +40,14 @@ pub struct MathPos {
     pub offset: usize,
 }
 
+/// Session 当前编辑的行内公式及公式内插入点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathFocus {
+    pub paragraph_id: NodeId,
+    pub inline_math_id: NodeId,
+    pub position: MathPos,
+}
+
 impl MathPos {
     /// 在模型已通过 `Document::validate` 的前提下解析地址。
     ///

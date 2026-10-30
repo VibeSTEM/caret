@@ -21,6 +21,9 @@ impl Session {
         if let Some(composition) = &self.composition {
             return self.cancel_composition(composition.id);
         }
+        if self.math_focus.is_some() {
+            return self.exit_math();
+        }
         if self.selected_block_environment.take().is_some() {
             self.selected_block_environments.clear();
             self.structure_selection = None;

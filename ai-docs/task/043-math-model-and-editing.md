@@ -64,7 +64,9 @@
 | 2026-10-31 | `cargo test --locked --offline -p caret-engine` | MathPos 路径与节点偏移边界原语 | 通过：205 项；不覆盖公式内导航、编辑事务、命中或修改后的路径映射 |
 | 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | MathPos 导出、MathNode 文本约束及全仓构建/lint/格式 | 通过：workspace check 与 lint 9 阶段通过 |
 | 2026-10-31 | `cargo check --locked --offline --workspace`、`cargo clippy --locked --offline -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 全工作区构建、直接消费者 lint、分层/native/QML 与格式检查 | 通过；cargo lint 9 阶段全部完成 |
-| —         | caret-engine 公式编辑与位置行为测试     | MathPos、内部编辑和导航契约成立          | 未执行                                               |
+| 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | Session 插入、MathFocus 输入/撤销重做、分数槽、失败原子性、空 Run 元数据、组合符边界、环境内公式删除及正文/IME 隔离 | 通过：`caret-doc` 44 项、`caret-engine` 231 项；数学候选因 app 尚无公式绘制/焦点投影保持禁用，MathPos 键盘导航仍未覆盖 |
+| 2026-10-31 | `cargo clippy --locked --offline -p caret-doc -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check HEAD` | Session 数学编辑实现 lint、格式和补丁检查 | 通过 |
+| 2026-10-31 | `cargo check --locked --offline -p caret-app` | 确认新增 engine 命令不会破坏直接应用消费者 | 通过 |
 | —         | 高节点数预算与合并后故障注入回滚测试    | 预算边界及失败后正文/选区/历史保持不变  | 未执行                                               |
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | MathTree payload/内容预算、导入返回校验、编辑后端节点/深度预算 | 通过：`caret-doc` 44 项、`caret-engine` 224 项；不覆盖 Session 数学焦点、撤销/重做、公式导航或整公式回写 |
 | 2026-10-31 | `cargo lint --check` | workspace lint、依赖、CMake/QML/native 检查 | 未完整通过：第 1 阶段 Clippy 和第 2 阶段未使用依赖检查通过；第 4 阶段 CMake layering fixture 启动 `/usr/bin/c++` 探测时 ABI 配置失败，检查提前退出；第 3 阶段通过，5–9 阶段未运行 |
@@ -89,6 +91,7 @@
 - 2026-10-31：新增无副作用 `apply_math_edit` 原子编辑原语，支持 Row/普通 Ord/TextContent/参数槽的文本插入，以及 Row 或 Placeholder 中插入分数、根式；候选树在克隆前及返回前执行 schema 深度/节点/payload 预算验证，失败不改变输入。输入须由 `latex-rust` 解析为普通 Ord 且拼接后与原字节完全一致，避免定界符、空白、命令归一化被误存为字符；编辑后的源与范围按导入溯源保留，不代表当前编辑树的 LaTeX。覆盖累计/单次文本预算及插入后组合字素光标边界。尚未接入 Session 命令、历史状态或键盘导航，结构插入限制在 Row/Placeholder，不能据此宣称公式交互完成。
 - 2026-10-31：追加编辑预算交叉检查：Ord 字符合并后按 parser 展开节点计数，多字符 Ord 结构操作数计入必要 Row 包装，防止数学树可保存但超过锁定 parser 的 65,536 临时节点/32 层上限；文档 payload 预算也包含 ID、属性、sourceRange 与未知扩展值，并独立限制节点文字总量为 1 MiB，限制超长字段及多次 TextContent 插入在编辑克隆前放大内存。schema v1 尚随 043 保持未合并、未发布，故本次在稳定前确立每公式 65,536 节点/8 MiB payload 上限；若之后需提高，必须新增 schema/能力迁移，不改变已发布 v1。扩展 JSON 深度受文档最大嵌套限制；导入桥在返回前校验持久化树，避免解析成功后才在保存时失败。`atomClass` 保持 parser 导入时的权威分类；存储层不复制字符分类规则。
 - 2026-10-31：对齐模型能力边界：编辑树仍执行 parser 结构展开节点/深度预算，但当前没有 Caret 树到 LaTeX 的序列化器；保留原始 source 与 sourceRange 作为溯源，节点文本限额不声称等价于含命令、定界符和转义后的 1 MiB parser 源码上限。当前编辑基础尚不能满足整公式导出或 Session 交互验收。
+- 2026-10-31：Session 增加 InlineMath 插入、受限数学文本/分数/根式事务、MathFocus 历史状态、输入合并和 Escape 退出；正文 Selection 停在 U+FFFC 右侧，Undo/Redo 恢复公式树与 MathPos。数学焦点下正文移动/删除/选区/IME/命令面板暂返回 UnsupportedMathTarget，避免编辑落到公式外或焦点悬空；command registry 中 `\\math`、`\\frac`、`\\sqrt` 仍不可用，因为当前 app/layout 只显示 U+FFFC，尚无公式内容及内部光标投影，直接开放会产生不可见编辑。TextMap 将 Math 对象两侧作为强制字素边界，并保留空 Run 字段。新增数学节点时暂克隆并校验完整 Document 以维护全局节点预算；已有数学叶内追加文本不触发全文校验，但整体成本仍未量测。内部左右/上下导航、删除参数槽、公式命令输入和跨层焦点投影仍待实现。
 
 ## 完成摘要
 
