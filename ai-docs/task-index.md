@@ -26,7 +26,7 @@
 
 ## 规划约定
 
-依赖列决定任务顺序；优先级和规模用于排期估算。产品行为以[架构文档](architecture/README.md)为准，工程与验证要求以[规范文档](standards/README.md)为准。本索引只维护任务状态、依赖和分类，不复制设计细节或进度摘要。
+依赖列决定任务顺序；优先级和规模用于排期估算（S 不超过 1 天，M 为 2–5 天，L 超过 1 周，均为粗略估计）。产品行为以[架构文档](architecture/README.md)为准，工程与验证要求以[规范文档](standards/README.md)为准。本索引只维护任务状态、依赖和分类，不复制设计细节或进度摘要。
 
 ## 任务队列
 
@@ -72,7 +72,7 @@
 | 038 | 窗口架构 | [多窗口文档会话与全局操作协调](task/038-multiwindow-document-sessions.md) | P2 | 037 | L | planned |
 | 039 | Settings UI | [Settings 中的主题与界面语言](task/039-settings-theme-language-ui.md) | P2 | 003、004、029 | M | done |
 | 040 | 架构治理 | [架构与结构审计整改](task/040-architecture-structure-cleanup.md) | P2 | — | M | done |
-| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in_progress |
+| 041 | 性能 | [性能基准补齐与热点优化](task/041-performance-benchmarks-and-optimization.md) | P2 | 024、026、027、030 | M | in-progress |
 | 042 | 数学排版 | [M3：latex-rust 后端验证](task/042-latex-rust-math-backend.md) | P2 | — | M | ready |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | planned |
 | 044 | 数学排版 | [M3：公式布局、画布渲染与表格集成](task/044-math-layout-and-rendering.md) | P2 | 012、027、043 | L | planned |
