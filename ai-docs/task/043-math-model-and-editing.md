@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：010、042
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-10-29
+- 创建 / 更新：2026-10-29 / 2026-10-30
 
 ## 目标与背景
 
@@ -13,7 +13,7 @@
 
 - [公式与表格](../architecture/editor/math-and-table.md)、[文档模型](../architecture/editor/document-model.md)、[结构导航](../architecture/editor/structure-navigation.md)
 - [命令输入](../architecture/editor/command-input.md)、[快捷键](../architecture/interface/keyboard-shortcuts.md)
-- [存储格式](../architecture/editor/document-model.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
+- [存储格式](../architecture/editor/document-model/document-storage.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
 ## 范围与非目标
 

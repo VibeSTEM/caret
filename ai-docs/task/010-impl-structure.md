@@ -9,7 +9,7 @@
 
 让用户能通过结构命令和快捷键在文档块之间导航、创建和操作块环境，并能看见当前所在结构。Rust 文档树和编辑会话是领域行为的唯一来源；Qt/QML 负责按 Rust 提供的结构类别和布局范围绘制状态提示。
 
-本任务使用[文档模型：页面层级与内容块形态](../architecture/editor/document-model.md#页面层级与内容块形态)作为结构分类的唯一权威定义；[结构导航](../architecture/editor/structure-navigation.md)定义索引和几何投影。任务文档只记录实现范围与进度，不复制节点类别和语义。
+本任务使用[文档树与结构：页面层级与内容块形态](../architecture/editor/document-model/document-structure.md#页面层级与内容块形态)作为结构分类的唯一权威定义；[结构导航](../architecture/editor/structure-navigation.md)定义索引和几何投影。任务文档只记录实现范围与进度，不复制节点类别和语义。
 
 当前文档模型中的 `Section` 与块级 `Custom` 是 `BlockEnvironmentKind` 的具体语义类型：二者共用可嵌套块容器；`Section` 额外承载独立标题和编号语义，`Custom` 是带可选实例显示名和主题定义引用的通用容器。Custom 的目标模型支持 Page、Block、Inline 三种可选 scope，嵌套顺序固定为 Page → Block → Inline；本任务当前仅实现 Block-scope 实例，其余 scope 和统一定义管理留待后续任务。两者归入通用 `MultiLine` 类别，但 Rust 保留具体领域 kind。新增环境应沿用可组合的容器与索引结构，不在 QML 为每个具体 kind 添加分支。`InlineMath` 是 Paragraph 内部的行内原子，不是独立块结构。
 

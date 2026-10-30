@@ -1,6 +1,6 @@
 CI 为 macOS arm64、Linux x86_64 和 Windows x86_64 构建并自检 GoogleTest 静态
 SDK。每个归档都包含上游 CMake 包、头文件、静态库、源码元数据和 BSD-3-Clause
-许可证。Caret 在本仓库独立生产和发布，不依赖其他组织的 Release。消费端根据归档旁的 `.sha256` 文件固定下载内容。
+许可证。Caret 在本仓库独立生产和发布，不依赖其他组织的 Release。消费端信任的摘要固定在仓库的 [GoogleTest 摘要清单](../../../native/cmake/googletest-sha256.json)；归档旁的 `.sha256` 文件是发布校验产物，不是运行时信任来源。
 
 ## 源码与构建
 

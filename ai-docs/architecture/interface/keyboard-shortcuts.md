@@ -10,7 +10,7 @@
 
 正文编辑中，Enter 开始新段落，Shift+Enter 在当前段落插入软换行，Backspace 删除前一个字素簇。方向键按布局视觉位置移动，段落边界可跨段；Ctrl/Command+C 复制选中文本，Ctrl/Command+V 粘贴并替换选区。撤销/重做分别使用 Windows/Linux 的 Ctrl+Z、Ctrl+Shift+Z，以及 macOS 的 Command+Z、Command+Shift+Z。IME 与选区细节见[030](../../task/030-ime-navigation-selection.md)。
 
-块环境首尾停靠、Backspace 删除和 Mod+Backspace 解除环境的具体行为见[文档模型](../editor/document-model.md)。
+块环境首尾停靠、Backspace 删除和 Mod+Backspace 解除环境的具体行为见[环境模型](../editor/document-model/document-environments.md)。
 
 macOS 上复制、保存、撤销用 Command。结构键的修饰键按下表。Linux 和 Windows 上，结构内移动用 Ctrl+Alt。不用 Win。
 
@@ -62,8 +62,8 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 | 普通命令模式下空格 | 无效果；字体族模式允许空格作为字体名的一部分 |
 | 取消并清除已输入内容 | Esc |
 | 字面 `\` | `\\` |
-| 行内公式 / 显示公式 | `$` / `$$` |
-| 字面 `$` | `$` 然后 Tab |
+| 插入行内 / 显示 / 多行公式（M3 规划，候选当前不可执行） | `\math` / `\equation` / `\align` |
+| 导入 LaTeX 源码分隔符 | 仅公式源码导入语法；不是正文插入快捷键 |
 | 插入 2×2 表格 | Alt+T |
 | 表格内下一格 / 上一格（后续目标） | Tab / Shift+Tab |
 

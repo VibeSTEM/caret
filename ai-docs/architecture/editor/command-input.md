@@ -1,6 +1,6 @@
 # `\` 命令输入
 
-更新日期：2026-10-29。键位总表见[快捷键](../interface/keyboard-shortcuts.md)。
+更新日期：2026-10-30。键位总表见[快捷键](../interface/keyboard-shortcuts.md)。
 
 ## 状态
 
@@ -48,17 +48,18 @@ Rust 根据命令实现状态和当前编辑上下文确定候选是否可执行
 
 ## 参数
 
-第一版的参数写在别名里：`\section` 就是一级标题，`\table` 就是 2×2。`\frac` 插入公式后进入分子。需要用户再填数字的花括号语法以后单独立项，第一版不做。
+命令别名解析成稳定命令 ID 和参数，不以别名文本推断结构类型。当前 `\section` 创建 Section 块环境；`\table` 计划插入 2×2 表格，`\frac` 计划插入分数并进入分子。需要用户再填数字的花括号语法暂不支持。
 
 ## 初始别名
 
-| 输入 | 命令 | 接入 |
+| 输入 | 命令 | 当前接入状态 |
 | --- | --- | --- |
-| `\chapter` `\section` `\subsection` `\subsubsection` | 章、节、小节、小小节 | 010 |
-| `\itemize` `\enumerate` | 项目符号 / 编号 | 010 |
-| `\math` `\equation` `\align` | 行内公式、单行公式、多行公式 | 011 |
-| `\frac` `\sqrt` | 插入对应公式结构 | 011 |
-| `\table` | 2×2 表格 | 012 |
+| `\section` | 创建 Section 块环境 | 已接入（010） |
+| `\chapter` `\subsection` `\subsubsection` | 标题层级 | 规划中（010） |
+| `\itemize` `\enumerate` | 项目符号 / 编号 | 规划中（010） |
+| `\math` `\equation` `\align` | 行内公式、单行公式、多行公式 | 规划中（011） |
+| `\frac` `\sqrt` | 插入对应公式结构 | 规划中（011） |
+| `\table` | 2×2 表格 | 规划中（012） |
 | `\newpage` | 分页符 | 后续结构/分页命令 |
 | `\newline` | 段内换行 | 009 |
 | `\newparagraph` | 插入段落边界；与 Enter 同语义 | 010 |
