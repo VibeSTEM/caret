@@ -11,8 +11,8 @@
 | Caret 节点 | LaTeX 术语 / 写法 | 位置与语义 |
 | --- | --- | --- |
 | `InlineMath` | inline math：`$...$`、`\(...\)` | 段落内的行内对象，内部位置用 `MathPos` |
-| `Equation` | `equation*` / `\[...\]` / `$$...$$` | 独占一行的无编号显示公式块；不是可自动折成普通段落的文本行 |
-| `Align` | `align*` | 多行无编号显示公式；每行有对齐单元格，`&` 是对齐点，`\\` 是公式行分隔 |
+| `Equation` | `\[...\]` / `$$...$$` | 独占一行的无编号显示公式块；不是可自动折成普通段落的文本行 |
+| `Align` | `\[\begin{aligned}...\end{aligned}\]` | 多行无编号显示公式；每行有对齐单元格，`&` 是对齐点，`\\` 是公式行分隔 |
 
 命令面板中的可读别名与公式源码分隔符是两套输入语法，不混用：`\math` 创建行内公式，`\equation` 创建单行显示公式，`\align` 创建多行对齐公式。`$...$`、`\(...\)`、`\[...\]` 等是公式源码导入语法，不作为命令候选；候选表达插入的结构，而不是源码边界标点。
 
@@ -56,6 +56,8 @@
 
 优先复用 [`latex-rust`](https://docs.rs/latex-rust/latest/latex_rust/) 做 LaTeX 数学解析和 TeX 数学盒排版，评估公开 `MathNode` / `MathBox` 到 Caret 文档与画布快照的适配。Caret 不另造已有 parser/layout 功能，也不将 crate AST 持久化。公式快照应能表达 glyph、rule、基线和盒尺寸；SVG/PNG 是输出格式，不是文档模型。若公开 API 不足，先做最小 adapter 或向上游补能力，避免将 egui renderer 与 Qt 画布混接。
 
+042 验证 crates.io `latex-rust 3.0.1` 的 MathBox 可用于 Caret 数学布局适配。继续复用它的 TeX parser/layout，通过独立低层 `caret-math` crate 隔离版本和兼容补丁，不自行实现公式 parser/layout。Caret 尚无既定 LaTeX 输入约定，因此 `Equation` 使用 `\[...\]` / `$$...$$`，`Align` 使用 `\[\begin{aligned}...\end{aligned}\]`，无需支持 `equation*` / `align*`。043 在 parser 边界补充源码字节范围和预处理偏移映射；044 提供正文 shaping provider 与布局盒到稳定数学节点的 provenance。`caret-doc` 保持持久化 schema 权威，`caret-layout` 组合 Caret 数学树、shaping 和布局快照，第三方 AST 不持久化。workspace MSRV 已提升为 Rust 1.99，与 3.0.1 元数据一致。版本、依赖校验和、原型和 patch 边界见[研究报告 010](../../research/010-latex-rust.md)。
+
 LaTeX 没有唯一公式字体。M3 首版统一使用 `latex-rust` 内嵌的 STIX Two Math，使三平台不依赖本机字体安装，并使用与其 MATH 表布局一致的字形度量。文档保留 `defaultMathFontFamily` 作为稳定扩展入口；未设置时默认解析为 `STIX Two Math`。M3 当前只支持该字体，不提供多字体切换 UI；其他值保持原样，渲染回退到 STIX Two Math 时提供诊断。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
 
 公式中的 `\text{...}` 属于正文文本，不应强制由 STIX Two Math 覆盖。适配原型需验证将其内容交给 Caret 的文字 shaping（含文档语言与字体回退）并作为数学文本原子放入 MathBox 的可行性；不支持的文本内容必须保留源文本并显示可定位错误，不能静默换成缺字方框。
@@ -65,7 +67,7 @@ LaTeX 没有唯一公式字体。M3 首版统一使用 `latex-rust` 内嵌的 ST
 ## 导航和编辑
 
 - `\math` 插入行内公式，`\equation` 插入单行显示公式，`\align` 插入多行对齐公式；三者均进入公式编辑。`$...$`、`\(...\)`、`\[...\]` 是公式源码解析/导入语法，不是正文命令入口。
-- 结构命令可显式插入 `Align`；LaTeX 无编号 `align*` 的 `&` 与 `\\` 映射为对齐点与行节点。
+- 结构命令可显式插入 `Align`；`aligned` 输入中的 `&` 与 `\\` 映射为对齐点与行节点。
 - 方向键在公式边界进出。Esc 离开公式，插入点落到公式之后。
 - 公式内部可以上下左右移动，也可以跳到下一个占位符；`_` 和 `^` 插入下标与上标节点。
 - 正文命令模式不会在公式内部打开。公式有自己的命令解析；其中的 `\\` 仅在 `Align` 内结束一行。

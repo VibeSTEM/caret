@@ -4,7 +4,7 @@
 
 ## 项目规则
 
-- edition 2024。编译器 channel、rustfmt 和 clippy 写在根 `rust-toolchain.toml`。MSRV 写在 workspace 的 `rust-version`。升级编译器和升级依赖分开验证。
+- edition 2024。编译器 channel、rustfmt 和 clippy 写在根 `rust-toolchain.toml`。MSRV 写在 workspace 的 `rust-version`；依赖要求提高 MSRV 时，同步更新技术基线并在锁定工具链上验证 workspace。升级编译器和升级依赖分开验证。
 - crate 名使用 `caret-` 前缀。模块和函数用 `snake_case`，类型用 `PascalCase`。
 - 领域代码用结构化 `Result`。正常输入、文件和解析路径不用 `unwrap` 或 `expect` 代替错误处理。Clippy 对这两项保持 deny，测试模块可以单独放行。
 - ID 使用 newtype。持久化 DTO 和内存对象分开。路径使用 `Path` / `PathBuf`，不假设操作系统路径都能无损变成 UTF-8。

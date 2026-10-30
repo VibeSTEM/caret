@@ -15,3 +15,4 @@
 | 007 | [多文字体系字体选择器](007-font-selection.md) | 字体选择外部资料与历史调研；当前设计规范见架构文档 |
 | 008 | [Office Open XML 行距、段距与分页语义](008-office-open-xml-spacing-pagination.md) | 以 ECMA-376 / ISO/IEC 29500 为准，记录 WordprocessingML 排版属性及互操作边界 |
 | 009 | [Rust AutoSave 库评估](009-autosave-rust-library-audit.md) | 评估防抖、文件通知与 AutoSave crate 是否适合 Caret 的文档生命周期 |
+| 010 | [latex-rust 数学排版后端验证](010-latex-rust.md) | 记录 3.0.1 的依赖、MSRV、MathBox 能力、兼容输入和 Caret 适配边界 |
