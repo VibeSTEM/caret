@@ -99,6 +99,18 @@ const CANDIDATES: &[CommandCandidate] = &[
         label: "New paragraph",
         available: true,
     },
+    CommandCandidate {
+        alias: "\\bold",
+        command_id: "text.format.bold",
+        label: "Bold",
+        available: true,
+    },
+    CommandCandidate {
+        alias: "\\italic",
+        command_id: "text.format.italic",
+        label: "Italic",
+        available: true,
+    },
 ];
 
 pub const fn candidates() -> &'static [CommandCandidate] {

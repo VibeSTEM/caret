@@ -3,6 +3,7 @@
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::Session;
+use super::formatting::inline_tree::apply_formats_to_range;
 
 impl Session {
     pub(super) fn insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
@@ -25,17 +26,12 @@ impl Session {
             &focus
         };
         let insert_offset = anchor.offset.min(focus.offset);
+        let mut paragraph = self.paragraph_for(&anchor)?.clone();
         if anchor.offset == focus.offset {
-            let map = TextMap::new(self.paragraph_for(&anchor)?)?;
+            let map = TextMap::new(&paragraph)?;
             map.validate_pos(&anchor)?;
-            map.insert_text(
-                self.paragraph_for_mut(&anchor)?,
-                insert_offset,
-                start.affinity,
-                text,
-            )?;
+            map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
         } else {
-            let mut paragraph = self.paragraph_for(&anchor)?.clone();
             let map = TextMap::new(&paragraph)?;
             map.validate_pos(&anchor)?;
             map.validate_pos(&focus)?;
@@ -46,8 +42,19 @@ impl Session {
             )?;
             let updated_map = TextMap::new(&paragraph)?;
             updated_map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
-            self.replace_paragraph(&anchor, paragraph)?;
         }
+        if !text.is_empty() {
+            let formats: Vec<_> = self.pending_inline_style.active_formats().collect();
+            if !formats.is_empty() {
+                let updated_map = TextMap::new(&paragraph)?;
+                let start =
+                    updated_map.snap_to_grapheme_boundary(insert_offset, Affinity::Upstream);
+                let end = updated_map
+                    .snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
+                apply_formats_to_range(&mut paragraph, start, end, &formats)?;
+            }
+        }
+        self.replace_paragraph(&anchor, paragraph)?;
         let paragraph_id = anchor.paragraph_id.clone();
         let replaced_start = anchor.offset.min(focus.offset);
         let replaced_end = anchor.offset.max(focus.offset);
@@ -59,9 +66,14 @@ impl Session {
         let position_offset =
             result_map.snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
         let result_boundaries = result_map.grapheme_boundaries.clone();
+        let affinity = if self.pending_inline_style.active_formats().next().is_some() {
+            Affinity::Upstream
+        } else {
+            start.affinity
+        };
         let new_pos = Pos {
             offset: position_offset,
-            affinity: start.affinity,
+            affinity,
             ..anchor
         };
         self.selection = Selection {

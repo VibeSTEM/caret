@@ -80,6 +80,16 @@ impl Session {
             text,
         )?;
         self.replace_paragraph(&target, paragraph)?;
+        self.apply_pending_style_to_inserted_text(
+            &result.paragraph_id,
+            result.start_offset,
+            result.start_offset + text.len(),
+        )?;
+        let affinity = if self.pending_inline_style.active_formats().next().is_some() {
+            Affinity::Upstream
+        } else {
+            Affinity::Downstream
+        };
         self.text_map_cache.clear();
         let result_map = self.text_map_for(&target)?;
         let caret_offset = result_map
@@ -87,7 +97,7 @@ impl Session {
         let result_boundaries = result_map.grapheme_boundaries.clone();
         let position = Pos {
             offset: caret_offset,
-            affinity: Affinity::Downstream,
+            affinity,
             ..target.clone()
         };
         self.selection = Selection {

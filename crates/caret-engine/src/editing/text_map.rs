@@ -483,7 +483,8 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
             (Some(InlineNode::Run(previous)), Some(InlineNode::Run(current))) => {
                 previous.language == current.language
                     && previous.props == current.props
-                    && previous.extra == current.extra
+                    && previous.extra.is_empty()
+                    && current.extra.is_empty()
             }
             _ => false,
         };
@@ -517,7 +518,8 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
             (Some(InlineNode::Run(current)), Some(InlineNode::Run(next))) => {
                 current.language == next.language
                     && current.props == next.props
-                    && current.extra == next.extra
+                    && current.extra.is_empty()
+                    && next.extra.is_empty()
             }
             _ => false,
         };

@@ -4,6 +4,7 @@ mod clipboard;
 mod command_line;
 mod composition;
 mod current_environment;
+mod formatting;
 mod history;
 mod inline_content;
 mod keyboards;
@@ -29,7 +30,8 @@ use caret_structure::StructureIndex;
 use std::{collections::VecDeque, sync::Arc};
 use undo::History;
 
-use self::history::{DocumentPatch, SessionHistoryEdit};
+use self::formatting::PendingInlineStyle;
+use self::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
@@ -48,6 +50,7 @@ pub struct Session {
     session_id: NodeId,
     document_generation: u64,
     composition: Option<InputComposition>,
+    pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
@@ -90,6 +93,7 @@ impl Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: None,
+            pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
             block_environment_exit: None,
             selected_block_environment: None,
@@ -348,6 +352,7 @@ impl Session {
         }
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
+        let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
         let adjacent_delete_paragraph = match &command {
             Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
@@ -357,6 +362,8 @@ impl Session {
         };
         let edit_group = history::edit_group(&command);
         let breaks_history_merge = edit_group.is_none();
+        let resets_pending_style =
+            matches!(&command, Command::MoveCaret(_) | Command::SetSelection(_));
         let mut before_paragraph_states = if is_paragraph_edit(&command) {
             let mut ids = history::before_selection_ids(&self.paragraph_index, &self.selection);
             if let Command::Delete(_) = &command
@@ -394,6 +401,7 @@ impl Session {
             Command::CreateBlockEnvironment(_) => {
                 unreachable!("structure edit commands returned above")
             }
+            Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
             Command::EditorKey(_) => unreachable!("editor keys returned before editing dispatch"),
             Command::SetSelection(selection) => self.set_selection(selection),
             Command::UpdateComposition { id, preedit } => self.update_composition(id, preedit),
@@ -412,6 +420,9 @@ impl Session {
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
         self.command_line = None;
+        if effect.selection_changed && resets_pending_style {
+            self.pending_inline_style.clear();
+        }
         if breaks_history_merge {
             self.advance_history_merge_epoch();
         }
@@ -465,12 +476,18 @@ impl Session {
             effect.changed_paragraph_id = patch.single_changed_paragraph_id();
             let edit = SessionHistoryEdit::new(
                 patch,
-                before_selection,
-                self.selection.clone(),
-                before_visual_affinity,
-                self.selection_visual_affinity,
-                before_state_id,
-                after_state_id,
+                SessionHistoryState::new(
+                    before_selection,
+                    before_visual_affinity,
+                    before_pending_style,
+                    before_state_id,
+                ),
+                SessionHistoryState::new(
+                    self.selection.clone(),
+                    self.selection_visual_affinity,
+                    self.pending_inline_style.clone(),
+                    after_state_id,
+                ),
             );
             self.record_history_edit(edit);
             self.history_state_id = after_state_id;
@@ -547,26 +564,36 @@ impl Session {
         let Some(transition) = transition else {
             return Ok(Effect::default());
         };
-        let (selection, visual_affinity, state_id, changed_paragraph_id) =
-            history::restore_history_transition(transition);
+        let (
+            selection,
+            visual_affinity,
+            pending_style,
+            state_id,
+            changed_paragraph_id,
+            document_changed,
+        ) = history::restore_history_transition(transition);
+        let selection_changed = self.selection != selection;
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
+        self.pending_inline_style = pending_style;
         self.selected_block_environment = None;
         self.block_environment_exit = None;
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
-        self.paragraph_index = build_paragraph_index(&self.document.body);
-        self.structure_index = Arc::new(StructureIndex::build(&self.document));
-        self.text_map_cache.clear();
-        if let Some(next) = self.document_generation.checked_add(1) {
-            self.document_generation = next;
-        } else {
-            self.session_id = NodeId::generate();
-            self.document_generation = 0;
+        if document_changed {
+            self.paragraph_index = build_paragraph_index(&self.document.body);
+            self.structure_index = Arc::new(StructureIndex::build(&self.document));
+            self.text_map_cache.clear();
+            if let Some(next) = self.document_generation.checked_add(1) {
+                self.document_generation = next;
+            } else {
+                self.session_id = NodeId::generate();
+                self.document_generation = 0;
+            }
         }
         Ok(Effect {
-            document_changed: true,
-            selection_changed: true,
+            document_changed,
+            selection_changed,
             changed_paragraph_id,
             ..Effect::default()
         })
@@ -698,6 +725,7 @@ impl Clone for Session {
             session_id: NodeId::generate(),
             document_generation: 0,
             composition: self.composition.clone(),
+            pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
@@ -723,6 +751,7 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::PasteText(_)
             | Command::InsertSoftBreak
             | Command::InsertParagraphBreak
+            | Command::ToggleInlineFormat(_)
             | Command::Delete(_)
             | Command::CommitComposition { .. }
     )

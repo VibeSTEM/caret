@@ -144,6 +144,12 @@ impl Session {
         let effect = match candidate.command_id {
             "text.soft_break" => self.run(Command::InsertSoftBreak),
             "text.split_paragraph" => self.run(Command::InsertParagraphBreak),
+            "text.format.bold" => self.run(Command::ToggleInlineFormat(
+                caret_doc::InlineEnvironmentKind::Bold,
+            )),
+            "text.format.italic" => self.run(Command::ToggleInlineFormat(
+                caret_doc::InlineEnvironmentKind::Italic,
+            )),
             "struct.section.create" => self.run(Command::CreateBlockEnvironment(
                 BlockEnvironmentKind::Section,
             )),

@@ -546,3 +546,13 @@ message_105:
   src: New paragraph
   tr: New paragraph
   st: finished
+
+message_106:
+  src: Bold
+  tr: Bold
+  st: finished
+
+message_107:
+  src: Italic
+  tr: Italic
+  st: finished

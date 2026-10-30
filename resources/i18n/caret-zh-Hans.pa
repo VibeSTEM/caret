@@ -546,3 +546,13 @@ message_105:
   src: New paragraph
   tr: 新段落
   st: finished
+
+message_106:
+  src: Bold
+  tr: 粗体
+  st: finished
+
+message_107:
+  src: Italic
+  tr: 斜体
+  st: finished

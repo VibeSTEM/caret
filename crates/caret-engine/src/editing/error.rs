@@ -16,6 +16,7 @@ pub enum EditError {
     InvalidUtf16Offset,
     InvalidCompositionId,
     CompositionPending,
+    UnsupportedInlineFormat,
     InvalidPageGeometry(String),
     UnknownCommand,
 }
@@ -35,6 +36,7 @@ impl Display for EditError {
             Self::InvalidUtf16Offset => f.write_str("edit.invalid_utf16_offset"),
             Self::InvalidCompositionId => f.write_str("edit.invalid_composition_id"),
             Self::CompositionPending => f.write_str("edit.composition_pending"),
+            Self::UnsupportedInlineFormat => f.write_str("edit.unsupported_inline_format"),
             Self::InvalidPageGeometry(reason) => {
                 write!(f, "edit.invalid_page_geometry: {reason}")
             }

@@ -58,6 +58,10 @@ Rectangle {
             return qsTranslate("CommandCompletion", "Line break");
         case "text.split_paragraph":
             return qsTranslate("CommandCompletion", "New paragraph");
+        case "text.format.bold":
+            return qsTranslate("CommandCompletion", "Bold");
+        case "text.format.italic":
+            return qsTranslate("CommandCompletion", "Italic");
         case "insert.inline_math":
             return qsTranslate("CommandCompletion", "Inline math");
         case "insert.equation":

@@ -2,6 +2,7 @@
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
+use super::formatting::PendingInlineStyle;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, PageGeometry, Paragraph,
 };
@@ -25,6 +26,7 @@ pub(super) struct ParagraphState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DocumentPatch {
+    PendingStyle,
     Compound(Vec<DocumentPatch>),
     Paragraphs {
         before: Vec<ParagraphState>,
@@ -87,48 +89,62 @@ pub(super) enum EditGroup {
 #[derive(Debug, Clone)]
 pub(super) struct SessionHistoryEdit {
     patch: DocumentPatch,
-    before_selection: Selection,
-    after_selection: Selection,
-    before_visual_affinity: VisualAffinity,
-    after_visual_affinity: VisualAffinity,
-    before_state_id: u64,
-    after_state_id: u64,
+    before: SessionHistoryState,
+    after: SessionHistoryState,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SessionHistoryState {
+    selection: Selection,
+    visual_affinity: VisualAffinity,
+    pending_style: PendingInlineStyle,
+    state_id: u64,
+}
+
+impl SessionHistoryState {
+    pub(super) fn new(
+        selection: Selection,
+        visual_affinity: VisualAffinity,
+        pending_style: PendingInlineStyle,
+        state_id: u64,
+    ) -> Self {
+        Self {
+            selection,
+            visual_affinity,
+            pending_style,
+            state_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct HistoryTransition {
     pub selection: Selection,
     pub visual_affinity: VisualAffinity,
+    pub pending_style: PendingInlineStyle,
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
+    pub document_changed: bool,
 }
 
 impl SessionHistoryEdit {
     pub fn new(
         patch: DocumentPatch,
-        before_selection: Selection,
-        after_selection: Selection,
-        before_visual_affinity: VisualAffinity,
-        after_visual_affinity: VisualAffinity,
-        before_state_id: u64,
-        after_state_id: u64,
+        before: SessionHistoryState,
+        after: SessionHistoryState,
     ) -> Self {
         Self {
             patch,
-            before_selection,
-            after_selection,
-            before_visual_affinity,
-            after_visual_affinity,
-            before_state_id,
-            after_state_id,
+            before,
+            after,
         }
     }
 
     pub(super) fn estimated_bytes(&self) -> usize {
         size_of::<Self>()
             + self.patch.estimated_bytes()
-            + selection_id_bytes(&self.before_selection)
-            + selection_id_bytes(&self.after_selection)
+            + selection_id_bytes(&self.before.selection)
+            + selection_id_bytes(&self.after.selection)
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -141,19 +157,23 @@ impl SessionHistoryEdit {
 
     fn before_transition(&self) -> HistoryTransition {
         HistoryTransition {
-            selection: self.before_selection.clone(),
-            visual_affinity: self.before_visual_affinity,
-            state_id: self.before_state_id,
+            selection: self.before.selection.clone(),
+            visual_affinity: self.before.visual_affinity,
+            pending_style: self.before.pending_style.clone(),
+            state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
+            document_changed: self.patch.affects_document(),
         }
     }
 
     fn after_transition(&self) -> HistoryTransition {
         HistoryTransition {
-            selection: self.after_selection.clone(),
-            visual_affinity: self.after_visual_affinity,
-            state_id: self.after_state_id,
+            selection: self.after.selection.clone(),
+            visual_affinity: self.after.visual_affinity,
+            pending_style: self.after.pending_style.clone(),
+            state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
+            document_changed: self.patch.affects_document(),
         }
     }
 }
@@ -198,11 +218,11 @@ impl Edit for SessionHistoryEdit {
         if current_group.is_none()
             || current_group != next_group
             || current_epoch != next_epoch
-            || self.after_state_id != other.before_state_id
-            || self.after_selection != other.before_selection
-            || self.after_visual_affinity != other.before_visual_affinity
-            || self.before_selection.anchor == self.before_selection.focus
-                && other.before_selection.anchor != other.before_selection.focus
+            || self.after.state_id != other.before.state_id
+            || self.after.selection != other.before.selection
+            || self.after.visual_affinity != other.before.visual_affinity
+            || self.before.selection.anchor == self.before.selection.focus
+                && other.before.selection.anchor != other.before.selection.focus
             || current_after.len() != 1
             || next_before.len() != 1
             || next_after.len() != 1
@@ -219,14 +239,16 @@ impl Edit for SessionHistoryEdit {
             unreachable!("merge compatibility was checked above");
         };
         *current_after = next_after;
-        self.after_selection = other.after_selection;
-        self.after_visual_affinity = other.after_visual_affinity;
-        self.after_state_id = other.after_state_id;
+        self.after = other.after;
         Merged::Yes
     }
 }
 
 impl DocumentPatch {
+    fn affects_document(&self) -> bool {
+        !matches!(self, Self::PendingStyle)
+    }
+
     pub(super) fn single_changed_paragraph_id(&self) -> Option<NodeId> {
         let Self::Paragraphs { before, after, .. } = self else {
             return None;
@@ -239,6 +261,7 @@ impl DocumentPatch {
 
     pub fn estimated_bytes(&self) -> usize {
         match self {
+            Self::PendingStyle => size_of::<Self>(),
             Self::Compound(patches) => {
                 patches.capacity() * size_of::<DocumentPatch>()
                     + patches.iter().map(Self::estimated_bytes).sum::<usize>()
@@ -330,6 +353,7 @@ impl DocumentPatch {
 
     pub(super) fn undo(&self, document: &mut Document) {
         match self {
+            Self::PendingStyle => {}
             Self::Compound(patches) => {
                 for patch in patches.iter().rev() {
                     patch.undo(document);
@@ -421,6 +445,7 @@ impl DocumentPatch {
 
     pub(super) fn redo(&self, document: &mut Document) {
         match self {
+            Self::PendingStyle => {}
             Self::Compound(patches) => {
                 for patch in patches {
                     patch.redo(document);
@@ -1166,11 +1191,20 @@ fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<
 
 pub(super) fn restore_history_transition(
     transition: HistoryTransition,
-) -> (Selection, VisualAffinity, u64, Option<NodeId>) {
+) -> (
+    Selection,
+    VisualAffinity,
+    PendingInlineStyle,
+    u64,
+    Option<NodeId>,
+    bool,
+) {
     (
         transition.selection,
         transition.visual_affinity,
+        transition.pending_style,
         transition.state_id,
         transition.changed_paragraph_id,
+        transition.document_changed,
     )
 }
