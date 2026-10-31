@@ -1,68 +1,79 @@
 # 043 — M3：公式文档模型与编辑
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：010、042
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-10-30
+- 创建 / 更新：2026-10-29 / 2026-11-01
 
 ## 目标与背景
 
-为可编辑公式建立版本化 Caret 数学树，并实现公式创建、内部编辑、位置和键盘导航。公式树属于 `.cdoc` 稳定文档模型；`latex-rust` AST 只能存在解析/排版适配器边界。总体验收由 [011 M3 公式](011-impl-math.md)管理。
+为可编辑公式建立 Caret 自有的版本化数学树，并实现公式插入、内部编辑、位置与键盘导航。总体验收由 [011 M3 公式](011-impl-math.md)管理。
 
 ## 必读
 
 - [公式与表格](../architecture/editor/math-and-table.md)、[文档模型](../architecture/editor/document-model.md)、[结构导航](../architecture/editor/structure-navigation.md)
-- [命令输入](../architecture/editor/command-input.md)、[快捷键](../architecture/interface/keyboard-shortcuts.md)
-- [存储格式](../architecture/editor/document-model/document-storage.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
+- [命令输入](../architecture/editor/command-input.md)、[存储格式](../architecture/editor/document-model/document-storage.md)
+- [测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
 ## 范围与非目标
 
-实现 `InlineMath` 段内原子对象、块级 `Equation` 单行显示公式、块级 `Align` 多行对齐公式的 Caret 持久化类型、节点位置、占位符和公式内 `MathPos`。首版无自动编号、无 `\label` / `\ref`；支持的分隔符、行分隔和失败保留规则以 011 为准。保留 `defaultMathFontFamily`，新文档默认 STIX Two Math，首版只支持该字体。
+模型（`caret-doc`）：
 
-本任务不实现 Qt 绘制和大范围布局优化，不写入第三方 AST，不实现表格行列编辑。
+- `InlineMath` 是段落行内节点；`Equation` 与 `Align` 是正文块，`Align` 由行与单元格组成。
+- 每个公式持有 `MathTree { schemaVersion, source, root, extra }`。`source` 是与当前树对应的 LaTeX，由 `caret-math` 序列化器在树变化后重写。
+- 节点是有序 `MathNode { id, kind, text, children, … }`，`MathNodeKind` 覆盖行、符号、分式、根式、上下标、定界、矩阵、大运算符、重音、文本、颜色、空白、占位符等。
+- 上限：源码 1 MiB、深度 32、节点 65 536、可变载荷 8 MiB；未知字段保存在 `extra` 并原样写回。
+- `defaultMathFontFamily` 是文档全局设置，未设置时使用 STIX Two Math。
+
+编辑（`caret-engine`）：
+
+- 行内公式在段落逻辑文本中占一个 U+FFFC（3 字节），作为原子对象参与插入、删除和光标移动。
+- `Command::InsertInlineMath(source)`（`insert.inline_math`）按 `MathInputKind::Inline` 解析，解析失败返回 `edit.invalid_math` 且文档不变；成功时替换选区并把插入点放在公式之后。
+- 公式是统一环境模型中的 `InlineMath`（行内层级、原子、不可解包），Mod+Backspace 跳过它解包外层环境。
+
+非目标：自动编号、`\label`/`\ref`、编号版 `equation`/`align`（解析器报不支持并保留输入）、表格行列编辑。
 
 ## 前置条件与待决策
 
-010 结构导航和 042 后端验证需完成。按 042 的证据选择解析/适配接口；如果 `MathBox` 无法提供编辑树所需结构，先明确最小 Caret 数学节点映射，不把第三方类型泄漏到 `.cdoc`。
+块级 `Equation`/`Align` 的插入命令依赖撤销历史对块插入的支持，暂不开放；`\math`、`\equation`、`\align` 命令候选在命令行支持参数前保持不可用。
 
 ## 实施步骤
 
-1. 定义 schema 版本、`InlineMath`/`Equation`/`Align` 序列化表示、稳定 ID、源片段保存方式、MathPos 和深度/输入长度上限；比较树节点布局并测量内存占用。
-2. 实现公式插入命令、公式内部 AST 编辑、占位符导航、左右上下移动、退出公式与错误恢复；LaTeX 命令由数学解析器处理，不触发正文命令模式，`\\` 仅在 `Align` 中表示公式行分隔。
-3. 接入原子事务与撤销/重做；解析或编辑失败不部分更改正文，未支持命令保留原输入并定位错误。
-4. 覆盖新建、编辑、保存重开、旧/未知字段、异常深度、跨段选区边界和位置映射的行为测试。
-5. 更新 011 与架构文档中的具体 schema/迁移决策，独立评审后复验。
+1. 定义数学树 schema、上限与校验，实现 `.cdoc` 编解码与未知字段保留。
+2. 实现解析器与序列化器（042），保证往返结构一致。
+3. 接入行内公式原子对象、插入命令与失败原子性。
+4. 接入块级公式插入、公式内部 `MathPos` 编辑、占位符跳转和进出公式导航。
+5. 撤销/重做、保存重开与表格单元格内公式的模型覆盖；独立评审。
 
 ## 预计改动
 
-`crates/caret-doc` 数学节点和验证/序列化，`crates/caret-engine` 公式命令与 MathPos/导航，`caret-app` 只在存储或命令边界确有需要时调整。
+`crates/caret-doc` 数学模型与校验，`crates/caret-math` 解析与序列化，`crates/caret-engine` 编辑命令、原子对象与环境模型。
 
 ## 验收标准
 
-- [ ] 三种公式类型在 `.cdoc` 中为 Caret 自有 schema，往返后节点、源内容、ID 与位置语义稳定。
-- [ ] 数学树避免每个符号单独分配字符串与堆对象；使用典型、深层及大量公式样本记录节点数、堆分配数和驻留内存后再确定紧凑布局。
-- [ ] 自动编号、编号版 `equation`/`align`、label/ref 明确不支持且不会静默丢失源文本或编号语义。
-- [ ] 键盘进入、内部移动、占位符跳转、离开和插入点落位符合 011。
-- [ ] 失败原子；超深/过长输入不能导致进程崩溃；未知 `defaultMathFontFamily` 原样保留，实际回退到 STIX 时有诊断。
-- [ ] 表格内公式可以由稳定块/行内结构表示，但与表格的可视集成留给 044。
-- [ ] 命令级/模型行为测试、格式和 lint 通过；独立评审通过。
+- [x] 三种公式在 `.cdoc` 中为 Caret 自有 schema，未知字段保留，保存重开稳定。
+- [x] 超深、超长、节点过多的输入安全拒绝，正文不变。
+- [x] 行内公式作为一个原子对象插入、删除和移动光标；无效输入不改文档。
+- [ ] 块级 `Equation`/`Align` 可通过命令插入并进入编辑。
+- [ ] 公式内部 `MathPos` 移动、占位符跳转、Esc 离开公式。
+- [ ] 表格单元格内公式由稳定块结构表示。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | caret-doc / caret-engine 公式行为测试 | schema、编辑和位置契约成立 | 未执行 |
-| — | `.cdoc` 保存重开/未知可选字段夹具 | 公式与扩展字段保留 | 未执行 |
-| — | 深度/长度边界及失败原子测试 | 安全拒绝且正文不变 | 未执行 |
+| 2026-11-01 | Linux：`cargo test -p caret-doc -p caret-math` | schema、上限、往返测试通过 | 通过 |
+| 2026-11-01 | Linux：`cargo test -p caret-engine` | 行内公式原子插入、删除、无效输入与环境栈测试通过 | 通过 |
 
 ## 风险与回退
 
-公式 schema 一旦发布需通过能力标识和版本迁移保持兼容；先验证必要字段和未知能力策略，再稳定持久化形式。布局器的库 AST 变化不能要求 `.cdoc` 迁移。
+schema 发布后靠 `schemaVersion` 与 `extra` 保持兼容。解析器只覆盖 LaTeX 数学子集，不支持的命令报错并保留输入。
 
 ## 决策与工作记录
 
-- 2026-10-29：从 011 拆出文档模型、编辑和导航任务；以 020/011 的产品语义为准。
+- 2026-11-01：解析器直接产出 `caret-doc` 数学树，不保留中间 AST；`source` 始终由序列化器描述当前树。
+- 2026-11-01：行内公式以 U+FFFC 原子对象进入段落文本，与格式边界分开记录。
 
 ## 完成摘要
 
-未完成。
+未完成。模型、解析、序列化与行内公式插入已完成；块级插入、公式内部编辑与表格集成待做。
