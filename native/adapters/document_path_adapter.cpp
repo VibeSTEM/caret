@@ -19,6 +19,10 @@ DocumentPathAdapter::DocumentPathAdapter(QObject* parent) : QObject(parent) {}
 
 QUrl DocumentPathAdapter::defaultSaveFileUrl() const {
     const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    return defaultSaveFileUrlForDocumentsLocation(documents);
+}
+
+QUrl DocumentPathAdapter::defaultSaveFileUrlForDocumentsLocation(const QString& documents) {
     if (documents.isEmpty()) {
         return {};
     }

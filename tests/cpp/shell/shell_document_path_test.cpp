@@ -2,45 +2,50 @@
 #include "document_path_adapter.hpp"
 #include "shell_load_test.hpp"
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
+#include <QIODevice>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QUrl>
 #include <QtCore/qstring.h>
 #include <QtTest/qtestcase.h>
 
 void ShellLoadTest::documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation() {
-    const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    if (documents.isEmpty()) {
-        QSKIP("当前平台未提供 Documents 目录");
-    }
+    QTemporaryDir temporary_directory;
+    QVERIFY(temporary_directory.isValid());
+    const QString documents = temporary_directory.filePath(QStringLiteral("Documents"));
+    QVERIFY(QDir().mkpath(documents));
     const QString caret_directory = QDir(documents).filePath(QStringLiteral("caret"));
-    const bool documents_existed = QDir(documents).exists();
-    const bool caret_directory_existed = QDir(caret_directory).exists();
-    struct CreatedDirectoryCleanup {
-        QString documents;
-        QString directory;
-        bool remove_documents = false;
-        bool remove_directory = false;
-        ~CreatedDirectoryCleanup() {
-            if (remove_directory) {
-                (void)QDir().rmdir(directory);
-            }
-            if (remove_documents) {
-                (void)QDir().rmdir(documents);
-            }
-        }
-    } cleanup{documents, caret_directory, !documents_existed, !caret_directory_existed};
 
-    caret::DocumentPathAdapter adapter;
-    const QUrl default_url = adapter.defaultSaveFileUrl();
+    QVERIFY(
+        !caret::DocumentPathAdapter::defaultSaveFileUrlForDocumentsLocation(QString{}).isValid());
+    const QUrl default_url =
+        caret::DocumentPathAdapter::defaultSaveFileUrlForDocumentsLocation(documents);
     QVERIFY(default_url.isLocalFile());
     const QFileInfo target(default_url.toLocalFile());
     QCOMPARE(target.path(), QDir(caret_directory).absolutePath());
-    QVERIFY(target.fileName().startsWith(QStringLiteral("Untitled")));
-    QCOMPARE(target.suffix(), QStringLiteral("cdoc"));
+    QCOMPARE(target.fileName(), QStringLiteral("Untitled.cdoc"));
     QVERIFY(QDir(caret_directory).exists());
 
+    const QString first_candidate = QDir(caret_directory).filePath(QStringLiteral("Untitled.cdoc"));
+    QFile collision(first_candidate);
+    QVERIFY(collision.open(QIODevice::WriteOnly));
+    collision.close();
+    const QUrl collision_url =
+        caret::DocumentPathAdapter::defaultSaveFileUrlForDocumentsLocation(documents);
+    QVERIFY(collision_url.isLocalFile());
+    QCOMPARE(QFileInfo(collision_url.toLocalFile()).fileName(), QStringLiteral("Untitled-1.cdoc"));
+
+    QVERIFY(QFile::remove(first_candidate));
+    QVERIFY(QDir().rmdir(caret_directory));
+    QFile blocker(caret_directory);
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    blocker.close();
+    QVERIFY(
+        !caret::DocumentPathAdapter::defaultSaveFileUrlForDocumentsLocation(documents).isValid());
+
+    caret::DocumentPathAdapter adapter;
     const QString local_path = QDir(QDir::tempPath()).filePath(QStringLiteral("Caret 文档.cdoc"));
     QCOMPARE(adapter.localFileUrl(local_path), QUrl::fromLocalFile(local_path));
     QVERIFY(!adapter.localFileUrl(QString{}).isValid());

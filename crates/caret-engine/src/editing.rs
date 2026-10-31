@@ -14,11 +14,13 @@ mod session;
 mod tests;
 mod text_map;
 
-pub use command::{Command, Direction, EditorKey};
+pub use command::{Command, Direction, EditorKey, MathDirection};
 pub use command_line::{CommandLine, CommandLineMode};
 pub use command_registry::CommandCandidate;
 pub use error::EditError;
-pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
+pub use position::{
+    Affinity, InlineEnvironmentRange, MathFocus, MathPos, Pos, PositionMap, Selection, StoryId,
+};
 pub use session::Session;
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};

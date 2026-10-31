@@ -4,7 +4,7 @@
 
 ## 当前实现
 
-当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 当前包含 Paragraph、BlockEnvironment、ExplicitBreak 和 Opaque，`InlineNode` 当前包含 Run、InlineEnvironment、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Equation、Align、Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
+当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、Equation、Align、BlockEnvironment、ExplicitBreak 和 Opaque，`InlineNode` 包含 Run、InlineMath、InlineEnvironment、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等仍是后续节点。
 
 本页下文中的 `EnvironmentNode` 是语义层的统称；树形图是目标模型草图。当前 `.cdoc` 的具体字段以 `crates/caret-doc/src/model/` 中的 DTO 和 codec 为准。文档修订、布局缓存代际、焦点和选区属于运行时状态，不序列化进 `Document`。
 
@@ -37,6 +37,7 @@ crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
 crates/caret-doc/src/model/inline.rs    InlineNode 与软换行
+crates/caret-doc/src/model/math.rs      Caret 自有版本化数学树及 InlineMath/Equation/Align DTO
 crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
@@ -104,6 +105,16 @@ Paragraph
 详细的块级/行内环境、格式能力和编辑语义见[环境模型](document-environments.md)。
 
 ## 文本与实现边界
+
+### 数学节点持久化
+
+`MathTree` 是 Caret 持久化数学语义的唯一权威结构，定义在 `caret-doc/src/model/math.rs`；不持久化 `latex-rust` 或其他解析器的 AST。`schemaVersion` 当前为 1，`source` 保存导入时的原始公式 UTF-8 文本，`root` 是带稳定 `NodeId` 的有序 `MathNode` 树。节点通过 `kind` 表达符号、文本、运算符、分数、根式、上下标、定界符、矩阵、算子、样式、分组和占位符；`text` 是可选节点内容，`Text`/`TextStyle` 仅作容器且不得自带 `text`，实际文字由 `TextContent.text` 表达；`attributes` 保存由对应 `kind` 校验的数学参数，`children` 保存有序操作数。`Symbol.text` 可合并连续普通 `ord` 原子形成字符序列；其他原子类别和命名符号各保留独立节点。操作数槽位由 kind 固定：Fraction=[numerator, denominator]；Radical=[index-or-placeholder, body]；Superscript/Subscript=[base, script]；SubSup=[base, sub, sup]；Delimited=[body]；Matrix=[Row/Hline/Intertext...]；Sum/Product/Integral=[lower, upper]；Limit=[lower]；OverUnder=[base, over, under]；CancelTo=[value, body]；Accent、颜色节点、Intertext、Phantom=[body]。Placeholder 无子节点，其含义由父节点槽位决定，仅表示该槽位当前无解析器参数值；后续编辑器主动创建的待填写参数仍使用同一槽位语义。Hline 和 Intertext 只允许出现在 Matrix 环境子项中。属性按 kind 必需并校验：Operator.limits、Fraction.style、SizedDelimiter.size/atomClass、Matrix.style/columns、Integral.integralKind、Accent.accent、Space.spaceKind、Text/TextStyle.style、颜色节点颜色值、Phantom.phantomKind；Matrix.style 限于无自动编号的 `matrix`、`pmatrix`、`bmatrix`、`vmatrix`、`Vmatrix`、`Bmatrix`、`cases`、`array`、`aligned`、`split`。Symbol.atomClass 可缺省（命名符号），Delimited.left/right 必须同时存在。可选 `sourceRange` 使用相对该 `source` 的半开 UTF-8 字节偏移，校验时必须落在字符边界内。编辑后 `source` 仍是导入时的原始公式，不会随每次输入变成当前树的 LaTeX；未修改节点的 `sourceRange` 可继续作为导入溯源，修改过的叶及新增解析节点不保留失效或无法映射的范围。若编辑会使来源范围或被拆分节点的未知扩展字段失去可确定的关联，操作会拒绝以保留这些字段。它们都不能用于恢复当前树的 LaTeX 源码。
+
+`InlineMath` 位于 `Paragraph.inlines`，`Equation` 是单行显示块，`Align` 保存完整原始公式源码以及有序行和单元格；每个单元格持有独立 `MathTree`，其中的源码范围以该单元格源码为基准。`latex-rust 3.0.1` 暂不提供节点源码跨度，因此 043 导入时只记录整段公式范围，Align cell 的 `MathTree.source` 为空且不写 `sourceRange`；节点级来源定位由 044 的 parser adapter patch 提供；编辑后源码导出仍待 serializer/adapter 契约与往返测试验收。公式容器、对齐行和每个数学节点都使用文档全局唯一 ID。当前实现限制公式源码最多 1 MiB、持久化树最大深度 32、每棵树最多 65,536 个节点及 8 MiB 可变长 payload；parser 转换另限制展开语法树最多 65,536 节点和 32 层，导入与编辑都需同时通过两边预算。需要数学属性的文档显式声明 `caret.math.syntax.v1`；未知节点 kind、缺失必需属性、非法子节点形状或未知属性值进入只读安全预览。`caret-engine` 把后端无关语法树转为 Caret schema，并只合并普通 `ord` 字符序列，不跨矩阵单元格。043 release 探针测得典型、十层嵌套和 1,000 公式样本后，沿用嵌套树和 `Vec` 子节点布局，不建立重复运行时 arena；内存数字、口径和复评条件见[数学树紧凑表示决策](../math-and-table.md#数学树的紧凑内存表示)与[043](../../../task/043-math-model-and-editing.md)。
+
+`Symbol.atomClass` 是导入适配器从锁定 parser 分类映射得到的持久化语义；`caret-doc` 只验证它属于已知枚举，不自行复制 parser 对字符的分类规则。公式编辑期间，Session 缓冲单键不完整的 LaTeX 命令，并在 parser 接受完整 chunk 后导入 Caret 树；新增 chunk 不写入 `MathTree.source`，因此当前模型不保存编辑后的 LaTeX 或逐键源日志。具体缓冲和错误恢复行为见[命令输入](../command-input.md#公式输入)。当前 app 尚未接通公式焦点投影。
+
+公式树编辑暂不把变更后的 Caret 树序列化回 LaTeX；`source` 和 `sourceRange` 仍是原始导入溯源。节点文本 1 MiB 限制保护文档模型内的内容量，不代表包含 LaTeX 命令、分隔符和转义后的输出也小于 parser 的 1 MiB 源码上限；可编辑公式源码导出及其预算在 serializer/adapter 接入前仍未验收。
 
 Run 文本在插入、打开和保存时保留原始 Unicode 码点序列，不隐式转成 NFC 或 NFD。搜索/比较如需规范化，使用独立的规范化视图，不回写或替换文档正文。相邻 Run 的 `language`、`props`、未知可选字段 `extra` 完全相同时，编辑器可在受影响的局部范围合并它们；这些边界不代表光标停靠点。没有文本且无显式属性/语言/未知字段的默认 Run 是无语义占位，可在局部编辑归一化时移除；不能合并格式不同或带未知字段的 Run，也不在打开文档时重写整棵内容树。
 

@@ -4,8 +4,8 @@ use super::text_map::TextMap;
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Orientation, PageGeometry, PageMargins, PaperSize,
-    Paragraph, Run,
+    InlineEnvironmentKind, InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree,
+    NodeId, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph, Run,
 };
 use caret_layout::VisualAffinity;
 
@@ -35,6 +35,245 @@ fn paragraph_text(paragraph: &Paragraph) -> String {
         Ok(map) => map.text,
         Err(error) => panic!("failed to map paragraph text: {error}"),
     }
+}
+
+#[test]
+fn math_position_resolves_stable_paths_and_valid_node_offsets() {
+    let root_id = NodeId::generate();
+    let symbol_id = NodeId::generate();
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: "αx".to_owned(),
+        root: MathNode {
+            id: root_id.clone(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            source_range: None,
+            children: vec![MathNode {
+                id: symbol_id.clone(),
+                kind: MathNodeKind::Symbol,
+                text: Some("αx".to_owned()),
+                attributes: std::collections::BTreeMap::from([(
+                    "atomClass".to_owned(),
+                    "ord".to_owned(),
+                )]),
+                source_range: None,
+                children: Vec::new(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+
+    let root_boundary = MathPos {
+        path: vec![root_id.clone()],
+        offset: 1,
+    };
+    assert_eq!(root_boundary.resolve(&tree), Some(&tree.root));
+
+    let text_boundary = MathPos {
+        path: vec![root_id.clone(), symbol_id.clone()],
+        offset: 2,
+    };
+    assert_eq!(
+        text_boundary.resolve(&tree).map(|node| node.id.clone()),
+        Some(symbol_id.clone())
+    );
+    assert!(
+        MathPos {
+            path: vec![root_id.clone(), symbol_id.clone()],
+            offset: 3,
+        }
+        .resolve(&tree)
+        .is_some()
+    );
+
+    let invalid_utf8_boundary = MathPos {
+        path: vec![root_id.clone(), tree.root.children[0].id.clone()],
+        offset: 1,
+    };
+    assert!(invalid_utf8_boundary.resolve(&tree).is_none());
+    assert!(
+        MathPos {
+            path: vec![root_id.clone(), symbol_id.clone()],
+            offset: 4,
+        }
+        .resolve(&tree)
+        .is_none()
+    );
+
+    let mut combining_tree = tree.clone();
+    combining_tree.root.children[0].text = Some("e\u{301}x".to_owned());
+    combining_tree.source = "e\u{301}x".to_owned();
+    let between_base_and_mark = MathPos {
+        path: vec![root_id.clone(), symbol_id.clone()],
+        offset: 1,
+    };
+    assert!(between_base_and_mark.resolve(&combining_tree).is_none());
+
+    let invalid_child_boundary = MathPos {
+        path: vec![root_id.clone()],
+        offset: 2,
+    };
+    assert!(invalid_child_boundary.resolve(&tree).is_none());
+
+    let invalid_path = MathPos {
+        path: vec![root_id.clone(), NodeId::generate()],
+        offset: 0,
+    };
+    assert!(invalid_path.resolve(&tree).is_none());
+
+    let mut ambiguous_tree = tree.clone();
+    ambiguous_tree
+        .root
+        .children
+        .push(ambiguous_tree.root.children[0].clone());
+    assert!(
+        MathPos {
+            path: vec![root_id, symbol_id],
+            offset: 0,
+        }
+        .resolve(&ambiguous_tree)
+        .is_none()
+    );
+}
+
+#[test]
+fn math_position_keeps_distinct_fraction_operand_edges() {
+    let root_id = NodeId::generate();
+    let numerator_id = NodeId::generate();
+    let denominator_id = NodeId::generate();
+    let symbol = |id, text: &str| MathNode {
+        id,
+        kind: MathNodeKind::Symbol,
+        text: Some(text.to_owned()),
+        attributes: std::collections::BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
+        source_range: None,
+        children: Vec::new(),
+        extra: Default::default(),
+    };
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: r"\frac{x}{y}".to_owned(),
+        root: MathNode {
+            id: root_id.clone(),
+            kind: MathNodeKind::Fraction,
+            text: None,
+            attributes: std::collections::BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+            source_range: None,
+            children: vec![
+                symbol(numerator_id.clone(), "x"),
+                symbol(denominator_id.clone(), "y"),
+            ],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let numerator_start = MathPos {
+        path: vec![root_id.clone(), numerator_id.clone()],
+        offset: 0,
+    };
+    let numerator_end = MathPos {
+        path: vec![root_id.clone(), numerator_id],
+        offset: 1,
+    };
+    let denominator_start = MathPos {
+        path: vec![root_id.clone(), denominator_id.clone()],
+        offset: 0,
+    };
+    let denominator_end = MathPos {
+        path: vec![root_id, denominator_id],
+        offset: 1,
+    };
+    assert!(numerator_start.resolve(&tree).is_some());
+    assert!(numerator_end.resolve(&tree).is_some());
+    assert!(denominator_start.resolve(&tree).is_some());
+    assert!(denominator_end.resolve(&tree).is_some());
+    assert_ne!(numerator_start, denominator_start);
+    assert_ne!(numerator_end, denominator_start);
+    assert_ne!(numerator_end, denominator_end);
+}
+
+#[test]
+fn math_position_treats_named_symbols_as_single_atoms() {
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: r"\alpha".to_owned(),
+        root: MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Symbol,
+            text: Some("alpha".to_owned()),
+            attributes: Default::default(),
+            source_range: None,
+            children: Vec::new(),
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    for offset in 0..=1 {
+        assert!(
+            MathPos {
+                path: vec![tree.root.id.clone()],
+                offset,
+            }
+            .resolve(&tree)
+            .is_some()
+        );
+    }
+    assert!(
+        MathPos {
+            path: vec![tree.root.id.clone()],
+            offset: 2,
+        }
+        .resolve(&tree)
+        .is_none()
+    );
+}
+
+#[test]
+fn math_position_resolves_empty_placeholder_slot_only_at_zero() {
+    let root_id = NodeId::generate();
+    let placeholder_id = NodeId::generate();
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: String::new(),
+        root: MathNode {
+            id: root_id.clone(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            source_range: None,
+            children: vec![MathNode {
+                id: placeholder_id.clone(),
+                kind: MathNodeKind::Placeholder,
+                text: None,
+                attributes: Default::default(),
+                source_range: None,
+                children: Vec::new(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    assert!(
+        MathPos {
+            path: vec![root_id.clone(), placeholder_id.clone()],
+            offset: 0,
+        }
+        .resolve(&tree)
+        .is_some()
+    );
+    assert!(
+        MathPos {
+            path: vec![root_id, placeholder_id],
+            offset: 1,
+        }
+        .resolve(&tree)
+        .is_none()
+    );
 }
 
 #[test]

@@ -11,6 +11,7 @@ mod formatting;
 mod history;
 mod inline_content;
 mod keyboards;
+mod math_edit;
 mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;
@@ -25,8 +26,8 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, CommandLine, Direction, EditError, Effect, InputComposition, Pos,
-    PositionMap, Selection, StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, InputComposition,
+    MathDirection, MathFocus, Pos, PositionMap, Selection, StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -55,6 +56,9 @@ pub struct Session {
     document_generation: u64,
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
+    math_focus: Option<MathFocus>,
+    math_input_buffer: Option<String>,
+    math_input_error: bool,
     command_line: Option<CommandLine>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
@@ -98,6 +102,9 @@ impl Session {
             document_generation: 0,
             composition: None,
             pending_inline_style: PendingInlineStyle::default(),
+            math_focus: None,
+            math_input_buffer: None,
+            math_input_error: false,
             command_line: None,
             block_environment_exit: None,
             selected_block_environment: None,
@@ -129,6 +136,21 @@ impl Session {
 
     pub fn selection(&self) -> &Selection {
         &self.selection
+    }
+
+    /// 当前公式焦点；数学输入路由到该 MathPos，正文 Selection 保持在公式对象边界。
+    pub fn math_focus(&self) -> Option<&MathFocus> {
+        self.math_focus.as_ref()
+    }
+
+    /// 当前尚未组成有效公式语法的原始输入；错误输入保留到继续输入、退格或 Escape。
+    pub fn pending_math_input(&self) -> Option<&str> {
+        self.math_input_buffer.as_deref()
+    }
+
+    /// 暂存数学输入当前是否为 parser 拒绝的完整语法；原文仍可通过 `pending_math_input` 读取。
+    pub fn math_input_error(&self) -> bool {
+        self.math_input_error
     }
 
     /// 按稳定段落 ID 返回 Rust 索引中的正文或环境标题归属。
@@ -240,6 +262,101 @@ impl Session {
             Command::InsertTwoCharacterWidthSpace => Some("\u{2003}\u{2003}"),
             _ => None,
         };
+        if self.math_focus.is_some() {
+            if matches!(&command, Command::EditorKey(EditorKey::Escape))
+                && (self.math_input_buffer.take().is_some() || self.math_input_error)
+            {
+                self.math_input_error = false;
+                return Ok(Effect {
+                    math_input_changed: true,
+                    ..Effect::default()
+                });
+            }
+            if matches!(&command, Command::Undo | Command::Redo)
+                && (self.math_input_buffer.take().is_some() || self.math_input_error)
+            {
+                self.math_input_error = false;
+                return Ok(Effect {
+                    math_input_changed: true,
+                    ..Effect::default()
+                });
+            }
+            match &command {
+                Command::InsertText(text) => {
+                    return self.run(Command::TypeMathText(text.clone()));
+                }
+                Command::PasteText(text) => {
+                    return self.run(Command::PasteMathText(text.clone()));
+                }
+                Command::InsertOneCharacterWidthSpace => {
+                    return self.run(Command::TypeMathText("\u{2003}".to_owned()));
+                }
+                Command::InsertTwoCharacterWidthSpace => {
+                    return self.run(Command::TypeMathText("\u{2003}\u{2003}".to_owned()));
+                }
+                Command::MoveCaret(direction) => {
+                    return self.move_math_caret(match direction {
+                        Direction::Backward => MathDirection::Left,
+                        Direction::Forward => MathDirection::Right,
+                    });
+                }
+                Command::EditorKey(EditorKey::Tab) => {
+                    return self.move_math_caret_to_next_placeholder();
+                }
+                Command::InsertMathText(_)
+                | Command::TypeMathText(_)
+                | Command::PasteMathText(_)
+                | Command::InsertMathFraction
+                | Command::InsertMathRadical
+                | Command::MoveMathCaret(_)
+                | Command::ExitMath
+                | Command::Undo
+                | Command::Redo
+                | Command::EditorKey(EditorKey::Escape) => {}
+                Command::BeginCommandLine => {
+                    // The canvas routes a physical `\\` through this entry point.
+                    // In MathFocus it starts LaTeX parser input, not the body palette.
+                    return self.run(Command::TypeMathText("\\".to_owned()));
+                }
+                Command::Delete(Direction::Backward) if self.math_input_buffer.is_some() => {
+                    return self.backspace_math_input();
+                }
+                Command::UpdateComposition { .. }
+                | Command::CommitComposition { .. }
+                | Command::CancelComposition { .. }
+                | Command::SetSelection(_)
+                | Command::Delete(_)
+                | Command::MoveStructure(_)
+                | Command::ExitBlockEnvironment(_)
+                | Command::RemoveBlockEnvironmentPreservingContent
+                | Command::RemoveInlineEnvironmentPreservingContent(_)
+                | Command::ExpandStructureSelection
+                | Command::ExitStructure
+                | Command::CreateBlockEnvironment(_)
+                | Command::ToggleInlineFormat(_)
+                | Command::ToggleRunUnderline
+                | Command::SetInlineFontFamily(_)
+                | Command::SetParagraphFirstLineIndentChars(_)
+                | Command::SetDefaultFontFamily(_)
+                | Command::SetDocumentFontFamily { .. }
+                | Command::EditorKey(_)
+                | Command::SetPageGeometry(_)
+                | Command::InsertSoftBreak
+                | Command::InsertParagraphBreak
+                | Command::InsertInlineMath
+                | Command::TypeCommandLine(_)
+                | Command::BackspaceCommandLine
+                | Command::MoveCommandLineCursor(_)
+                | Command::MoveCommandLineSelection(_)
+                | Command::SelectCommandLineCandidate(_)
+                | Command::TabCommandLine
+                | Command::AcceptCommandLine
+                | Command::CancelCommandLine => return Err(EditError::UnsupportedMathTarget),
+            }
+        }
+        if let Command::MoveMathCaret(direction) = &command {
+            return self.move_math_caret(*direction);
+        }
         if let Some(text) = inserted_text
             && self.block_environment_exit.is_some()
         {
@@ -269,6 +386,9 @@ impl Session {
         }
         if let Command::EditorKey(key) = &command {
             return self.run_editor_key(*key);
+        }
+        if command == Command::ExitMath {
+            return self.exit_math();
         }
         if let Command::CommitComposition { id, text } = &command
             && self.block_environment_exit.is_some()
@@ -366,6 +486,7 @@ impl Session {
             .is_some_and(|line| !line.preedit.is_empty());
         let before_visual_affinity = self.selection_visual_affinity;
         let before_pending_style = self.pending_inline_style.clone();
+        let before_math_focus = self.math_focus.clone();
         let before_state_id = self.history_state_id;
         let adjacent_delete_paragraph = match &command {
             Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
@@ -428,6 +549,20 @@ impl Session {
         };
         let mut effect = match command {
             Command::InsertText(text) => self.insert_text(&text),
+            Command::InsertInlineMath => self.insert_inline_math(),
+            Command::InsertMathText(text) => self.insert_math_text(&text, false),
+            Command::TypeMathText(text) => self.insert_math_text(&text, true),
+            Command::PasteMathText(text) => self.insert_math_text(&text, false),
+            Command::InsertMathFraction => {
+                self.insert_math_edit(crate::math_edit::MathEdit::InsertFraction)
+            }
+            Command::InsertMathRadical => {
+                self.insert_math_edit(crate::math_edit::MathEdit::InsertRadical)
+            }
+            Command::ExitMath => unreachable!("math exit returned before editing dispatch"),
+            Command::MoveMathCaret(_) => {
+                unreachable!("math navigation returned before editing dispatch")
+            }
             Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
@@ -476,6 +611,7 @@ impl Session {
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
         }?;
         effect.composition_changed |= cancels_command_line_preedit;
+        effect.selection_changed |= before_math_focus != self.math_focus;
         self.command_line = None;
         if effect.selection_changed && resets_pending_style {
             self.pending_inline_style.clear();
@@ -548,14 +684,16 @@ impl Session {
             effect.changed_paragraph_id = patch.single_changed_paragraph_id();
             let edit = SessionHistoryEdit::new(
                 patch,
-                SessionHistoryState::new(
+                SessionHistoryState::with_math_focus(
                     before_selection,
+                    before_math_focus,
                     before_visual_affinity,
                     before_pending_style,
                     before_state_id,
                 ),
-                SessionHistoryState::new(
+                SessionHistoryState::with_math_focus(
                     self.selection.clone(),
+                    self.math_focus.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
                     after_state_id,
@@ -638,14 +776,16 @@ impl Session {
         };
         let (
             selection,
+            math_focus,
             visual_affinity,
             pending_style,
             state_id,
             changed_paragraph_id,
             document_changed,
         ) = history::restore_history_transition(transition);
-        let selection_changed = self.selection != selection;
+        let selection_changed = self.selection != selection || self.math_focus != math_focus;
         self.selection = selection;
+        self.math_focus = math_focus;
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
         self.selected_block_environment = None;
@@ -798,6 +938,9 @@ impl Clone for Session {
             document_generation: 0,
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
+            math_focus: self.math_focus.clone(),
+            math_input_buffer: self.math_input_buffer.clone(),
+            math_input_error: self.math_input_error,
             command_line: self.command_line.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
@@ -820,6 +963,12 @@ fn is_paragraph_edit(command: &Command) -> bool {
     matches!(
         command,
         Command::InsertText(_)
+            | Command::InsertInlineMath
+            | Command::InsertMathText(_)
+            | Command::TypeMathText(_)
+            | Command::PasteMathText(_)
+            | Command::InsertMathFraction
+            | Command::InsertMathRadical
             | Command::InsertOneCharacterWidthSpace
             | Command::InsertTwoCharacterWidthSpace
             | Command::PasteText(_)

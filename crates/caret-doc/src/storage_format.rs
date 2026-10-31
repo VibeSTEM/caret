@@ -23,12 +23,27 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.custom",
     "caret.env.templates",
     "caret.font.family-preferences",
+    "caret.math.align",
+    "caret.math.equation",
+    "caret.math.inline",
+    "caret.math.syntax.v1",
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
     "caret.text.underline",
     "caret.theme.snapshot",
 ];
+
+fn requires_explicit_feature_declaration(feature: &str) -> bool {
+    matches!(
+        feature,
+        "caret.text.underline"
+            | "caret.math.inline"
+            | "caret.math.equation"
+            | "caret.math.align"
+            | "caret.math.syntax.v1"
+    )
+}
 
 /// 可供编辑并保存的当前 `.cdoc` 文档。
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -88,7 +103,8 @@ impl CdocFile {
             .map(String::as_str)
             .collect::<std::collections::HashSet<_>>();
         if self.document.required_features().iter().any(|feature| {
-            feature == "caret.text.underline" && !declared_features.contains(feature.as_str())
+            requires_explicit_feature_declaration(feature)
+                && !declared_features.contains(feature.as_str())
         }) {
             return Err(DocumentError::ReadOnlyPreview);
         }
@@ -316,7 +332,9 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         .map(String::as_str)
         .collect::<std::collections::HashSet<_>>();
     for feature in file.document.required_features() {
-        if feature == "caret.text.underline" && !declared_features.contains(feature.as_str()) {
+        if requires_explicit_feature_declaration(&feature)
+            && !declared_features.contains(feature.as_str())
+        {
             reasons.push(PreviewReason::MissingRequiredFeature(feature.clone()));
         } else if !KNOWN_FEATURES.contains(&feature.as_str())
             && !declared_features.contains(feature.as_str())
@@ -442,7 +460,7 @@ fn contains_opaque_block(blocks: &[Block]) -> bool {
                 .is_some_and(|title| title.inlines.iter().any(contains_opaque_inline))
                 || contains_opaque_block(&environment.children)
         }
-        Block::ExplicitBreak(_) => false,
+        Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) => false,
     })
 }
 
@@ -453,7 +471,7 @@ fn contains_opaque_inline(inline: &crate::model::InlineNode) -> bool {
         InlineNode::Environment(environment) => {
             environment.children.iter().any(contains_opaque_inline)
         }
-        InlineNode::Run(_) | InlineNode::SoftBreak(_) => false,
+        InlineNode::Run(_) | InlineNode::Math(_) | InlineNode::SoftBreak(_) => false,
     }
 }
 

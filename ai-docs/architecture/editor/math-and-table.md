@@ -18,9 +18,11 @@
 
 首版只支持无编号的显示公式：不实现自动编号、`\label`、`\ref`；编号版 `equation` / `align` 不得静默丢弃编号语义，首版应明确报不支持并保留输入。公式源文本可保留用于错误位置和导出；解析或规范化后不保证与原始 LaTeX 字符串相同。未支持的命令必须报错并保留原内容。正文 Shift+Enter 的 `SoftBreak` 与 `Align` 行分隔是不同结构。
 
+`MathFocus` 下的逐键 LaTeX 输入先由 Session 暂存不完整控制词、参数组及 parser 明确判定仍可补全的前缀；控制词等到非字母分隔符再解析，避免合法短命令前缀抢先提交。适配层将缓冲分类为合法、未完成或非法，未知命令等确定错误立即标记。完整 chunk 只有在 `caret-math` parser 接受后才转成 Caret 数学节点并进入文档历史。错误输入保留在 Session，effect 标记错误且可读取原始待处理文本。Backspace 可修正暂存输入，修正后成为合法公式时立即作为一次文档编辑提交；Escape 先取消暂存输入，再次 Escape 才退出公式焦点；粘贴使用完整输入事务，暂存输入不改写 `MathTree.source`。
+
 ### 正文结构示意
 
-下面的 JSON 展示公式节点在文档正文中的位置：行内公式属于段落的 `inlines`，显示公式和多行公式是正文块。字段名称与树形仅用于表达文档模型，不是已定稿的 `.cdoc` 序列化 schema；具体必需字段、ID、版本兼容和校验规则由 [043 模型与编辑](../../task/043-math-model-and-editing.md) 定义。Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运算语义。
+下面的 JSON 展示公式节点在文档正文中的位置：行内公式属于段落的 `inlines`，显示公式和多行公式是正文块。数学节点的正式 `.cdoc` schema、必需字段、ID、版本兼容和校验规则由[文档树与结构](document-model/document-structure.md#数学节点持久化)定义。Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运算语义。
 
 ```json
 {
@@ -48,15 +50,15 @@
 
 ### 数学树的紧凑内存表示
 
-文档模型保留语义结构，但不为每个字符分配一个独立字符串和堆对象。实现优先评估连续 arena：节点使用紧凑 kind 与子节点范围/索引，符号使用枚举或紧凑数值，标识符与数字共享公式级文本缓冲区并以 UTF-8 范围引用；临时索引不承担跨编辑稳定 ID。这样保留脚本、分组、运算符和关系符的结构，同时避免深层 `Box` 与每符号 `String` 的碎片化。
+文档模型保留语义结构，不为每个普通字符建立独立节点；相邻普通 `ord` 字符合并为一个文本节点，树子项通过父节点的 `Vec` 连续保存，不使用逐节点 `Box`。2026-10-31 的 release 导入探针测得典型 54 B 公式为 23 节点、11,319 B 保留堆；十层嵌套公式为 21 节点、16,454 B；1,000 个典型公式为 23,000 节点、11,271,000 B 保留堆、19,988,480 B 进程峰值 RSS。`MathNode` 为 168 B，`NodeId` 为 24 B。保留堆包含公式外层 Vec 及其内联根节点，不含预解析的 `ParsedMath`；分配统计不含 allocator 元数据。RSS 是含解析与预热阶段的进程历史高水位，不是测量时刻的精确占用。
 
-这只是实现约束，不先锁定具体位宽或二进制 schema。043 应以典型公式、深层公式和大量公式文档测量节点数、堆分配数、驻留内存及编辑成本，再确定树节点布局和持久化编码；可读 JSON 如用于调试/交换，不要求直接作为运行时内存结构。
+043 据此沿用可读的树形 `.cdoc` schema 和当前 `Vec` 子节点布局，不增加第二份运行时 arena；额外 arena 会引入持久化 DTO 与运行时表示的同步/转换及重复占用，而当前样本没有证明其收益足以覆盖这些成本。连续字符串或紧凑 arena 可在真实文档超过 1,000 个公式，或 044 完成布局后测得超出内存预算时重新评估；布局成本尚未包含在本次数据中。可重现命令和 allocation/RSS 口径见[性能基准说明](../../../tests/performance/rust/README.md#数学树内存探针)及[043](../../task/043-math-model-and-editing.md)。
 
 ## 解析、数学排版和字体
 
 优先复用 [`latex-rust`](https://docs.rs/latex-rust/latest/latex_rust/) 做 LaTeX 数学解析和 TeX 数学盒排版，评估公开 `MathNode` / `MathBox` 到 Caret 文档与画布快照的适配。Caret 不另造已有 parser/layout 功能，也不将 crate AST 持久化。公式快照应能表达 glyph、rule、基线和盒尺寸；SVG/PNG 是输出格式，不是文档模型。若公开 API 不足，先做最小 adapter 或向上游补能力，避免将 egui renderer 与 Qt 画布混接。
 
-042 验证 crates.io `latex-rust 3.0.1` 的 MathBox 可用于 Caret 数学布局适配。继续复用它的 TeX parser/layout，通过独立低层 `caret-math` crate 隔离版本和兼容补丁，不自行实现公式 parser/layout。Caret 尚无既定 LaTeX 输入约定，因此 `Equation` 使用 `\[...\]` / `$$...$$`，`Align` 使用 `\[\begin{aligned}...\end{aligned}\]`，无需支持 `equation*` / `align*`。043 在 parser 边界补充源码字节范围和预处理偏移映射；044 提供正文 shaping provider 与布局盒到稳定数学节点的 provenance。`caret-doc` 保持持久化 schema 权威，`caret-layout` 组合 Caret 数学树、shaping 和布局快照，第三方 AST 不持久化。workspace MSRV 已提升为 Rust 1.99，与 3.0.1 元数据一致。版本、依赖校验和、原型和 patch 边界见[研究报告 010](../../research/010-latex-rust.md)。
+042 验证 crates.io `latex-rust 3.0.1` 的 MathBox 可用于 Caret 数学布局适配。继续复用它的 TeX parser/layout，通过独立低层 `caret-math` crate 隔离版本和兼容补丁，不自行实现公式 parser/layout。Caret 尚无既定 LaTeX 输入约定，因此 `Equation` 使用 `\[...\]` / `$$...$$`，`Align` 使用 `\[\begin{aligned}...\end{aligned}\]`，无需支持 `equation*` / `align*`。当前 043 parser adapter 只能定位整段公式；044 扩展 token/AST 源码字节范围与预处理偏移映射，并提供正文 shaping provider 和布局盒到稳定数学节点的 provenance。`caret-doc` 保持持久化 schema 权威，`caret-layout` 组合 Caret 数学树、shaping 和布局快照，第三方 AST 不持久化。workspace MSRV 已提升为 Rust 1.99，与 3.0.1 元数据一致。版本、依赖校验和、原型和 patch 边界见[研究报告 010](../../research/010-latex-rust.md)。
 
 LaTeX 没有唯一公式字体。M3 首版统一使用 `latex-rust` 内嵌的 STIX Two Math，使三平台不依赖本机字体安装，并使用与其 MATH 表布局一致的字形度量。文档保留 `defaultMathFontFamily` 作为稳定扩展入口；未设置时默认解析为 `STIX Two Math`。M3 当前只支持该字体，不提供多字体切换 UI；其他值保持原样，渲染回退到 STIX Two Math 时提供诊断。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
 
@@ -64,13 +66,17 @@ LaTeX 没有唯一公式字体。M3 首版统一使用 `latex-rust` 内嵌的 ST
 
 解析输入和手建树都受明确的最大嵌套深度约束；依赖版本不得包含已知深层嵌套导致栈溢出的版本。布局失败不能伪装成成功，也不得破坏现有公式源内容。
 
+在数学盒布局接通前，`Equation` 与 `Align` 使用非交互式源码预览维持文档可打开；预览展示导入时保留的源码（最长 512 UTF-8 字节，空源码显示占位符），不代表当前数学树的渲染结果，也不接受命中或创建正文光标。公式树仍是文档权威状态；真正的公式排版、命中和焦点投影由 044 完成。未知或不安全的文档语义仍按文档模型规则进入只读安全预览。
+
 ## 导航和编辑
 
 - `\math` 插入行内公式，`\equation` 插入单行显示公式，`\align` 插入多行对齐公式；三者均进入公式编辑。`$...$`、`\(...\)`、`\[...\]` 是公式源码解析/导入语法，不是正文命令入口。
 - 结构命令可显式插入 `Align`；`aligned` 输入中的 `&` 与 `\\` 映射为对齐点与行节点。
-- 方向键在公式边界进出。Esc 离开公式，插入点落到公式之后。
-- 公式内部可以上下左右移动，也可以跳到下一个占位符；`_` 和 `^` 插入下标与上标节点。
+- 公式焦点内左右移动到两侧边缘时退出，Esc 也可退出并保持公式后的正文插入点；从正文用方向键重新进入已存在公式，待 044 接入布局焦点投影。
+- 公式内部可以上下左右移动；Tab 沿树顺序跳到当前光标后的下一个占位符，最后一个之后不循环。存在暂存的 LaTeX 输入时，Tab 拒绝导航并保留缓冲，不将按键当作输入分隔符。`_` 和 `^` 插入下标与上标节点的命令由 044 接通。
 - 正文命令模式不会在公式内部打开。公式有自己的命令解析；其中的 `\\` 仅在 `Align` 内结束一行。
+
+MathFocus 下的反斜线入口路由见[命令输入](command-input.md#公式输入)。
 
 离开公式只移动插入点，不产生撤销步。改树的命令才记账。
 

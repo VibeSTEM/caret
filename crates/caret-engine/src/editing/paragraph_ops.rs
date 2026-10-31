@@ -76,7 +76,7 @@ fn collect_locations(blocks: &[Block], parent_path: &mut Vec<usize>, index: &mut
                 }
                 collect_locations(&environment.children, parent_path, index);
             }
-            Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
         parent_path.pop();
     }
@@ -163,7 +163,7 @@ fn collect_block_locations(block: &Block, path: &[usize], index: &mut ParagraphI
             let mut child_path = path.to_vec();
             collect_locations(&environment.children, &mut child_path, index);
         }
-        Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+        Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
     }
 }
 
@@ -244,7 +244,7 @@ pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)>
                     return Some(paragraph);
                 }
             }
-            Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
     }
     None
@@ -630,8 +630,22 @@ fn inline_tree_has_unknown_fields(nodes: &[InlineNode]) -> bool {
             !environment.extra.is_empty() || inline_tree_has_unknown_fields(&environment.children)
         }
         InlineNode::SoftBreak(value) => !value.extra.is_empty(),
+        InlineNode::Math(value) => {
+            !value.extra.is_empty()
+                || !value.math_tree.extra.is_empty()
+                || math_node_has_extra(&value.math_tree.root)
+        }
         InlineNode::Opaque(_) => true,
     })
+}
+
+fn math_node_has_extra(node: &caret_doc::MathNode) -> bool {
+    !node.extra.is_empty()
+        || node
+            .source_range
+            .as_ref()
+            .is_some_and(|range| !range.extra.is_empty())
+        || node.children.iter().any(math_node_has_extra)
 }
 
 fn block_list_at_path_mut<'a>(

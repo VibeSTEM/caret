@@ -83,23 +83,22 @@ impl DocumentViewRuntime {
                     return Err("navigation.unknown_paragraph".to_owned());
                 };
                 let paragraph = &snapshot.paragraphs[paragraph_index];
+                if !paragraph.is_interactive() {
+                    return Err("navigation.unknown_paragraph".to_owned());
+                }
                 let cursor = paragraph
                     .layout
                     .cursor_at(current.focus.offset, current_visual)
                     .ok_or_else(|| "navigation.invalid_caret".to_owned())?;
                 let moved = paragraph.layout.move_visual(cursor, forward);
-                let (adjacent_index, adjacent_offset) = if paragraph.text.is_empty() {
-                    if forward {
-                        (paragraph_index.checked_add(1), 0)
-                    } else {
-                        (paragraph_index.checked_sub(1), usize::MAX)
-                    }
+                let adjacent = if paragraph.text.is_empty() {
+                    Some((forward, if forward { 0 } else { usize::MAX }))
                 } else if current.focus.offset == 0 {
-                    (paragraph_index.checked_sub(1), usize::MAX)
+                    Some((false, usize::MAX))
                 } else if current.focus.offset == paragraph.text.len() {
-                    (paragraph_index.checked_add(1), 0)
+                    Some((true, 0))
                 } else {
-                    (None, 0)
+                    None
                 };
                 moved
                     .map(|cursor| {
@@ -114,7 +113,12 @@ impl DocumentViewRuntime {
                         )
                     })
                     .or_else(|| {
-                        let adjacent = snapshot.paragraphs.get(adjacent_index?)?;
+                        let (adjacent_forward, adjacent_offset) = adjacent?;
+                        let adjacent_index = snapshot.adjacent_interactive_paragraph_index(
+                            paragraph_index,
+                            adjacent_forward,
+                        )?;
+                        let adjacent = snapshot.paragraphs.get(adjacent_index)?;
                         let offset = if adjacent_offset == usize::MAX {
                             adjacent.text.len()
                         } else {
@@ -258,6 +262,9 @@ impl DocumentViewRuntime {
                 .paragraph_index_by_id(&current.focus.paragraph_id)
                 .ok_or_else(|| "navigation.unknown_paragraph".to_owned())?;
             let paragraph = &snapshot.paragraphs[paragraph_index];
+            if !paragraph.is_interactive() {
+                return Err("navigation.unknown_paragraph".to_owned());
+            }
             let cursor = paragraph
                 .layout
                 .cursor_at(current.focus.offset, current_visual)
@@ -278,11 +285,8 @@ impl DocumentViewRuntime {
                     )
                 })
                 .or_else(|| {
-                    let adjacent_index = if line_delta < 0 {
-                        paragraph_index.checked_sub(1)
-                    } else {
-                        paragraph_index.checked_add(1)
-                    }?;
+                    let adjacent_index = snapshot
+                        .adjacent_interactive_paragraph_index(paragraph_index, line_delta > 0)?;
                     let adjacent = snapshot.paragraphs.get(adjacent_index)?;
                     let line_index = if line_delta < 0 {
                         adjacent.layout.paragraph.lines.len().checked_sub(1)?

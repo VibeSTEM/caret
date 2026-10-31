@@ -1,7 +1,10 @@
 //! 验证指针选区、命中图与视觉光标导航。
 
 use super::*;
-use caret_doc::{BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run};
+use caret_doc::{
+    BlockEnvironment, BlockEnvironmentKind, Equation, MATH_TREE_SCHEMA_VERSION, MathNode,
+    MathNodeKind, MathTree, NodeId, Paragraph, Run,
+};
 use std::collections::BTreeMap;
 
 fn paragraph_with_text(text: &str) -> Paragraph {
@@ -43,6 +46,80 @@ fn block_text(block: &Block) -> Option<&str> {
         InlineNode::Run(run) => Some(run.text.as_str()),
         _ => None,
     })
+}
+
+fn equation(source: &str) -> Block {
+    Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: source.to_owned(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Row,
+                text: None,
+                attributes: BTreeMap::new(),
+                source_range: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    })
+}
+
+fn caret_selection_json(paragraph_id: &NodeId, offset: usize) -> String {
+    serde_json::json!({
+        "anchor": {
+            "paragraphId": paragraph_id.to_string(),
+            "offsetUtf8": offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream"
+        },
+        "focus": {
+            "paragraphId": paragraph_id.to_string(),
+            "offsetUtf8": offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream"
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn visual_navigation_skips_noninteractive_block_math_previews()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let before_id = before.id.clone();
+    let after = paragraph_with_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation("\\frac{x}{y}"),
+        equation("a=b"),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    runtime.set_selection_json(&caret_selection_json(&before_id, "before".len()))?;
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+
+    runtime.set_selection_json(&caret_selection_json(&after_id, 0))?;
+    runtime.move_visual_caret_json(false, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, before_id);
+    assert_eq!(runtime.session.selection().focus.offset, "before".len());
+
+    runtime.set_selection_json(&caret_selection_json(&before_id, "before".len()))?;
+    runtime.move_vertical_caret_json(1, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    runtime.set_selection_json(&caret_selection_json(&after_id, 0))?;
+    runtime.move_vertical_caret_json(-1, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, before_id);
+    Ok(())
 }
 
 #[test]

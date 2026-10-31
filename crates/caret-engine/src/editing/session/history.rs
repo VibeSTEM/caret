@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
-use super::super::{PositionMap, Selection, StoryId};
+use super::super::{MathFocus, PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, DocumentSettings,
@@ -161,6 +161,7 @@ pub(super) struct SessionHistoryEdit {
 #[derive(Debug, Clone)]
 pub(super) struct SessionHistoryState {
     selection: Selection,
+    math_focus: Option<MathFocus>,
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
     state_id: u64,
@@ -175,6 +176,23 @@ impl SessionHistoryState {
     ) -> Self {
         Self {
             selection,
+            math_focus: None,
+            visual_affinity,
+            pending_style,
+            state_id,
+        }
+    }
+
+    pub(super) fn with_math_focus(
+        selection: Selection,
+        math_focus: Option<MathFocus>,
+        visual_affinity: VisualAffinity,
+        pending_style: PendingInlineStyle,
+        state_id: u64,
+    ) -> Self {
+        Self {
+            selection,
+            math_focus,
             visual_affinity,
             pending_style,
             state_id,
@@ -185,6 +203,7 @@ impl SessionHistoryState {
 #[derive(Debug, Clone)]
 pub(super) struct HistoryTransition {
     pub selection: Selection,
+    pub math_focus: Option<MathFocus>,
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
     pub state_id: u64,
@@ -210,6 +229,8 @@ impl SessionHistoryEdit {
             + self.patch.estimated_bytes()
             + selection_id_bytes(&self.before.selection)
             + selection_id_bytes(&self.after.selection)
+            + math_focus_bytes(self.before.math_focus.as_ref())
+            + math_focus_bytes(self.after.math_focus.as_ref())
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -223,6 +244,7 @@ impl SessionHistoryEdit {
     fn before_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.before.selection.clone(),
+            math_focus: self.before.math_focus.clone(),
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
             state_id: self.before.state_id,
@@ -234,6 +256,7 @@ impl SessionHistoryEdit {
     fn after_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.after.selection.clone(),
+            math_focus: self.after.math_focus.clone(),
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
             state_id: self.after.state_id,
@@ -285,6 +308,7 @@ impl Edit for SessionHistoryEdit {
             || current_epoch != next_epoch
             || self.after.state_id != other.before.state_id
             || self.after.selection != other.before.selection
+            || self.after.math_focus != other.before.math_focus
             || self.after.visual_affinity != other.before.visual_affinity
             || self.before.selection.anchor == self.before.selection.focus
                 && other.before.selection.anchor != other.before.selection.focus
@@ -1048,6 +1072,32 @@ fn block_estimated_bytes(block: &Block) -> usize {
     size_of::<Block>()
         + match block {
             Block::Paragraph(paragraph) => paragraph_estimated_bytes(paragraph),
+            Block::Equation(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + string_value_map_bytes(&value.extra)
+                    + math_tree_estimated_bytes(&value.math_tree)
+            }
+            Block::Align(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + value.source.len()
+                    + string_value_map_bytes(&value.extra)
+                    + value
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            size_of_val(row)
+                                + node_id_bytes(&row.id)
+                                + string_value_map_bytes(&row.extra)
+                                + row
+                                    .cells
+                                    .iter()
+                                    .map(math_tree_estimated_bytes)
+                                    .sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
             Block::Environment(environment) => environment_estimated_bytes(environment),
             Block::ExplicitBreak(value) => {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
@@ -1067,6 +1117,12 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
                     + string_value_map_bytes(&run.props)
                     + string_value_map_bytes(&run.extra)
             }
+            InlineNode::Math(value) => {
+                size_of_val(value)
+                    + node_id_bytes(&value.id)
+                    + string_value_map_bytes(&value.extra)
+                    + math_tree_estimated_bytes(&value.math_tree)
+            }
             InlineNode::Environment(environment) => {
                 size_of_val(environment)
                     + node_id_bytes(&environment.id)
@@ -1084,6 +1140,29 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
             }
             InlineNode::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
         }
+}
+
+fn math_tree_estimated_bytes(tree: &caret_doc::MathTree) -> usize {
+    fn node_bytes(node: &caret_doc::MathNode) -> usize {
+        size_of_val(node)
+            + node_id_bytes(&node.id)
+            + node.text.as_ref().map_or(0, String::len)
+            + node
+                .attributes
+                .iter()
+                .map(|(key, value)| key.len() + value.len())
+                .sum::<usize>()
+            + node
+                .source_range
+                .as_ref()
+                .map_or(0, |range| string_value_map_bytes(&range.extra))
+            + string_value_map_bytes(&node.extra)
+            + node.children.iter().map(node_bytes).sum::<usize>()
+    }
+    size_of_val(tree)
+        + tree.source.len()
+        + string_value_map_bytes(&tree.extra)
+        + node_bytes(&tree.root)
 }
 
 pub(super) fn history_memory_limit() -> usize {
@@ -1139,6 +1218,12 @@ pub(super) fn edit_group(command: &super::super::Command) -> Option<EditGroup> {
         super::super::Command::InsertText(text)
             if !text.is_empty() && !text.contains(['\n', '\r']) =>
         {
+            Some(EditGroup::InsertText)
+        }
+        super::super::Command::InsertMathText(text) if !text.is_empty() => {
+            Some(EditGroup::InsertText)
+        }
+        super::super::Command::TypeMathText(text) if !text.is_empty() => {
             Some(EditGroup::InsertText)
         }
         super::super::Command::InsertOneCharacterWidthSpace
@@ -1218,6 +1303,15 @@ fn selection_id_bytes(selection: &Selection) -> usize {
         + story_id_bytes(&selection.focus.story)
 }
 
+fn math_focus_bytes(focus: Option<&MathFocus>) -> usize {
+    focus.map_or(0, |focus| {
+        size_of::<MathFocus>()
+            + node_id_bytes(&focus.paragraph_id)
+            + node_id_bytes(&focus.inline_math_id)
+            + focus.position.path.iter().map(node_id_bytes).sum::<usize>()
+    })
+}
+
 fn story_id_bytes(story: &StoryId) -> usize {
     match story {
         StoryId::Body => 0,
@@ -1280,6 +1374,7 @@ pub(super) fn restore_history_transition(
     transition: HistoryTransition,
 ) -> (
     Selection,
+    Option<MathFocus>,
     VisualAffinity,
     PendingInlineStyle,
     u64,
@@ -1288,10 +1383,96 @@ pub(super) fn restore_history_transition(
 ) {
     (
         transition.selection,
+        transition.math_focus,
         transition.visual_affinity,
         transition.pending_style,
         transition.state_id,
         transition.changed_paragraph_id,
         transition.document_changed,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{block_estimated_bytes, inline_estimated_bytes};
+    use caret_doc::{
+        Align, Block, Equation, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathAlignRow,
+        MathNode, MathNodeKind, MathSourceRange, MathTree, NodeId,
+    };
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    fn tree() -> MathTree {
+        MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "x".to_owned(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Symbol,
+                text: Some("x".to_owned()),
+                attributes: BTreeMap::new(),
+                source_range: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn history_estimate_includes_math_extension_keys_and_values() {
+        let inline = InlineNode::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree(),
+            extra: BTreeMap::new(),
+        });
+        let baseline = inline_estimated_bytes(&inline);
+        let mut extended = inline.clone();
+        let InlineNode::Math(value) = &mut extended else {
+            unreachable!();
+        };
+        let payload = "x".repeat(4096);
+        value
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .root
+            .extra
+            .insert(payload.clone(), Value::String(payload.clone()));
+        value
+            .math_tree
+            .root
+            .attributes
+            .insert(payload.clone(), payload.clone());
+        value.math_tree.root.source_range = Some(MathSourceRange {
+            start: 0,
+            end: 1,
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(inline_estimated_bytes(&extended) >= baseline + payload.len() * 8);
+
+        let equation = Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree: tree(),
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(block_estimated_bytes(&equation) >= baseline + payload.len() * 2);
+
+        let align = Block::Align(Align {
+            id: NodeId::generate(),
+            source: "x".to_owned(),
+            rows: vec![MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![tree()],
+                extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+            }],
+            extra: BTreeMap::from([(payload.clone(), Value::String(payload.clone()))]),
+        });
+        assert!(block_estimated_bytes(&align) >= baseline + payload.len() * 2);
+    }
 }

@@ -133,39 +133,6 @@ fn place_caret_after_first_grapheme(
     grapheme
 }
 
-fn document_character_count(blocks: &[Block]) -> usize {
-    blocks
-        .iter()
-        .map(|block| match block {
-            Block::Paragraph(paragraph) => {
-                paragraph.inlines.iter().map(inline_character_count).sum()
-            }
-            Block::Environment(environment) => {
-                environment
-                    .title
-                    .as_ref()
-                    .map(|title| title.inlines.iter().map(inline_character_count).sum())
-                    .unwrap_or(0)
-                    + document_character_count(&environment.children)
-            }
-            Block::ExplicitBreak(_) | Block::Opaque(_) => 0,
-        })
-        .sum()
-}
-
-fn inline_character_count(inline: &InlineNode) -> usize {
-    match inline {
-        InlineNode::Run(run) => run.text.chars().count(),
-        InlineNode::Environment(environment) => environment
-            .children
-            .iter()
-            .map(inline_character_count)
-            .sum(),
-        InlineNode::SoftBreak(_) => 1,
-        InlineNode::Opaque(_) => 0,
-    }
-}
-
 fn benchmark_open_and_delete(criterion: &mut Criterion) {
     let document = BenchmarkDocument::load();
     let document_bytes = DocumentStorage
@@ -176,8 +143,7 @@ fn benchmark_open_and_delete(criterion: &mut Criterion) {
     let OpenedDocument::Editable(opened_file) = opened else {
         panic!("性能文档必须可编辑");
     };
-    let character_count = document_character_count(&opened_file.document.body);
-    assert!(character_count > 0, "性能文档必须包含文本");
+    let document_size_bytes = document_bytes.len() as u64;
     let paragraph_indices: Vec<_> = opened_file
         .document
         .body
@@ -189,13 +155,12 @@ fn benchmark_open_and_delete(criterion: &mut Criterion) {
         .get(paragraph_indices.len() / 2)
         .unwrap_or_else(|| panic!("性能文档必须包含顶层段落"));
     eprintln!(
-        "document_open_delete fixture: path={}, bytes={}, known_text_unicode_characters={character_count}",
+        "document_open_delete fixture: path={}, bytes={document_size_bytes}",
         document.path.display(),
-        document_bytes.len()
     );
 
     let mut group = criterion.benchmark_group("rust/cdoc_open");
-    group.throughput(Throughput::Elements(character_count as u64));
+    group.throughput(Throughput::Bytes(document_size_bytes));
     group.bench_function("decode_validate_cdoc", |bencher| {
         bencher.iter(|| {
             let opened = open(black_box(&document_bytes))

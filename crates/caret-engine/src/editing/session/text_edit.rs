@@ -149,6 +149,8 @@ impl Session {
                     document_changed: true,
                     selection_changed: true,
                     composition_changed: false,
+                    math_input_changed: false,
+                    math_input_error: false,
                     changed_paragraph_id: None,
                     position_map: Some(position_map),
                 });
@@ -189,6 +191,8 @@ impl Session {
                     document_changed: true,
                     selection_changed: true,
                     composition_changed: false,
+                    math_input_changed: false,
+                    math_input_error: false,
                     changed_paragraph_id: None,
                     position_map: Some(position_map),
                 });
@@ -228,6 +232,8 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            math_input_changed: false,
+            math_input_error: false,
             changed_paragraph_id: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,

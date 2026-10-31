@@ -19,67 +19,84 @@ impl Session {
         }
         let (anchor, focus) = self.edit_range()?;
         if anchor.paragraph_id != focus.paragraph_id {
-            let super::range_edit::MergedCrossParagraphRange { start, end, result } =
-                self.merge_cross_paragraph_range(&anchor, &focus)?;
-            let target = Pos {
-                paragraph_id: result.paragraph_id.clone(),
-                offset: result.start_offset,
-                ..start.clone()
-            };
-            let mut source = self.paragraph_for(&target)?.clone();
-            let result_boundaries = TextMap::new(&source)?.grapheme_boundaries;
-            let (left, right) =
-                split_inline_nodes(std::mem::take(&mut source.inlines), start.offset)?;
-            let mut left_paragraph = source.clone();
-            left_paragraph.inlines = left;
-            let mut right_paragraph = source;
-            right_paragraph.id = NodeId::generate();
-            right_paragraph.inlines = right;
-            let right_id = right_paragraph.id.clone();
-            let location = self
-                .paragraph_index
-                .get(&result.paragraph_id)
-                .cloned()
-                .ok_or_else(|| EditError::UnknownParagraph(result.paragraph_id.to_string()))?;
-            let mut replacements = vec![left_paragraph, right_paragraph];
-            if !replace_paragraph_with_many(&mut self.document.body, &location, &mut replacements) {
-                return Err(EditError::UnknownParagraph(result.paragraph_id.to_string()));
+            let before_document = self.document.clone();
+            let before_selection = self.selection.clone();
+            let before_index = self.paragraph_index.clone();
+            let before_cache = self.text_map_cache.clone();
+            let result = (|| {
+                let super::range_edit::MergedCrossParagraphRange { start, end, result } =
+                    self.merge_cross_paragraph_range(&anchor, &focus)?;
+                let target = Pos {
+                    paragraph_id: result.paragraph_id.clone(),
+                    offset: result.start_offset,
+                    ..start.clone()
+                };
+                let mut source = self.paragraph_for(&target)?.clone();
+                let result_boundaries = TextMap::new(&source)?.grapheme_boundaries;
+                let (left, right) =
+                    split_inline_nodes(std::mem::take(&mut source.inlines), start.offset)?;
+                let mut left_paragraph = source.clone();
+                left_paragraph.inlines = left;
+                let mut right_paragraph = source;
+                right_paragraph.id = NodeId::generate();
+                right_paragraph.inlines = right;
+                let right_id = right_paragraph.id.clone();
+                let location = self
+                    .paragraph_index
+                    .get(&result.paragraph_id)
+                    .cloned()
+                    .ok_or_else(|| EditError::UnknownParagraph(result.paragraph_id.to_string()))?;
+                let mut replacements = vec![left_paragraph, right_paragraph];
+                if !replace_paragraph_with_many(
+                    &mut self.document.body,
+                    &location,
+                    &mut replacements,
+                ) {
+                    return Err(EditError::UnknownParagraph(result.paragraph_id.to_string()));
+                }
+                self.paragraph_index = build_paragraph_index(&self.document.body);
+                self.text_map_cache.clear();
+                let position = Pos {
+                    story: StoryId::Body,
+                    paragraph_id: right_id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                };
+                self.selection = Selection {
+                    anchor: position.clone(),
+                    focus: position,
+                };
+                Ok(Effect {
+                    document_changed: true,
+                    selection_changed: true,
+                    position_map: Some(PositionMap::Composite(vec![
+                        PositionMap::ParagraphRangeMerge {
+                            paragraph_id: result.paragraph_id,
+                            end_paragraph_id: end.paragraph_id,
+                            removed_ids: result.removed_ids,
+                            start_offset: result.start_offset,
+                            end_offset: result.end_offset,
+                            snap_graphemes: false,
+                            result_boundaries,
+                        },
+                        PositionMap::ParagraphSplit {
+                            source_id: target.paragraph_id,
+                            right_id,
+                            split_offset: start.offset,
+                            source_story: StoryId::Body,
+                            right_story: StoryId::Body,
+                        },
+                    ])),
+                    ..Effect::default()
+                })
+            })();
+            if result.is_err() {
+                self.document = before_document;
+                self.selection = before_selection;
+                self.paragraph_index = before_index;
+                self.text_map_cache = before_cache;
             }
-            self.paragraph_index = build_paragraph_index(&self.document.body);
-            self.text_map_cache.clear();
-            let position = Pos {
-                story: StoryId::Body,
-                paragraph_id: right_id.clone(),
-                offset: 0,
-                affinity: Affinity::Downstream,
-            };
-            self.selection = Selection {
-                anchor: position.clone(),
-                focus: position,
-            };
-            return Ok(Effect {
-                document_changed: true,
-                selection_changed: true,
-                position_map: Some(PositionMap::Composite(vec![
-                    PositionMap::ParagraphRangeMerge {
-                        paragraph_id: result.paragraph_id,
-                        end_paragraph_id: end.paragraph_id,
-                        removed_ids: result.removed_ids,
-                        start_offset: result.start_offset,
-                        end_offset: result.end_offset,
-                        snap_graphemes: false,
-                        result_boundaries,
-                    },
-                    PositionMap::ParagraphSplit {
-                        source_id: target.paragraph_id,
-                        right_id,
-                        split_offset: start.offset,
-                        source_story: StoryId::Body,
-                        right_story: StoryId::Body,
-                    },
-                ])),
-                ..Effect::default()
-            });
+            return result;
         }
         let mut source = self.paragraph_for(&anchor)?.clone();
         let map = TextMap::new(&source)?;
@@ -161,6 +178,8 @@ impl Session {
             document_changed: true,
             selection_changed: true,
             composition_changed: false,
+            math_input_changed: false,
+            math_input_error: false,
             changed_paragraph_id: None,
             position_map: Some(if replaced_start == replaced_end {
                 PositionMap::ParagraphSplit {

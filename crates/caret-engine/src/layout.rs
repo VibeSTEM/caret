@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use crate::{Affinity, Pos, Selection, Session, StoryId};
-use caret_doc::{Block, Document, NodeId, Paragraph};
+use caret_doc::{Block, Document, InlineNode, NodeId, Paragraph, Run};
 use caret_layout::{
     FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
     ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
@@ -65,6 +65,7 @@ pub struct LaidOutParagraph {
     pub story: StoryId,
     pub environment_ids: Arc<[NodeId]>,
     pub text: Arc<str>,
+    interactive: bool,
     pub layout: Arc<ParleyParagraphLayout>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
@@ -77,12 +78,18 @@ struct CaretLineLocation {
 }
 
 impl LaidOutParagraph {
+    /// 预览段落供阅读布局使用，不代表可编辑的文档位置。
+    pub fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
     fn new(
         id: NodeId,
         story: StoryId,
         environment_ids: Vec<NodeId>,
         text: String,
         layout: ParleyParagraphLayout,
+        interactive: bool,
     ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
         let mut utf16_offset = 0;
@@ -100,6 +107,7 @@ impl LaidOutParagraph {
             story,
             environment_ids: Arc::from(environment_ids),
             text: Arc::from(text),
+            interactive,
             layout: Arc::new(layout),
             utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
@@ -112,6 +120,7 @@ impl LaidOutParagraph {
             story,
             environment_ids: Arc::from(environment_ids),
             text: Arc::clone(&self.text),
+            interactive: self.interactive,
             layout: Arc::clone(&self.layout),
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
             line_locations: vec![None; self.layout.paragraph.lines.len()],
@@ -168,7 +177,17 @@ pub struct DocumentLayoutSnapshot {
     pub paragraphs: Vec<LaidOutParagraph>,
     pub pages: Vec<PageLayoutSnapshot>,
     pub environment_ranges: Vec<PageEnvironmentRange>,
+    math_preview_regions: Vec<MathPreviewRegion>,
     paragraph_lookup: HashMap<NodeId, usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MathPreviewRegion {
+    page_index: usize,
+    x0_pt: f64,
+    y0_pt: f64,
+    x1_pt: f64,
+    y1_pt: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,7 +233,7 @@ impl DocumentLayoutSnapshot {
         visual_affinity: VisualAffinity,
     ) -> Option<u16> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
-        if paragraph.story != position.story {
+        if !paragraph.interactive || paragraph.story != position.story {
             return None;
         }
         let cursor = paragraph
@@ -256,6 +275,28 @@ impl DocumentLayoutSnapshot {
         self.paragraph_lookup.get(id).copied()
     }
 
+    /// 查找指定段落前/后的下一个可交互段落，跳过只读布局预览。
+    pub fn adjacent_interactive_paragraph_index(
+        &self,
+        paragraph_index: usize,
+        forward: bool,
+    ) -> Option<usize> {
+        if forward {
+            self.paragraphs
+                .iter()
+                .enumerate()
+                .skip(paragraph_index.checked_add(1)?)
+                .find_map(|(index, paragraph)| paragraph.interactive.then_some(index))
+        } else {
+            self.paragraphs
+                .get(..paragraph_index)?
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, paragraph)| paragraph.interactive.then_some(index))
+        }
+    }
+
     /// 判断此布局结果是否仍对应当前文档与字体输入。
     ///
     /// 异步调用方应在安装布局前调用，避免已替换的会话、已编辑的文档或已刷新的字体目录发布过期几何。
@@ -274,6 +315,15 @@ impl DocumentLayoutSnapshot {
         if x_pt < 0.0 || y_pt < 0.0 || x_pt > page.width_pt || y_pt > page.height_pt {
             return None;
         }
+        if self.math_preview_regions.iter().any(|region| {
+            region.page_index == page_index
+                && x_pt >= region.x0_pt
+                && x_pt <= region.x1_pt
+                && y_pt >= region.y0_pt
+                && y_pt <= region.y1_pt
+        }) {
+            return None;
+        }
         let content_y = y_pt - page.margin_top_pt;
         let mut closest_line: Option<(f64, usize, usize, f64)> = None;
         for fragment in &page.layout.fragments {
@@ -283,6 +333,9 @@ impl DocumentLayoutSnapshot {
             let Some(paragraph) = self.paragraphs.get(paragraph_index) else {
                 continue;
             };
+            if !paragraph.interactive {
+                continue;
+            }
             let mut line_top = f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
@@ -340,7 +393,7 @@ impl DocumentLayoutSnapshot {
         visual_affinity: VisualAffinity,
     ) -> Option<PageCaretGeometry> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
-        if paragraph.story != position.story {
+        if !paragraph.interactive || paragraph.story != position.story {
             return None;
         }
         let cursor = paragraph
@@ -380,6 +433,8 @@ impl DocumentLayoutSnapshot {
         let focus_paragraph = self.paragraphs.get(focus_index)?;
         if anchor_paragraph.story != anchor.story
             || focus_paragraph.story != focus.story
+            || !anchor_paragraph.interactive
+            || !focus_paragraph.interactive
             || !Self::valid_text_offset(anchor_paragraph, anchor.offset)
             || !Self::valid_text_offset(focus_paragraph, focus.offset)
         {
@@ -460,7 +515,9 @@ impl DocumentLayoutSnapshot {
     }
 
     fn valid_text_offset(paragraph: &LaidOutParagraph, offset: usize) -> bool {
-        offset <= paragraph.text.len() && paragraph.text.is_char_boundary(offset)
+        paragraph.interactive
+            && offset <= paragraph.text.len()
+            && paragraph.text.is_char_boundary(offset)
     }
 
     fn text_range_geometry(
@@ -473,7 +530,8 @@ impl DocumentLayoutSnapshot {
         let mut rectangles = Vec::new();
         for paragraph_index in range.start_index..=range.end_index {
             let paragraph = self.paragraphs.get(paragraph_index)?;
-            if story.is_some_and(|story| &paragraph.story != story)
+            if !paragraph.interactive
+                || story.is_some_and(|story| &paragraph.story != story)
                 || paragraph
                     .environment_ids
                     .iter()
@@ -701,10 +759,12 @@ impl DocumentLayoutService {
                 paragraph,
                 story,
                 environment_ids,
+                interactive,
             } = item
             else {
                 continue;
             };
+            let paragraph = paragraph.as_ref();
             let style =
                 resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
                     .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
@@ -752,6 +812,7 @@ impl DocumentLayoutService {
                 environment_ids.clone(),
                 text,
                 layout,
+                *interactive,
             ));
         }
 
@@ -794,6 +855,7 @@ impl DocumentLayoutService {
                 layout,
             })
             .collect();
+        let mut math_preview_regions = Vec::new();
         let paragraph_lookup: HashMap<_, _> = paragraphs
             .iter()
             .enumerate()
@@ -808,6 +870,8 @@ impl DocumentLayoutService {
                     continue;
                 };
                 let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let mut preview_y0_pt = None;
+                let mut preview_y1_pt = None;
                 for line_index in fragment.line_range.clone() {
                     let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                         continue;
@@ -815,7 +879,20 @@ impl DocumentLayoutService {
                     if let Some(location) = paragraph.line_locations.get_mut(line_index) {
                         *location = Some(CaretLineLocation { page_index, y0_pt });
                     }
+                    if !paragraph.interactive {
+                        preview_y0_pt.get_or_insert(y0_pt);
+                        preview_y1_pt = Some(y0_pt + f64::from(line.metrics.height_pt));
+                    }
                     y0_pt += f64::from(line.metrics.height_pt);
+                }
+                if let (Some(y0_pt), Some(y1_pt)) = (preview_y0_pt, preview_y1_pt) {
+                    math_preview_regions.push(MathPreviewRegion {
+                        page_index,
+                        x0_pt: page.margin_left_pt,
+                        y0_pt,
+                        x1_pt: page.width_pt - page.margin_right_pt,
+                        y1_pt,
+                    });
                 }
             }
         }
@@ -829,6 +906,7 @@ impl DocumentLayoutService {
             paragraphs,
             pages,
             environment_ranges,
+            math_preview_regions,
         })
     }
 }
@@ -976,11 +1054,26 @@ impl DocumentLayoutRuntime {
 
 enum LayoutInput<'a> {
     Paragraph {
-        paragraph: &'a Paragraph,
+        paragraph: ParagraphSource<'a>,
         story: StoryId,
         environment_ids: Vec<NodeId>,
+        interactive: bool,
     },
     ExplicitBreak,
+}
+
+enum ParagraphSource<'a> {
+    Borrowed(&'a Paragraph),
+    Owned(Box<Paragraph>),
+}
+
+impl ParagraphSource<'_> {
+    fn as_ref(&self) -> &Paragraph {
+        match self {
+            Self::Borrowed(paragraph) => paragraph,
+            Self::Owned(paragraph) => paragraph,
+        }
+    }
 }
 
 fn collect_blocks<'a>(
@@ -991,17 +1084,19 @@ fn collect_blocks<'a>(
     for block in blocks {
         match block {
             Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
-                paragraph,
+                paragraph: ParagraphSource::Borrowed(paragraph),
                 story: StoryId::Body,
                 environment_ids: environment_ids.clone(),
+                interactive: true,
             }),
             Block::Environment(environment) => {
                 environment_ids.push(environment.id.clone());
                 if let Some(title) = &environment.title {
                     ordered.push(LayoutInput::Paragraph {
-                        paragraph: title,
+                        paragraph: ParagraphSource::Borrowed(title),
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
                         environment_ids: environment_ids.clone(),
+                        interactive: true,
                     });
                 }
                 collect_blocks(&environment.children, ordered, environment_ids)?;
@@ -1015,10 +1110,63 @@ fn collect_blocks<'a>(
                 }
                 ordered.push(LayoutInput::ExplicitBreak);
             }
-            Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
+            Block::Equation(equation) => {
+                ordered.push(LayoutInput::Paragraph {
+                    paragraph: ParagraphSource::Owned(Box::new(math_preview_paragraph(
+                        equation.id.clone(),
+                        &equation.math_tree.source,
+                    ))),
+                    story: StoryId::Body,
+                    environment_ids: environment_ids.clone(),
+                    interactive: false,
+                });
+            }
+            Block::Align(align) => {
+                ordered.push(LayoutInput::Paragraph {
+                    paragraph: ParagraphSource::Owned(Box::new(math_preview_paragraph(
+                        align.id.clone(),
+                        &align.source,
+                    ))),
+                    story: StoryId::Body,
+                    environment_ids: environment_ids.clone(),
+                    interactive: false,
+                });
+            }
+            Block::Opaque(_) => {
+                return Err(DocumentLayoutError::UnsupportedContent);
+            }
         }
     }
     Ok(())
+}
+
+const MATH_PREVIEW_SOURCE_LIMIT_BYTES: usize = 512;
+
+fn math_preview_paragraph(id: NodeId, source: &str) -> Paragraph {
+    let truncated = source.len() > MATH_PREVIEW_SOURCE_LIMIT_BYTES;
+    let mut boundary = if truncated {
+        MATH_PREVIEW_SOURCE_LIMIT_BYTES - '…'.len_utf8()
+    } else {
+        source.len()
+    };
+    while !source.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let mut text = source[..boundary].to_owned();
+    if truncated {
+        text.push('…');
+    }
+    if text.is_empty() {
+        text.push('□');
+    }
+    let mut paragraph = Paragraph::empty(id);
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text,
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    })];
+    paragraph
 }
 
 #[cfg(test)]

@@ -2,8 +2,9 @@
 
 use crate::{Affinity, Command, Pos, Selection, Session, StoryId};
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, ExplicitBreak, InlineNode, NodeId,
-    OpaqueNode, Paragraph, Run, SoftBreak,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
+    InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree, NodeId, OpaqueNode,
+    Paragraph, Run, SoftBreak,
 };
 use caret_layout::{FontCatalog, FontCatalogError, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -19,6 +20,155 @@ fn paragraph(text: &str) -> Paragraph {
         extra: BTreeMap::new(),
     })];
     paragraph
+}
+
+fn source_only_math_tree(source: &str) -> MathTree {
+    MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: source.to_owned(),
+        root: MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            source_range: None,
+            children: Vec::new(),
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    }
+}
+
+#[test]
+fn block_math_uses_noninteractive_source_preview_without_mutating_document() {
+    let before = paragraph("Before formula");
+    let before_id = before.id.clone();
+    let equation_id = NodeId::generate();
+    let align_id = NodeId::generate();
+    let after = paragraph("After formula");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree: source_only_math_tree("\\frac{x}{y}"),
+            extra: Default::default(),
+        }),
+        Block::Align(Align {
+            id: align_id.clone(),
+            source: "a &= b".to_owned(),
+            rows: Vec::new(),
+            extra: Default::default(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let original = document.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+
+    assert_eq!(document, original);
+    let equation_preview = snapshot
+        .paragraph_by_id(&equation_id)
+        .unwrap_or_else(|| panic!("equation source preview is missing"));
+    assert_eq!(equation_preview.text.as_ref(), "\\frac{x}{y}");
+    let align_preview = snapshot
+        .paragraph_by_id(&align_id)
+        .unwrap_or_else(|| panic!("align source preview is missing"));
+    assert_eq!(align_preview.text.as_ref(), "a &= b");
+
+    let preview_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: equation_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        snapshot
+            .caret_geometry(&preview_position, VisualAffinity::Downstream)
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .font_size_centipoints_at(&preview_position, VisualAffinity::Downstream)
+            .is_none()
+    );
+    let preview_selection = Selection {
+        anchor: preview_position.clone(),
+        focus: Pos {
+            paragraph_id: align_id.clone(),
+            ..preview_position.clone()
+        },
+    };
+    assert!(snapshot.selection_geometry(&preview_selection).is_none());
+    assert!(
+        snapshot
+            .structure_selection_geometry(
+                &Pos {
+                    paragraph_id: before_id.clone(),
+                    offset: 0,
+                    ..preview_position.clone()
+                },
+                &preview_position,
+                &[],
+            )
+            .is_none()
+    );
+    assert!(snapshot.paragraph_by_id(&after_id).is_some());
+    let across_previews = Selection {
+        anchor: Pos {
+            paragraph_id: before_id,
+            offset: 0,
+            ..preview_position.clone()
+        },
+        focus: Pos {
+            paragraph_id: after_id,
+            offset: "After formula".len(),
+            affinity: Affinity::Upstream,
+            ..preview_position
+        },
+    };
+    let visible_selection_rects = snapshot
+        .selection_geometry(&across_previews)
+        .unwrap_or_else(|| panic!("selection across math previews should be measurable"));
+    assert_eq!(visible_selection_rects.len(), 2);
+
+    for id in [&equation_id, &align_id] {
+        let fragment = snapshot.pages[0]
+            .layout
+            .fragments
+            .iter()
+            .find(|fragment| &fragment.paragraph_id == id)
+            .unwrap_or_else(|| panic!("math preview fragment {id} is missing"));
+        let paragraph = snapshot
+            .paragraph_by_id(id)
+            .unwrap_or_else(|| panic!("math preview paragraph {id} is missing"));
+        let line = &paragraph.layout.paragraph.lines[fragment.line_range.start];
+        let y = snapshot.pages[0].margin_top_pt
+            + f64::from(fragment.y_offset_pt)
+            + f64::from(line.metrics.height_pt) / 2.0;
+        assert!(
+            snapshot
+                .hit_test(0, snapshot.pages[0].width_pt / 2.0, y)
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn block_math_source_preview_truncates_at_a_valid_utf8_boundary_within_limit() {
+    let source = "界".repeat(256);
+    let preview = super::math_preview_paragraph(NodeId::generate(), &source);
+    let InlineNode::Run(run) = &preview.inlines[0] else {
+        panic!("math source preview should be text");
+    };
+    assert!(run.text.len() <= super::MATH_PREVIEW_SOURCE_LIMIT_BYTES);
+    assert!(run.text.is_char_boundary(run.text.len()));
+    assert!(run.text.ends_with('…'));
 }
 
 fn single_line_y_offset(snapshot: &super::DocumentLayoutSnapshot, paragraph_id: &NodeId) -> f32 {

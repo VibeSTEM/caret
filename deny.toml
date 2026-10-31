@@ -28,6 +28,10 @@ multiple-versions = "deny"
 wildcards = "deny"
 deny = []
 skip = [
+  # latex-rust 3.0.1 固定旧版 skrifa API；其隔离依赖链需要 read-fonts 0.36 / font-types 0.10，无法与 Parley 当前的 0.44 / 0.41 / 0.12 合并。
+  { name = "font-types", version = "=0.10.1", reason = "latex-rust 3.0.1 -> skrifa 0.39 -> read-fonts 0.36 所需；与 Parley 的 font-types 0.12 不兼容" },
+  { name = "read-fonts", version = "=0.36.0", reason = "latex-rust 3.0.1 的 skrifa 0.39 依赖所需；Parley 使用 read-fonts 0.41" },
+  { name = "skrifa", version = "=0.39.0", reason = "latex-rust 3.0.1 固定此版；Caret Parley 当前使用 skrifa 0.44" },
   # syn 3 由 cxx、serde、pest 等宏依赖引入；Windows API 和 zerocopy 宏仍要求 syn 2。
   # 上游当前版本仍使用 syn 2，Cargo 不能跨主版本统一；仅豁免已审查的 3.0.9。
   { name = "syn", version = "=3.0.9", reason = "上游过程宏仍分别依赖 syn 2 与 syn 3，无法跨主版本统一" },

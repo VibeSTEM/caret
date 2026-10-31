@@ -16,6 +16,14 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorKey {
     Escape,
     Enter,
@@ -27,6 +35,14 @@ pub enum EditorKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     InsertText(String),
+    InsertInlineMath,
+    InsertMathText(String),
+    TypeMathText(String),
+    PasteMathText(String),
+    InsertMathFraction,
+    InsertMathRadical,
+    MoveMathCaret(MathDirection),
+    ExitMath,
     InsertOneCharacterWidthSpace,
     InsertTwoCharacterWidthSpace,
     PasteText(String),
@@ -81,6 +97,14 @@ impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
             Self::InsertText(_) => "text.insert",
+            Self::InsertInlineMath => "insert.inline_math",
+            Self::InsertMathText(_) => "math.insert.text",
+            Self::TypeMathText(_) => "math.input.type",
+            Self::PasteMathText(_) => "math.input.paste",
+            Self::InsertMathFraction => "math.insert.fraction",
+            Self::InsertMathRadical => "math.insert.radical",
+            Self::MoveMathCaret(_) => "math.caret.move",
+            Self::ExitMath => "math.exit",
             Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",
