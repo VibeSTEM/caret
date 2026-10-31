@@ -282,3 +282,11 @@ fn content_hash(root: &MathNode) -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+/// 浮点判零容差（单位与被比较量相同）。
+pub(crate) const FLOAT_EPSILON: f64 = 1e-9;
+
+/// 判断浮点值是否在容差内为零。
+pub(crate) fn is_zero(value: f64) -> bool {
+    value.abs() < FLOAT_EPSILON
+}
