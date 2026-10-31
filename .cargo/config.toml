@@ -10,6 +10,8 @@ test-plan = "run -q --locked --package caret-tests -- test-plan"
 test-scope = "run -q --locked --package caret-tests -- test-scope"
 quality = "run -q --locked --package caret-tests -- quality"
 verify-changed = "run -q --locked --package caret-tests -- verify-changed"
+# 公式后端独立测试（#75）：解析、序列化往返、Typst 移植排版与段落内联盒，不依赖 Qt/原生构建。
+math-backend = "test --locked --package caret-math --package caret-layout --package caret-doc"
 lint = "run -q --locked --package caret-tests -- lint"
 format = "run -q --locked --package caret-tests -- format"
 audit = "run -q --locked --package caret-tests -- audit"
