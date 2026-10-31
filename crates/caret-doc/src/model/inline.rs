@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{InlineEnvironment, OpaqueNode, Run};
+use super::{InlineEnvironment, InlineMath, OpaqueNode, Run};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 pub enum InlineNode {
     Run(Run),
     Environment(InlineEnvironment),
+    Math(InlineMath),
     SoftBreak(SoftBreak),
     Opaque(OpaqueNode),
 }

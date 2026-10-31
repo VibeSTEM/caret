@@ -142,7 +142,9 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                         output,
                     )?;
                 }
-                InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+                InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
             }
         }
         Ok(())
@@ -186,7 +188,9 @@ pub(super) fn set_run_underline_to_range(
                 }
                 InlineNode::Environment(environment) => set(&mut environment.children, enabled)?,
                 InlineNode::SoftBreak(_) => {}
-                InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+                InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
             }
         }
         Ok(())
@@ -404,7 +408,9 @@ fn apply_font_family_at_deepest(
                 )?;
                 output.push(InlineNode::Environment(environment));
             }
-            InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                return Err(EditError::UnsupportedOpaqueContent);
+            }
         }
     }
     flush_pending(&mut pending, &mut output)?;
@@ -468,7 +474,9 @@ fn apply_format_at_deepest(
                 )?;
                 output.push(InlineNode::Environment(environment));
             }
-            InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                return Err(EditError::UnsupportedOpaqueContent);
+            }
         }
     }
     flush_pending(&mut pending, &mut output)?;

@@ -54,7 +54,7 @@ fn block_has_language(block: &Block) -> bool {
                     InlineNode::Environment(environment) => {
                         environment.children.iter().any(inline_has_language)
                     }
-                    InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
+                    InlineNode::Math(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
                 })
         }
         Block::Environment(environment) => {
@@ -62,7 +62,7 @@ fn block_has_language(block: &Block) -> bool {
                 title.language.is_some() || title.inlines.iter().any(inline_has_language)
             }) || environment.children.iter().any(block_has_language)
         }
-        Block::ExplicitBreak(_) | Block::Opaque(_) => false,
+        Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => false,
     }
 }
 
@@ -72,7 +72,7 @@ fn inline_has_language(inline: &InlineNode) -> bool {
         InlineNode::Environment(environment) => {
             environment.children.iter().any(inline_has_language)
         }
-        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
+        InlineNode::Math(_) | InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => false,
     }
 }
 
@@ -84,6 +84,18 @@ fn collect_block_features(block: &Block, features: &mut std::collections::BTreeS
             }
             for inline in &paragraph.inlines {
                 collect_inline_features(inline, features);
+            }
+        }
+        Block::Equation(equation) => {
+            features.insert("caret.math.equation".to_owned());
+            collect_math_tree_features(&equation.math_tree, features);
+        }
+        Block::Align(align) => {
+            features.insert("caret.math.align".to_owned());
+            for row in &align.rows {
+                for cell in &row.cells {
+                    collect_math_tree_features(cell, features);
+                }
             }
         }
         Block::Environment(environment) => {
@@ -130,6 +142,10 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
                 );
             }
         }
+        InlineNode::Math(math) => {
+            features.insert("caret.math.inline".to_owned());
+            collect_math_tree_features(&math.math_tree, features);
+        }
         InlineNode::Environment(environment) => {
             features.insert(environment.kind.required_feature().to_owned());
             if environment.definition_id.is_some() {
@@ -143,5 +159,40 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
             }
         }
         InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
+    }
+}
+
+fn collect_math_tree_features(tree: &MathTree, features: &mut std::collections::BTreeSet<String>) {
+    let mut pending = vec![&tree.root];
+    while let Some(node) = pending.pop() {
+        if !node.attributes.is_empty()
+            || matches!(
+                node.kind,
+                MathNodeKind::SizedDelimiter
+                    | MathNodeKind::Matrix
+                    | MathNodeKind::Substack
+                    | MathNodeKind::Intertext
+                    | MathNodeKind::Hline
+                    | MathNodeKind::Sum
+                    | MathNodeKind::Integral
+                    | MathNodeKind::Product
+                    | MathNodeKind::Limit
+                    | MathNodeKind::OverUnder
+                    | MathNodeKind::CancelTo
+                    | MathNodeKind::TextContent
+                    | MathNodeKind::TextSpace
+                    | MathNodeKind::TextSymbol
+                    | MathNodeKind::TextStyle
+                    | MathNodeKind::Color
+                    | MathNodeKind::TextColor
+                    | MathNodeKind::ColorBox
+                    | MathNodeKind::FColorBox
+                    | MathNodeKind::Strut
+                    | MathNodeKind::Phantom
+            )
+        {
+            features.insert("caret.math.syntax.v1".to_owned());
+        }
+        pending.extend(node.children.iter());
     }
 }
