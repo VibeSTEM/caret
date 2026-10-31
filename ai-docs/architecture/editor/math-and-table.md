@@ -93,4 +93,4 @@ MathFocus 下的反斜线入口路由见[命令输入](command-input.md#公式�
 
 ## M3 集成验收
 
-[011 总体验收](../../task/011-impl-math.md)由 [042 后端验证](../../task/042-latex-rust-math-backend.md)、[043 模型与编辑](../../task/043-math-model-and-editing.md)及 [044 布局、渲染与集成](../../task/044-math-layout-and-rendering.md)拆分推进。042 可先独立进行，043 依赖 010 与 042，044 依赖 012 表格和 027 画布。[012 表格总体验收](../../task/012-impl-table.md)由 [045 模型与交互](../../task/045-table-model-and-editing.md)及 [046 布局与画布](../../task/046-table-layout-and-canvas.md)拆分；表格模型只持有通用 Caret 块序列，不依赖 `latex-rust`。044 负责接通单元格内公式的插入、编辑、导航、绘制、命中、撤销和保存往返。M3 只有在 011 汇总验收和单元格集成证据齐全后才算完成，013 也只有在该证据存在时才能开始。
+[011 总体验收](../../task/011-impl-math.md)由 [042 后端验证](../../task/042-latex-rust-math-backend.md)、[043 模型与编辑](../../task/043-math-model-and-editing.md)及 [044 布局与渲染](../../task/044-math-layout-and-rendering.md)拆分推进。[012 表格总体验收](../../task/012-impl-table.md)由 [045 模型与交互](../../task/045-table-model-and-editing.md)及 [046 布局与画布](../../task/046-table-layout-and-canvas.md)拆分；表格模型只持有通用 Caret 块序列，不依赖 `latex-rust`。045 验收公式节点的单元格保存往返；046 在 044 提供的公式快照和 045 模型上验收单元格布局、绘制、命中和导航。044 不依赖表格模型。M3 只有在 011 汇总验收以及 045/046 单元格公式证据齐全后才算完成，013 也只有在该证据存在时才能开始。

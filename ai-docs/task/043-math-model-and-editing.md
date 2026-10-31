@@ -50,8 +50,8 @@
 
 ## 后续任务交接
 
-- [044：公式布局、画布渲染与表格集成](044-math-layout-and-rendering.md) 承接显示公式/Align 的交互式创建与编辑、`^`/`_` 上下标插入、已提交节点的 Backspace/Delete、从正文方向键重新进入既有公式焦点、细粒度 parser source range adapter patch，以及未知 `defaultMathFontFamily` 回退到 STIX 时的诊断和公式在表格中的视觉集成。
-- [045：表格模型与交互](045-table-model-and-editing.md) 验收单元格通用块序列及公式节点的保存重开；044 只接手该单元格内容的视觉和交互集成。
+- [044：公式布局与画布渲染](044-math-layout-and-rendering.md) 承接显示公式/Align 的交互式创建与编辑、`^`/`_` 上下标插入、已提交节点的 Backspace/Delete、从正文方向键重新进入既有公式焦点、细粒度 parser source range adapter patch，以及未知 `defaultMathFontFamily` 回退到 STIX 时的诊断。
+- [045：表格模型与交互](045-table-model-and-editing.md) 验收单元格通用块序列及公式节点的保存重开；[046：表格布局与画布](046-table-layout-and-canvas.md) 验收公式快照在单元格中的布局、绘制、命中和导航。
 
 ## 验证计划与结果
 
