@@ -131,7 +131,7 @@ pub(crate) fn layout_attachments(
     let mut fragment = Fragment::new(frame, class);
     fragment.large = base_large;
     // 只有上下限时保留基底斜体校正，便于后续附着。
-    if sup_shift == 0.0 && sub_shift == 0.0 {
+    if super::is_zero(sup_shift) && super::is_zero(sub_shift) {
         fragment.italics_correction = italics;
     }
     fragment
