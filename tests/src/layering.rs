@@ -15,10 +15,12 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
     ("caret-build", &[]),
     ("caret-dsl-core", &[]),
     ("caret-doc", &[]),
-    ("caret-layout", &["caret-doc"]),
+    // caret-math 解析与布局都直接读写 caret-doc 的数学树。
+    ("caret-math", &["caret-doc"]),
+    ("caret-layout", &["caret-doc", "caret-math"]),
     (
         "caret-engine",
-        &["caret-doc", "caret-layout", "caret-structure"],
+        &["caret-doc", "caret-layout", "caret-math", "caret-structure"],
     ),
     ("caret-structure", &["caret-doc"]),
     ("caret-dslc", &["caret-dsl-core"]),

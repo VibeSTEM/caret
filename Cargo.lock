@@ -201,6 +201,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "caret-math"
+version = "0.1.0"
+dependencies = [
+ "caret-doc",
+]
+
+[[package]]
 name = "caret-structure"
 version = "0.1.0"
 dependencies = [

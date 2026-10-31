@@ -35,7 +35,7 @@ pub fn paragraph_has_empty_line(paragraph: &Paragraph) -> bool {
                 }
                 InlineNode::Environment(environment) => visit(&environment.children, state),
                 InlineNode::SoftBreak(_) => state.push('\n'),
-                InlineNode::Opaque(_) => state.push('\u{fffc}'),
+                InlineNode::Opaque(_) | InlineNode::Math(_) => state.push('\u{fffc}'),
             }
         }
     }

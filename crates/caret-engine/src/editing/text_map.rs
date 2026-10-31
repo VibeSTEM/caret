@@ -456,7 +456,9 @@ fn collect_text(
                     is_soft_break: true,
                 });
             }
-            InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                return Err(EditError::UnsupportedOpaqueContent);
+            }
         }
         path.pop();
     }
@@ -554,7 +556,7 @@ pub(super) fn inline_length(node: &InlineNode) -> Result<usize, EditError> {
                 })
         }
         InlineNode::SoftBreak(_) => Ok(1),
-        InlineNode::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
+        InlineNode::Opaque(_) | InlineNode::Math(_) => Err(EditError::UnsupportedOpaqueContent),
     }
 }
 
@@ -646,7 +648,9 @@ fn split_inline_node(
                 Some(InlineNode::Environment(right_environment)),
             ))
         }
-        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => Err(EditError::InvalidPosition),
+        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) | InlineNode::Math(_) => {
+            Err(EditError::InvalidPosition)
+        }
     }
 }
 

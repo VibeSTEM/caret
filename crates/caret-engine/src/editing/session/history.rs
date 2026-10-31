@@ -1053,6 +1053,9 @@ fn block_estimated_bytes(block: &Block) -> usize {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
             Block::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
+            // 公式树节点数与源码长度近似成正比，按源码长度的常数倍粗估。
+            Block::Equation(value) => size_of_val(value) + value.math_tree.source.len() * 8,
+            Block::Align(value) => size_of_val(value) + value.source.len() * 8,
         }
 }
 
@@ -1083,6 +1086,7 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
             InlineNode::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
+            InlineNode::Math(value) => size_of_val(value) + value.math_tree.source.len() * 8,
         }
 }
 

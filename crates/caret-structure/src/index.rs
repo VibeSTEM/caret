@@ -272,7 +272,7 @@ impl StructureIndex {
                     entry.range.paragraph_ordinals.end = self.paragraph_ordinals.len();
                 }
             }
-            Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
     }
 
