@@ -20,14 +20,14 @@ pub use math_layout::{layout_math_align, layout_math_tree};
 
 pub use editing::{
     Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, CompositionUpdateCandidate,
-    Direction, EditError, EditorKey, Effect, InlineEnvironmentRange, InputComposition,
-    MathDirection, MathFocus, MathPos, Pos, PositionMap, Selection, Session, SessionCheckpoint,
-    StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
+    Direction, EditError, EditorKey, Effect, InlineEnvironmentRange, InlineMathTarget,
+    InputComposition, MathDirection, MathFocus, MathPos, Pos, PositionMap, Selection, Session,
+    SessionCheckpoint, StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
-    LaidOutParagraph, PageCaretGeometry, PageEnvironmentRange, PageHit, PageLayoutSnapshot,
-    PageSelectionRect,
+    InlineMathHit, LaidOutParagraph, PageCaretGeometry, PageEnvironmentRange, PageHit,
+    PageLayoutSnapshot, PageSelectionRect,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

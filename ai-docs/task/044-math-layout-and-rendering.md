@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `caret-math` parser/layout adapter | 已实现基础 | 持久树转换、MathBox 快照、STIX 与正文 `\text` shaping、Align 多行组合和预算校验已接入；parser 仍只有公式级源码范围，缺 token/AST 细粒度 spans |
 | 行内布局与页面绘制 | 已接通首个纵向切片 | 行内公式参与段高、分页和有序页面 glyph；Rust 栅格、FFI DTO、QSG 混合图元及错误提示已接通。需继续验证完整像素链、失败注入与方向混排 |
-| 行内 MathFocus 与编辑 | 部分实现 | Session 有行内公式焦点、输入路由、部分结构编辑和撤销状态；画布尚未按公式几何进行命中/caret 投影，入口/退出及 UI 命令候选仍未验收 |
+| 行内 MathFocus 与编辑 | 命中与光标投影已接通 | Session 持有行内焦点、输入路由、部分结构编辑和撤销。左右键、点击和上下移动使用同一份行内布局快照进入并投影 caret；正文插入点留在对象末尾。进入和退出不产生撤销步。显示公式矩形不产生插入点。块级焦点、上下标命令和 UI 命令候选仍未接通 |
 | 块级 `Equation` / `Align` | 布局与页面绘制已接通 | 显式 DisplayMath 输入复用 `layout_math_tree(..., Equation)` / `layout_math_align`、独立资源表、不可拆分分页和页面 glyph。超出版心改为可见占位，不截断。单击和拖选落在公式矩形内不产生正文插入点。块级焦点、命令和编辑仍未接通 |
 | 性能、RTL 与跨平台 | 未完成 | 尚无公式场景基线；RTL/混合方向和三平台行为未验证 |
 | 表格集成 | 后续任务 | 045/046 负责模型、单元格定位/裁剪、命中与导航 |
@@ -37,7 +37,7 @@
 ## 后续实施顺序
 
 1. 以显式块布局输入接通 `Equation`/`Align` 的 display MathBox、资源命名空间、分页和页面 glyph。已接通；块公式不是可编辑段落，超高/超宽显示占位失败。
-2. 将同一行内公式快照用于命中、MathFocus caret 和正文边界导航；覆盖左右进入/退出、连续公式、上下移动、选区、保存重开和旧 generation 拒绝。
+2. 将同一行内公式快照用于命中、MathFocus caret 和正文边界导航；覆盖左右进入/退出、连续公式、上下移动、选区、保存重开和旧 generation 拒绝。已接通。显示公式内部焦点仍留在第 4 项。
 3. 在 `latex-rust` adapter 中为 token/AST 建立 UTF-8 字节范围及预处理偏移映射；保留旧解析入口，并正确处理 token 重写、嵌套 `\text` 和 Align cell 的源码重基。
 4. 接通块级创建、MathFocus、上下标、已提交节点删除和对应撤销/失败原子行为；只有布局及焦点投影可用后才开放命令候选。
 5. 补公式完整行为矩阵、RTL/混排验证、代表性性能基线、三平台检查；处理领域评审发现并执行未参与实现者的完整 diff 终审。
@@ -55,7 +55,7 @@
 
 - [ ] `\math`、`\equation`、`\align` 及 `\frac`、`\sqrt`、`^`、`_` 命令仅在对应结构和焦点能力可用时开放，创建/编辑支持撤销。
 - [ ] 行内与块级公式支持上下标及已提交文本/节点 Backspace/Delete；结构边界、占位槽、失败原子性有行为测试。
-- [ ] 正文方向键和点击可按同一布局几何进入公式；公式边缘退出后正文 caret/selection 投影正确。覆盖两侧边界、连续公式、上下导航、保存重开及相邻文本。
+- [x] 正文方向键和点击可按同一布局几何进入公式；公式边缘退出后正文 caret/selection 投影正确。覆盖两侧边界、连续公式、上下导航、保存重开及相邻文本。Qt 像素与键盘链仍由下方 Qt Test 项验收。
 - [ ] parser token/AST 的 UTF-8 源码范围和预处理映射对转义、重写、嵌套文本、多字节输入、Align cell 和错误位置正确；不相关旧解析 API 保持兼容。
 
 ### 验证与边界
@@ -87,16 +87,18 @@
 | `cargo format --check` / `git diff --check` | 通过 | 最终文档修改后再确认 |
 | 锁定 `lupdate qml native -recursive` 与 QM 加载 | 119 个消息源；四个 locale 翻译完成，QM 加载通过 | 仅在本轮新增提示文案时相关 |
 | `cargo coverage` / `cargo coverage native` | Rust 全局函数/行 85.91%/86.99%；native 产品函数/行 89.47%/85.22%，门槛通过 | native 有 4 个函数 coverage data mismatch 警告；门槛按产品范围汇总 |
-| 性能基线 / 三平台 / RTL 混排 | 未完成 | 恢复后从实施顺序第 2 项继续 |
+| 性能基线 / 三平台 / RTL 混排 | 未完成 | 恢复后从实施顺序第 3 项继续 |
 | `cargo test --locked --offline -p caret-layout --lib pagination` | 24 通过 | 含不可拆分块换页、超高保留高度、间距和 keep-with-next |
 | `cargo test --locked --offline -p caret-engine --lib layout::` | 39 通过，含显示公式页面绘制、失败占位、换页、环境范围、快照复用，以及超宽占位伸进页边距时不产生正文命中 | 未重跑 workspace 全量与 native |
 | `cargo test --locked --offline -p caret-engine --lib page_glyphs::` | 12 通过 | 显示公式 glyph 由布局测试覆盖；本轮命中区改动后未单独重跑 |
 | `cargo test --locked --offline -p caret-app --lib document_view::tests::navigation` | 38 通过，含显示公式跳过导航，以及拖选图用公式矩形挡住正文停靠点 | 未跑 Qt shell 拖选 |
-| `cargo clippy --locked --offline -p caret-math -p caret-layout -p caret-engine -p caret-app --all-targets -- -D warnings` | 通过 | 不是 workspace 全量 lint |
+| `cargo clippy --locked --offline -p caret-math -p caret-layout -p caret-engine -p caret-app --all-targets -- -D warnings` | 通过 | 不是 workspace 全量 lint；本轮行内命中与光标改动后重跑 |
+| `cargo test --locked --offline -p caret-engine --lib` | 309 通过 | 含连续公式进出、进入不产生撤销步、选区包装、`.cdoc` 重开、旧代际拒绝、进入时清除环境停靠 |
+| `cargo test --locked --offline -p caret-app --lib document_view::tests::navigation` | 42 通过 | 含视觉左右进入、Shift 保持正文、点击、上下进入和离开、行首尾停在公式旁边；未跑 Qt shell |
 
 ## 当前未解决风险
 
-- 行内 U+FFFC 替换与 U+200B shaping 在 RTL/混合方向、对象选区和 caret/hit 映射上未验证。
+- 行内 U+FFFC 在从左到右的进入、退出、点击和上下移动上使用同一布局快照。RTL、混合方向和对象选区仍未验证。
 - 块级公式已按不可拆分块分页。高于整页的可见占位仍会越过版心一次，页面绘制层可能裁切占位本身；原始 MathBox 不会被当成成功结果截断。页内伸进页边距的占位不再接受正文命中，页外坐标仍被页面边界拒绝。
 - 拖选图发布同一组公式矩形，指针处理器在矩形内不改正文锚点。Qt shell 里的实际拖选手势尚未重跑。
 - 未变化公式在同一布局上下文中复用快照。输入热路径和 QSG 重建仍没有性能基线，不得视为已优化。
@@ -112,7 +114,10 @@
 - Terra/medium 对公式布局边界、provenance、正文/数学字形分流、错误诊断、checkpoint/reuse 和本轮 QSG page submission generation 分别做过只读复核；发现项已修复或记录为验收缺口。
 - 2026-10-31：对未提交的显示公式块布局做了只读分领域检查。委派工具不能指定 `gpt-6.1-terra`，两名只读评审使用当前会话模型。分层检查确认依赖方向、版心溢出策略和原子分页没有把公式类型漏进 `caret-layout`。它指出 `interactive` 已无 `false` 来源，以及显示公式复用行内 `PageMathObject`。前者已删；后者按上一条保留。行为检查确认块公式不再是段落、资源成对、整块换页、失败不改源、快照复用，以及版心内单击不产生正文 caret。它指出拖选仍会落到最近正文停靠点，超宽占位伸进页边距后仍可点出正文 caret。两处都已改，并用布局命中和拖选图测试覆盖。Qt 拖选手势未跑。
 - 之前的 Sol/medium 评审只覆盖较早的完整 diff，不能视为更早实现的终审。2026-10-31 对本轮未提交 diff 另做了一次只读终审。委派工具不能指定 `gpt-6.1-sol`，终审由未参与实现的只读代理完成，未重跑测试。结论：无阻断问题。`interactive` 已删除；显示公式仍复用 `PageMathObject`，生产路径不拿块 ID 查找段落；命中矩形与拖选 `blocked` 已接通。限制：显式 `keep_with_next` 且段落加公式高于整页版心时，段落留下、公式整块进下一页；Qt 拖选手势和占位绘制裁切未验证。044 与 011 仍不标完成。
+- 行内公式与粗体、下划线同处段落行内流，编辑规则不合并。粗体和斜体是行内环境，下划线是 Run 直接属性；行内公式是 U+FFFC 原子，使用 `MathFocus`。`Equation` / `Align` 与 Section 同为正文块，显示公式不是块环境。进入和退出不产生撤销步。MathFocus 存在时直接 `SetSelection` 仍拒绝；导航、点击和块环境范围选区先清焦点，命令失败则恢复。过期布局由会话代际校验拒绝，几何函数不自行失效。显示公式矩形优先于行内命中。
+- 2026-10-31：对未提交的行内命中与导航做了只读分领域检查。委派工具不能指定 `gpt-6.1-terra`，两名只读评审使用当前会话模型。分层检查指出进入公式时不清块环境外侧停靠，交互快照会把公式光标 x 改到环境边界。行为检查另外指出：没有相邻行时上下键留在公式内；行首/行尾偏移正好等于公式跨度时会误进入；选中块环境时公式焦点和输入缓冲可以并存。点击盒用闭区间，上下移动用开区间，这是保留的差别：点击命中绘制盒，上下移动不抢走停在边缘的正文插入点。上述阻断项已修。进入公式会清外侧停靠和结构选区；没有槽位、也没有相邻行时上下键退出到对象末尾的正文插入点；行首/行尾只移动正文，不进入公式；选中块环境时分别清掉焦点和输入缓冲。
+- 2026-10-31：修复后再做只读终审。委派工具不能指定 `gpt-6.1-sol`，终审由未参与实现的只读代理完成，未重跑测试。结论：无阻断问题。限制：没有槽位时上下离开用的是对象末尾正文 x，不是公式内部光标 x；`InsertInlineMath` 不走进入函数，外侧停靠仍可能盖住新插入公式的光标；拖选不进入公式内部；RTL、混合方向、Qt 像素与键盘链未验证。044 与 011 仍不标完成。
 
 ## 暂停点
 
-显示公式块布局已接通。下一次从“后续实施顺序”第 2 项继续。在 044 实际完成并取得验证证据前，状态保持 `in-progress`，不得将本任务或 [011](011-impl-math.md) 标为完成。
+显示公式块布局，以及行内公式的命中、MathFocus caret 和正文边界导航已接通。下一次从“后续实施顺序”第 3 项继续。在 044 实际完成并取得验证证据前，状态保持 `in-progress`，不得将本任务或 [011](011-impl-math.md) 标为完成。

@@ -333,6 +333,9 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         let changed = self.selected_block_environment.as_ref() != Some(&environment_id);
+        let cleared_math_focus = self.math_focus.take().is_some();
+        let cleared_math_input = self.math_input_buffer.take().is_some();
+        self.math_input_error = false;
         self.selected_block_environment = Some(environment_id);
         self.selected_block_environments =
             self.selected_block_environment.iter().cloned().collect();
@@ -343,7 +346,7 @@ impl Session {
         self.block_environment_exit = None;
         self.advance_composition_candidate_revision();
         Ok(Effect {
-            selection_changed: changed,
+            selection_changed: changed || cleared_math_focus || cleared_math_input,
             ..Effect::default()
         })
     }

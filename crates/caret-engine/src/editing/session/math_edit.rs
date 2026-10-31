@@ -4,9 +4,10 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::paragraph_at_location_mut;
-use super::super::text_map::TextMap;
+use super::super::text_map::{MathObjectSpan, TextMap};
 use super::super::{
-    Affinity, EditError, Effect, MathDirection, MathFocus, MathPos, Pos, PositionMap, Selection,
+    Affinity, EditError, Effect, InlineMathTarget, MathDirection, MathFocus, MathPos, Pos,
+    PositionMap, Selection,
 };
 use super::Session;
 use crate::apply_math_edit;
@@ -416,6 +417,146 @@ impl Session {
         })
     }
 
+    /// 正文一步正好跨过行内公式时进入该公式。
+    ///
+    /// 正文插入点留在对象末尾且亲和性为 Downstream，向左退出才能退回对象前。
+    /// 不产生撤销步。扩展选区不得调用。
+    pub fn enter_inline_math_crossed(
+        &mut self,
+        from: &Pos,
+        to_offset: usize,
+    ) -> Result<bool, EditError> {
+        if from.offset == to_offset || self.composition.is_some() {
+            return Ok(false);
+        }
+        let Some(span) = self
+            .text_map_for(from)?
+            .math_object_crossed(from.offset, to_offset)
+        else {
+            return Ok(false);
+        };
+        let from_left = from.offset <= span.start;
+        self.install_inline_math_focus(from, &span, None, from_left)?;
+        Ok(true)
+    }
+
+    /// 按布局命中进入行内公式。
+    ///
+    /// `node_id` 能对应到水平位置时停在该节点靠近落点的一侧，否则停在整棵树的对应边缘。
+    /// 不产生撤销步。
+    pub fn enter_inline_math_at(&mut self, target: &InlineMathTarget) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        let probe = Pos {
+            story: target.story.clone(),
+            paragraph_id: target.paragraph_id.clone(),
+            offset: target.source_end,
+            affinity: Affinity::Downstream,
+        };
+        let Some(span) = self
+            .text_map_for(&probe)?
+            .math_object_by_id(&target.inline_math_id)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        if span.end != target.source_end {
+            return Err(EditError::InvalidPosition);
+        }
+        self.install_inline_math_focus(&probe, &span, target.node_id.as_deref(), target.from_left)
+    }
+
+    /// 当前焦点在同一节点水平位置中的比例。0 是第一个位置，1 是最后一个。
+    pub fn math_focus_caret_fraction(&self) -> Option<f64> {
+        let focus = self.math_focus.as_ref()?;
+        let story = self.story_for_paragraph(&focus.paragraph_id)?;
+        let paragraph_pos = Pos {
+            story,
+            paragraph_id: focus.paragraph_id.clone(),
+            offset: self.selection.focus.offset,
+            affinity: self.selection.focus.affinity,
+        };
+        let paragraph = self.paragraph_for(&paragraph_pos).ok()?;
+        let math = find_inline_math(&paragraph.inlines, &focus.inline_math_id)?;
+        let mut positions = Vec::new();
+        collect_horizontal_positions(
+            &math.math_tree.root,
+            vec![math.math_tree.root.id.clone()],
+            &mut positions,
+        );
+        let same = positions
+            .iter()
+            .filter(|position| position.path == focus.position.path)
+            .collect::<Vec<_>>();
+        if same.is_empty() {
+            return None;
+        }
+        let index = same
+            .iter()
+            .position(|position| position.offset == focus.position.offset)?;
+        if same.len() == 1 {
+            return Some(0.0);
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "同一节点的水平插入点数量远小于 2^53"
+        )]
+        let index = index as f64;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "同一节点的水平插入点数量远小于 2^53"
+        )]
+        let last = (same.len() - 1) as f64;
+        Some(index / last)
+    }
+
+    fn install_inline_math_focus(
+        &mut self,
+        from: &Pos,
+        span: &MathObjectSpan,
+        node_id: Option<&str>,
+        from_left: bool,
+    ) -> Result<Effect, EditError> {
+        let position = {
+            let paragraph = self.paragraph_for(from)?;
+            let math = find_inline_math(&paragraph.inlines, &span.inline_math_id)
+                .ok_or(EditError::InvalidPosition)?;
+            let position = math_edge_position(math, node_id, from_left);
+            if position.resolve(&math.math_tree).is_none() {
+                return Err(EditError::InvalidPosition);
+            }
+            position
+        };
+        let body = Pos {
+            story: from.story.clone(),
+            paragraph_id: from.paragraph_id.clone(),
+            offset: span.end,
+            affinity: Affinity::Downstream,
+        };
+        self.text_map_for(&body)?.validate_pos(&body)?;
+        self.advance_history_merge_epoch();
+        self.math_input_buffer = None;
+        self.math_input_error = false;
+        self.block_environment_exit = None;
+        self.selected_block_environment = None;
+        self.selected_block_environments.clear();
+        self.structure_selection = None;
+        self.selection = Selection {
+            anchor: body.clone(),
+            focus: body,
+        };
+        self.selection_visual_affinity = VisualAffinity::Downstream;
+        self.math_focus = Some(MathFocus {
+            paragraph_id: from.paragraph_id.clone(),
+            inline_math_id: span.inline_math_id.clone(),
+            position,
+        });
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
     pub(super) fn exit_math(&mut self) -> Result<Effect, EditError> {
         if self.math_input_buffer.is_some() {
             return Err(EditError::InvalidMathText);
@@ -460,6 +601,35 @@ fn math_node_count(root: &MathNode) -> usize {
         pending.extend(&node.children);
     }
     count
+}
+
+fn math_edge_position(math: &InlineMath, node_id: Option<&str>, from_left: bool) -> MathPos {
+    let mut positions = Vec::new();
+    collect_horizontal_positions(
+        &math.math_tree.root,
+        vec![math.math_tree.root.id.clone()],
+        &mut positions,
+    );
+    let scoped = node_id.map(|node_id| {
+        positions
+            .iter()
+            .filter(|position| position.path.iter().any(|id| id.as_str() == node_id))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let candidates = scoped
+        .as_ref()
+        .filter(|positions| !positions.is_empty())
+        .unwrap_or(&positions);
+    let chosen = if from_left {
+        candidates.first()
+    } else {
+        candidates.last()
+    };
+    chosen.cloned().unwrap_or_else(|| MathPos {
+        path: vec![math.math_tree.root.id.clone()],
+        offset: 0,
+    })
 }
 
 fn find_inline_math<'a>(nodes: &'a [InlineNode], id: &NodeId) -> Option<&'a InlineMath> {

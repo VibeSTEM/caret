@@ -470,6 +470,16 @@ impl DocumentViewRuntime {
             .session
             .structure_selection()
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+        let math_caret = if self.composition_preview_session.is_none() {
+            self.session.math_focus().cloned().map(|math_focus| {
+                (
+                    math_focus,
+                    self.session.math_focus_caret_fraction().unwrap_or(0.0),
+                )
+            })
+        } else {
+            None
+        };
         let snapshot = self.current_snapshot()?;
         let inline_environment_rectangles =
             inline_highlight_rects(inline_highlight.as_ref(), snapshot);
@@ -524,8 +534,12 @@ impl DocumentViewRuntime {
                 serde_json::Value::from(cursor_utf16),
             );
         }
-        let caret = snapshot
-            .caret_geometry(focus, visual_affinity)
+        let caret = math_caret
+            .as_ref()
+            .and_then(|(math_focus, fraction)| {
+                snapshot.inline_math_caret_geometry(math_focus, *fraction)
+            })
+            .or_else(|| snapshot.caret_geometry(focus, visual_affinity))
             .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
         let caret = caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
         let font_size_centipoints = snapshot

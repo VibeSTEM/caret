@@ -172,11 +172,27 @@ impl Session {
         selection: Option<Selection>,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        // 直接的 SetSelection 在 MathFocus 下仍拒绝。导航和点击先离开公式，失败时把焦点放回。
+        let saved_focus = self.math_focus.take();
+        let saved_buffer = self.math_input_buffer.take();
+        let saved_error = self.math_input_error;
+        self.math_input_error = false;
         let previous_visual_affinity = self.selection_visual_affinity;
-        let mut effect = self.run(Command::SetSelection(selection))?;
-        effect.selection_changed |= previous_visual_affinity != visual_affinity;
-        self.selection_visual_affinity = visual_affinity;
-        Ok(effect)
+        match self.run(Command::SetSelection(selection)) {
+            Ok(mut effect) => {
+                effect.selection_changed |= previous_visual_affinity != visual_affinity
+                    || saved_focus.is_some()
+                    || saved_buffer.is_some();
+                self.selection_visual_affinity = visual_affinity;
+                Ok(effect)
+            }
+            Err(error) => {
+                self.math_focus = saved_focus;
+                self.math_input_buffer = saved_buffer;
+                self.math_input_error = saved_error;
+                Err(error)
+            }
+        }
     }
 
     /// 统一提交鼠标产生的文本范围，并在跨越块环境时提升为结构选区。
@@ -357,6 +373,9 @@ impl Session {
         if selected.is_empty() {
             return Err(EditError::InvalidPosition);
         }
+        let cleared_math_focus = self.math_focus.take().is_some();
+        let cleared_math_input = self.math_input_buffer.take().is_some();
+        self.math_input_error = false;
         let cancels_command_line_preedit = self
             .command_line
             .as_ref()
@@ -382,7 +401,7 @@ impl Session {
         }
         self.advance_composition_candidate_revision();
         Ok(Effect {
-            selection_changed: changed,
+            selection_changed: changed || cleared_math_focus || cleared_math_input,
             composition_changed: cancels_command_line_preedit,
             ..Effect::default()
         })

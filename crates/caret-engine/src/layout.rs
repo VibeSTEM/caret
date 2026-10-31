@@ -16,10 +16,12 @@ use caret_math::MathLayoutSnapshot;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 mod display_math;
+mod inline_caret;
 mod math;
 use display_math::{
     DisplayLayoutContext, DisplayMathSource, ensure_math_backend, layout_display_math,
 };
+pub use inline_caret::InlineMathHit;
 use math::layout_inline_math_objects;
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;

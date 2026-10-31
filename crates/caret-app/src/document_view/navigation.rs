@@ -6,8 +6,8 @@
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, Command, Direction, DocumentLayoutSnapshot, HitAffinity, Pos, Selection,
-    StructureIndex, VisualAffinity,
+    Affinity, Command, Direction, DocumentLayoutSnapshot, HitAffinity, InlineMathTarget,
+    MathDirection, Pos, Selection, StructureIndex, VisualAffinity,
 };
 
 impl DocumentViewRuntime {
@@ -40,6 +40,14 @@ impl DocumentViewRuntime {
         forward: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if !extend && self.session.math_focus().is_some() {
+            let direction = if forward {
+                Direction::Forward
+            } else {
+                Direction::Backward
+            };
+            return self.move_math_caret(Command::MoveCaret(direction));
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session
@@ -250,6 +258,9 @@ impl DocumentViewRuntime {
                 focus,
             }
         };
+        if self.enter_crossed_inline_math(&current.focus, &selection, extend)? {
+            return self.interaction_state_json();
+        }
         self.session
             .set_navigation_selection(selection, visual_affinity)
             .map_err(|error| format!("selection.set: {error}"))?;
@@ -268,6 +279,28 @@ impl DocumentViewRuntime {
         line_delta: isize,
         extend: bool,
     ) -> Result<String, String> {
+        if !extend && line_delta != 0 && self.session.math_focus().is_some() {
+            let direction = if line_delta < 0 {
+                MathDirection::Up
+            } else {
+                MathDirection::Down
+            };
+            let before = self
+                .session
+                .math_focus()
+                .map(|focus| focus.position.clone());
+            self.session
+                .run(Command::MoveMathCaret(direction))
+                .map_err(|error| format!("navigation.math: {error}"))?;
+            let after = self
+                .session
+                .math_focus()
+                .map(|focus| focus.position.clone());
+            if after.is_some() && after != before {
+                self.anchor_visual_affinity = self.session.selection_visual_affinity();
+                return self.interaction_state_json();
+            }
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session
@@ -333,6 +366,12 @@ impl DocumentViewRuntime {
                 })
         };
         let Some((focus, visual_affinity, preferred_x)) = target else {
+            if !extend && line_delta != 0 && self.session.math_focus().is_some() {
+                self.session
+                    .run(Command::ExitMath)
+                    .map_err(|error| format!("navigation.math: {error}"))?;
+                self.anchor_visual_affinity = self.session.selection_visual_affinity();
+            }
             return self.interaction_state_json();
         };
         let selection = if extend {
@@ -346,6 +385,37 @@ impl DocumentViewRuntime {
                 focus,
             }
         };
+        if !extend && selection.anchor == selection.focus {
+            let hit = {
+                let snapshot = self.current_snapshot()?;
+                let line_index = snapshot
+                    .paragraph_by_id(&selection.focus.paragraph_id)
+                    .and_then(|paragraph| {
+                        let cursor = paragraph
+                            .layout
+                            .cursor_at(selection.focus.offset, visual_affinity)?;
+                        paragraph
+                            .layout
+                            .cursor_geometry_with_line(cursor, 0.0)
+                            .map(|(_, line_index)| line_index)
+                    });
+                line_index.and_then(|line_index| {
+                    snapshot.inline_math_on_line(
+                        &selection.focus.paragraph_id,
+                        line_index,
+                        preferred_x,
+                    )
+                })
+            };
+            if let Some(hit) = hit {
+                self.session
+                    .enter_inline_math_at(&InlineMathTarget::from(&hit))
+                    .map_err(|error| format!("navigation.math: {error}"))?;
+                self.anchor_visual_affinity = self.session.selection_visual_affinity();
+                self.preferred_visual_x_pt = Some(preferred_x);
+                return self.interaction_state_json();
+            }
+        }
         self.session
             .set_navigation_selection(selection, visual_affinity)
             .map_err(|error| format!("selection.set: {error}"))?;
@@ -414,6 +484,42 @@ impl DocumentViewRuntime {
         };
         self.preferred_visual_x_pt = None;
         self.interaction_state_json()
+    }
+
+    fn move_math_caret(&mut self, command: Command) -> Result<String, String> {
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("navigation.math: {error}"))?;
+        if effect.selection_changed {
+            self.anchor_visual_affinity = self.session.selection_visual_affinity();
+            self.preferred_visual_x_pt = None;
+        }
+        self.interaction_state_json()
+    }
+
+    /// 折叠移动正好跨过行内公式时进入该公式。扩展选区保持正文范围。
+    fn enter_crossed_inline_math(
+        &mut self,
+        from: &Pos,
+        selection: &Selection,
+        extend: bool,
+    ) -> Result<bool, String> {
+        if extend
+            || selection.anchor != selection.focus
+            || selection.focus.paragraph_id != from.paragraph_id
+        {
+            return Ok(false);
+        }
+        let entered = self
+            .session
+            .enter_inline_math_crossed(from, selection.focus.offset)
+            .map_err(|error| format!("navigation.math: {error}"))?;
+        if entered {
+            self.anchor_visual_affinity = self.session.selection_visual_affinity();
+            self.preferred_visual_x_pt = None;
+        }
+        Ok(entered)
     }
 }
 

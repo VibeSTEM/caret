@@ -93,6 +93,12 @@ impl Session {
             Direction::Forward => Affinity::Upstream,
         };
         let at_active_scope_boundary = map.inline_boundary_source_at(offset).is_some();
+        if self.enter_inline_math_crossed(&pos, offset)? {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         let affinity = if at_active_scope_boundary {
             boundary_affinity
         } else {

@@ -39,6 +39,15 @@ struct Span {
     is_soft_break: bool,
     is_math: bool,
     is_underlined_run: bool,
+    math_id: Option<NodeId>,
+}
+
+/// 一次正文移动正好跨过的行内公式对象。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MathObjectSpan {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) inline_math_id: NodeId,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +227,40 @@ impl TextMap {
             .get(index + 1)
             .copied()
             .unwrap_or(offset)
+    }
+
+    /// 两端正好是某个行内公式对象的起点和终点时返回该对象。
+    ///
+    /// 停在对象旁边不算跨过。U+FFFC 是一个字素，左右各一步才会从一侧落到另一侧。
+    pub(super) fn math_object_crossed(&self, from: usize, to: usize) -> Option<MathObjectSpan> {
+        let (start, end) = if from <= to { (from, to) } else { (to, from) };
+        if start == end {
+            return None;
+        }
+        self.spans.iter().find_map(|span| {
+            if span.is_math && span.start == start && span.end == end {
+                span.math_id.as_ref().map(|inline_math_id| MathObjectSpan {
+                    start,
+                    end,
+                    inline_math_id: inline_math_id.clone(),
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    pub(super) fn math_object_by_id(&self, id: &NodeId) -> Option<MathObjectSpan> {
+        self.spans.iter().find_map(|span| {
+            span.math_id
+                .as_ref()
+                .filter(|math_id| *math_id == id)
+                .map(|inline_math_id| MathObjectSpan {
+                    start: span.start,
+                    end: span.end,
+                    inline_math_id: inline_math_id.clone(),
+                })
+        })
     }
 
     fn soft_break_at_boundary(&self, offset: usize, affinity: Affinity) -> Option<&Span> {
@@ -645,9 +688,10 @@ fn collect_text(
                         .get("underline")
                         .and_then(serde_json::Value::as_bool)
                         == Some(true),
+                    math_id: None,
                 });
             }
-            InlineNode::Math(_) => {
+            InlineNode::Math(math) => {
                 let start = text.len();
                 text.push('\u{fffc}');
                 spans.push(Span {
@@ -657,6 +701,7 @@ fn collect_text(
                     is_soft_break: false,
                     is_math: true,
                     is_underlined_run: false,
+                    math_id: Some(math.id.clone()),
                 });
             }
             InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
@@ -686,6 +731,7 @@ fn collect_text(
                     is_soft_break: true,
                     is_math: false,
                     is_underlined_run: false,
+                    math_id: None,
                 });
             }
             InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),

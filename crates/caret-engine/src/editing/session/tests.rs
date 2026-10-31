@@ -2811,3 +2811,331 @@ fn undo_is_rejected_while_input_composition_is_active() {
     );
     assert_eq!(paragraph_text(&session, 0), "");
 }
+
+fn inline_math_ids(session: &Session) -> Vec<NodeId> {
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected a paragraph");
+    };
+    paragraph
+        .inlines
+        .iter()
+        .filter_map(|node| match node {
+            InlineNode::Math(math) => Some(math.id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn arrow_enters_and_exits_consecutive_inline_math() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("a".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("first formula insertion failed: {error}"));
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("first formula exit failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("second formula insertion failed: {error}"));
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("second formula exit failed: {error}"));
+    let ids = inline_math_ids(&session);
+    assert_eq!(ids.len(), 2);
+    let first = &ids[0];
+    let second = &ids[1];
+    let between = "a".len() + "\u{fffc}".len();
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("entering the second formula failed: {error}"));
+    assert_eq!(
+        session.math_focus().map(|focus| &focus.inline_math_id),
+        Some(second)
+    );
+    assert_eq!(session.selection().focus.offset, between + "\u{fffc}".len());
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("leaving the second formula failed: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(session.selection().focus.offset, between);
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("entering the first formula failed: {error}"));
+    assert_eq!(
+        session.math_focus().map(|focus| &focus.inline_math_id),
+        Some(first)
+    );
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("leaving the first formula failed: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(session.selection().focus.offset, "a".len());
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("re-entering the first formula failed: {error}"));
+    assert_eq!(
+        session.math_focus().map(|focus| &focus.inline_math_id),
+        Some(first)
+    );
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("leaving toward the second formula failed: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(session.selection().focus.offset, between);
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| {
+            panic!("entering the second formula from the left failed: {error}")
+        });
+    assert_eq!(
+        session.math_focus().map(|focus| &focus.inline_math_id),
+        Some(second)
+    );
+}
+
+#[test]
+fn inline_math_entry_does_not_create_an_undo_step() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("a".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("formula insertion failed: {error}"));
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("formula exit failed: {error}"));
+    let history = session.history_state_id();
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("formula entry failed: {error}"));
+    assert!(session.math_focus().is_some());
+    assert_eq!(session.history_state_id(), history);
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo after entry failed: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(paragraph_text(&session, 0), "a");
+}
+
+#[test]
+fn body_selection_wrapper_clears_math_focus_and_direct_set_selection_stays_rejected() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("ab".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("formula insertion failed: {error}"));
+    let focus = session.math_focus().cloned();
+    let selection = session.selection().clone();
+    let invalid = Selection {
+        focus: Pos {
+            offset: 99,
+            ..selection.focus.clone()
+        },
+        ..selection.clone()
+    };
+    assert!(
+        session
+            .set_selection_with_visual_affinity(
+                Some(invalid),
+                caret_layout::VisualAffinity::Downstream
+            )
+            .is_err()
+    );
+    assert_eq!(session.math_focus(), focus.as_ref());
+    assert_eq!(session.selection(), &selection);
+    assert!(matches!(
+        session.run(Command::SetSelection(Some(Selection {
+            anchor: Pos {
+                offset: 0,
+                ..selection.focus.clone()
+            },
+            focus: selection.focus.clone(),
+        }))),
+        Err(EditError::UnsupportedMathTarget)
+    ));
+    assert_eq!(session.math_focus(), focus.as_ref());
+
+    session
+        .set_selection_with_visual_affinity(
+            Some(Selection {
+                anchor: Pos {
+                    offset: 0,
+                    affinity: Affinity::Upstream,
+                    ..selection.focus.clone()
+                },
+                focus: selection.focus.clone(),
+            }),
+            caret_layout::VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|error| panic!("body selection should leave the formula: {error}"));
+    assert!(session.math_focus().is_none());
+    assert_eq!(session.selection().anchor.offset, 0);
+    assert_eq!(session.selection().focus.offset, selection.focus.offset);
+    assert_ne!(session.selection().anchor, session.selection().focus);
+}
+
+#[test]
+fn inline_math_reenters_after_cdoc_roundtrip() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("ab".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("formula insertion failed: {error}"));
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("formula exit failed: {error}"));
+    let math_id = inline_math_ids(&session)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("formula should persist"));
+    let bytes = caret_doc::CdocFile::new(session.document().clone())
+        .and_then(|file| file.to_bytes())
+        .unwrap_or_else(|error| panic!("formula document should save: {error}"));
+    let opened = caret_doc::open(&bytes)
+        .unwrap_or_else(|error| panic!("formula document should reopen: {error}"));
+    let caret_doc::OpenedDocument::Editable(file) = opened else {
+        panic!("inline math should remain editable");
+    };
+    let mut reopened = Session::new(file.document().clone())
+        .unwrap_or_else(|error| panic!("reopened document rejected: {error}"));
+    assert!(reopened.math_focus().is_none());
+    let paragraph_id = reopened.selection().focus.paragraph_id.clone();
+    let story = reopened.selection().focus.story.clone();
+    reopened
+        .run(Command::SetSelection(Some(Selection {
+            anchor: Pos {
+                story: story.clone(),
+                paragraph_id: paragraph_id.clone(),
+                offset: "ab".len(),
+                affinity: Affinity::Downstream,
+            },
+            focus: Pos {
+                story,
+                paragraph_id,
+                offset: "ab".len(),
+                affinity: Affinity::Downstream,
+            },
+        })))
+        .unwrap_or_else(|error| panic!("caret before the reopened formula failed: {error}"));
+    reopened
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("reopened formula should accept entry: {error}"));
+    assert_eq!(
+        reopened.math_focus().map(|focus| &focus.inline_math_id),
+        Some(&math_id)
+    );
+    assert_eq!(
+        reopened.selection().focus.offset,
+        "ab".len() + "\u{fffc}".len()
+    );
+}
+
+#[test]
+fn entering_inline_math_clears_block_environment_navigation_state() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("formula insertion failed: {error}"));
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("formula exit failed: {error}"));
+    let environment_id = NodeId::generate();
+    session.block_environment_exit = Some((environment_id.clone(), Direction::Forward));
+    session.selected_block_environment = Some(environment_id.clone());
+    session.selected_block_environments = vec![environment_id];
+    session.structure_selection = Some(StructureSelection {
+        anchor: session.selection.focus.clone(),
+        focus: session.selection.focus.clone(),
+    });
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("formula entry failed: {error}"));
+    assert!(session.math_focus().is_some());
+    assert!(session.block_environment_exit.is_none());
+    assert!(session.selected_block_environment.is_none());
+    assert!(session.selected_block_environments.is_empty());
+    assert!(session.structure_selection.is_none());
+}
+
+#[test]
+fn selecting_a_block_environment_clears_math_focus() {
+    let body_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: Default::default(),
+        title: Some(Paragraph {
+            id: NodeId::generate(),
+            language: None,
+            layout: None,
+            inlines: vec![InlineNode::Run(Run {
+                text: "title".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            })],
+            mark_style: Default::default(),
+            props: Default::default(),
+            extra: Default::default(),
+        }),
+        children: vec![Block::Paragraph(Paragraph {
+            id: body_id.clone(),
+            language: None,
+            layout: None,
+            inlines: Vec::new(),
+            mark_style: Default::default(),
+            props: Default::default(),
+            extra: Default::default(),
+        })],
+        extra: Default::default(),
+    })];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("section document rejected: {error}"));
+    let body = Pos {
+        story: StoryId::Body,
+        paragraph_id: body_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: body.clone(),
+            focus: body,
+        })))
+        .unwrap_or_else(|error| panic!("body caret failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("formula insertion failed: {error}"));
+    session.math_input_buffer = Some("\\frac".to_owned());
+    session.math_input_error = true;
+    session
+        .select_block_environment(environment_id.clone())
+        .unwrap_or_else(|error| panic!("environment selection failed: {error}"));
+    assert!(session.math_focus().is_none());
+    assert!(session.math_input_buffer.is_none());
+    assert!(!session.math_input_error);
+    assert_eq!(session.selected_block_environment(), Some(&environment_id));
+}

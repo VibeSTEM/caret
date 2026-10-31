@@ -2023,3 +2023,119 @@ fn explicit_breaks_keep_empty_pages_without_inventing_text_hit_targets() {
         assert_eq!(hit.position.offset, 0);
     }
 }
+
+#[test]
+fn inline_math_caret_uses_the_same_snapshot_as_hit_and_rejects_stale_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session should be valid: {error}"));
+    session
+        .run(Command::InsertText("ab".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("xy".to_owned()))
+        .unwrap_or_else(|error| panic!("formula text failed: {error}"));
+    let focus = session
+        .math_focus()
+        .cloned()
+        .unwrap_or_else(|| panic!("formula should be focused"));
+    let paragraph_id = focus.paragraph_id.clone();
+    let object_end = session.selection().focus.offset;
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("inline formula layout failed: {error}"));
+    assert!(snapshot.is_current_for(&session, catalog.generation()));
+
+    let math_caret = snapshot
+        .inline_math_caret_geometry(&focus, 0.0)
+        .unwrap_or_else(|| panic!("focused formula node should project a caret"));
+    let body_caret = snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: object_end,
+                affinity: Affinity::Downstream,
+            },
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("body caret after the formula should exist"));
+    assert_eq!(math_caret.page_index, body_caret.page_index);
+    assert!(
+        math_caret.x_pt < body_caret.x_pt,
+        "formula caret at the node start should sit left of the body caret after the object"
+    );
+
+    let object = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .and_then(|paragraph| paragraph.layout.positioned_inline_objects.first().cloned())
+        .unwrap_or_else(|| panic!("formula should have a positioned line box"));
+    let inside_x = body_caret.x_pt - f64::from(object.width_pt) * 0.75;
+    let inside_y = (body_caret.y0_pt + body_caret.y1_pt) / 2.0;
+    let hit = snapshot
+        .inline_math_hit(body_caret.page_index, inside_x, inside_y)
+        .unwrap_or_else(|| panic!("click inside the formula box should hit it"));
+    assert_eq!(hit.inline_math_id, focus.inline_math_id);
+    assert!(hit.from_left);
+    let center_x = object.x_pt + object.width_pt / 2.0;
+    let landing = snapshot
+        .inline_math_on_line(&paragraph_id, object.line_index, center_x)
+        .unwrap_or_else(|| panic!("x inside the formula line box should enter it"));
+    assert_eq!(landing.inline_math_id, focus.inline_math_id);
+    assert!(
+        snapshot
+            .inline_math_on_line(&paragraph_id, object.line_index, object.x_pt)
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .inline_math_on_line(
+                &paragraph_id,
+                object.line_index,
+                object.x_pt + object.width_pt
+            )
+            .is_none()
+    );
+
+    let mut missing = focus.clone();
+    missing.position.path = vec![NodeId::generate()];
+    assert!(snapshot.inline_math_caret_geometry(&missing, 0.0).is_none());
+
+    let mut display_document = Document::blank();
+    display_document.body = vec![
+        Block::Paragraph(paragraph("Beside")),
+        Block::Equation(equation_from_source(r"\frac{1}{2}")),
+    ];
+    let display = service
+        .layout(&display_document, 0, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("display formula layout failed: {error}"));
+    let bounds = display.display_math_bounds(0);
+    let [x0, y0, x1, y1] = bounds
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("display formula should publish bounds"));
+    assert!(
+        display
+            .inline_math_hit(0, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
+            .is_none()
+    );
+
+    session
+        .run(Command::ExitMath)
+        .unwrap_or_else(|error| panic!("formula exit failed: {error}"));
+    session
+        .run(Command::InsertText("z".to_owned()))
+        .unwrap_or_else(|error| panic!("text after the formula failed: {error}"));
+    assert!(!snapshot.is_current_for(&session, catalog.generation()));
+    assert!(snapshot.inline_math_caret_geometry(&focus, 0.0).is_some());
+    let fresh = service
+        .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("fresh layout failed: {error}"));
+    assert!(fresh.is_current_for(&session, catalog.generation()));
+    assert_ne!(fresh.document_generation, snapshot.document_generation);
+}

@@ -2114,3 +2114,191 @@ fn current_structure_exposes_heading_kind_and_level() -> Result<(), Box<dyn std:
     assert!(state[0].get("label").is_none());
     Ok(())
 }
+
+fn run_math(
+    runtime: &mut DocumentViewRuntime,
+    command: caret_engine::Command,
+) -> Result<(), String> {
+    runtime
+        .session
+        .run(command)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[test]
+fn visual_arrow_enters_inline_math_and_shift_stays_in_the_body()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("a".to_owned()),
+    )?;
+    run_math(&mut runtime, caret_engine::Command::InsertInlineMath)?;
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("x".to_owned()),
+    )?;
+    let inside: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let math_x = inside["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("math caret x should be a number")?;
+    run_math(&mut runtime, caret_engine::Command::ExitMath)?;
+    let outside: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let body_x = outside["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("body caret x should be a number")?;
+    assert!(math_x < body_x);
+    let generation = outside["documentGeneration"]
+        .as_str()
+        .ok_or("interaction should publish a generation")?
+        .to_owned();
+
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.math_focus().is_some());
+    let entered: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let entered_x = entered["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or("entered caret x should be a number")?;
+    assert!(entered_x < body_x);
+    assert_eq!(entered["documentGeneration"], generation);
+
+    for _ in 0..4 {
+        if runtime.session.math_focus().is_none() {
+            break;
+        }
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert!(runtime.session.math_focus().is_none());
+    runtime.move_visual_caret_json(false, true)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_ne!(
+        runtime.session.selection().anchor.offset,
+        runtime.session.selection().focus.offset
+    );
+
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("z".to_owned()),
+    )?;
+    let edited: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert_eq!(
+        edited["documentGeneration"],
+        runtime.document_generation().to_string()
+    );
+    assert_ne!(edited["documentGeneration"], generation);
+    Ok(())
+}
+
+#[test]
+fn inline_math_click_and_vertical_entry_use_the_layout_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("MMMMMMMM".to_owned()),
+    )?;
+    run_math(&mut runtime, caret_engine::Command::InsertParagraphBreak)?;
+    run_math(&mut runtime, caret_engine::Command::InsertInlineMath)?;
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("xxxxxxxx".to_owned()),
+    )?;
+    run_math(&mut runtime, caret_engine::Command::ExitMath)?;
+    let focus = runtime.session.selection().focus.clone();
+    let math_paragraph = focus.paragraph_id.clone();
+    let object_end = focus.offset;
+    let visual_affinity = runtime.session.selection_visual_affinity();
+    let snapshot = runtime.current_snapshot()?;
+    let body_caret = snapshot
+        .caret_geometry(&focus, visual_affinity)
+        .ok_or("formula edge should have a caret")?;
+    let object = snapshot
+        .paragraph_by_id(&math_paragraph)
+        .and_then(|paragraph| paragraph.layout.positioned_inline_objects.first())
+        .ok_or("formula should have a line box")?;
+    let click_x = body_caret.x_pt - f64::from(object.width_pt) * 0.75;
+    let click_y = (body_caret.y0_pt + body_caret.y1_pt) / 2.0;
+    let page_index = i32::try_from(body_caret.page_index)?;
+
+    let placed = runtime.place_caret_at_page_json(page_index, click_x, click_y)?;
+    let placed: Value = serde_json::from_str(&placed)?;
+    assert!(runtime.session.math_focus().is_some());
+    let placed_x = placed["caret"]["xPt"]
+        .as_f64()
+        .ok_or("placed caret x should be a number")?;
+    assert!(placed_x < body_caret.x_pt);
+    assert_eq!(placed["position"]["offsetUtf8"], object_end.to_string());
+
+    let Block::Paragraph(first_paragraph) = &runtime.session.document().body[0] else {
+        return Err("first block should be a paragraph".into());
+    };
+    let first_paragraph = first_paragraph.id.clone();
+    run_math(&mut runtime, caret_engine::Command::ExitMath)?;
+    let above = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: first_paragraph.clone(),
+        offset: 4,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    run_math(
+        &mut runtime,
+        caret_engine::Command::SetSelection(Some(caret_engine::Selection {
+            anchor: above.clone(),
+            focus: above,
+        })),
+    )?;
+    runtime.move_vertical_caret_json(1, false)?;
+    assert!(runtime.session.math_focus().is_some());
+    assert_eq!(
+        runtime
+            .session
+            .math_focus()
+            .map(|focus| focus.paragraph_id.clone()),
+        Some(math_paragraph)
+    );
+    runtime.move_vertical_caret_json(-1, false)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        first_paragraph
+    );
+    Ok(())
+}
+
+#[test]
+fn vertical_move_without_another_line_leaves_inline_math() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    run_math(&mut runtime, caret_engine::Command::InsertInlineMath)?;
+    run_math(
+        &mut runtime,
+        caret_engine::Command::InsertText("x".to_owned()),
+    )?;
+    let object_end = runtime.session.selection().focus.offset;
+    runtime.move_vertical_caret_json(-1, false)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_eq!(runtime.session.selection().focus.offset, object_end);
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.math_focus().is_some());
+    runtime.move_vertical_caret_json(1, false)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_eq!(runtime.session.selection().focus.offset, object_end);
+    Ok(())
+}
+
+#[test]
+fn line_edge_movement_stays_beside_a_line_filling_formula() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    run_math(&mut runtime, caret_engine::Command::InsertInlineMath)?;
+    run_math(&mut runtime, caret_engine::Command::ExitMath)?;
+    let object_end = runtime.session.selection().focus.offset;
+    runtime.move_to_visual_line_edge_json(false, false)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    runtime.move_to_visual_line_edge_json(true, false)?;
+    assert!(runtime.session.math_focus().is_none());
+    assert_eq!(runtime.session.selection().focus.offset, object_end);
+    Ok(())
+}

@@ -4,7 +4,9 @@
 // 署名：Yuki Lu
 
 use super::{DocumentViewRuntime, snapshot::caret_geometry_with_environment_exit};
-use caret_engine::{PageCaretView, PageGlyphDrawCommand, Selection};
+use caret_engine::{
+    InlineMathTarget, PageCaretView, PageGlyphDrawCommand, Selection, VisualAffinity,
+};
 
 /// 页面绘制适配层传给 Qt 的共享 RGBA 图片资源。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +69,23 @@ impl DocumentViewRuntime {
         let position = display_session.selection().focus.clone();
         let visual_affinity = display_session.selection_visual_affinity();
         let block_environment_exit = display_session.block_environment_exit();
+        let math_caret = if self.composition_preview_session.is_none() {
+            self.session.math_focus().cloned().map(|math_focus| {
+                (
+                    math_focus,
+                    self.session.math_focus_caret_fraction().unwrap_or(0.0),
+                )
+            })
+        } else {
+            None
+        };
         let snapshot = self.current_snapshot()?;
-        let caret = snapshot
-            .caret_geometry(&position, visual_affinity)
+        let caret = math_caret
+            .as_ref()
+            .and_then(|(math_focus, fraction)| {
+                snapshot.inline_math_caret_geometry(math_focus, *fraction)
+            })
+            .or_else(|| snapshot.caret_geometry(&position, visual_affinity))
             .map(|caret| {
                 PageCaretView::from(caret_geometry_with_environment_exit(
                     block_environment_exit,
@@ -174,6 +190,13 @@ impl DocumentViewRuntime {
             Ok(page_index) => page_index,
             Err(_) => return Ok("null".to_owned()),
         };
+        let math_hit = {
+            let snapshot = self.current_snapshot()?;
+            snapshot.inline_math_hit(page_index, x_pt, y_pt)
+        };
+        if let Some(math_hit) = math_hit {
+            return self.place_inline_math_caret(math_hit);
+        }
         let (hit, result) = {
             let snapshot = self.current_snapshot()?;
             let Some(hit) = snapshot.hit_test(page_index, x_pt, y_pt) else {
@@ -211,6 +234,30 @@ impl DocumentViewRuntime {
             );
         }
         serde_json::to_string(&result)
+            .map_err(|error| format!("layout.place_caret_serialize: {error}"))
+    }
+
+    fn place_inline_math_caret(
+        &mut self,
+        math_hit: caret_engine::InlineMathHit,
+    ) -> Result<String, String> {
+        self.session
+            .enter_inline_math_at(&InlineMathTarget::from(&math_hit))
+            .map_err(|error| format!("selection.math: {error}"))?;
+        self.anchor_visual_affinity = VisualAffinity::Downstream;
+        self.preferred_visual_x_pt = None;
+        let fraction = self.session.math_focus_caret_fraction().unwrap_or(0.0);
+        let math_focus = self.session.math_focus().cloned();
+        let body_focus = self.session.selection().focus.clone();
+        let visual_affinity = self.session.selection_visual_affinity();
+        let snapshot = self.current_snapshot()?;
+        let caret = math_focus
+            .as_ref()
+            .and_then(|math_focus| snapshot.inline_math_caret_geometry(math_focus, fraction))
+            .or_else(|| snapshot.caret_geometry(&body_focus, visual_affinity))
+            .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
+        let view = snapshot.inline_math_place_view(&math_hit, caret);
+        serde_json::to_string(&view)
             .map_err(|error| format!("layout.place_caret_serialize: {error}"))
     }
 }

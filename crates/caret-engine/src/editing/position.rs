@@ -48,6 +48,19 @@ pub struct MathFocus {
     pub position: MathPos,
 }
 
+/// 从布局命中或垂直落点进入行内公式时使用的身份。
+///
+/// 布局快照负责算出这些字段。Session 只校验段落、对象和源码终点，不读取公式几何。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineMathTarget {
+    pub paragraph_id: NodeId,
+    pub story: StoryId,
+    pub inline_math_id: NodeId,
+    pub source_end: usize,
+    pub node_id: Option<String>,
+    pub from_left: bool,
+}
+
 impl MathPos {
     /// 在模型已通过 `Document::validate` 的前提下解析地址。
     ///

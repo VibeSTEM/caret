@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use crate::layout::InlineMathHit;
 use crate::{
     Affinity, DocumentLayoutSnapshot, PageCaretGeometry, PageEnvironmentRange, PageHit,
     PageLayoutSnapshot, StoryId,
@@ -314,6 +315,32 @@ impl DocumentLayoutSnapshot {
     pub fn hit_test_view(&self, page_index: usize, x_pt: f64, y_pt: f64) -> Option<PageHitView> {
         let hit = self.hit_test(page_index, x_pt, y_pt)?;
         Some(self.view_for_hit(&hit))
+    }
+
+    /// 将行内公式进入结果转换为界面 DTO。插入点几何必须来自同一份公式快照。
+    pub fn inline_math_place_view(
+        &self,
+        hit: &InlineMathHit,
+        caret: PageCaretGeometry,
+    ) -> PageHitView {
+        let story = match &hit.story {
+            StoryId::Body => StoryView::Body,
+            StoryId::EnvironmentTitle(environment_id) => StoryView::EnvironmentTitle {
+                environment_id: environment_id.to_string(),
+            },
+        };
+        PageHitView {
+            session_id: self.published_session_id().map(ToString::to_string),
+            document_generation: self.published_document_generation().to_string(),
+            position: DocumentPositionView {
+                story,
+                paragraph_id: hit.paragraph_id.to_string(),
+                offset_utf8: hit.source_end.to_string(),
+                affinity: "downstream".to_owned(),
+            },
+            visual_affinity: "downstream".to_owned(),
+            caret: PageCaretView::from(caret),
+        }
     }
 
     /// 将已有的 Rust 页面命中转换为界面 DTO。
