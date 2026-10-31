@@ -115,6 +115,8 @@ pub enum MathLayoutDiagnostic {
     InlinePlaceholderFallback { reason: String },
     /// 空公式使用可见槽位，供 MathFocus 进入和定位。
     EmptyFormulaPlaceholder,
+    /// 显示公式不能作为不可拆分块放进版心。快照只含可见占位，不含被截断的 MathBox。
+    DisplayBlockFallback { reason: String },
 }
 
 /// 数学快照生成失败；失败时不会返回部分快照。

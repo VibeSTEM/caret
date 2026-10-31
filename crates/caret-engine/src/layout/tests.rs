@@ -45,6 +45,46 @@ fn source_only_math_tree(source: &str) -> MathTree {
     }
 }
 
+fn equation_from_source(source: &str) -> Equation {
+    let parsed = caret_math::parse(source, caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("equation source should parse: {error}"));
+    match import_parsed_math(&parsed)
+        .unwrap_or_else(|error| panic!("equation source should import: {error}"))
+    {
+        ImportedMath::Equation(equation) => equation,
+        _ => panic!("equation input should produce Equation"),
+    }
+}
+
+fn align_from_source(source: &str) -> Align {
+    let parsed = caret_math::parse(source, caret_math::MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("align source should parse: {error}"));
+    match import_parsed_math(&parsed)
+        .unwrap_or_else(|error| panic!("align source should import: {error}"))
+    {
+        ImportedMath::Align(align) => align,
+        _ => panic!("align input should produce Align"),
+    }
+}
+
+fn with_content_box(document: &mut Document, content_width_pt: f64, content_height_pt: f64) {
+    let page = caret_doc::PageGeometry::default();
+    let (page_width, page_height) = page.page_size_pt();
+    let horizontal = (page_width - content_width_pt) / 2.0;
+    let vertical = (page_height - content_height_pt) / 2.0;
+    document.page_sections[0]
+        .set_geometry(caret_doc::PageGeometry {
+            margins: caret_doc::PageMargins {
+                top: vertical,
+                right: horizontal,
+                bottom: vertical,
+                left: horizontal,
+            },
+            ..page
+        })
+        .unwrap_or_else(|error| panic!("content box should be valid: {error}"));
+}
+
 fn inline_math_from_source(source: &str) -> InlineMath {
     let parsed = caret_math::parse(source, caret_math::MathInputKind::Inline)
         .unwrap_or_else(|error| panic!("inline source should parse: {error}"));
@@ -535,27 +575,22 @@ fn negative_strut_metrics_fall_back_instead_of_rejecting_the_document() {
 }
 
 #[test]
-fn block_math_uses_noninteractive_source_preview_without_mutating_document() {
+fn display_math_blocks_use_math_boxes_without_becoming_paragraphs() {
     let before = paragraph("Before formula");
     let before_id = before.id.clone();
-    let equation_id = NodeId::generate();
-    let align_id = NodeId::generate();
+    let equation = equation_from_source(r"\[\frac{1}{2}\]");
+    let equation_id = equation.id.clone();
+    let equation_source = equation.math_tree.source.clone();
+    let align = align_from_source(r"\[\begin{aligned}\text{A} &= b \\ c &= d\end{aligned}\]");
+    let align_id = align.id.clone();
+    let align_source = align.source.clone();
     let after = paragraph("After formula");
     let after_id = after.id.clone();
     let mut document = Document::blank();
     document.body = vec![
         Block::Paragraph(before),
-        Block::Equation(Equation {
-            id: equation_id.clone(),
-            math_tree: source_only_math_tree("\\frac{x}{y}"),
-            extra: Default::default(),
-        }),
-        Block::Align(Align {
-            id: align_id.clone(),
-            source: "a &= b".to_owned(),
-            rows: Vec::new(),
-            extra: Default::default(),
-        }),
+        Block::Equation(equation),
+        Block::Align(align),
         Block::Paragraph(after),
     ];
     let original = document.clone();
@@ -567,103 +602,399 @@ fn block_math_uses_noninteractive_source_preview_without_mutating_document() {
         .unwrap_or_else(|error| panic!("document layout failed: {error}"));
 
     assert_eq!(document, original);
-    let equation_preview = snapshot
-        .paragraph_by_id(&equation_id)
-        .unwrap_or_else(|| panic!("equation source preview is missing"));
-    assert_eq!(equation_preview.text.as_ref(), "\\frac{x}{y}");
-    let align_preview = snapshot
-        .paragraph_by_id(&align_id)
-        .unwrap_or_else(|| panic!("align source preview is missing"));
-    assert_eq!(align_preview.text.as_ref(), "a &= b");
+    assert!(snapshot.paragraph_by_id(&equation_id).is_none());
+    assert!(snapshot.paragraph_by_id(&align_id).is_none());
+    assert_eq!(snapshot.display_math.len(), 2);
+    let equation_block = &snapshot.display_math[0];
+    let align_block = &snapshot.display_math[1];
+    assert_eq!(equation_block.id, equation_id);
+    assert_eq!(align_block.id, align_id);
+    assert!(equation_block.layout.width_micro_pt > 0);
+    assert!(equation_block.height_pt() > 0.0);
+    assert!(
+        equation_block
+            .layout
+            .items
+            .iter()
+            .any(|item| matches!(item, caret_math::MathLayoutItem::Rule { .. }))
+    );
+    assert!(
+        !equation_block
+            .layout
+            .diagnostics
+            .iter()
+            .any(|diagnostic| matches!(
+                diagnostic,
+                caret_math::MathLayoutDiagnostic::DisplayBlockFallback { .. }
+            ))
+    );
+    assert!(align_block.text_resources.contains_key(&1));
+    assert!(!Arc::ptr_eq(
+        &equation_block.text_resources,
+        &align_block.text_resources
+    ));
+    assert_eq!(
+        snapshot
+            .pages
+            .iter()
+            .flat_map(|page| page.layout.blocks.iter())
+            .filter(|block| block.block_id == equation_id)
+            .count(),
+        1
+    );
+    let equation_page = snapshot
+        .pages
+        .iter()
+        .find(|page| {
+            page.layout
+                .blocks
+                .iter()
+                .any(|block| block.block_id == equation_id)
+        })
+        .unwrap_or_else(|| panic!("equation block is missing"));
+    let placed = equation_page
+        .layout
+        .blocks
+        .iter()
+        .find(|block| block.block_id == equation_id)
+        .unwrap_or_else(|| panic!("equation placement is missing"));
+    assert!((placed.height_pt - equation_block.height_pt()).abs() < 0.01);
 
-    let preview_position = Pos {
-        story: StoryId::Body,
-        paragraph_id: equation_id.clone(),
-        offset: 0,
-        affinity: Affinity::Downstream,
-    };
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("display math glyphs failed: {error}"));
+    let equation_glyph = glyphs
+        .math_objects
+        .iter()
+        .find(|object| object.id == equation_id)
+        .unwrap_or_else(|| panic!("equation glyph is missing"));
+    assert!(equation_glyph.display_block);
+    assert!(Arc::ptr_eq(
+        &equation_glyph.text_resources,
+        &equation_block.text_resources
+    ));
+    let content_width =
+        equation_page.width_pt - equation_page.margin_left_pt - equation_page.margin_right_pt;
+    let expected_x =
+        equation_page.margin_left_pt + (content_width - f64::from(equation_block.width_pt)) / 2.0;
+    assert!((equation_glyph.x_pt - expected_x).abs() < 0.01);
+    let expected_baseline = equation_page.margin_top_pt
+        + f64::from(placed.y_offset_pt)
+        + f64::from(equation_block.ascent_pt);
+    assert!((equation_glyph.baseline_y_pt - expected_baseline).abs() < 0.01);
+    assert!(equation_glyph.line_clip_y_pt.is_none());
+
+    let block_y = equation_page.margin_top_pt + f64::from(placed.y_offset_pt) + 1.0;
     assert!(
         snapshot
-            .caret_geometry(&preview_position, VisualAffinity::Downstream)
+            .hit_test(0, equation_page.width_pt / 2.0, block_y)
             .is_none()
     );
+    let before_y = snapshot.pages[0].margin_top_pt + 1.0;
     assert!(
         snapshot
-            .font_size_centipoints_at(&preview_position, VisualAffinity::Downstream)
-            .is_none()
+            .hit_test(0, snapshot.pages[0].width_pt / 2.0, before_y)
+            .is_some()
     );
-    let preview_selection = Selection {
-        anchor: preview_position.clone(),
-        focus: Pos {
-            paragraph_id: align_id.clone(),
-            ..preview_position.clone()
-        },
-    };
-    assert!(snapshot.selection_geometry(&preview_selection).is_none());
-    assert!(
-        snapshot
-            .structure_selection_geometry(
-                &Pos {
-                    paragraph_id: before_id.clone(),
-                    offset: 0,
-                    ..preview_position.clone()
-                },
-                &preview_position,
-                &[],
-            )
-            .is_none()
-    );
-    assert!(snapshot.paragraph_by_id(&after_id).is_some());
-    let across_previews = Selection {
+    let across = Selection {
         anchor: Pos {
+            story: StoryId::Body,
             paragraph_id: before_id,
             offset: 0,
-            ..preview_position.clone()
+            affinity: Affinity::Downstream,
         },
         focus: Pos {
+            story: StoryId::Body,
             paragraph_id: after_id,
             offset: "After formula".len(),
             affinity: Affinity::Upstream,
-            ..preview_position
         },
     };
-    let visible_selection_rects = snapshot
-        .selection_geometry(&across_previews)
-        .unwrap_or_else(|| panic!("selection across math previews should be measurable"));
-    assert_eq!(visible_selection_rects.len(), 2);
+    let selection = snapshot
+        .selection_geometry(&across)
+        .unwrap_or_else(|| panic!("selection across display math should cover the paragraphs"));
+    assert_eq!(selection.len(), 2);
+    assert_eq!(equation_source, r"\[\frac{1}{2}\]");
+    assert!(align_source.contains("aligned"));
+}
 
-    for id in [&equation_id, &align_id] {
-        let fragment = snapshot.pages[0]
-            .layout
-            .fragments
+#[test]
+fn display_math_that_does_not_fit_keeps_source_and_shows_a_fallback() {
+    let equation = equation_from_source(r"\[\frac{1}{2}\]");
+    let equation_id = equation.id.clone();
+    let mut wide_document = Document::blank();
+    wide_document.body = vec![Block::Equation(equation.clone())];
+    with_content_box(&mut wide_document, 4.0, 400.0);
+    let mut tall_document = Document::blank();
+    tall_document.body = vec![Block::Equation(equation.clone())];
+    with_content_box(&mut tall_document, 400.0, 4.0);
+    let mut both_document = Document::blank();
+    both_document.body = vec![Block::Equation(equation)];
+    with_content_box(&mut both_document, 4.0, 4.0);
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+
+    for (document, expected_reason) in [
+        (&wide_document, "wider than the content box"),
+        (&tall_document, "taller than the content box"),
+        (&both_document, "wider and taller than the content box"),
+    ] {
+        let original = document.clone();
+        let snapshot = service
+            .layout(document, 1, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| {
+                panic!("overflowing display math should stay visible: {error}")
+            });
+        assert_eq!(document, &original);
+        let block = snapshot
+            .display_math
             .iter()
-            .find(|fragment| &fragment.paragraph_id == id)
-            .unwrap_or_else(|| panic!("math preview fragment {id} is missing"));
-        let paragraph = snapshot
-            .paragraph_by_id(id)
-            .unwrap_or_else(|| panic!("math preview paragraph {id} is missing"));
-        let line = &paragraph.layout.paragraph.lines[fragment.line_range.start];
-        let y = snapshot.pages[0].margin_top_pt
-            + f64::from(fragment.y_offset_pt)
-            + f64::from(line.metrics.height_pt) / 2.0;
+            .find(|block| block.id == equation_id)
+            .unwrap_or_else(|| panic!("fallback block is missing"));
+        assert!(block.layout.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            caret_math::MathLayoutDiagnostic::DisplayBlockFallback { reason }
+                if reason.contains(expected_reason)
+        )));
         assert!(
-            snapshot
-                .hit_test(0, snapshot.pages[0].width_pt / 2.0, y)
-                .is_none()
+            block
+                .layout
+                .items
+                .iter()
+                .all(|item| matches!(item, caret_math::MathLayoutItem::ExternalText { .. }))
         );
+        let placed = snapshot
+            .pages
+            .iter()
+            .flat_map(|page| page.layout.blocks.iter())
+            .find(|placed| placed.block_id == equation_id)
+            .unwrap_or_else(|| panic!("fallback placement is missing"));
+        assert!((placed.height_pt - block.height_pt()).abs() < 0.01);
+        assert!(placed.height_pt > 4.0);
     }
 }
 
 #[test]
-fn block_math_source_preview_truncates_at_a_valid_utf8_boundary_within_limit() {
-    let source = "界".repeat(256);
-    let preview = super::math_preview_paragraph(NodeId::generate(), &source);
-    let InlineNode::Run(run) = &preview.inlines[0] else {
-        panic!("math source preview should be text");
-    };
-    assert!(run.text.len() <= super::MATH_PREVIEW_SOURCE_LIMIT_BYTES);
-    assert!(run.text.is_char_boundary(run.text.len()));
-    assert!(run.text.ends_with('…'));
+fn display_math_overflow_glyph_does_not_accept_a_body_hit() {
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph("Beside")),
+        Block::Equation(equation_from_source(r"\[\frac{1}{2}\]")),
+    ];
+    with_content_box(&mut document, 4.0, 800.0);
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("narrow display math failed: {error}"));
+    let page = snapshot
+        .pages
+        .iter()
+        .find(|page| !page.layout.blocks.is_empty())
+        .unwrap_or_else(|| panic!("fallback block is missing"));
+    let placed = &page.layout.blocks[0];
+    let math = snapshot
+        .display_math
+        .iter()
+        .find(|math| math.id == placed.block_id)
+        .unwrap_or_else(|| panic!("fallback snapshot is missing"));
+    let content_left = page.margin_left_pt;
+    let content_width = page.width_pt - page.margin_left_pt - page.margin_right_pt;
+    assert!(f64::from(math.width_pt) > content_width);
+    let math_left = math.origin_x_pt(content_left, content_width);
+    assert!(math_left < content_left);
+    let glyph_y = page.margin_top_pt + f64::from(placed.y_offset_pt) + 1.0;
+    assert!(snapshot.hit_test(0, math_left + 0.5, glyph_y).is_none());
+    assert!(
+        snapshot
+            .hit_test(0, page.width_pt / 2.0, page.margin_top_pt + 1.0)
+            .is_some()
+    );
+}
+
+#[test]
+fn display_math_moves_intact_when_the_remaining_page_is_too_short() {
+    let equation = equation_from_source(r"\[\frac{1}{2}\]");
+    let equation_id = equation.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph("Before")),
+        Block::Equation(equation),
+    ];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let fitted = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("fitted display math failed: {error}"));
+    let paragraph_height = fitted.paragraphs[0]
+        .layout
+        .paragraph
+        .lines
+        .iter()
+        .map(|line| line.metrics.height_pt)
+        .sum::<f32>();
+    let math_height = fitted.display_math[0].height_pt();
+    // 版心容纳整块公式，但容不下段落后剩余的间距加公式，所以公式整块移到下一页。
+    with_content_box(
+        &mut document,
+        400.0,
+        f64::from(paragraph_height + 8.0 + math_height) - 1.0,
+    );
+    let snapshot = service
+        .layout(&document, 2, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("paged display math failed: {error}"));
+
+    assert!(snapshot.pages.len() >= 2);
+    assert!(snapshot.pages[0].layout.blocks.is_empty());
+    let placed = snapshot
+        .pages
+        .iter()
+        .find_map(|page| {
+            page.layout
+                .blocks
+                .iter()
+                .find(|block| block.block_id == equation_id)
+        })
+        .unwrap_or_else(|| panic!("equation should move to a later page"));
+    assert!((placed.height_pt - math_height).abs() < 0.01);
+    assert_eq!(placed.y_offset_pt, 0.0);
+    assert!(
+        snapshot.display_math[0]
+            .layout
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !matches!(
+                diagnostic,
+                caret_math::MathLayoutDiagnostic::DisplayBlockFallback { .. }
+            ))
+    );
+}
+
+#[test]
+fn unchanged_display_math_is_reused_when_another_paragraph_changes() {
+    let equation = equation_from_source(r"\[\text{kept}\]");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph("Before")),
+        Block::Equation(equation),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("display math document should open: {error}"));
+    let paragraph_id = session.selection().focus.paragraph_id.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let style = ShapingStyle::new(1200);
+    let previous = service
+        .layout_session(&session, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("initial display math layout failed: {error}"));
+    let math_layout = Arc::clone(&previous.display_math[0].layout);
+    let math_resources = Arc::clone(&previous.display_math[0].text_resources);
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("paragraph edit should succeed: {error}"));
+    let next = service
+        .layout_session_reusing(&session, &previous, &paragraph_id, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("display math reuse failed: {error}"));
+
+    assert!(Arc::ptr_eq(&math_layout, &next.display_math[0].layout));
+    assert!(Arc::ptr_eq(
+        &math_resources,
+        &next.display_math[0].text_resources
+    ));
+    assert_ne!(previous.paragraphs[0].text, next.paragraphs[0].text);
+}
+
+#[test]
+fn display_math_extends_the_environment_range() {
+    let equation = equation_from_source(r"\[\frac{1}{2}\]");
+    let equation_id = equation.id.clone();
+    let environment_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: vec![Block::Equation(equation)],
+        extra: BTreeMap::new(),
+    })];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("environment display math failed: {error}"));
+    let block = snapshot.pages[0]
+        .layout
+        .blocks
+        .iter()
+        .find(|block| block.block_id == equation_id)
+        .unwrap_or_else(|| panic!("equation block is missing"));
+    let range = snapshot
+        .environment_ranges
+        .iter()
+        .find(|range| range.environment_id == environment_id)
+        .unwrap_or_else(|| panic!("section range should include the equation"));
+    let y0_pt = snapshot.pages[0].margin_top_pt + f64::from(block.y_offset_pt);
+    assert!((range.y0_pt - y0_pt).abs() < 0.01);
+    assert!((range.y1_pt - (y0_pt + f64::from(block.height_pt))).abs() < 0.01);
+}
+
+#[test]
+fn empty_display_math_is_a_visible_slot_and_keeps_its_source() {
+    let equation_id = NodeId::generate();
+    let align_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree: source_only_math_tree(""),
+            extra: Default::default(),
+        }),
+        Block::Align(Align {
+            id: align_id.clone(),
+            source: "a &= b".to_owned(),
+            rows: Vec::new(),
+            extra: Default::default(),
+        }),
+    ];
+    let original = document.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("empty display math should layout: {error}"));
+
+    assert_eq!(document, original);
+    let equation = snapshot
+        .display_math
+        .iter()
+        .find(|block| block.id == equation_id)
+        .unwrap_or_else(|| panic!("empty equation is missing"));
+    assert!(equation.layout.diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic,
+            caret_math::MathLayoutDiagnostic::EmptyFormulaPlaceholder
+        )
+    }));
+    assert!(equation.height_pt() > 0.0);
+    let align = snapshot
+        .display_math
+        .iter()
+        .find(|block| block.id == align_id)
+        .unwrap_or_else(|| panic!("empty align is missing"));
+    assert!(align.layout.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        caret_math::MathLayoutDiagnostic::DisplayBlockFallback { reason }
+            if reason == "align has no rows"
+    )));
+    assert!(snapshot.paragraph_by_id(&equation_id).is_none());
 }
 
 fn single_line_y_offset(snapshot: &super::DocumentLayoutSnapshot, paragraph_id: &NodeId) -> f32 {

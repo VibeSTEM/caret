@@ -145,6 +145,13 @@ Item {
         if (pageMap === undefined)
             return;
 
+        const blocked = pageMap.blocked || [];
+        for (let index = 0; index < blocked.length; ++index) {
+            const region = blocked[index];
+            if (pageHit.xPt >= region.x0Pt && pageHit.xPt <= region.x1Pt && pageHit.yPt >= region.y0Pt && pageHit.yPt <= region.y1Pt)
+                return;
+        }
+
         const stops = pageMap.stops;
         if (!stops || stops.length === 0)
             return;

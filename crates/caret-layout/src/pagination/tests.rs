@@ -1,6 +1,9 @@
 //! 验证分页、段落约束和页面推进规则。
 
-use super::{PaginationError, PaginationItem, ParagraphPaginationInput, paginate_paragraphs};
+use super::{
+    AtomicBlockPaginationInput, PaginationError, PaginationItem, ParagraphPaginationInput,
+    paginate_paragraphs,
+};
 use crate::{LineMetrics, ParagraphLayout, ParagraphLine};
 use caret_doc::NodeId;
 use std::ops::Range;
@@ -26,6 +29,15 @@ fn paragraph(heights: &[f32]) -> ParagraphLayout {
             .collect(),
         total_height_pt: heights.iter().sum(),
     }
+}
+
+fn atomic<'a>(id: &'a NodeId, height: f32, before: f32, after: f32) -> PaginationItem<'a> {
+    PaginationItem::AtomicBlock(AtomicBlockPaginationInput {
+        block_id: id,
+        height_pt: height,
+        space_before_pt: before,
+        space_after_pt: after,
+    })
 }
 
 fn input<'a>(
@@ -453,4 +465,114 @@ fn malformed_paragraph_lines_do_not_produce_partial_pages() {
         assert_eq!(error, PaginationError::InvalidLineHeight);
         assert_eq!(error.to_string(), "layout.invalid_line_height");
     }
+}
+
+#[test]
+fn atomic_block_moves_intact_when_the_remaining_page_is_too_short()
+-> Result<(), Box<dyn std::error::Error>> {
+    let paragraph_id = NodeId::generate();
+    let block_id = NodeId::generate();
+    let text = paragraph(&[30.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&paragraph_id, &text, 0.0, 8.0),
+            atomic(&block_id, 20.0, 0.0, 8.0),
+        ],
+        50.0,
+    )?;
+
+    assert_eq!(pages.len(), 2);
+    assert!(pages[0].blocks.is_empty());
+    assert_eq!(pages[1].blocks.len(), 1);
+    assert_eq!(pages[1].blocks[0].block_id, block_id);
+    assert_eq!(pages[1].blocks[0].y_offset_pt, 0.0);
+    assert_eq!(pages[1].blocks[0].height_pt, 20.0);
+    assert_eq!(pages[1].used_height_pt, 20.0);
+    Ok(())
+}
+
+#[test]
+fn atomic_block_taller_than_a_page_keeps_its_height_and_is_placed_once()
+-> Result<(), Box<dyn std::error::Error>> {
+    let block_id = NodeId::generate();
+    let paragraph_id = NodeId::generate();
+    let text = paragraph(&[10.0]);
+    let pages = paginate_paragraphs(
+        &[
+            atomic(&block_id, 80.0, 0.0, 8.0),
+            input(&paragraph_id, &text, 0.0, 0.0),
+        ],
+        40.0,
+    )?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].blocks[0].height_pt, 80.0);
+    assert_eq!(pages[0].used_height_pt, 80.0);
+    assert!(pages[0].fragments.is_empty());
+    assert_eq!(pages[1].fragments[0].paragraph_id, paragraph_id);
+    assert_eq!(pages[1].fragments[0].y_offset_pt, 0.0);
+    Ok(())
+}
+
+#[test]
+fn atomic_block_uses_the_larger_adjacent_spacing() -> Result<(), Box<dyn std::error::Error>> {
+    let paragraph_id = NodeId::generate();
+    let block_id = NodeId::generate();
+    let text = paragraph(&[10.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&paragraph_id, &text, 0.0, 4.0),
+            atomic(&block_id, 10.0, 9.0, 3.0),
+            input(&paragraph_id, &text, 1.0, 0.0),
+        ],
+        100.0,
+    )?;
+
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].blocks[0].y_offset_pt, 19.0);
+    assert_eq!(pages[0].fragments[1].y_offset_pt, 32.0);
+    Ok(())
+}
+
+#[test]
+fn keep_with_next_moves_a_paragraph_together_with_the_following_atomic_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let heading_id = NodeId::generate();
+    let block_id = NodeId::generate();
+    let heading = paragraph(&[20.0]);
+    let mut heading_item = input(&heading_id, &heading, 0.0, 8.0);
+    if let PaginationItem::Paragraph(paragraph) = &mut heading_item {
+        paragraph.keep_with_next = true;
+    }
+    let previous_id = NodeId::generate();
+    let previous = paragraph(&[30.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&previous_id, &previous, 0.0, 0.0),
+            heading_item,
+            atomic(&block_id, 20.0, 0.0, 0.0),
+        ],
+        50.0,
+    )?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].fragments[0].paragraph_id, previous_id);
+    assert!(pages[0].blocks.is_empty());
+    assert_eq!(pages[1].fragments[0].paragraph_id, heading_id);
+    assert_eq!(pages[1].blocks[0].block_id, block_id);
+    assert_eq!(pages[1].blocks[0].y_offset_pt, 28.0);
+    Ok(())
+}
+
+#[test]
+fn atomic_block_rejects_non_positive_height_without_a_partial_page() {
+    let id = NodeId::generate();
+    assert_eq!(
+        paginate_paragraphs(&[atomic(&id, 0.0, 0.0, 0.0)], 100.0),
+        Err(PaginationError::InvalidLineHeight)
+    );
+    assert_eq!(
+        paginate_paragraphs(&[atomic(&id, f32::NAN, 0.0, 0.0)], 100.0),
+        Err(PaginationError::InvalidLineHeight)
+    );
 }

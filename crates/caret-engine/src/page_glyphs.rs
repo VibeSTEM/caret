@@ -40,9 +40,11 @@ pub(crate) enum PageDrawItem {
 #[derive(Debug, Clone)]
 pub(crate) struct PageMathObject {
     pub(crate) id: NodeId,
+    /// 行内公式是所属段落；显示公式没有段落，这里是公式块 ID。
     pub(crate) paragraph_id: NodeId,
     pub(crate) source_bytes: Range<usize>,
     pub(crate) line_index: usize,
+    pub(crate) display_block: bool,
     pub(crate) line_clip_y_pt: Option<[f64; 2]>,
     pub(crate) x_pt: f64,
     pub(crate) baseline_y_pt: f64,
@@ -56,6 +58,7 @@ impl PartialEq for PageMathObject {
             && self.paragraph_id == other.paragraph_id
             && self.source_bytes == other.source_bytes
             && self.line_index == other.line_index
+            && self.display_block == other.display_block
             && self.line_clip_y_pt == other.line_clip_y_pt
             && self.x_pt == other.x_pt
             && self.baseline_y_pt == other.baseline_y_pt
@@ -250,6 +253,7 @@ pub struct PageGlyphDecoration {
 pub enum PageGlyphError {
     InvalidPageIndex,
     MissingParagraph,
+    MissingDisplayMath,
     InvalidLineRange,
     InvalidLineGeometry,
     InvalidGlyphSource,
@@ -263,6 +267,7 @@ impl std::fmt::Display for PageGlyphError {
         formatter.write_str(match self {
             Self::InvalidPageIndex => "layout.glyphs.invalid_page_index",
             Self::MissingParagraph => "layout.glyphs.missing_paragraph",
+            Self::MissingDisplayMath => "layout.glyphs.missing_display_math",
             Self::InvalidLineRange => "layout.glyphs.invalid_line_range",
             Self::InvalidLineGeometry => "layout.glyphs.invalid_line_geometry",
             Self::InvalidGlyphSource => "layout.glyphs.invalid_source",
@@ -296,160 +301,28 @@ impl DocumentLayoutSnapshot {
         let mut decorations = Vec::new();
         let mut math_objects = Vec::new();
         let mut draw_order = Vec::new();
+        let mut pieces = Vec::with_capacity(page.layout.fragments.len() + page.layout.blocks.len());
         for fragment in &page.layout.fragments {
-            let paragraph = self
-                .paragraph_by_id(&fragment.paragraph_id)
-                .ok_or(PageGlyphError::MissingParagraph)?;
-            let line_range = &fragment.line_range;
-            if line_range.start >= line_range.end
-                || line_range.end > paragraph.layout.paragraph.lines.len()
-            {
-                return Err(PageGlyphError::InvalidLineRange);
-            }
-            let mut page_line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
-            let math_objects_by_id = paragraph
-                .math_objects
-                .iter()
-                .map(|math| (math.inline_box_id, math))
-                .collect::<HashMap<_, _>>();
-            let inline_positions_by_id = paragraph
-                .layout
-                .positioned_inline_objects
-                .iter()
-                .map(|position| (position.id, position))
-                .collect::<HashMap<_, _>>();
-            if !page_line_top_pt.is_finite() || fragment.y_offset_pt < 0.0 {
-                return Err(PageGlyphError::InvalidLineGeometry);
-            }
-            for line_index in line_range.clone() {
-                let caret_line = &paragraph.layout.paragraph.lines[line_index];
-                let line_height_pt = f64::from(caret_line.metrics.height_pt);
-                let line_clip_y_pt = caret_line
-                    .metrics
-                    .clip_ink_to_line_height
-                    .then_some([page_line_top_pt, page_line_top_pt + line_height_pt]);
-                if !line_height_pt.is_finite() || line_height_pt <= 0.0 {
-                    return Err(PageGlyphError::InvalidLineGeometry);
+            pieces.push((fragment.y_offset_pt, PagePiece::Fragment(fragment)));
+        }
+        for block in &page.layout.blocks {
+            pieces.push((block.y_offset_pt, PagePiece::Block(block)));
+        }
+        pieces.sort_by(|left, right| left.0.total_cmp(&right.0));
+        for (_, piece) in pieces {
+            match piece {
+                PagePiece::Fragment(fragment) => append_paragraph_fragment(
+                    self,
+                    page,
+                    fragment,
+                    &mut runs,
+                    &mut decorations,
+                    &mut math_objects,
+                    &mut draw_order,
+                )?,
+                PagePiece::Block(block) => {
+                    append_display_math(self, page, block, &mut math_objects, &mut draw_order)?
                 }
-                // 空段由 Caret 合成不可见行框，Parley 可以没有对应的绘制行。
-                if paragraph.text.is_empty() {
-                    page_line_top_pt += line_height_pt;
-                    continue;
-                }
-                let draw_items = paragraph
-                    .layout
-                    .positioned_draw_items_for_line(line_index)
-                    .map_err(|error| match error {
-                        caret_layout::PositionedParagraphDrawError::InvalidLineGeometry => {
-                            PageGlyphError::InvalidLineGeometry
-                        }
-                        caret_layout::PositionedParagraphDrawError::InvalidLineIndex
-                        | caret_layout::PositionedParagraphDrawError::InvalidGlyphRun => {
-                            PageGlyphError::InvalidGlyphSource
-                        }
-                    })?;
-                for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
-                    let x_pt = page.margin_left_pt + bounds.x0;
-                    let y_pt = page_line_top_pt + bounds.y0;
-                    let width_pt = bounds.x1 - bounds.x0;
-                    let height_pt = bounds.y1 - bounds.y0;
-                    if !x_pt.is_finite()
-                        || !y_pt.is_finite()
-                        || !width_pt.is_finite()
-                        || !height_pt.is_finite()
-                        || width_pt <= 0.0
-                        || height_pt <= 0.0
-                    {
-                        return Err(PageGlyphError::InvalidLineGeometry);
-                    }
-                    decorations.push(PageGlyphDecoration {
-                        x_pt,
-                        y_pt,
-                        width_pt,
-                        height_pt,
-                        color,
-                        line_clip_y_pt,
-                    });
-                }
-                for item in draw_items {
-                    let PositionedParagraphDrawItem::GlyphRun(glyph_run) = item else {
-                        let PositionedParagraphDrawItem::InlineObject { id } = item else {
-                            return Err(PageGlyphError::InvalidGlyphSource);
-                        };
-                        let math = math_objects_by_id
-                            .get(&id)
-                            .copied()
-                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
-                        let position = inline_positions_by_id
-                            .get(&id)
-                            .copied()
-                            .filter(|position| position.line_index == line_index)
-                            .ok_or(PageGlyphError::InvalidGlyphSource)?;
-                        let x_pt = page.margin_left_pt + f64::from(position.x_pt);
-                        let baseline_y_pt = page_line_top_pt
-                            + f64::from(position.y_pt)
-                            + f64::from(position.baseline_pt);
-                        if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
-                            return Err(PageGlyphError::InvalidLineGeometry);
-                        }
-                        let source_bytes = math.source_bytes.clone();
-                        if source_bytes != position.source_bytes {
-                            return Err(PageGlyphError::InvalidGlyphSource);
-                        }
-                        let math_index = math_objects.len();
-                        math_objects.push(PageMathObject {
-                            id: math.id.clone(),
-                            paragraph_id: paragraph.id.clone(),
-                            source_bytes,
-                            line_index,
-                            line_clip_y_pt,
-                            x_pt,
-                            baseline_y_pt,
-                            layout: Arc::clone(&math.layout),
-                            text_resources: Arc::clone(&math.text_resources),
-                        });
-                        draw_order.push(PageDrawItem::MathObject(math_index));
-                        continue;
-                    };
-                    let font_size_pt = glyph_run.font_size_pt;
-                    if !font_size_pt.is_finite()
-                        || font_size_pt <= 0.0
-                        || glyph_run.font.data.is_empty()
-                    {
-                        return Err(PageGlyphError::InvalidGlyphSource);
-                    }
-                    let mut glyphs = Vec::new();
-                    // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
-                    // 的全局 f32 baseline 吞掉组合附标的局部偏移。
-                    for glyph in glyph_run.glyphs {
-                        let x_pt = page.margin_left_pt + f64::from(glyph.x_pt);
-                        let baseline_y_pt = page_line_top_pt + glyph.baseline_offset_pt;
-                        if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
-                            return Err(PageGlyphError::InvalidGlyphSource);
-                        }
-                        glyphs.push(PageGlyph {
-                            glyph_id: glyph.glyph_id,
-                            x_pt,
-                            baseline_y_pt,
-                        });
-                    }
-                    if !glyphs.is_empty() {
-                        let run_index = runs.len();
-                        runs.push(PageGlyphRun {
-                            paragraph_id: paragraph.id.clone(),
-                            line_index,
-                            line_clip_y_pt,
-                            font: glyph_run.font.clone(),
-                            font_size_pt,
-                            normalized_coords: glyph_run.normalized_coords,
-                            synthesis: glyph_run.synthesis,
-                            foreground: glyph_run.foreground,
-                            glyphs,
-                        });
-                        draw_order.push(PageDrawItem::GlyphRun(run_index));
-                    }
-                }
-                page_line_top_pt += line_height_pt;
             }
         }
         Ok(PageGlyphSnapshot {
@@ -463,6 +336,217 @@ impl DocumentLayoutSnapshot {
             draw_order,
         })
     }
+}
+
+enum PagePiece<'a> {
+    Fragment(&'a caret_layout::ParagraphFragment),
+    Block(&'a caret_layout::PageBlockFragment),
+}
+
+fn append_paragraph_fragment(
+    snapshot: &DocumentLayoutSnapshot,
+    page: &crate::PageLayoutSnapshot,
+    fragment: &caret_layout::ParagraphFragment,
+    runs: &mut Vec<PageGlyphRun>,
+    decorations: &mut Vec<PageGlyphDecoration>,
+    math_objects: &mut Vec<PageMathObject>,
+    draw_order: &mut Vec<PageDrawItem>,
+) -> Result<(), PageGlyphError> {
+    let paragraph = snapshot
+        .paragraph_by_id(&fragment.paragraph_id)
+        .ok_or(PageGlyphError::MissingParagraph)?;
+    let line_range = &fragment.line_range;
+    if line_range.start >= line_range.end || line_range.end > paragraph.layout.paragraph.lines.len()
+    {
+        return Err(PageGlyphError::InvalidLineRange);
+    }
+    let mut page_line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+    let math_objects_by_id = paragraph
+        .math_objects
+        .iter()
+        .map(|math| (math.inline_box_id, math))
+        .collect::<HashMap<_, _>>();
+    let inline_positions_by_id = paragraph
+        .layout
+        .positioned_inline_objects
+        .iter()
+        .map(|position| (position.id, position))
+        .collect::<HashMap<_, _>>();
+    if !page_line_top_pt.is_finite() || fragment.y_offset_pt < 0.0 {
+        return Err(PageGlyphError::InvalidLineGeometry);
+    }
+    for line_index in line_range.clone() {
+        let caret_line = &paragraph.layout.paragraph.lines[line_index];
+        let line_height_pt = f64::from(caret_line.metrics.height_pt);
+        let line_clip_y_pt = caret_line
+            .metrics
+            .clip_ink_to_line_height
+            .then_some([page_line_top_pt, page_line_top_pt + line_height_pt]);
+        if !line_height_pt.is_finite() || line_height_pt <= 0.0 {
+            return Err(PageGlyphError::InvalidLineGeometry);
+        }
+        // 空段由 Caret 合成不可见行框，Parley 可以没有对应的绘制行。
+        if paragraph.text.is_empty() {
+            page_line_top_pt += line_height_pt;
+            continue;
+        }
+        let draw_items = paragraph
+            .layout
+            .positioned_draw_items_for_line(line_index)
+            .map_err(|error| match error {
+                caret_layout::PositionedParagraphDrawError::InvalidLineGeometry => {
+                    PageGlyphError::InvalidLineGeometry
+                }
+                caret_layout::PositionedParagraphDrawError::InvalidLineIndex
+                | caret_layout::PositionedParagraphDrawError::InvalidGlyphRun => {
+                    PageGlyphError::InvalidGlyphSource
+                }
+            })?;
+        for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
+            let x_pt = page.margin_left_pt + bounds.x0;
+            let y_pt = page_line_top_pt + bounds.y0;
+            let width_pt = bounds.x1 - bounds.x0;
+            let height_pt = bounds.y1 - bounds.y0;
+            if !x_pt.is_finite()
+                || !y_pt.is_finite()
+                || !width_pt.is_finite()
+                || !height_pt.is_finite()
+                || width_pt <= 0.0
+                || height_pt <= 0.0
+            {
+                return Err(PageGlyphError::InvalidLineGeometry);
+            }
+            decorations.push(PageGlyphDecoration {
+                x_pt,
+                y_pt,
+                width_pt,
+                height_pt,
+                color,
+                line_clip_y_pt,
+            });
+        }
+        for item in draw_items {
+            let PositionedParagraphDrawItem::GlyphRun(glyph_run) = item else {
+                let PositionedParagraphDrawItem::InlineObject { id } = item else {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                };
+                let math = math_objects_by_id
+                    .get(&id)
+                    .copied()
+                    .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                let position = inline_positions_by_id
+                    .get(&id)
+                    .copied()
+                    .filter(|position| position.line_index == line_index)
+                    .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                let x_pt = page.margin_left_pt + f64::from(position.x_pt);
+                let baseline_y_pt =
+                    page_line_top_pt + f64::from(position.y_pt) + f64::from(position.baseline_pt);
+                if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
+                    return Err(PageGlyphError::InvalidLineGeometry);
+                }
+                let source_bytes = math.source_bytes.clone();
+                if source_bytes != position.source_bytes {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                let math_index = math_objects.len();
+                math_objects.push(PageMathObject {
+                    id: math.id.clone(),
+                    paragraph_id: paragraph.id.clone(),
+                    source_bytes,
+                    line_index,
+                    display_block: false,
+                    line_clip_y_pt,
+                    x_pt,
+                    baseline_y_pt,
+                    layout: Arc::clone(&math.layout),
+                    text_resources: Arc::clone(&math.text_resources),
+                });
+                draw_order.push(PageDrawItem::MathObject(math_index));
+                continue;
+            };
+            let font_size_pt = glyph_run.font_size_pt;
+            if !font_size_pt.is_finite() || font_size_pt <= 0.0 || glyph_run.font.data.is_empty() {
+                return Err(PageGlyphError::InvalidGlyphSource);
+            }
+            let mut glyphs = Vec::new();
+            // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
+            // 的全局 f32 baseline 吞掉组合附标的局部偏移。
+            for glyph in glyph_run.glyphs {
+                let x_pt = page.margin_left_pt + f64::from(glyph.x_pt);
+                let baseline_y_pt = page_line_top_pt + glyph.baseline_offset_pt;
+                if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                glyphs.push(PageGlyph {
+                    glyph_id: glyph.glyph_id,
+                    x_pt,
+                    baseline_y_pt,
+                });
+            }
+            if !glyphs.is_empty() {
+                let run_index = runs.len();
+                runs.push(PageGlyphRun {
+                    paragraph_id: paragraph.id.clone(),
+                    line_index,
+                    line_clip_y_pt,
+                    font: glyph_run.font.clone(),
+                    font_size_pt,
+                    normalized_coords: glyph_run.normalized_coords,
+                    synthesis: glyph_run.synthesis,
+                    foreground: glyph_run.foreground,
+                    glyphs,
+                });
+                draw_order.push(PageDrawItem::GlyphRun(run_index));
+            }
+        }
+        page_line_top_pt += line_height_pt;
+    }
+    Ok(())
+}
+
+fn append_display_math(
+    snapshot: &DocumentLayoutSnapshot,
+    page: &crate::PageLayoutSnapshot,
+    block: &caret_layout::PageBlockFragment,
+    math_objects: &mut Vec<PageMathObject>,
+    draw_order: &mut Vec<PageDrawItem>,
+) -> Result<(), PageGlyphError> {
+    let math = snapshot
+        .display_math
+        .iter()
+        .find(|math| math.id == block.block_id)
+        .ok_or(PageGlyphError::MissingDisplayMath)?;
+    let content_width_pt = page.width_pt - page.margin_left_pt - page.margin_right_pt;
+    let x_pt = math.origin_x_pt(page.margin_left_pt, content_width_pt);
+    let baseline_y_pt =
+        page.margin_top_pt + f64::from(block.y_offset_pt) + f64::from(math.ascent_pt);
+    if !content_width_pt.is_finite()
+        || content_width_pt <= 0.0
+        || !x_pt.is_finite()
+        || !baseline_y_pt.is_finite()
+        || !math.width_pt.is_finite()
+        || !math.ascent_pt.is_finite()
+        || block.y_offset_pt < 0.0
+        || block.height_pt <= 0.0
+    {
+        return Err(PageGlyphError::InvalidLineGeometry);
+    }
+    let math_index = math_objects.len();
+    math_objects.push(PageMathObject {
+        id: math.id.clone(),
+        paragraph_id: math.id.clone(),
+        source_bytes: 0..0,
+        line_index: 0,
+        display_block: true,
+        line_clip_y_pt: None,
+        x_pt,
+        baseline_y_pt,
+        layout: Arc::clone(&math.layout),
+        text_resources: Arc::clone(&math.text_resources),
+    });
+    draw_order.push(PageDrawItem::MathObject(math_index));
+    Ok(())
 }
 
 #[cfg(test)]

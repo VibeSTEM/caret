@@ -191,6 +191,37 @@ fn layout_source_fallback(
     ),
     DocumentLayoutError,
 > {
+    let mut diagnostics = fallback.diagnostics;
+    if fallback.empty_formula {
+        diagnostics.push(MathLayoutDiagnostic::EmptyFormulaPlaceholder);
+    }
+    if let Some(reason) = fallback.error {
+        diagnostics.push(MathLayoutDiagnostic::InlinePlaceholderFallback { reason });
+    }
+    layout_visible_placeholder(
+        catalog,
+        layouter,
+        settings,
+        style,
+        fallback.root_id,
+        diagnostics,
+    )
+}
+
+pub(super) fn layout_visible_placeholder(
+    catalog: &mut FontCatalog,
+    layouter: &mut ParagraphLayouter,
+    settings: &ResolvedDocumentTextSettings,
+    style: &caret_layout::ShapingStyle,
+    root_id: &str,
+    diagnostics: Vec<MathLayoutDiagnostic>,
+) -> Result<
+    (
+        MathLayoutSnapshot,
+        std::collections::HashMap<u64, Arc<caret_layout::ParleyParagraphLayout>>,
+    ),
+    DocumentLayoutError,
+> {
     let display_text = "□";
     let shaper = ParleyMathTextShaper::new(catalog, layouter, settings, style);
     let font_size_micro_pt = i64::from(style.font_size_centipoints) * 10_000;
@@ -207,20 +238,13 @@ fn layout_source_fallback(
     shaper.finish_layout(true);
     let resources = shaper.take_resources();
     let nodes = vec![MathNodeGeometry {
-        node_id: fallback.root_id.to_owned(),
+        node_id: root_id.to_owned(),
         x_micro_pt: 0,
         y_micro_pt: -metrics.ascent_micro_pt,
         width_micro_pt: metrics.width_micro_pt,
         ascent_micro_pt: metrics.ascent_micro_pt,
         descent_micro_pt: metrics.descent_micro_pt,
     }];
-    let mut diagnostics = fallback.diagnostics;
-    if fallback.empty_formula {
-        diagnostics.push(MathLayoutDiagnostic::EmptyFormulaPlaceholder);
-    }
-    if let Some(reason) = fallback.error {
-        diagnostics.push(MathLayoutDiagnostic::InlinePlaceholderFallback { reason });
-    }
     Ok((
         MathLayoutSnapshot {
             font_resource_sha256: caret_math::MATH_FONT_SHA256,
@@ -240,7 +264,7 @@ fn layout_source_fallback(
     ))
 }
 
-fn micro_pt_to_points(value: i64) -> Result<f32, DocumentLayoutError> {
+pub(super) fn micro_pt_to_points(value: i64) -> Result<f32, DocumentLayoutError> {
     if value < 0 {
         return Err(DocumentLayoutError::MathLayout(
             "negative inline math geometry".into(),

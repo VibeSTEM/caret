@@ -4,17 +4,22 @@
 // 署名：Yuki Lu
 
 use crate::{Affinity, Pos, Selection, Session, StoryId};
-use caret_doc::{Block, Document, InlineNode, NodeId, Paragraph, Run};
+use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
-    FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
-    ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
-    paragraph_has_empty_line, paragraph_inline_math_anchors, resolve_paragraph_style,
+    AtomicBlockPaginationInput, FontCatalog, FontCatalogError, PageLayout, PaginationItem,
+    ParagraphLayoutOptions, ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout,
+    PositionedGlyphLayoutItem, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
+    paginate_paragraphs, paragraph_has_empty_line, paragraph_inline_math_anchors,
+    resolve_paragraph_style,
 };
-use caret_math::{MathLayoutBackend, MathLayoutSnapshot};
+use caret_math::MathLayoutSnapshot;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
+mod display_math;
 mod math;
+use display_math::{
+    DisplayLayoutContext, DisplayMathSource, ensure_math_backend, layout_display_math,
+};
 use math::layout_inline_math_objects;
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
@@ -75,11 +80,45 @@ pub struct LaidOutParagraph {
     pub story: StoryId,
     pub environment_ids: Arc<[NodeId]>,
     pub text: Arc<str>,
-    interactive: bool,
     pub layout: Arc<ParleyParagraphLayout>,
     pub(crate) math_objects: Arc<[LaidOutMathObject]>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
+}
+
+/// 显示公式块的布局快照。资源表只解释这一块里的正文句柄。
+#[derive(Debug, Clone)]
+pub(crate) struct LaidOutDisplayMath {
+    pub(crate) id: NodeId,
+    pub(crate) environment_ids: Arc<[NodeId]>,
+    pub(crate) layout: Arc<MathLayoutSnapshot>,
+    pub(crate) text_resources: Arc<HashMap<u64, Arc<ParleyParagraphLayout>>>,
+    pub(crate) width_pt: f32,
+    pub(crate) ascent_pt: f32,
+    pub(crate) descent_pt: f32,
+}
+
+impl LaidOutDisplayMath {
+    pub(crate) fn height_pt(&self) -> f32 {
+        self.ascent_pt + self.descent_pt
+    }
+
+    /// 公式在版心内水平居中后的左边缘。超宽占位可以落在页边距里。
+    pub(crate) fn origin_x_pt(&self, margin_left_pt: f64, content_width_pt: f64) -> f64 {
+        margin_left_pt + (content_width_pt - f64::from(self.width_pt)) / 2.0
+    }
+
+    fn reused(&self, environment_ids: &[NodeId]) -> Self {
+        Self {
+            id: self.id.clone(),
+            environment_ids: Arc::from(environment_ids),
+            layout: Arc::clone(&self.layout),
+            text_resources: Arc::clone(&self.text_resources),
+            width_pt: self.width_pt,
+            ascent_pt: self.ascent_pt,
+            descent_pt: self.descent_pt,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,11 +137,6 @@ struct CaretLineLocation {
 }
 
 impl LaidOutParagraph {
-    /// 预览段落供阅读布局使用，不代表可编辑的文档位置。
-    pub fn is_interactive(&self) -> bool {
-        self.interactive
-    }
-
     fn new(
         id: NodeId,
         story: StoryId,
@@ -110,7 +144,6 @@ impl LaidOutParagraph {
         text: String,
         layout: ParleyParagraphLayout,
         math_objects: Vec<LaidOutMathObject>,
-        interactive: bool,
     ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
         let mut utf16_offset = 0;
@@ -128,7 +161,6 @@ impl LaidOutParagraph {
             story,
             environment_ids: Arc::from(environment_ids),
             text: Arc::from(text),
-            interactive,
             layout: Arc::new(layout),
             math_objects: Arc::from(math_objects),
             utf16_checkpoints: Arc::from(utf16_checkpoints),
@@ -142,7 +174,6 @@ impl LaidOutParagraph {
             story,
             environment_ids: Arc::from(environment_ids),
             text: Arc::clone(&self.text),
-            interactive: self.interactive,
             layout: Arc::clone(&self.layout),
             math_objects: Arc::clone(&self.math_objects),
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
@@ -202,9 +233,10 @@ pub struct DocumentLayoutSnapshot {
     pub font_generation: u64,
     default_font_size_centipoints: u16,
     pub paragraphs: Vec<LaidOutParagraph>,
+    pub(crate) display_math: Vec<LaidOutDisplayMath>,
     pub pages: Vec<PageLayoutSnapshot>,
     pub environment_ranges: Vec<PageEnvironmentRange>,
-    math_preview_regions: Vec<MathPreviewRegion>,
+    display_math_regions: Vec<DisplayMathRegion>,
     paragraph_lookup: HashMap<NodeId, usize>,
     layout_context: LayoutReuseContext,
 }
@@ -218,7 +250,7 @@ struct LayoutReuseContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MathPreviewRegion {
+struct DisplayMathRegion {
     page_index: usize,
     x0_pt: f64,
     y0_pt: f64,
@@ -280,7 +312,7 @@ impl DocumentLayoutSnapshot {
         visual_affinity: VisualAffinity,
     ) -> Option<u16> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
-        if !paragraph.interactive || paragraph.story != position.story {
+        if paragraph.story != position.story {
             return None;
         }
         let cursor = paragraph
@@ -318,30 +350,27 @@ impl DocumentLayoutSnapshot {
         self.paragraphs.get(*self.paragraph_lookup.get(id)?)
     }
 
+    /// 返回这一页上挡住正文命中的显示公式矩形，顺序为 x0、y0、x1、y1。
+    pub fn display_math_bounds(&self, page_index: usize) -> Vec<[f64; 4]> {
+        self.display_math_regions
+            .iter()
+            .filter(|region| region.page_index == page_index)
+            .map(|region| [region.x0_pt, region.y0_pt, region.x1_pt, region.y1_pt])
+            .collect()
+    }
+
     pub fn paragraph_index_by_id(&self, id: &NodeId) -> Option<usize> {
         self.paragraph_lookup.get(id).copied()
     }
 
-    /// 查找指定段落前/后的下一个可交互段落，跳过只读布局预览。
-    pub fn adjacent_interactive_paragraph_index(
-        &self,
-        paragraph_index: usize,
-        forward: bool,
-    ) -> Option<usize> {
-        if forward {
-            self.paragraphs
-                .iter()
-                .enumerate()
-                .skip(paragraph_index.checked_add(1)?)
-                .find_map(|(index, paragraph)| paragraph.interactive.then_some(index))
+    /// 查找指定段落前或后的相邻已排版段落。
+    pub fn adjacent_paragraph_index(&self, paragraph_index: usize, forward: bool) -> Option<usize> {
+        let index = if forward {
+            paragraph_index.checked_add(1)?
         } else {
-            self.paragraphs
-                .get(..paragraph_index)?
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(index, paragraph)| paragraph.interactive.then_some(index))
-        }
+            paragraph_index.checked_sub(1)?
+        };
+        self.paragraphs.get(index).map(|_| index)
     }
 
     /// 判断此布局结果是否仍对应当前文档与字体输入。
@@ -362,7 +391,7 @@ impl DocumentLayoutSnapshot {
         if x_pt < 0.0 || y_pt < 0.0 || x_pt > page.width_pt || y_pt > page.height_pt {
             return None;
         }
-        if self.math_preview_regions.iter().any(|region| {
+        if self.display_math_regions.iter().any(|region| {
             region.page_index == page_index
                 && x_pt >= region.x0_pt
                 && x_pt <= region.x1_pt
@@ -380,9 +409,6 @@ impl DocumentLayoutSnapshot {
             let Some(paragraph) = self.paragraphs.get(paragraph_index) else {
                 continue;
             };
-            if !paragraph.interactive {
-                continue;
-            }
             let mut line_top = f64::from(fragment.y_offset_pt);
             for line_index in fragment.line_range.clone() {
                 let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
@@ -440,7 +466,7 @@ impl DocumentLayoutSnapshot {
         visual_affinity: VisualAffinity,
     ) -> Option<PageCaretGeometry> {
         let paragraph = self.paragraph_by_id(&position.paragraph_id)?;
-        if !paragraph.interactive || paragraph.story != position.story {
+        if paragraph.story != position.story {
             return None;
         }
         let cursor = paragraph
@@ -480,8 +506,6 @@ impl DocumentLayoutSnapshot {
         let focus_paragraph = self.paragraphs.get(focus_index)?;
         if anchor_paragraph.story != anchor.story
             || focus_paragraph.story != focus.story
-            || !anchor_paragraph.interactive
-            || !focus_paragraph.interactive
             || !Self::valid_text_offset(anchor_paragraph, anchor.offset)
             || !Self::valid_text_offset(focus_paragraph, focus.offset)
         {
@@ -562,9 +586,7 @@ impl DocumentLayoutSnapshot {
     }
 
     fn valid_text_offset(paragraph: &LaidOutParagraph, offset: usize) -> bool {
-        paragraph.interactive
-            && offset <= paragraph.text.len()
-            && paragraph.text.is_char_boundary(offset)
+        offset <= paragraph.text.len() && paragraph.text.is_char_boundary(offset)
     }
 
     fn text_range_geometry(
@@ -577,8 +599,7 @@ impl DocumentLayoutSnapshot {
         let mut rectangles = Vec::new();
         for paragraph_index in range.start_index..=range.end_index {
             let paragraph = self.paragraphs.get(paragraph_index)?;
-            if !paragraph.interactive
-                || story.is_some_and(|story| &paragraph.story != story)
+            if story.is_some_and(|story| &paragraph.story != story)
                 || paragraph
                     .environment_ids
                     .iter()
@@ -857,12 +878,10 @@ impl DocumentLayoutService {
                 paragraph,
                 story,
                 environment_ids,
-                interactive,
             } = item
             else {
                 continue;
             };
-            let paragraph = paragraph.as_ref();
             let style =
                 resolve_paragraph_style(&document.global_settings, paragraph.layout.as_ref())
                     .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
@@ -892,14 +911,11 @@ impl DocumentLayoutService {
             let (math_objects, inline_boxes) = if paragraph_math.is_empty() {
                 (Vec::new(), Vec::new())
             } else {
-                if math_backend.is_none() && math_backend_error.is_none() {
-                    match MathLayoutBackend::for_requested_font_family(
-                        document.global_settings.default_math_font_family.as_deref(),
-                    ) {
-                        Ok(backend) => math_backend = Some(backend),
-                        Err(error) => math_backend_error = Some(error.to_string()),
-                    }
-                }
+                ensure_math_backend(
+                    &mut math_backend,
+                    &mut math_backend_error,
+                    document.global_settings.default_math_font_family.as_deref(),
+                );
                 layout_inline_math_objects(
                     math_backend.as_ref(),
                     math_backend_error.as_deref(),
@@ -938,16 +954,79 @@ impl DocumentLayoutService {
                 text,
                 layout,
                 math_objects,
-                *interactive,
             ));
+        }
+
+        let block_style = resolve_paragraph_style(&document.global_settings, None)
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        let previous_display = reuse.map(|(previous, _)| {
+            previous
+                .display_math
+                .iter()
+                .map(|math| (math.id.clone(), math))
+                .collect::<HashMap<_, _>>()
+        });
+        let mut display_math = Vec::new();
+        for item in &ordered_inputs {
+            let LayoutInput::DisplayMath {
+                source,
+                environment_ids,
+            } = item
+            else {
+                continue;
+            };
+            if let Some((_, changed_paragraph_id)) = reuse
+                && source.id() != changed_paragraph_id
+                && let Some(previous_math) = previous_display
+                    .as_ref()
+                    .and_then(|previous| previous.get(source.id()))
+                && previous_math.environment_ids.as_ref() == environment_ids.as_slice()
+            {
+                display_math.push(previous_math.reused(environment_ids));
+                continue;
+            }
+            ensure_math_backend(
+                &mut math_backend,
+                &mut math_backend_error,
+                document.global_settings.default_math_font_family.as_deref(),
+            );
+            display_math.push(layout_display_math(
+                &mut DisplayLayoutContext {
+                    backend: math_backend.as_ref(),
+                    backend_error: math_backend_error.as_deref(),
+                    layouter: &mut self.layouter,
+                    catalog,
+                    settings: &text_settings,
+                    style: base_style,
+                    content_width_pt,
+                    content_height_pt,
+                },
+                *source,
+                environment_ids.clone(),
+            )?);
         }
 
         let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
         let mut paragraph_index = 0;
-        for item in ordered_inputs {
+        let mut display_index = 0;
+        for item in &ordered_inputs {
             match item {
                 LayoutInput::ExplicitBreak => {
                     pagination_items.push(PaginationItem::ExplicitPageBreak);
+                }
+                LayoutInput::DisplayMath { .. } => {
+                    let math = display_math.get(display_index).ok_or_else(|| {
+                        DocumentLayoutError::InvalidDocument("missing display math block".into())
+                    })?;
+                    pagination_items.push(PaginationItem::AtomicBlock(
+                        AtomicBlockPaginationInput {
+                            block_id: &math.id,
+                            height_pt: math.height_pt(),
+                            space_before_pt: block_style.space_before_pt,
+                            space_after_pt: block_style.space_after_pt,
+                        },
+                    ));
+                    display_index += 1;
                 }
                 LayoutInput::Paragraph { .. } => {
                     let paragraph = paragraphs.get(paragraph_index).ok_or_else(|| {
@@ -981,7 +1060,7 @@ impl DocumentLayoutService {
                 layout,
             })
             .collect();
-        let mut math_preview_regions = Vec::new();
+        let mut display_math_regions = Vec::new();
         let paragraph_lookup: HashMap<_, _> = paragraphs
             .iter()
             .enumerate()
@@ -996,8 +1075,6 @@ impl DocumentLayoutService {
                     continue;
                 };
                 let mut y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
-                let mut preview_y0_pt = None;
-                let mut preview_y1_pt = None;
                 for line_index in fragment.line_range.clone() {
                     let Some(line) = paragraph.layout.paragraph.lines.get(line_index) else {
                         continue;
@@ -1005,24 +1082,31 @@ impl DocumentLayoutService {
                     if let Some(location) = paragraph.line_locations.get_mut(line_index) {
                         *location = Some(CaretLineLocation { page_index, y0_pt });
                     }
-                    if !paragraph.interactive {
-                        preview_y0_pt.get_or_insert(y0_pt);
-                        preview_y1_pt = Some(y0_pt + f64::from(line.metrics.height_pt));
-                    }
                     y0_pt += f64::from(line.metrics.height_pt);
                 }
-                if let (Some(y0_pt), Some(y1_pt)) = (preview_y0_pt, preview_y1_pt) {
-                    math_preview_regions.push(MathPreviewRegion {
-                        page_index,
-                        x0_pt: page.margin_left_pt,
-                        y0_pt,
-                        x1_pt: page.width_pt - page.margin_right_pt,
-                        y1_pt,
-                    });
-                }
+            }
+            for block in &page.layout.blocks {
+                let Some(math) = display_math.iter().find(|math| math.id == block.block_id) else {
+                    continue;
+                };
+                let y0_pt = page.margin_top_pt + f64::from(block.y_offset_pt);
+                let content_left_pt = page.margin_left_pt;
+                let content_right_pt = page.width_pt - page.margin_right_pt;
+                let content_width_pt = content_right_pt - content_left_pt;
+                let math_left_pt = math.origin_x_pt(content_left_pt, content_width_pt);
+                let math_right_pt = math_left_pt + f64::from(math.width_pt);
+                // 整栏版心都不接受正文命中；伸进页边距的可见占位也算在内。
+                display_math_regions.push(DisplayMathRegion {
+                    page_index,
+                    x0_pt: content_left_pt.min(math_left_pt),
+                    y0_pt,
+                    x1_pt: content_right_pt.max(math_right_pt),
+                    y1_pt: y0_pt + f64::from(block.height_pt),
+                });
             }
         }
-        let environment_ranges = collect_environment_ranges(&pages, &paragraphs, &paragraph_lookup);
+        let environment_ranges =
+            collect_environment_ranges(&pages, &paragraphs, &paragraph_lookup, &display_math);
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -1032,9 +1116,10 @@ impl DocumentLayoutService {
             default_font_size_centipoints: base_style.font_size_centipoints,
             paragraph_lookup,
             paragraphs,
+            display_math,
             pages,
             environment_ranges,
-            math_preview_regions,
+            display_math_regions,
             layout_context,
         })
     }
@@ -1044,6 +1129,7 @@ fn collect_environment_ranges(
     pages: &[PageLayoutSnapshot],
     paragraphs: &[LaidOutParagraph],
     paragraph_lookup: &HashMap<NodeId, usize>,
+    display_math: &[LaidOutDisplayMath],
 ) -> Vec<PageEnvironmentRange> {
     let mut ranges = HashMap::<(NodeId, usize), (f64, f64)>::new();
     for (page_index, page) in pages.iter().enumerate() {
@@ -1081,6 +1167,22 @@ fn collect_environment_ranges(
             let y0_pt = first_line.y0_pt;
             let y1_pt = last_line.y0_pt + f64::from(line.metrics.height_pt);
             for environment_id in paragraph.environment_ids.iter() {
+                ranges
+                    .entry((environment_id.clone(), page_index))
+                    .and_modify(|range| {
+                        range.0 = range.0.min(y0_pt);
+                        range.1 = range.1.max(y1_pt);
+                    })
+                    .or_insert((y0_pt, y1_pt));
+            }
+        }
+        for block in &page.layout.blocks {
+            let Some(math) = display_math.iter().find(|math| math.id == block.block_id) else {
+                continue;
+            };
+            let y0_pt = page.margin_top_pt + f64::from(block.y_offset_pt);
+            let y1_pt = y0_pt + f64::from(block.height_pt);
+            for environment_id in math.environment_ids.iter() {
                 ranges
                     .entry((environment_id.clone(), page_index))
                     .and_modify(|range| {
@@ -1207,26 +1309,15 @@ impl DocumentLayoutRuntime {
 
 enum LayoutInput<'a> {
     Paragraph {
-        paragraph: ParagraphSource<'a>,
+        paragraph: &'a Paragraph,
         story: StoryId,
         environment_ids: Vec<NodeId>,
-        interactive: bool,
     },
     ExplicitBreak,
-}
-
-enum ParagraphSource<'a> {
-    Borrowed(&'a Paragraph),
-    Owned(Box<Paragraph>),
-}
-
-impl ParagraphSource<'_> {
-    fn as_ref(&self) -> &Paragraph {
-        match self {
-            Self::Borrowed(paragraph) => paragraph,
-            Self::Owned(paragraph) => paragraph,
-        }
-    }
+    DisplayMath {
+        source: DisplayMathSource<'a>,
+        environment_ids: Vec<NodeId>,
+    },
 }
 
 fn collect_blocks<'a>(
@@ -1237,19 +1328,17 @@ fn collect_blocks<'a>(
     for block in blocks {
         match block {
             Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
-                paragraph: ParagraphSource::Borrowed(paragraph),
+                paragraph,
                 story: StoryId::Body,
                 environment_ids: environment_ids.clone(),
-                interactive: true,
             }),
             Block::Environment(environment) => {
                 environment_ids.push(environment.id.clone());
                 if let Some(title) = &environment.title {
                     ordered.push(LayoutInput::Paragraph {
-                        paragraph: ParagraphSource::Borrowed(title),
+                        paragraph: title,
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
                         environment_ids: environment_ids.clone(),
-                        interactive: true,
                     });
                 }
                 collect_blocks(&environment.children, ordered, environment_ids)?;
@@ -1263,63 +1352,20 @@ fn collect_blocks<'a>(
                 }
                 ordered.push(LayoutInput::ExplicitBreak);
             }
-            Block::Equation(equation) => {
-                ordered.push(LayoutInput::Paragraph {
-                    paragraph: ParagraphSource::Owned(Box::new(math_preview_paragraph(
-                        equation.id.clone(),
-                        &equation.math_tree.source,
-                    ))),
-                    story: StoryId::Body,
-                    environment_ids: environment_ids.clone(),
-                    interactive: false,
-                });
-            }
-            Block::Align(align) => {
-                ordered.push(LayoutInput::Paragraph {
-                    paragraph: ParagraphSource::Owned(Box::new(math_preview_paragraph(
-                        align.id.clone(),
-                        &align.source,
-                    ))),
-                    story: StoryId::Body,
-                    environment_ids: environment_ids.clone(),
-                    interactive: false,
-                });
-            }
+            Block::Equation(equation) => ordered.push(LayoutInput::DisplayMath {
+                source: DisplayMathSource::Equation(equation),
+                environment_ids: environment_ids.clone(),
+            }),
+            Block::Align(align) => ordered.push(LayoutInput::DisplayMath {
+                source: DisplayMathSource::Align(align),
+                environment_ids: environment_ids.clone(),
+            }),
             Block::Opaque(_) => {
                 return Err(DocumentLayoutError::UnsupportedContent);
             }
         }
     }
     Ok(())
-}
-
-const MATH_PREVIEW_SOURCE_LIMIT_BYTES: usize = 512;
-
-fn math_preview_paragraph(id: NodeId, source: &str) -> Paragraph {
-    let truncated = source.len() > MATH_PREVIEW_SOURCE_LIMIT_BYTES;
-    let mut boundary = if truncated {
-        MATH_PREVIEW_SOURCE_LIMIT_BYTES - '…'.len_utf8()
-    } else {
-        source.len()
-    };
-    while !source.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    let mut text = source[..boundary].to_owned();
-    if truncated {
-        text.push('…');
-    }
-    if text.is_empty() {
-        text.push('□');
-    }
-    let mut paragraph = Paragraph::empty(id);
-    paragraph.inlines = vec![InlineNode::Run(Run {
-        text,
-        language: None,
-        props: Default::default(),
-        extra: Default::default(),
-    })];
-    paragraph
 }
 
 #[cfg(test)]

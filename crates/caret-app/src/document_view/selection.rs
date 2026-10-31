@@ -131,12 +131,25 @@ impl DocumentViewRuntime {
                 }
             }
         }
+        let blocked = snapshot
+            .display_math_bounds(page_index)
+            .into_iter()
+            .map(|[x0_pt, y0_pt, x1_pt, y1_pt]| {
+                serde_json::json!({
+                    "x0Pt": x0_pt,
+                    "y0Pt": y0_pt,
+                    "x1Pt": x1_pt,
+                    "y1Pt": y1_pt,
+                })
+            })
+            .collect::<Vec<_>>();
         serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
             "pageIndex": page_index,
             "stops": stops,
             "segments": segments,
+            "blocked": blocked,
         }))
         .map_err(|error| format!("selection.hit_map_serialize: {error}"))
     }

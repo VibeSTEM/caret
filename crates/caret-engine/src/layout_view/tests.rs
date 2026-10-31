@@ -105,6 +105,7 @@ fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
                     y_offset_pt: 0.0,
                 })
                 .collect(),
+            blocks: Vec::new(),
             used_height_pt: 12.0,
         },
     }

@@ -88,8 +88,53 @@ fn caret_selection_json(paragraph_id: &NodeId, offset: usize) -> String {
 }
 
 #[test]
-fn visual_navigation_skips_noninteractive_block_math_previews()
--> Result<(), Box<dyn std::error::Error>> {
+fn drag_hit_map_blocks_display_math_from_body_carets() -> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let before_id = before.id.to_string();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), equation(r"\frac{1}{2}")];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let blocked = hit_map["blocked"]
+        .as_array()
+        .ok_or("display math drag map should publish blocked rectangles")?;
+    if blocked.is_empty() {
+        return Err("display math drag map should block the formula".into());
+    }
+    for region in blocked {
+        let x0 = region["x0Pt"].as_f64().ok_or("blocked x0")?;
+        let y0 = region["y0Pt"].as_f64().ok_or("blocked y0")?;
+        let x1 = region["x1Pt"].as_f64().ok_or("blocked x1")?;
+        let y1 = region["y1Pt"].as_f64().ok_or("blocked y1")?;
+        assert_eq!(
+            runtime.hit_test_json(0, (x0 + x1) / 2.0, (y0 + y1) / 2.0)?,
+            "null"
+        );
+    }
+    let stops = hit_map["stops"]
+        .as_array()
+        .ok_or("drag map should keep paragraph stops")?;
+    let paragraph_stop = stops
+        .iter()
+        .find(|stop| stop["position"]["paragraphId"] == before_id)
+        .ok_or("paragraph caret stop is missing")?;
+    let x = paragraph_stop["xPt"].as_f64().ok_or("stop x")?;
+    let y0 = paragraph_stop["y0Pt"].as_f64().ok_or("stop y0")?;
+    let y1 = paragraph_stop["y1Pt"].as_f64().ok_or("stop y1")?;
+    let y = (y0 + y1) / 2.0;
+    assert!(blocked.iter().all(|region| {
+        let region_x0 = region["x0Pt"].as_f64().unwrap_or(f64::NAN);
+        let region_y0 = region["y0Pt"].as_f64().unwrap_or(f64::NAN);
+        let region_x1 = region["x1Pt"].as_f64().unwrap_or(f64::NAN);
+        let region_y1 = region["y1Pt"].as_f64().unwrap_or(f64::NAN);
+        x < region_x0 || x > region_x1 || y < region_y0 || y > region_y1
+    }));
+    assert_ne!(runtime.hit_test_json(0, x, y)?, "null");
+    Ok(())
+}
+
+#[test]
+fn visual_navigation_skips_display_math_blocks() -> Result<(), Box<dyn std::error::Error>> {
     let before = paragraph_with_text("before");
     let before_id = before.id.clone();
     let after = paragraph_with_text("after");

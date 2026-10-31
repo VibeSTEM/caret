@@ -83,9 +83,6 @@ impl DocumentViewRuntime {
                     return Err("navigation.unknown_paragraph".to_owned());
                 };
                 let paragraph = &snapshot.paragraphs[paragraph_index];
-                if !paragraph.is_interactive() {
-                    return Err("navigation.unknown_paragraph".to_owned());
-                }
                 let cursor = paragraph
                     .layout
                     .cursor_at(current.focus.offset, current_visual)
@@ -114,10 +111,8 @@ impl DocumentViewRuntime {
                     })
                     .or_else(|| {
                         let (adjacent_forward, adjacent_offset) = adjacent?;
-                        let adjacent_index = snapshot.adjacent_interactive_paragraph_index(
-                            paragraph_index,
-                            adjacent_forward,
-                        )?;
+                        let adjacent_index =
+                            snapshot.adjacent_paragraph_index(paragraph_index, adjacent_forward)?;
                         let adjacent = snapshot.paragraphs.get(adjacent_index)?;
                         let offset = if adjacent_offset == usize::MAX {
                             adjacent.text.len()
@@ -288,9 +283,6 @@ impl DocumentViewRuntime {
                 .paragraph_index_by_id(&current.focus.paragraph_id)
                 .ok_or_else(|| "navigation.unknown_paragraph".to_owned())?;
             let paragraph = &snapshot.paragraphs[paragraph_index];
-            if !paragraph.is_interactive() {
-                return Err("navigation.unknown_paragraph".to_owned());
-            }
             let cursor = paragraph
                 .layout
                 .cursor_at(current.focus.offset, current_visual)
@@ -311,8 +303,8 @@ impl DocumentViewRuntime {
                     )
                 })
                 .or_else(|| {
-                    let adjacent_index = snapshot
-                        .adjacent_interactive_paragraph_index(paragraph_index, line_delta > 0)?;
+                    let adjacent_index =
+                        snapshot.adjacent_paragraph_index(paragraph_index, line_delta > 0)?;
                     let adjacent = snapshot.paragraphs.get(adjacent_index)?;
                     let line_index = if line_delta < 0 {
                         adjacent.layout.paragraph.lines.len().checked_sub(1)?

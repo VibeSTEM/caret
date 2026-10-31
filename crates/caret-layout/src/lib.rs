@@ -23,8 +23,8 @@ pub use line_metrics::{
 };
 pub use math_text::{MathInlineBoxMetrics, ParleyMathTextShaper, stix_two_math_font_data};
 pub use pagination::{
-    PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
-    paginate_paragraphs,
+    AtomicBlockPaginationInput, PageBlockFragment, PageLayout, PaginationError, PaginationItem,
+    ParagraphFragment, ParagraphPaginationInput, paginate_paragraphs,
 };
 pub use paragraph::{
     HitAffinity, InlineObjectPlacement, LocalGlyph, ParagraphHit, ParagraphLayout,
