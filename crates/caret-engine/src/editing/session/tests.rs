@@ -54,12 +54,20 @@ fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
             props: BTreeMap::new(),
-            children: vec![InlineNode::Run(Run {
-                text: "inside".to_owned(),
-                language: None,
-                props: BTreeMap::new(),
-                extra: BTreeMap::new(),
-            })],
+            children: vec![
+                InlineNode::Run(Run {
+                    text: "under".to_owned(),
+                    language: None,
+                    props: BTreeMap::from([("underline".into(), serde_json::Value::Bool(true))]),
+                    extra: BTreeMap::new(),
+                }),
+                InlineNode::Run(Run {
+                    text: " rest".to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }),
+            ],
             extra: BTreeMap::new(),
         })],
         extra: BTreeMap::new(),
@@ -77,7 +85,13 @@ fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
     assert_eq!(inside.environment_id, inner_id);
     assert_eq!(inside.paragraph_id, paragraph_id);
     assert_eq!(inside.start_utf8, 0);
-    assert_eq!(inside.end_utf8, "inside".len());
+    assert_eq!(inside.end_utf8, "under rest".len());
+    let highlight = session
+        .current_inline_highlight_range()
+        .unwrap_or_else(|error| panic!("inline highlight lookup failed: {error}"))
+        .unwrap_or_else(|| panic!("inline environment should produce a highlight range"));
+    assert_eq!(highlight.anchor.offset, 0);
+    assert_eq!(highlight.focus.offset, "under rest".len());
 
     let outside_start = Pos {
         affinity: Affinity::Upstream,
@@ -94,6 +108,101 @@ fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
             .current_inline_environment()
             .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
             .is_none()
+    );
+}
+
+#[test]
+fn current_inline_highlight_uses_underlined_run_and_boundary_affinity() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![
+        InlineNode::Run(Run {
+            text: "before".into(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "underlined".into(),
+            language: None,
+            props: BTreeMap::from([("underline".into(), serde_json::Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "after".into(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let mut focus = session.selection().focus.clone();
+    focus.offset = "before".len();
+    focus.affinity = Affinity::Downstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: focus.clone(),
+            focus: focus.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("moving caret into underline run failed: {error}"));
+    let generation = session.document_generation();
+
+    let range = session
+        .current_inline_highlight_range()
+        .unwrap_or_else(|error| panic!("underline lookup failed: {error}"))
+        .unwrap_or_else(|| panic!("caret in an underlined run should expose its range"));
+    assert_eq!(range.anchor.paragraph_id, paragraph_id);
+    assert_eq!(range.anchor.offset, "before".len());
+    assert_eq!(range.focus.offset, "beforeunderlined".len());
+    assert_eq!(session.document_generation(), generation);
+
+    let mut selected_focus = focus.clone();
+    selected_focus.offset += "under".len();
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: Pos {
+                offset: 0,
+                affinity: Affinity::Downstream,
+                ..selected_focus.clone()
+            },
+            focus: selected_focus,
+        })))
+        .unwrap_or_else(|error| panic!("selecting underlined text failed: {error}"));
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .is_ok_and(|range| range.is_none())
+    );
+
+    focus.offset = "beforeunderlined".len();
+    focus.affinity = Affinity::Upstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: focus.clone(),
+            focus: focus.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("moving caret to underline end failed: {error}"));
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .is_ok_and(|range| range.is_some())
+    );
+
+    focus.affinity = Affinity::Downstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: focus.clone(),
+            focus: focus.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("moving caret past underline end failed: {error}"));
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .is_ok_and(|range| range.is_none())
     );
 }
 

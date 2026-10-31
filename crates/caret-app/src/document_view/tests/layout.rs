@@ -226,6 +226,66 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
 }
 
 #[test]
+fn underlined_run_receives_inline_highlight_without_an_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let paragraph_id = paragraph.id.clone();
+    let underlined_text = "underlined range ".repeat(24);
+    paragraph.inlines = vec![
+        InlineNode::Run(Run {
+            text: underlined_text.clone(),
+            language: None,
+            props: BTreeMap::from([("underline".into(), serde_json::Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: " plain".into(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let rectangles = snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline highlight rectangles were omitted"))?;
+    assert!(
+        rectangles.len() > 1,
+        "wrapped underline should highlight each line"
+    );
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle["x1Pt"].as_f64() > rectangle["x0Pt"].as_f64()
+            && rectangle["y1Pt"].as_f64() > rectangle["y0Pt"].as_f64()
+    }));
+    assert!(runtime.session.current_inline_environment()?.is_none());
+
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: underlined_text.len() + " pl".len(),
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(
+        snapshot["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+#[test]
 fn empty_inline_environment_does_not_hide_visible_block_highlight()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
