@@ -1166,7 +1166,7 @@ fn environment_virtual_stops_use_outer_geometry_and_insert_outside_paragraphs()
         Some(range_x0)
     );
     let complete_caret: Value = serde_json::from_str(&before_runtime.current_caret_json()?)?;
-    assert_eq!(complete_caret["xPt"].as_f64(), Some(range_x0));
+    super::assert_pt_close(complete_caret["xPt"].as_f64(), range_x0);
 
     before_runtime.insert_text_json("before".to_owned())?;
     assert_eq!(before_runtime.document().body.len(), 2);
@@ -1322,7 +1322,7 @@ fn existing_paragraphs_do_not_skip_environment_outer_stops()
         .ok_or_else(|| std::io::Error::other("Section outer geometry is missing"))?
         .x1_pt;
     let caret: Value = serde_json::from_str(&after_runtime.current_caret_json()?)?;
-    assert_eq!(caret["xPt"].as_f64(), Some(environment_range_x1));
+    super::assert_pt_close(caret["xPt"].as_f64(), environment_range_x1);
     after_runtime.insert_text_json("inserted after".to_owned())?;
     assert_eq!(after_runtime.document().body.len(), 4);
     assert!(matches!(
