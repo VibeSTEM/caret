@@ -19,3 +19,9 @@ Caret 是轻量的所见即所得结构化编辑器，用 Rust 实现领域规�
 | 产品行为与架构 | [架构文档](ai-docs/architecture/README.md) |
 | 工程栈、版本和长期规则 | [技术规范](ai-docs/standards/README.md) |
 | 外部项目调查 | [调查索引](ai-docs/research/README.md) |
+
+## 致谢
+
+- [Typst](https://github.com/typst/typst)（Apache-2.0）：公式排版移植自 Typst v0.15.1 的数学布局，来源见 [NOTICE](NOTICE) 与[调查 010](ai-docs/research/010-typst-math-layout.md)。
+- [STIX Two Math](https://github.com/stipub/stixfonts)（SIL OFL 1.1）：内置数学字体。
+- [read-fonts / skrifa](https://github.com/googlefonts/fontations)（MIT / Apache-2.0）：OpenType MATH 表与字形度量读取。

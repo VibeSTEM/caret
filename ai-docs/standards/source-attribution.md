@@ -1,6 +1,6 @@
 # 源码署名
 
-更新日期：2026-10-30。
+更新日期：2026-11-01。
 
 ## 目的与含义
 
@@ -62,6 +62,28 @@ import QtQuick
 
 #include "document_canvas.hpp"
 ```
+
+## 移植或改写的第三方源码
+
+从 Apache-2.0 等兼容许可证的第三方项目移植或改写的文件，文件头不加 `署名` 行，改为在 SPDX 行后写来源块，次序固定：
+
+```rust
+//! 分式与无横线堆叠的排版。
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// 本文件移植自 Typst：
+//   仓库：https://github.com/typst/typst
+//   原路径：crates/typst-layout/src/math/fraction.rs
+//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
+//   修改：<相对原文件的主要改动>
+```
+
+- 来源块必须包含：仓库 URL、原文件路径（多个时全部列出）、固定提交、原版权方与许可证、“已修改”的具体说明（Apache-2.0 第 4(b) 条）。
+- 只借鉴思路、未保留原代码结构的文件按第一方文件处理，使用 Caret 文件头；判断不清时按移植处理。
+- 同一文件不同时写 `署名` 行与来源块；后续在移植文件中新增代码也不补 `署名` 行。
+- 引入新的第三方来源时，同步更新根目录 `NOTICE` 的来源与许可证条目。
 
 ## 维护规则
 

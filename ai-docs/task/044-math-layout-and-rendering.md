@@ -1,69 +1,90 @@
 # 044 — M3：公式布局、画布渲染与表格集成
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：012、027、043
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-10-29
+- 创建 / 更新：2026-10-29 / 2026-11-01
 
 ## 目标与背景
 
-把 `latex-rust` 的数学盒布局精确、高效地呈现到 Caret 页面画布。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。完成 M3 规定的表格内公式可视集成。总体验收由 [011 M3 公式](011-impl-math.md)管理。
+把 `caret-math` 的排版结果接入 Caret 段落布局与页面字形快照，使绘制、命中、光标与环境高亮共用同一份 Rust 侧几何。Qt 只消费快照。总体验收由 [011 M3 公式](011-impl-math.md)管理。
 
 ## 必读
 
-- [公式与表格](../architecture/editor/math-and-table.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)、[表格](../task/012-impl-table.md)
-- [分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
+- [公式与表格](../architecture/editor/math-and-table.md)、[画布与交互背景](../architecture/interface/canvas-highlighting.md)、[结构导航](../architecture/editor/structure-navigation.md)
+- [研究 010](../research/010-typst-math-layout.md)、[分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)
 
 ## 范围与非目标
 
-实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
+布局：
 
-覆盖段落行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的唯一支持值与诊断回退；公式内 `\text{...}` 使用 Caret 正文 shaping。接通表格单元格内公式的绘制、命中、光标与布局。
+- `MathLayoutEngine` 驻留在布局服务中，首次遇到公式时加载内置字体；按“内容哈希（含节点 ID）+ 字号 + 样式 + 字体标识”缓存 `Arc<MathLayout>`，上限 4096 条，超出时整体清空。
+- 行内公式把宽度、上伸、下伸作为行内对象度量交给段落行框；行高随公式增高，基线对齐正文。
+- `Equation` 与 `Align` 合成为显示伪段落，按显示样式排版并居中；`Align` 按列对齐。
+- 插入点高度只取文字度量：含行内对象的行按去掉对象后的同一行计算光标上沿和高度，再对齐到本行基线，光标在公式旁与纯文字行等高。
 
-不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
+绘制：
+
+- 公式字形与矩形写入页面字形快照，与正文共用字形 atlas 与 QSG 路线；背景层在字形之下。
+
+环境高亮：
+
+- 快照输出 `environmentHighlights: [{level, kind, rects}]`，每个层级只输出最内层环境。
+- 原生端按 `level` 拆分为块级与行内两组矩形，画布图层不变。
+- 行内环境（含行内公式，矩形为公式盒）使用 `color-inline-environment-highlight`（默认浅粉 `#FCE4EC`）；块级环境（含 `Equation`/`Align`）使用 `color-block-environment-highlight`（默认浅米黄 `#fff2cc`）。
+
+非目标：编号公式、字体切换 UI、SVG/PNG 交互路径、`\text{…}` 交给正文 shaping（当前用数学字体的正体字形）。
 
 ## 前置条件与待决策
 
-依赖 043 的稳定公式树和 042 的 MathBox API 结论。依赖 012、027 已完成；如果后端不能提供编辑命中所需映射，先记录上游最小扩展方案，不用异步 SVG/PNG 绘制绕开契约。
+表格单元格内公式依赖 045/046。插入点目前不会进入 `Equation`/`Align`，因此它们的块级高亮路径已接通但尚无可达的交互入口；待 043 开放块级公式编辑后验证。
 
 ## 实施步骤
 
-1. 定义缓存键和 generation：公式树、字体、字号、语言、缩放/分辨率中哪些影响布局、绘制及 atlas 缓存。
-2. 把数学盒输出映射到 Caret 整数坐标与字形/rule 快照；确认 `\text{...}` 混合正文 shaping 时尺寸与基线一致。
-3. 接入画布绘制、光标几何、命中测试与选择范围；验证输入更新不会重建未受影响的公式/段落快照。
-4. 将同一公式路径接入表格单元格，覆盖单元格尺寸变化、分页、命中和导航。
-5. 补充具有行为断言的布局/渲染/缓存测试，做性能对比；独立架构与代码评审并处理发现。
+1. 驻留引擎与按公式缓存；缓存命中不重新排版。
+2. 行内公式度量进入行框；显示公式合成伪段落。
+3. 字形与矩形写入页面快照，画布绘制。
+4. 统一环境模型、`environmentHighlights` DTO 与原生拆分；统一插入点高度。
+5. 表格单元格内公式；独立评审。
 
 ## 预计改动
 
-`crates/caret-layout` 数学布局适配，`native` 画布 glyph/rule 绘制，必要的 FFI 快照传输与 Qt 节点绘制；限制为公式内容所需的最小边界。
+`crates/caret-engine`（`math_layout.rs`、`layout.rs`、`page_glyphs.rs`、环境模型）、`crates/caret-layout`（行内对象度量、插入点度量）、`crates/caret-app` 快照、`native` 快照解析与画布。
 
 ## 验收标准
 
-- [ ] `InlineMath` 与块级 `Equation`/`Align` 可显示；多行对齐、基线、括号/分数等伸展符号使用数学布局度量。
-- [ ] 绘制、命中、光标几何引用同一 generation/几何快照，旧异步结果不能覆盖新布局。
-- [ ] 英文、中文 `\text{...}` 按正文字体与语言 shaping 显示；缺失字体/字形有定义明确的 fallback/诊断。
-- [ ] 同一公式快照在缩放与三平台检查中不依赖临时栅格图；页面内编辑没有显著重复重排，性能结果记录基线和测试输入。
-- [ ] 表格内公式的插入、显示、命中、导航和保存重开已与 012 集成验收。
-- [ ] 无 SVG/PNG-only 交互路径；测试、格式、lint、独立评审通过。
+- [x] 行内公式、`Equation`、`Align` 可显示；分式、根式、上下标、定界符伸展使用 MATH 表度量。
+- [x] 绘制、命中、光标几何来自同一布局快照。
+- [x] 行内公式显示行内高亮矩形；块级环境高亮按层级拆分。
+- [x] 公式旁插入点与纯文字行等高。
+- [ ] `\text{…}` 使用正文字体与语言 shaping。
+- [ ] 表格单元格内公式的显示、命中、导航与保存往返。
+- [ ] macOS、Windows 验证。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | caret-layout 数学盒快照行为测试 | 坐标、基线、字形与源位置映射一致 | 未执行 |
-| — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
-| — | 表格内公式集成测试 | 表格单元格内可编辑且保存往返稳定 | 未执行 |
-| — | 公式布局基准 | 记录输入、构建与缓存条件 | 未执行 |
+| 2026-11-01 | Linux：`cargo test --workspace` | 布局、快照、高亮与光标高度测试通过 | 通过 |
+| 2026-11-01 | Linux：`cargo clippy --workspace --all-targets -- -D warnings` | 无警告 | 通过 |
+| 2026-11-01 | Linux：`cargo lint`、`cargo format --check`、`cargo deny check` | 通过 | 通过 |
+| 2026-11-01 | Linux：原生构建与 `ctest`（offscreen） | 8 项全部通过 | 通过 |
+| — | macOS / Windows | 构建与测试通过 | 未验证 |
 
 ## 风险与回退
 
-字体缺字、MATH 度量差异、Qt atlas 生命周期或文本 shaping 混排可能造成错位。失败时保留公式源与错误状态，不能退回无法定位和选择的图片对象。性能优化限定在测量证明的热路径。
+缓存键使用 64 位内容哈希，碰撞会返回错误排版；概率极低，键中同时含字号、样式与字体标识。字体缺字时绘制占位方框并产生 `math.glyph.missing` 诊断。
 
 ## 决策与工作记录
 
-- 2026-10-29：从 011 拆出公式布局、画布渲染和与 012 的最终集成验收。
+- 2026-11-01：快照几何比较改为带容差（d59ca1d）；caret-app 测试失败来自 serde_json 浮点往返约 1 ulp 的偏差。
+- 2026-11-01：插入点高度按无行内对象的同一行计算，不随公式撑高。
+- 2026-11-01：独立评审（同一模型、只读）发现与处理见下表。
+
+| 发现 | 处理 |
+| --- | --- |
+| （待评审） | — |
 
 ## 完成摘要
 
-未完成。
+未完成。行内与显示公式的布局、绘制、高亮和光标已完成；`\text` 正文 shaping、表格集成与另外两个平台待做。
