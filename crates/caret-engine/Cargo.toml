@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 caret-doc.workspace = true
 caret-layout.workspace = true
+caret-math.workspace = true
 caret-structure.workspace = true
 serde.workspace = true
 serde_json.workspace = true

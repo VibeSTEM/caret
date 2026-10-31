@@ -4,7 +4,14 @@
 //! 片段在帧之外携带数学专有属性（类别、斜体校正、重音附着点、角落字距来源）。
 //
 // SPDX-License-Identifier: Apache-2.0
-// 署名：Yuki Lu
+//
+// 本文件改写自 Typst：
+//   仓库：https://github.com/typst/typst
+//   原路径：crates/typst-layout/src/math/fragment/mod.rs
+//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
+//   修改：片段合并为单一结构体；帧推入子帧时立即展平；绘制项改为 Caret 的字形、矩形、
+//   线段与节点记录；颜色使用 Caret 的 `MathColor`。
 
 use caret_doc::NodeId;
 

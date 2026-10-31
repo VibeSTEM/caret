@@ -6,11 +6,15 @@
 use caret_doc::NodeId;
 use caret_layout::{
     GlyphFontData, GlyphRasterOptions, GlyphRasterizer, GlyphSynthesis, PositionedGlyphLayoutItem,
-    RasterizedGlyph, RasterizedGlyphKey,
+    RasterizedGlyph, RasterizedGlyphKey, static_glyph_font_data,
 };
-use std::collections::HashMap;
+use caret_math::layout::{MathColor, MathItem, STIX_TWO_MATH};
+use std::{collections::HashMap, sync::OnceLock};
 
-use crate::DocumentLayoutSnapshot;
+use crate::{DocumentLayoutSnapshot, math_layout::MathBox};
+
+/// 小于该字号的字形运行是公式占位字符 U+FFFC 的近零宽塑形结果，不绘制。
+const PLACEHOLDER_RUN_MAX_FONT_SIZE_PT: f32 = 0.05;
 
 /// 同一布局代际中一页的只读字形快照；字体数据按 Blob 共享。
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +25,8 @@ pub struct PageGlyphSnapshot {
     pub page_index: usize,
     pub runs: Vec<PageGlyphRun>,
     pub decorations: Vec<PageGlyphDecoration>,
+    /// 绘制在字形之下的背景矩形（如公式 `\\colorbox` 底色）。
+    pub backgrounds: Vec<PageGlyphDecoration>,
 }
 
 /// 同一页的唯一栅格图片；同字形重复使用时只传输一份像素数据。
@@ -54,6 +60,8 @@ pub struct RasterizedPageGlyphs {
     pub images: Vec<PageGlyphImage>,
     pub placements: Vec<PageGlyphPlacement>,
     pub decorations: Vec<PageGlyphDecoration>,
+    /// 绘制在字形之下的背景矩形（如公式 `\\colorbox` 底色）。
+    pub backgrounds: Vec<PageGlyphDecoration>,
 }
 
 /// 持有有界 glyph 缓存的页面栅格化入口。
@@ -89,6 +97,14 @@ impl PageGlyphRasterizer {
             .map(|decoration| PageGlyphDecoration {
                 color: Some(decoration.color.unwrap_or(default_foreground)),
                 ..*decoration
+            })
+            .collect();
+        let backgrounds = page
+            .backgrounds
+            .iter()
+            .map(|background| PageGlyphDecoration {
+                color: Some(background.color.unwrap_or(default_foreground)),
+                ..*background
             })
             .collect();
         let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
@@ -140,6 +156,7 @@ impl PageGlyphRasterizer {
             images,
             placements,
             decorations,
+            backgrounds,
         })
     }
 }
@@ -246,6 +263,7 @@ impl DocumentLayoutSnapshot {
         }
         let mut runs = Vec::new();
         let mut decorations = Vec::new();
+        let mut backgrounds = Vec::new();
         for fragment in &page.layout.fragments {
             let paragraph = self
                 .paragraph_by_id(&fragment.paragraph_id)
@@ -322,11 +340,41 @@ impl DocumentLayoutSnapshot {
                     });
                 }
                 for item in line.items() {
-                    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
-                        return Err(PageGlyphError::UnsupportedInlineBox);
+                    let glyph_run = match item {
+                        PositionedGlyphLayoutItem::GlyphRun(glyph_run) => glyph_run,
+                        PositionedGlyphLayoutItem::InlineBox(inline_box) => {
+                            let math_box = usize::try_from(inline_box.id)
+                                .ok()
+                                .and_then(|index| paragraph.math_boxes.get(index))
+                                .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                            let origin = MathOrigin {
+                                paragraph_id: &paragraph.id,
+                                line_index,
+                                line_clip_y_pt,
+                                x_pt: page.margin_left_pt + f64::from(inline_box.x),
+                                baseline_y_pt: page_line_top_pt
+                                    + f64::from(inline_box.y)
+                                    + math_box.layout.ascent
+                                    - raw_top_pt
+                                    + baseline_adjustment_pt,
+                            };
+                            emit_math_box(
+                                math_box,
+                                &origin,
+                                &mut runs,
+                                &mut decorations,
+                                &mut backgrounds,
+                            )?;
+                            continue;
+                        }
                     };
                     let run = glyph_run.run();
                     let font_size_pt = run.font_size();
+                    if font_size_pt < PLACEHOLDER_RUN_MAX_FONT_SIZE_PT
+                        && glyph_run.run().text_range().len() == '\u{fffc}'.len_utf8()
+                    {
+                        continue;
+                    }
                     if !font_size_pt.is_finite()
                         || font_size_pt <= 0.0
                         || run.font().data.is_empty()
@@ -382,8 +430,167 @@ impl DocumentLayoutSnapshot {
             page_index,
             runs,
             decorations,
+            backgrounds,
         })
     }
+}
+
+/// 公式盒在页面上的放置：左端 x 与公式基线 y（页面局部 pt）。
+struct MathOrigin<'a> {
+    paragraph_id: &'a NodeId,
+    line_index: usize,
+    line_clip_y_pt: Option<[f64; 2]>,
+    x_pt: f64,
+    baseline_y_pt: f64,
+}
+
+/// 内置数学字体的共享字形资源；只创建一次，保证栅格缓存键稳定。
+fn math_font_data() -> &'static GlyphFontData {
+    static FONT: OnceLock<GlyphFontData> = OnceLock::new();
+    FONT.get_or_init(|| static_glyph_font_data(STIX_TWO_MATH, 0))
+}
+
+fn rgba(color: Option<MathColor>) -> Option<[u8; 4]> {
+    color.map(|color| [color.red, color.green, color.blue, color.alpha])
+}
+
+/// 把公式布局项转换为页面字形运行、装饰与背景：字形按（字号、颜色）连续分组，
+/// 实心矩形与描边转为装饰矩形，斜线用沿线排列的小方块近似。
+fn emit_math_box(
+    math_box: &MathBox,
+    origin: &MathOrigin<'_>,
+    runs: &mut Vec<PageGlyphRun>,
+    decorations: &mut Vec<PageGlyphDecoration>,
+    backgrounds: &mut Vec<PageGlyphDecoration>,
+) -> Result<(), PageGlyphError> {
+    if !origin.x_pt.is_finite() || !origin.baseline_y_pt.is_finite() {
+        return Err(PageGlyphError::InvalidLineGeometry);
+    }
+    let push_rect = |target: &mut Vec<PageGlyphDecoration>,
+                     x: f64,
+                     y: f64,
+                     width: f64,
+                     height: f64,
+                     color: Option<MathColor>|
+     -> Result<(), PageGlyphError> {
+        if !(x.is_finite() && y.is_finite() && width.is_finite() && height.is_finite()) {
+            return Err(PageGlyphError::InvalidGlyphSource);
+        }
+        if width > 0.0 && height > 0.0 {
+            target.push(PageGlyphDecoration {
+                x_pt: origin.x_pt + x,
+                y_pt: origin.baseline_y_pt + y,
+                width_pt: width,
+                height_pt: height,
+                color: rgba(color),
+                line_clip_y_pt: origin.line_clip_y_pt,
+            });
+        }
+        Ok(())
+    };
+    for item in &math_box.layout.items {
+        match *item {
+            MathItem::Glyph {
+                glyph,
+                x,
+                y,
+                size,
+                color,
+            } => {
+                let font_size_pt = size as f32;
+                let foreground = rgba(color);
+                let placed = PageGlyph {
+                    glyph_id: u32::from(glyph),
+                    x_pt: origin.x_pt + x,
+                    baseline_y_pt: origin.baseline_y_pt + y,
+                };
+                if !placed.x_pt.is_finite()
+                    || !placed.baseline_y_pt.is_finite()
+                    || !font_size_pt.is_finite()
+                    || font_size_pt <= 0.0
+                {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                if let Some(last) = runs.last_mut()
+                    && last.paragraph_id == *origin.paragraph_id
+                    && last.line_index == origin.line_index
+                    && last.font == *math_font_data()
+                    && last.font_size_pt.to_bits() == font_size_pt.to_bits()
+                    && last.foreground == foreground
+                {
+                    last.glyphs.push(placed);
+                    continue;
+                }
+                runs.push(PageGlyphRun {
+                    paragraph_id: origin.paragraph_id.clone(),
+                    line_index: origin.line_index,
+                    line_clip_y_pt: origin.line_clip_y_pt,
+                    font: math_font_data().clone(),
+                    font_size_pt,
+                    normalized_coords: Vec::new(),
+                    synthesis: GlyphSynthesis::default(),
+                    foreground,
+                    glyphs: vec![placed],
+                });
+            }
+            MathItem::Rule {
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => push_rect(decorations, x, y, width, height, color)?,
+            MathItem::Line {
+                x,
+                y,
+                dx,
+                dy,
+                thickness,
+                color,
+            } => {
+                let length = dx.hypot(dy);
+                if !length.is_finite() || !thickness.is_finite() || thickness <= 0.0 {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                // 步长取半个线宽，方块相互重叠，缩放后仍呈连续线段。
+                let steps = ((length / (thickness * 0.5)).ceil() as usize).clamp(1, 4096);
+                for step in 0..=steps {
+                    let t = step as f64 / steps as f64;
+                    push_rect(
+                        decorations,
+                        x + dx * t - thickness / 2.0,
+                        y + dy * t - thickness / 2.0,
+                        thickness,
+                        thickness,
+                        color,
+                    )?;
+                }
+            }
+            MathItem::Rectangle {
+                x,
+                y,
+                width,
+                height,
+                fill,
+                stroke,
+                stroke_width,
+            } => {
+                if fill.is_some() {
+                    push_rect(backgrounds, x, y, width, height, fill)?;
+                }
+                if let Some(stroke) = stroke
+                    && stroke_width > 0.0
+                {
+                    let w = stroke_width;
+                    push_rect(decorations, x, y, width, w, Some(stroke))?;
+                    push_rect(decorations, x, y + height - w, width, w, Some(stroke))?;
+                    push_rect(decorations, x, y, w, height, Some(stroke))?;
+                    push_rect(decorations, x + width - w, y, w, height, Some(stroke))?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

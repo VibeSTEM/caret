@@ -468,8 +468,19 @@ pub(crate) fn rasterize_page_glyphs(
             clip_y1_pt,
         });
     }
-    let mut decorations = Vec::with_capacity(rasterized.decorations.len());
-    for decoration in rasterized.decorations {
+    let mut decorations =
+        Vec::with_capacity(rasterized.decorations.len() + rasterized.backgrounds.len());
+    let layered = rasterized
+        .backgrounds
+        .into_iter()
+        .map(|decoration| (true, decoration))
+        .chain(
+            rasterized
+                .decorations
+                .into_iter()
+                .map(|decoration| (false, decoration)),
+        );
+    for (background, decoration) in layered {
         let Some(color) = decoration.color else {
             return empty_glyph_frame(
                 page_index,
@@ -481,6 +492,7 @@ pub(crate) fn rasterize_page_glyphs(
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
         decorations.push(bridge::GlyphDecoration {
+            background,
             x_pt: decoration.x_pt,
             y_pt: decoration.y_pt,
             width_pt: decoration.width_pt,

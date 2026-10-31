@@ -147,6 +147,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "caret-layout",
+ "caret-math",
  "caret-structure",
  "criterion",
  "serde",

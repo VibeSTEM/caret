@@ -1835,3 +1835,107 @@ fn run_unicode_break_corpus(corpus: &str, grapheme: bool) {
         );
     }
 }
+
+#[test]
+fn inline_objects_reserve_box_width_and_raise_line_height() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let source = paragraph("a\u{fffc}b", Some("en"));
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let (_, plain) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("ab", Some("en")),
+            &settings,
+            &style,
+            layout_options(300.0),
+        )
+        .unwrap_or_else(|error| panic!("plain paragraph failed: {error}"));
+    let objects = [crate::InlineObjectMetrics {
+        source_bytes: 1..4,
+        advance_pt: 30.0,
+        ascent_pt: 40.0,
+        descent_pt: 10.0,
+        ink_bounds: crate::InkBounds {
+            left: 0.0,
+            top: -40.0,
+            right: 30.0,
+            bottom: 10.0,
+        },
+    }];
+    let (_, layout) = layouter
+        .layout_with_objects(
+            &mut catalog,
+            &source,
+            &settings,
+            &style,
+            layout_options(300.0),
+            crate::ParagraphObjects {
+                objects: &objects,
+                center: false,
+            },
+        )
+        .unwrap_or_else(|error| panic!("object paragraph failed: {error}"));
+    let boxes: Vec<_> = layout
+        .layout
+        .lines()
+        .flat_map(|line| {
+            line.items()
+                .filter_map(|item| match item {
+                    parley::PositionedLayoutItem::InlineBox(inline_box) => Some(inline_box),
+                    parley::PositionedLayoutItem::GlyphRun(_) => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(boxes.len(), 1);
+    let inline_box = boxes
+        .first()
+        .unwrap_or_else(|| panic!("missing inline box"));
+    assert!((inline_box.width - 30.0).abs() < 1e-3);
+    let line = layout
+        .paragraph
+        .lines
+        .first()
+        .unwrap_or_else(|| panic!("missing line"));
+    let plain_line = plain
+        .paragraph
+        .lines
+        .first()
+        .unwrap_or_else(|| panic!("missing line"));
+    assert!(line.metrics.height_pt >= 50.0 - 1e-3);
+    assert!(line.metrics.height_pt > plain_line.metrics.height_pt);
+    assert!(line.advance_pt >= plain_line.advance_pt + 29.0);
+    assert!(line.advance_pt <= plain_line.advance_pt + 31.0);
+}
+
+#[test]
+fn inline_objects_must_cover_a_placeholder_character() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let objects = [crate::InlineObjectMetrics {
+        source_bytes: 0..1,
+        advance_pt: 1.0,
+        ascent_pt: 1.0,
+        descent_pt: 1.0,
+        ink_bounds: crate::InkBounds {
+            left: 0.0,
+            top: -1.0,
+            right: 1.0,
+            bottom: 1.0,
+        },
+    }];
+    let result = layouter.layout_with_objects(
+        &mut catalog,
+        &paragraph("ab", Some("en")),
+        &document_settings(),
+        &ShapingStyle::new(1200),
+        layout_options(300.0),
+        crate::ParagraphObjects {
+            objects: &objects,
+            center: false,
+        },
+    );
+    assert!(result.is_err());
+}

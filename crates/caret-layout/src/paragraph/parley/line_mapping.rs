@@ -6,8 +6,8 @@
 use parley::Layout;
 
 use crate::{
-    FontLineMetrics, LineMetricsError, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ParagraphLine, calculate_line_metrics_with_grid,
+    FontLineMetrics, InlineObjectMetrics, LineMetricsError, LineSpacing, ParagraphLayout,
+    ParagraphLayoutError, ParagraphLine, calculate_line_metrics_with_grid,
 };
 
 pub(super) fn font_line_metrics(metrics: parley::FontMetrics) -> FontLineMetrics {
@@ -33,6 +33,7 @@ pub(super) fn make_paragraph_lines(
     spacing: LineSpacing,
     line_grid_metrics: FontLineMetrics,
     line_grid_font_size_centipoints: u16,
+    objects: &[InlineObjectMetrics],
 ) -> Result<ParagraphLineMapping, ParagraphLayoutError> {
     let line_grid = calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], spacing)?;
     if text.is_empty() {
@@ -94,15 +95,27 @@ pub(super) fn make_paragraph_lines(
                 .filter(|run| run.font_size() > line_grid_font_size_pt)
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
-        let line_metrics =
-            calculate_line_metrics_with_grid(line_grid_metrics, &font_metrics, &[], spacing)
-                .map_err(|error| match error {
-                    LineMetricsError::InvalidFontMetrics
-                    | LineMetricsError::InvalidObjectMetrics
-                    | LineMetricsError::InvalidLineSpacing => {
-                        ParagraphLayoutError::InvalidLineMetrics(error)
-                    }
-                })?;
+        let line_objects: Vec<_> = objects
+            .iter()
+            .filter(|object| {
+                object.source_bytes.start >= source_bytes.start
+                    && object.source_bytes.start < consumed_end
+            })
+            .cloned()
+            .collect();
+        let line_metrics = calculate_line_metrics_with_grid(
+            line_grid_metrics,
+            &font_metrics,
+            &line_objects,
+            spacing,
+        )
+        .map_err(|error| match error {
+            LineMetricsError::InvalidFontMetrics
+            | LineMetricsError::InvalidObjectMetrics
+            | LineMetricsError::InvalidLineSpacing => {
+                ParagraphLayoutError::InvalidLineMetrics(error)
+            }
+        })?;
         let raw_top = metrics.block_min_coord;
         let raw_baseline_from_top = metrics.baseline - raw_top;
         if !raw_top.is_finite() || !raw_baseline_from_top.is_finite() {
