@@ -38,6 +38,7 @@ struct Span {
     path: Vec<usize>,
     is_soft_break: bool,
     is_math: bool,
+    is_underlined_run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,12 @@ pub(super) struct EnvironmentSpan {
     pub(super) start: usize,
     pub(super) end: usize,
     depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InlineBoundarySource {
+    Environment,
+    UnderlinedRun,
 }
 
 impl TextMap {
@@ -126,6 +133,53 @@ impl TextMap {
 
     pub(super) fn has_environment_boundary(&self, offset: usize) -> bool {
         self.has_environment_start(offset) || self.has_environment_end(offset)
+    }
+
+    pub(super) fn has_underlined_run_start(&self, offset: usize) -> bool {
+        self.spans
+            .iter()
+            .any(|span| span.is_underlined_run && span.start == offset && span.start < span.end)
+    }
+
+    pub(super) fn has_underlined_run_end(&self, offset: usize) -> bool {
+        self.spans
+            .iter()
+            .any(|span| span.is_underlined_run && span.end == offset && span.start < span.end)
+    }
+
+    pub(super) fn has_underlined_run_boundary(&self, offset: usize) -> bool {
+        self.has_underlined_run_start(offset) || self.has_underlined_run_end(offset)
+    }
+
+    pub(super) fn inline_boundary_source_at(&self, offset: usize) -> Option<InlineBoundarySource> {
+        let environment_is_active = [Affinity::Downstream, Affinity::Upstream]
+            .into_iter()
+            .any(|affinity| self.inline_environment_at(offset, affinity).is_some());
+        if environment_is_active {
+            self.has_environment_boundary(offset)
+                .then_some(InlineBoundarySource::Environment)
+        } else if self.has_underlined_run_boundary(offset) {
+            Some(InlineBoundarySource::UnderlinedRun)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn underlined_run_at(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+    ) -> Option<std::ops::Range<usize>> {
+        self.spans
+            .iter()
+            .find(|span| {
+                span.is_underlined_run
+                    && span.start < span.end
+                    && ((span.start < offset && offset < span.end)
+                        || (offset == span.start && affinity == Affinity::Downstream)
+                        || (offset == span.end && affinity == Affinity::Upstream))
+            })
+            .map(|span| span.start..span.end)
     }
 
     pub(super) fn snap_to_grapheme_boundary(&self, offset: usize, affinity: Affinity) -> usize {
@@ -586,6 +640,11 @@ fn collect_text(
                     path: path.clone(),
                     is_soft_break: false,
                     is_math: false,
+                    is_underlined_run: run
+                        .props
+                        .get("underline")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true),
                 });
             }
             InlineNode::Math(_) => {
@@ -597,6 +656,7 @@ fn collect_text(
                     path: path.clone(),
                     is_soft_break: false,
                     is_math: true,
+                    is_underlined_run: false,
                 });
             }
             InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
@@ -625,6 +685,7 @@ fn collect_text(
                     path: path.clone(),
                     is_soft_break: true,
                     is_math: false,
+                    is_underlined_run: false,
                 });
             }
             InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),

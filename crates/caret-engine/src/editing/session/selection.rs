@@ -229,7 +229,7 @@ impl Session {
             .map(|entry| entry.id.clone())
     }
 
-    /// 提交键盘导航产生的位置，并按逻辑移动方向更新环境边界亲和性。
+    /// 提交键盘导航产生的位置，并按逻辑移动方向更新行内高亮边界亲和性。
     pub fn set_navigation_selection(
         &mut self,
         mut selection: Selection,
@@ -260,14 +260,16 @@ impl Session {
             }
         };
         if let Some(direction) = direction {
-            let at_environment_boundary = self
-                .text_map_for(&selection.focus)?
-                .has_environment_boundary(selection.focus.offset);
-            if at_environment_boundary {
-                selection.focus.affinity = match direction {
-                    Direction::Backward => Affinity::Downstream,
-                    Direction::Forward => Affinity::Upstream,
-                };
+            let map = self.text_map_for(&selection.focus)?;
+            let boundary_affinity = match direction {
+                Direction::Backward => Affinity::Downstream,
+                Direction::Forward => Affinity::Upstream,
+            };
+            let at_active_scope_boundary = map
+                .inline_boundary_source_at(selection.focus.offset)
+                .is_some();
+            if at_active_scope_boundary {
+                selection.focus.affinity = boundary_affinity;
             }
         }
         if was_collapsed {

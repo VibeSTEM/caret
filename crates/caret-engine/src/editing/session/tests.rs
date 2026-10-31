@@ -207,6 +207,60 @@ fn current_inline_highlight_uses_underlined_run_and_boundary_affinity() {
 }
 
 #[test]
+fn move_caret_can_leave_direct_underline_at_its_right_edge() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "underlined".into(),
+        language: None,
+        props: BTreeMap::from([("underline".into(), serde_json::Value::Bool(true))]),
+        extra: BTreeMap::new(),
+    })];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session rejected: {error}"));
+    let run_end = "underlined".len();
+
+    for _ in 0.."underlined".chars().count() {
+        session
+            .run(Command::MoveCaret(Direction::Forward))
+            .unwrap_or_else(|error| panic!("moving through underlined text failed: {error}"));
+    }
+    assert_eq!(session.selection().focus.offset, run_end);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .unwrap_or_else(|error| panic!("underline highlight lookup failed: {error}"))
+            .is_some()
+    );
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("moving out of the underline failed: {error}"));
+    assert_eq!(session.selection().focus.offset, run_end);
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .unwrap_or_else(|error| panic!("underline highlight lookup failed: {error}"))
+            .is_none()
+    );
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("moving back into the underline failed: {error}"));
+    assert_eq!(session.selection().focus.offset, run_end - 1);
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .unwrap_or_else(|error| panic!("underline highlight lookup failed: {error}"))
+            .is_some()
+    );
+}
+
+#[test]
 fn text_map_cache_keeps_both_paragraphs_of_a_cross_paragraph_selection() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));

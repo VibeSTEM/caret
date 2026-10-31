@@ -19,6 +19,11 @@ impl Session {
                 environment.environment_id,
             ));
         }
+        if self.selection.anchor == self.selection.focus
+            && self.current_inline_underline_range()?.is_some()
+        {
+            return self.run(Command::RemoveRunUnderlinePreservingContent);
+        }
         self.run(Command::RemoveBlockEnvironmentPreservingContent)
     }
 }

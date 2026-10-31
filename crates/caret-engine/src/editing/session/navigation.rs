@@ -39,9 +39,16 @@ impl Session {
         let pos = self.selection.focus.clone();
         let map = self.text_map_for(&pos)?;
         map.validate_pos(&pos)?;
+        let active_environment = map
+            .inline_environment_at(pos.offset, pos.affinity)
+            .is_some();
         if direction == Direction::Forward
             && pos.affinity == Affinity::Upstream
-            && map.has_environment_end(pos.offset)
+            && (if active_environment {
+                map.has_environment_end(pos.offset)
+            } else {
+                map.has_underlined_run_end(pos.offset)
+            })
         {
             let target = Pos {
                 affinity: Affinity::Downstream,
@@ -58,7 +65,11 @@ impl Session {
         }
         if direction == Direction::Backward
             && pos.affinity == Affinity::Downstream
-            && map.has_environment_start(pos.offset)
+            && (if active_environment {
+                map.has_environment_start(pos.offset)
+            } else {
+                map.has_underlined_run_start(pos.offset)
+            })
         {
             let target = Pos {
                 affinity: Affinity::Upstream,
@@ -77,11 +88,13 @@ impl Session {
             Direction::Backward => map.previous_boundary(pos.offset),
             Direction::Forward => map.next_boundary(pos.offset),
         };
-        let affinity = if map.has_environment_boundary(offset) {
-            match direction {
-                Direction::Backward => Affinity::Downstream,
-                Direction::Forward => Affinity::Upstream,
-            }
+        let boundary_affinity = match direction {
+            Direction::Backward => Affinity::Downstream,
+            Direction::Forward => Affinity::Upstream,
+        };
+        let at_active_scope_boundary = map.inline_boundary_source_at(offset).is_some();
+        let affinity = if at_active_scope_boundary {
+            boundary_affinity
         } else {
             pos.affinity
         };

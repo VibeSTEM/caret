@@ -335,6 +335,7 @@ impl Session {
                 | Command::CreateBlockEnvironment(_)
                 | Command::ToggleInlineFormat(_)
                 | Command::ToggleRunUnderline
+                | Command::RemoveRunUnderlinePreservingContent
                 | Command::SetInlineFontFamily(_)
                 | Command::SetParagraphFirstLineIndentChars(_)
                 | Command::SetDefaultFontFamily(_)
@@ -582,6 +583,12 @@ impl Session {
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
             Command::ToggleRunUnderline => self.toggle_run_underline(),
+            Command::RemoveRunUnderlinePreservingContent => {
+                let Some(range) = self.current_inline_underline_range()? else {
+                    return Ok(Effect::default());
+                };
+                self.remove_run_underline_preserving_content(&range)
+            }
             Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
                 self.remove_inline_environment_preserving_content(&environment_id)
             }
@@ -976,6 +983,7 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
             | Command::ToggleRunUnderline
+            | Command::RemoveRunUnderlinePreservingContent
             | Command::RemoveInlineEnvironmentPreservingContent(_)
             | Command::SetInlineFontFamily(_)
             | Command::SetParagraphFirstLineIndentChars(_)
