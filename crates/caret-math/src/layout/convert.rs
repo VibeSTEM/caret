@@ -196,7 +196,7 @@ impl Converter<'_> {
                             .unwrap_or(default)
                     };
                     let denominator = read("Denominator", 1.0);
-                    if denominator == 0.0 {
+                    if super::is_zero(denominator) {
                         0.0
                     } else {
                         read("Numerator", 0.0) / denominator * em
@@ -715,7 +715,7 @@ impl Converter<'_> {
                         .unwrap_or(default)
                 };
                 let denominator = read("valueDenominator", 1.0);
-                if denominator == 0.0 {
+                if super::is_zero(denominator) {
                     0.0
                 } else {
                     read("valueNumerator", 0.0) / denominator

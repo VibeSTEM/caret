@@ -104,7 +104,7 @@ pub(crate) fn layout_row(
         let y = ascent - fragment.ascent();
         let advance = fragment.width();
         // 行末片段的斜体校正传给整行，供后续脚标使用。
-        italics = if gap == 0.0 {
+        italics = if super::is_zero(gap) {
             fragment.italics_correction
         } else {
             0.0
