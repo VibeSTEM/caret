@@ -197,6 +197,51 @@ fn underline_toggle_ignores_soft_breaks_when_deciding_mixed_selection_state() {
 }
 
 #[test]
+fn removing_run_underline_accepts_a_boundary_inside_a_cross_run_grapheme() {
+    let mut model = paragraph("");
+    model.inlines = vec![
+        InlineNode::Run(Run {
+            text: "a".into(),
+            language: None,
+            props: BTreeMap::from([("underline".into(), Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        run("\u{0301}"),
+    ];
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let mut focus = session.selection().focus.clone();
+    focus.paragraph_id = paragraph_id;
+    focus.offset = 0;
+    focus.affinity = Affinity::Downstream;
+    select(&mut session, focus.clone(), focus);
+
+    session
+        .run(Command::RemoveRunUnderlinePreservingContent)
+        .unwrap_or_else(|error| panic!("underline removal should accept a Run boundary: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection().focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(visible_text(&paragraph.inlines), "a\u{0301}");
+    let InlineNode::Run(first) = &paragraph.inlines[0] else {
+        panic!("underlined content should remain a Run");
+    };
+    assert_ne!(first.props.get("underline"), Some(&Value::Bool(true)));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("underline removal should undo: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection().focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed after undo: {error}"));
+    let InlineNode::Run(first) = &paragraph.inlines[0] else {
+        panic!("undo should retain the Run");
+    };
+    assert_eq!(first.props.get("underline"), Some(&Value::Bool(true)));
+    assert_eq!(visible_text(&paragraph.inlines), "a\u{0301}");
+}
+
+#[test]
 fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() {
     let mut session = session_with_paragraphs(vec![paragraph("alpha")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();

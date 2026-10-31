@@ -294,8 +294,13 @@ impl Session {
         let position = start.clone();
         let original = self.paragraph_for(&position)?.clone();
         let map = TextMap::new(&original)?;
-        map.validate_pos(start)?;
-        map.validate_pos(end)?;
+        if start.offset > end.offset
+            || end.offset > map.text.len()
+            || !map.text.is_char_boundary(start.offset)
+            || !map.text.is_char_boundary(end.offset)
+        {
+            return Err(EditError::InvalidPosition);
+        }
         let mut paragraph = original.clone();
         set_run_underline_to_range(&mut paragraph.inlines, start.offset, end.offset, false)?;
         if paragraph == original {

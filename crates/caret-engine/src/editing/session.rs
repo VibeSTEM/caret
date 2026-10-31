@@ -314,8 +314,7 @@ impl Session {
                 | Command::Redo
                 | Command::EditorKey(EditorKey::Escape) => {}
                 Command::BeginCommandLine => {
-                    // The canvas routes a physical `\\` through this entry point.
-                    // In MathFocus it starts LaTeX parser input, not the body palette.
+                    // 画布通过此入口转发物理 `\\` 键；在 MathFocus 中它启动 LaTeX 解析输入。
                     return self.run(Command::TypeMathText("\\".to_owned()));
                 }
                 Command::Delete(Direction::Backward) if self.math_input_buffer.is_some() => {

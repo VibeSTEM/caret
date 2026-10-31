@@ -1,4 +1,4 @@
-//! 从当前焦点解析其所属的最内层行内环境。
+//! 从当前焦点解析行内环境、直接下划线 Run 与导航边界。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -34,9 +34,8 @@ impl Session {
         }))
     }
 
-    /// Returns the active inline highlight range. Nested environments win; absent an environment,
-    /// an enabled direct underline property highlights its containing Run while the caret is
-    /// collapsed there.
+    /// 返回当前焦点的行内高亮范围。嵌套环境优先；无环境时，若折叠光标位于带下划线属性的 Run，
+    /// 则高亮该 Run。两种来源保持为独立模型。
     pub fn current_inline_highlight_range(&mut self) -> Result<Option<Selection>, EditError> {
         if let Some(range) = self.current_inline_environment()? {
             return Ok(Some(Selection {
@@ -67,10 +66,7 @@ impl Session {
             return Ok(None);
         }
         let selection = self.selection().clone();
-        if selection.anchor.story != selection.focus.story
-            || selection.anchor.paragraph_id != selection.focus.paragraph_id
-            || selection.anchor.offset != selection.focus.offset
-        {
+        if selection.anchor != selection.focus {
             return Ok(None);
         }
         let focus = selection.focus;
@@ -96,8 +92,7 @@ impl Session {
         }))
     }
 
-    /// Returns the outside affinity when a visual navigation target leaves the active inline
-    /// scope. The environment and direct Run property remain distinct sources; environments win.
+    /// 视觉导航目标离开当前行内范围时返回外侧亲和性。环境和直接 Run 属性仍是不同来源，环境优先。
     pub fn navigation_inline_scope_exit_affinity(
         &mut self,
         destination: Option<&Pos>,

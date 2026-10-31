@@ -160,6 +160,26 @@ fn current_inline_highlight_uses_underlined_run_and_boundary_affinity() {
     assert_eq!(range.focus.offset, "beforeunderlined".len());
     assert_eq!(session.document_generation(), generation);
 
+    let mut opposite_affinity = focus.clone();
+    opposite_affinity.affinity = Affinity::Upstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: focus.clone(),
+            focus: opposite_affinity,
+        })))
+        .unwrap_or_else(|error| panic!("setting an affinity-only selection failed: {error}"));
+    assert!(
+        session
+            .current_inline_highlight_range()
+            .is_ok_and(|range| range.is_none())
+    );
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: focus.clone(),
+            focus: focus.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("restoring collapsed caret failed: {error}"));
+
     let mut selected_focus = focus.clone();
     selected_focus.offset += "under".len();
     session

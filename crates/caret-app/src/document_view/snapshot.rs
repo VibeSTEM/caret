@@ -231,7 +231,7 @@ fn block_environment_highlight_rects(
     )
 }
 
-/// 将当前最内层行内环境投影为布局层选区矩形。
+/// 将当前行内高亮范围投影为布局层选区矩形，涵盖最内层行内环境与直接下划线 Run。
 fn inline_highlight_rects(
     range: Option<&Selection>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
