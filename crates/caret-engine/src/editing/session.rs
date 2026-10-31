@@ -313,6 +313,11 @@ impl Session {
                 | Command::Undo
                 | Command::Redo
                 | Command::EditorKey(EditorKey::Escape) => {}
+                Command::BeginCommandLine => {
+                    // The canvas routes a physical `\\` through this entry point.
+                    // In MathFocus it starts LaTeX parser input, not the body palette.
+                    return self.run(Command::TypeMathText("\\".to_owned()));
+                }
                 Command::Delete(Direction::Backward) if self.math_input_buffer.is_some() => {
                     return self.backspace_math_input();
                 }
@@ -339,7 +344,6 @@ impl Session {
                 | Command::InsertSoftBreak
                 | Command::InsertParagraphBreak
                 | Command::InsertInlineMath
-                | Command::BeginCommandLine
                 | Command::TypeCommandLine(_)
                 | Command::BackspaceCommandLine
                 | Command::MoveCommandLineCursor(_)

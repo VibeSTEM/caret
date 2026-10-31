@@ -29,7 +29,7 @@
 
 1. 更新 Rust crate 分级和依赖图，在 L1 创建不依赖 workspace crate 的 `caret-math` parser 边界；`caret-engine` 调用它解析后转换为 Caret 自有 schema，schema 不存第三方 AST。当前仅记录整段公式源范围。
 2. 定义 schema 版本、`InlineMath`/`Equation`/`Align` 序列化表示、稳定 ID、源片段保存方式、MathPos 和 32 层树深度/输入长度上限；验证 Caret 树与 parser 递归预算的转换边界，比较树节点布局并测量内存占用。
-3. 实现 `InlineMath` 插入命令、公式内部树编辑、占位符导航、左右上下移动、退出公式与错误恢复；Equation/Align 的交互命令留给 044。LaTeX 输入由 `caret-math` parser 处理，不触发正文命令模式，`\\` 仅在 `Align` 中表示公式行分隔。
+3. 实现 `InlineMath` 插入命令、公式内部树编辑、占位符导航、左右上下移动、退出公式与错误恢复；Equation/Align 的交互命令留给 044。画布的 `BeginCommandLine` 反斜线入口在正文焦点打开正文候选，在 MathFocus 下转成 `caret-math` LaTeX 输入，不创建正文候选；`\\` 仅在 `Align` 中表示公式行分隔。
 4. 接入原子事务与撤销/重做；解析或编辑失败不部分更改正文，未支持命令保留原输入并定位错误。
 5. 覆盖新建、编辑、保存重开、旧/未知字段、异常深度、跨段选区边界和位置映射的行为测试。
 6. 更新 011 与架构文档中的具体 schema/迁移决策，独立评审后复验。
@@ -45,6 +45,7 @@
 - [x] 自动编号、编号版 `equation`/`align`、label/ref 明确不支持；parser 拒绝时保留原公式源，不静默丢弃编号语义。
 - [x] 插入行内公式后 Session 进入 MathFocus；支持文本/分数/根式插入、公式内左右/上下移动、Tab 跳转后续占位符、离开和正文插入点落位。末尾 Tab 不循环，容器边界有效 MathPos 可导航，暂存输入下拒绝 Tab 且保留状态。
 - [x] 解析/编辑失败原子；超深/过长输入受预算限制；未知 `defaultMathFontFamily` 值在文档模型中原样保留。
+- [x] 画布 `BeginCommandLine` 入口在 MathFocus 下输入反斜线并接通逐键 LaTeX parser；正文焦点行为不变。
 - [x] 命令级/模型行为测试、格式和 lint 通过；独立评审通过。
 
 ## 后续任务交接
@@ -86,6 +87,8 @@
 | 2026-10-31 | `cargo test --locked --offline -p caret-doc -p caret-engine` | MathTree payload/内容预算、导入返回校验、编辑后端节点/深度预算 | 通过：`caret-doc` 44 项、`caret-engine` 224 项；不覆盖 Session 数学焦点、撤销/重做、公式导航或整公式回写 |
 | 2026-10-31 | `cargo lint --check` | workspace lint、依赖、CMake/QML/native 检查 | 首次运行受 `/usr/bin/c++` ABI 探测失败影响；后续全仓复验通过，见上方最新记录 |
 | 2026-10-31 | `cargo fmt --all -- --check`、`git diff --check HEAD` | Rust 格式与补丁空白检查 | 通过 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-math -p caret-doc -p caret-engine -p caret-app --quiet`、`cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 公式反斜线从画布 BeginCommandLine 入口进入 LaTeX 缓冲；MathFocus 不创建正文候选，正文上下文不变 | 通过：math 17、doc 44、engine 262、app 193 项；目标 Clippy 通过；全仓 lint 9/9、格式及 diff 检查通过 |
+| 2026-10-31 | Terra/medium 数学输入领域复核；Sol/medium 最终完整 diff 只读复核 | 公式与正文输入路由边界、输入缓冲/错误语义、跨 app API 回归、架构文档权威性及最终差异 | Terra 和 Sol 均通过；重复说明改为单一权威链接，未发现未解决问题 |
 
 ## 风险与回退
 
@@ -117,5 +120,6 @@
 - 2026-10-31：release 数学树导入探针测量于 macOS 27.0 arm64 (Apple T8132), Rust 1.99.0。典型公式为 54 B 源码、23 nodes/深度 6、155 次导入分配/15,889 B 累计、11,319 B 保留堆、6,553,600 B 进程峰值 RSS；10 层嵌套分数为 101 B、21 nodes/深度 11、177 次/19,838 B、16,454 B 保留堆、6,438,912 B RSS；重复典型公式 1,000 次为 23,000 nodes、154,001 次/15,817,000 B、11,271,000 B 保留堆、19,988,480 B RSS。`MathNode` 为 168 B，`NodeId` 为 24 B；根和 child `Vec` 中的节点内联存储，无逐节点 `Box`，普通 `ord` 字符合并；保留堆差值在 parser parse 及首次 import warm-up 后采集，包含外层公式 Vec 容量和内联根节点，不含预解析的 `ParsedMath`。分配字节为 allocator 请求大小，不含其元数据；RSS 为进程启动以来的历史高水位，包含解析与预热阶段，运行间可能波动。此组数字修正了早期未计入外层 Vec 的测量。决定沿用可读、树形 `.cdoc` schema 和 `Vec` 子节点布局，不增加重复 arena；Arena 会增加运行时表示与持久化 DTO 的转换/双份存储，而 1,000 个典型公式当前 RSS 约 19 MiB。完整排版与真实文档数据未进入测量；超过 1,000 公式或 044 布局集成暴露内存预算后再评估 schema v2/arena。
 - 2026-10-31：Session 的 `EditorKey::Tab` 在 MathFocus 下遍历 Caret 树，移动到树顺序中的下一个 Placeholder；当前位置与候选节点通过子索引和容器 offset 比较，扫描不枚举普通文字字素、不在每个节点上重新解析 MathPos，仅在命中后复制路径。不存在后续占位符时不循环；暂存 LaTeX 输入时拒绝导航并保留文档、焦点及输入缓冲。测试覆盖普通/嵌套槽、根 Row 非零边界、最后槽和不完整输入。
 - 2026-10-31：043 的 schema/parser 导入与基础 InlineMath Session 验收完成；三个 crate 测试 17/44/261 项通过，目标 Clippy、app check、cargo format、cargo lint 9 阶段及 diff 检查通过，Terra 领域复核和 Sol 最终评审通过。Equation/Align 命令编辑、`^`/`_` 上下标、已提交节点删除、正文重新进入焦点和细粒度 parser source range patch 留给 044；未知数学字体回退诊断也由 044 验收，表格通用模型及公式保存往返由 045 验收，见“后续任务交接”。
+- 2026-10-31：修复画布将单个 `\` 始终启动正文命令面板导致公式焦点首个反斜线被拒绝的问题：MathFocus 下 Session 将 `BeginCommandLine` 转为 `TypeMathText("\\")`，使后续普通文本接续现有 parser 缓冲；正文焦点路径不变。Engine 和 app command-line JSON API 均增加逐键 `\alpha+` 回归。架构入口规则以 command-input 为唯一权威，公式架构页只链接引用。Terra/medium 领域复核和 Sol/medium 最终评审通过，未发现未解决问题。
 
 完成。

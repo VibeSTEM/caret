@@ -24,6 +24,37 @@ fn paragraph_text(paragraph: &caret_doc::Paragraph) -> String {
         .collect()
 }
 
+#[test]
+fn backslash_entry_routes_to_math_input_instead_of_body_command_popup()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath)?;
+
+    let begin: Value =
+        serde_json::from_str(&runtime.command_line_command_json("begin", String::new())?)?;
+    assert_eq!(begin["commandLine"]["active"], false);
+    assert_eq!(runtime.session.pending_math_input(), Some("\\"));
+
+    for character in "alpha+".chars() {
+        runtime.insert_text_json(character.to_string())?;
+    }
+    assert!(runtime.session.pending_math_input().is_none());
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        panic!("expected paragraph with inline formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline formula");
+    };
+    assert_eq!(
+        math.math_tree.root.children[0].text.as_deref(),
+        Some("alpha")
+    );
+    assert_eq!(math.math_tree.root.children[1].text.as_deref(), Some("+"));
+    Ok(())
+}
+
 fn document_with_paragraph_section_paragraph() -> (Document, String, String) {
     let before = paragraph_with_text("before");
     let title = paragraph_with_text("heading");

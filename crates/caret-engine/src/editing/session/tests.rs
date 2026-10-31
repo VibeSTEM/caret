@@ -403,6 +403,41 @@ fn charwise_latex_command_input_buffers_prefix_and_commits_as_one_edit() {
 }
 
 #[test]
+fn command_line_prefix_routes_into_math_parser_when_formula_has_focus() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+
+    let effect = session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("math command prefix was rejected: {error}"));
+    assert!(effect.math_input_changed);
+    assert_eq!(session.pending_math_input(), Some("\\"));
+    assert!(session.command_line().is_none());
+
+    for character in "alpha+".chars() {
+        session
+            .run(Command::InsertText(character.to_string()))
+            .unwrap_or_else(|error| panic!("math command continuation failed: {error}"));
+    }
+    assert!(session.pending_math_input().is_none());
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("expected paragraph containing formula");
+    };
+    let InlineNode::Math(math) = &paragraph.inlines[0] else {
+        panic!("expected inline formula");
+    };
+    assert_eq!(math.math_tree.root.children.len(), 2);
+    assert_eq!(
+        math.math_tree.root.children[0].text.as_deref(),
+        Some("alpha")
+    );
+    assert_eq!(math.math_tree.root.children[1].text.as_deref(), Some("+"));
+}
+
+#[test]
 fn incomplete_math_input_is_preserved_for_backspace_and_escape_recovery() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
@@ -833,7 +868,6 @@ fn unsupported_body_navigation_and_ime_are_rejected_while_math_has_focus() {
             id: 77,
             preedit: "中".to_owned(),
         },
-        Command::BeginCommandLine,
     ];
     for command in commands {
         assert!(matches!(
