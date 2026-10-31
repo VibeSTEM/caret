@@ -8,6 +8,7 @@ mod layout;
 mod layout_view;
 mod math_edit;
 mod math_import;
+mod math_layout;
 mod page_glyphs;
 
 pub use caret_doc::DocumentFontTarget;
@@ -15,6 +16,7 @@ pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
 };
+pub use math_layout::layout_math_tree;
 
 pub use editing::{
     Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError,

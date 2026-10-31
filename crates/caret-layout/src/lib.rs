@@ -7,6 +7,7 @@ pub mod font_selection;
 mod fonts;
 mod glyph_raster;
 mod line_metrics;
+mod math_text;
 pub mod pagination;
 mod paragraph;
 mod paragraph_style;
@@ -20,6 +21,7 @@ pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics, calculate_line_metrics_with_grid,
 };
+pub use math_text::{MathInlineBoxMetrics, ParleyMathTextShaper, stix_two_math_font_data};
 pub use pagination::{
     PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
     paginate_paragraphs,

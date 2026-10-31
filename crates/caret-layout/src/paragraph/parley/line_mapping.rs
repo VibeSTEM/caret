@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use parley::Layout;
+use parley::{InlineBox, InlineBoxKind, Layout, PositionedLayoutItem};
 
 use crate::{
-    FontLineMetrics, LineMetricsError, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ParagraphLine, calculate_line_metrics_with_grid,
+    FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetricsError, LineSpacing,
+    ParagraphLayout, ParagraphLayoutError, ParagraphLine, calculate_line_metrics_with_grid,
 };
 
 pub(super) fn font_line_metrics(metrics: parley::FontMetrics) -> FontLineMetrics {
@@ -33,6 +33,7 @@ pub(super) fn make_paragraph_lines(
     spacing: LineSpacing,
     line_grid_metrics: FontLineMetrics,
     line_grid_font_size_centipoints: u16,
+    inline_boxes: &[InlineBox],
 ) -> Result<ParagraphLineMapping, ParagraphLayoutError> {
     let line_grid = calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], spacing)?;
     if text.is_empty() {
@@ -67,6 +68,7 @@ pub(super) fn make_paragraph_lines(
     let mut parley_line_heights_pt = Vec::with_capacity(lines.len());
     let mut baseline_adjustments_pt = Vec::with_capacity(lines.len());
     let mut font_metrics = Vec::new();
+    let mut object_metrics = Vec::new();
     let line_grid_font_size_pt = f32::from(line_grid_font_size_centipoints) / 100.0;
     let mut top_pt = 0.0f32;
     for (index, line) in lines.iter().enumerate() {
@@ -94,15 +96,66 @@ pub(super) fn make_paragraph_lines(
                 .filter(|run| run.font_size() > line_grid_font_size_pt)
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
-        let line_metrics =
-            calculate_line_metrics_with_grid(line_grid_metrics, &font_metrics, &[], spacing)
-                .map_err(|error| match error {
-                    LineMetricsError::InvalidFontMetrics
-                    | LineMetricsError::InvalidObjectMetrics
-                    | LineMetricsError::InvalidLineSpacing => {
-                        ParagraphLayoutError::InvalidLineMetrics(error)
-                    }
-                })?;
+        object_metrics.clear();
+        for item in line.items() {
+            let PositionedLayoutItem::InlineBox(positioned) = item else {
+                continue;
+            };
+            if positioned.kind != InlineBoxKind::InFlow {
+                continue;
+            }
+            let Some(source) = inline_boxes.iter().find(|item| item.id == positioned.id) else {
+                return Err(ParagraphLayoutError::InconsistentShaping);
+            };
+            let ascent_pt = positioned.baseline.unwrap_or(positioned.height);
+            if !ascent_pt.is_finite() || ascent_pt < 0.0 || ascent_pt > positioned.height {
+                return Err(ParagraphLayoutError::InvalidInlineBox);
+            }
+            let descent_pt = positioned.height - ascent_pt;
+            let source_end = text[source.index..]
+                .chars()
+                .next()
+                .map_or(source.index, |character| {
+                    source.index + character.len_utf8()
+                });
+            let source_bytes = if source_end > source.index {
+                source.index..source_end
+            } else {
+                let start = text[..source.index]
+                    .char_indices()
+                    .next_back()
+                    .map_or(source.index, |(start, _)| start);
+                start..source.index
+            };
+            if source_bytes.is_empty() {
+                return Err(ParagraphLayoutError::InvalidInlineBox);
+            }
+            object_metrics.push(InlineObjectMetrics {
+                source_bytes,
+                advance_pt: positioned.width,
+                ascent_pt,
+                descent_pt,
+                ink_bounds: InkBounds {
+                    left: 0.0,
+                    top: -ascent_pt,
+                    right: positioned.width,
+                    bottom: descent_pt,
+                },
+            });
+        }
+        let line_metrics = calculate_line_metrics_with_grid(
+            line_grid_metrics,
+            &font_metrics,
+            &object_metrics,
+            spacing,
+        )
+        .map_err(|error| match error {
+            LineMetricsError::InvalidFontMetrics
+            | LineMetricsError::InvalidObjectMetrics
+            | LineMetricsError::InvalidLineSpacing => {
+                ParagraphLayoutError::InvalidLineMetrics(error)
+            }
+        })?;
         let raw_top = metrics.block_min_coord;
         let raw_baseline_from_top = metrics.baseline - raw_top;
         if !raw_top.is_finite() || !raw_baseline_from_top.is_finite() {

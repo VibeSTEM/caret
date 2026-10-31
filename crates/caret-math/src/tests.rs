@@ -3,9 +3,76 @@
 use super::math_syntax::{AstBudgetError, check_ast_budget};
 use super::{
     MAX_MATH_NESTING_DEPTH, MAX_MATH_SOURCE_BYTES, MAX_MATH_SYNTAX_NODES, MathInputKind,
-    MathInputStatus, MathParseError, MathSyntaxKind, MathSyntaxNode, classify_input,
-    is_incomplete_input_prefix, parse,
+    MathInputStatus, MathParseError, MathSyntaxConversionError, MathSyntaxKind, MathSyntaxNode,
+    classify_input, is_incomplete_input_prefix, parse,
 };
+
+#[test]
+fn public_math_errors_format_stable_messages_with_actionable_context() {
+    let source = "formula";
+    let errors = [
+        (
+            MathParseError::InputTooLong {
+                source,
+                source_range: 0..source.len(),
+                limit: 6,
+            },
+            "math.input_too_long: maximum 6 bytes",
+        ),
+        (
+            MathParseError::InputTooDeep {
+                source,
+                source_range: 0..source.len(),
+                limit: 32,
+            },
+            "math.input_too_deep: maximum depth 32",
+        ),
+        (
+            MathParseError::SyntaxTreeTooLarge {
+                source,
+                source_range: 0..source.len(),
+                limit: 65_536,
+            },
+            "math.syntax_tree_too_large: maximum nodes 65536",
+        ),
+        (
+            MathParseError::UnsupportedNumbering {
+                source,
+                source_range: 0..source.len(),
+                command: "tag".into(),
+            },
+            r"math.unsupported_numbering: \tag",
+        ),
+        (
+            MathParseError::InputKindMismatch {
+                source,
+                source_range: 0..source.len(),
+                expected: MathInputKind::Equation,
+            },
+            "math.input_kind_mismatch: Equation",
+        ),
+        (
+            MathParseError::Parse {
+                source,
+                source_range: 0..source.len(),
+                message: "unexpected closing brace".into(),
+                incomplete: false,
+            },
+            "math.parse: unexpected closing brace",
+        ),
+    ];
+    for (error, expected) in errors {
+        assert_eq!(error.to_string(), expected);
+    }
+
+    assert_eq!(
+        MathSyntaxConversionError {
+            construct: "unknown accent".into(),
+        }
+        .to_string(),
+        "math.syntax_conversion_unsupported: unknown accent"
+    );
+}
 
 #[test]
 fn incomplete_input_prefix_detection_only_tracks_open_latex_boundaries() {
@@ -215,6 +282,10 @@ fn normalized_range_maps_trimmed_unicode_input_to_utf8_bytes() {
     };
     assert_eq!(&source[parsed.normalized_range()], "α + x");
     assert_eq!(parsed.source_range(), 0..source.len());
+    let tree = parsed
+        .syntax_tree()
+        .unwrap_or_else(|error| panic!("syntax conversion should succeed: {error}"));
+    assert_eq!(tree.root.source_range, Some(0..source.len()));
 }
 
 #[test]

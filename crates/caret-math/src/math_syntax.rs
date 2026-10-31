@@ -10,6 +10,7 @@ use latex_rust::{
 };
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::ops::Range;
 
 /// 后端无关的、一次解析结果。它不含 Caret 文档 ID 或持久化源码跨度。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +50,11 @@ pub struct MathSyntaxNode {
     pub text: Option<String>,
     /// kind 专属的值属性；键由 `kind` 决定，值保留 TeX parser 语义。
     pub attributes: BTreeMap<String, String>,
+    /// UTF-8 byte range mapped to the original input when available; the current upstream parser
+    /// adapter does not populate fine-grained node ranges yet.
+    pub source_range: Option<Range<usize>>,
+    /// Opaque caller-owned stable identity copied to layout boxes as provenance.
+    pub provenance: Option<String>,
     /// 依语法位置排序的子节点；可选槽位由 `Placeholder` 明确占位。
     pub children: Vec<Self>,
 }
@@ -59,6 +65,8 @@ impl MathSyntaxNode {
             kind,
             text: None,
             attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
             children: Vec::new(),
         }
     }
@@ -742,6 +750,8 @@ fn binary_node(
         kind,
         text: None,
         attributes: BTreeMap::new(),
+        source_range: None,
+        provenance: None,
         children: vec![first, second],
     }
 }

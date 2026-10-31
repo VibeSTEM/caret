@@ -103,6 +103,7 @@ pub struct ParagraphLayout {
 pub enum ParagraphLayoutError {
     InvalidWidth,
     InvalidFontSize,
+    InvalidInlineBox,
     InconsistentShaping,
     InvalidLineMetrics(LineMetricsError),
 }
@@ -112,6 +113,7 @@ impl std::fmt::Display for ParagraphLayoutError {
         match self {
             Self::InvalidWidth => formatter.write_str("layout.invalid_width"),
             Self::InvalidFontSize => formatter.write_str("layout.invalid_font_size"),
+            Self::InvalidInlineBox => formatter.write_str("layout.invalid_inline_box"),
             Self::InconsistentShaping => formatter.write_str("layout.inconsistent_parley_output"),
             Self::InvalidLineMetrics(error) => error.fmt(formatter),
         }

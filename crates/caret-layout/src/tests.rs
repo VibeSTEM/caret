@@ -10,8 +10,9 @@ use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 use crate::shaping::{StyledSpan, boundaries_for_spans};
 use crate::{
     FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, LineSpacing,
-    ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings, ShapingStyle,
-    UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line, paragraph_has_empty_line,
+    MathInlineBoxMetrics, ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings,
+    ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line,
+    paragraph_has_empty_line,
 };
 
 fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
@@ -87,6 +88,86 @@ fn invalid_layout_requests_leave_the_reusable_layouter_available() {
         .unwrap_or_else(|error| panic!("reusable layout failed after bad input: {error}"));
     assert_eq!(source, "still usable");
     assert!(!result.paragraph.lines.is_empty());
+}
+
+#[test]
+fn measured_inline_box_reserves_formula_geometry_in_parley_lines() {
+    let mut catalog = font_catalog();
+    let mut layouter = ParagraphLayouter::new();
+    let settings = document_settings();
+    let source = paragraph("x\u{fffc}y", Some("en"));
+    let mut formula = MathInlineBoxMetrics {
+        width_pt: 24.0,
+        ascent_pt: 15.0,
+        descent_pt: 5.0,
+    }
+    .inline_box(71, 1)
+    .unwrap_or_else(|error| panic!("valid inline formula geometry: {error}"));
+    let (_, result) = layouter
+        .layout_with_inline_boxes(
+            &mut catalog,
+            &source,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(120.0),
+            &[formula.clone()],
+        )
+        .unwrap_or_else(|error| panic!("inline formula should layout: {error}"));
+    let line = result
+        .layout
+        .get(0)
+        .unwrap_or_else(|| panic!("paragraph should contain one line"));
+    let boxes = line
+        .items()
+        .filter_map(|item| match item {
+            parley::PositionedLayoutItem::InlineBox(inline_box) => Some(inline_box),
+            parley::PositionedLayoutItem::GlyphRun(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(boxes.len(), 1);
+    assert_eq!(boxes[0].id, 71);
+    assert_eq!(boxes[0].width, 24.0);
+    assert_eq!(boxes[0].height, 20.0);
+    assert_eq!(boxes[0].baseline, Some(15.0));
+    assert!(result.paragraph.lines[0].metrics.height_pt >= 20.0);
+    assert!(result.paragraph.lines[0].metrics.baseline_pt >= 15.0);
+    assert_eq!(
+        result.paragraph.total_height_pt,
+        result.paragraph.lines[0].metrics.height_pt
+    );
+
+    formula.index = 2;
+    let Err(error) = layouter.layout_with_inline_boxes(
+        &mut catalog,
+        &source,
+        &settings,
+        &ShapingStyle::new(1200),
+        layout_options(120.0),
+        &[formula],
+    ) else {
+        panic!("inline box index inside a multi-byte object replacement must fail");
+    };
+    assert_eq!(error.to_string(), "layout.invalid_inline_box");
+
+    let empty = paragraph("", Some("en"));
+    let empty_box = MathInlineBoxMetrics {
+        width_pt: 10.0,
+        ascent_pt: 8.0,
+        descent_pt: 2.0,
+    }
+    .inline_box(72, 0)
+    .unwrap_or_else(|error| panic!("valid inline formula geometry: {error}"));
+    let Err(error) = layouter.layout_with_inline_boxes(
+        &mut catalog,
+        &empty,
+        &settings,
+        &ShapingStyle::new(1200),
+        layout_options(120.0),
+        &[empty_box],
+    ) else {
+        panic!("an inline box without a source position must be rejected");
+    };
+    assert_eq!(error.to_string(), "layout.invalid_inline_box");
 }
 
 #[test]

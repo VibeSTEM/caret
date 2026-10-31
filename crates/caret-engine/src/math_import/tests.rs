@@ -17,9 +17,20 @@ fn converts_inline_math_to_caret_owned_schema_with_unique_ids() {
     let Ok(ImportedMath::Inline(inline)) = import_parsed_math(&parsed) else {
         panic!("inline formula should import");
     };
+    let source_len = u32::try_from(source.len())
+        .unwrap_or_else(|error| panic!("test source length must fit u32: {error}"));
     assert_eq!(inline.math_tree.schema_version, MATH_TREE_SCHEMA_VERSION);
     assert_eq!(inline.math_tree.source, source);
     assert_eq!(inline.math_tree.root.kind, MathNodeKind::Fraction);
+    assert_eq!(
+        inline
+            .math_tree
+            .root
+            .source_range
+            .as_ref()
+            .map(|range| (range.start, range.end)),
+        Some((0, source_len))
+    );
     assert_eq!(inline.math_tree.root.children.len(), 2);
     assert_eq!(
         inline

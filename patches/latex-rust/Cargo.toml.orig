@@ -1,0 +1,68 @@
+[package]
+name = "latex-rust"
+version = "3.0.1"
+edition = "2021"
+rust-version = "1.99"
+authors = ["Jeffrey S Carr <jscarr1964@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "Pure-Rust LaTeX math renderer. Parse to AST, TeX-faithful layout on exact rationals, emit SVG, PNG, or egui shapes. No JavaScript, no webview, no runtime."
+readme = "README.md"
+repository = "https://github.com/jscarr64/latex-rust"
+homepage = "https://github.com/jscarr64/latex-rust"
+documentation = "https://docs.rs/latex-rust"
+keywords = ["latex", "math", "rendering", "svg", "rust"]
+categories = ["rendering", "science", "mathematics"]
+include = [
+    "src/**",
+    "data/**",
+    "fonts/**",
+    "golds/**",
+    "tests/**",
+    "benches/layout.rs",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "NOTICE",
+    "documents/CAPABILITIES.md",
+    "documents/SYMBOLS.md",
+    "documents/TEXT_MODE_SPEC.md",
+]
+
+[lib]
+name = "latex_rust"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+# PNG raster backend (`src/render/png`).
+png = ["dep:tiny-skia"]
+# egui Shape backend (`src/render/egui`). Off by default.
+# epaint is pinned to the same release so the feature resolves one epaint.
+egui = ["dep:egui", "dep:epaint"]
+
+[dev-dependencies]
+proptest = "=1.5.0"
+# rusty-fork (via proptest 1.5) pulls the newest tempfile. 3.27 needs
+# getrandom 0.4, whose manifest requires Cargo edition2024. 1.83 cannot
+# read that manifest. 3.14 stays on getrandom 0.2.
+tempfile = "=3.14.0"
+
+[dependencies]
+# Outlines come from skrifa 0.39. MATH is parsed in src/font/math.rs.
+# Do not enable the `libm` feature. epaint 0.36 brings its own skrifa.
+skrifa = "=0.39.0"
+tiny-skia = { version = "0.11", optional = true }
+egui = { version = "=0.36.2", optional = true }
+epaint = { version = "=0.36.2", optional = true }
+
+[[bench]]
+name = "layout"
+harness = false
+required-features = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
