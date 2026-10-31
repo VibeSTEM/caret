@@ -70,6 +70,8 @@ cargo quality
 
 `cargo lint` 包含 Clippy、未使用依赖、CMake 格式与 lint、Rust/CMake 分层、qmllint、clang-tidy、include-cleaner 和 cppcheck。Objective-C++ 仅在 macOS 检查。`cargo test --locked -p caret-tests --test native` 是单独的 native 聚合；CI 可通过 `CARET_TEST_CTEST_LABELS` 选择 CTest 标签，空匹配会失败。`CARET_TEST_QML_LINT=false` 仅供已有独立 qmllint job 的 CI 跳过重复扫描，本地默认仍检查。
 
+会触发致命信号或未处理异常的测试必须隔离在子进程。若平台会为预期中的测试崩溃弹出交互报告，测试应使用平台专属的无界面退出路径；生产崩溃处理语义仍须在不会阻塞开发者的环境中验证。
+
 `l1` 是直接受影响的 Rust package，`l2` 是它们的消费者以及相关 native / QML 测试。这两个名字不是[分层](layering.md)里的层号。未知路径和公共构建边界扩大到完整范围。
 
 `cargo hyperfine <command> [options]` 将参数转交给锁定版本的 hyperfine；没有被测命令时不调用。

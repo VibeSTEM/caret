@@ -189,6 +189,7 @@ name = "caret-layout"
 version = "0.1.0"
 dependencies = [
  "caret-doc",
+ "caret-math",
  "criterion",
  "fontique",
  "icu_locale_core",
@@ -817,8 +818,6 @@ dependencies = [
 [[package]]
 name = "latex-rust"
 version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2250132fbda62040ccba5ede9336add3257c76fe004f016d929926bf7530e9b6"
 dependencies = [
  "skrifa 0.39.0",
 ]

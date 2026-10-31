@@ -1,14 +1,30 @@
 //! 验证页面字形快照、裁剪与栅格缓存。
 
 use caret_doc::{
-    Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph,
+    Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineMath, InlineNode,
+    MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree, NodeId, Paragraph,
     ParagraphLineSpacing, Run,
 };
 use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
 
-use crate::{DocumentLayoutService, DocumentLayoutSnapshot};
+use crate::{DocumentLayoutService, DocumentLayoutSnapshot, ImportedMath, import_parsed_math};
+use caret_math::MathInputKind;
 
-use super::{PageGlyphError, PageGlyphRasterizer};
+use super::{
+    PageGlyphDrawCommand, PageGlyphError, PageGlyphPlacement, PageGlyphRasterizer,
+    RasterizedPageGlyphs,
+};
+
+fn placements(frame: &RasterizedPageGlyphs) -> Vec<PageGlyphPlacement> {
+    frame
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            PageGlyphDrawCommand::Glyph(placement) => Some(*placement),
+            _ => None,
+        })
+        .collect()
+}
 
 fn text_run(text: &str, language: Option<&str>) -> InlineNode {
     InlineNode::Run(Run {
@@ -82,6 +98,95 @@ fn paragraph_glyphs_keep_one_anchor_across_mixed_scripts() {
 }
 
 #[test]
+fn page_rasterizer_accepts_empty_inline_math_draw_items() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!();
+    };
+    paragraph.inlines = vec![InlineNode::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: String::new(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Row,
+                text: None,
+                attributes: Default::default(),
+                source_range: None,
+                children: Vec::new(),
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    })];
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("formula page projection should succeed: {error}"));
+    let mut rasterizer = PageGlyphRasterizer::default();
+
+    let frame = rasterizer
+        .rasterize(&page, 1.0, [0.0, 0.0], [32, 32, 32, 255])
+        .unwrap_or_else(|error| panic!("empty math object should produce a valid frame: {error}"));
+    assert_eq!(frame.page_index, 0);
+}
+
+#[test]
+fn page_rasterizer_keeps_formula_and_body_glyphs_in_visual_order() {
+    let parsed = caret_math::parse(r"\frac{a}{b}+\text{中文}", MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("formula parse failed: {error}"));
+    let ImportedMath::Inline(math) = import_parsed_math(&parsed)
+        .unwrap_or_else(|error| panic!("formula import failed: {error}"))
+    else {
+        panic!("inline source should create inline math");
+    };
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!();
+    };
+    paragraph.inlines = vec![
+        text_run("before ", Some("en")),
+        InlineNode::Math(math),
+        text_run(" after", Some("en")),
+    ];
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("formula page extraction failed: {error}"));
+    let mut rasterizer = PageGlyphRasterizer::default();
+    let frame = rasterizer
+        .rasterize(&page, 1.0, [0.0, 0.0], [32, 32, 32, 255])
+        .unwrap_or_else(|error| panic!("formula page rasterization failed: {error}"));
+    assert!(frame.images.len() > 1);
+    assert!(
+        frame
+            .commands
+            .iter()
+            .any(|command| matches!(command, PageGlyphDrawCommand::Rectangle(_)))
+    );
+    let Some(formula_position) = frame
+        .commands
+        .iter()
+        .position(|command| matches!(command, PageGlyphDrawCommand::Rectangle(_)))
+    else {
+        panic!("fraction rule should remain in visual command order");
+    };
+    assert!(
+        frame.commands[..formula_position]
+            .iter()
+            .any(|command| matches!(command, PageGlyphDrawCommand::Glyph(_)))
+    );
+    assert!(
+        frame.commands[formula_position + 1..]
+            .iter()
+            .any(|command| matches!(command, PageGlyphDrawCommand::Glyph(_)))
+    );
+}
+
+#[test]
 fn blank_page_has_no_glyphs_and_invalid_page_is_rejected() {
     let snapshot = layout(&Document::blank());
     let page = snapshot
@@ -124,15 +229,13 @@ fn rasterized_page_deduplicates_images_and_preserves_device_phase() {
         .unwrap_or_else(|error| panic!("page glyph rasterization failed: {error}"));
 
     assert_eq!(rasterized.images.len(), 1);
-    assert_eq!(rasterized.placements.len(), 2);
-    assert_eq!(rasterized.placements[0].image_index, 0);
-    assert_eq!(rasterized.placements[1].image_index, 0);
+    let placements = placements(&rasterized);
+    assert_eq!(placements.len(), 2);
+    assert_eq!(placements[0].image_index, 0);
+    assert_eq!(placements[1].image_index, 0);
+    assert_eq!(placements[0].pixel_phase, placements[1].pixel_phase);
     assert_eq!(
-        rasterized.placements[0].pixel_phase,
-        rasterized.placements[1].pixel_phase
-    );
-    assert_eq!(
-        rasterized.placements[0].pixel_phase[0],
+        placements[0].pixel_phase[0],
         (page_origin[0] + repeated.x_pt * px_per_pt).rem_euclid(1.0) as f32
     );
     assert!(rasterized.images[0].pixels.len() > 4);
@@ -158,8 +261,9 @@ fn near_integer_device_origins_keep_phases_inside_the_valid_interval() {
         let rasterized = rasterizer
             .rasterize(&page, 1.0, [origin_x, 0.0], [32, 32, 32, 255])
             .unwrap_or_else(|error| panic!("near integer phase failed: {error}"));
-        assert!(!rasterized.placements.is_empty());
-        assert!(rasterized.placements.iter().all(|placement| {
+        let placements = placements(&rasterized);
+        assert!(!placements.is_empty());
+        assert!(placements.iter().all(|placement| {
             placement
                 .pixel_phase
                 .iter()
@@ -188,17 +292,12 @@ fn page_deduplication_survives_global_raster_cache_eviction() {
         .rasterize(&page, 1.0, [0.0, 0.0], [32, 32, 32, 255])
         .unwrap_or_else(|error| panic!("page glyph rasterization failed: {error}"));
 
-    assert_eq!(rasterized.placements.len(), 8194);
+    let placements = placements(&rasterized);
+    assert_eq!(placements.len(), 8194);
     assert_eq!(rasterized.images.len(), 8193);
     assert_eq!(
-        rasterized
-            .placements
-            .first()
-            .map(|placement| placement.image_index),
-        rasterized
-            .placements
-            .last()
-            .map(|placement| placement.image_index)
+        placements.first().map(|placement| placement.image_index),
+        placements.last().map(|placement| placement.image_index)
     );
 }
 

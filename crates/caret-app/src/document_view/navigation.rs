@@ -147,6 +147,32 @@ impl DocumentViewRuntime {
                     })
             }
         };
+        if !extend && current.anchor == current.focus {
+            let exit_affinity = self
+                .session
+                .navigation_inline_scope_exit_affinity(
+                    target.as_ref().map(|(candidate, _, _)| candidate),
+                )
+                .map_err(|error| format!("navigation.inline_scope: {error}"))?;
+            if let Some(affinity) = exit_affinity {
+                let position = Pos {
+                    affinity,
+                    ..current.focus
+                };
+                self.session
+                    .set_selection_with_visual_affinity(
+                        Some(Selection {
+                            anchor: position.clone(),
+                            focus: position,
+                        }),
+                        current_visual,
+                    )
+                    .map_err(|error| format!("selection.set: {error}"))?;
+                self.anchor_visual_affinity = current_visual;
+                self.preferred_visual_x_pt = None;
+                return self.interaction_state_json();
+            }
+        }
         let Some((focus, visual_affinity, collapsed_selection)) = target else {
             if extend
                 && let Some(environment_id) =

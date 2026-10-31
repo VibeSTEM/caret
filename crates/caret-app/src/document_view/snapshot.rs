@@ -6,8 +6,8 @@
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection, StructureClass,
-    StructureKind, StructurePosition,
+    DocumentLayoutDeltaView, PageCaretGeometry, Selection, StructureClass, StructureKind,
+    StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -231,31 +231,17 @@ fn block_environment_highlight_rects(
     )
 }
 
-/// 将当前最内层行内环境投影为布局层选区矩形。
-fn inline_environment_highlight_rects(
-    range: Option<&caret_engine::InlineEnvironmentRange>,
+/// 将当前行内高亮范围投影为布局层选区矩形，涵盖最内层行内环境与直接下划线 Run。
+fn inline_highlight_rects(
+    range: Option<&Selection>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
-    let Some(range) = range else {
+    let Some(selection) = range else {
         return Value::Array(Vec::new());
-    };
-    let selection = Selection {
-        anchor: Pos {
-            story: range.story.clone(),
-            paragraph_id: range.paragraph_id.clone(),
-            offset: range.start_utf8,
-            affinity: Affinity::Downstream,
-        },
-        focus: Pos {
-            story: range.story.clone(),
-            paragraph_id: range.paragraph_id.clone(),
-            offset: range.end_utf8,
-            affinity: Affinity::Upstream,
-        },
     };
     Value::Array(
         snapshot
-            .selection_geometry(&selection)
+            .selection_geometry(selection)
             .unwrap_or_default()
             .into_iter()
             .map(|rectangle| {
@@ -311,9 +297,9 @@ impl DocumentViewRuntime {
             .composition_preview_session
             .as_mut()
             .unwrap_or(&mut self.session);
-        let inline_environment = highlight_session
-            .current_inline_environment()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
+        let inline_highlight = highlight_session
+            .current_inline_highlight_range()
+            .map_err(|error| format!("layout.inline_highlight: {error}"))?;
         let focus_environment_id = current_block_environment_id(highlight_session);
         let selection = self.session.selection().clone();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
@@ -362,7 +348,7 @@ impl DocumentViewRuntime {
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "inlineEnvironmentHighlightRects".to_owned(),
-                inline_environment_highlight_rects(inline_environment.as_ref(), snapshot),
+                inline_highlight_rects(inline_highlight.as_ref(), snapshot),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -466,12 +452,13 @@ impl DocumentViewRuntime {
             )
         });
         let current_structure = current_structure_state(&self.session);
-        let inline_environment = self
+        let highlight_session = self
             .composition_preview_session
             .as_mut()
-            .unwrap_or(&mut self.session)
-            .current_inline_environment()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
+            .unwrap_or(&mut self.session);
+        let inline_highlight = highlight_session
+            .current_inline_highlight_range()
+            .map_err(|error| format!("layout.inline_highlight: {error}"))?;
         let highlight_session = self
             .composition_preview_session
             .as_ref()
@@ -485,7 +472,7 @@ impl DocumentViewRuntime {
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = self.current_snapshot()?;
         let inline_environment_rectangles =
-            inline_environment_highlight_rects(inline_environment.as_ref(), snapshot);
+            inline_highlight_rects(inline_highlight.as_ref(), snapshot);
         let rectangles = selection_rectangles_json(
             &selection,
             structure_selection

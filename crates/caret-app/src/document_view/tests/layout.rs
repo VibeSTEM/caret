@@ -47,6 +47,51 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
 }
 
 #[test]
+fn layout_failure_after_edit_restores_session_history_and_last_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!();
+    };
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "original".to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    })];
+    paragraph
+        .mark_style
+        .insert("futureMetric".to_owned(), serde_json::json!(true));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let before_snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let before_document = runtime.session.document().clone();
+    let before_selection = runtime.session.selection().clone();
+    let before_session_id = runtime.session.session_id().clone();
+    let before_generation = runtime.session.document_generation();
+
+    let Err(error) = runtime.insert_soft_break_json() else {
+        panic!("a break with an unsupported empty-line mark must fail layout");
+    };
+    assert!(error.contains("layout.unsupported_paragraph_mark_style"));
+    assert_eq!(runtime.session.document(), &before_document);
+    assert_eq!(runtime.session.selection(), &before_selection);
+    assert_eq!(runtime.session.session_id(), &before_session_id);
+    assert!(runtime.session.document_generation() > before_generation);
+    let after_snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(after_snapshot["paragraphs"], before_snapshot["paragraphs"]);
+    assert_eq!(after_snapshot["pages"], before_snapshot["pages"]);
+    assert_ne!(
+        after_snapshot["documentGeneration"], before_snapshot["documentGeneration"],
+        "rollback advances generation to invalidate transient layout results"
+    );
+
+    runtime.insert_text_json("!".to_owned())?;
+    runtime.undo_json()?;
+    assert_eq!(runtime.session.document(), &before_document);
+    Ok(())
+}
+
+#[test]
 fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
@@ -226,6 +271,66 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
 }
 
 #[test]
+fn underlined_run_receives_inline_highlight_without_an_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let paragraph_id = paragraph.id.clone();
+    let underlined_text = "underlined range ".repeat(24);
+    paragraph.inlines = vec![
+        InlineNode::Run(Run {
+            text: underlined_text.clone(),
+            language: None,
+            props: BTreeMap::from([("underline".into(), serde_json::Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: " plain".into(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let rectangles = snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline highlight rectangles were omitted"))?;
+    assert!(
+        rectangles.len() > 1,
+        "wrapped underline should highlight each line"
+    );
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle["x1Pt"].as_f64() > rectangle["x0Pt"].as_f64()
+            && rectangle["y1Pt"].as_f64() > rectangle["y0Pt"].as_f64()
+    }));
+    assert!(runtime.session.current_inline_environment()?.is_none());
+
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: underlined_text.len() + " pl".len(),
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(
+        snapshot["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+#[test]
 fn empty_inline_environment_does_not_hide_visible_block_highlight()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
@@ -361,8 +466,11 @@ fn visible_page_rasterization_returns_binary_glyph_images() -> Result<(), Box<dy
     assert_eq!(page.document_generation, 0);
     assert_eq!(page.font_generation, 1);
     assert_eq!(page.images.len(), 1);
-    assert_eq!(page.placements.len(), 1);
-    assert_eq!(page.placements[0].image_index, 0);
+    assert_eq!(page.commands.len(), 1);
+    assert!(matches!(
+        page.commands[0],
+        crate::document_view::DocumentGlyphDrawCommand::Glyph { image_index: 0, .. }
+    ));
     assert!(page.images[0].pixels.len() > 4);
     assert!(page.images[0].pixels.as_chunks::<4>().1.is_empty());
     Ok(())

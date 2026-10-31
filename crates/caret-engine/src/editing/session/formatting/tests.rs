@@ -197,6 +197,51 @@ fn underline_toggle_ignores_soft_breaks_when_deciding_mixed_selection_state() {
 }
 
 #[test]
+fn removing_run_underline_accepts_a_boundary_inside_a_cross_run_grapheme() {
+    let mut model = paragraph("");
+    model.inlines = vec![
+        InlineNode::Run(Run {
+            text: "a".into(),
+            language: None,
+            props: BTreeMap::from([("underline".into(), Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        run("\u{0301}"),
+    ];
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let mut focus = session.selection().focus.clone();
+    focus.paragraph_id = paragraph_id;
+    focus.offset = 0;
+    focus.affinity = Affinity::Downstream;
+    select(&mut session, focus.clone(), focus);
+
+    session
+        .run(Command::RemoveRunUnderlinePreservingContent)
+        .unwrap_or_else(|error| panic!("underline removal should accept a Run boundary: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection().focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(visible_text(&paragraph.inlines), "a\u{0301}");
+    let InlineNode::Run(first) = &paragraph.inlines[0] else {
+        panic!("underlined content should remain a Run");
+    };
+    assert_ne!(first.props.get("underline"), Some(&Value::Bool(true)));
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("underline removal should undo: {error}"));
+    let paragraph = session
+        .paragraph_for(&session.selection().focus)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed after undo: {error}"));
+    let InlineNode::Run(first) = &paragraph.inlines[0] else {
+        panic!("undo should retain the Run");
+    };
+    assert_eq!(first.props.get("underline"), Some(&Value::Bool(true)));
+    assert_eq!(visible_text(&paragraph.inlines), "a\u{0301}");
+}
+
+#[test]
 fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() {
     let mut session = session_with_paragraphs(vec![paragraph("alpha")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
@@ -462,6 +507,110 @@ fn mod_backspace_unwraps_nested_inline_environments_one_layer_at_a_time() {
 }
 
 #[test]
+fn mod_backspace_unwraps_environment_before_clearing_nested_run_underline() {
+    let mut child = run("text");
+    let InlineNode::Run(run) = &mut child else {
+        unreachable!();
+    };
+    run.props.insert("underline".to_owned(), Value::Bool(true));
+    let paragraph_model = Paragraph {
+        inlines: vec![inline_environment(
+            NodeId::generate(),
+            InlineEnvironmentKind::Bold,
+            vec![child],
+        )],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let paragraph_id = paragraph_model.id.clone();
+    let mut session = session_with_paragraphs(vec![paragraph_model]);
+    let original = session.document().clone();
+    let caret = Pos {
+        offset: 2,
+        ..session.selection.focus.clone()
+    };
+    select(&mut session, caret.clone(), caret);
+
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("environment unwrap failed: {error}"));
+    let position = Pos {
+        paragraph_id: paragraph_id.clone(),
+        offset: 2,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let paragraph = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert!(
+        matches!(paragraph.inlines.as_slice(), [InlineNode::Run(run)]
+        if run.text == "text"
+            && run.props.get("underline") == Some(&Value::Bool(true)))
+    );
+    let unwrapped = session.document().clone();
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("environment unwrap undo failed: {error}"));
+    assert_eq!(session.document(), &original);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("environment unwrap redo failed: {error}"));
+    assert_eq!(session.document(), &unwrapped);
+
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("direct underline removal failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph lookup after direct formatting failed: {error}"));
+    assert!(
+        matches!(paragraph.inlines.as_slice(), [InlineNode::Run(run)]
+        if run.text == "text"
+            && run.props.get("underline") == Some(&Value::Bool(false)))
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("direct underline undo failed: {error}"));
+    assert_eq!(session.document(), &unwrapped);
+}
+
+#[test]
+fn navigation_ignores_direct_run_boundaries_inside_active_environment() {
+    let mut underlined = run("bc");
+    let InlineNode::Run(run_node) = &mut underlined else {
+        unreachable!();
+    };
+    run_node
+        .props
+        .insert("underline".to_owned(), Value::Bool(true));
+    let paragraph_model = Paragraph {
+        inlines: vec![inline_environment(
+            NodeId::generate(),
+            InlineEnvironmentKind::Bold,
+            vec![run("a"), underlined, run("d")],
+        )],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let mut session = session_with_paragraphs(vec![paragraph_model]);
+    let mut caret = session.selection.focus.clone();
+    caret.offset = 0;
+    select(&mut session, caret.clone(), caret);
+
+    session
+        .run(Command::MoveCaret(crate::editing::Direction::Forward))
+        .unwrap_or_else(|error| panic!("navigation into nested run failed: {error}"));
+    assert_eq!(session.selection.focus.offset, 1);
+    assert_eq!(session.selection.focus.affinity, Affinity::Downstream);
+    assert!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("environment query failed: {error}"))
+            .is_some()
+    );
+}
+
+#[test]
 fn mod_backspace_does_not_unwrap_inline_environment_during_ime_or_command_input() {
     let original = Paragraph {
         inlines: vec![inline_environment(
@@ -515,6 +664,63 @@ fn mod_backspace_does_not_unwrap_inline_environment_during_ime_or_command_input(
         ..session.selection.focus.clone()
     };
     assert!(session.paragraph_for(&position).is_ok());
+}
+
+#[test]
+fn mod_backspace_removes_direct_underline_and_undo_restores_it() {
+    let model = Paragraph {
+        inlines: vec![InlineNode::Run(Run {
+            text: "underlined".to_owned(),
+            language: None,
+            props: BTreeMap::from([("underline".to_owned(), Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        })],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let mut caret = session.selection.focus.clone();
+    caret.offset = 4;
+    select(&mut session, caret.clone(), caret);
+    let original = session.document().clone();
+
+    let effect = session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("removing direct underline failed: {error}"));
+    assert!(effect.document_changed);
+    let position = Pos {
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    let cleared = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(visible_text(&cleared.inlines), "underlined");
+    assert!(
+        format_spans(&cleared.inlines)
+            .unwrap_or_else(|error| panic!("format query failed: {error}"))
+            .iter()
+            .all(|span| span.underline == Some(false))
+    );
+
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo direct underline removal failed: {error}"));
+    assert_eq!(session.document(), &original);
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo direct underline removal failed: {error}"));
+    let redone = session
+        .paragraph_for(&position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert!(
+        format_spans(&redone.inlines)
+            .unwrap_or_else(|error| panic!("format query failed: {error}"))
+            .iter()
+            .all(|span| span.underline == Some(false))
+    );
 }
 
 #[test]

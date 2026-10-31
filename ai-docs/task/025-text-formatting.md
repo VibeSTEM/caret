@@ -3,7 +3,7 @@
 - 状态：done
 - 依赖：009、021、022、024
 - 优先级：P2
-- 创建 / 更新：2026-10-25 / 2026-10-30
+- 创建 / 更新：2026-10-25 / 2026-10-31
 
 ## 目标与背景
 
@@ -50,7 +50,7 @@
 - [x] `\bold` / `\italic` 使用行内 `EnvironmentNode`；支持选中文本、混合选区统一应用、显式局部关闭、空选区 pending typing、跨段格式、IME、Undo/Redo、环境拆分/合并和节点 ID 保留。行为测试覆盖格式树与可见文本/位置语义。
 - [x] 文档字体默认值按 Script 与 Script+Language 目标由 Rust 文档设置持有；`\defaultfont` 可键盘导航目标层级并提交设置，`\font` 可查询本机字体并将所选字体应用为局部 Font 环境。字体缺失保留请求并由 shaping fallback 处理；UI 不扫描目录。
 - [x] `defaultCodeFontFamily` 默认值、校验、`.cdoc` 持久化和快照投影已接通；代码 shaping 使用显式字体或平台 Monospace，保持代码角色等宽空格语义。实际代码块节点尚未实现。
-- [x] `\underline` 使用 Run 直接属性，支持选区、混合范围、pending typing、软换行、IME 和 Undo/Redo；Rust/Parley 提供装饰几何，Qt 使用独立 QSG 装饰层，行框不变。Qt Quick 行为测试从 Rust FFI 生成装饰帧并检查画布装饰区域内的实际像素覆盖。
+- [x] `\underline` 使用 Run 直接属性，支持选区、混合范围、pending typing、软换行、IME 和 Undo/Redo；Rust/Parley 提供装饰几何，Qt 使用独立 QSG 装饰层，行框不变。Mod+Backspace 清除直接 Run 属性并保留文字；右边界可通过方向键离开。Qt Quick 行为测试从 Rust FFI 生成装饰帧并检查画布装饰区域内的实际像素覆盖。
 - [x] `\firstlineindent`、Tab、`\singlecharspace`、`\doublecharspace` 与普通 U+0020 半字宽排版语义已接通；首行缩进参与布局、光标/选区几何、撤销/重做和 `.cdoc` 往返。
 - [x] 上述已交付能力通过对应 Rust、跨层、QML 加载/格式和持久化测试；字体弹窗初始实现通过构建与加载检查。
 - [x] 下划线装饰跨 Rust FFI/Qt Quick 场景图的像素级行为测试通过；命令字体弹窗的边缘定位、滚动和鼠标行为由 059 验收，不阻塞本任务既有命令状态/API。
@@ -76,6 +76,8 @@
 | 2026-10-30 | Sol medium 独立只读 final review（本次完整实现 diff） | 通过，无需修复项。确认 Mod+Backspace 的树变更与历史测试、下划线 FFI/QSG 装饰绘制测试的隔离方式，以及 Criterion 计时范围和统计值。限制：未重跑 benchmark；像素行为尚未覆盖取消格式和多 DPR/缩放组合；性能数据只代表 100k 文档中单段格式操作。 |
 | 2026-10-30 | review 后修复：`cargo test --locked --offline -p caret-engine -p caret-app`；构建 `caret_shell_load_test` 并运行 `ctest --test-dir target/native/debug -R '^Qml\.ShellLoad$' --output-on-failure`；`cargo lint --check` | caret-app 192 项、caret-engine 189 项通过；ShellLoad 通过；9 阶段 lint 全部通过。新增覆盖行内环境深度溢出原子拒绝、重复 Bold 切换不增长环境深度、跨段格式失败原子性与 Undo 历史、待输入格式不污染保存状态，以及同步重入时 IME 取消只发出一次事件。修复后未重跑性能基准，既有数据仍是单次测量。 |
 | 2026-10-30 | Sol medium 独立只读 final review（修复后完整分支 diff） | 通过，无新增 findings。复核 Bold/Italic 原位更新同类环境、嵌套深度检查、PendingStyle 保存状态、IME 同步重入保护、Criterion 统计术语和新增回归测试。限制：评审未重跑测试或 GUI；多 DPR/缩放组合未确认。 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-engine current_inline_`；caret-app 下划线/行内环境高亮定向测试；公式分支上的 `cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings` | 行内高亮覆盖 EnvironmentNode 与直接 Run 属性来源；Run 高亮不在非折叠选区显示。当前最内层行内环境优先；无环境时折叠光标命中 `underline: true` Run 高亮整段，可按 affinity 在 Run 尾部进入/离开；显式关闭及普通 Run 不产生 Run 高亮。复用同一 Parley 选区几何和 QSG 层，目标测试与 Clippy 通过 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-engine -p caret-app`；`cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings`；`cargo fmt --all -- --check`、`cargo format --check`、`git diff --check` | caret-app 199 项、caret-engine 271 项通过；Clippy 和格式检查通过。行为覆盖直接下划线段末、段内后继文字及下一段停靠，离开后输入不继承下划线，RTL 逻辑起点退出；Mod+Backspace 按环境优先于嵌套 Run 属性并分别 Undo/Redo，环境内部 Run 边界不引入额外 affinity 停靠。 |
 
 以上记录只说明对应检查当时的结果；后续变更须重跑受影响验证。未记录的本机手工操作不视为自动化验收证据。
 
@@ -93,6 +95,7 @@
 - 2026-10-30：命令弹窗分为普通命令与字体专用 QML 展示，共用弹窗 frame；命令字体选择器后续交互优化转入 059，Settings 专用字体布局由 056 等待独立设计。
 - 2026-10-30：独立审查修正虚拟环境外 pending 样式、字体嵌套深度、软换行格式状态、首次编辑能力标记和长文档几何精度问题；当前已完成能力的限制见验收与验证记录。
 - 2026-10-30：复核发现并修复四项问题：Bold/Italic 更新选区内已有同类环境并限制新增嵌套深度；pending 样式保留撤销历史但不推进文档保存状态 ID；IME 取消事件增加同步重入保护；性能表将 16.477 ms 正确标为回归斜率估计。
+- 2026-10-31：行内高亮可视层支持两类语义来源：活动 `InlineEnvironment` 范围优先；无环境时，折叠光标位于 `Run.props.underline: true` 时高亮整个 Run。两者分别查询和识别，只有选定范围的 Parley 几何与 QSG 绘制复用；`TextMap` 集中标记边界来源，`Session` 根据视觉目标管理当前来源的 affinity，app 不复制结构优先级。Mod+Backspace 分别解包环境或清除 Run 属性并保留文字。
 
 ## 完成摘要
 

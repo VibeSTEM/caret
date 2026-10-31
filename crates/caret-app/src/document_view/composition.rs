@@ -39,6 +39,7 @@ impl DocumentViewRuntime {
         } else {
             None
         };
+        let mut edit_checkpoint = commit_current.then(|| self.edit_checkpoint());
         let selection_before = self.session.selection().clone();
         let composition_range_before = self.composition_range.clone();
         let selection_is_single_paragraph =
@@ -60,19 +61,26 @@ impl DocumentViewRuntime {
         let mut committed_delta = None;
 
         if commit_current {
-            if self.composition_id.is_some() && has_replacement {
+            let commit_result = if self.composition_id.is_some() && has_replacement {
                 self.commit_ime_replacement(
                     replacement_start,
                     replacement_length,
                     &commit,
                     self.composition_id,
-                )?;
+                )
             } else if let Some(id) = self.composition_id {
                 self.session
                     .run(Command::CommitComposition { id, text: commit })
-                    .map_err(|error| format!("ime.commit: {error}"))?;
+                    .map(|_| ())
+                    .map_err(|error| format!("ime.commit: {error}"))
             } else {
-                self.commit_ime_replacement(replacement_start, replacement_length, &commit, None)?;
+                self.commit_ime_replacement(replacement_start, replacement_length, &commit, None)
+            };
+            if let Err(error) = commit_result {
+                if let Some(checkpoint) = edit_checkpoint.take() {
+                    self.rollback_failed_layout_edit(checkpoint);
+                }
+                return Err(error);
             }
             self.composition_id = None;
             self.composition_preview_session = None;
@@ -85,7 +93,12 @@ impl DocumentViewRuntime {
         if let (Some(previous), Some(paragraph_id)) =
             (previous_layout.as_ref(), reusable_paragraph_id.as_ref())
         {
-            self.relayout_reusing_paragraph(previous, paragraph_id)?;
+            if let Err(error) = self.relayout_reusing_paragraph(previous, paragraph_id) {
+                if let Some(checkpoint) = edit_checkpoint.take() {
+                    self.rollback_failed_layout_edit(checkpoint);
+                }
+                return Err(error);
+            }
             let updated = self
                 .last_snapshot
                 .as_ref()
@@ -115,9 +128,17 @@ impl DocumentViewRuntime {
             };
             let id = match self.composition_id {
                 Some(id) => id,
-                None => self.allocate_composition_id()?,
+                None => match self.allocate_composition_id() {
+                    Ok(id) => id,
+                    Err(error) => {
+                        if let Some(checkpoint) = edit_checkpoint.take() {
+                            self.rollback_failed_layout_edit(checkpoint);
+                        }
+                        return Err(error);
+                    }
+                },
             };
-            return match self.install_composition_update(
+            let response = match self.install_composition_update(
                 id,
                 preedit,
                 replacement_range,
@@ -127,6 +148,12 @@ impl DocumentViewRuntime {
                 Err(_) if commit_current => self.layout_snapshot_json(),
                 Err(error) => Err(error),
             };
+            if response.is_err()
+                && let Some(checkpoint) = edit_checkpoint.take()
+            {
+                self.rollback_failed_layout_edit(checkpoint);
+            }
+            return response;
         } else if !commit_current && let Some(id) = self.composition_id {
             self.session
                 .run(Command::CancelComposition { id })
@@ -141,7 +168,7 @@ impl DocumentViewRuntime {
         self.composition_preview_session = None;
         self.composition_snapshot = None;
         self.composition_range = None;
-        if commit_current || replacement_length != 0 || had_composition {
+        let response = if commit_current || replacement_length != 0 || had_composition {
             if let Some((paragraph_id, page_start_index, base_generation)) = committed_delta {
                 self.layout_snapshot_json_with_delta(Some((
                     &paragraph_id,
@@ -153,7 +180,13 @@ impl DocumentViewRuntime {
             }
         } else {
             self.interaction_state_json()
+        };
+        if response.is_err()
+            && let Some(checkpoint) = edit_checkpoint.take()
+        {
+            self.rollback_failed_layout_edit(checkpoint);
         }
+        response
     }
 
     fn commit_ime_replacement(
@@ -185,16 +218,20 @@ impl DocumentViewRuntime {
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
     ) -> Result<String, String> {
-        let (candidate, preview, range) = self
+        let candidate = self
             .session
             .composition_update_candidate(id, preedit, replacement_range, cursor_position_utf16)
             .map_err(|error| format!("ime.preview: {error}"))?;
         let snapshot = self
-            .composition_snapshot_for(&preview, &range)
+            .composition_snapshot_for(candidate.preview_session(), candidate.range())
             .map_err(|error| format!("ime.preview_layout: {error}"))?;
-        let delta = self.composition_preview_delta_for(&snapshot, &range);
+        let delta = self.composition_preview_delta_for(&snapshot, candidate.range());
+        let range = candidate.range().clone();
 
-        self.session.install_composition_candidate(candidate);
+        let preview = self
+            .session
+            .install_composition_candidate(candidate)
+            .map_err(|error| format!("ime.preview_install: {error}"))?;
         self.composition_id = Some(id);
         self.composition_preview_session = Some(preview);
         self.composition_snapshot = Some(snapshot);

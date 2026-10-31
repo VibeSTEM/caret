@@ -149,8 +149,8 @@ pub struct PageCaretView {
 impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
     fn from(snapshot: &DocumentLayoutSnapshot) -> Self {
         Self {
-            session_id: snapshot.session_id.as_ref().map(ToString::to_string),
-            document_generation: snapshot.document_generation.to_string(),
+            session_id: snapshot.published_session_id().map(ToString::to_string),
+            document_generation: snapshot.published_document_generation().to_string(),
             font_generation: snapshot.font_generation.to_string(),
             margins_pt: margins_view(snapshot),
             pages: page_views(snapshot, 0),
@@ -174,9 +174,9 @@ impl DocumentLayoutDeltaView {
         }
         Some(Self {
             partial: true,
-            session_id: snapshot.session_id.as_ref().map(ToString::to_string),
+            session_id: snapshot.published_session_id().map(ToString::to_string),
             base_document_generation: base_document_generation.to_string(),
-            document_generation: snapshot.document_generation.to_string(),
+            document_generation: snapshot.published_document_generation().to_string(),
             font_generation: snapshot.font_generation.to_string(),
             margins_pt: margins_view(snapshot),
             page_start_index,
@@ -319,8 +319,8 @@ impl DocumentLayoutSnapshot {
     /// 将已有的 Rust 页面命中转换为界面 DTO。
     pub fn view_for_hit(&self, hit: &PageHit) -> PageHitView {
         PageHitView {
-            session_id: self.session_id.as_ref().map(ToString::to_string),
-            document_generation: self.document_generation.to_string(),
+            session_id: self.published_session_id().map(ToString::to_string),
+            document_generation: self.published_document_generation().to_string(),
             position: DocumentPositionView::from(hit),
             visual_affinity: visual_affinity_name(hit.visual_affinity).to_owned(),
             caret: PageCaretView::from(hit.caret),

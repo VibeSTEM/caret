@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | L1 基础 | `caret-foundation`、`caret-build`、`caret-dsl-core`、`caret-math` | 不依赖其他 workspace crate |
 | L2 叶子 | `caret-doc`、`caret-dslc` | `caret-doc` 只可到 `caret-foundation`。`caret-dslc` 只可到 `caret-dsl-core`。二者互不依赖 |
-| L3 派生 | `caret-layout`、`caret-structure` | `caret-doc`，以及 `caret-foundation`。二者互不依赖 |
+| L3 派生 | `caret-layout`、`caret-structure` | `caret-layout` 可依赖 `caret-doc`、`caret-math`、`caret-foundation`；`caret-structure` 只可依赖 `caret-doc` 与 `caret-foundation`，二者互不依赖 |
 | L4 会话 | `caret-engine` | `caret-doc`、`caret-layout`、`caret-structure`、`caret-math`、`caret-foundation` |
 | L5 应用 | `caret-app` | `caret-engine`、`caret-doc`、`caret-dsl-core`、`caret-foundation` |
 | L6 边界 | `caret-ffi` | `caret-app`、`caret-foundation` |
@@ -19,3 +19,5 @@
 `caret-cli` 把参数适配成 `caret-app` 上的同一批命令。它不依赖 `caret-ffi`、`caret-engine` 或 Qt。`caret-app` 不依赖 `caret-ffi`。`caret-ffi` 不依赖 `caret-engine` 来绕过 `caret-app`。这样不会形成应用和边界之间的环，命令行也不会绕过应用服务。
 
 `caret-math` 隔离 `latex-rust` 的 parser 版本、公式输入预算与导入错误；它不依赖 `caret-doc`，持久化数学 schema 由 `caret-doc` 独立定义。`caret-engine` 后续负责把解析结果转换成 Caret 自有树。
+
+`caret-layout → caret-math` 仅用于 Parley 数学正文 shaper 实现 Caret 自有接口，以及取得固定 STIX 字体数据；公式文档模型、会话编辑和 UI 状态不进入 `caret-layout`。

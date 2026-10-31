@@ -7,6 +7,7 @@ pub mod font_selection;
 mod fonts;
 mod glyph_raster;
 mod line_metrics;
+mod math_text;
 pub mod pagination;
 mod paragraph;
 mod paragraph_style;
@@ -20,18 +21,24 @@ pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
     calculate_line_metrics, calculate_line_metrics_with_grid,
 };
+pub use math_text::{MathInlineBoxMetrics, ParleyMathTextShaper, stix_two_math_font_data};
 pub use pagination::{
     PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
     paginate_paragraphs,
 };
 pub use paragraph::{
-    HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
+    HitAffinity, InlineObjectPlacement, LocalGlyph, ParagraphHit, ParagraphLayout,
+    ParagraphLayoutError, ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine,
+    ParleyParagraphLayout, PositionedGlyphRun, PositionedInlineObject,
+    PositionedParagraphDrawError, PositionedParagraphDrawItem, VisualAffinity, VisualCursor,
     has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
-pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text};
+pub use shaping::{
+    FontRole, InlineMathAnchor, ShapingStyle, UnicodeBoundaries, paragraph_inline_math_anchors,
+    paragraph_text,
+};
 
 #[cfg(test)]
 mod tests;

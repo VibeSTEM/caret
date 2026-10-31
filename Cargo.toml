@@ -15,6 +15,7 @@ members = [
     "crates/launcher",
     "tests",
 ]
+exclude = ["patches/latex-rust"]
 # 默认成员只有桌面 launcher。裸 `cargo run` 打开 M0 文档窗口，页面仍是占位。
 # `cargo test` 不带 `--workspace` 时只测 launcher。
 default-members = ["crates/launcher"]
@@ -62,6 +63,10 @@ pest_derive = "2.8"
 quick-xml = { version = "0.41", features = ["serialize"] }
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
+
+[patch.crates-io]
+# 调用方正文塑形和节点来源标识补丁固定在本地 latex-rust 后端副本中。
+latex-rust = { path = "patches/latex-rust" }
 
 [workspace.lints.rust]
 # 默认拒绝 unsafe。已登记例外只有 caret-foundation::crash，模块级 allow。

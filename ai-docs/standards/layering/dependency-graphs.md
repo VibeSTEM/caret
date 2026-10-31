@@ -49,6 +49,7 @@ flowchart TB
   engine --> layout
   engine --> structure
   layout --> doc
+  layout --> math
   structure --> doc
   dslc --> dslcore
   layout ~~~ structure

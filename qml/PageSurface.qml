@@ -20,6 +20,7 @@ Item {
     property int canvasGeometryRevision: 0
     property var activeGlyphPageRange: []
     property var pageGlyphFrameCache: ({})
+    property var glyphRasterizationErrors: []
 
     function compositionPoint(pageIndex, x, y) {
         // C++ 坐标映射依赖 QML 无法直接读取的画布几何状态。
@@ -104,6 +105,10 @@ Item {
         const frames = [];
         const keys = [];
         const requests = [];
+        const errors = [];
+        const requestedSessionId = LayoutViewModel.sessionId;
+        const requestedDocumentGeneration = LayoutViewModel.documentGeneration;
+        const requestedFontGeneration = LayoutViewModel.fontGeneration;
         let lastVisiblePage = low - 1;
         const color = Theme.colorText;
         const pageGlyphRevisions = LayoutViewModel.pageGlyphRevisions;
@@ -121,24 +126,28 @@ Item {
         for (let pageIndex = low; pageIndex < rasterEnd; ++pageIndex) {
             const request = pageCanvas.glyphRasterRequest(pageIndex);
             if (!request.valid) {
-                pageCanvas.glyphFrames = [];
-                lastGlyphRasterKey = "";
-                pageGlyphFrameCache = ({});
-                return;
+                errors.push({
+                    pageIndex: pageIndex,
+                    error: "layout.glyphs.invalid_raster_request"
+                });
+                keys.push([pageIndex, "invalid-request"].join(":"));
+                continue;
             }
             const phaseX = request.pageOriginDeviceXPx - Math.floor(request.pageOriginDeviceXPx);
             const phaseY = request.pageOriginDeviceYPx - Math.floor(request.pageOriginDeviceYPx);
-            const rasterKey = [pageGlyphRevisions[pageIndex], LayoutViewModel.fontGeneration, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":");
+            const pageGlyphRevision = pageGlyphRevisions[pageIndex];
+            const rasterKey = [requestedSessionId, pageGlyphRevision, requestedFontGeneration, request.pxPerPt, phaseX, phaseY, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)].join(":");
             keys.push([pageIndex, rasterKey].join(":"));
             requests.push({
                 pageIndex: pageIndex,
                 raster: request,
-                key: rasterKey
+                key: rasterKey,
+                revision: pageGlyphRevision
             });
         }
         pageCanvas.visiblePageRange = [Math.max(0, low - 1), Math.min(pageSizes.length, lastVisiblePage + 2)];
         const key = "visible:" + keys.join("|");
-        if (key === lastGlyphRasterKey)
+        if (key === lastGlyphRasterKey && glyphRasterizationErrors.length === 0)
             return;
         const cacheStart = Math.max(0, low - 2);
         const cacheEnd = Math.min(pageSizes.length, lastVisiblePage + 3);
@@ -146,30 +155,53 @@ Item {
         for (const cachedPageIndex in pageGlyphFrameCache) {
             const pageIndex = Number(cachedPageIndex);
             const cached = pageGlyphFrameCache[cachedPageIndex];
-            if (pageIndex >= cacheStart && pageIndex < cacheEnd && cached.revision === pageGlyphRevisions[pageIndex])
+            if (pageIndex >= cacheStart && pageIndex < cacheEnd && cached.sessionId === requestedSessionId && cached.revision === pageGlyphRevisions[pageIndex])
                 nextPageCache[pageIndex] = cached;
         }
         for (let index = 0; index < requests.length; ++index) {
             const request = requests[index];
             const cached = pageGlyphFrameCache[request.pageIndex];
-            const frame = cached && cached.key === request.key ? cached.frame : LayoutViewModel.rasterizePageGlyphs(request.pageIndex, request.raster.pxPerPt, request.raster.pageOriginDeviceXPx, request.raster.pageOriginDeviceYPx, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255));
-            frames.push(frame);
-            nextPageCache[request.pageIndex] = {
-                key: request.key,
-                revision: pageGlyphRevisions[request.pageIndex],
-                frame: frame
-            };
-        }
-        for (let index = 0; index < frames.length; ++index) {
-            if (!frames[index].valid) {
-                pageCanvas.glyphFrames = [];
-                lastGlyphRasterKey = "";
-                pageGlyphFrameCache = ({});
+            const cachedFrameMatches = cached && cached.key === request.key && cached.sessionId === requestedSessionId && cached.revision === request.revision;
+            const cachedContentMatches = cached && cached.sessionId === requestedSessionId && cached.revision === request.revision && cached.fontGeneration === requestedFontGeneration && cached.foreground && cached.foreground[0] === Math.round(color.r * 255) && cached.foreground[1] === Math.round(color.g * 255) && cached.foreground[2] === Math.round(color.b * 255) && cached.foreground[3] === Math.round(color.a * 255);
+            const frame = cachedFrameMatches ? cached.frame : LayoutViewModel.rasterizePageGlyphs(request.pageIndex, request.raster.pxPerPt, request.raster.pageOriginDeviceXPx, request.raster.pageOriginDeviceYPx, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255));
+            const requestStillCurrent = LayoutViewModel.sessionId === requestedSessionId && LayoutViewModel.documentGeneration === requestedDocumentGeneration && LayoutViewModel.fontGeneration === requestedFontGeneration && LayoutViewModel.pageGlyphRevisions[request.pageIndex] === request.revision;
+            const frameMatchesRequest = cachedFrameMatches || (frame.valid && frame.sessionId === requestedSessionId && frame.documentGeneration === requestedDocumentGeneration && frame.fontGeneration === requestedFontGeneration && frame.pageIndex === request.pageIndex);
+            if (!requestStillCurrent) {
+                scheduleGlyphRasterization(false);
                 return;
             }
+            if (!frame.valid || !frameMatchesRequest) {
+                if (cachedContentMatches) {
+                    frames.push(cached.frame);
+                    nextPageCache[request.pageIndex] = cached;
+                    errors.push({
+                        pageIndex: request.pageIndex,
+                        error: frame.error || "layout.glyphs.stale_frame"
+                    });
+                    continue;
+                }
+                errors.push({
+                    pageIndex: request.pageIndex,
+                    error: frame.error || "layout.glyphs.stale_frame"
+                });
+                continue;
+            }
+            const currentFrame = Object.assign({}, frame, {
+                pageGlyphRevision: request.revision
+            });
+            frames.push(currentFrame);
+            nextPageCache[request.pageIndex] = {
+                key: request.key,
+                sessionId: requestedSessionId,
+                revision: request.revision,
+                fontGeneration: requestedFontGeneration,
+                foreground: [Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255)],
+                frame: currentFrame
+            };
         }
         pageGlyphFrameCache = nextPageCache;
         pageCanvas.glyphFrames = frames;
+        glyphRasterizationErrors = errors;
         lastGlyphRasterKey = key;
     }
 
@@ -352,6 +384,28 @@ Item {
                 visible: width > 0
                 z: 1
             }
+        }
+    }
+
+    Rectangle {
+        objectName: "glyphRasterizationErrorBanner"
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: Theme.spacingSmall
+        width: errorLabel.implicitWidth + Theme.spacingSmall * 2
+        height: errorLabel.implicitHeight + Theme.spacingTiny * 2
+        color: Theme.colorPanel
+        border.color: Theme.colorError
+        radius: Theme.radiusSmall
+        visible: surface.glyphRasterizationErrors.length > 0 || pageCanvas.glyphFrameBuildFailed
+        z: 2
+
+        Text {
+            id: errorLabel
+            objectName: "glyphRasterizationErrorLabel"
+            anchors.centerIn: parent
+            text: qsTr("Some page content could not be rendered.")
+            color: Theme.colorError
         }
     }
 

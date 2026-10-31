@@ -5,12 +5,16 @@
 
 use caret_doc::NodeId;
 use caret_layout::{
-    GlyphFontData, GlyphRasterOptions, GlyphRasterizer, GlyphSynthesis, PositionedGlyphLayoutItem,
-    RasterizedGlyph, RasterizedGlyphKey,
+    GlyphFontData, GlyphRasterizer, GlyphSynthesis, ParleyParagraphLayout,
+    PositionedParagraphDrawItem, RasterizedGlyphKey,
 };
-use std::collections::HashMap;
+use caret_math::MathLayoutSnapshot;
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use crate::DocumentLayoutSnapshot;
+
+mod math_raster;
+use math_raster::{rasterize_math_object, rasterize_page_glyph};
 
 /// 同一布局代际中一页的只读字形快照；字体数据按 Blob 共享。
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +25,43 @@ pub struct PageGlyphSnapshot {
     pub page_index: usize,
     pub runs: Vec<PageGlyphRun>,
     pub decorations: Vec<PageGlyphDecoration>,
+    pub(crate) math_objects: Vec<PageMathObject>,
+    pub(crate) draw_order: Vec<PageDrawItem>,
+}
+
+/// 正文 run 与行内公式按 Parley 视觉顺序交错绘制。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageDrawItem {
+    GlyphRun(usize),
+    MathObject(usize),
+}
+
+/// 位于页面坐标中的公式快照，并保留该公式正文塑形句柄所属的局部资源表。
+#[derive(Debug, Clone)]
+pub(crate) struct PageMathObject {
+    pub(crate) id: NodeId,
+    pub(crate) paragraph_id: NodeId,
+    pub(crate) source_bytes: Range<usize>,
+    pub(crate) line_index: usize,
+    pub(crate) line_clip_y_pt: Option<[f64; 2]>,
+    pub(crate) x_pt: f64,
+    pub(crate) baseline_y_pt: f64,
+    pub(crate) layout: Arc<MathLayoutSnapshot>,
+    pub(crate) text_resources: Arc<HashMap<u64, Arc<ParleyParagraphLayout>>>,
+}
+
+impl PartialEq for PageMathObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.paragraph_id == other.paragraph_id
+            && self.source_bytes == other.source_bytes
+            && self.line_index == other.line_index
+            && self.line_clip_y_pt == other.line_clip_y_pt
+            && self.x_pt == other.x_pt
+            && self.baseline_y_pt == other.baseline_y_pt
+            && self.layout == other.layout
+            && Arc::ptr_eq(&self.text_resources, &other.text_resources)
+    }
 }
 
 /// 同一页的唯一栅格图片；同字形重复使用时只传输一份像素数据。
@@ -52,8 +93,27 @@ pub struct RasterizedPageGlyphs {
     pub font_generation: u64,
     pub page_index: usize,
     pub images: Vec<PageGlyphImage>,
-    pub placements: Vec<PageGlyphPlacement>,
-    pub decorations: Vec<PageGlyphDecoration>,
+    pub commands: Vec<PageGlyphDrawCommand>,
+}
+
+/// 一页中按视觉顺序排列的栅格图元。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageGlyphDrawCommand {
+    Glyph(PageGlyphPlacement),
+    Rectangle(PageGlyphDecoration),
+    Line(PageGlyphLine),
+}
+
+/// 页面中的线段及居中笔画厚度，坐标单位为 pt。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageGlyphLine {
+    pub x1_pt: f64,
+    pub y1_pt: f64,
+    pub x2_pt: f64,
+    pub y2_pt: f64,
+    pub thickness_pt: f64,
+    pub color: [u8; 4],
+    pub line_clip_y_pt: Option<[f64; 2]>,
 }
 
 /// 持有有界 glyph 缓存的页面栅格化入口。
@@ -82,55 +142,60 @@ impl PageGlyphRasterizer {
             return Err(PageGlyphError::InvalidRasterGeometry);
         }
         let mut images = Vec::new();
-        let mut placements = Vec::new();
-        let decorations = page
-            .decorations
-            .iter()
-            .map(|decoration| PageGlyphDecoration {
+        let mut commands = Vec::new();
+        let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
+        for item in &page.draw_order {
+            match *item {
+                PageDrawItem::GlyphRun(index) => {
+                    let run = page
+                        .runs
+                        .get(index)
+                        .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    for glyph in &run.glyphs {
+                        let foreground = run.foreground.unwrap_or(default_foreground);
+                        let placement = rasterize_page_glyph(
+                            &mut self.glyphs,
+                            &mut images,
+                            &mut image_indexes,
+                            &run.font,
+                            glyph.glyph_id,
+                            run.font_size_pt * pixels_per_pt,
+                            &run.normalized_coords,
+                            run.synthesis,
+                            foreground,
+                            glyph.x_pt,
+                            glyph.baseline_y_pt,
+                            page_origin_device_px,
+                            px_per_pt,
+                            run.line_clip_y_pt,
+                        )?;
+                        commands.push(PageGlyphDrawCommand::Glyph(placement));
+                    }
+                }
+                PageDrawItem::MathObject(index) => {
+                    let object = page
+                        .math_objects
+                        .get(index)
+                        .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    rasterize_math_object(
+                        &mut self.glyphs,
+                        &mut images,
+                        &mut image_indexes,
+                        &mut commands,
+                        object,
+                        pixels_per_pt,
+                        page_origin_device_px,
+                        px_per_pt,
+                        default_foreground,
+                    )?;
+                }
+            }
+        }
+        for decoration in &page.decorations {
+            commands.push(PageGlyphDrawCommand::Rectangle(PageGlyphDecoration {
                 color: Some(decoration.color.unwrap_or(default_foreground)),
                 ..*decoration
-            })
-            .collect();
-        let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
-        for run in &page.runs {
-            let pixels_per_em = run.font_size_pt * pixels_per_pt;
-            let foreground = run.foreground.unwrap_or(default_foreground);
-            for glyph in &run.glyphs {
-                let device_x = page_origin_device_px[0] + glyph.x_pt * px_per_pt;
-                let device_y = page_origin_device_px[1] + glyph.baseline_y_pt * px_per_pt;
-                if !device_x.is_finite() || !device_y.is_finite() {
-                    return Err(PageGlyphError::InvalidRasterGeometry);
-                }
-                let phase = [device_phase(device_x), device_phase(device_y)];
-                let options = GlyphRasterOptions {
-                    pixels_per_em,
-                    pixel_phase: phase,
-                    normalized_coords: &run.normalized_coords,
-                    synthesis: run.synthesis,
-                    foreground,
-                };
-                let key = RasterizedGlyphKey::new(&run.font, glyph.glyph_id, options)
-                    .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
-                let image_index = if let Some(index) = image_indexes.get(&key) {
-                    *index
-                } else {
-                    let (key, image) = self
-                        .glyphs
-                        .rasterize_with_key(&run.font, glyph.glyph_id, options)
-                        .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
-                    let index = images.len();
-                    images.push(page_glyph_image(&image));
-                    image_indexes.insert(key, index);
-                    index
-                };
-                placements.push(PageGlyphPlacement {
-                    image_index,
-                    x_pt: glyph.x_pt,
-                    baseline_y_pt: glyph.baseline_y_pt,
-                    pixel_phase: phase,
-                    line_clip_y_pt: run.line_clip_y_pt,
-                });
-            }
+            }));
         }
         Ok(RasterizedPageGlyphs {
             session_id: page.session_id.clone(),
@@ -138,25 +203,8 @@ impl PageGlyphRasterizer {
             font_generation: page.font_generation,
             page_index: page.page_index,
             images,
-            placements,
-            decorations,
+            commands,
         })
-    }
-}
-
-fn device_phase(position: f64) -> f32 {
-    let phase = position.rem_euclid(1.0) as f32;
-    phase.min(f32::from_bits(1.0_f32.to_bits() - 1))
-}
-
-fn page_glyph_image(image: &RasterizedGlyph) -> PageGlyphImage {
-    PageGlyphImage {
-        width: image.width,
-        height: image.height,
-        left: image.left,
-        top: image.top,
-        pixel_phase_applied: image.pixel_phase_applied,
-        pixels: image.pixels.clone(),
     }
 }
 
@@ -246,6 +294,8 @@ impl DocumentLayoutSnapshot {
         }
         let mut runs = Vec::new();
         let mut decorations = Vec::new();
+        let mut math_objects = Vec::new();
+        let mut draw_order = Vec::new();
         for fragment in &page.layout.fragments {
             let paragraph = self
                 .paragraph_by_id(&fragment.paragraph_id)
@@ -257,6 +307,17 @@ impl DocumentLayoutSnapshot {
                 return Err(PageGlyphError::InvalidLineRange);
             }
             let mut page_line_top_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+            let math_objects_by_id = paragraph
+                .math_objects
+                .iter()
+                .map(|math| (math.inline_box_id, math))
+                .collect::<HashMap<_, _>>();
+            let inline_positions_by_id = paragraph
+                .layout
+                .positioned_inline_objects
+                .iter()
+                .map(|position| (position.id, position))
+                .collect::<HashMap<_, _>>();
             if !page_line_top_pt.is_finite() || fragment.y_offset_pt < 0.0 {
                 return Err(PageGlyphError::InvalidLineGeometry);
             }
@@ -267,25 +328,7 @@ impl DocumentLayoutSnapshot {
                     .metrics
                     .clip_ink_to_line_height
                     .then_some([page_line_top_pt, page_line_top_pt + line_height_pt]);
-                let raw_top_pt = f64::from(
-                    *paragraph
-                        .layout
-                        .parley_line_tops_pt
-                        .get(line_index)
-                        .ok_or(PageGlyphError::InvalidLineGeometry)?,
-                );
-                let baseline_adjustment_pt = f64::from(
-                    *paragraph
-                        .layout
-                        .baseline_adjustments_pt
-                        .get(line_index)
-                        .ok_or(PageGlyphError::InvalidLineGeometry)?,
-                );
-                if !line_height_pt.is_finite()
-                    || line_height_pt <= 0.0
-                    || !raw_top_pt.is_finite()
-                    || !baseline_adjustment_pt.is_finite()
-                {
+                if !line_height_pt.is_finite() || line_height_pt <= 0.0 {
                     return Err(PageGlyphError::InvalidLineGeometry);
                 }
                 // 空段由 Caret 合成不可见行框，Parley 可以没有对应的绘制行。
@@ -293,11 +336,18 @@ impl DocumentLayoutSnapshot {
                     page_line_top_pt += line_height_pt;
                     continue;
                 }
-                let line = paragraph
+                let draw_items = paragraph
                     .layout
-                    .layout
-                    .get(line_index)
-                    .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    .positioned_draw_items_for_line(line_index)
+                    .map_err(|error| match error {
+                        caret_layout::PositionedParagraphDrawError::InvalidLineGeometry => {
+                            PageGlyphError::InvalidLineGeometry
+                        }
+                        caret_layout::PositionedParagraphDrawError::InvalidLineIndex
+                        | caret_layout::PositionedParagraphDrawError::InvalidGlyphRun => {
+                            PageGlyphError::InvalidGlyphSource
+                        }
+                    })?;
                 for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
                     let x_pt = page.margin_left_pt + bounds.x0;
                     let y_pt = page_line_top_pt + bounds.y0;
@@ -321,67 +371,96 @@ impl DocumentLayoutSnapshot {
                         line_clip_y_pt,
                     });
                 }
-                for item in line.items() {
-                    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
-                        return Err(PageGlyphError::UnsupportedInlineBox);
+                for item in draw_items {
+                    let PositionedParagraphDrawItem::GlyphRun(glyph_run) = item else {
+                        let PositionedParagraphDrawItem::InlineObject { id } = item else {
+                            return Err(PageGlyphError::InvalidGlyphSource);
+                        };
+                        let math = math_objects_by_id
+                            .get(&id)
+                            .copied()
+                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                        let position = inline_positions_by_id
+                            .get(&id)
+                            .copied()
+                            .filter(|position| position.line_index == line_index)
+                            .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                        let x_pt = page.margin_left_pt + f64::from(position.x_pt);
+                        let baseline_y_pt = page_line_top_pt
+                            + f64::from(position.y_pt)
+                            + f64::from(position.baseline_pt);
+                        if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
+                            return Err(PageGlyphError::InvalidLineGeometry);
+                        }
+                        let source_bytes = math.source_bytes.clone();
+                        if source_bytes != position.source_bytes {
+                            return Err(PageGlyphError::InvalidGlyphSource);
+                        }
+                        let math_index = math_objects.len();
+                        math_objects.push(PageMathObject {
+                            id: math.id.clone(),
+                            paragraph_id: paragraph.id.clone(),
+                            source_bytes,
+                            line_index,
+                            line_clip_y_pt,
+                            x_pt,
+                            baseline_y_pt,
+                            layout: Arc::clone(&math.layout),
+                            text_resources: Arc::clone(&math.text_resources),
+                        });
+                        draw_order.push(PageDrawItem::MathObject(math_index));
+                        continue;
                     };
-                    let run = glyph_run.run();
-                    let font_size_pt = run.font_size();
+                    let font_size_pt = glyph_run.font_size_pt;
                     if !font_size_pt.is_finite()
                         || font_size_pt <= 0.0
-                        || run.font().data.is_empty()
+                        || glyph_run.font.data.is_empty()
                     {
                         return Err(PageGlyphError::InvalidGlyphSource);
                     }
                     let mut glyphs = Vec::new();
                     // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
                     // 的全局 f32 baseline 吞掉组合附标的局部偏移。
-                    let run_baseline_y_pt = page_line_top_pt + f64::from(glyph_run.baseline())
-                        - raw_top_pt
-                        + baseline_adjustment_pt;
-                    for (glyph, local_glyph) in
-                        glyph_run.positioned_glyphs().zip(glyph_run.glyphs())
-                    {
-                        let x_pt = page.margin_left_pt + f64::from(glyph.x);
-                        let baseline_y_pt = run_baseline_y_pt + f64::from(local_glyph.y);
+                    for glyph in glyph_run.glyphs {
+                        let x_pt = page.margin_left_pt + f64::from(glyph.x_pt);
+                        let baseline_y_pt = page_line_top_pt + glyph.baseline_offset_pt;
                         if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
                             return Err(PageGlyphError::InvalidGlyphSource);
                         }
                         glyphs.push(PageGlyph {
-                            glyph_id: glyph.id,
+                            glyph_id: glyph.glyph_id,
                             x_pt,
                             baseline_y_pt,
                         });
                     }
                     if !glyphs.is_empty() {
+                        let run_index = runs.len();
                         runs.push(PageGlyphRun {
                             paragraph_id: paragraph.id.clone(),
                             line_index,
                             line_clip_y_pt,
-                            font: run.font().clone(),
+                            font: glyph_run.font.clone(),
                             font_size_pt,
-                            normalized_coords: run
-                                .normalized_coords()
-                                .iter()
-                                .map(|coordinate| coordinate.to_bits())
-                                .collect(),
-                            synthesis: run.synthesis(),
-                            foreground: (glyph_run.style().brush != [0, 0, 0, 0])
-                                .then_some(glyph_run.style().brush),
+                            normalized_coords: glyph_run.normalized_coords,
+                            synthesis: glyph_run.synthesis,
+                            foreground: glyph_run.foreground,
                             glyphs,
                         });
+                        draw_order.push(PageDrawItem::GlyphRun(run_index));
                     }
                 }
                 page_line_top_pt += line_height_pt;
             }
         }
         Ok(PageGlyphSnapshot {
-            session_id: self.session_id.clone(),
-            document_generation: self.document_generation,
+            session_id: self.published_session_id().cloned(),
+            document_generation: self.published_document_generation(),
             font_generation: self.font_generation,
             page_index,
             runs,
             decorations,
+            math_objects,
+            draw_order,
         })
     }
 }

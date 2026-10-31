@@ -4,7 +4,24 @@
 // 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
-use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey};
+use caret_engine::{
+    Command, Direction, DocumentLayoutDeltaView, DocumentLayoutSnapshot, EditorKey,
+    SessionCheckpoint, VisualAffinity,
+};
+
+pub(super) struct DocumentEditCheckpoint {
+    session: SessionCheckpoint,
+    snapshot: Option<DocumentLayoutSnapshot>,
+    affinity: VisualAffinity,
+    preferred_x_pt: Option<f32>,
+    composition_id: Option<u64>,
+    next_composition_id: u64,
+    preedit_cursor_position_utf16: usize,
+    composition_preview_session: Option<caret_engine::Session>,
+    composition_snapshot: Option<DocumentLayoutSnapshot>,
+    composition_range: Option<caret_engine::Selection>,
+    last_interaction_context: Option<(u64, caret_doc::NodeId, bool)>,
+}
 
 impl DocumentViewRuntime {
     /// 将 Qt 编辑器按键意图交给 Session 裁决，并按结果发布布局或交互快照。
@@ -112,37 +129,65 @@ impl DocumentViewRuntime {
     fn restore_history_json(&mut self, redo: bool) -> Result<String, String> {
         let command = if redo { Command::Redo } else { Command::Undo };
         let context = if redo { "history.redo" } else { "history.undo" };
-        let effect = self
-            .session
-            .run(command)
-            .map_err(|error| format!("{context}: {error}"))?;
-        let previous = self.last_snapshot.take();
+        let checkpoint = self.edit_checkpoint();
+        let previous = checkpoint.snapshot.clone();
+        let rollback_snapshot = previous.clone();
+        let effect = match self.session.run(command) {
+            Ok(effect) => effect,
+            Err(error) => {
+                self.rollback_failed_layout_edit(checkpoint);
+                return Err(format!("{context}: {error}"));
+            }
+        };
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
 
         let (Some(previous), Some(paragraph_id)) = (previous, effect.changed_paragraph_id) else {
             self.last_snapshot = None;
-            return self.layout_snapshot_json();
+            return match self.layout_snapshot_json() {
+                Ok(snapshot) => Ok(snapshot),
+                Err(error) => {
+                    let mut checkpoint = checkpoint;
+                    checkpoint.snapshot = rollback_snapshot;
+                    self.rollback_failed_layout_edit(checkpoint);
+                    Err(error)
+                }
+            };
         };
         let base_generation = previous.document_generation;
-        let updated = self
-            .layout
-            .layout_session_reusing(&self.session, &previous, &paragraph_id)
-            .map_err(|error| error.to_string())?;
+        let updated =
+            match self
+                .layout
+                .layout_session_reusing(&self.session, &previous, &paragraph_id)
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    let mut checkpoint = checkpoint;
+                    checkpoint.snapshot = Some(previous);
+                    self.rollback_failed_layout_edit(checkpoint);
+                    return Err(error.to_string());
+                }
+            };
         let page_start_index = caret_engine::DocumentLayoutDeltaView::first_affected_page_index(
             &previous,
             &updated,
             &paragraph_id,
         );
         self.last_snapshot = Some(updated);
-        match page_start_index {
+        let result = match page_start_index {
             Some(page_start_index) => self.layout_snapshot_json_with_delta(Some((
                 &paragraph_id,
                 page_start_index,
                 base_generation,
             ))),
             None => self.layout_snapshot_json(),
+        };
+        if result.is_err() {
+            let mut checkpoint = checkpoint;
+            checkpoint.snapshot = rollback_snapshot;
+            self.rollback_failed_layout_edit(checkpoint);
         }
+        result
     }
 
     /// 将 Qt 直接输入的文本交给 Rust Session，再返回新布局快照。
@@ -166,44 +211,73 @@ impl DocumentViewRuntime {
             && self.session.selected_block_environment().is_none()
             && selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
-        self.session
-            .run(Command::InsertText(text))
-            .map_err(|error| format!("text.insert: {error}"))?;
+        let checkpoint = self.edit_checkpoint();
+        let previous_snapshot = checkpoint.snapshot.clone();
+        if let Err(error) = self.session.run(Command::InsertText(text)) {
+            let mut checkpoint = checkpoint;
+            checkpoint.snapshot = previous_snapshot;
+            self.rollback_failed_layout_edit(checkpoint);
+            return Err(format!("text.insert: {error}"));
+        }
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
         let mut page_start_index = None;
         let mut base_generation = None;
         if let Some(paragraph_id) = reusable_paragraph_id.as_ref() {
-            let previous = self
-                .last_snapshot
-                .as_ref()
-                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            let Some(previous) = self.last_snapshot.clone() else {
+                let mut checkpoint = checkpoint;
+                checkpoint.snapshot = previous_snapshot;
+                self.rollback_failed_layout_edit(checkpoint);
+                return Err("layout.snapshot_unavailable".to_owned());
+            };
             base_generation = Some(previous.document_generation);
-            let updated = self
-                .layout
-                .layout_session_reusing(&self.session, previous, paragraph_id)
-                .map_err(|error| error.to_string())?;
+            let updated =
+                match self
+                    .layout
+                    .layout_session_reusing(&self.session, &previous, paragraph_id)
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        let mut checkpoint = checkpoint;
+                        checkpoint.snapshot = previous_snapshot;
+                        self.rollback_failed_layout_edit(checkpoint);
+                        return Err(error.to_string());
+                    }
+                };
             page_start_index = DocumentLayoutDeltaView::first_affected_page_index(
-                previous,
+                &previous,
                 &updated,
                 paragraph_id,
             );
             if page_start_index.is_none() {
+                let mut checkpoint = checkpoint;
+                checkpoint.snapshot = previous_snapshot;
+                self.rollback_failed_layout_edit(checkpoint);
                 return Err("layout.changed_paragraph_page_unavailable".to_owned());
             }
             self.last_snapshot = Some(updated);
         } else {
             self.last_snapshot = None;
         }
-        match reusable_paragraph_id.as_ref().filter(|_| allow_delta) {
-            Some(paragraph_id) => self.layout_snapshot_json_with_delta(Some((
-                paragraph_id,
-                page_start_index.ok_or_else(|| "layout.changed_page_unavailable".to_owned())?,
-                base_generation
-                    .ok_or_else(|| "layout.delta_base_generation_unavailable".to_owned())?,
-            ))),
+        let result = match reusable_paragraph_id.as_ref().filter(|_| allow_delta) {
+            Some(paragraph_id) => match (page_start_index, base_generation) {
+                (Some(page_start_index), Some(base_generation)) => self
+                    .layout_snapshot_json_with_delta(Some((
+                        paragraph_id,
+                        page_start_index,
+                        base_generation,
+                    ))),
+                (None, _) => Err("layout.changed_page_unavailable".to_owned()),
+                (_, None) => Err("layout.delta_base_generation_unavailable".to_owned()),
+            },
             None => self.layout_snapshot_json(),
+        };
+        if result.is_err() {
+            let mut checkpoint = checkpoint;
+            checkpoint.snapshot = previous_snapshot;
+            self.rollback_failed_layout_edit(checkpoint);
         }
+        result
     }
 
     /// 将纯文本剪贴板内容作为一次原子事务插入，换行会拆为段落。
@@ -249,10 +323,17 @@ impl DocumentViewRuntime {
         if can_reuse_layout {
             self.base_snapshot()?;
         }
-        let effect = self
-            .session
-            .run(command)
-            .map_err(|error| format!("{error_context}: {error}"))?;
+        let checkpoint = self.edit_checkpoint();
+        let previous_snapshot = checkpoint.snapshot.clone();
+        let effect = match self.session.run(command) {
+            Ok(effect) => effect,
+            Err(error) => {
+                let mut checkpoint = checkpoint;
+                checkpoint.snapshot = previous_snapshot;
+                self.rollback_failed_layout_edit(checkpoint);
+                return Err(format!("{error_context}: {error}"));
+            }
+        };
         if effect.composition_changed {
             self.composition_id = None;
             self.composition_preview_session = None;
@@ -263,27 +344,94 @@ impl DocumentViewRuntime {
         self.preferred_visual_x_pt = None;
         let mut delete_delta = None;
         if can_reuse_layout && let Some(paragraph_id) = reusable_paragraph_id.as_ref() {
-            let previous = self
-                .last_snapshot
-                .as_ref()
-                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            let Some(previous) = self.last_snapshot.clone() else {
+                let mut checkpoint = checkpoint;
+                checkpoint.snapshot = previous_snapshot;
+                self.rollback_failed_layout_edit(checkpoint);
+                return Err("layout.snapshot_unavailable".to_owned());
+            };
             let base_generation = previous.document_generation;
-            let updated = self
-                .layout
-                .layout_session_reusing(&self.session, previous, paragraph_id)
-                .map_err(|error| error.to_string())?;
+            let updated =
+                match self
+                    .layout
+                    .layout_session_reusing(&self.session, &previous, paragraph_id)
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        let mut checkpoint = checkpoint;
+                        checkpoint.snapshot = previous_snapshot;
+                        self.rollback_failed_layout_edit(checkpoint);
+                        return Err(error.to_string());
+                    }
+                };
             if delete_is_paragraph_local {
-                let page_start_index = DocumentLayoutDeltaView::first_affected_page_index(
-                    previous,
+                let Some(page_start_index) = DocumentLayoutDeltaView::first_affected_page_index(
+                    &previous,
                     &updated,
                     paragraph_id,
-                )
-                .ok_or_else(|| "layout.changed_paragraph_page_unavailable".to_owned())?;
+                ) else {
+                    let mut checkpoint = checkpoint;
+                    checkpoint.snapshot = previous_snapshot;
+                    self.rollback_failed_layout_edit(checkpoint);
+                    return Err("layout.changed_paragraph_page_unavailable".to_owned());
+                };
                 delete_delta = Some((paragraph_id, page_start_index, base_generation));
             }
             self.last_snapshot = Some(updated);
         }
-        self.layout_snapshot_json_with_delta(delete_delta)
+        let result = self.layout_snapshot_json_with_delta(delete_delta);
+        if result.is_err() {
+            let mut checkpoint = checkpoint;
+            checkpoint.snapshot = previous_snapshot;
+            self.rollback_failed_layout_edit(checkpoint);
+        }
+        result
+    }
+
+    pub(super) fn edit_checkpoint(&mut self) -> DocumentEditCheckpoint {
+        DocumentEditCheckpoint {
+            session: self.session.checkpoint(),
+            snapshot: self.last_snapshot.clone(),
+            affinity: self.anchor_visual_affinity,
+            preferred_x_pt: self.preferred_visual_x_pt,
+            composition_id: self.composition_id,
+            next_composition_id: self.next_composition_id,
+            preedit_cursor_position_utf16: self.preedit_cursor_position_utf16,
+            composition_preview_session: self.composition_preview_session.clone(),
+            composition_snapshot: self.composition_snapshot.clone(),
+            composition_range: self.composition_range.clone(),
+            last_interaction_context: self.last_interaction_context.clone(),
+        }
+    }
+
+    pub(super) fn rollback_failed_layout_edit(&mut self, checkpoint: DocumentEditCheckpoint) {
+        let restored = self.session.restore_checkpoint(checkpoint.session);
+        debug_assert!(restored, "edit checkpoint belongs to this Session");
+        self.last_snapshot = checkpoint.snapshot;
+        self.anchor_visual_affinity = checkpoint.affinity;
+        self.preferred_visual_x_pt = checkpoint.preferred_x_pt;
+        self.composition_id = checkpoint.composition_id;
+        self.next_composition_id = checkpoint.next_composition_id;
+        self.preedit_cursor_position_utf16 = checkpoint.preedit_cursor_position_utf16;
+        self.composition_preview_session = checkpoint.composition_preview_session;
+        self.composition_snapshot = checkpoint.composition_snapshot;
+        self.composition_range = checkpoint.composition_range;
+        self.last_interaction_context = checkpoint.last_interaction_context;
+        if restored {
+            let generation = self.session.document_generation();
+            if let Some(snapshot) = self.last_snapshot.as_mut() {
+                snapshot.session_id = Some(self.session.session_id().clone());
+                snapshot.document_generation = generation;
+            }
+            if let Some(snapshot) = self.composition_snapshot.as_mut() {
+                if let Some(preview) = self.composition_preview_session.as_ref() {
+                    snapshot.session_id = Some(preview.session_id().clone());
+                    snapshot.document_generation = preview.document_generation();
+                }
+                snapshot.publication_session_id = Some(self.session.session_id().clone());
+                snapshot.publication_generation = Some(generation);
+            }
+        }
     }
 }
 

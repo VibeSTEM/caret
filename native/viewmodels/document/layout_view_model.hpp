@@ -57,6 +57,7 @@ class LayoutViewModel final : public QObject {
         QString environmentHighlightKind READ environmentHighlightKind NOTIFY interactionChanged)
     Q_PROPERTY(QString documentGeneration READ documentGeneration NOTIFY layoutChanged)
     Q_PROPERTY(QString fontGeneration READ fontGeneration NOTIFY layoutChanged)
+    Q_PROPERTY(QString sessionId READ sessionId NOTIFY layoutChanged)
     Q_PROPERTY(qulonglong layoutRevision READ layoutRevision NOTIFY layoutChanged)
     Q_PROPERTY(QString error READ error CONSTANT)
     Q_PROPERTY(QString documentPath READ documentPath NOTIFY documentFileChanged)
@@ -102,6 +103,7 @@ class LayoutViewModel final : public QObject {
         return QString::number(m_document_generation);
     }
     [[nodiscard]] QString fontGeneration() const { return QString::number(m_font_generation); }
+    [[nodiscard]] const QString& sessionId() const { return m_session_id; }
     [[nodiscard]] qulonglong layoutRevision() const { return m_layout_revision; }
     [[nodiscard]] const QString& error() const { return m_error; }
     [[nodiscard]] const QString& documentPath() const { return m_document_path; }
@@ -234,6 +236,7 @@ class LayoutViewModel final : public QObject {
     qulonglong m_document_generation = 0;
     qulonglong m_font_generation = 0;
     qulonglong m_layout_revision = 0;
+    QString m_session_id;
     QString m_error;
     QVariantMap m_caret_geometry;
     QString m_document_path;

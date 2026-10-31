@@ -6,7 +6,7 @@
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use super::super::text_map::TextMap;
-use super::super::{Affinity, EditError, Effect, Pos};
+use super::super::{Affinity, EditError, Effect, Pos, Selection};
 use super::Session;
 use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
 use inline_tree::{
@@ -272,6 +272,47 @@ impl Session {
             document_changed: true,
             changed_paragraph_id: (start.paragraph_id == end.paragraph_id)
                 .then_some(start.paragraph_id),
+            ..Effect::default()
+        })
+    }
+
+    pub(super) fn remove_run_underline_preserving_content(
+        &mut self,
+        range: &Selection,
+    ) -> Result<Effect, EditError> {
+        if range.anchor.story != range.focus.story
+            || range.anchor.paragraph_id != range.focus.paragraph_id
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        let ordering = compare_positions(&self.paragraph_index, &range.anchor, &range.focus)?;
+        let (start, end) = if ordering.is_le() {
+            (&range.anchor, &range.focus)
+        } else {
+            (&range.focus, &range.anchor)
+        };
+        let position = start.clone();
+        let original = self.paragraph_for(&position)?.clone();
+        let map = TextMap::new(&original)?;
+        if start.offset > end.offset
+            || end.offset > map.text.len()
+            || !map.text.is_char_boundary(start.offset)
+            || !map.text.is_char_boundary(end.offset)
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        let mut paragraph = original.clone();
+        set_run_underline_to_range(&mut paragraph.inlines, start.offset, end.offset, false)?;
+        if paragraph == original {
+            return Ok(Effect::default());
+        }
+        self.replace_paragraph(&position, paragraph)?;
+        self.text_map_cache.clear();
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            document_changed: true,
+            changed_paragraph_id: Some(position.paragraph_id),
             ..Effect::default()
         })
     }

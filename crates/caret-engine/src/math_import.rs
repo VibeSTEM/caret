@@ -5,7 +5,7 @@
 
 use caret_doc::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MathAlignRow, MathNode, MathNodeKind,
-    MathTree, NodeId,
+    MathSourceRange, MathTree, NodeId,
 };
 use caret_math::{
     MathInputKind, MathSyntaxConversionError, MathSyntaxKind, MathSyntaxNode, ParsedMath,
@@ -178,6 +178,13 @@ fn into_math_tree(root: MathSyntaxNode, source: &str) -> MathTree {
 }
 
 fn into_math_node(node: MathSyntaxNode, coalesce_row: bool) -> MathNode {
+    let source_range = node.source_range.and_then(|range| {
+        Some(MathSourceRange {
+            start: range.start.try_into().ok()?,
+            end: range.end.try_into().ok()?,
+            extra: BTreeMap::new(),
+        })
+    });
     let kind = document_kind(node.kind);
     let children = if node.kind == MathSyntaxKind::Row && coalesce_row {
         coalesce_atom_runs(node.children)
@@ -190,7 +197,7 @@ fn into_math_node(node: MathSyntaxNode, coalesce_row: bool) -> MathNode {
         kind,
         text: node.text,
         attributes: node.attributes,
-        source_range: None,
+        source_range,
         children: children
             .into_iter()
             .map(|child| {
@@ -226,6 +233,15 @@ fn coalesce_atom_runs(children: Vec<MathSyntaxNode>) -> Vec<MathSyntaxNode> {
                 .get_or_insert_with(String::new)
                 .push_str(&text);
         }
+        if let Some(child_range) = child.source_range {
+            previous.source_range = Some(match previous.source_range.take() {
+                Some(previous_range) => {
+                    previous_range.start.min(child_range.start)
+                        ..previous_range.end.max(child_range.end)
+                }
+                None => child_range,
+            });
+        }
     }
     output
 }
@@ -233,6 +249,7 @@ fn coalesce_atom_runs(children: Vec<MathSyntaxNode>) -> Vec<MathSyntaxNode> {
 fn document_kind(kind: MathSyntaxKind) -> MathNodeKind {
     match kind {
         MathSyntaxKind::Row => MathNodeKind::Row,
+        MathSyntaxKind::Group => MathNodeKind::Group,
         MathSyntaxKind::Symbol => MathNodeKind::Symbol,
         MathSyntaxKind::Operator => MathNodeKind::Operator,
         MathSyntaxKind::Fraction => MathNodeKind::Fraction,

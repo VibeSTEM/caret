@@ -50,18 +50,28 @@ inline QVariantMap glyph_frame(int page_index = 0) {
         });
     }
 
-    QVariantList placements;
-    placements.reserve(glyph_placements);
+    QVariantList commands;
+    commands.reserve(glyph_placements);
     for (int index = 0; index < glyph_placements; ++index) {
         const int column = index % 90;
         const int row = index / 90;
-        placements.push_back(QVariantMap{
+        commands.push_back(QVariantMap{
+            {QStringLiteral("kind"), 0},
             {QStringLiteral("imageIndex"), index % unique_glyph_images},
             {QStringLiteral("xPt"), 24.0 + static_cast<double>(column) * 6.0},
-            {QStringLiteral("baselineYPt"), 30.0 + static_cast<double>(row) * 24.0},
+            {QStringLiteral("yPt"), 30.0 + static_cast<double>(row) * 24.0},
+            {QStringLiteral("widthPt"), 0.0},
+            {QStringLiteral("heightPt"), 0.0},
+            {QStringLiteral("x2Pt"), 0.0},
+            {QStringLiteral("y2Pt"), 0.0},
+            {QStringLiteral("thicknessPt"), 0.0},
             {QStringLiteral("pixelPhaseX"), 0.0},
             {QStringLiteral("pixelPhaseY"), 0.0},
             {QStringLiteral("pixelPhaseApplied"), false},
+            {QStringLiteral("colorRed"), 0},
+            {QStringLiteral("colorGreen"), 0},
+            {QStringLiteral("colorBlue"), 0},
+            {QStringLiteral("colorAlpha"), 0},
             {QStringLiteral("clipEnabled"), false},
             {QStringLiteral("clipY0Pt"), 0.0},
             {QStringLiteral("clipY1Pt"), 0.0},
@@ -73,38 +83,38 @@ inline QVariantMap glyph_frame(int page_index = 0) {
             {QStringLiteral("rasterPxPerPt"), 96.0 / 72.0},
             {QStringLiteral("pageIndex"), page_index},
             {QStringLiteral("images"), images},
-            {QStringLiteral("placements"), placements}};
+            {QStringLiteral("commands"), commands}};
 }
 
 inline QVariantMap edited_glyph_frame(int page_index, int frame_index) {
     QVariantMap frame = glyph_frame(page_index);
-    QVariantList placements = frame.value(QStringLiteral("placements")).toList();
-    if (!placements.isEmpty()) {
-        QVariantMap first = placements.front().toMap();
+    QVariantList commands = frame.value(QStringLiteral("commands")).toList();
+    if (!commands.isEmpty()) {
+        QVariantMap first = commands.front().toMap();
         const double original_x = first.value(QStringLiteral("xPt")).toDouble();
         first.insert(QStringLiteral("xPt"), original_x + (frame_index % 2 == 0 ? 0.25 : 0.0));
-        placements.front() = first;
-        frame.insert(QStringLiteral("placements"), placements);
+        commands.front() = first;
+        frame.insert(QStringLiteral("commands"), commands);
     }
     return frame;
 }
 
 inline QVariantMap ime_updated_glyph_frame(int page_index, int frame_index) {
     QVariantMap frame = glyph_frame(page_index);
-    QVariantList placements = frame.value(QStringLiteral("placements")).toList();
+    QVariantList commands = frame.value(QStringLiteral("commands")).toList();
     const double suffix_offset = frame_index % 2 == 0 ? 12.0 : 0.0;
-    for (qsizetype index = 0; index < placements.size(); ++index) {
+    for (qsizetype index = 0; index < commands.size(); ++index) {
         const int column = static_cast<int>(index % 90);
         const int row = static_cast<int>(index / 90);
         if (row != 3 || column < 45) {
             continue;
         }
-        QVariantMap placement = placements.at(index).toMap();
+        QVariantMap placement = commands.at(index).toMap();
         const double original_x = placement.value(QStringLiteral("xPt")).toDouble();
         placement.insert(QStringLiteral("xPt"), original_x + suffix_offset);
-        placements[index] = placement;
+        commands[index] = placement;
     }
-    frame.insert(QStringLiteral("placements"), placements);
+    frame.insert(QStringLiteral("commands"), commands);
     return frame;
 }
 

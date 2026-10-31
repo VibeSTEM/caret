@@ -1,79 +1,109 @@
-# 044 — M3：公式布局、画布渲染与表格集成
+# 044 — M3：公式布局与画布渲染
 
-- 状态：planned
-- 依赖：012、027、043
+- 状态：in-progress
+- 依赖：027、043
 - 优先级：P2
 - 创建 / 更新：2026-10-29 / 2026-10-31
 
-## 目标与背景
+本文件是 044 的唯一范围与验收记录。用户要求先合并当前分支并暂停未完成部分；因此本任务仍为 `in-progress`，当前实现状态与恢复顺序见下文。
 
-通过独立 `caret-math` crate 适配 `latex-rust` 的数学盒布局，并精确、高效地呈现到 Caret 页面画布。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。完成 M3 规定的表格内公式可视集成。总体验收由 [011 M3 公式](011-impl-math.md)管理。
+## 目标
 
-## 必读
+通过 `caret-math` 适配 `latex-rust` MathBox 布局，并将公式呈现在 Caret 页面画布。布局、绘制、命中和光标几何共用同一 Rust 快照；Qt/QML 消费快照，不实现公式领域规则。
 
-- [公式与表格](../architecture/editor/math-and-table.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)、[表格](../task/012-impl-table.md)
-- [分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
+044 提供不依赖表格模型的公式布局、绘制、命中与焦点能力。表格模型及保存由 [045](045-table-model-and-editing.md) 负责，表格中的定位、裁剪、绘制与导航由 [046](046-table-layout-and-canvas.md) 负责；总体验收由 [011](011-impl-math.md) 管理。
 
-## 范围与非目标
+开始实现时按需查阅[公式与表格架构](../architecture/editor/math-and-table.md)、[画布与命中任务](027-canvas-and-hit-testing.md)、[分层规范](../standards/layering.md)、[测试规范](../standards/testing.md)和[验证评审标准](../standards/validation-and-review.md)。
 
-在 043 创建的低层 `caret-math` workspace crate 中扩展 `latex-rust` pin/patch、输入适配和 MathBox 快照 API；为 token/AST 增加细粒度源码字节范围及预处理偏移映射。接通块级 `Equation`/`Align` 的交互式创建、MathFocus 编辑和命令入口，补齐 `^`/`_` 上下标插入及已提交数学内容的 Backspace/Delete；确保可见布局可用后才开放候选。`caret-math` 不依赖 Qt、Parley 或 `caret-doc`，向 `caret-layout` 暴露调用方注入的 shaping provider 与稳定节点 provenance。实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
+## 范围与边界
 
-覆盖段落行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的唯一支持值与诊断回退；公式内 `\text{...}` 使用 Caret 正文 shaping。接通表格单元格内公式的绘制、命中、光标与布局。
+- 支持行内 `InlineMath`、块级 `Equation` 和多行 `Align`，公式默认使用 STIX Two Math。
+- `\text{...}` 通过 Caret 正文 shaper 排版；字形、规则线、基线、盒尺寸和节点 provenance 使用 Caret 自有快照及整数度量。
+- `caret-math` 隔离 pinned `latex-rust`，不依赖 Qt、Parley 或 `caret-doc`；engine 转换持久模型，layout 提供正文 shaping，FFI 传递验证后的 DTO，Qt 负责绘制。
+- 命令和公式编辑状态由 Rust 持有；命中、caret、选区及绘制使用同代布局快照。失败保留有效文档和公式源码，并向用户显示可定位错误。
+- 044 不接入表格模型，不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染或未经测量的大范围排版优化。
 
-不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
+## 当前进度
 
-## 前置条件与待决策
+| 能力 | 状态 | 当前边界 |
+| --- | --- | --- |
+| `caret-math` parser/layout adapter | 已实现基础 | 持久树转换、MathBox 快照、STIX 与正文 `\text` shaping、Align 多行组合和预算校验已接入；parser 仍只有公式级源码范围，缺 token/AST 细粒度 spans |
+| 行内布局与页面绘制 | 已接通首个纵向切片 | 行内公式参与段高、分页和有序页面 glyph；Rust 栅格、FFI DTO、QSG 混合图元及错误提示已接通。需继续验证完整像素链、失败注入与方向混排 |
+| 行内 MathFocus 与编辑 | 部分实现 | Session 有行内公式焦点、输入路由、部分结构编辑和撤销状态；画布尚未按公式几何进行命中/caret 投影，入口/退出及 UI 命令候选仍未验收 |
+| 块级 `Equation` / `Align` | 部分实现 | 持久模型导入和 `layout_math_align` 已有；文档布局仍以源码预览为主，块公式页面绘制、焦点、命令和编辑未接通 |
+| 性能、RTL 与跨平台 | 未完成 | 尚无公式场景基线；RTL/混合方向和三平台行为未验证 |
+| 表格集成 | 后续任务 | 045/046 负责模型、单元格定位/裁剪、命中与导航 |
 
-依赖 043 创建的 parser crate、整段公式 source range 和稳定公式树，以及 042 的后端边界结论。依赖 012、027 已完成；在 1.99 工具链验证补丁包和依赖树，增加细粒度源码范围映射、正文 shaping provider 与布局盒到 Caret 节点的 provenance。Caret 树到 parser/layout 的深度预算映射须验证；超过上游默认预算的导入或编辑须原子拒绝。输入采用 `\[...\]` 和 `\[\begin{aligned}...\end{aligned}\]`；不为未发布的公式语法增加星号环境 parser patch。如果上游 patch 不能满足契约，暂停集成并复核 patch 范围，不另写 TeX parser/layout，也不用 SVG/PNG 绘制绕开契约。
+## 后续实施顺序
 
-## 实施步骤
-
-1. 定义缓存键和 generation：公式树、字体、字号、语言、缩放/分辨率中哪些影响布局、绘制及 atlas 缓存。
-2. 把数学盒输出映射到 Caret 整数坐标与字形/rule 快照；确认 `\text{...}` 混合正文 shaping 时尺寸与基线一致。
-3. 通过适配层 patch 暴露 token/AST 细粒度源码范围和预处理映射；用错误位置用例验证原始输入定位。
-4. 接通 `\equation`/`\align` 插入命令和显示公式 MathFocus 编辑，MathFocus 路径覆盖行内与块级结构。
-5. 实现 `^`/`_` 上下标插入和已提交数学节点的 Backspace/Delete，定义结构边界、占位槽、撤销及失败原子行为。
-6. 接入画布绘制、光标几何、命中测试与选择范围；让正文方向键在相邻的行内公式边界进入既有公式 MathFocus，并由同一布局快照选择入口 MathPos；验证左右两侧边界、连续移动、退出及正文光标投影一致，输入更新不会重建未受影响的公式/段落快照。
-7. 将同一公式路径接入表格单元格，覆盖单元格尺寸变化、分页、命中和导航。
-8. 补充具有行为断言的布局/渲染/缓存测试，做性能对比；独立架构与代码评审并处理发现。
-
-## 预计改动
-
-`crates/caret-layout` 数学布局适配，`native` 画布 glyph/rule 绘制，必要的 FFI 快照传输与 Qt 节点绘制；限制为公式内容所需的最小边界。
+1. 以显式块布局输入接通 `Equation`/`Align` 的 display MathBox、资源命名空间、分页和页面 glyph；块公式不得伪装成可编辑正文段落。公式按不可拆分块处理，超高/超宽时必须可见失败，不得静默截断。
+2. 将同一行内公式快照用于命中、MathFocus caret 和正文边界导航；覆盖左右进入/退出、连续公式、上下移动、选区、保存重开和旧 generation 拒绝。
+3. 在 `latex-rust` adapter 中为 token/AST 建立 UTF-8 字节范围及预处理偏移映射；保留旧解析入口，并正确处理 token 重写、嵌套 `\text` 和 Align cell 的源码重基。
+4. 接通块级创建、MathFocus、上下标、已提交节点删除和对应撤销/失败原子行为；只有布局及焦点投影可用后才开放命令候选。
+5. 补公式完整行为矩阵、RTL/混排验证、代表性性能基线、三平台检查；处理领域评审发现并执行未参与实现者的完整 diff 终审。
 
 ## 验收标准
 
-- [ ] `InlineMath` 与块级 `Equation`/`Align` 可显示；多行对齐、基线、括号/分数等伸展符号使用数学布局度量。
-- [ ] `\math`、`\equation`、`\align` 均可创建并进入相应公式焦点；`\frac`、`\sqrt` 以及行内/块级 `^`、`_` 编辑候选可用。候选只在对应公式渲染和焦点投影可用时开放，创建与编辑可撤销。
-- [ ] 行内与块级公式均支持 `^`/`_` 上下标插入，以及已提交文字/节点的 Backspace/Delete；结构边界行为明确，撤销与失败原子测试通过。
-- [ ] parser token/AST 提供 UTF-8 源码字节范围和预处理偏移映射；错误位置能映射回原始输入，并覆盖转义、规范化和边界位置。
-- [ ] 绘制、命中、光标几何引用同一 generation/几何快照，旧异步结果不能覆盖新布局。
-- [ ] 正文方向键可从行内公式两侧进入已有公式，入口 `MathPos` 由布局几何确定；公式左右边缘退出后正文 caret 与快照一致，覆盖保存重开、连续公式及相邻文本边界。
-- [ ] 英文、中文 `\text{...}` 按正文字体与语言 shaping 显示；缺失字体/字形有定义明确的 fallback/诊断；未知 `defaultMathFontFamily` 保留文档原值，实际回退到 STIX 时可观测并可测试。
-- [ ] 同一公式快照在缩放与三平台检查中不依赖临时栅格图；页面内编辑没有显著重复重排，性能结果记录基线和测试输入。
-- [ ] 表格内公式的插入、显示、命中、导航和保存重开已与 012 集成验收。
-- [ ] 无 SVG/PNG-only 交互路径；测试、格式、lint、独立评审通过。
+### 布局与渲染
 
-## 验证计划与结果
+- [ ] 行内 `InlineMath`、块级 `Equation` 和 `Align` 可见；分数、根式、伸展符号、基线、对齐和 `\text` 均使用对应布局度量与字体资源。
+- [ ] 公式快照可被页面 glyph、FFI/QSG 以及后续 046 的单元格画布消费；正文与公式按视觉顺序混合绘制并正确裁剪。
+- [ ] 字体缺字、未知 `defaultMathFontFamily`、无效树、布局失败和 GPU/QSG 失败有明确 fallback/诊断；失败保留文档和公式源，过期帧不覆盖当前结果。
+- [ ] 缩放、主题色、字体和文档代际变化正确更新缓存；异步结果绑定 session、revision/generation 与几何身份。
 
-| 日期 | 环境 / 命令 | 预期 | 实际结果 |
-| --- | --- | --- | --- |
-| — | caret-layout 数学盒快照行为测试 | 坐标、基线、字形与源位置映射一致 | 未执行 |
-| — | parser adapter token/AST source range 测试 | UTF-8 字节跨度及预处理偏移映射能定位原始输入 | 未执行 |
-| — | `\equation` / `\align` 命令与块级 MathFocus 测试 | 两种显示公式可创建、编辑、撤销并与布局快照同步 | 未执行 |
-| — | 上下标和公式删除命令测试 | 行内/块级结构编辑、光标位置、撤销及边界失败一致 | 未执行 |
-| — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
-| — | 表格内公式集成测试 | 表格单元格内可编辑且保存往返稳定 | 未执行 |
-| — | 公式布局基准 | 记录输入、构建与缓存条件 | 未执行 |
+### 输入、命中与编辑
 
-## 风险与回退
+- [ ] `\math`、`\equation`、`\align` 及 `\frac`、`\sqrt`、`^`、`_` 命令仅在对应结构和焦点能力可用时开放，创建/编辑支持撤销。
+- [ ] 行内与块级公式支持上下标及已提交文本/节点 Backspace/Delete；结构边界、占位槽、失败原子性有行为测试。
+- [ ] 正文方向键和点击可按同一布局几何进入公式；公式边缘退出后正文 caret/selection 投影正确。覆盖两侧边界、连续公式、上下导航、保存重开及相邻文本。
+- [ ] parser token/AST 的 UTF-8 源码范围和预处理映射对转义、重写、嵌套文本、多字节输入、Align cell 和错误位置正确；不相关旧解析 API 保持兼容。
 
-字体缺字、MATH 度量差异、Qt atlas 生命周期或文本 shaping 混排可能造成错位。失败时保留公式源与错误状态，不能退回无法定位和选择的图片对象。性能优化限定在测量证明的热路径。
+### 验证与边界
 
-## 决策与工作记录
+- [ ] Qt Quick/Qt Test 覆盖公式像素、命中、焦点和键盘行为；Rust/C++ 覆盖率门槛与行为用例分别核实，未覆盖项明确记录。
+- [ ] 有代表性输入、机器/构建/缓存条件和可复现基线；没有测量数据时不宣称性能提升。
+- [ ] 公式无需临时 SVG/PNG 作为交互对象；格式、lint、构建及三平台验证通过，领域评审与最终只读 review 完成。
+- [ ] 单元格公式定位和裁剪留给 046 验收，本任务不依赖或改写表格模型。
 
-- 2026-10-29：从 011 拆出公式布局、画布渲染和与 012 的最终集成验收。
+## 已确认的架构决策
 
-## 完成摘要
+- 保留 `caret-math` 独立 crate：它隔离第三方 TeX parser/layout/font 依赖并拥有稳定适配契约。新增 crate 只有出现独立复用、发布、依赖约束或安全边界需求时才考虑。
+- 持久文档模型由 `caret-doc` 权威持有；engine 负责模型转换和布局快照编排；layout 负责 Parley shaping；FFI 负责稳定 DTO；Qt/QML 不重复持有公式状态或数学策略。
+- `ExternalText` 资源句柄只在创建它的 provider 命名空间内有效。公式快照与所属 provider 资源表成对保存，不跨公式合并局部 handle。
+- `caret-layout` 输出稳定的 `PositionedParagraphDrawItem`，engine 不解释 Parley positioned enum；页面栅格按有序 draw item 合并正文 glyph 与公式图元。
+- Align 行由上游 `EnvRow` 折叠，当前没有独立行盒几何；不能用 cell 几何伪造行 ID 命中或 caret。跨页 Align 需先获得保持列宽的行边界契约。
 
-未完成。
+## 验证摘要
+
+- Rust workspace 全量测试和 doc-tests 通过；本轮 native CTest 9/9、定向 Qt Quick 用例、`cargo lint --check` 九阶段、`cargo format --check` 和 `git diff --check` 通过。
+- 当前完整分支 Rust 全局覆盖率函数 85.91%、行 86.99%；native 产品覆盖率函数 89.47%、行 85.22%。两侧 85% 门槛均通过。
+- QSG 纹理创建失败尚无可靠注入；回调 ABA 已加 page submission generation 并经 Terra/medium 只读复核，但延迟 success/failure、窗口销毁行为仍待故障注入测试。
+| 验证 | 最近结果 | 限制 |
+| --- | --- | --- |
+| `cargo test --locked --offline --workspace` | Rust workspace 与 doc-tests 全量通过 | — |
+| `ctest --test-dir target/native/debug --output-on-failure` | native CTest 9/9 通过 | QSG 实际纹理失败没有故障注入 |
+| Qt Test `documentCanvasMapsPageCoordinatesAndHitsPages` | offscreen + software backend 通过，含 mixed commands、clip、页面错误横幅 | 未覆盖真实公式全链路像素或数学 caret/hit |
+| `cargo lint --check` | 九阶段通过 | 最终文档修改后再确认 |
+| `cargo format --check` / `git diff --check` | 通过 | 最终文档修改后再确认 |
+| 锁定 `lupdate qml native -recursive` 与 QM 加载 | 119 个消息源；四个 locale 翻译完成，QM 加载通过 | 仅在本轮新增提示文案时相关 |
+| `cargo coverage` / `cargo coverage native` | Rust 全局函数/行 85.91%/86.99%；native 产品函数/行 89.47%/85.22%，门槛通过 | native 有 4 个函数 coverage data mismatch 警告；门槛按产品范围汇总 |
+| 性能基线 / 三平台 / RTL 混排 | 未完成 | 044 暂停点，恢复后补齐 |
+
+## 当前未解决风险
+
+- 行内 U+FFFC 替换与 U+200B shaping 在 RTL/混合方向、对象选区和 caret/hit 映射上未验证。
+- 块级公式尚未进入真正的 display 页面布局；现有段落分页不能直接表达不可拆分的数学块，需要先明确页尾、整页过高/超宽及失败回退策略。
+- 块级公式快照的缓存应绑定内容、字体、文本 shaping 和布局上下文；重分页只更新页面位置，不应重塑未变化的公式。
+- Session checkpoint 会克隆会话/历史/快照；输入热路径的成本没有基准。QSG 图元也会在受影响帧重建，均不得视为已优化。
+
+## 决策与评审记录
+
+- `caret-math` crate 边界已由此前架构评审确认合理；转换持久数学树由 engine 持有，不让 parser crate 依赖 `caret-doc`，不为文件拆分新增 crate。
+- parser span 审计建议在 patched parser 构树时传递与 AST 同形的 range sidecar，不能事后按相同节点值或源码搜索猜跨度；须覆盖 group rewrite、嵌套 `\text` 与 Align cell 重基。此设计尚未实现。
+- 块级公式审计建议使用显式 DisplayMath 布局输入，复用 `layout_math_tree(..., Equation)` / `layout_math_align` 和现有 page glyph 管线；不把块公式伪装成可编辑段落。此设计尚未实现。
+- Terra/medium 对公式布局边界、provenance、正文/数学字形分流、错误诊断、checkpoint/reuse 和本轮 QSG page submission generation 分别做过只读复核；发现项已修复或记录为验收缺口。
+- 之前的 Sol/medium 评审只覆盖较早的完整 diff，不能视为当前终审。当前分支合并前对 `main...HEAD` 及本文件最终改动重新执行独立 Sol/medium 只读评审。
+
+## 暂停点
+
+当前分支合并后按用户要求暂停 044。恢复时从上述“后续实施顺序”第 1 项继续；在 044 实际完成并取得验证证据前，状态保持 `in-progress`，不得将本任务或 [011](011-impl-math.md) 标为完成。

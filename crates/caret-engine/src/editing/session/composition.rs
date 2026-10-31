@@ -12,6 +12,28 @@ use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use std::mem;
 
+/// 已完成布局验证、只能由其创建者安装的一次 composition 更新。
+pub struct CompositionUpdateCandidate {
+    owner_id: caret_doc::NodeId,
+    base_generation: u64,
+    state_revision: u64,
+    candidate: Session,
+    preview: Session,
+    range: Selection,
+}
+
+impl CompositionUpdateCandidate {
+    /// 只读预览，不暴露可独立修改的候选 Session 身份。
+    pub fn preview_session(&self) -> &Session {
+        &self.preview
+    }
+
+    /// 该 composition 预览覆盖的文档范围。
+    pub fn range(&self) -> &Selection {
+        &self.range
+    }
+}
+
 impl Session {
     /// 按 Qt UTF-16 相对范围原子提交输入法替换，支持先取消已有预编辑再应用新范围。
     ///
@@ -127,31 +149,61 @@ impl Session {
                 .unwrap_or(candidate.document_generation);
         }
         *self = candidate;
+        self.advance_composition_candidate_revision();
         Ok(effect)
     }
 
     /// 构造待安装的 composition 与对应显示副本，预览校验失败时调用方可保留原状态。
     pub fn composition_update_candidate(
-        &self,
+        &mut self,
         id: u64,
         preedit: String,
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
-    ) -> Result<(Self, Self, Selection), EditError> {
+    ) -> Result<CompositionUpdateCandidate, EditError> {
+        self.advance_composition_candidate_revision();
+        let state_revision = self.composition_candidate_revision;
         let mut candidate = self.transaction_clone();
         if let Some((replacement_start, replacement_length)) = replacement_range {
             candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
         }
         candidate.run(Command::UpdateComposition { id, preedit })?;
-        let (preview, range) = candidate.composition_preview_with_range(cursor_position_utf16)?;
-        Ok((candidate, preview, range))
+        let (mut preview, range) =
+            candidate.composition_preview_with_range(cursor_position_utf16)?;
+        preview.composition_preview_origin = Some(super::CompositionPreviewOrigin {
+            base_session_id: self.session_id.clone(),
+            base_generation: self.document_generation,
+            base_state_revision: self.composition_candidate_revision,
+            changed_paragraph_id: range.anchor.paragraph_id.clone(),
+        });
+        Ok(CompositionUpdateCandidate {
+            owner_id: self.session_id.clone(),
+            base_generation: self.document_generation,
+            state_revision,
+            candidate,
+            preview,
+            range,
+        })
     }
 
     /// 布局验证成功后安装候选，并移动原会话历史，避免失败时丢失撤销分支。
-    pub fn install_composition_candidate(&mut self, mut candidate: Self) {
+    pub fn install_composition_candidate(
+        &mut self,
+        update: CompositionUpdateCandidate,
+    ) -> Result<Session, EditError> {
+        if self.session_id != update.owner_id
+            || self.document_generation != update.base_generation
+            || self.composition_candidate_revision != update.state_revision
+        {
+            return Err(EditError::InvalidCompositionId);
+        }
+        let mut candidate = update.candidate;
+        let preview = update.preview;
+        candidate.composition_candidate_revision = update.state_revision;
         candidate.edit_history = mem::replace(&mut self.edit_history, history::history());
         candidate.history_estimated_bytes = self.history_estimated_bytes;
         *self = candidate;
+        Ok(preview)
     }
 
     fn transaction_clone(&self) -> Self {
@@ -160,6 +212,7 @@ impl Session {
             selection: self.selection.clone(),
             selection_visual_affinity: self.selection_visual_affinity,
             session_id: self.session_id.clone(),
+            checkpoint_owner_id: self.checkpoint_owner_id.clone(),
             document_generation: self.document_generation,
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
@@ -180,6 +233,9 @@ impl Session {
             next_history_state_id: self.next_history_state_id,
             history_estimated_bytes: self.history_estimated_bytes,
             history_merge_epoch: self.history_merge_epoch,
+            composition_preview_origin: None,
+            layout_reuse_change: self.layout_reuse_change.clone(),
+            composition_candidate_revision: self.composition_candidate_revision,
         }
     }
 
@@ -200,6 +256,8 @@ impl Session {
             .ok_or(EditError::InvalidCompositionId)?;
         let preedit = composition.preedit.clone();
         let mut preview = self.transaction_clone();
+        preview.session_id = caret_doc::NodeId::generate();
+        preview.checkpoint_owner_id = caret_doc::NodeId::generate();
         preview.run(Command::CommitComposition {
             id: composition.id,
             text: preedit.clone(),

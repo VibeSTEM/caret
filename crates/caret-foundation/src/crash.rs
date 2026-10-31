@@ -18,6 +18,8 @@ use std::os::fd::IntoRawFd;
 use std::os::windows::io::IntoRawHandle;
 use std::path::PathBuf;
 use std::sync::Mutex;
+#[cfg(all(test, target_os = "macos"))]
+use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -25,6 +27,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 #[cfg(unix)]
 /// 未安装时的哨兵 fd；安装后保存常驻 fd（不关闭，进程退出由内核回收）。
 static LOG_FD: AtomicI32 = AtomicI32::new(-1);
+#[cfg(all(test, target_os = "macos"))]
+static TEST_EXIT_AFTER_CRASH_LOG: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 /// 未安装时的空句柄；安装后保存常驻句柄（不关闭，进程退出由系统回收）。
 static LOG_HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -141,6 +145,14 @@ fn record_crash(signal: libc::c_int) {
 #[cfg(unix)]
 extern "C" fn crash_handler(signal: libc::c_int) {
     record_crash(signal);
+    #[cfg(all(test, target_os = "macos"))]
+    if TEST_EXIT_AFTER_CRASH_LOG.load(Ordering::SeqCst) {
+        // SAFETY: 仅测试子进程启用；使用 async-signal-safe `_exit` 避免 macOS
+        // CrashReporter 为预期中的测试信号弹窗。正式构建仍走默认信号重发路径。
+        unsafe {
+            libc::_exit(128 + signal);
+        }
+    }
     // SAFETY: 恢复默认处置后重发同一信号，保持 .ips 崩溃报告与内核退出
     // 语义；signal/raise 均为 async-signal-safe。
     unsafe {

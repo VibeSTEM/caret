@@ -9,6 +9,8 @@ use caret_engine::{
     VisualAffinity,
 };
 
+pub use hit_test::{DocumentGlyphDrawCommand, DocumentGlyphFrame, DocumentGlyphImage};
+
 mod composition;
 mod editing;
 mod hit_test;

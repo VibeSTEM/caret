@@ -61,10 +61,15 @@ impl Session {
                 };
                 self.command_line = Some(picker);
             }
+            self.advance_composition_candidate_revision();
             return Ok(Effect::default());
         }
 
-        self.run_command_line(command)
+        let result = self.run_command_line(command);
+        if result.is_ok() {
+            self.advance_composition_candidate_revision();
+        }
+        result
     }
 
     /// 将输入法预编辑和提交文本路由到字体族查询，不触碰正文会话内容。
@@ -92,6 +97,7 @@ impl Session {
             command_line.replace_from_ime(replacement_start, replacement_length, &commit)?;
         }
         command_line.update_preedit(preedit, cursor_utf16);
+        self.advance_composition_candidate_revision();
         Ok(())
     }
 

@@ -4,6 +4,8 @@
 // 署名：Yuki Lu
 
 use std::{
+    borrow::Cow,
+    collections::HashSet,
     ops::Range,
     sync::{
         Arc,
@@ -15,13 +17,19 @@ use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, Language, Layout,
-    LayoutContext, StyleProperty, WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, InlineBox,
+    InlineBoxKind, Language, Layout, LayoutContext, StyleProperty, TextWrapMode, VerticalAlign,
+    WhiteSpaceCollapse,
+};
+
+mod drawing;
+pub use drawing::{
+    LocalGlyph, PositionedGlyphRun, PositionedParagraphDrawError, PositionedParagraphDrawItem,
 };
 
 use crate::{
-    FontCatalog, FontLineMetrics, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ResolvedDocumentTextSettings, ShapingStyle,
+    FontCatalog, FontLineMetrics, InlineObjectPlacement, LineSpacing, ParagraphLayout,
+    ParagraphLayoutError, PositionedInlineObject, ResolvedDocumentTextSettings, ShapingStyle,
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
@@ -93,6 +101,8 @@ pub struct ParleyParagraphLayout {
     pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
+    /// 调用方放置的行内对象经 Parley 定位后的段落局部几何。
+    pub positioned_inline_objects: Vec<PositionedInlineObject>,
 }
 
 /// 段落布局的版心宽度、行距和共享行网格度量。
@@ -133,6 +143,12 @@ struct SpaceStyleKey {
     kind: SpaceKind,
 }
 
+#[derive(Clone, Copy)]
+struct InlineLayout<'a> {
+    boxes: &'a [InlineBox],
+    wrap_mode: TextWrapMode,
+}
+
 const ORDINARY_SPACE_EM_PERCENT: u16 = 50;
 const EM_SPACE_EM_PERCENT: u16 = 100;
 
@@ -150,6 +166,83 @@ impl ParagraphLayouter {
         base_style: &ShapingStyle,
         options: ParagraphLayoutOptions,
     ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        self.layout_with_inline_boxes(catalog, paragraph, settings, base_style, options, &[])
+    }
+
+    /// 与 [`Self::layout`] 使用相同的样式和分页度量，并在 U+FFFC UTF-8 字节范围放置调用方测量的行内盒。
+    /// 对象位置上的 U+FFFC 在仅用于塑形的副本中替换成等长 U+200B，以免额外绘制/推进占位字形；返回的逻辑文本保留 U+FFFC。
+    /// 非空文本才可提供行内对象。每个对象必须有唯一 `id` 和 `index`，且 `index` 指向唯一 U+FFFC；宽度有限且非负，高度有限且为正；
+    /// 可选基线必须有限；in-flow 盒子的基线须位于盒子高度内。输入不合规返回 `InvalidInlineBox`，
+    /// Parley 输出无法映射返回 `InconsistentShaping`。
+    pub fn layout_with_inline_boxes(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+        inline_boxes: &[InlineObjectPlacement],
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        let parley_inline_boxes = inline_boxes
+            .iter()
+            .map(|object| InlineBox {
+                id: object.id,
+                kind: InlineBoxKind::InFlow,
+                index: object.index,
+                width: object.width_pt,
+                height: object.height_pt,
+                baseline: object.baseline_pt,
+                vertical_align: VerticalAlign::BASELINE,
+            })
+            .collect::<Vec<_>>();
+        self.layout_with_inline_boxes_wrap_mode(
+            catalog,
+            paragraph,
+            settings,
+            base_style,
+            options,
+            InlineLayout {
+                boxes: &parley_inline_boxes,
+                wrap_mode: TextWrapMode::Wrap,
+            },
+        )
+    }
+
+    /// 禁止自动软换行并使用相同字体与字符 shaping 规则布局；显式硬换行仍会产生多行，调用方须检查结果。
+    pub fn layout_single_line(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        self.layout_with_inline_boxes_wrap_mode(
+            catalog,
+            paragraph,
+            settings,
+            base_style,
+            options,
+            InlineLayout {
+                boxes: &[],
+                wrap_mode: TextWrapMode::NoWrap,
+            },
+        )
+    }
+
+    fn layout_with_inline_boxes_wrap_mode(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+        inline_layout: InlineLayout<'_>,
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        let InlineLayout {
+            boxes: inline_boxes,
+            wrap_mode: text_wrap_mode,
+        } = inline_layout;
         let font_generation = catalog.generation();
         if self.font_generation != Some(font_generation) {
             self.context = LayoutContext::default();
@@ -183,6 +276,10 @@ impl ParagraphLayouter {
             self.space_adjustments_pt.clear();
         }
         let text: String = spans.iter().map(|span| span.text).collect();
+        if !valid_inline_boxes(&text, inline_boxes) {
+            return Err(ParagraphLayoutError::InvalidInlineBox);
+        }
+        let shaping_text = text_for_inline_box_shaping(&text, inline_boxes);
         let boundaries = boundaries_for_spans(&text, &spans);
         let decisions = Arc::new(line_break_decisions(&text, &boundaries));
         let available_families = Arc::clone(&catalog.family_names_lowercase);
@@ -335,7 +432,8 @@ impl ParagraphLayouter {
                     },
                 );
                 requested_family_missing |= candidates.first().is_some_and(|candidate| {
-                    !available_families.contains(&candidate.family.to_lowercase())
+                    !matches!(candidate.family, "sans-serif" | "monospace")
+                        && !available_families.contains(&candidate.family.to_lowercase())
                 });
                 let mut names = Vec::with_capacity(candidates.len());
                 for candidate in candidates {
@@ -350,16 +448,18 @@ impl ParagraphLayouter {
             .any(|(_, key)| !self.space_adjustments_pt.contains_key(key));
         let (mut layout, mut callback_count) = {
             let layout_input = ParleyLayoutInput {
-                text: &text,
+                text: &shaping_text,
                 base_style,
                 style_ranges: &style_ranges,
                 family_names_by_key: &family_names_by_key,
                 word_spacing_ranges: &word_spacing_ranges,
                 em_space_ranges: &em_space_ranges,
                 space_adjustments_pt: &self.space_adjustments_pt,
+                inline_boxes,
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                text_wrap_mode,
             };
             build_parley_layout(&mut self.context, catalog, &layout_input)
         };
@@ -371,16 +471,18 @@ impl ParagraphLayouter {
                 &mut self.space_adjustments_pt,
             );
             let layout_input = ParleyLayoutInput {
-                text: &text,
+                text: &shaping_text,
                 base_style,
                 style_ranges: &style_ranges,
                 family_names_by_key: &family_names_by_key,
                 word_spacing_ranges: &word_spacing_ranges,
                 em_space_ranges: &em_space_ranges,
                 space_adjustments_pt: &self.space_adjustments_pt,
+                inline_boxes,
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                text_wrap_mode,
             };
             (layout, callback_count) =
                 build_parley_layout(&mut self.context, catalog, &layout_input);
@@ -395,12 +497,14 @@ impl ParagraphLayouter {
             parley_line_tops_pt,
             parley_line_heights_pt,
             baseline_adjustments_pt,
+            positioned_inline_objects,
         } = make_paragraph_lines(
             &text,
             &layout,
             spacing,
             line_grid_metrics,
             line_grid_font_size_centipoints,
+            inline_boxes,
         )?;
         Ok((
             text,
@@ -413,6 +517,7 @@ impl ParagraphLayouter {
                 parley_line_tops_pt,
                 parley_line_heights_pt,
                 baseline_adjustments_pt,
+                positioned_inline_objects,
                 empty_line_indent_pt,
                 requested_family_missing,
             },
@@ -479,9 +584,45 @@ struct ParleyLayoutInput<'a> {
     word_spacing_ranges: &'a [(Range<usize>, SpaceStyleKey)],
     em_space_ranges: &'a [(Range<usize>, SpaceStyleKey)],
     space_adjustments_pt: &'a std::collections::HashMap<SpaceStyleKey, f32>,
+    inline_boxes: &'a [InlineBox],
     decisions: &'a Arc<PackedLineBreakDecisions>,
     width_pt: f32,
     first_line_indent_chars: Option<u16>,
+    text_wrap_mode: TextWrapMode,
+}
+
+fn valid_inline_boxes(text: &str, inline_boxes: &[InlineBox]) -> bool {
+    if text.is_empty() && !inline_boxes.is_empty() {
+        return false;
+    }
+    let mut ids = HashSet::with_capacity(inline_boxes.len());
+    let mut indexes = HashSet::with_capacity(inline_boxes.len());
+    inline_boxes.iter().all(|inline_box| {
+        text.get(inline_box.index..)
+            .is_some_and(|suffix| suffix.starts_with('\u{fffc}'))
+            && inline_box.width.is_finite()
+            && inline_box.width >= 0.0
+            && inline_box.height.is_finite()
+            && inline_box.height > 0.0
+            && inline_box.baseline.is_none_or(f32::is_finite)
+            && ids.insert(inline_box.id)
+            && indexes.insert(inline_box.index)
+    })
+}
+
+fn text_for_inline_box_shaping<'a>(text: &'a str, inline_boxes: &[InlineBox]) -> Cow<'a, str> {
+    if inline_boxes.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut shaped = text.to_owned();
+    for inline_box in inline_boxes {
+        if shaped[inline_box.index..].starts_with('\u{fffc}') {
+            let end = inline_box.index + '\u{fffc}'.len_utf8();
+            // 两个标量都占三个 UTF-8 字节，可保持逻辑文本中的字节偏移不变。
+            shaped.replace_range(inline_box.index..end, "\u{200b}");
+        }
+    }
+    Cow::Owned(shaped)
 }
 
 /// 构建 Parley 布局，并在对应空白范围应用由实际字体度量得出的 advance 修正。
@@ -498,9 +639,11 @@ fn build_parley_layout(
         word_spacing_ranges,
         em_space_ranges,
         space_adjustments_pt,
+        inline_boxes,
         decisions,
         width_pt,
         first_line_indent_chars,
+        text_wrap_mode,
     } = *input;
     let mut builder = context.ranged_builder(catalog.parley_context(), text, 1.0, false);
     builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
@@ -510,6 +653,7 @@ fn build_parley_layout(
     builder.push_default(StyleProperty::WhiteSpaceCollapse(
         WhiteSpaceCollapse::BreakSpaces,
     ));
+    builder.push_default(StyleProperty::TextWrapMode(text_wrap_mode));
 
     for (range, style, script, emoji, underline) in style_ranges {
         let key = (style.clone(), *script, *emoji);
@@ -572,6 +716,9 @@ fn build_parley_layout(
             continue;
         };
         builder.push(StyleProperty::LetterSpacing(adjustment_pt), range.clone());
+    }
+    for inline_box in inline_boxes {
+        builder.push_inline_box(inline_box.clone());
     }
 
     let callback_index = Arc::new(AtomicUsize::new(0));
@@ -640,7 +787,13 @@ fn font_families(names: &[String], emoji: bool, code: bool) -> Vec<FontFamilyNam
     if emoji {
         families.push(FontFamilyName::Generic(GenericFamily::Emoji));
     }
-    families.extend(names.iter().map(|family| FontFamilyName::named(family)));
+    for family in names {
+        match family.as_str() {
+            "sans-serif" => families.push(FontFamilyName::Generic(GenericFamily::SansSerif)),
+            "monospace" => families.push(FontFamilyName::Generic(GenericFamily::Monospace)),
+            family => families.push(FontFamilyName::named(family)),
+        }
+    }
     if code {
         families.push(FontFamilyName::Generic(GenericFamily::Monospace));
     }
@@ -786,6 +939,24 @@ mod tests {
         );
         assert_eq!(
             font_families(&[], false, true),
+            vec![
+                FontFamilyName::Generic(GenericFamily::Monospace),
+                FontFamilyName::Generic(GenericFamily::SystemUi),
+            ]
+        );
+    }
+
+    #[test]
+    fn generic_text_styles_are_not_treated_as_named_font_families() {
+        assert_eq!(
+            font_families(&["sans-serif".to_owned()], false, false),
+            vec![
+                FontFamilyName::Generic(GenericFamily::SansSerif),
+                FontFamilyName::Generic(GenericFamily::SystemUi),
+            ]
+        );
+        assert_eq!(
+            font_families(&["monospace".to_owned()], false, false),
             vec![
                 FontFamilyName::Generic(GenericFamily::Monospace),
                 FontFamilyName::Generic(GenericFamily::SystemUi),

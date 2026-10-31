@@ -251,23 +251,24 @@ fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
     assert_eq!(frame.document_generation, 1);
     assert_eq!(frame.font_generation, 1);
     assert!(!frame.images.is_empty());
-    assert!(!frame.placements.is_empty());
+    assert!(!frame.commands.is_empty());
     assert!(
         frame.images.iter().all(|image| {
             image.pixels.len() == image.width as usize * image.height as usize * 4
         })
     );
-    assert!(frame.placements.iter().all(|placement| {
-        placement.image_index < frame.images.len() as u32
-            && placement.x_pt.is_finite()
-            && placement.baseline_y_pt.is_finite()
+    assert!(frame.commands.iter().all(|command| {
+        command.kind <= 2
+            && command.x_pt.is_finite()
+            && command.y_pt.is_finite()
+            && (command.kind != 0 || command.image_index < frame.images.len() as u32)
     }));
 
     request.px_per_pt = f64::NAN;
     let invalid = rasterize_page_glyphs(&mut runtime, &request);
     assert_eq!(invalid.error, "layout.glyphs.invalid_raster_geometry");
     assert!(invalid.images.is_empty());
-    assert!(invalid.placements.is_empty());
+    assert!(invalid.commands.is_empty());
 }
 
 #[test]

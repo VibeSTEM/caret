@@ -11,7 +11,17 @@ use std::ops::Range;
 
 pub use math_syntax::{MathSyntaxConversionError, MathSyntaxKind, MathSyntaxNode, MathSyntaxTree};
 
+mod layout;
 mod math_syntax;
+
+pub use latex_rust::{
+    STIX_TWO_MATH_NAME as MATH_FONT_NAME, STIX_TWO_MATH_OTF as MATH_FONT_BYTES,
+    STIX_TWO_MATH_SHA256 as MATH_FONT_SHA256,
+};
+pub use layout::{
+    MathLayoutBackend, MathLayoutDiagnostic, MathLayoutError, MathLayoutItem, MathLayoutSnapshot,
+    MathNodeGeometry, MathTextMetrics, MathTextShaper, MathTextStyle,
+};
 
 /// 单个公式允许的最大 UTF-8 源码长度。
 pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
@@ -90,7 +100,9 @@ impl<'source> ParsedMath<'source> {
     /// 中间树只含稳定值类型，不暴露 `latex-rust` 类型。转换在需要新节点
     /// kind 时显式失败，避免静默丢弃未来语法。
     pub fn syntax_tree(&self) -> Result<MathSyntaxTree, MathSyntaxConversionError> {
-        math_syntax::convert(self.input_kind, &self.ast)
+        let mut tree = math_syntax::convert(self.input_kind, &self.ast)?;
+        tree.root.source_range = Some(self.source_range.clone());
+        Ok(tree)
     }
 }
 

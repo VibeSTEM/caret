@@ -10,7 +10,7 @@ fn lock_crash_state() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// 使用全新进程触发崩溃，避免污染父测试进程的处理器及退出状态。
+/// 使用全新进程触发崩溃，避免污染父测试进程的处理器及退出状态；macOS 测试子进程在写日志后安全退出，避免 CrashReporter 弹窗。
 #[cfg(any(unix, windows))]
 #[test]
 fn handler_logs_crash_and_preserves_exit() -> std::io::Result<()> {
@@ -35,11 +35,13 @@ fn handler_logs_crash_and_preserves_exit() -> std::io::Result<()> {
     let pid = child.id();
     let output = child.wait_with_output()?;
     let stderr = String::from_utf8_lossy(&output.stderr);
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         use std::os::unix::process::ExitStatusExt;
         assert_eq!(output.status.signal(), Some(libc::SIGSEGV), "{stderr}");
     }
+    #[cfg(target_os = "macos")]
+    assert_eq!(output.status.code(), Some(128 + libc::SIGSEGV), "{stderr}");
     #[cfg(windows)]
     assert_eq!(
         output.status.code().map(|code| code as u32),
@@ -69,9 +71,12 @@ fn crash_subprocess_entry() -> std::io::Result<()> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     let path = install_crash_handler(&dir)?;
     assert_eq!(crash_log_path().as_deref(), Some(path.as_path()));
+    #[cfg(all(unix, target_os = "macos"))]
+    TEST_EXIT_AFTER_CRASH_LOG.store(true, Ordering::SeqCst);
     #[cfg(unix)]
-    // SAFETY: 此测试仅在独立子进程、日志已安装后触发；信号处理器应恢复
-    // 默认处置并以同一信号终止。_exit(77) 标识信号意外返回的失败路径。
+    // SAFETY: 仅独立子进程安装处理器后触发；非 macOS Unix 验证原信号终止，
+    // macOS 测试构建由处理器记录后以 128+signal 退出以避免系统弹窗。
+    // 若 raise 意外返回，_exit(77) 标识失败路径。
     unsafe {
         libc::raise(libc::SIGSEGV);
         libc::_exit(77);

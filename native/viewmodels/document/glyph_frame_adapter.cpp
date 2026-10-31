@@ -90,67 +90,59 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
         });
     }
 
-    QVariantList placements;
-    placements.reserve(static_cast<qsizetype>(frame.placements.size()));
-    for (const auto& placement : frame.placements) {
-        if (placement.image_index >= frame.images.size() || !std::isfinite(placement.x_pt) ||
-            !std::isfinite(placement.baseline_y_pt) || !std::isfinite(placement.pixel_phase_x) ||
-            !std::isfinite(placement.pixel_phase_y) || placement.pixel_phase_x < 0.0F ||
-            placement.pixel_phase_x >= 1.0F || placement.pixel_phase_y < 0.0F ||
-            placement.pixel_phase_y >= 1.0F ||
-            (placement.clip_enabled &&
-             (!std::isfinite(placement.clip_y0_pt) || !std::isfinite(placement.clip_y1_pt) ||
-              placement.clip_y0_pt < 0.0 || placement.clip_y1_pt <= placement.clip_y0_pt))) {
+    QVariantList commands;
+    commands.reserve(static_cast<qsizetype>(frame.commands.size()));
+    for (const auto& command : frame.commands) {
+        if (command.kind > 2 || !std::isfinite(command.x_pt) || !std::isfinite(command.y_pt) ||
+            !std::isfinite(command.width_pt) || !std::isfinite(command.height_pt) ||
+            !std::isfinite(command.x2_pt) || !std::isfinite(command.y2_pt) ||
+            !std::isfinite(command.thickness_pt) || !std::isfinite(command.pixel_phase_x) ||
+            !std::isfinite(command.pixel_phase_y) ||
+            (command.kind == 0 &&
+             (command.image_index >= frame.images.size() || command.pixel_phase_x < 0.0F ||
+              command.pixel_phase_x >= 1.0F || command.pixel_phase_y < 0.0F ||
+              command.pixel_phase_y >= 1.0F)) ||
+            (command.kind == 1 && (command.width_pt <= 0.0 || command.height_pt <= 0.0)) ||
+            (command.kind == 2 && command.thickness_pt < 0.0) ||
+            (command.clip_enabled &&
+             (!std::isfinite(command.clip_y0_pt) || !std::isfinite(command.clip_y1_pt) ||
+              command.clip_y0_pt < 0.0 || command.clip_y1_pt <= command.clip_y0_pt))) {
             return {{QStringLiteral("valid"), false},
-                    {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_placement")}};
+                    {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_command")}};
         }
-        placements.push_back(QVariantMap{
-            {QStringLiteral("imageIndex"), placement.image_index},
-            {QStringLiteral("xPt"), placement.x_pt},
-            {QStringLiteral("baselineYPt"), placement.baseline_y_pt},
-            {QStringLiteral("pixelPhaseX"), placement.pixel_phase_x},
-            {QStringLiteral("pixelPhaseY"), placement.pixel_phase_y},
+        commands.push_back(QVariantMap{
+            {QStringLiteral("kind"), command.kind},
+            {QStringLiteral("imageIndex"), command.image_index},
+            {QStringLiteral("xPt"), command.x_pt},
+            {QStringLiteral("yPt"), command.y_pt},
+            {QStringLiteral("widthPt"), command.width_pt},
+            {QStringLiteral("heightPt"), command.height_pt},
+            {QStringLiteral("x2Pt"), command.x2_pt},
+            {QStringLiteral("y2Pt"), command.y2_pt},
+            {QStringLiteral("thicknessPt"), command.thickness_pt},
+            {QStringLiteral("pixelPhaseX"), command.pixel_phase_x},
+            {QStringLiteral("pixelPhaseY"), command.pixel_phase_y},
             {QStringLiteral("pixelPhaseApplied"),
-             frame.images[placement.image_index].pixel_phase_applied},
-            {QStringLiteral("clipEnabled"), placement.clip_enabled},
-            {QStringLiteral("clipY0Pt"), placement.clip_y0_pt},
-            {QStringLiteral("clipY1Pt"), placement.clip_y1_pt},
-        });
-    }
-    QVariantList decorations;
-    decorations.reserve(static_cast<qsizetype>(frame.decorations.size()));
-    for (const auto& decoration : frame.decorations) {
-        if (!std::isfinite(decoration.x_pt) || !std::isfinite(decoration.y_pt) ||
-            !std::isfinite(decoration.width_pt) || !std::isfinite(decoration.height_pt) ||
-            decoration.width_pt <= 0.0 || decoration.height_pt <= 0.0 ||
-            (decoration.clip_enabled &&
-             (!std::isfinite(decoration.clip_y0_pt) || !std::isfinite(decoration.clip_y1_pt) ||
-              decoration.clip_y0_pt < 0.0 || decoration.clip_y1_pt <= decoration.clip_y0_pt))) {
-            return {{QStringLiteral("valid"), false},
-                    {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
-        }
-        decorations.push_back(QVariantMap{
-            {QStringLiteral("xPt"), decoration.x_pt},
-            {QStringLiteral("yPt"), decoration.y_pt},
-            {QStringLiteral("widthPt"), decoration.width_pt},
-            {QStringLiteral("heightPt"), decoration.height_pt},
-            {QStringLiteral("colorRed"), decoration.color_red},
-            {QStringLiteral("colorGreen"), decoration.color_green},
-            {QStringLiteral("colorBlue"), decoration.color_blue},
-            {QStringLiteral("colorAlpha"), decoration.color_alpha},
-            {QStringLiteral("clipEnabled"), decoration.clip_enabled},
-            {QStringLiteral("clipY0Pt"), decoration.clip_y0_pt},
-            {QStringLiteral("clipY1Pt"), decoration.clip_y1_pt},
+             command.kind == 0 ? frame.images[command.image_index].pixel_phase_applied : false},
+            {QStringLiteral("colorRed"), command.color_red},
+            {QStringLiteral("colorGreen"), command.color_green},
+            {QStringLiteral("colorBlue"), command.color_blue},
+            {QStringLiteral("colorAlpha"), command.color_alpha},
+            {QStringLiteral("clipEnabled"), command.clip_enabled},
+            {QStringLiteral("clipY0Pt"), command.clip_y0_pt},
+            {QStringLiteral("clipY1Pt"), command.clip_y1_pt},
         });
     }
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), QString::number(frame.document_generation)},
             {QStringLiteral("fontGeneration"), QString::number(frame.font_generation)},
+            {QStringLiteral("sessionId"),
+             QString::fromUtf8(frame.session_id.data(),
+                               static_cast<qsizetype>(frame.session_id.size()))},
             {QStringLiteral("rasterPxPerPt"), px_per_pt},
             {QStringLiteral("pageIndex"), frame.page_index},
             {QStringLiteral("images"), images},
-            {QStringLiteral("placements"), placements},
-            {QStringLiteral("decorations"), decorations}};
+            {QStringLiteral("commands"), commands}};
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(px_per_pt)

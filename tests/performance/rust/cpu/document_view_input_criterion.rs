@@ -192,7 +192,7 @@ fn long_document_input(criterion: &mut Criterion) {
                             [32, 32, 32, 255],
                         )
                         .unwrap_or_else(|error| panic!("输入法更新后的可视页栅格化失败：{error}"));
-                    black_box((response.len(), page.images.len(), page.placements.len()));
+                    black_box((response.len(), page.images.len(), page.commands.len()));
                 },
                 BatchSize::LargeInput,
             );
@@ -214,7 +214,7 @@ fn long_document_input(criterion: &mut Criterion) {
                         [32, 32, 32, 255],
                     )
                     .unwrap_or_else(|error| panic!("候选提交后的可视页栅格化失败：{error}"));
-                black_box((response.len(), page.images.len(), page.placements.len()));
+                black_box((response.len(), page.images.len(), page.commands.len()));
             },
             BatchSize::LargeInput,
         );

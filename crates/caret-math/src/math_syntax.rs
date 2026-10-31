@@ -10,8 +10,10 @@ use latex_rust::{
 };
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::ops::Range;
 
-/// 后端无关的、一次解析结果。它不含 Caret 文档 ID 或持久化源码跨度。
+/// 后端无关的一次解析结果；解析结果默认不含 Caret 文档 ID，但调用方可补充 provenance。
+/// 源码范围为可选值，当前解析器尚未提供节点级范围。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathSyntaxTree {
     /// 调用方要求的公式形态。
@@ -49,6 +51,12 @@ pub struct MathSyntaxNode {
     pub text: Option<String>,
     /// kind 专属的值属性；键由 `kind` 决定，值保留 TeX parser 语义。
     pub attributes: BTreeMap<String, String>,
+    /// 映射回原始输入的 UTF-8 字节范围（若可用）；当前解析器适配器尚未填充节点级范围。
+    pub source_range: Option<Range<usize>>,
+    /// 调用方拥有的不透明稳定 ID，布局适配器将其作为来源标识传递给几何盒。
+    pub provenance: Option<String>,
+    /// 与该节点共享最终几何的透明节点 ID。
+    pub provenance_aliases: Vec<String>,
     /// 依语法位置排序的子节点；可选槽位由 `Placeholder` 明确占位。
     pub children: Vec<Self>,
 }
@@ -59,6 +67,9 @@ impl MathSyntaxNode {
             kind,
             text: None,
             attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -69,6 +80,8 @@ impl MathSyntaxNode {
 pub enum MathSyntaxKind {
     /// 有序数学项集合。
     Row,
+    /// TeX 分组边界；布局时保持透明，并保留调用方提供的节点身份。
+    Group,
     /// 单个数学符号或原子。
     Symbol,
     /// 命名数学运算符。
@@ -742,6 +755,9 @@ fn binary_node(
         kind,
         text: None,
         attributes: BTreeMap::new(),
+        source_range: None,
+        provenance: None,
+        provenance_aliases: Vec::new(),
         children: vec![first, second],
     }
 }

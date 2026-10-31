@@ -79,9 +79,10 @@ impl DocumentViewRuntime {
     ) -> Result<DocumentLayoutSnapshot, String> {
         self.base_snapshot()?;
         let changed_paragraph_id = composition_range.anchor.paragraph_id.clone();
-        let mut snapshot = self
+        let snapshot = self
             .layout
-            .layout_session_reusing(
+            .layout_composition_preview_reusing(
+                &self.session,
                 preview_session,
                 self.last_snapshot
                     .as_ref()
@@ -89,8 +90,6 @@ impl DocumentViewRuntime {
                 &changed_paragraph_id,
             )
             .map_err(|error| error.to_string())?;
-        snapshot.session_id = Some(self.session.session_id().clone());
-        snapshot.document_generation = self.session.document_generation();
         Ok(snapshot)
     }
 }

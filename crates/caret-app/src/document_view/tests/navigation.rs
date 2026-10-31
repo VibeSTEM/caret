@@ -123,6 +123,175 @@ fn visual_navigation_skips_noninteractive_block_math_previews()
 }
 
 #[test]
+fn visual_right_arrow_leaves_a_direct_underline_at_paragraph_end()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut paragraph = paragraph_with_text("");
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "underlined".to_owned(),
+        language: None,
+        props: BTreeMap::from([("underline".to_owned(), serde_json::Value::Bool(true))]),
+        extra: BTreeMap::new(),
+    })];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    for _ in 0.."underlined".chars().count() {
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert_eq!(runtime.session.selection().focus.offset, "underlined".len());
+    assert!(runtime.session.current_inline_highlight_range()?.is_some());
+
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.offset, "underlined".len());
+    assert_eq!(
+        runtime.session.selection().focus.affinity,
+        caret_engine::Affinity::Downstream
+    );
+    assert!(runtime.session.current_inline_highlight_range()?.is_none());
+
+    runtime.move_visual_caret_json(false, false)?;
+    runtime.handle_editor_key_json("mod-backspace")?;
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        panic!("expected paragraph after removing underline");
+    };
+    assert!(matches!(
+        paragraph.inlines.first(),
+        Some(InlineNode::Run(run))
+            if run.text == "underlined"
+                && run.props.get("underline") == Some(&serde_json::Value::Bool(false))
+    ));
+    Ok(())
+}
+
+#[test]
+fn visual_right_arrow_exits_direct_underline_before_following_text_without_inheriting_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut paragraph = paragraph_with_text("");
+    paragraph.inlines = vec![
+        InlineNode::Run(Run {
+            text: "underlined".to_owned(),
+            language: None,
+            props: BTreeMap::from([("underline".to_owned(), serde_json::Value::Bool(true))]),
+            extra: BTreeMap::new(),
+        }),
+        InlineNode::Run(Run {
+            text: "tail".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    runtime.set_selection_json(&caret_selection_json(&paragraph_id, 0))?;
+    for _ in 0.."underlined".chars().count() {
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert_eq!(runtime.session.selection().focus.offset, "underlined".len());
+    assert!(runtime.session.current_inline_highlight_range()?.is_some());
+
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.offset, "underlined".len());
+    assert_eq!(
+        runtime.session.selection().focus.affinity,
+        caret_engine::Affinity::Downstream
+    );
+    assert!(runtime.session.current_inline_highlight_range()?.is_none());
+    runtime.insert_text_json("x".to_owned())?;
+
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        panic!("expected paragraph after typing outside underline");
+    };
+    assert_eq!(
+        paragraph
+            .inlines
+            .iter()
+            .map(|node| match node {
+                InlineNode::Run(run) => run.text.as_str(),
+                _ => "",
+            })
+            .collect::<String>(),
+        "underlinedxtail"
+    );
+    assert!(
+        paragraph
+            .inlines
+            .iter()
+            .any(|node| matches!(node, InlineNode::Run(run)
+            if run.text.starts_with('x')
+                && run.props.get("underline") != Some(&serde_json::Value::Bool(true))))
+    );
+    Ok(())
+}
+
+#[test]
+fn visual_right_arrow_leaves_rtl_direct_underline_at_its_logical_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut paragraph = paragraph_with_text("");
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "שלום".to_owned(),
+        language: Some("he".to_owned()),
+        props: BTreeMap::from([("underline".to_owned(), serde_json::Value::Bool(true))]),
+        extra: BTreeMap::new(),
+    })];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    runtime.set_selection_json(&caret_selection_json(&paragraph_id, 0))?;
+    assert!(runtime.session.current_inline_highlight_range()?.is_some());
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert_eq!(
+        runtime.session.selection().focus.affinity,
+        caret_engine::Affinity::Upstream
+    );
+    assert!(runtime.session.current_inline_highlight_range()?.is_none());
+    Ok(())
+}
+
+#[test]
+fn visual_right_arrow_stops_at_underline_end_before_entering_next_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut paragraph = paragraph_with_text("");
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "underlined".to_owned(),
+        language: None,
+        props: BTreeMap::from([("underline".to_owned(), serde_json::Value::Bool(true))]),
+        extra: BTreeMap::new(),
+    })];
+    let paragraph_id = paragraph.id.clone();
+    let next = paragraph_with_text("next");
+    let next_id = next.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph), Block::Paragraph(next)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+
+    runtime.set_selection_json(&caret_selection_json(&paragraph_id, 0))?;
+    for _ in 0.."underlined".chars().count() {
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, paragraph_id);
+    assert_eq!(runtime.session.selection().focus.offset, "underlined".len());
+    assert_eq!(
+        runtime.session.selection().focus.affinity,
+        caret_engine::Affinity::Downstream
+    );
+    assert!(runtime.session.current_inline_highlight_range()?.is_none());
+
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, next_id);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    Ok(())
+}
+
+#[test]
 fn drag_hit_map_keeps_soft_break_carets_but_omits_its_highlight_geometry()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;

@@ -448,72 +448,153 @@ pub(crate) fn rasterize_page_glyphs(
             pixels: image.pixels,
         });
     }
-    let mut placements = Vec::with_capacity(rasterized.placements.len());
-    for placement in rasterized.placements {
-        let Ok(image_index) = u32::try_from(placement.image_index) else {
-            return empty_glyph_frame(page_index, "layout.glyphs.too_many_images".to_owned());
+    let mut commands = Vec::with_capacity(rasterized.commands.len());
+    for command in rasterized.commands {
+        let command = match command {
+            caret_app::document_view::DocumentGlyphDrawCommand::Glyph {
+                image_index,
+                x_pt,
+                baseline_y_pt,
+                pixel_phase,
+                line_clip_y_pt,
+            } => {
+                let Ok(image_index) = u32::try_from(image_index) else {
+                    return empty_glyph_frame(
+                        page_index,
+                        "layout.glyphs.too_many_images".to_owned(),
+                    );
+                };
+                let (clip_enabled, clip_y0_pt, clip_y1_pt) = line_clip_y_pt
+                    .map(|clip| (true, clip[0], clip[1]))
+                    .unwrap_or((false, 0.0, 0.0));
+                bridge::GlyphDrawCommand {
+                    kind: 0,
+                    image_index,
+                    x_pt,
+                    y_pt: baseline_y_pt,
+                    width_pt: 0.0,
+                    height_pt: 0.0,
+                    x2_pt: 0.0,
+                    y2_pt: 0.0,
+                    thickness_pt: 0.0,
+                    pixel_phase_x: pixel_phase[0],
+                    pixel_phase_y: pixel_phase[1],
+                    color_red: 0,
+                    color_green: 0,
+                    color_blue: 0,
+                    color_alpha: 0,
+                    clip_enabled,
+                    clip_y0_pt,
+                    clip_y1_pt,
+                }
+            }
+            caret_app::document_view::DocumentGlyphDrawCommand::Rectangle {
+                x_pt,
+                y_pt,
+                width_pt,
+                height_pt,
+                color,
+                line_clip_y_pt,
+            } => {
+                let (clip_enabled, clip_y0_pt, clip_y1_pt) = line_clip_y_pt
+                    .map(|clip| (true, clip[0], clip[1]))
+                    .unwrap_or((false, 0.0, 0.0));
+                bridge::GlyphDrawCommand {
+                    kind: 1,
+                    image_index: 0,
+                    x_pt,
+                    y_pt,
+                    width_pt,
+                    height_pt,
+                    x2_pt: 0.0,
+                    y2_pt: 0.0,
+                    thickness_pt: 0.0,
+                    pixel_phase_x: 0.0,
+                    pixel_phase_y: 0.0,
+                    color_red: color[0],
+                    color_green: color[1],
+                    color_blue: color[2],
+                    color_alpha: color[3],
+                    clip_enabled,
+                    clip_y0_pt,
+                    clip_y1_pt,
+                }
+            }
+            caret_app::document_view::DocumentGlyphDrawCommand::Line {
+                x1_pt,
+                y1_pt,
+                x2_pt,
+                y2_pt,
+                thickness_pt,
+                color,
+                line_clip_y_pt,
+            } => {
+                let (clip_enabled, clip_y0_pt, clip_y1_pt) = line_clip_y_pt
+                    .map(|clip| (true, clip[0], clip[1]))
+                    .unwrap_or((false, 0.0, 0.0));
+                bridge::GlyphDrawCommand {
+                    kind: 2,
+                    image_index: 0,
+                    x_pt: x1_pt,
+                    y_pt: y1_pt,
+                    width_pt: 0.0,
+                    height_pt: 0.0,
+                    x2_pt,
+                    y2_pt,
+                    thickness_pt,
+                    pixel_phase_x: 0.0,
+                    pixel_phase_y: 0.0,
+                    color_red: color[0],
+                    color_green: color[1],
+                    color_blue: color[2],
+                    color_alpha: color[3],
+                    clip_enabled,
+                    clip_y0_pt,
+                    clip_y1_pt,
+                }
+            }
         };
-        let (clip_enabled, clip_y0_pt, clip_y1_pt) = placement
-            .line_clip_y_pt
-            .map(|clip| (true, clip[0], clip[1]))
-            .unwrap_or((false, 0.0, 0.0));
-        placements.push(bridge::GlyphPlacement {
-            image_index,
-            x_pt: placement.x_pt,
-            baseline_y_pt: placement.baseline_y_pt,
-            pixel_phase_x: placement.pixel_phase[0],
-            pixel_phase_y: placement.pixel_phase[1],
-            clip_enabled,
-            clip_y0_pt,
-            clip_y1_pt,
-        });
-    }
-    let mut decorations = Vec::with_capacity(rasterized.decorations.len());
-    for decoration in rasterized.decorations {
-        let Some(color) = decoration.color else {
-            return empty_glyph_frame(
-                page_index,
-                "layout.glyphs_missing_decoration_color".to_owned(),
-            );
-        };
-        let (clip_enabled, clip_y0_pt, clip_y1_pt) = decoration
-            .line_clip_y_pt
-            .map(|clip| (true, clip[0], clip[1]))
-            .unwrap_or((false, 0.0, 0.0));
-        decorations.push(bridge::GlyphDecoration {
-            x_pt: decoration.x_pt,
-            y_pt: decoration.y_pt,
-            width_pt: decoration.width_pt,
-            height_pt: decoration.height_pt,
-            color_red: color[0],
-            color_green: color[1],
-            color_blue: color[2],
-            color_alpha: color[3],
-            clip_enabled,
-            clip_y0_pt,
-            clip_y1_pt,
-        });
+        if ![
+            command.x_pt,
+            command.y_pt,
+            command.width_pt,
+            command.height_pt,
+            command.x2_pt,
+            command.y2_pt,
+            command.thickness_pt,
+            command.clip_y0_pt,
+            command.clip_y1_pt,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+        {
+            return empty_glyph_frame(page_index, "layout.glyphs_invalid_command".to_owned());
+        }
+        commands.push(command);
     }
     bridge::PageGlyphFrame {
+        session_id: rasterized
+            .session_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
         document_generation: rasterized.document_generation,
         font_generation: rasterized.font_generation,
         page_index,
         error: String::new(),
         images,
-        placements,
-        decorations,
+        commands,
     }
 }
 
 fn empty_glyph_frame(page_index: u32, error: String) -> bridge::PageGlyphFrame {
     bridge::PageGlyphFrame {
+        session_id: String::new(),
         document_generation: 0,
         font_generation: 0,
         page_index,
         error,
         images: Vec::new(),
-        placements: Vec::new(),
-        decorations: Vec::new(),
+        commands: Vec::new(),
     }
 }
 
@@ -573,6 +654,6 @@ mod tests {
         assert_eq!(frame.error, "document.initialization_failed");
         assert_eq!(frame.page_index, 2);
         assert!(frame.images.is_empty());
-        assert!(frame.placements.is_empty());
+        assert!(frame.commands.is_empty());
     }
 }
