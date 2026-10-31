@@ -576,6 +576,12 @@ struct LineGridMetricsCache {
 }
 
 impl DocumentLayoutService {
+    /// 常驻公式后端缓存的条目数；未排过公式时为 None。
+    #[cfg(test)]
+    pub(crate) fn math_cache_len(&self) -> Option<usize> {
+        self.math.as_ref().map(MathLayoutEngine::cached_len)
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

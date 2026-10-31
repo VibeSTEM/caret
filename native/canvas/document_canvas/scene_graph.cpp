@@ -400,7 +400,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                     continue;
                 }
                 const QPointF clip_top = document_to_content(page_index, QPointF(0.0, clip_y0));
-                const QRectF line_clip_rect(page_clip_rect.left(), clip_top.y(), page_clip_rect.width(),
+                const QRectF line_clip_rect(page_clip_rect.left(), clip_top.y(),
+                                            page_clip_rect.width(),
                                             (clip_y1 - clip_y0) * logical_scale);
                 clip_rect = clip_rect.intersected(line_clip_rect);
             }

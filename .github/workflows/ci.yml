@@ -6,6 +6,7 @@
 # - check：Ubuntu 执行 check/build/工具核验和受影响测试；
 # - lint：Ubuntu 上每个工具独立成一个矩阵检查，失败项可直接定位，按域触发；
 # - macOS / Windows 构建测试与 Objective-C++ 检查仅在 nightly 执行；
+# - math-backend：Rust 变更时单独运行公式后端测试（cargo math-backend，不构建原生端）；
 # - format：Ubuntu 上通过 cargo format --check 检查 Rust、C++/CXX、CMake、QML 和 `.pa`；
 # - dependency-audit：仅在依赖清单/审计配置变更时运行；
 # - 完整 Rust/native coverage 与长时动态检查由 nightly.yml 每日运行；
@@ -319,6 +320,29 @@ jobs:
       - name: Test CI path selector
         shell: bash
         run: cargo test --locked --package caret-tests --bin caret-tests
+
+  math-backend:
+    name: cargo math-backend (ubuntu)
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/caret-toolchain
+
+      # caret-layout 的 Fontique 系统字体后端需要 Fontconfig。
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-gl-prereqs
+
+      - uses: ./.github/actions/caret-cache-restore
+        with:
+          tools_deps: "false"
+
+      - name: Test math backend only
+        shell: bash
+        run: cargo math-backend
 
   check:
     name: cargo check and build (ubuntu)
