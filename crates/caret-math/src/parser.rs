@@ -2,6 +2,9 @@
 //!
 //! 解析过程只做一次自顶向下扫描：数学模式跳过空白与 `%` 注释，文本模式逐字符
 //! 保留空格。所有节点记录相对输入的 UTF-8 字节范围；占位节点没有范围。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use std::collections::BTreeMap;
 use std::ops::Range;

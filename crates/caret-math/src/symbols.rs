@@ -2,6 +2,9 @@
 //!
 //! 表格按 TeX/LaTeX 的命令语义和 Unicode 数学字符整理，供解析器判定命令合法性、
 //! 序列化器反查命令名以及布局阶段取字形与间距类别。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 /// TeX 原子类别，决定相邻原子之间的数学间距。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -1,4 +1,7 @@
 //! 解析器与序列化器的行为测试。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{MathNode, MathNodeKind as K};
 
