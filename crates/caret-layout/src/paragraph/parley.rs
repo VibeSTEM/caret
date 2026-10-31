@@ -22,6 +22,11 @@ use parley::{
     WhiteSpaceCollapse,
 };
 
+mod drawing;
+pub use drawing::{
+    LocalGlyph, PositionedGlyphRun, PositionedParagraphDrawError, PositionedParagraphDrawItem,
+};
+
 use crate::{
     FontCatalog, FontLineMetrics, InlineObjectPlacement, LineSpacing, ParagraphLayout,
     ParagraphLayoutError, PositionedInlineObject, ResolvedDocumentTextSettings, ShapingStyle,

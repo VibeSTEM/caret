@@ -10,8 +10,9 @@ use crate::{LineMetrics, LineMetricsError};
 
 mod parley;
 pub use parley::{
-    HitAffinity, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter, ParleyParagraphLayout,
-    VisualAffinity, VisualCursor,
+    HitAffinity, LocalGlyph, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter,
+    ParleyParagraphLayout, PositionedGlyphRun, PositionedParagraphDrawError,
+    PositionedParagraphDrawItem, VisualAffinity, VisualCursor,
 };
 
 /// Caret 自有的段内对象放置请求；index 必须指向文本中的 U+FFFC 对象占位符。

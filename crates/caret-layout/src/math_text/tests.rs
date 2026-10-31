@@ -6,7 +6,7 @@
 use super::{MathInlineBoxMetrics, ParleyMathTextShaper, stix_two_math_font_data};
 use crate::{
     FontCatalog, LineSpacing, ParagraphLayoutOptions, ParagraphLayouter, PositionedGlyphLayoutItem,
-    ResolvedDocumentTextSettings, ShapingStyle,
+    PositionedParagraphDrawItem, ResolvedDocumentTextSettings, ShapingStyle,
 };
 use caret_doc::{DocumentSettings, Paragraph};
 use caret_math::{MathTextShaper, MathTextStyle};
@@ -37,7 +37,22 @@ fn chinese_math_text_uses_parley_and_committed_resources_move_to_snapshot() {
     assert!(metrics.width_micro_pt > 0);
     assert!(metrics.ascent_micro_pt > 0);
     let resources = provider.take_resources();
-    assert!(resources.contains_key(&metrics.handle));
+    let layout = resources
+        .get(&metrics.handle)
+        .unwrap_or_else(|| panic!("committed text layout should be owned by the snapshot"));
+    let draw_items = layout
+        .positioned_draw_items_for_line(0)
+        .unwrap_or_else(|error| panic!("text draw items should project: {error:?}"));
+    let [PositionedParagraphDrawItem::GlyphRun(run)] = draw_items.as_slice() else {
+        panic!("single script text should project one glyph run");
+    };
+    assert!(!run.font.data.is_empty());
+    assert_eq!(run.glyphs.len(), 2);
+    assert!(
+        run.glyphs
+            .iter()
+            .all(|glyph| glyph.x_pt.is_finite() && glyph.baseline_offset_pt.is_finite())
+    );
 }
 
 #[test]

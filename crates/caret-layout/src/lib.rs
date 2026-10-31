@@ -27,9 +27,11 @@ pub use pagination::{
     paginate_paragraphs,
 };
 pub use paragraph::{
-    HitAffinity, InlineObjectPlacement, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
-    ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine, ParleyParagraphLayout,
-    PositionedInlineObject, VisualAffinity, VisualCursor, has_empty_line, paragraph_has_empty_line,
+    HitAffinity, InlineObjectPlacement, LocalGlyph, ParagraphHit, ParagraphLayout,
+    ParagraphLayoutError, ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine,
+    ParleyParagraphLayout, PositionedGlyphRun, PositionedInlineObject,
+    PositionedParagraphDrawError, PositionedParagraphDrawItem, VisualAffinity, VisualCursor,
+    has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};

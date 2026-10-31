@@ -6,7 +6,7 @@
 use caret_doc::NodeId;
 use caret_layout::{
     GlyphFontData, GlyphRasterOptions, GlyphRasterizer, GlyphSynthesis, ParleyParagraphLayout,
-    PositionedGlyphLayoutItem, RasterizedGlyph, RasterizedGlyphKey,
+    PositionedParagraphDrawItem, RasterizedGlyph, RasterizedGlyphKey,
 };
 use caret_math::MathLayoutSnapshot;
 use std::{collections::HashMap, ops::Range, sync::Arc};
@@ -321,25 +321,7 @@ impl DocumentLayoutSnapshot {
                     .metrics
                     .clip_ink_to_line_height
                     .then_some([page_line_top_pt, page_line_top_pt + line_height_pt]);
-                let raw_top_pt = f64::from(
-                    *paragraph
-                        .layout
-                        .parley_line_tops_pt
-                        .get(line_index)
-                        .ok_or(PageGlyphError::InvalidLineGeometry)?,
-                );
-                let baseline_adjustment_pt = f64::from(
-                    *paragraph
-                        .layout
-                        .baseline_adjustments_pt
-                        .get(line_index)
-                        .ok_or(PageGlyphError::InvalidLineGeometry)?,
-                );
-                if !line_height_pt.is_finite()
-                    || line_height_pt <= 0.0
-                    || !raw_top_pt.is_finite()
-                    || !baseline_adjustment_pt.is_finite()
-                {
+                if !line_height_pt.is_finite() || line_height_pt <= 0.0 {
                     return Err(PageGlyphError::InvalidLineGeometry);
                 }
                 // 空段由 Caret 合成不可见行框，Parley 可以没有对应的绘制行。
@@ -347,11 +329,18 @@ impl DocumentLayoutSnapshot {
                     page_line_top_pt += line_height_pt;
                     continue;
                 }
-                let line = paragraph
+                let draw_items = paragraph
                     .layout
-                    .layout
-                    .get(line_index)
-                    .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    .positioned_draw_items_for_line(line_index)
+                    .map_err(|error| match error {
+                        caret_layout::PositionedParagraphDrawError::InvalidLineGeometry => {
+                            PageGlyphError::InvalidLineGeometry
+                        }
+                        caret_layout::PositionedParagraphDrawError::InvalidLineIndex
+                        | caret_layout::PositionedParagraphDrawError::InvalidGlyphRun => {
+                            PageGlyphError::InvalidGlyphSource
+                        }
+                    })?;
                 for (bounds, color) in paragraph.layout.underline_geometry_for_line(line_index) {
                     let x_pt = page.margin_left_pt + bounds.x0;
                     let y_pt = page_line_top_pt + bounds.y0;
@@ -375,17 +364,17 @@ impl DocumentLayoutSnapshot {
                         line_clip_y_pt,
                     });
                 }
-                for item in line.items() {
-                    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
-                        let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
+                for item in draw_items {
+                    let PositionedParagraphDrawItem::GlyphRun(glyph_run) = item else {
+                        let PositionedParagraphDrawItem::InlineObject { id } = item else {
                             return Err(PageGlyphError::InvalidGlyphSource);
                         };
                         let math = math_objects_by_id
-                            .get(&inline_box.id)
+                            .get(&id)
                             .copied()
                             .ok_or(PageGlyphError::UnsupportedInlineBox)?;
                         let position = inline_positions_by_id
-                            .get(&inline_box.id)
+                            .get(&id)
                             .copied()
                             .filter(|position| position.line_index == line_index)
                             .ok_or(PageGlyphError::InvalidGlyphSource)?;
@@ -415,30 +404,24 @@ impl DocumentLayoutSnapshot {
                         draw_order.push(PageDrawItem::MathObject(math_index));
                         continue;
                     };
-                    let run = glyph_run.run();
-                    let font_size_pt = run.font_size();
+                    let font_size_pt = glyph_run.font_size_pt;
                     if !font_size_pt.is_finite()
                         || font_size_pt <= 0.0
-                        || run.font().data.is_empty()
+                        || glyph_run.font.data.is_empty()
                     {
                         return Err(PageGlyphError::InvalidGlyphSource);
                     }
                     let mut glyphs = Vec::new();
                     // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
                     // 的全局 f32 baseline 吞掉组合附标的局部偏移。
-                    let run_baseline_y_pt = page_line_top_pt + f64::from(glyph_run.baseline())
-                        - raw_top_pt
-                        + baseline_adjustment_pt;
-                    for (glyph, local_glyph) in
-                        glyph_run.positioned_glyphs().zip(glyph_run.glyphs())
-                    {
-                        let x_pt = page.margin_left_pt + f64::from(glyph.x);
-                        let baseline_y_pt = run_baseline_y_pt + f64::from(local_glyph.y);
+                    for glyph in glyph_run.glyphs {
+                        let x_pt = page.margin_left_pt + f64::from(glyph.x_pt);
+                        let baseline_y_pt = page_line_top_pt + glyph.baseline_offset_pt;
                         if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
                             return Err(PageGlyphError::InvalidGlyphSource);
                         }
                         glyphs.push(PageGlyph {
-                            glyph_id: glyph.id,
+                            glyph_id: glyph.glyph_id,
                             x_pt,
                             baseline_y_pt,
                         });
@@ -449,16 +432,11 @@ impl DocumentLayoutSnapshot {
                             paragraph_id: paragraph.id.clone(),
                             line_index,
                             line_clip_y_pt,
-                            font: run.font().clone(),
+                            font: glyph_run.font.clone(),
                             font_size_pt,
-                            normalized_coords: run
-                                .normalized_coords()
-                                .iter()
-                                .map(|coordinate| coordinate.to_bits())
-                                .collect(),
-                            synthesis: run.synthesis(),
-                            foreground: (glyph_run.style().brush != [0, 0, 0, 0])
-                                .then_some(glyph_run.style().brush),
+                            normalized_coords: glyph_run.normalized_coords,
+                            synthesis: glyph_run.synthesis,
+                            foreground: glyph_run.foreground,
                             glyphs,
                         });
                         draw_order.push(PageDrawItem::GlyphRun(run_index));
