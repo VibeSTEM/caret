@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use std::{
+    borrow::Cow,
     collections::HashSet,
     ops::Range,
     sync::{
@@ -16,13 +17,14 @@ use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, InlineBox, Language,
-    Layout, LayoutContext, StyleProperty, WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, InlineBox,
+    InlineBoxKind, Language, Layout, LayoutContext, StyleProperty, TextWrapMode, VerticalAlign,
+    WhiteSpaceCollapse,
 };
 
 use crate::{
-    FontCatalog, FontLineMetrics, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ResolvedDocumentTextSettings, ShapingStyle,
+    FontCatalog, FontLineMetrics, InlineObjectPlacement, LineSpacing, ParagraphLayout,
+    ParagraphLayoutError, ResolvedDocumentTextSettings, ShapingStyle,
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
@@ -134,6 +136,12 @@ struct SpaceStyleKey {
     kind: SpaceKind,
 }
 
+#[derive(Clone, Copy)]
+struct InlineLayout<'a> {
+    boxes: &'a [InlineBox],
+    wrap_mode: TextWrapMode,
+}
+
 const ORDINARY_SPACE_EM_PERCENT: u16 = 50;
 const EM_SPACE_EM_PERCENT: u16 = 100;
 
@@ -154,7 +162,11 @@ impl ParagraphLayouter {
         self.layout_with_inline_boxes(catalog, paragraph, settings, base_style, options, &[])
     }
 
-    /// As [`Self::layout`], with caller-measured inline objects placed at UTF-8 byte positions.
+    /// 与 [`Self::layout`] 使用相同的样式和分页度量，并在文本的 UTF-8 字节位置放置调用方测量的行内盒。
+    /// 对象位置上的 U+FFFC 在仅用于塑形的副本中替换成等长 U+200B，以免额外绘制/推进占位字形；返回的逻辑文本保留 U+FFFC。
+    /// 非空文本才可提供行内对象。每个对象必须有唯一 `id`、位于文本边界上的 `index`、有限且非负的宽度、有限正高度；
+    /// 可选基线必须有限；in-flow 盒子的基线须位于盒子高度内。输入不合规返回 `InvalidInlineBox`，
+    /// Parley 输出无法映射返回 `InconsistentShaping`。
     pub fn layout_with_inline_boxes(
         &mut self,
         catalog: &mut FontCatalog,
@@ -162,8 +174,68 @@ impl ParagraphLayouter {
         settings: &ResolvedDocumentTextSettings,
         base_style: &ShapingStyle,
         options: ParagraphLayoutOptions,
-        inline_boxes: &[InlineBox],
+        inline_boxes: &[InlineObjectPlacement],
     ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        let parley_inline_boxes = inline_boxes
+            .iter()
+            .map(|object| InlineBox {
+                id: object.id,
+                kind: InlineBoxKind::InFlow,
+                index: object.index,
+                width: object.width_pt,
+                height: object.height_pt,
+                baseline: object.baseline_pt,
+                vertical_align: VerticalAlign::BASELINE,
+            })
+            .collect::<Vec<_>>();
+        self.layout_with_inline_boxes_wrap_mode(
+            catalog,
+            paragraph,
+            settings,
+            base_style,
+            options,
+            InlineLayout {
+                boxes: &parley_inline_boxes,
+                wrap_mode: TextWrapMode::Wrap,
+            },
+        )
+    }
+
+    /// 禁止自动软换行并使用相同字体与字符 shaping 规则布局；显式硬换行仍会产生多行，调用方须检查结果。
+    pub fn layout_single_line(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        self.layout_with_inline_boxes_wrap_mode(
+            catalog,
+            paragraph,
+            settings,
+            base_style,
+            options,
+            InlineLayout {
+                boxes: &[],
+                wrap_mode: TextWrapMode::NoWrap,
+            },
+        )
+    }
+
+    fn layout_with_inline_boxes_wrap_mode(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+        inline_layout: InlineLayout<'_>,
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        let InlineLayout {
+            boxes: inline_boxes,
+            wrap_mode: text_wrap_mode,
+        } = inline_layout;
         let font_generation = catalog.generation();
         if self.font_generation != Some(font_generation) {
             self.context = LayoutContext::default();
@@ -200,6 +272,7 @@ impl ParagraphLayouter {
         if !valid_inline_boxes(&text, inline_boxes) {
             return Err(ParagraphLayoutError::InvalidInlineBox);
         }
+        let shaping_text = text_for_inline_box_shaping(&text, inline_boxes);
         let boundaries = boundaries_for_spans(&text, &spans);
         let decisions = Arc::new(line_break_decisions(&text, &boundaries));
         let available_families = Arc::clone(&catalog.family_names_lowercase);
@@ -368,7 +441,7 @@ impl ParagraphLayouter {
             .any(|(_, key)| !self.space_adjustments_pt.contains_key(key));
         let (mut layout, mut callback_count) = {
             let layout_input = ParleyLayoutInput {
-                text: &text,
+                text: &shaping_text,
                 base_style,
                 style_ranges: &style_ranges,
                 family_names_by_key: &family_names_by_key,
@@ -379,6 +452,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                text_wrap_mode,
             };
             build_parley_layout(&mut self.context, catalog, &layout_input)
         };
@@ -390,7 +464,7 @@ impl ParagraphLayouter {
                 &mut self.space_adjustments_pt,
             );
             let layout_input = ParleyLayoutInput {
-                text: &text,
+                text: &shaping_text,
                 base_style,
                 style_ranges: &style_ranges,
                 family_names_by_key: &family_names_by_key,
@@ -401,6 +475,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                text_wrap_mode,
             };
             (layout, callback_count) =
                 build_parley_layout(&mut self.context, catalog, &layout_input);
@@ -504,6 +579,7 @@ struct ParleyLayoutInput<'a> {
     decisions: &'a Arc<PackedLineBreakDecisions>,
     width_pt: f32,
     first_line_indent_chars: Option<u16>,
+    text_wrap_mode: TextWrapMode,
 }
 
 fn valid_inline_boxes(text: &str, inline_boxes: &[InlineBox]) -> bool {
@@ -521,6 +597,21 @@ fn valid_inline_boxes(text: &str, inline_boxes: &[InlineBox]) -> bool {
             && inline_box.baseline.is_none_or(f32::is_finite)
             && ids.insert(inline_box.id)
     })
+}
+
+fn text_for_inline_box_shaping<'a>(text: &'a str, inline_boxes: &[InlineBox]) -> Cow<'a, str> {
+    if inline_boxes.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut shaped = text.to_owned();
+    for inline_box in inline_boxes {
+        if shaped[inline_box.index..].starts_with('\u{fffc}') {
+            let end = inline_box.index + '\u{fffc}'.len_utf8();
+            // 两个标量都占三个 UTF-8 字节，可保持逻辑文本中的字节偏移不变。
+            shaped.replace_range(inline_box.index..end, "\u{200b}");
+        }
+    }
+    Cow::Owned(shaped)
 }
 
 /// 构建 Parley 布局，并在对应空白范围应用由实际字体度量得出的 advance 修正。
@@ -541,6 +632,7 @@ fn build_parley_layout(
         decisions,
         width_pt,
         first_line_indent_chars,
+        text_wrap_mode,
     } = *input;
     let mut builder = context.ranged_builder(catalog.parley_context(), text, 1.0, false);
     builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
@@ -550,6 +642,7 @@ fn build_parley_layout(
     builder.push_default(StyleProperty::WhiteSpaceCollapse(
         WhiteSpaceCollapse::BreakSpaces,
     ));
+    builder.push_default(StyleProperty::TextWrapMode(text_wrap_mode));
 
     for (range, style, script, emoji, underline) in style_ranges {
         let key = (style.clone(), *script, *emoji);

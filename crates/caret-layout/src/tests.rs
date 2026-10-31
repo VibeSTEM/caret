@@ -110,7 +110,7 @@ fn measured_inline_box_reserves_formula_geometry_in_parley_lines() {
             &settings,
             &ShapingStyle::new(1200),
             layout_options(120.0),
-            &[formula.clone()],
+            &[formula],
         )
         .unwrap_or_else(|error| panic!("inline formula should layout: {error}"));
     let line = result
@@ -134,6 +134,19 @@ fn measured_inline_box_reserves_formula_geometry_in_parley_lines() {
     assert_eq!(
         result.paragraph.total_height_pt,
         result.paragraph.lines[0].metrics.height_pt
+    );
+    let (_, plain) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph("xy", Some("en")),
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(120.0),
+        )
+        .unwrap_or_else(|error| panic!("plain neighboring text should layout: {error}"));
+    assert_eq!(
+        result.paragraph.lines[0].advance_pt,
+        plain.paragraph.lines[0].advance_pt + 24.0
     );
 
     formula.index = 2;

@@ -76,8 +76,8 @@
 | 042 | 数学排版 | [M3：latex-rust 后端验证](task/042-latex-rust-math-backend.md) | P2 | — | M | done |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | done |
 | 044 | 数学排版 | [M3：公式布局与画布渲染](task/044-math-layout-and-rendering.md) | P2 | 027、043 | L | in-progress |
-| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043 | M | planned |
-| 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、045 | M | planned |
+| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043 | M | ready |
+| 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、044、045 | M | planned |
 | 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053 | L | planned |
 | 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
 | 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 047 | L | planned |

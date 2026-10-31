@@ -31,15 +31,7 @@ pub struct ExternalTextMetrics {
 ///
 /// Calls are synchronous and sequential within a layout. A provider instance
 /// must not be used by overlapping layouts unless it isolates their transactions.
-/// A failed `begin_layout` must clean up any partial setup itself. After a
-/// successful begin, `finish_layout(false)` must invalidate handles created by
-/// that transaction.
 pub trait TextShaper {
-    /// Starts an isolated provider transaction before any external runs are created.
-    fn begin_layout(&self) -> Result<(), String> {
-        Ok(())
-    }
-
     /// Shape one text-mode run at the actual physical font size selected by TeX math style.
     fn shape_text(
         &self,
@@ -48,9 +40,6 @@ pub trait TextShaper {
         font_size_micro_pt: i64,
     ) -> Result<ExternalTextMetrics, String>;
 
-    /// Commits the handles on success or invalidates them after a failed layout.
-    /// Providers that intern immutable runs may keep the default no-op behavior.
-    fn finish_layout(&self, _committed: bool) {}
 }
 
 use crate::color::Color;

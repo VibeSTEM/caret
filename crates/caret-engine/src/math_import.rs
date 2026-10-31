@@ -249,6 +249,7 @@ fn coalesce_atom_runs(children: Vec<MathSyntaxNode>) -> Vec<MathSyntaxNode> {
 fn document_kind(kind: MathSyntaxKind) -> MathNodeKind {
     match kind {
         MathSyntaxKind::Row => MathNodeKind::Row,
+        MathSyntaxKind::Group => MathNodeKind::Group,
         MathSyntaxKind::Symbol => MathNodeKind::Symbol,
         MathSyntaxKind::Operator => MathNodeKind::Operator,
         MathSyntaxKind::Fraction => MathNodeKind::Fraction,

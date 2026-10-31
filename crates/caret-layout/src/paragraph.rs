@@ -14,6 +14,21 @@ pub use parley::{
     VisualAffinity, VisualCursor,
 };
 
+/// Caret 自有的段内对象放置请求；引擎层不需要依赖 Parley 的盒子类型。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineObjectPlacement {
+    /// 当前段落内唯一的对象 ID。
+    pub id: u64,
+    /// 对象在逻辑文本中的 UTF-8 字节索引。
+    pub index: usize,
+    /// 对象占用的行内宽度，单位为 pt。
+    pub width_pt: f32,
+    /// 对象总高度，单位为 pt。
+    pub height_pt: f32,
+    /// 对象基线相对盒顶的距离；`None` 表示底边对齐正文基线。
+    pub baseline_pt: Option<f32>,
+}
+
 /// 判断源文本是否会产生需要段落标记度量的空行，包含开头/连续/结尾 mandatory break。
 pub fn has_empty_line(text: &str) -> bool {
     let mut state = EmptyLineState::default();

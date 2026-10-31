@@ -65,7 +65,7 @@ serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 
 [patch.crates-io]
-# Caret-specific shaping/provenance/source-range hooks stay on the pinned upstream backend.
+# 调用方正文塑形和节点来源标识补丁固定在本地 latex-rust 后端副本中。
 latex-rust = { path = "patches/latex-rust" }
 
 [workspace.lints.rust]

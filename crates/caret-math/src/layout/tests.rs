@@ -5,7 +5,8 @@
 
 use super::{MathLayoutBackend, MathLayoutError, MathLayoutItem};
 use crate::{
-    MathInputKind, MathSyntaxKind, MathSyntaxNode, MathTextMetrics, MathTextShaper, parse,
+    MathInputKind, MathSyntaxKind, MathSyntaxNode, MathTextMetrics, MathTextShaper, MathTextStyle,
+    parse,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -46,7 +47,7 @@ impl MathTextShaper for FixedTextShaper {
     fn shape_text(
         &self,
         text: &str,
-        _style: latex_rust::TextStyle,
+        _style: MathTextStyle,
         font_size_micro_pt: i64,
     ) -> Result<MathTextMetrics, String> {
         Ok(MathTextMetrics {
@@ -243,6 +244,142 @@ fn node_provenance_does_not_change_math_placement_or_draw_primitives() {
 }
 
 #[test]
+fn one_child_group_preserves_child_and_group_provenance_in_backend_api() {
+    let child = MathSyntaxNode {
+        kind: MathSyntaxKind::Symbol,
+        text: Some("x".into()),
+        attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
+        source_range: None,
+        provenance: Some("child".into()),
+        provenance_aliases: Vec::new(),
+        children: Vec::new(),
+    };
+    let tree = crate::MathSyntaxTree {
+        input_kind: MathInputKind::Inline,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Group,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: Some("group".into()),
+            provenance_aliases: Vec::new(),
+            children: vec![child],
+        },
+    };
+    let backend =
+        MathLayoutBackend::new().unwrap_or_else(|error| panic!("math font should load: {error}"));
+    let snapshot = backend
+        .layout(&tree, 1200, &FixedTextShaper)
+        .unwrap_or_else(|error| panic!("group should lay out: {error}"));
+    let child_geometry = snapshot
+        .nodes
+        .iter()
+        .find(|geometry| geometry.node_id == "child")
+        .unwrap_or_else(|| panic!("child provenance should survive group conversion"));
+    let group_geometry = snapshot
+        .nodes
+        .iter()
+        .find(|geometry| geometry.node_id == "group")
+        .unwrap_or_else(|| panic!("group provenance should share the child's geometry"));
+    assert_eq!(child_geometry.x_micro_pt, group_geometry.x_micro_pt);
+    assert_eq!(child_geometry.y_micro_pt, group_geometry.y_micro_pt);
+    assert_eq!(child_geometry.width_micro_pt, group_geometry.width_micro_pt);
+    assert_eq!(
+        child_geometry.ascent_micro_pt,
+        group_geometry.ascent_micro_pt
+    );
+    assert_eq!(
+        child_geometry.descent_micro_pt,
+        group_geometry.descent_micro_pt
+    );
+}
+
+#[test]
+fn nested_groups_preserve_leaf_and_each_group_provenance_in_backend_api() {
+    let leaf = MathSyntaxNode {
+        kind: MathSyntaxKind::Symbol,
+        text: Some("x".into()),
+        attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
+        source_range: None,
+        provenance: Some("leaf".into()),
+        provenance_aliases: Vec::new(),
+        children: Vec::new(),
+    };
+    let inner = MathSyntaxNode {
+        kind: MathSyntaxKind::Group,
+        text: None,
+        attributes: BTreeMap::new(),
+        source_range: None,
+        provenance: Some("inner".into()),
+        provenance_aliases: Vec::new(),
+        children: vec![leaf],
+    };
+    let tree = crate::MathSyntaxTree {
+        input_kind: MathInputKind::Inline,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Group,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: Some("outer".into()),
+            provenance_aliases: Vec::new(),
+            children: vec![inner],
+        },
+    };
+    let backend =
+        MathLayoutBackend::new().unwrap_or_else(|error| panic!("math font should load: {error}"));
+    let snapshot = backend
+        .layout(&tree, 1200, &FixedTextShaper)
+        .unwrap_or_else(|error| panic!("nested groups should lay out: {error}"));
+
+    for node_id in ["leaf", "inner", "outer"] {
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|geometry| geometry.node_id == node_id),
+            "missing geometry provenance for {node_id}"
+        );
+    }
+}
+
+#[test]
+fn group_provenance_survives_when_its_child_has_no_provenance() {
+    let tree = crate::MathSyntaxTree {
+        input_kind: MathInputKind::Inline,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Group,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: Some("group".into()),
+            provenance_aliases: Vec::new(),
+            children: vec![MathSyntaxNode {
+                kind: MathSyntaxKind::Symbol,
+                text: Some("x".into()),
+                attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
+                source_range: None,
+                provenance: None,
+                provenance_aliases: Vec::new(),
+                children: Vec::new(),
+            }],
+        },
+    };
+    let backend =
+        MathLayoutBackend::new().unwrap_or_else(|error| panic!("math font should load: {error}"));
+    let snapshot = backend
+        .layout(&tree, 1200, &FixedTextShaper)
+        .unwrap_or_else(|error| panic!("group without child provenance should lay out: {error}"));
+
+    assert!(
+        snapshot
+            .nodes
+            .iter()
+            .any(|geometry| geometry.node_id == "group")
+    );
+}
+
+#[test]
 fn phantom_keeps_shifted_child_node_geometry_without_drawing_its_primitives() {
     let backend = MathLayoutBackend::new()
         .unwrap_or_else(|error| panic!("pinned math font should load: {error}"));
@@ -294,7 +431,7 @@ fn add_provenance(
 ) {
     let id = format!("node-{}", *next_id);
     node.provenance = Some(id.clone());
-    // latex-rust represents matrix rows as EnvRow values rather than MathNode boxes.
+    // latex-rust 的矩阵行使用 EnvRow 表示，不是独立的 MathNode 布局盒。
     if !is_matrix_row {
         ids.push(id);
     }
@@ -349,7 +486,7 @@ fn text_metrics_are_applied_before_fraction_packing() {
         fn shape_text(
             &self,
             _text: &str,
-            _style: latex_rust::TextStyle,
+            _style: MathTextStyle,
             _font_size_micro_pt: i64,
         ) -> Result<MathTextMetrics, String> {
             Ok(MathTextMetrics {
@@ -379,13 +516,13 @@ fn text_metrics_are_applied_before_fraction_packing() {
 
 #[test]
 fn nested_text_styles_flush_before_resuming_the_parent_style() {
-    struct RecordingShaper(RefCell<Vec<(String, latex_rust::TextStyle)>>);
+    struct RecordingShaper(RefCell<Vec<(String, MathTextStyle)>>);
 
     impl MathTextShaper for RecordingShaper {
         fn shape_text(
             &self,
             text: &str,
-            style: latex_rust::TextStyle,
+            style: MathTextStyle,
             font_size_micro_pt: i64,
         ) -> Result<MathTextMetrics, String> {
             self.0.borrow_mut().push((text.to_owned(), style));
@@ -413,9 +550,9 @@ fn nested_text_styles_flush_before_resuming_the_parent_style() {
     assert_eq!(
         *shaper.0.borrow(),
         vec![
-            ("a".into(), latex_rust::TextStyle::Text),
-            ("b".into(), latex_rust::TextStyle::Bf),
-            ("c".into(), latex_rust::TextStyle::Text),
+            ("a".into(), MathTextStyle::Text),
+            ("b".into(), MathTextStyle::Bf),
+            ("c".into(), MathTextStyle::Text),
         ]
     );
 }
@@ -447,7 +584,7 @@ fn invalid_size_and_provider_failure_return_no_snapshot() {
         fn shape_text(
             &self,
             _text: &str,
-            _style: latex_rust::TextStyle,
+            _style: MathTextStyle,
             _font_size_micro_pt: i64,
         ) -> Result<MathTextMetrics, String> {
             Err("font unavailable".into())
@@ -478,7 +615,7 @@ fn a_later_shaping_failure_rolls_back_earlier_handles() {
         fn shape_text(
             &self,
             _text: &str,
-            _style: latex_rust::TextStyle,
+            _style: MathTextStyle,
             font_size_micro_pt: i64,
         ) -> Result<MathTextMetrics, String> {
             let call = self.calls.get();
@@ -524,7 +661,7 @@ fn successful_layout_commits_provider_handles() {
         fn shape_text(
             &self,
             _text: &str,
-            _style: latex_rust::TextStyle,
+            _style: MathTextStyle,
             font_size_micro_pt: i64,
         ) -> Result<MathTextMetrics, String> {
             Ok(MathTextMetrics {
@@ -565,6 +702,7 @@ fn public_syntax_tree_is_budget_checked_before_recursive_conversion() {
             attributes: BTreeMap::new(),
             source_range: None,
             provenance: None,
+            provenance_aliases: Vec::new(),
             children: vec![tree.root],
         };
     }
@@ -586,6 +724,7 @@ fn multi_character_atom_expansion_counts_toward_the_layout_budget() {
             attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
             source_range: None,
             provenance: None,
+            provenance_aliases: Vec::new(),
             children: Vec::new(),
         },
     };

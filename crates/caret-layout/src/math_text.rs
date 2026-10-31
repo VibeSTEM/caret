@@ -4,13 +4,12 @@
 // 署名：Yuki Lu
 
 use crate::{
-    FontCatalog, FontLineMetrics, GlyphFontData, ParagraphLayoutOptions, ParagraphLayouter,
-    ParleyParagraphLayout, ResolvedDocumentTextSettings, ShapingStyle,
+    FontCatalog, FontLineMetrics, GlyphFontData, InlineObjectPlacement, ParagraphLayoutOptions,
+    ParagraphLayouter, ParleyParagraphLayout, ResolvedDocumentTextSettings, ShapingStyle,
 };
 use caret_doc::{NodeId, Paragraph, Run};
 use caret_math::{MathTextMetrics, MathTextShaper, MathTextStyle};
 use linebender_resource_handle::Blob;
-use parley::{InlineBox, InlineBoxKind, VerticalAlign};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -21,14 +20,15 @@ const MATH_TEXT_LAYOUT_WIDTH_PT: f32 = 10_000.0;
 const MICRO_POINTS_PER_POINT: f64 = 1_000_000.0;
 const MICRO_POINTS_PER_CENTIPOINT: i64 = 10_000;
 
-/// Shared embedded STIX Two Math face for glyph-id rasterization.
+/// 返回用于按 glyph ID 栅格化的内嵌 STIX Two Math 字体。
 pub fn stix_two_math_font_data() -> GlyphFontData {
     static FONT: OnceLock<GlyphFontData> = OnceLock::new();
     FONT.get_or_init(|| GlyphFontData::new(Blob::new(Arc::new(caret_math::MATH_FONT_BYTES)), 0))
         .clone()
 }
 
-/// Provider-local Parley layouts referenced by `MathLayoutItem::ExternalText` handles.
+/// 持有 `MathLayoutItem::ExternalText` 句柄引用的 Parley 布局；句柄按该 provider 的资源命名空间解析，
+/// 资源移交后由接收方持有。
 pub struct ParleyMathTextShaper<'a> {
     state: RefCell<ProviderState<'a>>,
 }
@@ -46,7 +46,7 @@ struct ProviderState<'a> {
 }
 
 impl<'a> ParleyMathTextShaper<'a> {
-    /// Borrows the active document's font catalog and reusable Parley layouter.
+    /// 借用当前文档的字体目录与可复用 Parley 布局器。
     pub fn new(
         catalog: &'a mut FontCatalog,
         layouter: &'a mut ParagraphLayouter,
@@ -68,7 +68,7 @@ impl<'a> ParleyMathTextShaper<'a> {
         }
     }
 
-    /// Moves successfully committed Parley layouts into the owning document snapshot.
+    /// 将成功提交的 Parley 布局移交给所属文档快照。
     pub fn take_resources(&self) -> HashMap<u64, Arc<ParleyParagraphLayout>> {
         std::mem::take(&mut self.state.borrow_mut().resources)
     }
@@ -155,7 +155,7 @@ impl MathTextShaper for ParleyMathTextShaper<'_> {
                 ..
             } = &mut *state;
             layouter
-                .layout(
+                .layout_single_line(
                     catalog,
                     &paragraph,
                     settings,
@@ -239,13 +239,13 @@ fn to_micro_points(points: f32) -> Result<i64, String> {
     if !scaled.is_finite() || scaled > i64::MAX as f64 {
         return Err("Parley math text geometry exceeds the integer range".into());
     }
-    // SAFETY: `scaled` is finite, nonnegative, integral after round, and <= i64::MAX.
+    // SAFETY: `scaled` 有限且非负，经过 round 后为整数，且不大于 i64::MAX。
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let integer = scaled as i64;
     Ok(integer)
 }
 
-/// Inline-box metrics used by Parley to reserve the formula's advance in a paragraph.
+/// Parley 为段内公式预留行内盒推进量时使用的度量。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MathInlineBoxMetrics {
     pub width_pt: f32,
@@ -254,8 +254,8 @@ pub struct MathInlineBoxMetrics {
 }
 
 impl MathInlineBoxMetrics {
-    /// Builds an in-flow Parley box with its baseline at the formula baseline.
-    pub fn inline_box(self, id: u64, index: usize) -> Result<InlineBox, String> {
+    /// 构造 Caret 行内对象放置值，使盒内基线与公式基线对齐；索引是正文 UTF-8 字节位置。
+    pub fn inline_box(self, id: u64, index: usize) -> Result<InlineObjectPlacement, String> {
         if [self.width_pt, self.ascent_pt, self.descent_pt]
             .iter()
             .any(|value| !value.is_finite() || *value < 0.0)
@@ -267,14 +267,12 @@ impl MathInlineBoxMetrics {
         if !height.is_finite() {
             return Err("math inline-box height exceeds Parley's range".into());
         }
-        Ok(InlineBox {
+        Ok(InlineObjectPlacement {
             id,
-            kind: InlineBoxKind::InFlow,
             index,
-            width: self.width_pt,
-            height,
-            baseline: Some(self.ascent_pt),
-            vertical_align: VerticalAlign::BASELINE,
+            width_pt: self.width_pt,
+            height_pt: height,
+            baseline_pt: Some(self.ascent_pt),
         })
     }
 }

@@ -61,6 +61,10 @@ pub(super) fn make_paragraph_lines(
     if lines.is_empty() {
         return Err(ParagraphLayoutError::InconsistentShaping);
     }
+    let inline_box_by_id = inline_boxes
+        .iter()
+        .map(|inline_box| (inline_box.id, inline_box))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut paragraph_lines = Vec::with_capacity(lines.len());
     let mut line_top_offsets_pt = Vec::with_capacity(lines.len());
     let mut line_box_tops_pt = Vec::with_capacity(lines.len());
@@ -97,51 +101,53 @@ pub(super) fn make_paragraph_lines(
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
         object_metrics.clear();
-        for item in line.items() {
-            let PositionedLayoutItem::InlineBox(positioned) = item else {
-                continue;
-            };
-            if positioned.kind != InlineBoxKind::InFlow {
-                continue;
-            }
-            let Some(source) = inline_boxes.iter().find(|item| item.id == positioned.id) else {
-                return Err(ParagraphLayoutError::InconsistentShaping);
-            };
-            let ascent_pt = positioned.baseline.unwrap_or(positioned.height);
-            if !ascent_pt.is_finite() || ascent_pt < 0.0 || ascent_pt > positioned.height {
-                return Err(ParagraphLayoutError::InvalidInlineBox);
-            }
-            let descent_pt = positioned.height - ascent_pt;
-            let source_end = text[source.index..]
-                .chars()
-                .next()
-                .map_or(source.index, |character| {
-                    source.index + character.len_utf8()
+        if !inline_box_by_id.is_empty() {
+            for item in line.items() {
+                let PositionedLayoutItem::InlineBox(positioned) = item else {
+                    continue;
+                };
+                if positioned.kind != InlineBoxKind::InFlow {
+                    continue;
+                }
+                let Some(source) = inline_box_by_id.get(&positioned.id) else {
+                    return Err(ParagraphLayoutError::InconsistentShaping);
+                };
+                let ascent_pt = positioned.baseline.unwrap_or(positioned.height);
+                if !ascent_pt.is_finite() || ascent_pt < 0.0 || ascent_pt > positioned.height {
+                    return Err(ParagraphLayoutError::InvalidInlineBox);
+                }
+                let descent_pt = positioned.height - ascent_pt;
+                let source_end = text[source.index..]
+                    .chars()
+                    .next()
+                    .map_or(source.index, |character| {
+                        source.index + character.len_utf8()
+                    });
+                let source_bytes = if source_end > source.index {
+                    source.index..source_end
+                } else {
+                    let start = text[..source.index]
+                        .char_indices()
+                        .next_back()
+                        .map_or(source.index, |(start, _)| start);
+                    start..source.index
+                };
+                if source_bytes.is_empty() {
+                    return Err(ParagraphLayoutError::InvalidInlineBox);
+                }
+                object_metrics.push(InlineObjectMetrics {
+                    source_bytes,
+                    advance_pt: positioned.width,
+                    ascent_pt,
+                    descent_pt,
+                    ink_bounds: InkBounds {
+                        left: 0.0,
+                        top: -ascent_pt,
+                        right: positioned.width,
+                        bottom: descent_pt,
+                    },
                 });
-            let source_bytes = if source_end > source.index {
-                source.index..source_end
-            } else {
-                let start = text[..source.index]
-                    .char_indices()
-                    .next_back()
-                    .map_or(source.index, |(start, _)| start);
-                start..source.index
-            };
-            if source_bytes.is_empty() {
-                return Err(ParagraphLayoutError::InvalidInlineBox);
             }
-            object_metrics.push(InlineObjectMetrics {
-                source_bytes,
-                advance_pt: positioned.width,
-                ascent_pt,
-                descent_pt,
-                ink_bounds: InkBounds {
-                    left: 0.0,
-                    top: -ascent_pt,
-                    right: positioned.width,
-                    bottom: descent_pt,
-                },
-            });
         }
         let line_metrics = calculate_line_metrics_with_grid(
             line_grid_metrics,

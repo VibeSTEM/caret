@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::MathLayoutError;
+use super::{MathLayoutError, transparent_child_provenance};
 use crate::{MathSyntaxKind, MathSyntaxNode};
 use latex_rust::{
     AccentKind, AtomKind, ColSpec, Color, DelimSize, Delimiter, Dim, EnvRow, FracStyle,
@@ -28,6 +28,13 @@ pub(super) fn to_latex_node(
     };
     let result = match node.kind {
         MathSyntaxKind::Row => MathNode::Row(vector_children(&node.children, provenance)?),
+        MathSyntaxKind::Group => {
+            if node.children.len() == 1 {
+                to_latex_node(&node.children[0], provenance)?
+            } else {
+                MathNode::Row(vector_children(&node.children, provenance)?)
+            }
+        }
         MathSyntaxKind::Symbol => {
             let text = node
                 .text
@@ -218,6 +225,14 @@ pub(super) fn register_provenance(
     syntax: &MathSyntaxNode,
     map: &mut HashMap<usize, String>,
 ) {
+    if syntax.kind == MathSyntaxKind::Group && syntax.children.len() == 1 {
+        if let Some(source_id) =
+            transparent_child_provenance(&syntax.children[0]).or(syntax.provenance.as_deref())
+        {
+            map.insert(node as *const MathNode as usize, source_id.to_owned());
+        }
+        return;
+    }
     if let Some(id) = &syntax.provenance {
         map.insert(node as *const MathNode as usize, id.clone());
     }
@@ -235,7 +250,20 @@ fn text_run(
     map: &mut HashMap<usize, String>,
 ) -> Result<TextRun, MathLayoutError> {
     let mut items = Vec::with_capacity(nodes.len());
+    append_text_items(nodes, map, &mut items)?;
+    Ok(TextRun::new(items))
+}
+
+fn append_text_items(
+    nodes: &[MathSyntaxNode],
+    map: &mut HashMap<usize, String>,
+    items: &mut Vec<TextItem>,
+) -> Result<(), MathLayoutError> {
     for node in nodes {
+        if node.kind == MathSyntaxKind::Group {
+            append_text_items(&node.children, map, items)?;
+            continue;
+        }
         match node.kind {
             MathSyntaxKind::TextContent => {
                 items.push(TextItem::Str(node.text.clone().unwrap_or_default()))
@@ -276,7 +304,7 @@ fn text_run(
             _ => items.push(TextItem::Math(boxed_child(node, map)?)),
         }
     }
-    Ok(TextRun::new(items))
+    Ok(())
 }
 
 fn atom_kind(value: &str) -> Result<AtomKind, MathLayoutError> {
