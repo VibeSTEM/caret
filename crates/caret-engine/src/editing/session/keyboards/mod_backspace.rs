@@ -4,19 +4,20 @@
 // 署名：Yuki Lu
 
 use super::super::Session;
-use crate::editing::{Command, EditError, Effect};
+use crate::editing::{Command, EditError, Effect, EnvironmentLevel};
 
 impl Session {
-    /// 优先解除光标所在的行内环境，否则解除当前块环境并保留其内容。
+    /// 按环境能力解除光标所在最内层可解除环境：行内环境优先，公式等原子环境跳过。
     pub(super) fn handle_mod_backspace(&mut self) -> Result<Effect, EditError> {
         if self.composition.is_some() || self.command_line.is_some() {
             return self.run(Command::RemoveBlockEnvironmentPreservingContent);
         }
         if self.selection.anchor == self.selection.focus
-            && let Some(environment) = self.current_inline_environment()?
+            && let Some(environment) = self.current_environment_stack()?.innermost_unwrappable()
+            && environment.kind.level() == EnvironmentLevel::Inline
         {
             return self.run(Command::RemoveInlineEnvironmentPreservingContent(
-                environment.environment_id,
+                environment.id.clone(),
             ));
         }
         self.run(Command::RemoveBlockEnvironmentPreservingContent)

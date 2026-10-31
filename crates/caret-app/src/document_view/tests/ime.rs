@@ -282,12 +282,12 @@ fn ime_preedit_inline_highlight_uses_the_preview_session_geometry()
         .collect::<Vec<_>>();
 
     super::assert_rects_close(
-        &actual["inlineEnvironmentHighlightRects"],
+        &environment_highlight_rects(&actual, "inline"),
         &serde_json::json!(expected),
     );
     assert!(!expected.is_empty());
     assert!(
-        actual["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&actual, "block")
             .as_array()
             .is_some_and(Vec::is_empty)
     );

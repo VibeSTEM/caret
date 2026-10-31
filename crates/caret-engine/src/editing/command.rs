@@ -31,6 +31,8 @@ pub enum Command {
     InsertTwoCharacterWidthSpace,
     PasteText(String),
     InsertSoftBreak,
+    /// 以 LaTeX 源文本在插入点放入一个原子行内公式。
+    InsertInlineMath(String),
     InsertParagraphBreak,
     Delete(Direction),
     MoveCaret(Direction),
@@ -85,6 +87,7 @@ impl Command {
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
+            Self::InsertInlineMath(_) => "insert.inline_math",
             Self::InsertParagraphBreak => "text.split_paragraph",
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",

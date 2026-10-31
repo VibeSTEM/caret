@@ -51,6 +51,10 @@ pub struct LineMetrics {
     /// 绘制器应把 ink 的垂直范围裁切到相对行顶的 `0..height_pt`；不裁左右悬垂。
     /// Exactly 保持固定行推进，并使用这个垂直裁切区间。
     pub clip_ink_to_line_height: bool,
+    /// 插入点相对行顶的上沿；只按文字度量计算，行内对象撑高行框时光标高度不变。
+    pub caret_top_pt: f32,
+    /// 插入点高度，与同字体、同行距的纯文字行一致。
+    pub caret_height_pt: f32,
 }
 
 /// 行度量无效时拒绝构造布局结果。
@@ -192,9 +196,18 @@ pub fn calculate_line_metrics_with_grid(
     } else {
         ascent_pt + (height_pt - content_height_pt).max(0.0) / 2.0
     };
+    // 有行内对象时，按去掉对象的同一行计算光标，并对齐到本行基线。
+    let (caret_top_pt, caret_height_pt) = if objects.is_empty() {
+        (0.0, height_pt)
+    } else {
+        let text_only = calculate_line_metrics_with_grid(line_grid, fonts, &[], spacing)?;
+        (baseline_pt - text_only.baseline_pt, text_only.height_pt)
+    };
     Ok(LineMetrics {
         height_pt,
         baseline_pt,
+        caret_top_pt,
+        caret_height_pt,
         content_metrics_overflow_line_box: content_overflows,
         object_ink_overflows_line_box: objects.iter().any(|object| {
             object.ink_bounds.top < -baseline_pt

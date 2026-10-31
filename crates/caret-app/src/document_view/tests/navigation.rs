@@ -230,7 +230,7 @@ fn shift_navigation_selects_an_environment_across_its_title_story_boundary()
     assert_eq!(selection_rects.len(), environment_ranges.len());
     assert!(!selection_rects.is_empty());
     assert_eq!(
-        interaction["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&interaction, "block")
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -734,7 +734,7 @@ fn visual_navigation_stops_between_adjacent_environments_without_creating_a_line
         Some(0)
     );
     assert_eq!(
-        outside["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&outside, "block")
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -1151,7 +1151,7 @@ fn environment_virtual_stops_use_outer_geometry_and_insert_outside_paragraphs()
         Some((environment_id.clone(), caret_engine::Direction::Backward))
     );
     assert_eq!(
-        outside_before["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&outside_before, "block")
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -1277,7 +1277,7 @@ fn existing_paragraphs_do_not_skip_environment_outer_stops()
         Some((environment_id.clone(), caret_engine::Direction::Backward))
     );
     assert_eq!(
-        outside["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&outside, "block")
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -1309,7 +1309,7 @@ fn existing_paragraphs_do_not_skip_environment_outer_stops()
         Some((environment_id.clone(), caret_engine::Direction::Forward))
     );
     assert_eq!(
-        outside["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&outside, "block")
             .as_array()
             .map(Vec::len),
         Some(0)

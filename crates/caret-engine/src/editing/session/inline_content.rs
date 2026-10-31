@@ -1,9 +1,9 @@
-//! 处理 Paragraph 内的文本和软换行插入。
+//! 处理 Paragraph 内的文本、软换行与行内公式插入。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::text_map::TextMap;
+use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::Session;
 
@@ -197,6 +197,71 @@ impl Session {
                 start: replaced_start,
                 end: replaced_end,
                 inserted_len: 1,
+                snap_graphemes: true,
+                result_boundaries,
+            }),
+        })
+    }
+
+    /// 解析 LaTeX 源文本并以 U+FFFC 原子对象插入；解析失败时正文不变。
+    pub(super) fn insert_inline_math(&mut self, source: &str) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        let caret_math::ParsedMath::Tree(math_tree) =
+            caret_math::parse(source, caret_math::MathInputKind::Inline)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+        else {
+            return Err(EditError::InvalidMath("expected inline math".to_owned()));
+        };
+        let (anchor, focus) = self.edit_range()?;
+        if anchor.paragraph_id != focus.paragraph_id {
+            return Err(EditError::CrossParagraphSelection);
+        }
+        let mut paragraph = self.paragraph_for(&anchor)?.clone();
+        let map = TextMap::new(&paragraph)?;
+        map.validate_pos(&anchor)?;
+        map.validate_pos(&focus)?;
+        let offset = anchor.offset.min(focus.offset);
+        let end = anchor.offset.max(focus.offset);
+        if offset != end {
+            map.delete_range(&mut paragraph, offset, end)?;
+        }
+        let affinity = if anchor.offset <= focus.offset {
+            anchor.affinity
+        } else {
+            focus.affinity
+        };
+        let node = caret_doc::InlineNode::Math(caret_doc::InlineMath {
+            id: caret_doc::NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        });
+        TextMap::new(&paragraph)?.insert_atomic(&mut paragraph, offset, affinity, node)?;
+        let paragraph_id = anchor.paragraph_id.clone();
+        self.replace_paragraph(&anchor, paragraph)?;
+        self.text_map_cache.clear();
+        let inserted_len = OBJECT_REPLACEMENT.len_utf8();
+        let result_boundaries = TextMap::new(self.paragraph_for(&anchor)?)?.grapheme_boundaries;
+        let pos = Pos {
+            offset: offset + inserted_len,
+            affinity: Affinity::Upstream,
+            ..anchor
+        };
+        self.selection = Selection {
+            anchor: pos.clone(),
+            focus: pos,
+        };
+        Ok(Effect {
+            document_changed: true,
+            selection_changed: true,
+            composition_changed: false,
+            changed_paragraph_id: None,
+            position_map: Some(PositionMap::TextEdit {
+                paragraph_id,
+                start: offset,
+                end,
+                inserted_len,
                 snap_graphemes: true,
                 result_boundaries,
             }),
