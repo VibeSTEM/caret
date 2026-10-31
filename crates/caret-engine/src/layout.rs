@@ -339,8 +339,10 @@ impl DocumentLayoutSnapshot {
             caret: PageCaretGeometry {
                 page_index,
                 x_pt: cursor_bounds.x0 + page.margin_left_pt,
-                y0_pt: caret_y0,
-                y1_pt: caret_y0 + f64::from(line.metrics.height_pt),
+                y0_pt: caret_y0 + f64::from(line.metrics.caret_top_pt),
+                y1_pt: caret_y0
+                    + f64::from(line.metrics.caret_top_pt)
+                    + f64::from(line.metrics.caret_height_pt),
             },
         })
     }
@@ -364,8 +366,10 @@ impl DocumentLayoutSnapshot {
         Some(PageCaretGeometry {
             page_index: location.page_index,
             x_pt: self.pages.get(location.page_index)?.margin_left_pt + bounds.x0,
-            y0_pt: location.y0_pt,
-            y1_pt: location.y0_pt + f64::from(line.metrics.height_pt),
+            y0_pt: location.y0_pt + f64::from(line.metrics.caret_top_pt),
+            y1_pt: location.y0_pt
+                + f64::from(line.metrics.caret_top_pt)
+                + f64::from(line.metrics.caret_height_pt),
         })
     }
 

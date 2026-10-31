@@ -6,8 +6,8 @@
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection, StructureClass,
-    StructureKind, StructurePosition,
+    Affinity, DocumentLayoutDeltaView, EnvironmentLevel, PageCaretGeometry, Pos, Selection,
+    StructureClass, StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -99,6 +99,8 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
             StructureKind::Heading { level } => ("heading", Some(level)),
             StructureKind::Section => ("section", None),
             StructureKind::Custom => ("custom", None),
+            StructureKind::Equation => ("equation", None),
+            StructureKind::Align => ("align", None),
         };
         let mut value = json!({ "id": entry.id, "kind": kind });
         if let Some(level) = level {
@@ -107,23 +109,6 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
         entries.push(value);
     }
     Value::Array(entries)
-}
-
-fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
-    if session.block_environment_exit().is_some() || session.selected_block_environment().is_some()
-    {
-        return None;
-    }
-    let focus = &session.selection().focus;
-    let stack = session.structure_index().at(&StructurePosition {
-        paragraph_id: focus.paragraph_id.clone(),
-        offset_utf8: focus.offset,
-    });
-    stack
-        .iter()
-        .rev()
-        .find(|entry| entry.kind.is_block_environment())
-        .map(|entry| entry.id.clone())
 }
 
 /// 将最终选区一次性投影为页面矩形；文本布局负责文字几何，结构环境复用环境范围。
@@ -206,39 +191,62 @@ pub(super) fn caret_geometry_with_environment_exit(
     caret
 }
 
-fn block_environment_highlight_rects(
-    environment_id: Option<&NodeId>,
+/// 将当前环境栈投影为 `environmentHighlights`：每个层级只取最内层环境，
+/// 块级用环境范围矩形，行内级（含公式盒）用布局层选区矩形。
+fn environment_highlights_json(
+    stack: &caret_engine::CurrentEnvironmentStack,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
-    let Some(environment_id) = environment_id else {
-        return Value::Array(Vec::new());
-    };
-    Value::Array(
-        snapshot
-            .environment_ranges
+    let mut highlights = Vec::new();
+    for level in [EnvironmentLevel::Block, EnvironmentLevel::Inline] {
+        let Some(entry) = stack
+            .entries()
             .iter()
-            .filter(|range| &range.environment_id == environment_id)
-            .map(|range| {
-                json!({
-                    "pageIndex": range.page_index,
-                    "x0Pt": range.x0_pt,
-                    "y0Pt": range.y0_pt,
-                    "x1Pt": range.x1_pt,
-                    "y1Pt": range.y1_pt,
-                })
-            })
-            .collect(),
-    )
+            .rev()
+            .find(|entry| entry.kind.level() == level)
+        else {
+            continue;
+        };
+        let rects = match &entry.inline_range {
+            Some(range) => inline_span_rects(range, snapshot),
+            None => block_environment_rects(&entry.id, snapshot),
+        };
+        if rects.is_empty() {
+            continue;
+        }
+        highlights.push(json!({
+            "level": level.as_str(),
+            "kind": entry.kind.as_str(),
+            "rects": rects,
+        }));
+    }
+    Value::Array(highlights)
 }
 
-/// 将当前最内层行内环境投影为布局层选区矩形。
-fn inline_environment_highlight_rects(
-    range: Option<&caret_engine::InlineEnvironmentRange>,
+fn block_environment_rects(
+    environment_id: &NodeId,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Value {
-    let Some(range) = range else {
-        return Value::Array(Vec::new());
-    };
+) -> Vec<Value> {
+    snapshot
+        .environment_ranges
+        .iter()
+        .filter(|range| &range.environment_id == environment_id)
+        .map(|range| {
+            json!({
+                "pageIndex": range.page_index,
+                "x0Pt": range.x0_pt,
+                "y0Pt": range.y0_pt,
+                "x1Pt": range.x1_pt,
+                "y1Pt": range.y1_pt,
+            })
+        })
+        .collect()
+}
+
+fn inline_span_rects(
+    range: &caret_engine::InlineSpan,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Vec<Value> {
     let selection = Selection {
         anchor: Pos {
             story: range.story.clone(),
@@ -253,22 +261,20 @@ fn inline_environment_highlight_rects(
             affinity: Affinity::Upstream,
         },
     };
-    Value::Array(
-        snapshot
-            .selection_geometry(&selection)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|rectangle| {
-                json!({
-                    "pageIndex": rectangle.page_index,
-                    "x0Pt": rectangle.x0_pt,
-                    "y0Pt": rectangle.y0_pt,
-                    "x1Pt": rectangle.x1_pt,
-                    "y1Pt": rectangle.y1_pt,
-                })
+    snapshot
+        .selection_geometry(&selection)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rectangle| {
+            json!({
+                "pageIndex": rectangle.page_index,
+                "x0Pt": rectangle.x0_pt,
+                "y0Pt": rectangle.y0_pt,
+                "x1Pt": rectangle.x1_pt,
+                "y1Pt": rectangle.y1_pt,
             })
-            .collect(),
-    )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -311,10 +317,9 @@ impl DocumentViewRuntime {
             .composition_preview_session
             .as_mut()
             .unwrap_or(&mut self.session);
-        let inline_environment = highlight_session
-            .current_inline_environment()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let focus_environment_id = current_block_environment_id(highlight_session);
+        let environment_stack = highlight_session
+            .current_environment_stack()
+            .map_err(|error| format!("layout.environment_stack: {error}"))?;
         let selection = self.session.selection().clone();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
         let structure_selection = self
@@ -355,14 +360,8 @@ impl DocumentViewRuntime {
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
-                "blockEnvironmentHighlightRects".to_owned(),
-                block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
-            );
-        view.as_object_mut()
-            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-            .insert(
-                "inlineEnvironmentHighlightRects".to_owned(),
-                inline_environment_highlight_rects(inline_environment.as_ref(), snapshot),
+                "environmentHighlights".to_owned(),
+                environment_highlights_json(&environment_stack, snapshot),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -466,17 +465,12 @@ impl DocumentViewRuntime {
             )
         });
         let current_structure = current_structure_state(&self.session);
-        let inline_environment = self
+        let environment_stack = self
             .composition_preview_session
             .as_mut()
             .unwrap_or(&mut self.session)
-            .current_inline_environment()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let highlight_session = self
-            .composition_preview_session
-            .as_ref()
-            .unwrap_or(&self.session);
-        let focus_environment_id = current_block_environment_id(highlight_session);
+            .current_environment_stack()
+            .map_err(|error| format!("layout.environment_stack: {error}"))?;
         let block_environment_exit = self.session.block_environment_exit();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
         let structure_selection = self
@@ -484,8 +478,7 @@ impl DocumentViewRuntime {
             .structure_selection()
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = self.current_snapshot()?;
-        let inline_environment_rectangles =
-            inline_environment_highlight_rects(inline_environment.as_ref(), snapshot);
+        let environment_highlights = environment_highlights_json(&environment_stack, snapshot);
         let rectangles = selection_rectangles_json(
             &selection,
             structure_selection
@@ -551,8 +544,7 @@ impl DocumentViewRuntime {
             "inputMethodContext": input_method_context,
             "commandLine": command_line,
             "currentStructure": current_structure,
-            "blockEnvironmentHighlightRects": block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
-            "inlineEnvironmentHighlightRects": inline_environment_rectangles,
+            "environmentHighlights": environment_highlights,
             "caretGeometry": {
                 "pageIndex": caret.page_index,
                 "xPt": caret.x_pt,

@@ -21,6 +21,8 @@ fn paragraph(heights: &[f32]) -> ParagraphLayout {
                     content_metrics_overflow_line_box: false,
                     object_ink_overflows_line_box: false,
                     clip_ink_to_line_height: false,
+                    caret_top_pt: 0.0,
+                    caret_height_pt: *height,
                 },
             })
             .collect(),

@@ -91,8 +91,14 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
                                   {QStringLiteral("y0Pt"), 3.0},
                                   {QStringLiteral("x1Pt"), 4.0},
                                   {QStringLiteral("y1Pt"), 4.0}};
-    root.insert(QStringLiteral("blockEnvironmentHighlightRects"), QJsonArray{focus_rect});
-    root.insert(QStringLiteral("inlineEnvironmentHighlightRects"), QJsonArray{inline_rect});
+    const QJsonObject block_highlight{{QStringLiteral("level"), QStringLiteral("block")},
+                                      {QStringLiteral("kind"), QStringLiteral("section")},
+                                      {QStringLiteral("rects"), QJsonArray{focus_rect}}};
+    const QJsonObject inline_highlight{{QStringLiteral("level"), QStringLiteral("inline")},
+                                       {QStringLiteral("kind"), QStringLiteral("inline_math")},
+                                       {QStringLiteral("rects"), QJsonArray{inline_rect}}};
+    root.insert(QStringLiteral("environmentHighlights"),
+                QJsonArray{block_highlight, inline_highlight});
     QVERIFY(caret::install_layout_snapshot(
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
     QVERIFY(caret::install_document_runtime(std::move(runtime)));
@@ -129,14 +135,14 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QVERIFY(inline_view_model.environmentHighlightRects().isEmpty());
     QCOMPARE(interaction_changed.size(), 1);
 
-    root.insert(QStringLiteral("inlineEnvironmentHighlightRects"), QJsonArray{});
+    root.insert(QStringLiteral("environmentHighlights"), QJsonArray{block_highlight});
     QVERIFY(caret::install_layout_snapshot(
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
     caret::LayoutViewModel block_view_model;
     QCOMPARE(block_view_model.environmentHighlightKind(), QStringLiteral("block"));
     QCOMPARE(block_view_model.environmentHighlightRects().size(), 1);
 
-    root.insert(QStringLiteral("blockEnvironmentHighlightRects"), QJsonArray{});
+    root.insert(QStringLiteral("environmentHighlights"), QJsonArray{});
     QVERIFY(caret::install_layout_snapshot(
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact))));
     caret::LayoutViewModel empty_view_model;

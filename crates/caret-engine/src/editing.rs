@@ -6,6 +6,7 @@
 mod command;
 mod command_line;
 mod command_registry;
+mod environment;
 mod error;
 mod paragraph_ops;
 mod position;
@@ -17,6 +18,10 @@ mod text_map;
 pub use command::{Command, Direction, EditorKey};
 pub use command_line::{CommandLine, CommandLineMode};
 pub use command_registry::CommandCandidate;
+pub use environment::{
+    Capabilities, CurrentEnvironment, CurrentEnvironmentStack, EnvironmentKind, EnvironmentLevel,
+    InlineSpan,
+};
 pub use error::EditError;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
 pub use session::Session;

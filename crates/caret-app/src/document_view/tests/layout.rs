@@ -21,7 +21,7 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
     assert_eq!(snapshot["paragraphs"].as_array().map(Vec::len), Some(1));
     assert_eq!(snapshot["paragraphs"][0]["text"], "");
     assert_eq!(
-        snapshot["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&snapshot, "block")
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -63,7 +63,8 @@ fn block_environment_highlight_geometry_tracks_the_active_block_environment()
     let mut runtime = DocumentViewRuntime::new(document)?;
 
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
-    let rectangles = snapshot["blockEnvironmentHighlightRects"]
+    let rectangles_value = environment_highlight_rects(&snapshot, "block");
+    let rectangles = rectangles_value
         .as_array()
         .ok_or_else(|| std::io::Error::other("focus rectangles were omitted"))?;
     assert_eq!(rectangles.len(), 1);
@@ -73,8 +74,8 @@ fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
     assert_eq!(
-        interaction["blockEnvironmentHighlightRects"],
-        snapshot["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&interaction, "block"),
+        environment_highlight_rects(&snapshot, "block")
     );
     Ok(())
 }
@@ -133,7 +134,8 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
         )))?;
 
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
-    let rectangles = snapshot["inlineEnvironmentHighlightRects"]
+    let rectangles_value = environment_highlight_rects(&snapshot, "inline");
+    let rectangles = rectangles_value
         .as_array()
         .ok_or_else(|| std::io::Error::other("inline environment rectangles were omitted"))?;
     assert!(
@@ -141,7 +143,7 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
         "wrapped text should produce per-line rectangles"
     );
     assert_eq!(
-        snapshot["blockEnvironmentHighlightRects"],
+        environment_highlight_rects(&snapshot, "block"),
         serde_json::json!([])
     );
     assert!(rectangles.iter().all(|rectangle| {
@@ -183,7 +185,8 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
             })
         })
         .collect::<Vec<_>>();
-    let actual = snapshot["inlineEnvironmentHighlightRects"]
+    let actual_value = environment_highlight_rects(&snapshot, "inline");
+    let actual = actual_value
         .as_array()
         .ok_or_else(|| std::io::Error::other("inline highlight snapshot is not an array"))?;
     assert_eq!(actual.len(), expected.len());
@@ -219,7 +222,7 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
         )))?;
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
     assert_eq!(
-        interaction["inlineEnvironmentHighlightRects"],
+        environment_highlight_rects(&interaction, "inline"),
         serde_json::json!([])
     );
     Ok(())
@@ -267,11 +270,11 @@ fn empty_inline_environment_does_not_hide_visible_block_highlight()
 
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
     assert_eq!(
-        snapshot["inlineEnvironmentHighlightRects"],
+        environment_highlight_rects(&snapshot, "inline"),
         serde_json::json!([])
     );
     assert!(
-        snapshot["blockEnvironmentHighlightRects"]
+        environment_highlight_rects(&snapshot, "block")
             .as_array()
             .is_some_and(|rectangles| !rectangles.is_empty())
     );
@@ -298,7 +301,8 @@ fn block_environment_geometry_is_emitted_as_page_fragments()
 
     let mut runtime = DocumentViewRuntime::new(document)?;
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
-    let ranges = snapshot["blockEnvironmentHighlightRects"]
+    let ranges_value = environment_highlight_rects(&snapshot, "block");
+    let ranges = ranges_value
         .as_array()
         .ok_or_else(|| std::io::Error::other("focus rectangles were omitted"))?;
 
@@ -497,5 +501,60 @@ fn invalid_model_is_rejected_and_unknown_content_does_not_publish_a_partial_layo
     );
     assert!(runtime.last_snapshot.is_none());
     assert_eq!(runtime.session.document_generation(), 0);
+    Ok(())
+}
+
+#[test]
+fn inline_math_reports_an_inline_environment_highlight_around_its_box()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(Document::blank())?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertText("a".to_owned()))?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath("x^2".to_owned()))?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let highlights = snapshot["environmentHighlights"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("environmentHighlights was omitted"))?;
+    let math = highlights
+        .iter()
+        .find(|highlight| highlight["kind"] == "inline_math")
+        .ok_or_else(|| std::io::Error::other("inline math highlight was omitted"))?;
+    assert_eq!(math["level"], "inline");
+    let rects = math["rects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline math rects were omitted"))?;
+    assert_eq!(rects.len(), 1);
+    assert!(rects.iter().all(|rectangle| {
+        rectangle["x1Pt"].as_f64() > rectangle["x0Pt"].as_f64()
+            && rectangle["y1Pt"].as_f64() > rectangle["y0Pt"].as_f64()
+    }));
+    Ok(())
+}
+
+#[test]
+fn caret_height_next_to_inline_math_matches_plain_text_caret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(Document::blank())?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertText("a".to_owned()))?;
+    let plain: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath(
+            r"\frac{a}{b}".to_owned(),
+        ))?;
+    let after_math: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let height = |snapshot: &Value| -> Option<f64> {
+        let caret = &snapshot["caretGeometry"];
+        Some(caret["y1Pt"].as_f64()? - caret["y0Pt"].as_f64()?)
+    };
+    let (Some(plain), Some(after_math)) = (height(&plain), height(&after_math)) else {
+        return Err(std::io::Error::other("caret geometry was omitted").into());
+    };
+    assert!((plain - after_math).abs() <= GEOMETRY_EPSILON_PT);
     Ok(())
 }

@@ -198,29 +198,17 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     }
     QVariantList block_environment_highlight_rects = m_block_environment_highlight_rects;
     QVariantList inline_environment_highlight_rects = m_inline_environment_highlight_rects;
-    const QJsonValue block_environment_highlight_value =
-        root.value(QStringLiteral("blockEnvironmentHighlightRects"));
-    if (!block_environment_highlight_value.isUndefined()) {
-        QVariantList parsed_block_environment_highlight_rects;
-        if (!layout_snapshot::parse_block_environment_highlight_rects(
-                block_environment_highlight_value, m_page_sizes_pt,
-                parsed_block_environment_highlight_rects, m_error)) {
+    const QJsonValue environment_highlights_value =
+        root.value(QStringLiteral("environmentHighlights"));
+    if (!environment_highlights_value.isUndefined()) {
+        layout_snapshot::EnvironmentHighlightRects parsed_rects;
+        if (!layout_snapshot::parse_environment_highlights(
+                environment_highlights_value, m_page_sizes_pt, parsed_rects, m_error)) {
             clearEnvironmentHighlightRects();
             return false;
         }
-        block_environment_highlight_rects = std::move(parsed_block_environment_highlight_rects);
-    }
-    const QJsonValue inline_environment_highlight_value =
-        root.value(QStringLiteral("inlineEnvironmentHighlightRects"));
-    if (!inline_environment_highlight_value.isUndefined()) {
-        QVariantList parsed_inline_environment_highlight_rects;
-        if (!layout_snapshot::parse_inline_environment_highlight_rects(
-                inline_environment_highlight_value, m_page_sizes_pt,
-                parsed_inline_environment_highlight_rects, m_error)) {
-            clearEnvironmentHighlightRects();
-            return false;
-        }
-        inline_environment_highlight_rects = std::move(parsed_inline_environment_highlight_rects);
+        block_environment_highlight_rects = std::move(parsed_rects.block);
+        inline_environment_highlight_rects = std::move(parsed_rects.inline_level);
     }
     QVariantList current_structure = m_current_structure;
     const QJsonValue current_structure_value = root.value(QStringLiteral("currentStructure"));

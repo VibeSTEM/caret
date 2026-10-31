@@ -432,6 +432,7 @@ impl Session {
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
+            Command::InsertInlineMath(source) => self.insert_inline_math(&source),
             Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),
@@ -824,6 +825,7 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertTwoCharacterWidthSpace
             | Command::PasteText(_)
             | Command::InsertSoftBreak
+            | Command::InsertInlineMath(_)
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
             | Command::ToggleRunUnderline

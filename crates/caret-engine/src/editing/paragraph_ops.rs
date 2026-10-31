@@ -630,7 +630,8 @@ fn inline_tree_has_unknown_fields(nodes: &[InlineNode]) -> bool {
             !environment.extra.is_empty() || inline_tree_has_unknown_fields(&environment.children)
         }
         InlineNode::SoftBreak(value) => !value.extra.is_empty(),
-        InlineNode::Opaque(_) | InlineNode::Math(_) => true,
+        InlineNode::Math(value) => !value.extra.is_empty(),
+        InlineNode::Opaque(_) => true,
     })
 }
 

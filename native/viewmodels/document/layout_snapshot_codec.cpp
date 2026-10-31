@@ -311,18 +311,42 @@ bool parse_current_structure(const QJsonValue& value, QVariantList& current_stru
     return parse_current_structure_impl(value, current_structure, error);
 }
 
-bool parse_block_environment_highlight_rects(const QJsonValue& value,
-                                             const QVariantList& page_sizes,
-                                             QVariantList& rectangles, QString& error) {
-    return parse_geometry_rectangles(
-        value, page_sizes, QStringLiteral("block_environment_highlight"), rectangles, error);
-}
-
-bool parse_inline_environment_highlight_rects(const QJsonValue& value,
-                                              const QVariantList& page_sizes,
-                                              QVariantList& rectangles, QString& error) {
-    return parse_geometry_rectangles(
-        value, page_sizes, QStringLiteral("inline_environment_highlight"), rectangles, error);
+bool parse_environment_highlights(const QJsonValue& value, const QVariantList& page_sizes,
+                                  EnvironmentHighlightRects& highlight_rectangles, QString& error) {
+    if (!value.isUndefined() && !value.isArray()) {
+        error = QStringLiteral("layout.invalid_environment_highlights");
+        return false;
+    }
+    for (const QJsonValue highlight_value : value.toArray()) {
+        if (!highlight_value.isObject()) {
+            error = QStringLiteral("layout.invalid_environment_highlight");
+            return false;
+        }
+        const QJsonObject highlight = highlight_value.toObject();
+        const QString level = highlight.value(QStringLiteral("level")).toString();
+        if (!highlight.value(QStringLiteral("kind")).isString()) {
+            error = QStringLiteral("layout.invalid_environment_highlight");
+            return false;
+        }
+        QVariantList* target = nullptr;
+        if (level == QStringLiteral("block")) {
+            target = &highlight_rectangles.block;
+        } else if (level == QStringLiteral("inline")) {
+            target = &highlight_rectangles.inline_level;
+        } else {
+            error = QStringLiteral("layout.invalid_environment_highlight");
+            return false;
+        }
+        QVariantList rectangles;
+        if (!parse_geometry_rectangles(highlight.value(QStringLiteral("rects")), page_sizes,
+                                       QStringLiteral("environment_highlight"), rectangles,
+                                       error)) {
+            return false;
+        }
+        // 同一层级只保留最内层（后出现）的环境。
+        *target = std::move(rectangles);
+    }
+    return true;
 }
 
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
@@ -626,16 +650,9 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
                                  parsed_current_structure, error)) {
         return false;
     }
-    QVariantList parsed_block_environment_highlight_rects;
-    if (!parse_block_environment_highlight_rects(
-            root.value(QStringLiteral("blockEnvironmentHighlightRects")), parsed_sizes,
-            parsed_block_environment_highlight_rects, error)) {
-        return false;
-    }
-    QVariantList parsed_inline_environment_highlight_rects;
-    if (!parse_inline_environment_highlight_rects(
-            root.value(QStringLiteral("inlineEnvironmentHighlightRects")), parsed_sizes,
-            parsed_inline_environment_highlight_rects, error)) {
+    EnvironmentHighlightRects parsed_environment_highlights;
+    if (!parse_environment_highlights(root.value(QStringLiteral("environmentHighlights")),
+                                      parsed_sizes, parsed_environment_highlights, error)) {
         return false;
     }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
@@ -649,9 +666,9 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.command_line = std::move(parsed_command_line);
     parsed_snapshot.current_structure = std::move(parsed_current_structure);
     parsed_snapshot.block_environment_highlight_rects =
-        std::move(parsed_block_environment_highlight_rects);
+        std::move(parsed_environment_highlights.block);
     parsed_snapshot.inline_environment_highlight_rects =
-        std::move(parsed_inline_environment_highlight_rects);
+        std::move(parsed_environment_highlights.inline_level);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isUndefined()) {
         if (!input_context_value.isObject()) {

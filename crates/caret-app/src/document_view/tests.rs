@@ -24,6 +24,19 @@ fn assert_pt_close(actual: Option<f64>, expected: f64) {
     );
 }
 
+/// 取出 `environmentHighlights` 中某一层级的全部矩形；该层级没有高亮时返回空数组。
+fn environment_highlight_rects(snapshot: &Value, level: &str) -> Value {
+    Value::Array(
+        snapshot["environmentHighlights"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|highlight| highlight["level"] == level)
+            .flat_map(|highlight| highlight["rects"].as_array().cloned().unwrap_or_default())
+            .collect(),
+    )
+}
+
 /// 按字段带容差比较两组 `{pageIndex,x0Pt,y0Pt,x1Pt,y1Pt}` 矩形。
 fn assert_rects_close(actual: &Value, expected: &Value) {
     let (Some(actual), Some(expected)) = (actual.as_array(), expected.as_array()) else {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{Affinity, EditError, Pos};
+use super::{Affinity, EditError, EnvironmentKind, Pos};
 use caret_doc::{InlineEnvironment, InlineNode, NodeId, Paragraph, Run, SoftBreak};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -31,11 +31,15 @@ pub fn utf8_offset_to_utf16(text: &str, offset: usize) -> Result<usize, EditErro
     Ok(prefix.encode_utf16().count())
 }
 
+/// 行内原子对象在逻辑文本中的占位字符。
+pub(crate) const OBJECT_REPLACEMENT: char = '\u{fffc}';
+
 #[derive(Debug, Clone)]
 struct Span {
     start: usize,
     end: usize,
     path: Vec<usize>,
+    /// 原子节点（软换行或行内公式）：整体插入与删除，内部无插入点。
     is_soft_break: bool,
 }
 
@@ -44,6 +48,8 @@ pub(super) struct TextMap {
     pub(super) text: String,
     spans: Vec<Span>,
     pub(super) environment_spans: Vec<EnvironmentSpan>,
+    /// 原子对象（行内公式）作为行内环境的范围；不参与格式边界判断。
+    pub(super) object_spans: Vec<EnvironmentSpan>,
     pub(super) grapheme_boundaries: Vec<usize>,
 }
 
@@ -52,6 +58,7 @@ pub(super) struct EnvironmentSpan {
     pub(super) id: NodeId,
     pub(super) start: usize,
     pub(super) end: usize,
+    pub(super) kind: EnvironmentKind,
     depth: usize,
 }
 
@@ -60,12 +67,16 @@ impl TextMap {
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut environment_spans = Vec::new();
+        let mut object_spans = Vec::new();
         collect_text(
             &paragraph.inlines,
             &mut Vec::new(),
             &mut text,
             &mut spans,
-            &mut environment_spans,
+            &mut EnvironmentSpans {
+                environments: &mut environment_spans,
+                objects: &mut object_spans,
+            },
             0,
         )?;
         let mut grapheme_boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
@@ -75,6 +86,7 @@ impl TextMap {
             text,
             spans,
             environment_spans,
+            object_spans,
             grapheme_boundaries,
         })
     }
@@ -104,6 +116,27 @@ impl TextMap {
             })
             .max_by_key(|span| span.depth)
             .map(|span| (span.id.clone(), span.start, span.end))
+    }
+
+    /// 返回焦点按亲和性所属的全部行内环境（含原子公式），由外到内排列。
+    pub(super) fn inline_environment_stack_at(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+    ) -> Vec<&EnvironmentSpan> {
+        let mut stack = self
+            .environment_spans
+            .iter()
+            .chain(self.object_spans.iter())
+            .filter(|span| {
+                span.start < span.end
+                    && ((span.start < offset && offset < span.end)
+                        || (offset == span.start && affinity == Affinity::Downstream)
+                        || (offset == span.end && affinity == Affinity::Upstream))
+            })
+            .collect::<Vec<_>>();
+        stack.sort_by_key(|span| span.depth);
+        stack
     }
 
     pub(super) fn has_environment_start(&self, offset: usize) -> bool {
@@ -264,6 +297,22 @@ impl TextMap {
         offset: usize,
         affinity: Affinity,
     ) -> Result<(), EditError> {
+        self.insert_atomic(
+            paragraph,
+            offset,
+            affinity,
+            InlineNode::SoftBreak(SoftBreak::default()),
+        )
+    }
+
+    /// 在插入点放入一个原子行内节点（软换行或行内公式），必要时拆分所在文本段。
+    pub(super) fn insert_atomic(
+        &self,
+        paragraph: &mut Paragraph,
+        offset: usize,
+        affinity: Affinity,
+        node: InlineNode,
+    ) -> Result<(), EditError> {
         let interior = self
             .spans
             .iter()
@@ -293,15 +342,11 @@ impl TextMap {
                     .ok_or(EditError::InvalidPosition)?;
                 let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
                 let insertion_index = index + usize::from(span.end == offset);
-                list.insert(insertion_index, InlineNode::SoftBreak(SoftBreak::default()));
+                list.insert(insertion_index, node.clone());
             } else if offset == 0 && affinity == Affinity::Upstream {
-                paragraph
-                    .inlines
-                    .insert(0, InlineNode::SoftBreak(SoftBreak::default()));
+                paragraph.inlines.insert(0, node.clone());
             } else {
-                paragraph
-                    .inlines
-                    .push(InlineNode::SoftBreak(SoftBreak::default()));
+                paragraph.inlines.push(node.clone());
             }
             return Ok(());
         };
@@ -318,7 +363,7 @@ impl TextMap {
         }
         if run.text.is_empty() {
             let break_index = index + usize::from(affinity == Affinity::Upstream);
-            list.insert(break_index, InlineNode::SoftBreak(SoftBreak::default()));
+            list.insert(break_index, node.clone());
             return Ok(());
         }
         let left = Run {
@@ -340,7 +385,7 @@ impl TextMap {
         if local > 0 {
             replacement.push(InlineNode::Run(left));
         }
-        replacement.push(InlineNode::SoftBreak(SoftBreak::default()));
+        replacement.push(node.clone());
         if local < run.text.len() {
             replacement.push(InlineNode::Run(right));
         }
@@ -373,6 +418,8 @@ impl TextMap {
                         removals.push(span.path.clone());
                     }
                     InlineNode::SoftBreak(_) => return Err(EditError::UnsupportedOpaqueContent),
+                    // 行内公式按 U+FFFC 原子删除。
+                    InlineNode::Math(_) => removals.push(span.path.clone()),
                     _ => return Err(EditError::InvalidPosition),
                 }
                 continue;
@@ -413,7 +460,7 @@ fn collect_text(
     path: &mut Vec<usize>,
     text: &mut String,
     spans: &mut Vec<Span>,
-    environment_spans: &mut Vec<EnvironmentSpan>,
+    environment_spans: &mut EnvironmentSpans<'_>,
     environment_depth: usize,
 ) -> Result<(), EditError> {
     for (index, node) in nodes.iter().enumerate() {
@@ -429,7 +476,9 @@ fn collect_text(
                     is_soft_break: false,
                 });
             }
-            InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
+            InlineNode::Environment(InlineEnvironment {
+                id, kind, children, ..
+            }) => {
                 let start = text.len();
                 collect_text(
                     children,
@@ -439,10 +488,11 @@ fn collect_text(
                     environment_spans,
                     environment_depth + 1,
                 )?;
-                environment_spans.push(EnvironmentSpan {
+                environment_spans.environments.push(EnvironmentSpan {
                     id: id.clone(),
                     start,
                     end: text.len(),
+                    kind: EnvironmentKind::from_inline(*kind),
                     depth: environment_depth,
                 });
             }
@@ -456,13 +506,37 @@ fn collect_text(
                     is_soft_break: true,
                 });
             }
-            InlineNode::Opaque(_) | InlineNode::Math(_) => {
+            InlineNode::Math(math) => {
+                // 行内公式在逻辑文本中占一个 U+FFFC，与布局层的占位字符一致。
+                let start = text.len();
+                text.push(OBJECT_REPLACEMENT);
+                environment_spans.objects.push(EnvironmentSpan {
+                    id: math.id.clone(),
+                    start,
+                    end: text.len(),
+                    kind: EnvironmentKind::InlineMath,
+                    depth: environment_depth,
+                });
+                spans.push(Span {
+                    start,
+                    end: text.len(),
+                    path: path.clone(),
+                    is_soft_break: true,
+                });
+            }
+            InlineNode::Opaque(_) => {
                 return Err(EditError::UnsupportedOpaqueContent);
             }
         }
         path.pop();
     }
     Ok(())
+}
+
+/// 收集文本时同时累积格式环境与原子对象两类范围。
+struct EnvironmentSpans<'a> {
+    environments: &'a mut Vec<EnvironmentSpan>,
+    objects: &'a mut Vec<EnvironmentSpan>,
 }
 
 fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
@@ -556,7 +630,8 @@ pub(super) fn inline_length(node: &InlineNode) -> Result<usize, EditError> {
                 })
         }
         InlineNode::SoftBreak(_) => Ok(1),
-        InlineNode::Opaque(_) | InlineNode::Math(_) => Err(EditError::UnsupportedOpaqueContent),
+        InlineNode::Math(_) => Ok(OBJECT_REPLACEMENT.len_utf8()),
+        InlineNode::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
 }
 

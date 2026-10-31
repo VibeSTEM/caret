@@ -1266,3 +1266,100 @@ fn undo_is_rejected_while_input_composition_is_active() {
     );
     assert_eq!(paragraph_text(&session, 0), "");
 }
+
+fn run_ok(session: &mut Session, command: Command) {
+    session
+        .run(command.clone())
+        .unwrap_or_else(|error| panic!("{command:?} failed: {error}"));
+}
+
+fn first_paragraph_math_count(session: &Session) -> usize {
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    paragraph
+        .inlines
+        .iter()
+        .filter(|node| matches!(node, InlineNode::Math(_)))
+        .count()
+}
+
+#[test]
+fn inline_math_is_one_atomic_object_for_insert_caret_and_delete() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath(r"x^2".to_owned()));
+    run_ok(&mut session, Command::InsertText("b".to_owned()));
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}b");
+    assert_eq!(first_paragraph_math_count(&session), 1);
+
+    // 光标左移两次：越过 b，再一步越过整个公式。
+    run_ok(&mut session, Command::MoveCaret(Direction::Backward));
+    run_ok(&mut session, Command::MoveCaret(Direction::Backward));
+    assert_eq!(session.selection().focus.offset, 1);
+
+    // 向后删除一次即删去整个公式。
+    run_ok(&mut session, Command::Delete(Direction::Forward));
+    assert_eq!(paragraph_text(&session, 0), "ab");
+    assert_eq!(first_paragraph_math_count(&session), 0);
+
+    run_ok(&mut session, Command::Undo);
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}b");
+    assert_eq!(first_paragraph_math_count(&session), 1);
+}
+
+#[test]
+fn invalid_inline_math_leaves_document_unchanged() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let result = session.run(Command::InsertInlineMath(r"\frac{".to_owned()));
+    assert!(matches!(result, Err(EditError::InvalidMath(_))));
+    assert_eq!(paragraph_text(&session, 0), "");
+}
+
+#[test]
+fn environment_stack_reports_math_and_mod_backspace_skips_it() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(
+        &mut session,
+        Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+    );
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath("y".to_owned()));
+    let stack = session
+        .current_environment_stack()
+        .unwrap_or_else(|error| panic!("environment stack failed: {error}"));
+    let kinds = stack
+        .entries()
+        .iter()
+        .map(|entry| entry.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            crate::editing::EnvironmentKind::Bold,
+            crate::editing::EnvironmentKind::InlineMath
+        ]
+    );
+    let math = stack
+        .innermost()
+        .and_then(|entry| entry.inline_range.clone())
+        .unwrap_or_else(|| panic!("inline math should carry its range"));
+    assert_eq!(math.end_utf8 - math.start_utf8, '\u{fffc}'.len_utf8());
+
+    // Mod+Backspace 按能力跳过公式，解除外层粗体并保留公式。
+    run_ok(&mut session, Command::EditorKey(EditorKey::ModBackspace));
+    assert_eq!(first_paragraph_math_count(&session), 1);
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}");
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    assert!(
+        !paragraph
+            .inlines
+            .iter()
+            .any(|node| matches!(node, InlineNode::Environment(_)))
+    );
+}

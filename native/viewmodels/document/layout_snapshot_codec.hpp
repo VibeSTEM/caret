@@ -46,11 +46,14 @@ bool parse(const QJsonDocument& snapshot_document, ParsedLayoutSnapshot& parsed_
 bool parse_command_line_state(const QJsonValue& value, QVariantMap& command_line, QString& error);
 bool parse_current_structure(const QJsonValue& value, QVariantList& current_structure,
                              QString& error);
-bool parse_block_environment_highlight_rects(const QJsonValue& value,
-                                             const QVariantList& page_sizes,
-                                             QVariantList& rectangles, QString& error);
-bool parse_inline_environment_highlight_rects(const QJsonValue& value,
-                                              const QVariantList& page_sizes,
-                                              QVariantList& rectangles, QString& error);
+// 解析 `environmentHighlights:[{level,kind,rects}]`，按 level 分组为块级与行内级矩形。
+// 按层级拆分的当前环境高亮矩形；每个层级只保留最内层环境。
+struct EnvironmentHighlightRects {
+    QVariantList block;
+    QVariantList inline_level;
+};
+
+bool parse_environment_highlights(const QJsonValue& value, const QVariantList& page_sizes,
+                                  EnvironmentHighlightRects& rectangles, QString& error);
 
 } // namespace caret::layout_snapshot
