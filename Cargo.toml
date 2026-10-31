@@ -10,6 +10,7 @@ members = [
     "crates/caret-ffi",
     "crates/caret-foundation",
     "crates/caret-layout",
+    "crates/caret-math",
     "crates/caret-structure",
     "crates/launcher",
     "tests",
@@ -36,6 +37,7 @@ caret-doc = { path = "crates/caret-doc", version = "0.1.0" }
 caret-engine = { path = "crates/caret-engine", version = "0.1.0" }
 caret-build = { path = "crates/caret-build", version = "0.1.0" }
 caret-layout = { path = "crates/caret-layout", version = "0.1.0" }
+caret-math = { path = "crates/caret-math", version = "0.1.0" }
 caret-structure = { path = "crates/caret-structure", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
 caret-ffi = { path = "crates/caret-ffi", version = "0.1.0" }

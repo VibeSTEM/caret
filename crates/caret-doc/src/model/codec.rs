@@ -13,6 +13,18 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
         ));
     };
     match object.get("type").and_then(Value::as_str) {
+        Some("equation") if supported_tree(object.get("mathTree")) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(Block::Equation)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("equation") => Ok(Block::Opaque(OpaqueNode { raw: value })),
+        Some("align") if supported_align(object) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(Block::Align)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("align") => Ok(Block::Opaque(OpaqueNode { raw: value })),
         Some("paragraph") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(Block::Paragraph)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -37,6 +49,12 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
         ));
     };
     match object.get("type").and_then(Value::as_str) {
+        Some("inlineMath") if supported_tree(object.get("mathTree")) => {
+            serde_json::from_value(without_fields(value, &["type"])?)
+                .map(InlineNode::Math)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+        }
+        Some("inlineMath") => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
         Some("run") => serde_json::from_value(without_fields(value, &["type"])?)
             .map(InlineNode::Run)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
@@ -56,6 +74,92 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
         }
         _ => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
     }
+}
+
+fn supported_tree(value: Option<&Value>) -> bool {
+    let Some(tree) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    tree.get("schemaVersion").and_then(Value::as_u64)
+        == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
+        && tree
+            .get("root")
+            .is_some_and(|root| supported_math_node(root, None))
+}
+
+fn supported_align(object: &Map<String, Value>) -> bool {
+    let Some(rows) = object.get("rows").and_then(Value::as_array) else {
+        return false;
+    };
+    rows.iter().all(|row| {
+        row.as_object()
+            .and_then(|row| row.get("cells"))
+            .and_then(Value::as_array)
+            .is_some_and(|cells| cells.iter().all(|cell| supported_tree(Some(cell))))
+    })
+}
+
+fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
+    let Some(node) = value.as_object() else {
+        return false;
+    };
+    let Some(kind_name) = node.get("kind").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(kind) =
+        serde_json::from_value::<super::MathNodeKind>(Value::String(kind_name.to_owned()))
+    else {
+        return false;
+    };
+    let mut attributes = BTreeMap::new();
+    if let Some(values) = node.get("attributes") {
+        let Some(values) = values.as_object() else {
+            return false;
+        };
+        for (key, value) in values {
+            let Some(value) = value.as_str() else {
+                return false;
+            };
+            attributes.insert(key.clone(), value.to_owned());
+        }
+    }
+    let children = match node.get("children") {
+        None => Vec::new(),
+        Some(Value::Array(children)) => {
+            let Some(children) = children
+                .iter()
+                .map(|child| {
+                    child.as_object()?.get("kind")?.as_str().and_then(|kind| {
+                        serde_json::from_value::<super::MathNodeKind>(Value::String(
+                            kind.to_owned(),
+                        ))
+                        .ok()
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return false;
+            };
+            children
+        }
+        Some(_) => return false,
+    };
+    super::math::math_node_attributes_supported(
+        kind,
+        node.get("text").and_then(Value::as_str),
+        &attributes,
+    ) && super::math::math_node_structure_supported(
+        parent,
+        kind,
+        node.get("text").and_then(Value::as_str),
+        &children,
+    ) && node.get("children").is_none_or(|children| {
+        children.as_array().is_some_and(|children| {
+            children
+                .iter()
+                .all(|child| supported_math_node(child, Some(kind)))
+        })
+    })
 }
 
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
@@ -182,6 +286,8 @@ fn take_map(
 
 pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
     match block {
+        Block::Equation(value) => with_type("equation", value),
+        Block::Align(value) => with_type("align", value),
         Block::Paragraph(value) => with_type("paragraph", value),
         Block::Environment(value) => environment_to_value(
             EnvironmentValue {
@@ -203,6 +309,7 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
 
 pub(crate) fn inline_to_value(inline: &InlineNode) -> Result<Value, ModelError> {
     match inline {
+        InlineNode::Math(value) => with_type("inlineMath", value),
         InlineNode::Run(value) => with_type("run", value),
         InlineNode::Environment(value) => environment_to_value(
             EnvironmentValue {
