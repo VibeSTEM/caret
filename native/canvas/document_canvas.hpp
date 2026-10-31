@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QColor>
+#include <QHash>
 #include <QPointF>
 #include <QQuickItem>
 #include <QRectF>
@@ -51,6 +52,8 @@ class DocumentCanvas : public QQuickItem {
                    caretBlinkEnabledChanged)
     Q_PROPERTY(
         QVariantList glyphFrames READ glyphFrames WRITE setGlyphFrames NOTIFY glyphFramesChanged)
+    Q_PROPERTY(
+        bool glyphFrameBuildFailed READ glyphFrameBuildFailed NOTIFY glyphFrameBuildErrorsChanged)
     Q_PROPERTY(QVariantList visiblePageRange READ visiblePageRange WRITE setVisiblePageRange NOTIFY
                    visiblePageRangeChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects WRITE setSelectionRects NOTIFY
@@ -112,6 +115,7 @@ class DocumentCanvas : public QQuickItem {
     [[nodiscard]] bool caretBlinkEnabled() const;
     void setCaretBlinkEnabled(bool enabled);
     [[nodiscard]] QVariantList glyphFrames() const;
+    [[nodiscard]] bool glyphFrameBuildFailed() const { return !m_qsg_failed_frames.isEmpty(); }
     void setGlyphFrames(const QVariantList& frames);
     /// 页面背景保留半开可视区间，避免为整篇文档创建场景图节点。
     [[nodiscard]] QVariantList visiblePageRange() const;
@@ -181,6 +185,7 @@ class DocumentCanvas : public QQuickItem {
     void inputMethodCursorRectangleChanged();
     void caretBlinkEnabledChanged();
     void glyphFramesChanged();
+    void glyphFrameBuildErrorsChanged();
     void visiblePageRangeChanged();
     void selectionRectsChanged();
     void selectionPreviewRectsChanged();
@@ -206,6 +211,10 @@ class DocumentCanvas : public QQuickItem {
     void inputMethodEvent(QInputMethodEvent* event) override;
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
     void itemChange(ItemChange change, const ItemChangeData& data) override;
+    void reportGlyphFrameBuildResult(int page_index, const QVariantMap& frame_identity,
+                                     bool succeeded, quint64 geometry_revision,
+                                     quint64 scene_graph_generation, quintptr window_identity);
+    void releaseResources() override;
 
     QVariantList m_page_sizes_pt;
     QVariantMap m_page_margins_pt;
@@ -223,6 +232,8 @@ class DocumentCanvas : public QQuickItem {
     bool m_preedit_cancellation_in_progress = false;
     int m_preedit_cursor_position = 0;
     QVariantList m_glyph_frames;
+    QHash<int, QVariantMap> m_qsg_failed_frames;
+    QHash<int, quint64> m_glyph_page_submission_generations;
     int m_first_visible_page = 0;
     int m_page_end_visible = -1;
     QVariantList m_selection_rects;
@@ -231,6 +242,7 @@ class DocumentCanvas : public QQuickItem {
     quint64 m_environment_highlight_revision = 0;
     quint64 m_glyph_frame_revision = 0;
     quint64 m_glyph_geometry_revision = 0;
+    quint64 m_scene_graph_generation = 0;
     QColor m_caret_color;
     QColor m_selection_color;
     QColor m_environment_highlight_color;

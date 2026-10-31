@@ -611,3 +611,9 @@ message_118:
   src: Underline
   tr: 下線
   st: finished
+
+[PageSurface]
+message_119:
+  src: Some page content could not be rendered.
+  tr: ページの一部を表示できませんでした。
+  st: finished

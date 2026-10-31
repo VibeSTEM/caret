@@ -5,13 +5,16 @@
 
 use caret_doc::NodeId;
 use caret_layout::{
-    GlyphFontData, GlyphRasterOptions, GlyphRasterizer, GlyphSynthesis, ParleyParagraphLayout,
-    PositionedParagraphDrawItem, RasterizedGlyph, RasterizedGlyphKey,
+    GlyphFontData, GlyphRasterizer, GlyphSynthesis, ParleyParagraphLayout,
+    PositionedParagraphDrawItem, RasterizedGlyphKey,
 };
 use caret_math::MathLayoutSnapshot;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use crate::DocumentLayoutSnapshot;
+
+mod math_raster;
+use math_raster::{rasterize_math_object, rasterize_page_glyph};
 
 /// 同一布局代际中一页的只读字形快照；字体数据按 Blob 共享。
 #[derive(Debug, Clone, PartialEq)]
@@ -90,8 +93,27 @@ pub struct RasterizedPageGlyphs {
     pub font_generation: u64,
     pub page_index: usize,
     pub images: Vec<PageGlyphImage>,
-    pub placements: Vec<PageGlyphPlacement>,
-    pub decorations: Vec<PageGlyphDecoration>,
+    pub commands: Vec<PageGlyphDrawCommand>,
+}
+
+/// 一页中按视觉顺序排列的栅格图元。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageGlyphDrawCommand {
+    Glyph(PageGlyphPlacement),
+    Rectangle(PageGlyphDecoration),
+    Line(PageGlyphLine),
+}
+
+/// 页面中的线段及居中笔画厚度，坐标单位为 pt。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageGlyphLine {
+    pub x1_pt: f64,
+    pub y1_pt: f64,
+    pub x2_pt: f64,
+    pub y2_pt: f64,
+    pub thickness_pt: f64,
+    pub color: [u8; 4],
+    pub line_clip_y_pt: Option<[f64; 2]>,
 }
 
 /// 持有有界 glyph 缓存的页面栅格化入口。
@@ -109,9 +131,6 @@ impl PageGlyphRasterizer {
         page_origin_device_px: [f64; 2],
         default_foreground: [u8; 4],
     ) -> Result<RasterizedPageGlyphs, PageGlyphError> {
-        if !page.math_objects.is_empty() {
-            return Err(PageGlyphError::UnsupportedInlineBox);
-        }
         if !px_per_pt.is_finite()
             || px_per_pt <= 0.0
             || page_origin_device_px.iter().any(|value| !value.is_finite())
@@ -123,55 +142,60 @@ impl PageGlyphRasterizer {
             return Err(PageGlyphError::InvalidRasterGeometry);
         }
         let mut images = Vec::new();
-        let mut placements = Vec::new();
-        let decorations = page
-            .decorations
-            .iter()
-            .map(|decoration| PageGlyphDecoration {
+        let mut commands = Vec::new();
+        let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
+        for item in &page.draw_order {
+            match *item {
+                PageDrawItem::GlyphRun(index) => {
+                    let run = page
+                        .runs
+                        .get(index)
+                        .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    for glyph in &run.glyphs {
+                        let foreground = run.foreground.unwrap_or(default_foreground);
+                        let placement = rasterize_page_glyph(
+                            &mut self.glyphs,
+                            &mut images,
+                            &mut image_indexes,
+                            &run.font,
+                            glyph.glyph_id,
+                            run.font_size_pt * pixels_per_pt,
+                            &run.normalized_coords,
+                            run.synthesis,
+                            foreground,
+                            glyph.x_pt,
+                            glyph.baseline_y_pt,
+                            page_origin_device_px,
+                            px_per_pt,
+                            run.line_clip_y_pt,
+                        )?;
+                        commands.push(PageGlyphDrawCommand::Glyph(placement));
+                    }
+                }
+                PageDrawItem::MathObject(index) => {
+                    let object = page
+                        .math_objects
+                        .get(index)
+                        .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                    rasterize_math_object(
+                        &mut self.glyphs,
+                        &mut images,
+                        &mut image_indexes,
+                        &mut commands,
+                        object,
+                        pixels_per_pt,
+                        page_origin_device_px,
+                        px_per_pt,
+                        default_foreground,
+                    )?;
+                }
+            }
+        }
+        for decoration in &page.decorations {
+            commands.push(PageGlyphDrawCommand::Rectangle(PageGlyphDecoration {
                 color: Some(decoration.color.unwrap_or(default_foreground)),
                 ..*decoration
-            })
-            .collect();
-        let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
-        for run in &page.runs {
-            let pixels_per_em = run.font_size_pt * pixels_per_pt;
-            let foreground = run.foreground.unwrap_or(default_foreground);
-            for glyph in &run.glyphs {
-                let device_x = page_origin_device_px[0] + glyph.x_pt * px_per_pt;
-                let device_y = page_origin_device_px[1] + glyph.baseline_y_pt * px_per_pt;
-                if !device_x.is_finite() || !device_y.is_finite() {
-                    return Err(PageGlyphError::InvalidRasterGeometry);
-                }
-                let phase = [device_phase(device_x), device_phase(device_y)];
-                let options = GlyphRasterOptions {
-                    pixels_per_em,
-                    pixel_phase: phase,
-                    normalized_coords: &run.normalized_coords,
-                    synthesis: run.synthesis,
-                    foreground,
-                };
-                let key = RasterizedGlyphKey::new(&run.font, glyph.glyph_id, options)
-                    .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
-                let image_index = if let Some(index) = image_indexes.get(&key) {
-                    *index
-                } else {
-                    let (key, image) = self
-                        .glyphs
-                        .rasterize_with_key(&run.font, glyph.glyph_id, options)
-                        .ok_or(PageGlyphError::GlyphRasterizationFailed)?;
-                    let index = images.len();
-                    images.push(page_glyph_image(&image));
-                    image_indexes.insert(key, index);
-                    index
-                };
-                placements.push(PageGlyphPlacement {
-                    image_index,
-                    x_pt: glyph.x_pt,
-                    baseline_y_pt: glyph.baseline_y_pt,
-                    pixel_phase: phase,
-                    line_clip_y_pt: run.line_clip_y_pt,
-                });
-            }
+            }));
         }
         Ok(RasterizedPageGlyphs {
             session_id: page.session_id.clone(),
@@ -179,25 +203,8 @@ impl PageGlyphRasterizer {
             font_generation: page.font_generation,
             page_index: page.page_index,
             images,
-            placements,
-            decorations,
+            commands,
         })
-    }
-}
-
-fn device_phase(position: f64) -> f32 {
-    let phase = position.rem_euclid(1.0) as f32;
-    phase.min(f32::from_bits(1.0_f32.to_bits() - 1))
-}
-
-fn page_glyph_image(image: &RasterizedGlyph) -> PageGlyphImage {
-    PageGlyphImage {
-        width: image.width,
-        height: image.height,
-        left: image.left,
-        top: image.top,
-        pixel_phase_applied: image.pixel_phase_applied,
-        pixels: image.pixels.clone(),
     }
 }
 

@@ -37,6 +37,7 @@ pub use layout_view::{
 pub use math_edit::{MathEdit, MathEditError, MathEditResult, apply_math_edit};
 pub use math_import::{ImportedMath, MathImportError, import_parsed_math};
 pub use page_glyphs::{
-    PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
-    PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
+    PageGlyph, PageGlyphDecoration, PageGlyphDrawCommand, PageGlyphError, PageGlyphImage,
+    PageGlyphLine, PageGlyphPlacement, PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot,
+    RasterizedPageGlyphs,
 };

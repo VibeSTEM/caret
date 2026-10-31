@@ -129,12 +129,16 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
         view_model.rasterizePageGlyphs(0, 96.0 / 72.0, 0.0, 0.0, 32, 32, 32, 255);
     QVERIFY2(request.value(QStringLiteral("valid")).toBool(),
              qPrintable(request.value(QStringLiteral("error")).toString()));
-    const QVariantList decorations = request.value(QStringLiteral("decorations")).toList();
-    QVERIFY(!decorations.isEmpty());
-    const QVariantMap decoration = decorations.first().toMap();
+    const QVariantList draw_commands = request.value(QStringLiteral("commands")).toList();
+    const auto decoration_it =
+        std::find_if(draw_commands.cbegin(), draw_commands.cend(), [](const QVariant& value) {
+            return value.toMap().value(QStringLiteral("kind")).toInt() == 1;
+        });
+    QVERIFY(decoration_it != draw_commands.cend());
+    const QVariantMap decoration = decoration_it->toMap();
     QVariantMap decoration_only_request = request;
     decoration_only_request.insert(QStringLiteral("images"), QVariantList{});
-    decoration_only_request.insert(QStringLiteral("placements"), QVariantList{});
+    decoration_only_request.insert(QStringLiteral("commands"), QVariantList{decoration});
 
     auto* canvas = new caret::DocumentCanvas();
     canvas->setPageSizesPt(view_model.pageSizesPt());
@@ -421,6 +425,18 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     auto* bound_canvas =
         surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
     QVERIFY(bound_canvas != nullptr);
+    surface->setProperty(
+        "glyphRasterizationErrors",
+        QVariantList{QVariantMap{{QStringLiteral("pageIndex"), 0},
+                                 {QStringLiteral("error"), QStringLiteral("layout.glyphs.test")}}});
+    QObject* error_banner =
+        surface->findChild<QObject*>(QStringLiteral("glyphRasterizationErrorBanner"));
+    QVERIFY(error_banner != nullptr);
+    QVERIFY(error_banner->property("visible").toBool());
+    QCOMPARE(surface->findChild<QObject*>(QStringLiteral("glyphRasterizationErrorLabel"))
+                 ->property("text")
+                 .toString(),
+             QStringLiteral("Some page content could not be rendered."));
     QCOMPARE(bound_canvas->pageSizesPt().size(), 1);
     QCOMPARE(bound_canvas->pageSizesPt().front().toSizeF(), QSizeF(600.0, 800.0));
     QCOMPARE(bound_canvas->pageColor(), QColor(Qt::white));
@@ -469,6 +485,18 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
         glyph_pixels[pixel * 4 + (x < 4 ? 0 : 1)] = static_cast<char>(255);
         glyph_pixels[pixel * 4 + 3] = static_cast<char>(255);
     }
+    const QVariantMap line_command{
+        {QStringLiteral("kind"), 2},           {QStringLiteral("imageIndex"), 0},
+        {QStringLiteral("xPt"), 10.0},         {QStringLiteral("yPt"), 40.0},
+        {QStringLiteral("widthPt"), 0.0},      {QStringLiteral("heightPt"), 0.0},
+        {QStringLiteral("x2Pt"), 50.0},        {QStringLiteral("y2Pt"), 44.0},
+        {QStringLiteral("thicknessPt"), 2.0},  {QStringLiteral("pixelPhaseX"), 0.0},
+        {QStringLiteral("pixelPhaseY"), 0.0},  {QStringLiteral("pixelPhaseApplied"), false},
+        {QStringLiteral("colorRed"), 255},     {QStringLiteral("colorGreen"), 0},
+        {QStringLiteral("colorBlue"), 255},    {QStringLiteral("colorAlpha"), 255},
+        {QStringLiteral("clipEnabled"), true}, {QStringLiteral("clipY0Pt"), 38.0},
+        {QStringLiteral("clipY1Pt"), 42.0},
+    };
     const QVariantMap glyph_frame{
         {QStringLiteral("valid"), true},
         {QStringLiteral("rasterPxPerPt"), 96.0 / 72.0},
@@ -486,23 +514,44 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                   {QStringLiteral("top"), 0},
                                   {QStringLiteral("pixelPhaseApplied"), false},
                                   {QStringLiteral("pixels"), QByteArray{}}}}},
-        {QStringLiteral("placements"),
-         QVariantList{QVariantMap{{QStringLiteral("imageIndex"), 0},
+        {QStringLiteral("commands"),
+         QVariantList{QVariantMap{{QStringLiteral("kind"), 0},
+                                  {QStringLiteral("imageIndex"), 0},
                                   {QStringLiteral("xPt"), 20.0},
-                                  {QStringLiteral("baselineYPt"), 32.0},
+                                  {QStringLiteral("yPt"), 32.0},
+                                  {QStringLiteral("widthPt"), 0.0},
+                                  {QStringLiteral("heightPt"), 0.0},
+                                  {QStringLiteral("x2Pt"), 0.0},
+                                  {QStringLiteral("y2Pt"), 0.0},
+                                  {QStringLiteral("thicknessPt"), 0.0},
                                   {QStringLiteral("pixelPhaseX"), 0.0},
                                   {QStringLiteral("pixelPhaseY"), 0.0},
                                   {QStringLiteral("pixelPhaseApplied"), false},
+                                  {QStringLiteral("colorRed"), 0},
+                                  {QStringLiteral("colorGreen"), 0},
+                                  {QStringLiteral("colorBlue"), 0},
+                                  {QStringLiteral("colorAlpha"), 0},
                                   {QStringLiteral("clipEnabled"), true},
                                   {QStringLiteral("clipY0Pt"), 28.0},
                                   {QStringLiteral("clipY1Pt"), 31.0}},
-                      QVariantMap{{QStringLiteral("imageIndex"), 1},
+                      QVariantMap{{QStringLiteral("kind"), 0},
+                                  {QStringLiteral("imageIndex"), 1},
                                   {QStringLiteral("xPt"), 30.0},
-                                  {QStringLiteral("baselineYPt"), 32.0},
+                                  {QStringLiteral("yPt"), 32.0},
+                                  {QStringLiteral("widthPt"), 0.0},
+                                  {QStringLiteral("heightPt"), 0.0},
+                                  {QStringLiteral("x2Pt"), 0.0},
+                                  {QStringLiteral("y2Pt"), 0.0},
+                                  {QStringLiteral("thicknessPt"), 0.0},
                                   {QStringLiteral("pixelPhaseX"), 0.0},
                                   {QStringLiteral("pixelPhaseY"), 0.0},
                                   {QStringLiteral("pixelPhaseApplied"), false},
-                                  {QStringLiteral("clipEnabled"), false}}}},
+                                  {QStringLiteral("colorRed"), 0},
+                                  {QStringLiteral("colorGreen"), 0},
+                                  {QStringLiteral("colorBlue"), 0},
+                                  {QStringLiteral("colorAlpha"), 0},
+                                  {QStringLiteral("clipEnabled"), false}},
+                      line_command}},
     };
     QVariantMap second_glyph_frame = glyph_frame;
     second_glyph_frame.insert(QStringLiteral("pageIndex"), 1);
@@ -533,6 +582,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(rendered_canvas->property("environmentHighlightRadius").toReal(), 4.0);
     QTRY_VERIFY_WITH_TIMEOUT(
         count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), QColor(Qt::magenta)) > 0, 3000);
     const QImage highlight_frame = render_window.grabWindow();
     QVERIFY(!highlight_frame.isNull());
     QVERIFY(count_color_pixels(highlight_frame, environment_highlight_color) > 0);
@@ -547,6 +598,10 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
         const qreal scale_y = static_cast<qreal>(image.height()) / render_window.height();
         return image.pixelColor(qFloor(x * scale_x), qFloor(y * scale_y));
     };
+    const QImage line_frame = render_window.grabWindow();
+    const QPointF outside_line_clip = rendered_canvas->documentToContent(0, QPointF(40.0, 45.0));
+    QVERIFY(pixel_at_logical_point(line_frame, outside_line_clip.x(), outside_line_clip.y()) !=
+            QColor(Qt::magenta));
     const QPointF highlight_origin = rendered_canvas->documentToContent(0, QPointF(10.0, 10.0));
     const QPointF highlight_center = rendered_canvas->documentToContent(0, QPointF(30.0, 15.0));
     const QPointF next_page_highlight_center =
@@ -682,6 +737,16 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     malformed_second_frame.insert(QStringLiteral("images"), malformed_images);
     QVERIFY(rendered_canvas->setProperty("glyphFrames",
                                          QVariantList{glyph_frame, malformed_second_frame}));
+    QCOMPARE(rendered_canvas->property("glyphFrames").toList(), partially_changed_frames);
+    QVariantMap malformed_command_frame = second_glyph_frame;
+    QVariantList malformed_commands =
+        malformed_command_frame.value(QStringLiteral("commands")).toList();
+    QVariantMap missing_position = malformed_commands.first().toMap();
+    missing_position.remove(QStringLiteral("xPt"));
+    malformed_commands[0] = missing_position;
+    malformed_command_frame.insert(QStringLiteral("commands"), malformed_commands);
+    QVERIFY(rendered_canvas->setProperty("glyphFrames",
+                                         QVariantList{glyph_frame, malformed_command_frame}));
     QCOMPARE(rendered_canvas->property("glyphFrames").toList(), partially_changed_frames);
     QImage partial_update_frame;
     const auto partial_update_pixel = [&partial_update_frame, &render_window](qreal x, qreal y) {

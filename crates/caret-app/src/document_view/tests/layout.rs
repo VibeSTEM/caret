@@ -466,8 +466,11 @@ fn visible_page_rasterization_returns_binary_glyph_images() -> Result<(), Box<dy
     assert_eq!(page.document_generation, 0);
     assert_eq!(page.font_generation, 1);
     assert_eq!(page.images.len(), 1);
-    assert_eq!(page.placements.len(), 1);
-    assert_eq!(page.placements[0].image_index, 0);
+    assert_eq!(page.commands.len(), 1);
+    assert!(matches!(
+        page.commands[0],
+        crate::document_view::DocumentGlyphDrawCommand::Glyph { image_index: 0, .. }
+    ));
     assert!(page.images[0].pixels.len() > 4);
     assert!(page.images[0].pixels.as_chunks::<4>().1.is_empty());
     Ok(())

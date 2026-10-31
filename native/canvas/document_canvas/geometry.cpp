@@ -262,11 +262,19 @@ void DocumentCanvas::updateGeometry() {
 
 void DocumentCanvas::itemChange(ItemChange change, const ItemChangeData& data) {
     QQuickItem::itemChange(change, data);
+    if (change == ItemSceneChange) {
+        ++m_scene_graph_generation;
+    }
     if (change == ItemDevicePixelRatioHasChanged) {
         ++m_glyph_geometry_revision;
         emit glyphRasterMetricsChanged();
         update();
     }
+}
+
+void DocumentCanvas::releaseResources() {
+    ++m_scene_graph_generation;
+    QQuickItem::releaseResources();
 }
 
 } // namespace caret

@@ -540,14 +540,14 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                  !canvas->glyphFrames()
                                       .first()
                                       .toMap()
-                                      .value(QStringLiteral("placements"))
+                                      .value(QStringLiteral("commands"))
                                       .toList()
                                       .isEmpty(),
                              3000);
     const QVariantMap updated_glyph_frame = canvas->glyphFrames().first().toMap();
     QCOMPARE(updated_glyph_frame.value(QStringLiteral("documentGeneration")).toString(),
              QStringLiteral("1"));
-    QVERIFY(!updated_glyph_frame.value(QStringLiteral("placements")).toList().isEmpty());
+    QVERIFY(!updated_glyph_frame.value(QStringLiteral("commands")).toList().isEmpty());
 
     const auto rendered_glyph_has_ink = [&](qsizetype placement_index) {
         const QImage frame = window.grabWindow();
@@ -556,7 +556,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         }
         const QVariantMap current_frame = canvas->glyphFrames().first().toMap();
         const QVariantList images = current_frame.value(QStringLiteral("images")).toList();
-        const QVariantList placements = current_frame.value(QStringLiteral("placements")).toList();
+        const QVariantList placements = current_frame.value(QStringLiteral("commands")).toList();
         if (images.isEmpty() || placement_index < 0 || placement_index >= placements.size()) {
             return false;
         }
@@ -575,9 +575,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                   current_frame.value(QStringLiteral("rasterPxPerPt")).toReal();
         const QPointF baseline = canvas->mapToItem(
             window.contentItem(),
-            canvas->documentToContent(
-                0, QPointF(placement.value(QStringLiteral("xPt")).toReal(),
-                           placement.value(QStringLiteral("baselineYPt")).toReal())));
+            canvas->documentToContent(0, QPointF(placement.value(QStringLiteral("xPt")).toReal(),
+                                                 placement.value(QStringLiteral("yPt")).toReal())));
         const QRectF glyph_rect(
             baseline.x() + (image.value(QStringLiteral("left")).toReal() - phase_x) * image_scale,
             baseline.y() + (-image.value(QStringLiteral("top")).toReal() - phase_y) * image_scale,
@@ -604,11 +603,11 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(0), 3000);
 
     const qreal latin_baseline_before_fallback =
-        updated_glyph_frame.value(QStringLiteral("placements"))
+        updated_glyph_frame.value(QStringLiteral("commands"))
             .toList()
             .first()
             .toMap()
-            .value(QStringLiteral("baselineYPt"))
+            .value(QStringLiteral("yPt"))
             .toReal();
     const QVariantMap fullwidth_insert = layout_view_model->insertText(QStringLiteral("！"));
     QVERIFY2(fullwidth_insert.value(QStringLiteral("valid")).toBool(),
@@ -623,18 +622,17 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                  canvas->glyphFrames()
                                          .first()
                                          .toMap()
-                                         .value(QStringLiteral("placements"))
+                                         .value(QStringLiteral("commands"))
                                          .toList()
                                          .size() >= 2,
                              3000);
     const QVariantMap mixed_glyph_frame = canvas->glyphFrames().first().toMap();
-    const qreal latin_baseline_after_fallback =
-        mixed_glyph_frame.value(QStringLiteral("placements"))
-            .toList()
-            .first()
-            .toMap()
-            .value(QStringLiteral("baselineYPt"))
-            .toReal();
+    const qreal latin_baseline_after_fallback = mixed_glyph_frame.value(QStringLiteral("commands"))
+                                                    .toList()
+                                                    .first()
+                                                    .toMap()
+                                                    .value(QStringLiteral("yPt"))
+                                                    .toReal();
     QCOMPARE(latin_baseline_after_fallback, latin_baseline_before_fallback);
     QTRY_VERIFY_WITH_TIMEOUT(rendered_glyph_has_ink(1), 3000);
 
@@ -697,7 +695,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                  !canvas->glyphFrames()
                                       .first()
                                       .toMap()
-                                      .value(QStringLiteral("placements"))
+                                      .value(QStringLiteral("commands"))
                                       .toList()
                                       .isEmpty(),
                              3000);

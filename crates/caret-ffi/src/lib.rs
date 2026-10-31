@@ -62,22 +62,18 @@ mod generated {
             pixels: Vec<u8>,
         }
 
-        struct GlyphPlacement {
+        struct GlyphDrawCommand {
+            kind: u8,
             image_index: u32,
-            x_pt: f64,
-            baseline_y_pt: f64,
-            pixel_phase_x: f32,
-            pixel_phase_y: f32,
-            clip_enabled: bool,
-            clip_y0_pt: f64,
-            clip_y1_pt: f64,
-        }
-
-        struct GlyphDecoration {
             x_pt: f64,
             y_pt: f64,
             width_pt: f64,
             height_pt: f64,
+            x2_pt: f64,
+            y2_pt: f64,
+            thickness_pt: f64,
+            pixel_phase_x: f32,
+            pixel_phase_y: f32,
             color_red: u8,
             color_green: u8,
             color_blue: u8,
@@ -88,13 +84,13 @@ mod generated {
         }
 
         struct PageGlyphFrame {
+            session_id: String,
             document_generation: u64,
             font_generation: u64,
             page_index: u32,
             error: String,
             images: Vec<GlyphImage>,
-            placements: Vec<GlyphPlacement>,
-            decorations: Vec<GlyphDecoration>,
+            commands: Vec<GlyphDrawCommand>,
         }
 
         struct DocumentOpenResult {

@@ -66,6 +66,7 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_inline_environment_highlight_rects = parsed_snapshot.inline_environment_highlight_rects;
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
+    m_session_id = parsed_snapshot.session_id;
 }
 
 bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace_document) {
@@ -131,6 +132,7 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     m_input_method_context = std::move(parsed_snapshot.input_method_context);
     m_document_generation = parsed_snapshot.document_generation;
     m_font_generation = parsed_snapshot.font_generation;
+    m_session_id = parsed_snapshot.session_id;
     ++m_layout_revision;
     m_error.clear();
     emit layoutChanged();
