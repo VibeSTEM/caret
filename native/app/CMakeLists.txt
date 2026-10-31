@@ -66,7 +66,12 @@ if(BUILD_TESTING)
       "APPDATA=${CMAKE_CURRENT_BINARY_DIR}/test-appdata"
       "LOCALAPPDATA=${CMAKE_CURRENT_BINARY_DIR}/test-localappdata"
       "$<TARGET_FILE:caret_native_app>" --quit-after-load)
+  add_test(NAME App.ForwardsQtArgumentErrors
+           COMMAND "${CMAKE_COMMAND}" "-DCARET_APP=$<TARGET_FILE:caret_native_app>" -P
+                   "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/tests/expect-qt-platform-argument.cmake")
+  set_tests_properties(App.InvalidArgument PROPERTIES LABELS "cpp;app" WILL_FAIL TRUE)
   set_tests_properties(App.Version App.HeadlessWindowLoads PROPERTIES LABELS "cpp;app" TIMEOUT 30)
+  set_tests_properties(App.ForwardsQtArgumentErrors PROPERTIES LABELS "cpp;app" TIMEOUT 30)
 endif()
 
 if(WIN32)

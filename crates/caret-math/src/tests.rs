@@ -176,6 +176,38 @@ fn rejects_automatically_numbered_environments_and_nested_references() {
 }
 
 #[test]
+fn explicit_math_fences_must_match_requested_input_kind() {
+    for (source, kind) in [
+        ("$$x$$", MathInputKind::Inline),
+        (r"\[x\]", MathInputKind::Inline),
+        ("$x$", MathInputKind::Equation),
+        (r"\(x\)", MathInputKind::Equation),
+        (
+            r"\(\begin{aligned}x &= y\end{aligned}\)",
+            MathInputKind::Align,
+        ),
+    ] {
+        assert!(matches!(
+            parse(source, kind),
+            Err(MathParseError::InputKindMismatch { source: preserved, .. })
+                if preserved == source
+        ));
+    }
+
+    assert!(parse("$$x$$", MathInputKind::Equation).is_ok());
+    assert!(
+        parse(
+            r"\[\begin{aligned}x &= y\end{aligned}\]",
+            MathInputKind::Align
+        )
+        .is_ok()
+    );
+    assert!(parse("$x$", MathInputKind::Inline).is_ok());
+    assert!(parse(r"\(x\)", MathInputKind::Inline).is_ok());
+    assert!(parse("x", MathInputKind::Equation).is_ok());
+}
+
+#[test]
 fn normalized_range_maps_trimmed_unicode_input_to_utf8_bytes() {
     let source = "  α + x  ";
     let Ok(parsed) = parse(source, MathInputKind::Inline) else {

@@ -31,6 +31,29 @@ pub enum MathInputKind {
     Align,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExplicitFenceKind {
+    Inline,
+    Display,
+}
+
+fn explicit_fence_kind(source: &str) -> Option<ExplicitFenceKind> {
+    let source = source.trim();
+    let has_fence = |open: &str, close: &str| {
+        source
+            .strip_prefix(open)
+            .is_some_and(|inner| inner.ends_with(close) && inner.len() > close.len())
+    };
+
+    if has_fence("$$", "$$") || has_fence(r"\[", r"\]") {
+        Some(ExplicitFenceKind::Display)
+    } else if has_fence("$", "$") || has_fence(r"\(", r"\)") {
+        Some(ExplicitFenceKind::Inline)
+    } else {
+        None
+    }
+}
+
 /// 通过语法与输入种类校验的公式及其原始导入文本范围。
 ///
 /// 上游 AST 仅在该值的私有生命周期内保留，不通过公开 API 暴露或写入 `.cdoc`。
@@ -231,8 +254,15 @@ pub fn parse(source: &str, kind: MathInputKind) -> Result<ParsedMath<'_>, MathPa
             command,
         });
     }
+    let fence_mismatches_kind = matches!(
+        (explicit_fence_kind(source), kind),
+        (
+            Some(ExplicitFenceKind::Inline),
+            MathInputKind::Equation | MathInputKind::Align
+        ) | (Some(ExplicitFenceKind::Display), MathInputKind::Inline)
+    );
     let is_aligned = matches!(&ast, MathNode::Matrix(MatrixStyle::Aligned, _, _));
-    if (kind == MathInputKind::Align) != is_aligned {
+    if fence_mismatches_kind || (kind == MathInputKind::Align) != is_aligned {
         return Err(MathParseError::InputKindMismatch {
             source,
             source_range: full_range,

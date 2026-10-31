@@ -89,6 +89,10 @@
 | 2026-10-31 | `cargo fmt --all -- --check`、`git diff --check HEAD` | Rust 格式与补丁空白检查 | 通过 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-math -p caret-doc -p caret-engine -p caret-app --quiet`、`cargo clippy --locked --offline -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo lint --check`、`cargo fmt --all -- --check`、`git diff --check HEAD` | 公式反斜线从画布 BeginCommandLine 入口进入 LaTeX 缓冲；MathFocus 不创建正文候选，正文上下文不变 | 通过：math 17、doc 44、engine 262、app 193 项；目标 Clippy 通过；全仓 lint 9/9、格式及 diff 检查通过 |
 | 2026-10-31 | Terra/medium 数学输入领域复核；Sol/medium 最终完整 diff 只读复核 | 公式与正文输入路由边界、输入缓冲/错误语义、跨 app API 回归、架构文档权威性及最终差异 | Terra 和 Sol 均通过；重复说明改为单一权威链接，未发现未解决问题 |
+| 2026-10-31 | `cargo coverage` | Rust 全局函数与行覆盖率均至少 85% | 通过：函数 1845/2158（85.50%），行 23082/26441（87.30%） |
+| 2026-10-31 | `cargo coverage native` | CTest 通过；native C++ 产品函数与行覆盖率均至少 85% | 通过：CTest 9/9，函数 331/368（89.95%），行 4536/5334（85.04%） |
+| 2026-10-31 | `cargo test --locked --workspace`、`cargo lint --check`、`cargo format --check`、`git diff --check HEAD` | 全工作区测试、9 阶段静态检查、格式与补丁一致 | 通过；workspace 含 Rust、公开文档集成和 native 聚合测试；native CTest 9/9。最终覆盖率见下两行 |
+| 2026-10-31 | `cargo coverage`、`cargo coverage native` | Rust 与 native 函数/行覆盖率门槛均至少 85% | 通过：Rust 函数 1850/2163（85.53%）、行 23140/26491（87.35%）；native 函数 331/369（89.70%）、行 4541/5337（85.09%），CTest 9/9 |
 
 ## 风险与回退
 
@@ -121,5 +125,7 @@
 - 2026-10-31：Session 的 `EditorKey::Tab` 在 MathFocus 下遍历 Caret 树，移动到树顺序中的下一个 Placeholder；当前位置与候选节点通过子索引和容器 offset 比较，扫描不枚举普通文字字素、不在每个节点上重新解析 MathPos，仅在命中后复制路径。不存在后续占位符时不循环；暂存 LaTeX 输入时拒绝导航并保留文档、焦点及输入缓冲。测试覆盖普通/嵌套槽、根 Row 非零边界、最后槽和不完整输入。
 - 2026-10-31：043 的 schema/parser 导入与基础 InlineMath Session 验收完成；三个 crate 测试 17/44/261 项通过，目标 Clippy、app check、cargo format、cargo lint 9 阶段及 diff 检查通过，Terra 领域复核和 Sol 最终评审通过。Equation/Align 命令编辑、`^`/`_` 上下标、已提交节点删除、正文重新进入焦点和细粒度 parser source range patch 留给 044；未知数学字体回退诊断也由 044 验收，表格通用模型及公式保存往返由 045 验收，见“后续任务交接”。
 - 2026-10-31：修复画布将单个 `\` 始终启动正文命令面板导致公式焦点首个反斜线被拒绝的问题：MathFocus 下 Session 将 `BeginCommandLine` 转为 `TypeMathText("\\")`，使后续普通文本接续现有 parser 缓冲；正文焦点路径不变。Engine 和 app command-line JSON API 均增加逐键 `\alpha+` 回归。架构入口规则以 command-input 为唯一权威，公式架构页只链接引用。Terra/medium 领域复核和 Sol/medium 最终评审通过，未发现未解决问题。
+- 2026-10-31：整体分支复核发现块级数学节点令 app 打开有效文档失败；在 044 的真正 MathBox 布局完成前增加有字节上限的原始源码预览，并隔离命中与正文 caret，文档模型不变。补充 `$...$`、`\(...\)`、`$$...$$`、`\[...\]` 与输入类型不匹配回归；打开公式基准将吞吐口径改为实际 `.cdoc` 字节数。native 用例增加 Qt 参数转发、无运行时设置失败后保留/恢复草稿、保存文件名冲突与目录创建失败场景；全局 native 覆盖门槛恢复通过。预览不替代公式排版与 MathFocus，仍由 044 验收。
+- 2026-10-31：Terra 复核发现源码预览虽跳过鼠标命中，仍可能进入相邻键盘导航和公开光标/选区几何。布局快照新增跳过预览的邻段查询；水平/垂直导航保留 RTL 逻辑边界，caret/字号/选区几何拒绝预览端点，跨段选区略过预览。增加应用导航和 engine 几何行为测试。Qt 参数转发测试通过专属无效 platform 名和 stderr 断言验证；默认保存路径测试通过静态根目录入口在 `QTemporaryDir` 验证，不触碰系统 Documents。Terra 修复复核无新阻断项。
 
 完成。

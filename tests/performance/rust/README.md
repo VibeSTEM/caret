@@ -6,7 +6,7 @@ Rust suite 只测 CPU：文档模型、Unicode 文本、字体回退、Parley �
 
 `document_history_save_criterion` 使用相同语料的前 500 段（100,000 个正文 Unicode 字符）和全部 5,000 段（1,000,000 个正文 Unicode 字符），分别测撤销、重做和 `.cdoc` 保存快照序列化。会话打开、光标定位和编辑状态准备在 Criterion 计时区间外；撤销/重做计时包含 Rust 布局更新及 UI 快照生成，不包含 Qt 渲染或磁盘 I/O。该基准用于比较 history 操作规模，不设置吞吐量，因为每次只撤销或重做一项编辑。
 
-`document_open_delete_criterion` 仅为完整文档解码和打开准备报告按实际 Unicode 字符数计算的 Criterion throughput；单字素删除独立分组，不标注整篇吞吐量。若设置 `CARET_PERF_CDOC`，基准会记录实际文件字节数和可见文本 Unicode 字符数，结果不能按默认一百万字符语料解读。
+`document_open_delete_criterion` 为完整文档解码和打开准备按实际 `.cdoc` 文件字节数报告 Criterion throughput；这一口径同时适用于正文、行内公式和块级公式。单字素删除独立分组，不标注整篇吞吐量。若设置 `CARET_PERF_CDOC`，基准使用该文件本身的字节数，结果不能按默认一百万字符语料解读。
 
 `document_view_input_criterion` 还测量在 100,499 个 Unicode 字符、500 段的多语言文档中，对中间段选区执行 `\underline` 命令并生成更新快照的耗时。文档构建和段落选择在计时区间外；命令行 begin/type/accept、Rust 格式事务、布局更新和快照生成在计时区间内。它不包含字体栅格化、Qt 场景图更新或 GPU 呈现。2026-10-30 macOS arm64 release 本机 10 样本的 Criterion 回归斜率估计为 1.5899 ms，95% 置信区间为 1.5742–1.6245 ms；这是当前实现的单次测量，没有历史对照组，因此不据此声称性能提升。
 

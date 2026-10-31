@@ -283,6 +283,34 @@ void ShellLoadTest::preferencesWithoutRuntimeRejectChangesAndKeepDefaults() {
     QVERIFY(preferences.caretBlinkEnabled());
     QVERIFY(preferences.commandSuggestionsEnabled());
     QVERIFY(!preferences.autoSaveEnabled());
+
+    caret::SettingsViewModel settings;
+    QCOMPARE(settings.error(), QStringLiteral("settings.runtime_unavailable"));
+    QVERIFY(settings.activeTheme().isEmpty());
+    QVERIFY(settings.language().isEmpty());
+    QVERIFY(!settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false, false));
+    QCOMPARE(settings.error(), QStringLiteral("settings.runtime_unavailable"));
+    QVERIFY(settings.activeTheme().isEmpty());
+    QVERIFY(settings.language().isEmpty());
+
+    caret::SettingsDialogController controller;
+    controller.setPreferences(&preferences);
+    controller.open();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    QObject late_settings_object;
+    controller.setSettingsObject(&late_settings_object);
+    QVERIFY(controller.settingsObject() == nullptr);
+    controller.editCaretBlinkEnabled(false);
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Failed);
+    QCOMPARE(controller.error(), QStringLiteral("settings.runtime_unavailable"));
+    QVERIFY(!controller.draftCaretBlinkEnabled());
+    QVERIFY(preferences.caretBlinkEnabled());
+    controller.editCaretBlinkEnabled(true);
+    QCOMPARE(controller.state(), caret::SettingsDialogController::Editing);
+    controller.apply();
+    QTRY_COMPARE(controller.state(), caret::SettingsDialogController::Closed);
+    QVERIFY(preferences.caretBlinkEnabled());
 }
 
 void ShellLoadTest::settingsDialogCommitsPreferencesThroughRust() {
@@ -679,6 +707,10 @@ void ShellLoadTest::unknownIconRefusesColoring() {
     const QImage known =
         provider->requestImage(QStringLiteral("close/ff112233"), &size, QSize(16, 16));
     QVERIFY(!known.isNull());
+    const QImage intrinsic_size =
+        provider->requestImage(QStringLiteral("close/ff112233"), nullptr, QSize{});
+    QVERIFY(!intrinsic_size.isNull());
+    QCOMPARE(intrinsic_size.size(), size);
     const QImage zoom_out =
         provider->requestImage(QStringLiteral("zoom-out/ff112233"), &size, QSize(16, 16));
     QVERIFY(!zoom_out.isNull());
