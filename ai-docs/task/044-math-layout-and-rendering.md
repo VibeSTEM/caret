@@ -67,6 +67,10 @@
 | 2026-10-31 | Terra/medium 错误诊断覆盖率复核 | 检查错误文本、上游错误映射与测试的行为价值 | 未发现问题；公开展示契约逐项断言，真实触发和源码范围由解析行为测试覆盖 |
 | 2026-10-31 | Sol/medium 最终只读评审 | 检查修复后相对 main 的完整 diff 与最新验证记录 | 多轮只读终审检查完整 staged/unstaged diff、架构改动和 macOS 测试专属退出路径；最新发现验证表中覆盖率数字过期，已同步为 Rust 85.20%/87.15% 与 native 行覆盖未达门槛；修正后终审确认无剩余文档不一致。评审代理未运行测试或覆盖率 |
 | 2026-10-31 | `cargo test --locked --offline -p caret-engine math_layout` 和 `cargo test --locked --offline -p caret-layout math_text::tests` | 持久树 provenance、中文 shaping、事务资源及行内基线盒行为成立 | 1 + 3 项通过；provider 测试不代表布局快照已经被页面渲染消费 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-layout measured_inline_box_reserves_formula_geometry_in_parley_lines` | 验证 Parley 行内对象向 Caret 输出稳定的 ID、U+FFFC UTF-8 范围、视觉行、行局部位置和基线；拒绝普通文字、尾部索引及重复索引 | 本次新增断言在复验后通过；对象 y 由最终 Caret 行基线计算，未实现页面快照、对象命中/光标或 RTL 行为 |
+| 2026-10-31 | `cargo test --locked --offline -p caret-layout` / `cargo clippy --locked --offline -p caret-layout --all-targets -- -D warnings` / `cargo fmt --all -- --check` / `git diff --check main` | 检查 layout crate 行为回归、新增公共类型的编译/lint、Rust 格式与补丁空白 | 105 项测试与 doc-tests 通过；Clippy、格式和 diff 空白检查通过 |
+| 2026-10-31 | Terra/medium 行内对象几何与输入契约复核 | 检查 y 坐标契约、长段落精度、U+FFFC 范围、防止普通文字误标及测试边界 | 修正坐标契约为行局部、仅接受唯一 U+FFFC 索引，并由 Caret 行基线推导 y；补充非法/重复索引和第二行 Exactly 行距测试。余留 RTL、混排、命中/caret 未验证 |
+| 2026-10-31 | Sol/medium 当前完整 diff 终审 | 只读检查 `main...HEAD` 与工作树，核对输入校验、坐标、行高、错误路径、测试和任务记录 | 未发现可执行问题；确认 page glyph 仍拒绝 inline box，页面/QSG/命中/焦点与 RTL 能力仍作为后续验收。评审未运行测试、格式或 lint |
 | 2026-10-31 | `cargo test --locked --offline -p caret-math layout::tests::node_provenance_does_not_change_math_placement_or_draw_primitives` | provenance 不改变尺寸、绘图项，并保留可表示节点 ID | 通过，覆盖上标、普通/可伸缩重音、phantom 和矩阵横线；矩阵 `EnvRow` 无独立 MathBox provenance，故行 ID 不在节点几何中 |
 | 2026-10-31 | 公式 public error diagnostic tests | parser、conversion 和 layout 错误格式及上游错误映射保持稳定 | `cargo coverage` 中全 workspace 测试通过；覆盖全部公开 parse/layout error variant 的可观察错误文本 |
 | 2026-10-31 | Terra/medium 044 完整性与分层缺口审计 | 对照剩余验收核对布局快照、Parley inline box、分页/glyph/QSG、MathFocus、块事务和失败原子性 | 确认现有 `layout_math_tree` 仍是孤立适配 API：文档布局仍将 InlineMath 展平为 U+FFFC、Equation/Align 保留为源码预览，page glyph 提取拒绝 inline box，MathFocus 仅支持 InlineMath，块历史仍依赖段落补丁。集成前必须统一同代几何快照并修复编辑后布局失败时的事务原子性。`Style` 仍明确拒绝以避免静默丢失样式语义；单子透明 `Group` 折叠到孩子并保留来源别名，多子 `Group` 转为有序行。 |
@@ -92,7 +96,7 @@
 - Cargo 依赖保持分层：`caret-engine → caret-doc/caret-layout/caret-math/caret-structure`、`caret-layout → caret-doc/caret-math`、`caret-structure → caret-doc`、`caret-math → latex-rust`。文档模型是持久化权威，engine 承担持久树与后端无关语法树的边界转换，layout 提供正文塑形与段落布局，math 封装 TeX 后端。三种树的字段映射有维护成本，但代表不同兼容/生命周期边界，不为消除 `match` 而合并 schema。
 - 当前仍不能将公式当作页面能力交付：engine 已提供 `layout_math_align`，从持久 `Align` 多行/多 cell 权威模型生成 `aligned` 数学快照并保留根与 cell 的 provenance；后端 `EnvRow` 尚无独立行几何，页面布局/字形/绘制/命中/焦点仍未消费公式快照。模型组合由 engine 承担，不让 `caret-math` 依赖文档模型或重新解析源码。
 - `MathLayoutItem::ExternalText` 的句柄仅在创建它的 provider 命名空间有效；`take_resources()` 返回 provider 局部资源表。多个 provider 的公式布局不能直接合并同名句柄；每个公式快照须与对应正文资源绑定，或携带明确的资源命名空间身份。公式/页面缓存还要校验 session/document、font generation 和全局排版设置，并保留 composition 预览复用特例。
-- `caret-layout` 已通过 Caret 自有 `InlineObjectPlacement` 隔离 Parley 输入类型，但输出尚未提供行内对象 ID、行号、位置和基线的稳定投影；逻辑 U+FFFC 替换为 U+200B 的 bidi、对象选择/caret/hit 映射也未验证。补齐该投影和对象交互后，再由 engine/page snapshot 消费；不要由 engine 或 Qt 直接解释 Parley item/坐标细节。
+- `caret-layout` 通过 Caret 自有 `InlineObjectPlacement` 隔离 Parley 输入类型，并以 `PositionedInlineObject` 输出 ID、行号、U+FFFC 源范围、段落局部 x、行局部 y 和基线；输入只能把唯一盒绑定到唯一 U+FFFC。行内盒固定按基线对齐，y 从同一 Caret 行的最终基线推导，避免用长段落全局 f32 坐标相减。逻辑 U+FFFC 替换为 U+200B 的 bidi、对象选择/caret/hit 映射尚未验证；下一步由 engine/page snapshot 消费，不要由 engine 或 Qt 直接解释 Parley item/坐标细节。
 - 持久 `Align` 由多行、多 cell 和独立 ID 组成；engine 现在负责将该权威模型组合成后端无关的对齐语法树。cell 与公式根进入快照 provenance；上游将行折叠为无身份 `EnvRow`，所以行几何与行 ID 映射仍是已知缺口，不能用 cell 几何冒充。
 - 页面重用现有段落快照的路径有 composition 预览的跨会话复用特例。接入公式缓存时，缓存键须绑定文档/session 身份、字体代际和全局排版设置；需区分可复用的受信任预览与一般布局，避免把旧 geometry 标成新代。
 - 行内环境与直接下划线 Run 是不同格式权威，Rust 负责边界策略和命令，TextMap 是可失效重建的派生索引，app 仅投影几何；目前没有 Qt/QML 重复持有这些领域规则的情况。
@@ -107,6 +111,7 @@
 - 2026-10-31：本轮 Terra/medium 完整 diff 复核修复了数学布局后端多层透明 Group 的叶与组 provenance 丢失、Group 别名范围过宽、普通段落 shaping 文本重复分配、Caret 公共 API 泄漏 Parley/latex-rust 类型、分层图缺边及 vendored manifest 中缺失的测试/benchmark target 和无用开发依赖。正文 U+FFFC 占位盒在 RTL/混合方向的 bidi、对象选择/caret/hit 映射仍无行为验证；当前没有页面消费者，接入前必须补齐并验证。性能变化仅由代码路径推断，没有基线或测量，不宣称已提升。
 - 2026-10-31：架构专题复核确认保留 `caret-math` 的边界和单向依赖合理，没有新增 crate 的收益；将两处透明 Group provenance 递归与微点换算常量收敛为单一实现，并移除上游 shaper trait 中无人调用的事务 hook，让 Caret backend 作为唯一资源事务权威。**当时**尚需补齐 Align 模型组合入口、provider 资源命名空间绑定、稳定的行内对象几何投影及页面绘制/命中/焦点快照消费；本轮随后提供了 `layout_math_align`，其余集成项仍待完成。
 - 2026-10-31：当时工作区验证：`cargo format --check`、`cargo lint --check` 通过；`cargo test --locked --offline --workspace` 全量通过，native CTest 9/9（在 macOS 崩溃测试子进程安全退出改动前）；当时 `cargo coverage` 在该测试改动后重跑全部 Rust 测试，Rust 全局函数/行门槛通过（85.20% / 87.15%），崩溃 handler 定向测试也通过。`cargo coverage native` 两次完整执行 CTest 9/9，但 native 产品行覆盖为 84.92% 和 84.82%，未达 85% 门槛（函数 89.70%，4 个 LLVM 函数映射警告）；本分支没有 native 生产源码改动，不通过缩小统计范围掩盖该缺口，标记为待解决/待验证。上游 `lupdate` 118 项四 locale 对照无变化，QM 加载 CTest 通过。macOS 崩溃记录子进程测试现用 test-only `_exit(128+signal)` 避免 CrashReporter 弹窗；非 macOS Unix 仍断言原信号退出，正式构建路径不变。
+- 2026-10-31：将 Parley 行内对象位置投影为 Caret 自有 `PositionedInlineObject`。对象必须引用唯一 U+FFFC，禁止把普通相邻文字或尾部插入点伪装成对象 source range；y 采用行局部坐标并从 Caret 行基线推导。补充多行固定行距基线、UTF-8 范围、非法索引和重复索引行为断言；定向用例复验见上表。该投影尚未被分页 page glyph、FFI/QSG、命中或 MathFocus 消费，RTL/混合方向也未验证。
 
 ## 完成摘要
 

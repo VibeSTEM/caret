@@ -14,7 +14,7 @@ pub use parley::{
     VisualAffinity, VisualCursor,
 };
 
-/// Caret 自有的段内对象放置请求；引擎层不需要依赖 Parley 的盒子类型。
+/// Caret 自有的段内对象放置请求；index 必须指向文本中的 U+FFFC 对象占位符。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InlineObjectPlacement {
     /// 当前段落内唯一的对象 ID。
@@ -27,6 +27,27 @@ pub struct InlineObjectPlacement {
     pub height_pt: f32,
     /// 对象基线相对盒顶的距离；`None` 表示底边对齐正文基线。
     pub baseline_pt: Option<f32>,
+}
+
+/// Parley 已定位的行内对象几何；x 相对段落左边，y 相对对应的 Caret 行顶。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionedInlineObject {
+    /// 与输入放置请求一致的对象 ID。
+    pub id: u64,
+    /// 对象对应的逻辑 UTF-8 字节范围。
+    pub source_bytes: Range<usize>,
+    /// 对象所在的视觉行索引。
+    pub line_index: usize,
+    /// 对象左边相对段落左边的 pt 坐标。
+    pub x_pt: f32,
+    /// 对象顶边相对对应 Caret 行顶的 pt 坐标。
+    pub y_pt: f32,
+    /// 对象占用的行内宽度，单位为 pt。
+    pub width_pt: f32,
+    /// 对象高度，单位为 pt。
+    pub height_pt: f32,
+    /// 对象基线相对对象顶边的距离。
+    pub baseline_pt: f32,
 }
 
 /// 判断源文本是否会产生需要段落标记度量的空行，包含开头/连续/结尾 mandatory break。

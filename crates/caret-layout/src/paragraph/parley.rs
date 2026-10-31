@@ -24,7 +24,7 @@ use parley::{
 
 use crate::{
     FontCatalog, FontLineMetrics, InlineObjectPlacement, LineSpacing, ParagraphLayout,
-    ParagraphLayoutError, ResolvedDocumentTextSettings, ShapingStyle,
+    ParagraphLayoutError, PositionedInlineObject, ResolvedDocumentTextSettings, ShapingStyle,
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
@@ -96,6 +96,8 @@ pub struct ParleyParagraphLayout {
     pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
+    /// 调用方放置的行内对象经 Parley 定位后的段落局部几何。
+    pub positioned_inline_objects: Vec<PositionedInlineObject>,
 }
 
 /// 段落布局的版心宽度、行距和共享行网格度量。
@@ -162,9 +164,9 @@ impl ParagraphLayouter {
         self.layout_with_inline_boxes(catalog, paragraph, settings, base_style, options, &[])
     }
 
-    /// 与 [`Self::layout`] 使用相同的样式和分页度量，并在文本的 UTF-8 字节位置放置调用方测量的行内盒。
+    /// 与 [`Self::layout`] 使用相同的样式和分页度量，并在 U+FFFC UTF-8 字节范围放置调用方测量的行内盒。
     /// 对象位置上的 U+FFFC 在仅用于塑形的副本中替换成等长 U+200B，以免额外绘制/推进占位字形；返回的逻辑文本保留 U+FFFC。
-    /// 非空文本才可提供行内对象。每个对象必须有唯一 `id`、位于文本边界上的 `index`、有限且非负的宽度、有限正高度；
+    /// 非空文本才可提供行内对象。每个对象必须有唯一 `id` 和 `index`，且 `index` 指向唯一 U+FFFC；宽度有限且非负，高度有限且为正；
     /// 可选基线必须有限；in-flow 盒子的基线须位于盒子高度内。输入不合规返回 `InvalidInlineBox`，
     /// Parley 输出无法映射返回 `InconsistentShaping`。
     pub fn layout_with_inline_boxes(
@@ -490,6 +492,7 @@ impl ParagraphLayouter {
             parley_line_tops_pt,
             parley_line_heights_pt,
             baseline_adjustments_pt,
+            positioned_inline_objects,
         } = make_paragraph_lines(
             &text,
             &layout,
@@ -509,6 +512,7 @@ impl ParagraphLayouter {
                 parley_line_tops_pt,
                 parley_line_heights_pt,
                 baseline_adjustments_pt,
+                positioned_inline_objects,
                 empty_line_indent_pt,
                 requested_family_missing,
             },
@@ -587,15 +591,17 @@ fn valid_inline_boxes(text: &str, inline_boxes: &[InlineBox]) -> bool {
         return false;
     }
     let mut ids = HashSet::with_capacity(inline_boxes.len());
+    let mut indexes = HashSet::with_capacity(inline_boxes.len());
     inline_boxes.iter().all(|inline_box| {
-        inline_box.index <= text.len()
-            && text.is_char_boundary(inline_box.index)
+        text.get(inline_box.index..)
+            .is_some_and(|suffix| suffix.starts_with('\u{fffc}'))
             && inline_box.width.is_finite()
             && inline_box.width >= 0.0
             && inline_box.height.is_finite()
             && inline_box.height > 0.0
             && inline_box.baseline.is_none_or(f32::is_finite)
             && ids.insert(inline_box.id)
+            && indexes.insert(inline_box.index)
     })
 }
 

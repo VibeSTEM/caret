@@ -129,6 +129,23 @@ fn measured_inline_box_reserves_formula_geometry_in_parley_lines() {
     assert_eq!(boxes[0].width, 24.0);
     assert_eq!(boxes[0].height, 20.0);
     assert_eq!(boxes[0].baseline, Some(15.0));
+    let positioned = &result.positioned_inline_objects;
+    assert_eq!(positioned.len(), 1);
+    assert_eq!(positioned[0].id, 71);
+    assert_eq!(positioned[0].source_bytes, 1..4);
+    assert_eq!(positioned[0].line_index, 0);
+    assert_eq!(positioned[0].width_pt, 24.0);
+    assert_eq!(positioned[0].height_pt, 20.0);
+    assert_eq!(positioned[0].baseline_pt, 15.0);
+    assert!(positioned[0].x_pt.is_finite());
+    assert!(positioned[0].y_pt.is_finite());
+    assert!(
+        (positioned[0].y_pt + positioned[0].baseline_pt
+            - result.paragraph.lines[0].metrics.baseline_pt)
+            .abs()
+            <= 0.001,
+        "baseline error must stay within 0.001 pt"
+    );
     assert!(result.paragraph.lines[0].metrics.height_pt >= 20.0);
     assert!(result.paragraph.lines[0].metrics.baseline_pt >= 15.0);
     assert_eq!(
@@ -161,6 +178,89 @@ fn measured_inline_box_reserves_formula_geometry_in_parley_lines() {
         panic!("inline box index inside a multi-byte object replacement must fail");
     };
     assert_eq!(error.to_string(), "layout.invalid_inline_box");
+
+    for (text, index) in [("ab", 1), ("a", 1)] {
+        let misplaced = MathInlineBoxMetrics {
+            width_pt: 10.0,
+            ascent_pt: 8.0,
+            descent_pt: 2.0,
+        }
+        .inline_box(73, index)
+        .unwrap_or_else(|error| panic!("valid geometry should construct: {error}"));
+        let Err(error) = layouter.layout_with_inline_boxes(
+            &mut catalog,
+            &paragraph(text, Some("en")),
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(120.0),
+            &[misplaced],
+        ) else {
+            panic!("inline box must point to its U+FFFC source placeholder");
+        };
+        assert_eq!(error.to_string(), "layout.invalid_inline_box");
+    }
+
+    let duplicate_indexes = [
+        MathInlineBoxMetrics {
+            width_pt: 10.0,
+            ascent_pt: 8.0,
+            descent_pt: 2.0,
+        }
+        .inline_box(74, 1)
+        .unwrap_or_else(|error| panic!("valid geometry should construct: {error}")),
+        MathInlineBoxMetrics {
+            width_pt: 12.0,
+            ascent_pt: 9.0,
+            descent_pt: 3.0,
+        }
+        .inline_box(75, 1)
+        .unwrap_or_else(|error| panic!("valid geometry should construct: {error}")),
+    ];
+    let Err(error) = layouter.layout_with_inline_boxes(
+        &mut catalog,
+        &source,
+        &settings,
+        &ShapingStyle::new(1200),
+        layout_options(120.0),
+        &duplicate_indexes,
+    ) else {
+        panic!("two inline boxes cannot claim the same source placeholder");
+    };
+    assert_eq!(error.to_string(), "layout.invalid_inline_box");
+
+    let second_line_source = paragraph("x\n\u{fffc}y", Some("en"));
+    let second_line_box = MathInlineBoxMetrics {
+        width_pt: 24.0,
+        ascent_pt: 15.0,
+        descent_pt: 5.0,
+    }
+    .inline_box(76, 2)
+    .unwrap_or_else(|error| panic!("valid inline formula geometry: {error}"));
+    let (_, second_line_layout) = layouter
+        .layout_with_inline_boxes(
+            &mut catalog,
+            &second_line_source,
+            &settings,
+            &ShapingStyle::new(1200),
+            ParagraphLayoutOptions {
+                spacing: LineSpacing::Exactly { centipoints: 1800 },
+                ..layout_options(120.0)
+            },
+            &[second_line_box],
+        )
+        .unwrap_or_else(|error| panic!("second-line inline formula should layout: {error}"));
+    assert_eq!(second_line_layout.positioned_inline_objects.len(), 1);
+    let second_line_object = &second_line_layout.positioned_inline_objects[0];
+    assert_eq!(second_line_object.id, 76);
+    assert_eq!(second_line_object.source_bytes, 2..5);
+    assert_eq!(second_line_object.line_index, 1);
+    assert!(
+        (second_line_object.y_pt + second_line_object.baseline_pt
+            - second_line_layout.paragraph.lines[1].metrics.baseline_pt)
+            .abs()
+            <= 0.001,
+        "second-line baseline error must stay within 0.001 pt"
+    );
 
     let empty = paragraph("", Some("en"));
     let empty_box = MathInlineBoxMetrics {
