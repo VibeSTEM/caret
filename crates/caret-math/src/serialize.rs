@@ -2,6 +2,9 @@
 //!
 //! 输出是解析器可接受的规范形式：参数一律加花括号，控制词后按需补空格。
 //! 对解析器产出的树，`parse(serialize(tree))` 与原树结构相同（节点 ID 与源范围除外）。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
 use caret_doc::{Align, MathNode, MathNodeKind, MathTree};
 

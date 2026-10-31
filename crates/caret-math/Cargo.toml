@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 caret-doc.workspace = true
+read-fonts.workspace = true
+skrifa.workspace = true
 
 [lints]
 workspace = true

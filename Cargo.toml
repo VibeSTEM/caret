@@ -50,6 +50,9 @@ undo = "=0.52.0"
 parley_engine = { version = "=0.12.0", features = ["complex-scripts"] }
 parley = { version = "=0.12.0", features = ["complex-scripts"] }
 swash = "=0.2.10"
+# caret-math 读取 OpenType MATH 表；0.45 起才提供 tables::math，parley 仍用 0.41，见 deny.toml。
+read-fonts = "=0.45.0"
+skrifa = "=0.44.0"
 fontique = { version = "=0.12.0", features = ["system", "fontconfig-dlopen"] }
 linebender_resource_handle = "=0.1.1"
 icu_segmenter = { version = "=2.3.0", features = ["unstable"] }
