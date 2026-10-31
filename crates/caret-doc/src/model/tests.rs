@@ -515,6 +515,42 @@ fn math_validation_rejects_non_boundary_ranges_and_duplicate_ids()
 }
 
 #[test]
+fn align_validation_rejects_ids_shared_across_rows_and_cells() {
+    fn tree(root_id: NodeId) -> MathTree {
+        MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "x".into(),
+            root: MathNode {
+                id: root_id,
+                kind: MathNodeKind::Symbol,
+                text: Some("x".into()),
+                attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
+                source_range: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }
+    }
+
+    let shared_id = NodeId::generate();
+    let mut align = Align {
+        id: NodeId::generate(),
+        source: "x&x".into(),
+        rows: vec![MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![tree(shared_id.clone()), tree(shared_id)],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    assert!(align.validate().is_err());
+
+    align.rows[0].cells[1].root.id = NodeId::generate();
+    assert!(align.validate().is_ok());
+}
+
+#[test]
 fn math_validation_enforces_source_and_tree_limits() {
     fn tree_with_depth(depth: usize) -> MathTree {
         let mut root = MathNode {

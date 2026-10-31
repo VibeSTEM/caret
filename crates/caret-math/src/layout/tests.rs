@@ -5,8 +5,8 @@
 
 use super::{MathLayoutBackend, MathLayoutError, MathLayoutItem};
 use crate::{
-    MathInputKind, MathSyntaxKind, MathSyntaxNode, MathTextMetrics, MathTextShaper, MathTextStyle,
-    parse,
+    MathInputKind, MathSyntaxKind, MathSyntaxNode, MathSyntaxTree, MathTextMetrics, MathTextShaper,
+    MathTextStyle, parse,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -715,6 +715,95 @@ fn public_syntax_tree_is_budget_checked_before_recursive_conversion() {
 }
 
 #[test]
+fn align_layout_budget_allows_its_two_model_wrapper_levels() {
+    let backend =
+        MathLayoutBackend::new().unwrap_or_else(|error| panic!("math font should load: {error}"));
+    let symbol = MathSyntaxNode {
+        kind: MathSyntaxKind::Symbol,
+        text: Some("x".into()),
+        attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
+        source_range: None,
+        provenance: None,
+        provenance_aliases: Vec::new(),
+        children: Vec::new(),
+    };
+    let at_limit =
+        (0..crate::MAX_MATH_NESTING_DEPTH - 1).fold(symbol.clone(), |child, _| MathSyntaxNode {
+            kind: MathSyntaxKind::Row,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children: vec![child],
+        });
+    let align_tree = |cell| MathSyntaxTree {
+        input_kind: MathInputKind::Align,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Matrix,
+            text: None,
+            attributes: BTreeMap::from([
+                ("style".into(), "aligned".into()),
+                ("columns".into(), String::new()),
+            ]),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children: vec![MathSyntaxNode {
+                kind: MathSyntaxKind::Row,
+                text: None,
+                attributes: BTreeMap::new(),
+                source_range: None,
+                provenance: None,
+                provenance_aliases: Vec::new(),
+                children: vec![cell],
+            }],
+        },
+    };
+    let accepted = align_tree(at_limit);
+    backend
+        .layout(&accepted, 1200, &FixedTextShaper)
+        .unwrap_or_else(|error| panic!("align wrapper depth should fit: {error}"));
+
+    let too_deep_cell =
+        (0..crate::MAX_MATH_NESTING_DEPTH).fold(symbol.clone(), |child, _| MathSyntaxNode {
+            kind: MathSyntaxKind::Row,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children: vec![child],
+        });
+    assert!(matches!(
+        backend.layout(&align_tree(too_deep_cell), 1200, &FixedTextShaper),
+        Err(MathLayoutError::UnsupportedTree(_))
+    ));
+
+    let arbitrary_align_tree =
+        (0..crate::MAX_MATH_NESTING_DEPTH + 1).fold(symbol, |child, _| MathSyntaxNode {
+            kind: MathSyntaxKind::Row,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children: vec![child],
+        });
+    assert!(matches!(
+        backend.layout(
+            &MathSyntaxTree {
+                input_kind: MathInputKind::Align,
+                root: arbitrary_align_tree,
+            },
+            1200,
+            &FixedTextShaper,
+        ),
+        Err(MathLayoutError::UnsupportedTree(_))
+    ));
+}
+
+#[test]
 fn multi_character_atom_expansion_counts_toward_the_layout_budget() {
     let tree = crate::MathSyntaxTree {
         input_kind: MathInputKind::Inline,
@@ -726,6 +815,38 @@ fn multi_character_atom_expansion_counts_toward_the_layout_budget() {
             provenance: None,
             provenance_aliases: Vec::new(),
             children: Vec::new(),
+        },
+    };
+    let backend =
+        MathLayoutBackend::new().unwrap_or_else(|error| panic!("math font should load: {error}"));
+    assert!(matches!(
+        backend.layout(&tree, 1200, &FixedTextShaper),
+        Err(MathLayoutError::UnsupportedTree(_))
+    ));
+}
+
+#[test]
+fn public_syntax_budget_rejects_wide_tree() {
+    let tree = MathSyntaxTree {
+        input_kind: MathInputKind::Inline,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Row,
+            text: None,
+            attributes: BTreeMap::new(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children: (0..crate::MAX_MATH_SYNTAX_NODES)
+                .map(|_| MathSyntaxNode {
+                    kind: MathSyntaxKind::Placeholder,
+                    text: None,
+                    attributes: BTreeMap::new(),
+                    source_range: None,
+                    provenance: None,
+                    provenance_aliases: Vec::new(),
+                    children: Vec::new(),
+                })
+                .collect(),
         },
     };
     let backend =

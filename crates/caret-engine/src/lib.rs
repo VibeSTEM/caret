@@ -16,7 +16,7 @@ pub use caret_layout::{HitAffinity, VisualAffinity};
 pub use caret_structure::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
 };
-pub use math_layout::layout_math_tree;
+pub use math_layout::{layout_math_align, layout_math_tree};
 
 pub use editing::{
     Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError,

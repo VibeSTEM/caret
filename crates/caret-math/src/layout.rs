@@ -294,7 +294,8 @@ impl MathLayoutBackend {
         if font_size_centipoints == 0 {
             return Err(MathLayoutError::InvalidFontSize);
         }
-        validate_syntax_budget(tree)?;
+        let max_depth = layout_depth_limit(tree);
+        validate_syntax_budget(tree, max_depth)?;
         text_shaper
             .begin_layout()
             .map_err(MathLayoutError::Backend)?;
@@ -324,7 +325,7 @@ impl MathLayoutBackend {
             &ast,
             &self.font,
             math_style,
-            crate::MAX_MATH_NESTING_DEPTH,
+            max_depth,
             &em_size_pt,
             &latex_text_shaper,
             &node_provenance,
@@ -349,7 +350,25 @@ impl MathLayoutBackend {
     }
 }
 
-fn validate_syntax_budget(tree: &MathSyntaxTree) -> Result<(), MathLayoutError> {
+fn layout_depth_limit(tree: &MathSyntaxTree) -> usize {
+    crate::MAX_MATH_NESTING_DEPTH
+        + if tree.input_kind == MathInputKind::Align
+            && tree.root.kind == MathSyntaxKind::Matrix
+            && tree.root.attributes.get("style").map(String::as_str) == Some("aligned")
+            && tree.root.children.len() <= crate::MAX_MATH_SYNTAX_NODES
+            && tree
+                .root
+                .children
+                .iter()
+                .all(|row| row.kind == MathSyntaxKind::Row)
+        {
+            2
+        } else {
+            0
+        }
+}
+
+fn validate_syntax_budget(tree: &MathSyntaxTree, max_depth: usize) -> Result<(), MathLayoutError> {
     let mut pending = vec![(&tree.root, 1usize)];
     let mut count = 0usize;
     while let Some((node, depth)) = pending.pop() {
@@ -359,10 +378,10 @@ fn validate_syntax_budget(tree: &MathSyntaxTree) -> Result<(), MathLayoutError> 
         count = count
             .checked_add(node.provenance_aliases.len())
             .ok_or(MathLayoutError::GeometryOverflow)?;
-        if depth > crate::MAX_MATH_NESTING_DEPTH {
-            return Err(MathLayoutError::UnsupportedTree(
-                "syntax tree exceeds the configured nesting depth".into(),
-            ));
+        if depth > max_depth {
+            return Err(MathLayoutError::UnsupportedTree(format!(
+                "syntax tree exceeds the configured nesting depth of {max_depth}"
+            )));
         }
         if count > crate::MAX_MATH_SYNTAX_NODES {
             return Err(MathLayoutError::UnsupportedTree(
@@ -370,23 +389,31 @@ fn validate_syntax_budget(tree: &MathSyntaxTree) -> Result<(), MathLayoutError> 
             ));
         }
         if node.attributes.contains_key("atomClass") {
-            let expanded_atoms = node
-                .text
-                .as_deref()
-                .map(|text| text.chars().count())
-                .unwrap_or(0);
-            count = count
-                .checked_add(expanded_atoms.saturating_sub(1))
-                .ok_or(MathLayoutError::GeometryOverflow)?;
-            if count > crate::MAX_MATH_SYNTAX_NODES {
+            let remaining = crate::MAX_MATH_SYNTAX_NODES.saturating_sub(count);
+            let expanded_atoms = node.text.as_deref().map_or(0, |text| {
+                text.chars().take(remaining.saturating_add(2)).count()
+            });
+            if expanded_atoms.saturating_sub(1) > remaining {
                 return Err(MathLayoutError::UnsupportedTree(
                     "expanded syntax tree exceeds the configured node budget".into(),
                 ));
             }
+            count = count
+                .checked_add(expanded_atoms.saturating_sub(1))
+                .ok_or(MathLayoutError::GeometryOverflow)?;
         }
         let child_depth = depth
             .checked_add(1)
             .ok_or(MathLayoutError::GeometryOverflow)?;
+        if count
+            .saturating_add(pending.len())
+            .saturating_add(node.children.len())
+            > crate::MAX_MATH_SYNTAX_NODES
+        {
+            return Err(MathLayoutError::UnsupportedTree(
+                "syntax tree exceeds the configured node budget".into(),
+            ));
+        }
         pending.extend(node.children.iter().map(|child| (child, child_depth)));
     }
     Ok(())

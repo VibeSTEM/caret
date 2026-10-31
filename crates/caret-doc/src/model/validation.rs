@@ -81,6 +81,15 @@ impl MathTree {
     }
 }
 
+impl Align {
+    /// 校验独立对齐公式及其所有行/cell 的 schema、资源预算和全局唯一 ID。
+    pub fn validate(&self) -> Result<(), ModelError> {
+        let mut node_count = 0;
+        validate_depth(0, &mut node_count)?;
+        validate_align(self, 0, &mut HashSet::new(), &mut node_count)
+    }
+}
+
 fn validate_font_family(family: Option<&str>, field: &str) -> Result<(), ModelError> {
     if family.is_some_and(|family| family.trim().is_empty()) {
         return Err(ModelError::InvalidDocument(format!(
@@ -178,22 +187,7 @@ fn validate_block<'a>(
             insert_id(ids, &equation.id)?;
             validate_math_tree(&equation.math_tree, ids, node_count)
         }
-        Block::Align(align) => {
-            insert_id(ids, &align.id)?;
-            if align.source.len() > MAX_MATH_SOURCE_BYTES {
-                return Err(ModelError::InvalidDocument(
-                    "math source exceeds byte limit".to_owned(),
-                ));
-            }
-            for row in &align.rows {
-                validate_depth(depth + 1, node_count)?;
-                insert_id(ids, &row.id)?;
-                for cell in &row.cells {
-                    validate_math_tree(cell, ids, node_count)?;
-                }
-            }
-            Ok(())
-        }
+        Block::Align(align) => validate_align(align, depth, ids, node_count),
         Block::Environment(environment) => {
             insert_id(ids, &environment.id)?;
             if environment.kind == BlockEnvironmentKind::Custom
@@ -217,6 +211,28 @@ fn validate_block<'a>(
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) => Ok(()),
     }
+}
+
+fn validate_align<'a>(
+    align: &'a Align,
+    depth: usize,
+    ids: &mut HashSet<&'a str>,
+    node_count: &mut usize,
+) -> Result<(), ModelError> {
+    insert_id(ids, &align.id)?;
+    if align.source.len() > MAX_MATH_SOURCE_BYTES {
+        return Err(ModelError::InvalidDocument(
+            "math source exceeds byte limit".to_owned(),
+        ));
+    }
+    for row in &align.rows {
+        validate_depth(depth + 1, node_count)?;
+        insert_id(ids, &row.id)?;
+        for cell in &row.cells {
+            validate_math_tree(cell, ids, node_count)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn custom_display_name_is_valid(value: &Value) -> bool {

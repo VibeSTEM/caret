@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathNode, MathNodeKind, MathSourceRange, MathTree};
+use caret_doc::{
+    Align, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_PAYLOAD_BYTES, MathNode, MathNodeKind,
+    MathSourceRange, MathTree,
+};
 use caret_math::{
-    MathInputKind, MathLayoutBackend, MathLayoutError, MathLayoutSnapshot, MathSyntaxKind,
-    MathSyntaxNode, MathSyntaxTree, MathTextShaper,
+    MAX_MATH_SYNTAX_NODES, MathInputKind, MathLayoutBackend, MathLayoutError, MathLayoutSnapshot,
+    MathSyntaxKind, MathSyntaxNode, MathSyntaxTree, MathTextShaper,
 };
 
 /// 根据文档模型布局公式，并将节点 ID 映射到布局几何。
@@ -22,6 +25,138 @@ pub fn layout_math_tree(
         .map_err(|error| MathLayoutError::UnsupportedTree(error.to_string()))?;
     let syntax = syntax_tree_from_model(tree, input_kind)?;
     backend.layout(&syntax, font_size_centipoints, text_shaper)
+}
+
+/// 根据持久化多行对齐模型生成布局快照，并保留公式和单元格的来源 ID。
+/// 上游将环境行折叠为无身份的 `EnvRow`，所以快照暂不提供行 ID 几何。
+/// 文档模型只在 engine 边界解释；`caret-math` 仍仅接收后端无关的语法树。
+pub fn layout_math_align(
+    backend: &MathLayoutBackend,
+    align: &Align,
+    font_size_centipoints: u16,
+    text_shaper: &dyn MathTextShaper,
+) -> Result<MathLayoutSnapshot, MathLayoutError> {
+    validate_align_layout_input(align)?;
+    let mut rows = Vec::with_capacity(align.rows.len());
+    for row in &align.rows {
+        let children = row
+            .cells
+            .iter()
+            .map(|cell| syntax_node_from_model(&cell.root, &cell.source))
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.push(MathSyntaxNode {
+            kind: MathSyntaxKind::Row,
+            text: None,
+            attributes: Default::default(),
+            source_range: None,
+            provenance: None,
+            provenance_aliases: Vec::new(),
+            children,
+        });
+    }
+
+    let syntax = MathSyntaxTree {
+        input_kind: MathInputKind::Align,
+        root: MathSyntaxNode {
+            kind: MathSyntaxKind::Matrix,
+            text: None,
+            // 转换器要求矩阵携带该字段；aligned 后端自行决定各列的左右对齐方式。
+            attributes: std::collections::BTreeMap::from([
+                ("style".into(), "aligned".into()),
+                ("columns".into(), String::new()),
+            ]),
+            source_range: None,
+            provenance: Some(align.id.to_string()),
+            provenance_aliases: Vec::new(),
+            children: rows,
+        },
+    };
+    backend.layout(&syntax, font_size_centipoints, text_shaper)
+}
+
+fn validate_align_layout_input(align: &Align) -> Result<(), MathLayoutError> {
+    if align.source.len() > MAX_MATH_SOURCE_BYTES {
+        return Err(MathLayoutError::UnsupportedTree(
+            "align source exceeds the configured byte limit".into(),
+        ));
+    }
+    let mut node_count = 1usize; // 合成的 aligned Matrix 根。
+    let mut payload_bytes = align.id.as_str().len();
+    for row in &align.rows {
+        node_count = node_count
+            .checked_add(1)
+            .ok_or(MathLayoutError::GeometryOverflow)?;
+        if node_count > MAX_MATH_SYNTAX_NODES {
+            return Err(align_node_budget_error());
+        }
+        if row.cells.len() > MAX_MATH_SYNTAX_NODES.saturating_sub(node_count) {
+            return Err(align_node_budget_error());
+        }
+        for cell in &row.cells {
+            if cell.source.len() > MAX_MATH_SOURCE_BYTES {
+                return Err(MathLayoutError::UnsupportedTree(
+                    "math source exceeds the configured byte limit".into(),
+                ));
+            }
+            let mut pending = vec![&cell.root];
+            while let Some(node) = pending.pop() {
+                node_count = node_count
+                    .checked_add(1)
+                    .ok_or(MathLayoutError::GeometryOverflow)?;
+                if node_count > MAX_MATH_SYNTAX_NODES {
+                    return Err(align_node_budget_error());
+                }
+                payload_bytes = payload_bytes
+                    .saturating_add(node.id.as_str().len())
+                    .saturating_add(node.text.as_ref().map_or(0, String::len))
+                    .saturating_add(node.attributes.iter().fold(0usize, |total, (key, value)| {
+                        total.saturating_add(key.len()).saturating_add(value.len())
+                    }));
+                if payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES {
+                    return Err(align_payload_budget_error());
+                }
+                if node.attributes.contains_key("atomClass") {
+                    let remaining = MAX_MATH_SYNTAX_NODES.saturating_sub(node_count);
+                    let extra_atoms = node.text.as_deref().map_or(0, |text| {
+                        text.chars()
+                            .take(remaining.saturating_add(2))
+                            .count()
+                            .saturating_sub(1)
+                    });
+                    if extra_atoms > remaining {
+                        return Err(align_node_budget_error());
+                    }
+                    node_count = node_count
+                        .checked_add(extra_atoms)
+                        .ok_or(MathLayoutError::GeometryOverflow)?;
+                }
+                if node_count
+                    .saturating_add(pending.len())
+                    .saturating_add(node.children.len())
+                    > MAX_MATH_SYNTAX_NODES
+                {
+                    return Err(align_node_budget_error());
+                }
+                pending.extend(node.children.iter());
+            }
+        }
+    }
+    if payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES {
+        return Err(align_payload_budget_error());
+    }
+    // 先用不分配 ID 集合的布局预算预扫，避免无界模型消耗布局验证资源。
+    align
+        .validate()
+        .map_err(|error| MathLayoutError::UnsupportedTree(error.to_string()))?;
+    Ok(())
+}
+
+fn align_node_budget_error() -> MathLayoutError {
+    MathLayoutError::UnsupportedTree("align exceeds the configured aggregate node budget".into())
+}
+
+fn align_payload_budget_error() -> MathLayoutError {
+    MathLayoutError::UnsupportedTree("align exceeds the configured aggregate payload budget".into())
 }
 
 pub(crate) fn syntax_tree_from_model(
