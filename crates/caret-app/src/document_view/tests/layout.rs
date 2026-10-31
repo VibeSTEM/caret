@@ -47,6 +47,51 @@ fn blank_document_snapshot_contains_page_and_paragraph_layout()
 }
 
 #[test]
+fn layout_failure_after_edit_restores_session_history_and_last_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!();
+    };
+    paragraph.inlines = vec![InlineNode::Run(Run {
+        text: "original".to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    })];
+    paragraph
+        .mark_style
+        .insert("futureMetric".to_owned(), serde_json::json!(true));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let before_snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let before_document = runtime.session.document().clone();
+    let before_selection = runtime.session.selection().clone();
+    let before_session_id = runtime.session.session_id().clone();
+    let before_generation = runtime.session.document_generation();
+
+    let Err(error) = runtime.insert_soft_break_json() else {
+        panic!("a break with an unsupported empty-line mark must fail layout");
+    };
+    assert!(error.contains("layout.unsupported_paragraph_mark_style"));
+    assert_eq!(runtime.session.document(), &before_document);
+    assert_eq!(runtime.session.selection(), &before_selection);
+    assert_eq!(runtime.session.session_id(), &before_session_id);
+    assert!(runtime.session.document_generation() > before_generation);
+    let after_snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(after_snapshot["paragraphs"], before_snapshot["paragraphs"]);
+    assert_eq!(after_snapshot["pages"], before_snapshot["pages"]);
+    assert_ne!(
+        after_snapshot["documentGeneration"], before_snapshot["documentGeneration"],
+        "rollback advances generation to invalidate transient layout results"
+    );
+
+    runtime.insert_text_json("!".to_owned())?;
+    runtime.undo_json()?;
+    assert_eq!(runtime.session.document(), &before_document);
+    Ok(())
+}
+
+#[test]
 fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();

@@ -52,6 +52,33 @@ fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
             .is_some_and(|rectangles| !rectangles.is_empty())
     );
     assert_eq!(snapshot["documentGeneration"], "2");
+    let layout = runtime
+        .composition_snapshot
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("composition snapshot was not retained"))?;
+    let preview_session = runtime
+        .composition_preview_session
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("composition preview was not retained"))?;
+    assert_eq!(
+        layout.session_id.as_ref(),
+        Some(preview_session.session_id())
+    );
+    assert_eq!(
+        layout.document_generation,
+        preview_session.document_generation()
+    );
+    assert_eq!(
+        layout.publication_session_id.as_ref(),
+        Some(runtime.session.session_id())
+    );
+    assert_eq!(
+        layout.publication_generation,
+        Some(runtime.session.document_generation())
+    );
+    let hit: Value = serde_json::from_str(&runtime.hit_test_json(0, 73.0, 73.0)?)?;
+    assert_eq!(hit["sessionId"], snapshot["sessionId"]);
+    assert_eq!(hit["documentGeneration"], snapshot["documentGeneration"]);
     let composition = runtime
         .session
         .composition()
@@ -106,6 +133,82 @@ fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
             .as_array()
             .is_some_and(Vec::is_empty)
     );
+    Ok(())
+}
+
+#[test]
+fn mod_backspace_does_not_drop_an_active_composition_preview_session()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let before: Value = serde_json::from_str(&runtime.input_method_event_json(
+        "preedit".to_owned(),
+        String::new(),
+        0,
+        0,
+        3,
+    )?)?;
+    let composition_id = runtime.composition_id;
+    let after: Value = serde_json::from_str(&runtime.handle_editor_key_json("mod-backspace")?)?;
+
+    assert_eq!(runtime.composition_id, composition_id);
+    assert!(runtime.composition_preview_session.is_some());
+    assert!(runtime.composition_snapshot.is_some());
+    assert_eq!(after["paragraphs"], before["paragraphs"]);
+    assert_eq!(after["compositionRects"], before["compositionRects"]);
+    assert_eq!(
+        runtime
+            .session
+            .composition()
+            .map(|value| value.preedit.as_str()),
+        Some("preedit")
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_commit_layout_rebinds_the_restored_composition_snapshot_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
+    let composition_id = runtime
+        .composition_id
+        .ok_or_else(|| std::io::Error::other("IME composition id was not assigned"))?;
+    let checkpoint = runtime.edit_checkpoint();
+    runtime.session.run(Command::CommitComposition {
+        id: composition_id,
+        text: "committed".to_owned(),
+    })?;
+    runtime.rollback_failed_layout_edit(checkpoint);
+
+    let generation = runtime.session.document_generation();
+    assert_eq!(
+        runtime
+            .composition_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.publication_generation),
+        Some(generation)
+    );
+    assert_eq!(
+        runtime
+            .composition_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.publication_session_id.as_ref()),
+        Some(runtime.session.session_id())
+    );
+    assert_eq!(
+        runtime
+            .composition_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_id.as_ref()),
+        runtime
+            .composition_preview_session
+            .as_ref()
+            .map(caret_engine::Session::session_id)
+    );
+    let view: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(view["documentGeneration"], generation.to_string());
+    assert_eq!(view["paragraphs"][0]["text"], "preedit");
+    assert_eq!(runtime.session.document().body.len(), 1);
     Ok(())
 }
 
@@ -705,11 +808,10 @@ fn failed_ime_preview_does_not_install_composition_state() -> Result<(), Box<dyn
     assert!(runtime.composition_preview_session.is_none());
     assert!(runtime.composition_snapshot.is_none());
 
-    let (candidate, preview, _) =
-        runtime
-            .session
-            .composition_update_candidate(77, "X".to_owned(), None, 1)?;
-    drop((candidate, preview));
+    let candidate = runtime
+        .session
+        .composition_update_candidate(77, "X".to_owned(), None, 1)?;
+    drop(candidate);
     assert!(runtime.session.can_undo());
     runtime.session.run(Command::Undo)?;
     assert_eq!(runtime.session.document().body.len(), 1);

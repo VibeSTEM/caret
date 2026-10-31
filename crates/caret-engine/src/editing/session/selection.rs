@@ -380,6 +380,7 @@ impl Session {
         if cancels_command_line_preedit {
             self.command_line = None;
         }
+        self.advance_composition_candidate_revision();
         Ok(Effect {
             selection_changed: changed,
             composition_changed: cancels_command_line_preedit,

@@ -9,9 +9,13 @@ use caret_layout::{
     FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
     ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
     ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
-    paragraph_has_empty_line, resolve_paragraph_style,
+    paragraph_has_empty_line, paragraph_inline_math_anchors, resolve_paragraph_style,
 };
-use std::{collections::HashMap, sync::Arc};
+use caret_math::{MathLayoutBackend, MathLayoutSnapshot};
+use std::{collections::HashMap, ops::Range, sync::Arc};
+
+mod math;
+use math::layout_inline_math_objects;
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
 const LINE_GRID_LATIN_SAMPLE: char = 'M';
@@ -28,6 +32,8 @@ pub enum DocumentLayoutError {
     UnknownBreakKind(String),
     UnsupportedContent,
     UnsupportedParagraphMarkStyle,
+    MathLayout(String),
+    InvalidCompositionPreview,
 }
 
 impl std::fmt::Display for DocumentLayoutError {
@@ -45,6 +51,10 @@ impl std::fmt::Display for DocumentLayoutError {
             Self::UnsupportedContent => formatter.write_str("layout.unsupported_content"),
             Self::UnsupportedParagraphMarkStyle => {
                 formatter.write_str("layout.unsupported_paragraph_mark_style")
+            }
+            Self::MathLayout(error) => write!(formatter, "layout.math: {error}"),
+            Self::InvalidCompositionPreview => {
+                formatter.write_str("layout.invalid_composition_preview")
             }
         }
     }
@@ -67,8 +77,18 @@ pub struct LaidOutParagraph {
     pub text: Arc<str>,
     interactive: bool,
     pub layout: Arc<ParleyParagraphLayout>,
+    pub(crate) math_objects: Arc<[LaidOutMathObject]>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LaidOutMathObject {
+    pub(crate) inline_box_id: u64,
+    pub(crate) id: NodeId,
+    pub(crate) source_bytes: Range<usize>,
+    pub(crate) layout: Arc<MathLayoutSnapshot>,
+    pub(crate) text_resources: Arc<HashMap<u64, Arc<ParleyParagraphLayout>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +109,7 @@ impl LaidOutParagraph {
         environment_ids: Vec<NodeId>,
         text: String,
         layout: ParleyParagraphLayout,
+        math_objects: Vec<LaidOutMathObject>,
         interactive: bool,
     ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
@@ -109,6 +130,7 @@ impl LaidOutParagraph {
             text: Arc::from(text),
             interactive,
             layout: Arc::new(layout),
+            math_objects: Arc::from(math_objects),
             utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
         }
@@ -122,6 +144,7 @@ impl LaidOutParagraph {
             text: Arc::clone(&self.text),
             interactive: self.interactive,
             layout: Arc::clone(&self.layout),
+            math_objects: Arc::clone(&self.math_objects),
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
             line_locations: vec![None; self.layout.paragraph.lines.len()],
         }
@@ -172,6 +195,10 @@ pub struct PageEnvironmentRange {
 pub struct DocumentLayoutSnapshot {
     pub session_id: Option<NodeId>,
     pub document_generation: u64,
+    /// UI-facing owner when this snapshot shows transient composition content.
+    pub publication_session_id: Option<NodeId>,
+    /// UI-facing document revision; the preview's source generation remains in `document_generation`.
+    pub publication_generation: Option<u64>,
     pub font_generation: u64,
     default_font_size_centipoints: u16,
     pub paragraphs: Vec<LaidOutParagraph>,
@@ -179,6 +206,15 @@ pub struct DocumentLayoutSnapshot {
     pub environment_ranges: Vec<PageEnvironmentRange>,
     math_preview_regions: Vec<MathPreviewRegion>,
     paragraph_lookup: HashMap<NodeId, usize>,
+    layout_context: LayoutReuseContext,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct LayoutReuseContext {
+    global_settings: caret_doc::DocumentSettings,
+    page_section: caret_doc::PageSection,
+    text_settings: ResolvedDocumentTextSettings,
+    base_style: ShapingStyle,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,6 +262,17 @@ pub struct PageHit {
 }
 
 impl DocumentLayoutSnapshot {
+    pub(crate) fn published_session_id(&self) -> Option<&NodeId> {
+        self.publication_session_id
+            .as_ref()
+            .or(self.session_id.as_ref())
+    }
+
+    pub(crate) fn published_document_generation(&self) -> u64 {
+        self.publication_generation
+            .unwrap_or(self.document_generation)
+    }
+
     /// 返回光标位置当前塑形 Run 的字号；Run 边界按视觉亲和性选择，空段回退到文档默认字号。
     pub fn font_size_centipoints_at(
         &self,
@@ -686,15 +733,54 @@ impl DocumentLayoutService {
         catalog: &mut FontCatalog,
         base_style: &ShapingStyle,
     ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let may_reuse = previous.session_id.as_ref() == Some(session.session_id())
+            && previous.font_generation == catalog.generation()
+            && previous
+                .document_generation
+                .checked_add(1)
+                .is_some_and(|generation| generation == session.document_generation())
+            && session.has_single_paragraph_change_since(
+                previous.document_generation,
+                changed_paragraph_id,
+            );
         let mut snapshot = self.layout_with_reuse(
             session.document(),
             session.document_generation(),
             catalog,
             base_style,
-            Some((previous, changed_paragraph_id)),
+            may_reuse.then_some((previous, changed_paragraph_id)),
             false,
         )?;
         snapshot.session_id = Some(session.session_id().clone());
+        Ok(snapshot)
+    }
+
+    /// 为同一 Session 的输入法候选生成预览；仅此路径允许跨候选 Session 复用段落。
+    pub fn layout_composition_preview_reusing(
+        &mut self,
+        base_session: &Session,
+        preview_session: &Session,
+        previous: &DocumentLayoutSnapshot,
+        changed_paragraph_id: &NodeId,
+        catalog: &mut FontCatalog,
+        base_style: &ShapingStyle,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        if !previous.is_current_for(base_session, catalog.generation())
+            || !preview_session.is_composition_preview_of(base_session, changed_paragraph_id)
+        {
+            return Err(DocumentLayoutError::InvalidCompositionPreview);
+        }
+        let mut snapshot = self.layout_with_reuse(
+            preview_session.document(),
+            preview_session.document_generation(),
+            catalog,
+            base_style,
+            Some((previous, changed_paragraph_id)),
+            false,
+        )?;
+        snapshot.session_id = Some(preview_session.session_id().clone());
+        snapshot.publication_session_id = Some(base_session.session_id().clone());
+        snapshot.publication_generation = Some(base_session.document_generation());
         Ok(snapshot)
     }
 
@@ -745,6 +831,16 @@ impl DocumentLayoutService {
         let text_settings =
             ResolvedDocumentTextSettings::from_document_settings(&document.global_settings)
                 .map_err(|error| DocumentLayoutError::FontPreferences(error.to_string()))?;
+        let layout_context = LayoutReuseContext {
+            global_settings: document.global_settings.clone(),
+            page_section: section.clone(),
+            text_settings: text_settings.clone(),
+            base_style: base_style.clone(),
+        };
+        let reuse = reuse.filter(|(previous, _)| {
+            previous.font_generation == catalog.generation()
+                && previous.layout_context == layout_context
+        });
         let mut ordered_inputs = Vec::new();
         collect_blocks(&document.body, &mut ordered_inputs, &mut Vec::new())?;
 
@@ -754,6 +850,8 @@ impl DocumentLayoutService {
             .count();
         let mut paragraphs = Vec::with_capacity(paragraph_count);
         let mut resolved_styles = Vec::with_capacity(paragraph_count);
+        let mut math_backend = None;
+        let mut math_backend_error = None;
         for item in &ordered_inputs {
             let LayoutInput::Paragraph {
                 paragraph,
@@ -789,22 +887,49 @@ impl DocumentLayoutService {
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
-            let (text, layout) = self
-                .layouter
-                .layout(
+            let paragraph_math =
+                paragraph_inline_math_anchors(paragraph, &text_settings, base_style);
+            let (math_objects, inline_boxes) = if paragraph_math.is_empty() {
+                (Vec::new(), Vec::new())
+            } else {
+                if math_backend.is_none() && math_backend_error.is_none() {
+                    match MathLayoutBackend::for_requested_font_family(
+                        document.global_settings.default_math_font_family.as_deref(),
+                    ) {
+                        Ok(backend) => math_backend = Some(backend),
+                        Err(error) => math_backend_error = Some(error.to_string()),
+                    }
+                }
+                layout_inline_math_objects(
+                    math_backend.as_ref(),
+                    math_backend_error.as_deref(),
+                    &mut self.layouter,
+                    catalog,
+                    &text_settings,
+                    &paragraph_math,
+                )?
+            };
+            let options = ParagraphLayoutOptions {
+                width_pt: content_width_pt as f32,
+                spacing: style.line_spacing,
+                line_grid_metrics,
+                line_grid_font_size_centipoints: base_style.font_size_centipoints,
+                first_line_indent_chars: style.first_line_indent_chars,
+            };
+            let (text, layout) = if inline_boxes.is_empty() {
+                self.layouter
+                    .layout(catalog, paragraph, &text_settings, base_style, options)
+            } else {
+                self.layouter.layout_with_inline_boxes(
                     catalog,
                     paragraph,
                     &text_settings,
                     base_style,
-                    ParagraphLayoutOptions {
-                        width_pt: content_width_pt as f32,
-                        spacing: style.line_spacing,
-                        line_grid_metrics,
-                        line_grid_font_size_centipoints: base_style.font_size_centipoints,
-                        first_line_indent_chars: style.first_line_indent_chars,
-                    },
+                    options,
+                    &inline_boxes,
                 )
-                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+            }
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             resolved_styles.push(style);
             paragraphs.push(LaidOutParagraph::new(
                 paragraph.id.clone(),
@@ -812,6 +937,7 @@ impl DocumentLayoutService {
                 environment_ids.clone(),
                 text,
                 layout,
+                math_objects,
                 *interactive,
             ));
         }
@@ -900,6 +1026,8 @@ impl DocumentLayoutService {
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
+            publication_session_id: None,
+            publication_generation: None,
             font_generation: catalog.generation(),
             default_font_size_centipoints: base_style.font_size_centipoints,
             paragraph_lookup,
@@ -907,6 +1035,7 @@ impl DocumentLayoutService {
             pages,
             environment_ranges,
             math_preview_regions,
+            layout_context,
         })
     }
 }
@@ -1025,6 +1154,30 @@ impl DocumentLayoutRuntime {
         );
         self.service.layout_session_reusing(
             session,
+            previous,
+            changed_paragraph_id,
+            &mut self.catalog,
+            &base_style,
+        )
+    }
+
+    /// 为输入法候选布局，只在基准快照仍属当前主 Session 时复用未变段落。
+    pub fn layout_composition_preview_reusing(
+        &mut self,
+        base_session: &Session,
+        preview_session: &Session,
+        previous: &DocumentLayoutSnapshot,
+        changed_paragraph_id: &NodeId,
+    ) -> Result<DocumentLayoutSnapshot, DocumentLayoutError> {
+        let base_style = ShapingStyle::new(
+            preview_session
+                .document()
+                .global_settings
+                .default_font_size_centipoints,
+        );
+        self.service.layout_composition_preview_reusing(
+            base_session,
+            preview_session,
             previous,
             changed_paragraph_id,
             &mut self.catalog,

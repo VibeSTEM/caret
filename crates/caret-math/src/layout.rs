@@ -111,6 +111,10 @@ pub enum MathLayoutDiagnostic {
         requested_family: String,
         used_family: &'static str,
     },
+    /// 当前树或后端不能无损布局时显示稳定占位符，并保留失败原因。
+    InlinePlaceholderFallback { reason: String },
+    /// 空公式使用可见槽位，供 MathFocus 进入和定位。
+    EmptyFormulaPlaceholder,
 }
 
 /// 数学快照生成失败；失败时不会返回部分快照。

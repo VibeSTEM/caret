@@ -107,7 +107,8 @@ impl MathTextShaper for ParleyMathTextShaper<'_> {
         let mut style = state.base_style.clone();
         style.font_size_centipoints = centipoints;
         match math_style {
-            MathTextStyle::Rm | MathTextStyle::Text => {
+            MathTextStyle::Text => {}
+            MathTextStyle::Rm => {
                 style.bold = false;
                 style.italic = false;
                 style.requested_family = None;

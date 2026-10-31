@@ -21,7 +21,7 @@ pub use error::EditError;
 pub use position::{
     Affinity, InlineEnvironmentRange, MathFocus, MathPos, Pos, PositionMap, Selection, StoryId,
 };
-pub use session::Session;
+pub use session::{CompositionUpdateCandidate, Session, SessionCheckpoint};
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};
 

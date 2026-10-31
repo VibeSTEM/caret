@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{InlineEnvironmentKind, InlineNode, Paragraph};
+use caret_doc::{InlineEnvironment, InlineEnvironmentKind, InlineMath, InlineNode, Paragraph};
+use std::ops::Range;
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
@@ -19,6 +20,14 @@ pub struct ShapingStyle {
     pub bold: bool,
     pub italic: bool,
     pub language: Option<String>,
+}
+
+/// 段落逻辑文本中公式对象的 UTF-8 范围及其所在位置的正文塑形样式。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InlineMathAnchor<'a> {
+    pub math: &'a InlineMath,
+    pub source_bytes: Range<usize>,
+    pub shaping_style: ShapingStyle,
 }
 
 /// 文字的语义字体角色；代码块等宽策略由布局层统一解析。
@@ -67,6 +76,62 @@ pub(crate) fn paragraph_style_spans<'a>(
     settings: &crate::ResolvedDocumentTextSettings,
     base_style: &ShapingStyle,
 ) -> Vec<StyledSpan<'a>> {
+    let base = paragraph_base_style(paragraph, settings, base_style);
+    let mut spans = Vec::new();
+    append_inlines(&paragraph.inlines, &base, &mut spans);
+    spans
+}
+
+/// 从同一段落遍历中提取公式源范围和已解析的正文样式，供数学布局的 `\text` provider 使用。
+pub fn paragraph_inline_math_anchors<'a>(
+    paragraph: &'a Paragraph,
+    settings: &crate::ResolvedDocumentTextSettings,
+    base_style: &ShapingStyle,
+) -> Vec<InlineMathAnchor<'a>> {
+    fn collect<'a>(
+        nodes: &'a [InlineNode],
+        style: &ShapingStyle,
+        offset: &mut usize,
+        anchors: &mut Vec<InlineMathAnchor<'a>>,
+    ) {
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => *offset += run.text.len(),
+                InlineNode::Environment(environment) => {
+                    let nested = style_for_environment(style, environment);
+                    collect(&environment.children, &nested, offset, anchors);
+                }
+                InlineNode::Math(math) => {
+                    let start = *offset;
+                    *offset += '\u{fffc}'.len_utf8();
+                    anchors.push(InlineMathAnchor {
+                        math,
+                        source_bytes: start..*offset,
+                        shaping_style: style.clone(),
+                    });
+                }
+                InlineNode::SoftBreak(_) => *offset += '\n'.len_utf8(),
+                InlineNode::Opaque(_) => *offset += '\u{fffc}'.len_utf8(),
+            }
+        }
+    }
+
+    let mut offset = 0;
+    let mut anchors = Vec::new();
+    collect(
+        &paragraph.inlines,
+        &paragraph_base_style(paragraph, settings, base_style),
+        &mut offset,
+        &mut anchors,
+    );
+    anchors
+}
+
+fn paragraph_base_style(
+    paragraph: &Paragraph,
+    settings: &crate::ResolvedDocumentTextSettings,
+    base_style: &ShapingStyle,
+) -> ShapingStyle {
     let mut base = base_style.clone();
     base.language = paragraph.language.clone().or_else(|| {
         settings
@@ -74,9 +139,37 @@ pub(crate) fn paragraph_style_spans<'a>(
             .map(str::to_owned)
             .or_else(|| base_style.language.clone())
     });
-    let mut spans = Vec::new();
-    append_inlines(&paragraph.inlines, &base, &mut spans);
-    spans
+    base
+}
+
+fn style_for_environment(style: &ShapingStyle, environment: &InlineEnvironment) -> ShapingStyle {
+    let mut nested = style.clone();
+    match environment.kind {
+        InlineEnvironmentKind::Bold => {
+            nested.bold = environment
+                .props
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+        }
+        InlineEnvironmentKind::Italic => {
+            nested.italic = environment
+                .props
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+        }
+        InlineEnvironmentKind::Font => {
+            if let Some(family) = environment
+                .props
+                .get("fontFamily")
+                .and_then(serde_json::Value::as_str)
+            {
+                nested.requested_family = Some(family.to_owned());
+            }
+        }
+    }
+    nested
 }
 
 pub(crate) fn boundaries_for_spans(text: &str, spans: &[StyledSpan<'_>]) -> UnicodeBoundaries {
@@ -197,32 +290,7 @@ fn append_inlines<'a>(
                 }
             }
             InlineNode::Environment(environment) => {
-                let mut nested = style.clone();
-                match environment.kind {
-                    InlineEnvironmentKind::Bold => {
-                        nested.bold = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Italic => {
-                        nested.italic = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Font => {
-                        if let Some(family) = environment
-                            .props
-                            .get("fontFamily")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            nested.requested_family = Some(family.to_owned());
-                        }
-                    }
-                }
+                let nested = style_for_environment(style, environment);
                 append_inlines(&environment.children, &nested, output);
             }
             InlineNode::Math(_) => output.push(StyledSpan {
@@ -248,7 +316,10 @@ fn append_inlines<'a>(
 mod tests {
     use std::collections::BTreeMap;
 
-    use caret_doc::{DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, Run, SoftBreak};
+    use caret_doc::{
+        DocumentSettings, InlineEnvironment, InlineMath, MATH_TREE_SCHEMA_VERSION, MathNode,
+        MathNodeKind, MathTree, NodeId, OpaqueNode, Run, SoftBreak,
+    };
 
     use super::*;
     use crate::ResolvedDocumentTextSettings;
@@ -326,6 +397,67 @@ mod tests {
         assert_eq!(spans[0].style.language.as_deref(), Some("zh-Hant"));
         assert_eq!(spans[1].style.language.as_deref(), Some("en-GB"));
         assert_eq!(spans[2].style.language.as_deref(), Some("zh-Hant"));
+    }
+
+    #[test]
+    fn math_anchor_inherits_paragraph_language_and_nested_font_style() {
+        let settings =
+            ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings::default())
+                .unwrap_or_else(|error| panic!("settings rejected: {error}"));
+        let root_id = NodeId::generate();
+        let math = InlineMath {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: MATH_TREE_SCHEMA_VERSION,
+                source: String::new(),
+                root: MathNode {
+                    id: root_id,
+                    kind: MathNodeKind::Row,
+                    text: None,
+                    attributes: BTreeMap::new(),
+                    source_range: None,
+                    children: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        };
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.language = Some("zh-Hant".to_owned());
+        paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Font,
+            definition_id: None,
+            props: BTreeMap::from([(
+                "fontFamily".to_owned(),
+                serde_json::json!("Caret Math Text Test Family"),
+            )]),
+            children: vec![InlineNode::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Bold,
+                definition_id: None,
+                props: BTreeMap::new(),
+                children: vec![InlineNode::Math(math)],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })];
+
+        let anchors =
+            paragraph_inline_math_anchors(&paragraph, &settings, &ShapingStyle::new(1200));
+
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].source_bytes, 0..3);
+        assert_eq!(
+            anchors[0].shaping_style.language.as_deref(),
+            Some("zh-Hant")
+        );
+        assert_eq!(
+            anchors[0].shaping_style.requested_family.as_deref(),
+            Some("Caret Math Text Test Family")
+        );
+        assert!(anchors[0].shaping_style.bold);
     }
 
     #[test]

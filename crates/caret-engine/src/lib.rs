@@ -19,9 +19,10 @@ pub use caret_structure::{
 pub use math_layout::{layout_math_align, layout_math_tree};
 
 pub use editing::{
-    Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError,
-    EditorKey, Effect, InlineEnvironmentRange, InputComposition, MathDirection, MathFocus, MathPos,
-    Pos, PositionMap, Selection, Session, StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
+    Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, CompositionUpdateCandidate,
+    Direction, EditError, EditorKey, Effect, InlineEnvironmentRange, InputComposition,
+    MathDirection, MathFocus, MathPos, Pos, PositionMap, Selection, Session, SessionCheckpoint,
+    StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,

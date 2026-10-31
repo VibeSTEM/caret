@@ -20,6 +20,7 @@ Item {
     property int canvasGeometryRevision: 0
     property var activeGlyphPageRange: []
     property var pageGlyphFrameCache: ({})
+    property var glyphRasterizationErrors: []
 
     function compositionPoint(pageIndex, x, y) {
         // C++ 坐标映射依赖 QML 无法直接读取的画布几何状态。
@@ -104,6 +105,7 @@ Item {
         const frames = [];
         const keys = [];
         const requests = [];
+        const errors = [];
         let lastVisiblePage = low - 1;
         const color = Theme.colorText;
         const pageGlyphRevisions = LayoutViewModel.pageGlyphRevisions;
@@ -121,10 +123,9 @@ Item {
         for (let pageIndex = low; pageIndex < rasterEnd; ++pageIndex) {
             const request = pageCanvas.glyphRasterRequest(pageIndex);
             if (!request.valid) {
-                pageCanvas.glyphFrames = [];
-                lastGlyphRasterKey = "";
-                pageGlyphFrameCache = ({});
-                return;
+                errors.push({ pageIndex: pageIndex, error: "layout.glyphs.invalid_raster_request" });
+                keys.push([pageIndex, "invalid-request"].join(":"));
+                continue;
             }
             const phaseX = request.pageOriginDeviceXPx - Math.floor(request.pageOriginDeviceXPx);
             const phaseY = request.pageOriginDeviceYPx - Math.floor(request.pageOriginDeviceYPx);
@@ -138,7 +139,7 @@ Item {
         }
         pageCanvas.visiblePageRange = [Math.max(0, low - 1), Math.min(pageSizes.length, lastVisiblePage + 2)];
         const key = "visible:" + keys.join("|");
-        if (key === lastGlyphRasterKey)
+        if (key === lastGlyphRasterKey && glyphRasterizationErrors.length === 0)
             return;
         const cacheStart = Math.max(0, low - 2);
         const cacheEnd = Math.min(pageSizes.length, lastVisiblePage + 3);
@@ -153,6 +154,10 @@ Item {
             const request = requests[index];
             const cached = pageGlyphFrameCache[request.pageIndex];
             const frame = cached && cached.key === request.key ? cached.frame : LayoutViewModel.rasterizePageGlyphs(request.pageIndex, request.raster.pxPerPt, request.raster.pageOriginDeviceXPx, request.raster.pageOriginDeviceYPx, Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255), Math.round(color.a * 255));
+            if (!frame.valid) {
+                errors.push({ pageIndex: request.pageIndex, error: frame.error });
+                continue;
+            }
             frames.push(frame);
             nextPageCache[request.pageIndex] = {
                 key: request.key,
@@ -160,16 +165,9 @@ Item {
                 frame: frame
             };
         }
-        for (let index = 0; index < frames.length; ++index) {
-            if (!frames[index].valid) {
-                pageCanvas.glyphFrames = [];
-                lastGlyphRasterKey = "";
-                pageGlyphFrameCache = ({});
-                return;
-            }
-        }
         pageGlyphFrameCache = nextPageCache;
         pageCanvas.glyphFrames = frames;
+        glyphRasterizationErrors = errors;
         lastGlyphRasterKey = key;
     }
 

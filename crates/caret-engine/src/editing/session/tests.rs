@@ -37,6 +37,190 @@ fn paragraph_math_node_count(session: &Session) -> usize {
 }
 
 #[test]
+fn checkpoint_restores_edit_history_and_identity_after_failed_layout_transaction() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    session
+        .run(crate::Command::InsertText("before".to_owned()))
+        .unwrap_or_else(|error| panic!("seed edit should succeed: {error}"));
+    let session_id = session.session_id().clone();
+    let generation = session.document_generation();
+    let document = session.document().clone();
+    let selection = session.selection().clone();
+    let checkpoint = session.checkpoint();
+
+    session
+        .run(crate::Command::InsertText(" after".to_owned()))
+        .unwrap_or_else(|error| panic!("transient edit should succeed: {error}"));
+    assert!(session.restore_checkpoint(checkpoint));
+
+    assert_eq!(session.session_id(), &session_id);
+    assert!(session.document_generation() > generation);
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.selection(), &selection);
+    session
+        .run(crate::Command::InsertText(" again".to_owned()))
+        .unwrap_or_else(|error| panic!("history should accept an edit after rollback: {error}"));
+    session
+        .run(crate::Command::Undo)
+        .unwrap_or_else(|error| panic!("undo should work after rollback: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "");
+    session
+        .run(crate::Command::Redo)
+        .unwrap_or_else(|error| panic!("redo should work after rollback: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "before again");
+}
+
+#[test]
+fn checkpoint_cannot_restore_another_session_or_duplicate_its_identity() {
+    let mut first = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("first session should initialize: {error}"));
+    let mut second = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("second session should initialize: {error}"));
+    let first_id = first.session_id().clone();
+    let second_id = second.session_id().clone();
+    assert!(!first.restore_checkpoint(second.checkpoint()));
+    assert!(!second.restore_checkpoint(first.checkpoint()));
+    assert_eq!(first.session_id(), &first_id);
+    assert_eq!(second.session_id(), &second_id);
+}
+
+#[test]
+fn checkpoint_restore_without_document_transition_preserves_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let generation = session.document_generation();
+    let checkpoint = session.checkpoint();
+
+    assert!(session.restore_checkpoint(checkpoint));
+
+    assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
+fn composition_preview_has_distinct_identity_and_trusted_provenance() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let paragraph_id = session.selection().focus.paragraph_id.clone();
+    let candidate = session
+        .composition_update_candidate(1, "preedit".to_owned(), None, 3)
+        .unwrap_or_else(|error| panic!("composition candidate should be valid: {error}"));
+
+    assert_ne!(
+        candidate.preview_session().session_id(),
+        session.session_id()
+    );
+    assert!(
+        candidate
+            .preview_session()
+            .is_composition_preview_of(&session, &paragraph_id)
+    );
+    assert_eq!(candidate.range().anchor.paragraph_id, paragraph_id);
+}
+
+#[test]
+fn stale_composition_candidate_cannot_replace_a_newer_session_state() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let candidate = session
+        .composition_update_candidate(1, "preedit".to_owned(), None, 3)
+        .unwrap_or_else(|error| panic!("composition candidate should be valid: {error}"));
+    session
+        .run(crate::Command::InsertText("newer".to_owned()))
+        .unwrap_or_else(|error| panic!("newer edit should succeed: {error}"));
+    let document = session.document().clone();
+    let generation = session.document_generation();
+
+    assert!(session.install_composition_candidate(candidate).is_err());
+
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(paragraph_text(&session, 0), "newer");
+}
+
+#[test]
+fn older_composition_candidate_cannot_replace_a_newer_candidate_in_the_same_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let older = session
+        .composition_update_candidate(1, "a".to_owned(), None, 1)
+        .unwrap_or_else(|error| panic!("first candidate should be valid: {error}"));
+    let newer = session
+        .composition_update_candidate(2, "ab".to_owned(), None, 2)
+        .unwrap_or_else(|error| panic!("second candidate should be valid: {error}"));
+    let generation = session.document_generation();
+
+    assert!(session.install_composition_candidate(older).is_err());
+    let _preview = session
+        .install_composition_candidate(newer)
+        .unwrap_or_else(|error| panic!("latest candidate should install: {error}"));
+
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(
+        session
+            .composition()
+            .map(|composition| composition.preedit.as_str()),
+        Some("ab")
+    );
+}
+
+#[test]
+fn composition_candidate_is_rejected_after_selection_moves() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let candidate = session
+        .composition_update_candidate(1, "preedit".to_owned(), None, 3)
+        .unwrap_or_else(|error| panic!("candidate should be valid: {error}"));
+    session
+        .run(crate::Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("selection movement should succeed: {error}"));
+    let selection = session.selection().clone();
+
+    assert!(session.install_composition_candidate(candidate).is_err());
+    assert_eq!(session.selection(), &selection);
+    assert!(session.composition().is_none());
+}
+
+#[test]
+fn composition_candidate_revision_covers_command_line_save_checkpoint_and_rollback() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank document should create a session: {error}"));
+    let checkpoint = session.checkpoint();
+    let stale_after_restore = session
+        .composition_update_candidate(1, "restore".to_owned(), None, 3)
+        .unwrap_or_else(|error| panic!("candidate should be valid: {error}"));
+    assert!(session.restore_checkpoint(checkpoint));
+    assert!(
+        session
+            .install_composition_candidate(stale_after_restore)
+            .is_err()
+    );
+
+    let stale_after_command_line = session
+        .composition_update_candidate(2, "command".to_owned(), None, 3)
+        .unwrap_or_else(|error| panic!("candidate should be valid: {error}"));
+    session
+        .run(crate::Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line should start: {error}"));
+    assert!(
+        session
+            .install_composition_candidate(stale_after_command_line)
+            .is_err()
+    );
+    assert!(session.command_line().is_some());
+
+    let stale_after_save = session
+        .composition_update_candidate(3, "save".to_owned(), None, 2)
+        .unwrap_or_else(|error| panic!("candidate should be valid: {error}"));
+    session.begin_save_checkpoint();
+    assert!(
+        session
+            .install_composition_candidate(stale_after_save)
+            .is_err()
+    );
+}
+
+#[test]
 fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
     let mut document = Document::blank();
     let outer_id = NodeId::generate();
@@ -415,6 +599,48 @@ fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {
     assert_eq!(session.document_generation(), 0);
     assert_ne!(session.session_id(), &old_session_id);
     assert_eq!(session.selection().focus.offset, "new revision".len());
+}
+
+#[test]
+fn checkpoint_restore_accepts_identity_rotation_after_revision_overflow() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session.document_generation = u64::MAX;
+    session.composition_candidate_revision = u64::MAX;
+    let original_document = session.document().clone();
+    let checkpoint = session.checkpoint();
+
+    session
+        .run(Command::InsertText("transient".to_owned()))
+        .unwrap_or_else(|error| panic!("transient edit failed: {error}"));
+    assert_eq!(session.document_generation(), 0);
+
+    assert!(session.restore_checkpoint(checkpoint));
+    assert_eq!(session.document(), &original_document);
+    assert_eq!(session.document_generation(), 1);
+    assert_eq!(session.composition_candidate_revision, 1);
+}
+
+#[test]
+fn composition_preview_checkpoints_cannot_cross_restore_session_state() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::UpdateComposition {
+            id: 4,
+            preedit: "preedit".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+    let mut preview = session
+        .composition_preview(7)
+        .unwrap_or_else(|error| panic!("composition preview failed: {error}"));
+    let base_document = session.document().clone();
+    let preview_document = preview.document().clone();
+
+    assert!(!session.restore_checkpoint(preview.checkpoint()));
+    assert!(!preview.restore_checkpoint(session.checkpoint()));
+    assert_eq!(session.document(), &base_document);
+    assert_eq!(preview.document(), &preview_document);
 }
 
 #[test]

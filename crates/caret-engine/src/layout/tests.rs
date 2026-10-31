@@ -1,13 +1,19 @@
 //! 验证文档布局、分页和命中测试。
 
-use crate::{Affinity, Command, Pos, Selection, Session, StoryId};
+use crate::page_glyphs::PageDrawItem;
+use crate::{
+    Affinity, Command, ImportedMath, Pos, Selection, Session, StoryId, import_parsed_math,
+};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
-    InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree, NodeId, OpaqueNode,
-    Paragraph, Run, SoftBreak,
+    InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree, NodeId,
+    OpaqueNode, Paragraph, Run, SoftBreak,
 };
-use caret_layout::{FontCatalog, FontCatalogError, ShapingStyle, VisualAffinity};
-use std::collections::BTreeMap;
+use caret_layout::{
+    FontCatalog, FontCatalogError, ParagraphLayouter, ParleyMathTextShaper,
+    ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
+};
+use std::{collections::BTreeMap, sync::Arc};
 
 use super::{DocumentLayoutError, DocumentLayoutService};
 
@@ -37,6 +43,495 @@ fn source_only_math_tree(source: &str) -> MathTree {
         },
         extra: Default::default(),
     }
+}
+
+fn inline_math_from_source(source: &str) -> InlineMath {
+    let parsed = caret_math::parse(source, caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("inline source should parse: {error}"));
+    match import_parsed_math(&parsed)
+        .unwrap_or_else(|error| panic!("inline source should import: {error}"))
+    {
+        ImportedMath::Inline(math) => math,
+        _ => panic!("inline input should produce InlineMath"),
+    }
+}
+
+#[test]
+fn inline_math_layout_is_bound_to_its_paragraph_and_page_snapshot() {
+    let first_math = inline_math_from_source(r"\text{A}");
+    let second_math = inline_math_from_source(r"\text{B}");
+    let first_formula_id = first_math.id.clone();
+    let second_formula_id = second_math.id.clone();
+    let mut source = paragraph("xyz");
+    let paragraph_id = source.id.clone();
+    source.inlines = vec![
+        InlineNode::Run(Run {
+            text: "x".to_owned(),
+            language: Some("en".to_owned()),
+            props: Default::default(),
+            extra: Default::default(),
+        }),
+        InlineNode::Math(first_math),
+        InlineNode::Run(Run {
+            text: "y".to_owned(),
+            language: Some("en".to_owned()),
+            props: Default::default(),
+            extra: Default::default(),
+        }),
+        InlineNode::Math(second_math),
+        InlineNode::Run(Run {
+            text: "z".to_owned(),
+            language: Some("en".to_owned()),
+            props: Default::default(),
+            extra: Default::default(),
+        }),
+    ];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(source)];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout(&document, 9, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("inline formula layout failed: {error}"));
+
+    let paragraph = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("laid out paragraph is missing"));
+    assert_eq!(paragraph.text.as_ref(), "x\u{fffc}y\u{fffc}z");
+    assert_eq!(paragraph.layout.positioned_inline_objects.len(), 2);
+    assert_eq!(
+        paragraph.layout.positioned_inline_objects[0].source_bytes,
+        1..4
+    );
+    assert_eq!(
+        paragraph.layout.positioned_inline_objects[1].source_bytes,
+        5..8
+    );
+    assert_eq!(paragraph.math_objects.len(), 2);
+    assert_eq!(paragraph.math_objects[0].id, first_formula_id);
+    assert_eq!(paragraph.math_objects[1].id, second_formula_id);
+    assert!(paragraph.math_objects[0].layout.width_micro_pt > 0);
+    assert!(
+        paragraph
+            .math_objects
+            .iter()
+            .all(|math| { math.text_resources.len() == 1 && math.text_resources.contains_key(&1) })
+    );
+    assert!(!Arc::ptr_eq(
+        &paragraph.math_objects[0].text_resources,
+        &paragraph.math_objects[1].text_resources
+    ));
+
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("page math snapshot failed: {error}"));
+    assert_eq!(page.math_objects.len(), 2);
+    let math_positions = page
+        .draw_order
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| matches!(item, PageDrawItem::MathObject(_)).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(math_positions.len(), 2);
+    assert!(matches!(
+        page.draw_order[math_positions[0]],
+        PageDrawItem::MathObject(0)
+    ));
+    assert!(matches!(
+        page.draw_order[math_positions[1]],
+        PageDrawItem::MathObject(1)
+    ));
+    assert!(
+        page.draw_order[..math_positions[0]]
+            .iter()
+            .any(|item| matches!(item, PageDrawItem::GlyphRun(_)))
+    );
+    assert!(
+        page.draw_order[math_positions[0] + 1..math_positions[1]]
+            .iter()
+            .any(|item| matches!(item, PageDrawItem::GlyphRun(_)))
+    );
+    assert!(
+        page.draw_order[math_positions[1] + 1..]
+            .iter()
+            .any(|item| matches!(item, PageDrawItem::GlyphRun(_)))
+    );
+    for (index, (positioned_math, expected_id, expected_range)) in page
+        .math_objects
+        .iter()
+        .zip([&first_formula_id, &second_formula_id])
+        .zip([1..4, 5..8])
+        .enumerate()
+        .map(|(index, ((object, id), range))| (index, (object, id, range)))
+    {
+        assert_eq!(positioned_math.id, *expected_id);
+        assert_eq!(positioned_math.paragraph_id, paragraph.id);
+        assert_eq!(positioned_math.source_bytes, expected_range);
+        assert_eq!(positioned_math.line_index, 0);
+        assert!(positioned_math.x_pt.is_finite());
+        assert!(positioned_math.baseline_y_pt.is_finite());
+        assert_eq!(positioned_math.layout, paragraph.math_objects[index].layout);
+        assert!(Arc::ptr_eq(
+            &positioned_math.text_resources,
+            &paragraph.math_objects[index].text_resources
+        ));
+    }
+}
+
+#[test]
+fn composition_layout_rejects_unrelated_and_stale_preview_sessions() {
+    let mut base = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("base session should be valid: {error}"));
+    let candidate = base
+        .composition_update_candidate(7, "preedit".to_owned(), None, 7)
+        .unwrap_or_else(|error| panic!("composition candidate should be valid: {error}"));
+    let paragraph_id = base.selection().focus.paragraph_id.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let base_snapshot = service
+        .layout_session(&base, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("base layout failed: {error}"));
+
+    let unrelated = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("unrelated session should be valid: {error}"));
+    assert!(matches!(
+        service.layout_composition_preview_reusing(
+            &base,
+            &unrelated,
+            &base_snapshot,
+            &paragraph_id,
+            &mut catalog,
+            &ShapingStyle::new(1200),
+        ),
+        Err(DocumentLayoutError::InvalidCompositionPreview)
+    ));
+
+    base.run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("base interaction change failed: {error}"));
+    assert!(matches!(
+        service.layout_composition_preview_reusing(
+            &base,
+            candidate.preview_session(),
+            &base_snapshot,
+            &paragraph_id,
+            &mut catalog,
+            &ShapingStyle::new(1200),
+        ),
+        Err(DocumentLayoutError::InvalidCompositionPreview)
+    ));
+}
+
+#[test]
+fn paragraph_reuse_requires_matching_session_and_layout_context() {
+    let document = Document::blank();
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut original = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("document should create a session: {error}"));
+    let other_session = Session::new(document)
+        .unwrap_or_else(|error| panic!("same document should create another session: {error}"));
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let style = ShapingStyle::new(1200);
+    let original_snapshot = service
+        .layout_session(&original, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("original layout failed: {error}"));
+    let original_layout = Arc::clone(
+        &original_snapshot
+            .paragraph_by_id(&paragraph_id)
+            .unwrap_or_else(|| panic!("original paragraph is missing"))
+            .layout,
+    );
+
+    let other_snapshot = service
+        .layout_session_reusing(
+            &other_session,
+            &original_snapshot,
+            &NodeId::generate(),
+            &mut catalog,
+            &style,
+        )
+        .unwrap_or_else(|error| panic!("cross-session layout should recompute: {error}"));
+    let other_layout = &other_snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("other session paragraph is missing"))
+        .layout;
+    assert!(!Arc::ptr_eq(&original_layout, other_layout));
+
+    original
+        .run(Command::SetPageGeometry(caret_doc::PageGeometry {
+            orientation: caret_doc::Orientation::Landscape,
+            ..caret_doc::PageGeometry::default()
+        }))
+        .unwrap_or_else(|error| panic!("page geometry change should succeed: {error}"));
+    let changed_context_snapshot = service
+        .layout_session_reusing(
+            &original,
+            &original_snapshot,
+            &NodeId::generate(),
+            &mut catalog,
+            &style,
+        )
+        .unwrap_or_else(|error| panic!("changed layout context should recompute: {error}"));
+    let changed_context_layout = &changed_context_snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("updated paragraph is missing"))
+        .layout;
+    assert!(!Arc::ptr_eq(&original_layout, changed_context_layout));
+}
+
+#[test]
+fn paragraph_reuse_rejects_an_id_other_than_the_actual_changed_paragraph() {
+    let mut document = Document::blank();
+    let other_paragraph = Paragraph::empty(NodeId::generate());
+    let other_paragraph_id = other_paragraph.id.clone();
+    document.body.push(Block::Paragraph(other_paragraph));
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("two-paragraph document should be valid: {error}"));
+    let changed_paragraph_id = session.selection().focus.paragraph_id.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let style = ShapingStyle::new(1200);
+    let previous = service
+        .layout_session(&session, &mut catalog, &style)
+        .unwrap_or_else(|error| panic!("initial layout failed: {error}"));
+    let unchanged_layout = Arc::clone(
+        &previous
+            .paragraph_by_id(&other_paragraph_id)
+            .unwrap_or_else(|| panic!("second paragraph is missing"))
+            .layout,
+    );
+
+    session
+        .run(Command::InsertText("changed".to_owned()))
+        .unwrap_or_else(|error| panic!("paragraph edit should succeed: {error}"));
+    assert_ne!(changed_paragraph_id, other_paragraph_id);
+    let incorrect_claim = service
+        .layout_session_reusing(
+            &session,
+            &previous,
+            &other_paragraph_id,
+            &mut catalog,
+            &style,
+        )
+        .unwrap_or_else(|error| panic!("untrusted reuse claim should recompute: {error}"));
+
+    assert!(!Arc::ptr_eq(
+        &unchanged_layout,
+        &incorrect_claim
+            .paragraph_by_id(&other_paragraph_id)
+            .unwrap_or_else(|| panic!("second paragraph is missing after layout"))
+            .layout
+    ));
+}
+
+#[test]
+fn empty_inline_math_keeps_a_line_box_for_math_focus() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session should be valid: {error}"));
+    session
+        .run(Command::InsertInlineMath)
+        .unwrap_or_else(|error| panic!("empty inline math command should succeed: {error}"));
+    let paragraph_id = session.selection().focus.paragraph_id.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    let snapshot = service
+        .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("empty inline formula should remain placeable: {error}"));
+
+    let paragraph = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("laid out paragraph is missing"));
+    let object = paragraph
+        .layout
+        .positioned_inline_objects
+        .first()
+        .unwrap_or_else(|| panic!("empty formula placeholder needs a measured line box"));
+    assert_eq!(object.source_bytes, 0..3);
+    assert!(object.width_pt > 0.0);
+    assert!(object.height_pt > 0.0);
+    assert_eq!(paragraph.math_objects.len(), 1);
+    assert!(matches!(
+        paragraph.math_objects[0].layout.items.as_slice(),
+        [caret_math::MathLayoutItem::ExternalText { .. }]
+    ));
+    assert_eq!(paragraph.math_objects[0].layout.nodes.len(), 1);
+    assert_eq!(
+        snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("empty formula page snapshot failed: {error}"))
+            .math_objects
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn unsupported_inline_math_tree_keeps_document_layoutable_with_locatable_placeholder() {
+    let root_id = NodeId::generate();
+    let math = InlineMath {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "stale source\nthat must not be rendered".to_owned(),
+            root: MathNode {
+                id: root_id.clone(),
+                kind: MathNodeKind::Style,
+                text: None,
+                attributes: Default::default(),
+                source_range: None,
+                children: vec![MathNode {
+                    id: NodeId::generate(),
+                    kind: MathNodeKind::Symbol,
+                    text: Some("x".to_owned()),
+                    attributes: Default::default(),
+                    source_range: None,
+                    children: Vec::new(),
+                    extra: Default::default(),
+                }],
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let mut source = paragraph("");
+    let paragraph_id = source.id.clone();
+    source.inlines = vec![InlineNode::Math(math)];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(source)];
+    let original = document.clone();
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+
+    let snapshot = service
+        .layout(&document, 3, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("unsupported math should not reject the document: {error}"));
+
+    assert_eq!(document, original);
+    let paragraph = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("laid out paragraph is missing"));
+    let formula = &paragraph.math_objects[0];
+    assert!(matches!(
+        formula.layout.diagnostics.as_slice(),
+        [caret_math::MathLayoutDiagnostic::InlinePlaceholderFallback { .. }]
+    ));
+    assert_eq!(formula.layout.nodes[0].node_id, root_id.to_string());
+    assert!(formula.layout.width_micro_pt > 0);
+    assert!(formula.text_resources.contains_key(&1));
+    let resource = formula
+        .text_resources
+        .get(&1)
+        .unwrap_or_else(|| panic!("fallback text should be retained"));
+    assert_eq!(resource.paragraph.lines.len(), 1);
+    assert_eq!(resource.paragraph.lines[0].source_bytes, 0..3);
+    let glyph_ids = |layout: &caret_layout::ParleyParagraphLayout| {
+        layout
+            .layout
+            .get(0)
+            .into_iter()
+            .flat_map(|line| line.items())
+            .filter_map(|item| match item {
+                caret_layout::PositionedGlyphLayoutItem::GlyphRun(run) => Some(
+                    run.positioned_glyphs()
+                        .map(|glyph| glyph.id)
+                        .collect::<Vec<_>>(),
+                ),
+                caret_layout::PositionedGlyphLayoutItem::InlineBox(_) => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    };
+    let mut fallback_layouter = ParagraphLayouter::new();
+    let settings =
+        ResolvedDocumentTextSettings::from_document_settings(&Document::blank().global_settings)
+            .unwrap_or_else(|error| panic!("document text settings should resolve: {error}"));
+    let style = ShapingStyle::new(1200);
+    let text_shaper =
+        ParleyMathTextShaper::new(&mut catalog, &mut fallback_layouter, &settings, &style);
+    caret_math::MathTextShaper::begin_layout(&text_shaper)
+        .unwrap_or_else(|error| panic!("text layout transaction should start: {error}"));
+    let expected = caret_math::MathTextShaper::shape_text(
+        &text_shaper,
+        "□",
+        caret_math::MathTextStyle::Text,
+        12_000_000,
+    )
+    .unwrap_or_else(|error| panic!("visible placeholder should shape: {error}"));
+    caret_math::MathTextShaper::finish_layout(&text_shaper, true);
+    let expected_resources = text_shaper.take_resources();
+    assert_eq!(
+        glyph_ids(resource),
+        glyph_ids(
+            expected_resources
+                .get(&expected.handle)
+                .unwrap_or_else(|| panic!("placeholder shaping resource is missing"))
+        )
+    );
+}
+
+#[test]
+fn negative_strut_metrics_fall_back_instead_of_rejecting_the_document() {
+    let root_id = NodeId::generate();
+    let math = InlineMath {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: "\\strut".to_owned(),
+            root: MathNode {
+                id: root_id.clone(),
+                kind: MathNodeKind::Strut,
+                text: None,
+                attributes: BTreeMap::from([
+                    ("heightNumerator".to_owned(), "-1".to_owned()),
+                    ("heightDenominator".to_owned(), "1".to_owned()),
+                    ("heightUnit".to_owned(), "em".to_owned()),
+                    ("depthNumerator".to_owned(), "0".to_owned()),
+                    ("depthDenominator".to_owned(), "1".to_owned()),
+                    ("depthUnit".to_owned(), "em".to_owned()),
+                ]),
+                source_range: None,
+                children: Vec::new(),
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let mut source = paragraph("");
+    let paragraph_id = source.id.clone();
+    source.inlines = vec![InlineNode::Math(math)];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(source)];
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+
+    let snapshot = service
+        .layout(&document, 4, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("negative strut must not reject the document: {error}"));
+
+    let paragraph = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("laid out paragraph is missing"));
+    let formula = &paragraph.math_objects[0];
+    assert_eq!(formula.layout.nodes[0].node_id, root_id.to_string());
+    assert!(formula.layout.width_micro_pt > 0);
+    assert!(formula.layout.ascent_micro_pt >= 0);
+    assert!(formula.layout.descent_micro_pt >= 0);
+    assert!(formula.layout.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        caret_math::MathLayoutDiagnostic::InlinePlaceholderFallback { .. }
+    )));
 }
 
 #[test]

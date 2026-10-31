@@ -6,6 +6,7 @@
 mod clipboard;
 mod command_line;
 mod composition;
+pub use composition::CompositionUpdateCandidate;
 mod current_environment;
 mod formatting;
 mod history;
@@ -53,6 +54,7 @@ pub struct Session {
     pub(super) selection: Selection,
     selection_visual_affinity: VisualAffinity,
     session_id: NodeId,
+    checkpoint_owner_id: NodeId,
     document_generation: u64,
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
@@ -73,6 +75,24 @@ pub struct Session {
     next_history_state_id: u64,
     history_estimated_bytes: usize,
     history_merge_epoch: u64,
+    composition_preview_origin: Option<CompositionPreviewOrigin>,
+    layout_reuse_change: Option<(u64, NodeId)>,
+    composition_candidate_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompositionPreviewOrigin {
+    base_session_id: NodeId,
+    base_generation: u64,
+    base_state_revision: u64,
+    changed_paragraph_id: NodeId,
+}
+
+/// 保留完整身份与历史的事务检查点；布局失败时可原样恢复编辑状态。
+#[derive(Debug)]
+pub struct SessionCheckpoint {
+    owner_id: NodeId,
+    session: Session,
 }
 
 impl Session {
@@ -89,6 +109,7 @@ impl Session {
             affinity: Affinity::Downstream,
         };
         let structure_index = Arc::new(StructureIndex::build(&document));
+        let session_id = NodeId::generate();
         Ok(Self {
             paragraph_index: build_paragraph_index(&document.body),
             structure_index,
@@ -98,7 +119,8 @@ impl Session {
                 focus: pos,
             },
             selection_visual_affinity: VisualAffinity::Downstream,
-            session_id: NodeId::generate(),
+            session_id: session_id.clone(),
+            checkpoint_owner_id: session_id,
             document_generation: 0,
             composition: None,
             pending_inline_style: PendingInlineStyle::default(),
@@ -117,7 +139,55 @@ impl Session {
             next_history_state_id: 1,
             history_estimated_bytes: 0,
             history_merge_epoch: 0,
+            composition_preview_origin: None,
+            layout_reuse_change: None,
+            composition_candidate_revision: 0,
         })
+    }
+
+    /// 创建用于跨布局事务回滚的完整检查点，包含历史、焦点和暂存输入状态。
+    pub fn checkpoint(&self) -> SessionCheckpoint {
+        let mut session = self.clone();
+        session.session_id.clone_from(&self.session_id);
+        session
+            .checkpoint_owner_id
+            .clone_from(&self.checkpoint_owner_id);
+        session.document_generation = self.document_generation;
+        session.composition_candidate_revision = self.composition_candidate_revision;
+        SessionCheckpoint {
+            owner_id: self.checkpoint_owner_id.clone(),
+            session,
+        }
+    }
+
+    /// 恢复检查点，连同编辑历史、缓存索引和瞬态焦点一并回滚。
+    pub fn restore_checkpoint(&mut self, checkpoint: SessionCheckpoint) -> bool {
+        if self.checkpoint_owner_id != checkpoint.owner_id {
+            return false;
+        }
+        let current_candidate_revision = self.composition_candidate_revision;
+        let current_session_id = self.session_id.clone();
+        let identity_rotated = self.session_id != checkpoint.session.session_id;
+        let checkpoint_generation = checkpoint.session.document_generation;
+        let next_generation = if self.document_generation == checkpoint_generation {
+            Some(checkpoint_generation)
+        } else {
+            self.document_generation.checked_add(1)
+        };
+        let next_session_id = next_generation.is_none().then(NodeId::generate);
+        *self = checkpoint.session;
+        self.composition_candidate_revision = current_candidate_revision;
+        if let Some(generation) = next_generation {
+            self.document_generation = generation;
+            if identity_rotated {
+                self.session_id = current_session_id;
+            }
+        } else {
+            self.session_id = next_session_id.unwrap_or_else(NodeId::generate);
+            self.document_generation = 0;
+        }
+        self.advance_composition_candidate_revision();
+        true
     }
 
     pub fn document(&self) -> &Document {
@@ -141,6 +211,47 @@ impl Session {
     /// 当前公式焦点；数学输入路由到该 MathPos，正文 Selection 保持在公式对象边界。
     pub fn math_focus(&self) -> Option<&MathFocus> {
         self.math_focus.as_ref()
+    }
+
+    /// 验证候选 Session 由指定主会话的 composition 预览 API 创建。
+    pub fn is_composition_preview_of(&self, base: &Self, changed_paragraph_id: &NodeId) -> bool {
+        self.session_id != base.session_id
+            && base
+                .document_generation
+                .checked_add(1)
+                .is_some_and(|generation| generation == self.document_generation)
+            && self
+                .composition_preview_origin
+                .as_ref()
+                .is_some_and(|origin| {
+                    origin.base_session_id == base.session_id
+                        && origin.base_generation == base.document_generation
+                        && origin.base_state_revision == base.composition_candidate_revision
+                        && &origin.changed_paragraph_id == changed_paragraph_id
+                })
+    }
+
+    pub(crate) fn has_single_paragraph_change_since(
+        &self,
+        previous_generation: u64,
+        paragraph_id: &NodeId,
+    ) -> bool {
+        self.layout_reuse_change
+            .as_ref()
+            .is_some_and(|(generation, changed_id)| {
+                previous_generation.checked_add(1) == Some(*generation)
+                    && *generation == self.document_generation
+                    && changed_id == paragraph_id
+            })
+    }
+
+    fn advance_composition_candidate_revision(&mut self) {
+        if let Some(next) = self.composition_candidate_revision.checked_add(1) {
+            self.composition_candidate_revision = next;
+        } else {
+            self.session_id = NodeId::generate();
+            self.composition_candidate_revision = 0;
+        }
     }
 
     /// 当前尚未组成有效公式语法的原始输入；错误输入保留到继续输入、退格或 Escape。
@@ -230,6 +341,7 @@ impl Session {
             focus: self.selection.focus.clone(),
         });
         self.block_environment_exit = None;
+        self.advance_composition_candidate_revision();
         Ok(Effect {
             selection_changed: changed,
             ..Effect::default()
@@ -252,10 +364,19 @@ impl Session {
     /// 在异步保存捕获修订前切断输入合并，保留可精确返回的保存位置。
     pub fn begin_save_checkpoint(&mut self) {
         self.advance_history_merge_epoch();
+        self.advance_composition_candidate_revision();
     }
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        let result = self.run_inner(command);
+        if result.is_ok() {
+            self.advance_composition_candidate_revision();
+        }
+        result
+    }
+
+    fn run_inner(&mut self, command: Command) -> Result<Effect, EditError> {
         let inserted_text = match &command {
             Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
             Command::InsertOneCharacterWidthSpace => Some("\u{2003}"),
@@ -714,6 +835,13 @@ impl Session {
                 self.document_generation = 0;
             }
         }
+        if effect.document_changed {
+            self.composition_preview_origin = None;
+            self.layout_reuse_change = effect
+                .changed_paragraph_id
+                .clone()
+                .map(|paragraph_id| (self.document_generation, paragraph_id));
+        }
         Ok(effect)
     }
 
@@ -738,6 +866,7 @@ impl Session {
     }
 
     pub(super) fn advance_document_generation(&mut self) {
+        self.composition_preview_origin = None;
         if let Some(next) = self.document_generation.checked_add(1) {
             self.document_generation = next;
         } else {
@@ -808,6 +937,10 @@ impl Session {
                 self.session_id = NodeId::generate();
                 self.document_generation = 0;
             }
+            self.composition_preview_origin = None;
+            self.layout_reuse_change = changed_paragraph_id
+                .clone()
+                .map(|paragraph_id| (self.document_generation, paragraph_id));
         }
         Ok(Effect {
             document_changed,
@@ -941,6 +1074,7 @@ impl Clone for Session {
             selection: self.selection.clone(),
             selection_visual_affinity: self.selection_visual_affinity,
             session_id: NodeId::generate(),
+            checkpoint_owner_id: NodeId::generate(),
             document_generation: 0,
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
@@ -961,6 +1095,9 @@ impl Clone for Session {
             next_history_state_id: self.next_history_state_id,
             history_estimated_bytes: self.history_estimated_bytes,
             history_merge_epoch: self.history_merge_epoch,
+            composition_preview_origin: None,
+            layout_reuse_change: None,
+            composition_candidate_revision: 0,
         }
     }
 }

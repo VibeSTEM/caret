@@ -1,7 +1,8 @@
 //! 验证页面字形快照、裁剪与栅格缓存。
 
 use caret_doc::{
-    Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph,
+    Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineMath, InlineNode,
+    MATH_TREE_SCHEMA_VERSION, MathNode, MathNodeKind, MathTree, NodeId, Paragraph,
     ParagraphLineSpacing, Run,
 };
 use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
@@ -79,6 +80,42 @@ fn paragraph_glyphs_keep_one_anchor_across_mixed_scripts() {
 
     let multilingual = layout(&document_with_multilingual_paragraphs());
     assert_eq!(multilingual.paragraphs.len(), 2);
+}
+
+#[test]
+fn page_rasterizer_rejects_inline_math_until_its_ordered_primitives_are_supported() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        unreachable!();
+    };
+    paragraph.inlines = vec![InlineNode::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: MATH_TREE_SCHEMA_VERSION,
+            source: String::new(),
+            root: MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Row,
+                text: None,
+                attributes: Default::default(),
+                source_range: None,
+                children: Vec::new(),
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    })];
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("formula page projection should succeed: {error}"));
+    let mut rasterizer = PageGlyphRasterizer::default();
+
+    assert_eq!(
+        rasterizer.rasterize(&page, 1.0, [0.0, 0.0], [32, 32, 32, 255]),
+        Err(PageGlyphError::UnsupportedInlineBox)
+    );
 }
 
 #[test]
