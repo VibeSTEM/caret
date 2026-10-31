@@ -3,7 +3,11 @@
 //!
 //! 解析器直接产出 `caret-doc` 的 [`MathTree`] / [`Align`]，不经过中间语法树；
 //! 序列化器把文档树写回 LaTeX，使树被编辑后 `source` 仍描述当前内容。
+//
+// SPDX-License-Identifier: Apache-2.0
+// 署名：Yuki Lu
 
+pub mod layout;
 mod parser;
 mod serialize;
 pub mod symbols;
