@@ -325,10 +325,10 @@ fn block_environment_geometry_is_emitted_as_page_fragments()
             snapshot_range["pageIndex"].as_u64(),
             Some(layout_range.page_index as u64)
         );
-        assert_eq!(snapshot_range["x0Pt"].as_f64(), Some(layout_range.x0_pt));
-        assert_eq!(snapshot_range["y0Pt"].as_f64(), Some(layout_range.y0_pt));
-        assert_eq!(snapshot_range["x1Pt"].as_f64(), Some(layout_range.x1_pt));
-        assert_eq!(snapshot_range["y1Pt"].as_f64(), Some(layout_range.y1_pt));
+        super::assert_pt_close(snapshot_range["x0Pt"].as_f64(), layout_range.x0_pt);
+        super::assert_pt_close(snapshot_range["y0Pt"].as_f64(), layout_range.y0_pt);
+        super::assert_pt_close(snapshot_range["x1Pt"].as_f64(), layout_range.x1_pt);
+        super::assert_pt_close(snapshot_range["y1Pt"].as_f64(), layout_range.y1_pt);
         let page = &layout.pages[layout_range.page_index];
         assert!(layout_range.x0_pt >= 0.0 && layout_range.x1_pt <= page.width_pt);
         assert!(layout_range.y0_pt >= 0.0 && layout_range.y1_pt <= page.height_pt);

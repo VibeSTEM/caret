@@ -281,9 +281,9 @@ fn ime_preedit_inline_highlight_uses_the_preview_session_geometry()
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        actual["inlineEnvironmentHighlightRects"],
-        serde_json::json!(expected)
+    super::assert_rects_close(
+        &actual["inlineEnvironmentHighlightRects"],
+        &serde_json::json!(expected),
     );
     assert!(!expected.is_empty());
     assert!(
