@@ -74,6 +74,8 @@ mod generated {
         }
 
         struct GlyphDecoration {
+            /// 为真时绘制在字形之下（公式底色），否则绘制在字形之上（下划线、公式线条）。
+            background: bool,
             x_pt: f64,
             y_pt: f64,
             width_pt: f64,

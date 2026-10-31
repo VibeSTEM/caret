@@ -130,6 +130,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
         }
         decorations.push_back(QVariantMap{
+            {QStringLiteral("background"), decoration.background},
             {QStringLiteral("xPt"), decoration.x_pt},
             {QStringLiteral("yPt"), decoration.y_pt},
             {QStringLiteral("widthPt"), decoration.width_pt},

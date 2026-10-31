@@ -411,3 +411,141 @@ fn invalid_fragment_or_glyph_source_rejects_the_page_atomically() {
         Err(PageGlyphError::InvalidGlyphSource)
     );
 }
+
+fn parsed_tree(source: &str, kind: caret_math::MathInputKind) -> caret_math::ParsedMath {
+    caret_math::parse(source, kind).unwrap_or_else(|error| panic!("{source}: {error:?}"))
+}
+
+fn inline_math(source: &str) -> InlineNode {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        parsed_tree(source, caret_math::MathInputKind::Inline)
+    else {
+        panic!("inline math must parse to a tree");
+    };
+    InlineNode::Math(caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    })
+}
+
+fn math_runs(snapshot: &super::PageGlyphSnapshot) -> Vec<&super::PageGlyphRun> {
+    let math_font = super::math_font_data();
+    snapshot
+        .runs
+        .iter()
+        .filter(|run| run.font == *math_font)
+        .collect()
+}
+
+#[test]
+fn inline_math_occupies_its_box_and_emits_math_glyphs_on_the_text_baseline() {
+    let mut document = document_with_text("x");
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should contain a paragraph");
+    };
+    paragraph.inlines = vec![
+        text_run("a ", Some("en")),
+        inline_math("\\frac{1}{2}+y"),
+        text_run(" b", Some("en")),
+    ];
+    let snapshot = layout(&document);
+    let paragraph = &snapshot.paragraphs[0];
+    assert_eq!(paragraph.math_boxes.len(), 1);
+    let math = &paragraph.math_boxes[0];
+    assert_eq!(math.source_bytes, 2..5);
+    assert!(math.layout.width > 10.0);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("page glyphs failed: {error}"));
+    let runs = math_runs(&page);
+    assert!(
+        !runs.is_empty(),
+        "math glyphs must be emitted with the math font"
+    );
+    // 分数线作为装饰矩形输出。
+    assert!(!page.decorations.is_empty());
+    // 占位字符本身不绘制；正文字形 'a' 与 'b' 位于公式盒两侧。
+    let text_runs: Vec<_> = page
+        .runs
+        .iter()
+        .filter(|run| run.font != *super::math_font_data())
+        .collect();
+    let text_glyphs: Vec<_> = text_runs.iter().flat_map(|run| run.glyphs.iter()).collect();
+    assert_eq!(text_glyphs.len(), 4, "'a', space, space, 'b'");
+    let math_x: Vec<_> = runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.x_pt))
+        .collect();
+    let min_math_x = math_x.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_math_x = math_x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let first_text_x = text_glyphs.first().map_or(0.0, |glyph| glyph.x_pt);
+    let last_text_x = text_glyphs.last().map_or(0.0, |glyph| glyph.x_pt);
+    assert!(first_text_x < min_math_x);
+    assert!(last_text_x > max_math_x);
+    // '+' 与 'y' 位于正文基线上（容差 0.01pt）。
+    let text_baseline = text_glyphs.first().map_or(0.0, |glyph| glyph.baseline_y_pt);
+    let on_baseline = runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter())
+        .filter(|glyph| (glyph.baseline_y_pt - text_baseline).abs() < 1e-2)
+        .count();
+    assert!(on_baseline >= 2);
+}
+
+#[test]
+fn equation_and_align_blocks_lay_out_as_centered_display_paragraphs() {
+    let mut document = Document::blank();
+    let caret_math::ParsedMath::Tree(math_tree) =
+        parsed_tree("\\sum_{i=1}^{n} i", caret_math::MathInputKind::Equation)
+    else {
+        panic!("equation must parse to a tree");
+    };
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+    let caret_math::ParsedMath::Align(align) = parsed_tree(
+        r"\[\begin{aligned} a &= b \\ c &= d \end{aligned}\]",
+        caret_math::MathInputKind::Align,
+    ) else {
+        panic!("align must parse to rows");
+    };
+    let align_id = align.id.clone();
+    document.body.push(Block::Align(align));
+    let snapshot = layout(&document);
+    let equation = snapshot
+        .paragraph_by_id(&equation_id)
+        .unwrap_or_else(|| panic!("equation paragraph missing"));
+    assert!(equation.display_math);
+    assert!(equation.environment_ids.contains(&equation_id));
+    let align = snapshot
+        .paragraph_by_id(&align_id)
+        .unwrap_or_else(|| panic!("align paragraph missing"));
+    assert!(align.display_math);
+    // 两行对齐公式的盒高大于单行显示公式的行高的一半以上。
+    let align_box = &align.math_boxes[0];
+    assert!(align_box.layout.ascent + align_box.layout.descent > 20.0);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("page glyphs failed: {error}"));
+    let page_layout = &snapshot.pages[0];
+    let center = page_layout.margin_left_pt
+        + (page_layout.width_pt - page_layout.margin_left_pt - page_layout.margin_right_pt) / 2.0;
+    for id in [&equation_id, &align_id] {
+        let xs: Vec<_> = math_runs(&page)
+            .into_iter()
+            .filter(|run| run.paragraph_id == *id)
+            .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.x_pt))
+            .collect();
+        assert!(!xs.is_empty());
+        let min = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            min < center && max > center,
+            "display math must be centered: {min}..{max} vs {center}"
+        );
+    }
+}

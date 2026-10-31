@@ -3,15 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use crate::math_layout::{MathBox, align_paragraph, equation_paragraph, layout_paragraph_math};
 use crate::{Affinity, Pos, Selection, Session, StoryId};
 use caret_doc::{Block, Document, NodeId, Paragraph};
 use caret_layout::{
     FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
-    ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
-    paragraph_has_empty_line, resolve_paragraph_style,
+    ParagraphLayouter, ParagraphObjects, ParagraphPaginationInput, ParleyParagraphLayout,
+    PositionedGlyphLayoutItem, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
+    paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
-use std::{collections::HashMap, sync::Arc};
+use caret_math::layout::{MathLayoutEngine, MathStyle};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
 const LINE_GRID_LATIN_SAMPLE: char = 'M';
@@ -66,6 +68,10 @@ pub struct LaidOutParagraph {
     pub environment_ids: Arc<[NodeId]>,
     pub text: Arc<str>,
     pub layout: Arc<ParleyParagraphLayout>,
+    /// 段落内公式盒，与 Parley 行内盒 `id` 一一对应（下标即 id）。
+    pub math_boxes: Arc<[MathBox]>,
+    /// 显示公式或对齐公式的伪段落。
+    pub display_math: bool,
     utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
 }
@@ -83,6 +89,8 @@ impl LaidOutParagraph {
         environment_ids: Vec<NodeId>,
         text: String,
         layout: ParleyParagraphLayout,
+        math_boxes: Vec<MathBox>,
+        display_math: bool,
     ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
         let mut utf16_offset = 0;
@@ -101,6 +109,8 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             text: Arc::from(text),
             layout: Arc::new(layout),
+            math_boxes: Arc::from(math_boxes),
+            display_math,
             utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
         }
@@ -113,6 +123,8 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             text: Arc::clone(&self.text),
             layout: Arc::clone(&self.layout),
+            math_boxes: Arc::clone(&self.math_boxes),
+            display_math: self.display_math,
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
             line_locations: vec![None; self.layout.paragraph.lines.len()],
         }
@@ -551,6 +563,8 @@ fn font_size_centipoints(font_size_pt: f32) -> Option<u16> {
 pub struct DocumentLayoutService {
     layouter: ParagraphLayouter,
     line_grid_metrics_cache: Option<LineGridMetricsCache>,
+    /// 驻留的公式布局后端：内置数学字体与按公式缓存，首次遇到公式时创建。
+    math: Option<MathLayoutEngine>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -701,6 +715,7 @@ impl DocumentLayoutService {
                 paragraph,
                 story,
                 environment_ids,
+                display_math,
             } = item
             else {
                 continue;
@@ -729,9 +744,22 @@ impl DocumentLayoutService {
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
+            let math_style = if *display_math {
+                MathStyle::Display
+            } else {
+                MathStyle::Inline
+            };
+            let math_boxes = layout_paragraph_math(
+                &mut self.math,
+                paragraph,
+                f64::from(base_style.font_size_centipoints) / 100.0,
+                math_style,
+            )
+            .map_err(|error| DocumentLayoutError::Shaping(error.to_string()))?;
+            let objects: Vec<_> = math_boxes.iter().map(MathBox::object_metrics).collect();
             let (text, layout) = self
                 .layouter
-                .layout(
+                .layout_with_objects(
                     catalog,
                     paragraph,
                     &text_settings,
@@ -741,7 +769,15 @@ impl DocumentLayoutService {
                         spacing: style.line_spacing,
                         line_grid_metrics,
                         line_grid_font_size_centipoints: base_style.font_size_centipoints,
-                        first_line_indent_chars: style.first_line_indent_chars,
+                        first_line_indent_chars: if *display_math {
+                            None
+                        } else {
+                            style.first_line_indent_chars
+                        },
+                    },
+                    ParagraphObjects {
+                        objects: &objects,
+                        center: *display_math,
                     },
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
@@ -752,6 +788,8 @@ impl DocumentLayoutService {
                 environment_ids.clone(),
                 text,
                 layout,
+                math_boxes,
+                *display_math,
             ));
         }
 
@@ -974,11 +1012,15 @@ impl DocumentLayoutRuntime {
     }
 }
 
+// 输入列表只在单次布局内短暂存在，段落变体占绝大多数，装箱反而多一次分配。
+#[allow(clippy::large_enum_variant)]
 enum LayoutInput<'a> {
     Paragraph {
-        paragraph: &'a Paragraph,
+        /// 正文段落借用文档；显示公式与对齐公式合成伪段落。
+        paragraph: Cow<'a, Paragraph>,
         story: StoryId,
         environment_ids: Vec<NodeId>,
+        display_math: bool,
     },
     ExplicitBreak,
 }
@@ -991,17 +1033,28 @@ fn collect_blocks<'a>(
     for block in blocks {
         match block {
             Block::Paragraph(paragraph) => ordered.push(LayoutInput::Paragraph {
-                paragraph,
+                paragraph: Cow::Borrowed(paragraph),
                 story: StoryId::Body,
                 environment_ids: environment_ids.clone(),
+                display_math: false,
             }),
+            Block::Equation(equation) => {
+                ordered.push(display_math_input(
+                    equation_paragraph(equation),
+                    environment_ids,
+                ));
+            }
+            Block::Align(align) => {
+                ordered.push(display_math_input(align_paragraph(align), environment_ids));
+            }
             Block::Environment(environment) => {
                 environment_ids.push(environment.id.clone());
                 if let Some(title) = &environment.title {
                     ordered.push(LayoutInput::Paragraph {
-                        paragraph: title,
+                        paragraph: Cow::Borrowed(title),
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
                         environment_ids: environment_ids.clone(),
+                        display_math: false,
                     });
                 }
                 collect_blocks(&environment.children, ordered, environment_ids)?;
@@ -1015,12 +1068,24 @@ fn collect_blocks<'a>(
                 }
                 ordered.push(LayoutInput::ExplicitBreak);
             }
-            Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {
+            Block::Opaque(_) => {
                 return Err(DocumentLayoutError::UnsupportedContent);
             }
         }
     }
     Ok(())
+}
+
+/// 块级公式自身也是一个块环境：其 ID 追加到环境链末尾，供块环境背景与结构导航使用。
+fn display_math_input<'a>(paragraph: Paragraph, environment_ids: &[NodeId]) -> LayoutInput<'a> {
+    let mut ids = environment_ids.to_vec();
+    ids.push(paragraph.id.clone());
+    LayoutInput::Paragraph {
+        paragraph: Cow::Owned(paragraph),
+        story: StoryId::Body,
+        environment_ids: ids,
+        display_math: true,
+    }
 }
 
 #[cfg(test)]

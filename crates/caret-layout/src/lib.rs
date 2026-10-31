@@ -26,8 +26,8 @@ pub use pagination::{
 };
 pub use paragraph::{
     HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
-    has_empty_line, paragraph_has_empty_line,
+    ParagraphLayouter, ParagraphLine, ParagraphObjects, ParleyParagraphLayout, VisualAffinity,
+    VisualCursor, has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
@@ -38,3 +38,11 @@ mod tests;
 
 /// Caret 固定使用的 Unicode 数据版本。
 pub const UNICODE_DATA_VERSION: &str = "17.0.0";
+
+/// 把进程内静态字体字节包装为字形资源；同一字节切片应只包装一次，以便共享栅格缓存键。
+pub fn static_glyph_font_data(bytes: &'static [u8], index: u32) -> GlyphFontData {
+    GlyphFontData::new(
+        parley::fontique::Blob::new(std::sync::Arc::new(bytes)),
+        index,
+    )
+}

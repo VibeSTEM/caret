@@ -15,13 +15,14 @@ use caret_doc::Paragraph;
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, Language, Layout,
-    LayoutContext, StyleProperty, WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, InlineBox,
+    InlineBoxKind, Language, Layout, LayoutContext, StyleProperty, VerticalAlign,
+    WhiteSpaceCollapse,
 };
 
 use crate::{
-    FontCatalog, FontLineMetrics, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ResolvedDocumentTextSettings, ShapingStyle,
+    FontCatalog, FontLineMetrics, InlineObjectMetrics, LineSpacing, ParagraphLayout,
+    ParagraphLayoutError, ResolvedDocumentTextSettings, ShapingStyle,
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
@@ -93,6 +94,20 @@ pub struct ParleyParagraphLayout {
     pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
+    /// 行内对象（公式盒）的度量，按逻辑顺序排列；Parley 行内盒的 `id` 即其下标。
+    pub objects: Vec<InlineObjectMetrics>,
+}
+
+/// 行内对象占位字符 U+FFFC 的塑形字号；对象宽度完全由行内盒提供，占位字形近乎零宽。
+const OBJECT_PLACEHOLDER_FONT_SIZE_PT: f32 = 0.01;
+
+/// 段落中的行内对象与水平对齐，供公式等非文本内容参与 Parley 断行。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParagraphObjects<'a> {
+    /// 每个对象覆盖一个 U+FFFC 占位字符，`source_bytes` 为其逻辑 UTF-8 范围。
+    pub objects: &'a [InlineObjectMetrics],
+    /// 显示公式伪段落居中排列。
+    pub center: bool,
 }
 
 /// 段落布局的版心宽度、行距和共享行网格度量。
@@ -150,6 +165,26 @@ impl ParagraphLayouter {
         base_style: &ShapingStyle,
         options: ParagraphLayoutOptions,
     ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        self.layout_with_objects(
+            catalog,
+            paragraph,
+            settings,
+            base_style,
+            options,
+            ParagraphObjects::default(),
+        )
+    }
+
+    /// 与 [`Self::layout`] 相同，但 U+FFFC 占位字符由给定度量的行内盒替代。
+    pub fn layout_with_objects(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+        objects: ParagraphObjects<'_>,
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
         let font_generation = catalog.generation();
         if self.font_generation != Some(font_generation) {
             self.context = LayoutContext::default();
@@ -183,6 +218,13 @@ impl ParagraphLayouter {
             self.space_adjustments_pt.clear();
         }
         let text: String = spans.iter().map(|span| span.text).collect();
+        if objects
+            .objects
+            .iter()
+            .any(|object| text.get(object.source_bytes.clone()) != Some("\u{fffc}"))
+        {
+            return Err(ParagraphLayoutError::InconsistentShaping);
+        }
         let boundaries = boundaries_for_spans(&text, &spans);
         let decisions = Arc::new(line_break_decisions(&text, &boundaries));
         let available_families = Arc::clone(&catalog.family_names_lowercase);
@@ -360,6 +402,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                objects,
             };
             build_parley_layout(&mut self.context, catalog, &layout_input)
         };
@@ -381,6 +424,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                objects,
             };
             (layout, callback_count) =
                 build_parley_layout(&mut self.context, catalog, &layout_input);
@@ -401,6 +445,7 @@ impl ParagraphLayouter {
             spacing,
             line_grid_metrics,
             line_grid_font_size_centipoints,
+            objects.objects,
         )?;
         Ok((
             text,
@@ -415,6 +460,7 @@ impl ParagraphLayouter {
                 baseline_adjustments_pt,
                 empty_line_indent_pt,
                 requested_family_missing,
+                objects: objects.objects.to_vec(),
             },
         ))
     }
@@ -482,6 +528,7 @@ struct ParleyLayoutInput<'a> {
     decisions: &'a Arc<PackedLineBreakDecisions>,
     width_pt: f32,
     first_line_indent_chars: Option<u16>,
+    objects: ParagraphObjects<'a>,
 }
 
 /// 构建 Parley 布局，并在对应空白范围应用由实际字体度量得出的 advance 修正。
@@ -501,6 +548,7 @@ fn build_parley_layout(
         decisions,
         width_pt,
         first_line_indent_chars,
+        objects,
     } = *input;
     let mut builder = context.ranged_builder(catalog.parley_context(), text, 1.0, false);
     builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
@@ -574,6 +622,22 @@ fn build_parley_layout(
         builder.push(StyleProperty::LetterSpacing(adjustment_pt), range.clone());
     }
 
+    for (index, object) in objects.objects.iter().enumerate() {
+        builder.push(
+            StyleProperty::FontSize(OBJECT_PLACEHOLDER_FONT_SIZE_PT),
+            object.source_bytes.clone(),
+        );
+        builder.push_inline_box(InlineBox {
+            id: index as u64,
+            kind: InlineBoxKind::InFlow,
+            index: object.source_bytes.start,
+            width: object.advance_pt,
+            height: object.ascent_pt + object.descent_pt,
+            baseline: Some(object.ascent_pt),
+            vertical_align: VerticalAlign::BASELINE,
+        });
+    }
+
     let callback_index = Arc::new(AtomicUsize::new(0));
     let callback_cursor = Arc::clone(&callback_index);
     let callback_decisions = Arc::clone(decisions);
@@ -586,7 +650,9 @@ fn build_parley_layout(
         layout.set_text_indent(indent_pt, IndentOptions::default());
     }
     layout.break_all_lines(Some(width_pt));
-    if first_line_indent_chars.is_some() {
+    if objects.center {
+        layout.align(Alignment::Center, AlignmentOptions::default());
+    } else if first_line_indent_chars.is_some() {
         layout.align(Alignment::Start, AlignmentOptions::default());
     }
     (layout, callback_index.load(Ordering::Relaxed))

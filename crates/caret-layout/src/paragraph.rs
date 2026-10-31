@@ -10,8 +10,8 @@ use crate::{LineMetrics, LineMetricsError};
 
 mod parley;
 pub use parley::{
-    HitAffinity, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter, ParleyParagraphLayout,
-    VisualAffinity, VisualCursor,
+    HitAffinity, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter, ParagraphObjects,
+    ParleyParagraphLayout, VisualAffinity, VisualCursor,
 };
 
 /// 判断源文本是否会产生需要段落标记度量的空行，包含开头/连续/结尾 mandatory break。

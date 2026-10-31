@@ -6,6 +6,7 @@
 mod editing;
 mod layout;
 mod layout_view;
+mod math_layout;
 mod page_glyphs;
 
 pub use caret_doc::DocumentFontTarget;
@@ -29,6 +30,7 @@ pub use layout_view::{
     LayoutLineView, PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
     ParagraphLayoutView, StoryView,
 };
+pub use math_layout::MathBox;
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
     PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
