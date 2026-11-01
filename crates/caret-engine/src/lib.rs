@@ -18,8 +18,9 @@ pub use caret_structure::{
 pub use editing::{
     Affinity, Capabilities, Command, CommandCandidate, CommandLine, CommandLineMode,
     CurrentEnvironment, CurrentEnvironmentStack, Direction, EditError, EditorKey, Effect,
-    EnvironmentKind, EnvironmentLevel, InlineEnvironmentRange, InlineSpan, InputComposition, Pos,
-    PositionMap, Selection, Session, StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
+    EnvironmentKind, EnvironmentLevel, InlineEnvironmentRange, InlineSpan, InputComposition,
+    MathEdit, MathEditTarget, Pos, PositionMap, Selection, Session, StoryId, utf8_offset_to_utf16,
+    utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,

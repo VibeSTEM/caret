@@ -16,16 +16,23 @@ impl DocumentViewRuntime {
         let position = display_session.selection().focus.clone();
         let visual_affinity = display_session.selection_visual_affinity();
         let block_environment_exit = display_session.block_environment_exit();
+        let math_edit = display_session.math_edit().cloned();
+        let document = display_session.document().clone();
         let snapshot = self.current_snapshot()?;
-        let caret = snapshot
-            .caret_geometry(&position, visual_affinity)
-            .map(|caret| {
-                PageCaretView::from(caret_geometry_with_environment_exit(
-                    block_environment_exit,
-                    snapshot,
-                    caret,
-                ))
-            });
+        let math_caret = math_edit
+            .as_ref()
+            .and_then(|edit| snapshot.math_caret_geometry(&document, edit));
+        let caret = math_caret.map(PageCaretView::from).or_else(|| {
+            snapshot
+                .caret_geometry(&position, visual_affinity)
+                .map(|caret| {
+                    PageCaretView::from(caret_geometry_with_environment_exit(
+                        block_environment_exit,
+                        snapshot,
+                        caret,
+                    ))
+                })
+        });
         serde_json::to_string(&caret).map_err(|error| format!("layout.caret_serialize: {error}"))
     }
 

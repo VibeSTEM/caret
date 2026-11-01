@@ -5,6 +5,7 @@
 
 use super::super::StoryId;
 use super::Session;
+use crate::editing::command_registry::MATH_INSERT_COMMAND_ID;
 use crate::editing::{
     Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError, Effect,
 };
@@ -113,6 +114,15 @@ impl Session {
                     && self.selection.anchor == self.selection.focus
                     && self.paragraph_index.contains_key(&line.at.paragraph_id)
             }),
+            "insert.equation" | "insert.align" => self.command_line.as_ref().is_some_and(|line| {
+                line.at.story == StoryId::Body
+                    && self.selection.anchor == self.selection.focus
+                    && self
+                        .paragraph_index
+                        .get(&line.at.paragraph_id)
+                        .is_some_and(|location| !location.is_title)
+            }),
+            "insert.inline_math" => self.selection.anchor == self.selection.focus,
             _ => true,
         }
     }
@@ -141,7 +151,12 @@ impl Session {
                 if self.composition.is_some() {
                     return Ok(Effect::default());
                 }
-                self.command_line = Some(CommandLine::new(self.selection.focus.clone()));
+                let at = self.selection.focus.clone();
+                self.command_line = Some(if self.math_edit.is_some() {
+                    CommandLine::math(at)
+                } else {
+                    CommandLine::new(at)
+                });
             }
             Command::TypeCommandLine(text) => {
                 if text == "\\"
@@ -412,6 +427,13 @@ impl Session {
             "struct.section.create" => self.run(Command::CreateBlockEnvironment(
                 BlockEnvironmentKind::Section,
             )),
+            "insert.inline_math" => self.begin_inline_math(),
+            "insert.equation" => self.insert_display_math(false),
+            "insert.align" => self.insert_display_math(true),
+            id if id == MATH_INSERT_COMMAND_ID => match candidate.value.clone() {
+                Some(template) if self.math_edit.is_some() => self.math_insert_template(&template),
+                _ => return Ok(Effect::default()),
+            },
             _ => return Ok(Effect::default()),
         };
         let effect = match effect {
@@ -422,7 +444,12 @@ impl Session {
             }
         };
         if continue_after {
-            self.command_line = Some(CommandLine::new(self.selection.focus.clone()));
+            let at = self.selection.focus.clone();
+            self.command_line = Some(if self.math_edit.is_some() {
+                CommandLine::math(at)
+            } else {
+                CommandLine::new(at)
+            });
         }
         Ok(effect)
     }

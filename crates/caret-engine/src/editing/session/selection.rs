@@ -341,6 +341,8 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        // 结构选区与公式内编辑互斥。
+        self.math_edit = None;
         if self.composition.is_some()
             || self
                 .command_line

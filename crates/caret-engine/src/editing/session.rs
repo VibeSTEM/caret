@@ -11,6 +11,8 @@ mod formatting;
 mod history;
 mod inline_content;
 mod keyboards;
+mod math_edit;
+pub use math_edit::{MathEdit, MathEditTarget};
 mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;
@@ -56,6 +58,7 @@ pub struct Session {
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
+    math_edit: Option<MathEdit>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
     selected_block_environments: Vec<NodeId>,
@@ -99,6 +102,7 @@ impl Session {
             composition: None,
             pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
+            math_edit: None,
             block_environment_exit: None,
             selected_block_environment: None,
             selected_block_environments: Vec::new(),
@@ -191,6 +195,7 @@ impl Session {
         &mut self,
         environment_id: NodeId,
     ) -> Result<Effect, EditError> {
+        self.math_edit = None;
         let exists = self
             .structure_index
             .structures()
@@ -234,6 +239,12 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        if let Some(effect) = self.run_math_edit(&command)? {
+            return Ok(effect);
+        }
+        if let Command::EnterMath(direction) = command {
+            return self.enter_math(direction);
+        }
         let inserted_text = match &command {
             Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
             Command::InsertOneCharacterWidthSpace => Some("\u{2003}"),
@@ -433,6 +444,7 @@ impl Session {
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
             Command::InsertInlineMath(source) => self.insert_inline_math(&source),
+            Command::EnterMath(direction) => self.enter_math(direction),
             Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),
@@ -799,6 +811,7 @@ impl Clone for Session {
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
+            math_edit: self.math_edit.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),

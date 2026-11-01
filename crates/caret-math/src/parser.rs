@@ -1,7 +1,8 @@
 //! LaTeX 数学子集解析器，直接构造 `caret-doc` 数学树。
 //!
 //! 解析过程只做一次自顶向下扫描：数学模式跳过空白与 `%` 注释，文本模式逐字符
-//! 保留空格。所有节点记录相对输入的 UTF-8 字节范围；占位节点没有范围。
+//! 保留空格。所有节点记录相对输入的 UTF-8 字节范围；源码空花括号产生的占位节点记录花括号范围，
+//! 由结构补齐的占位节点没有范围。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -467,6 +468,17 @@ impl<'s> Parser<'s> {
         self.node(MathNodeKind::Placeholder, None, &[], None, Vec::new())
     }
 
+    /// 源码中的空花括号 `{}`：占位节点记录花括号范围，供公式内光标定位到该空槽。
+    fn empty_group(&mut self, range: Range<usize>) -> MathNode {
+        self.node(
+            MathNodeKind::Placeholder,
+            None,
+            &[],
+            Some(range),
+            Vec::new(),
+        )
+    }
+
     /// 由列表构造 Row，相邻的字面普通字符合并为一个多字符符号。
     fn row(&mut self, items: Vec<MathNode>, range: Option<Range<usize>>) -> MathNode {
         let range = range.or_else(|| span_of(&items));
@@ -694,7 +706,7 @@ impl<'s> Parser<'s> {
                 self.bump();
                 let (items, _) = self.parse_list(Stops::BRACE)?;
                 if items.is_empty() {
-                    return Ok(self.placeholder());
+                    return Ok(self.empty_group(start..self.pos));
                 }
                 Ok(self.list_node(items, start..self.pos))
             }
@@ -758,7 +770,7 @@ impl<'s> Parser<'s> {
             self.bump();
             let (items, _) = self.parse_list(Stops::BRACE)?;
             if items.is_empty() {
-                return Ok(self.placeholder());
+                return Ok(self.empty_group(start..self.pos));
             }
             return Ok(self.node(MathNodeKind::Group, None, &[], Some(start..self.pos), items));
         }
