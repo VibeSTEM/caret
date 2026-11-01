@@ -612,9 +612,6 @@ fn collect_paragraph_text(
     for content in contents {
         match content {
             FlowContent::Text(flow) => {
-                if flow.source_range.is_some() || !flow.extra.is_empty() {
-                    return Err(EditError::UnsupportedOpaqueContent);
-                }
                 for run in &flow.runs {
                     path.push(logical_index);
                     let start = text.len();
@@ -720,9 +717,6 @@ fn collect_paragraph_run_property_spans(
         for content in contents {
             match content {
                 FlowContent::Text(flow) => {
-                    if flow.source_range.is_some() || !flow.extra.is_empty() {
-                        return Err(EditError::UnsupportedOpaqueContent);
-                    }
                     for run in &flow.runs {
                         if (property.is_active)(run.props.get(property.key)) {
                             active_start.get_or_insert(*offset);
@@ -865,11 +859,26 @@ fn normalize_run_neighborhood(nodes: &mut Vec<EditNode>, index: usize) {
 }
 
 pub(super) fn inline_length(node: &ParagraphContent) -> Result<usize, EditError> {
-    let edit = to_edit_nodes(std::slice::from_ref(node))?;
-    edit.iter().try_fold(0usize, |sum, item| {
-        sum.checked_add(edit_inline_length(item)?)
-            .ok_or(EditError::InvalidPosition)
-    })
+    fn flow_length(contents: &[ParagraphContent]) -> Result<usize, EditError> {
+        contents.iter().try_fold(0usize, |length, content| {
+            let content_length = match content {
+                FlowContent::Text(flow) => flow.runs.iter().try_fold(0usize, |length, run| {
+                    length
+                        .checked_add(run.text.len())
+                        .ok_or(EditError::InvalidPosition)
+                })?,
+                FlowContent::Environment(environment) => flow_length(&environment.children)?,
+                FlowContent::SoftBreak(_) => 1,
+                FlowContent::Math(_) => OBJECT_REPLACEMENT.len_utf8(),
+                FlowContent::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            };
+            length
+                .checked_add(content_length)
+                .ok_or(EditError::InvalidPosition)
+        })
+    }
+
+    flow_length(std::slice::from_ref(node))
 }
 
 pub(super) fn split_inline_nodes(

@@ -26,7 +26,7 @@ use super::Session;
 use super::history::{
     self, DocumentPatch, EditGroup, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
 };
-use crate::StructureIndex;
+use crate::{StructureIndex, VisualAffinity};
 #[cfg(test)]
 use caret_doc::MathTree;
 use caret_doc::{
@@ -58,8 +58,6 @@ pub struct MathEdit {
     pub target: MathEditTarget,
     pub source: String,
     pub cursor: usize,
-    /// 输入法预编辑暂时替换的 UTF-8 源码范围。
-    pub(super) composition_range: Option<Range<usize>>,
 }
 
 impl MathEdit {
@@ -99,7 +97,6 @@ pub(super) fn restore_math_edit(
         target: position.target,
         source,
         cursor: position.cursor,
-        composition_range: None,
     })
 }
 
@@ -143,7 +140,7 @@ impl Session {
             return Ok(None);
         }
         if self.composition.is_some()
-            && !matches!(
+            || matches!(
                 command,
                 Command::UpdateComposition { .. }
                     | Command::CommitComposition { .. }
@@ -153,28 +150,58 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         if self.command_line.is_some() {
-            // 子命令行打开时，命令行命令照常执行；其余命令先关闭命令行。
-            return Ok(None);
+            if matches!(
+                command,
+                Command::ToggleInlineFormat(_)
+                    | Command::ToggleRunUnderline
+                    | Command::SetInlineFontFamily(_)
+                    | Command::RemoveInlineEnvironmentPreservingContent(_)
+                    | Command::RemoveRunPropertyPreservingContent(_)
+            ) {
+                return Err(EditError::UnsupportedInlineFormat);
+            }
+            return if matches!(
+                command,
+                Command::BeginCommandLine
+                    | Command::TypeCommandLine(_)
+                    | Command::BackspaceCommandLine
+                    | Command::MoveCommandLineCursor(_)
+                    | Command::MoveCommandLineSelection(_)
+                    | Command::SelectCommandLineCandidate(_)
+                    | Command::TabCommandLine
+                    | Command::AcceptCommandLine
+                    | Command::CancelCommandLine
+                    | Command::Undo
+                    | Command::Redo
+                    | Command::Delete(Direction::Backward)
+                    | Command::EditorKey(
+                        EditorKey::Escape
+                            | EditorKey::Enter
+                            | EditorKey::Tab
+                            | EditorKey::ShiftEnter
+                    )
+            ) {
+                Ok(None)
+            } else if matches!(command, Command::EditorKey(EditorKey::ModBackspace)) {
+                Ok(Some(Effect::default()))
+            } else {
+                Err(EditError::UnknownCommand)
+            };
         }
         let effect = match command {
             Command::InsertText(text) => self.math_insert_text(text)?,
             Command::PasteText(text) => self.math_insert_raw(text, text.len())?,
-            Command::CommitComposition { id, text } => self.commit_math_composition(*id, text)?,
-            Command::UpdateComposition { id, preedit } => {
-                self.update_composition(*id, preedit.clone())?
-            }
-            Command::CancelComposition { id } => {
-                let effect = self.cancel_composition(*id)?;
-                if let Some(edit) = &mut self.math_edit {
-                    edit.composition_range = None;
-                }
-                effect
-            }
             Command::Delete(Direction::Backward) => self.math_delete_backward()?,
             Command::Delete(Direction::Forward) => self.math_delete_forward()?,
             Command::MoveCaret(direction) => self.math_move(*direction)?,
             Command::EnterMath(_) => Effect::default(),
-            Command::RemoveRunPropertyPreservingContent(_) => Effect::default(),
+            Command::ToggleInlineFormat(_)
+            | Command::ToggleRunUnderline
+            | Command::SetInlineFontFamily(_)
+            | Command::RemoveInlineEnvironmentPreservingContent(_)
+            | Command::RemoveRunPropertyPreservingContent(_) => {
+                return Err(EditError::UnsupportedInlineFormat);
+            }
             Command::EditorKey(EditorKey::Enter)
                 if matches!(
                     self.math_edit.as_ref().map(|edit| &edit.target),
@@ -188,8 +215,9 @@ impl Session {
                 Effect::default()
             }
             Command::EditorKey(EditorKey::Tab) => Effect::default(),
+            Command::EditorKey(EditorKey::ShiftEnter) => Effect::default(),
             Command::EditorKey(EditorKey::Escape | EditorKey::Enter) => {
-                self.exit_math_edit(Direction::Forward)?
+                self.exit_math_edit(Direction::Forward, true)?
             }
             Command::BeginCommandLine => {
                 self.command_line = Some(CommandLine::math(self.selection.focus.clone()));
@@ -276,7 +304,6 @@ impl Session {
             target: MathEditTarget::Block { block_id, align },
             source: String::new(),
             cursor: 0,
-            composition_range: None,
         });
         let index = build_paragraph_index(&self.document.body);
         self.finalize_structure_edit(
@@ -302,6 +329,9 @@ impl Session {
     pub(super) fn enter_math(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
+            || self.structure_selection.is_some()
+            || self.selected_block_environment.is_some()
+            || !self.selected_block_environments.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
             || self.block_environment_exit.is_some()
@@ -336,6 +366,7 @@ impl Session {
                 anchor: position.clone(),
                 focus: position,
             };
+            self.selection_visual_affinity = VisualAffinity::Upstream;
             self.math_edit = Some(MathEdit {
                 target: MathEditTarget::Inline {
                     paragraph_id: paragraph.id.clone(),
@@ -343,8 +374,8 @@ impl Session {
                 },
                 source,
                 cursor,
-                composition_range: None,
             });
+            self.advance_history_merge_epoch();
             return Ok(Effect {
                 selection_changed: true,
                 ..Effect::default()
@@ -400,8 +431,8 @@ impl Session {
             target: MathEditTarget::Block { block_id, align },
             source,
             cursor,
-            composition_range: None,
         });
+        self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
             ..Effect::default()
@@ -450,48 +481,6 @@ impl Session {
         self.write_math_source(source, cursor, Some(EditGroup::InsertText), source_edit)
     }
 
-    fn commit_math_composition(&mut self, id: u64, text: &str) -> Result<Effect, EditError> {
-        if self.last_committed_composition == Some(id) {
-            return Ok(Effect::default());
-        }
-        let composition = self
-            .composition
-            .as_ref()
-            .filter(|composition| composition.id == id)
-            .cloned()
-            .ok_or(EditError::InvalidCompositionId)?;
-        let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-        let range = edit
-            .composition_range
-            .clone()
-            .unwrap_or(edit.cursor..edit.cursor);
-        if range.start > range.end
-            || range.end > edit.source.len()
-            || !edit.source.is_char_boundary(range.start)
-            || !edit.source.is_char_boundary(range.end)
-        {
-            return Err(EditError::InvalidUtf16Offset);
-        }
-        let mut source = edit.source.clone();
-        source.replace_range(range.clone(), text);
-        let cursor = range.start + text.len();
-        self.composition = None;
-        match self.write_math_source(source, cursor, Some(EditGroup::Composition), range) {
-            Ok(mut effect) => {
-                self.last_committed_composition = Some(id);
-                if let Some(edit) = &mut self.math_edit {
-                    edit.composition_range = None;
-                }
-                effect.composition_changed = true;
-                Ok(effect)
-            }
-            Err(error) => {
-                self.composition = Some(composition);
-                Err(error)
-            }
-        }
-    }
-
     fn math_insert_raw(&mut self, text: &str, cursor_in_text: usize) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         let mut source = edit.source.clone();
@@ -516,7 +505,7 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         if cursor == 0 {
-            return self.exit_math_edit(Direction::Backward);
+            return self.exit_math_edit(Direction::Backward, false);
         }
         if let Some(construct_range) = self.empty_construct_range(&edit) {
             let mut next = source.to_owned();
@@ -547,7 +536,7 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         let body_source = source.get(body.clone()).ok_or(EditError::InvalidPosition)?;
         let Some(next_end) = next_math_caret_stop(body_source, cursor) else {
-            return self.exit_math_edit(Direction::Forward);
+            return self.exit_math_edit(Direction::Forward, false);
         };
         let start = body.start + cursor;
         let end = body.start + next_end;
@@ -579,7 +568,7 @@ impl Session {
                     ..Effect::default()
                 })
             }
-            None => self.exit_math_edit(direction),
+            None => self.exit_math_edit(direction, false),
         }
     }
 
@@ -594,27 +583,31 @@ impl Session {
     }
 
     /// 退出公式编辑，把正文光标放到公式之前（向后）或之后（向前）。
-    pub(super) fn exit_math_edit(&mut self, direction: Direction) -> Result<Effect, EditError> {
-        let Some(edit) = self.math_edit.take() else {
+    pub(super) fn exit_math_edit(
+        &mut self,
+        direction: Direction,
+        allow_fallback: bool,
+    ) -> Result<Effect, EditError> {
+        let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
-        match edit.target {
+        match &edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
                 math_id,
             } => {
                 let story = self
-                    .story_for_paragraph(&paragraph_id)
+                    .story_for_paragraph(paragraph_id)
                     .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
                 let probe = Pos {
                     story,
-                    paragraph_id,
+                    paragraph_id: paragraph_id.clone(),
                     offset: 0,
                     affinity: Affinity::Downstream,
                 };
                 let start = inline_math_slots(self.paragraph_for(&probe)?)?
                     .into_iter()
-                    .find(|(_, id)| *id == math_id)
+                    .find(|(_, id)| id == math_id)
                     .map(|(start, _)| start)
                     .ok_or(EditError::InvalidPosition)?;
                 let position = match direction {
@@ -629,24 +622,138 @@ impl Session {
                         ..probe
                     },
                 };
-                self.selection = Selection {
-                    anchor: position.clone(),
-                    focus: position,
-                };
+                self.set_math_exit_selection(position);
             }
             MathEditTarget::Block { block_id, .. } => {
-                if let Some(position) = self.paragraph_beside_block(&block_id, direction)? {
-                    self.selection = Selection {
-                        anchor: position.clone(),
-                        focus: position,
+                if allow_fallback {
+                    let other_direction = match direction {
+                        Direction::Backward => Direction::Forward,
+                        Direction::Forward => Direction::Backward,
                     };
+                    let position = match self.paragraph_beside_math_chain(block_id, direction)? {
+                        Some(position) => Some(position),
+                        None => self.paragraph_beside_math_chain(block_id, other_direction)?,
+                    };
+                    let Some(position) = position else {
+                        return Ok(Effect::default());
+                    };
+                    self.set_math_exit_selection(position);
+                } else if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
+                    self.set_math_exit_selection(position);
+                } else if let Some(next_edit) = self.math_edit_beside_block(block_id, direction)? {
+                    self.math_edit = Some(next_edit);
+                    self.advance_history_merge_epoch();
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                } else {
+                    return Ok(Effect::default());
                 }
             }
         }
+        self.math_edit = None;
+        self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
             ..Effect::default()
         })
+    }
+
+    fn set_math_exit_selection(&mut self, position: Pos) {
+        self.selection = Selection {
+            anchor: position.clone(),
+            focus: position.clone(),
+        };
+        self.selection_visual_affinity = match position.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+    }
+
+    /// 显式退出时跳过连续公式块，寻找最近的同级正文段落。
+    fn paragraph_beside_math_chain(
+        &self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Option<Pos>, EditError> {
+        let (parent_ids, mut index) =
+            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
+        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        loop {
+            let Some(next_index) = (match direction {
+                Direction::Forward => index.checked_add(1),
+                Direction::Backward => index.checked_sub(1),
+            }) else {
+                return Ok(None);
+            };
+            index = next_index;
+            let Some(block) = siblings.get(index) else {
+                return Ok(None);
+            };
+            match block {
+                Block::Paragraph(paragraph) => {
+                    let offset = match direction {
+                        Direction::Forward => 0,
+                        Direction::Backward => TextMap::new(paragraph)?.text.len(),
+                    };
+                    return Ok(Some(Pos {
+                        story: StoryId::Body,
+                        paragraph_id: paragraph.id.clone(),
+                        offset,
+                        affinity: match direction {
+                            Direction::Forward => Affinity::Upstream,
+                            Direction::Backward => Affinity::Downstream,
+                        },
+                    }));
+                }
+                Block::Equation(_) | Block::Align(_) => {}
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    /// 连续显示公式之间按块顺序移动公式焦点，不经过旧正文选区。
+    fn math_edit_beside_block(
+        &self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Option<MathEdit>, EditError> {
+        let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
+            return Err(EditError::InvalidPosition);
+        };
+        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        let neighbour = match direction {
+            Direction::Forward => index.checked_add(1),
+            Direction::Backward => index.checked_sub(1),
+        };
+        let Some(block) = neighbour.and_then(|index| siblings.get(index)) else {
+            return Ok(None);
+        };
+        let (block_id, align, source) = match block {
+            Block::Equation(equation) => (
+                equation.id.clone(),
+                false,
+                equation.math_tree.source.clone(),
+            ),
+            Block::Align(align) => (align.id.clone(), true, align_body(&align.source)),
+            _ => return Ok(None),
+        };
+        let body = if align {
+            0..source.len()
+        } else {
+            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+        };
+        let cursor = match direction {
+            Direction::Forward => body.start,
+            Direction::Backward => body.end,
+        };
+        Ok(Some(MathEdit {
+            target: MathEditTarget::Block { block_id, align },
+            source,
+            cursor,
+        }))
     }
 
     /// 块公式前（向后）或后（向前）的同级正文段落边缘。
@@ -674,7 +781,10 @@ impl Session {
             story: StoryId::Body,
             paragraph_id: paragraph.id.clone(),
             offset,
-            affinity: Affinity::Downstream,
+            affinity: match direction {
+                Direction::Forward => Affinity::Upstream,
+                Direction::Backward => Affinity::Downstream,
+            },
         }))
     }
 
@@ -705,6 +815,7 @@ impl Session {
                     .map(|(start, _)| start)
                     .ok_or(EditError::InvalidPosition)?;
                 let before_selection = self.selection.clone();
+                let before_visual_affinity = self.selection_visual_affinity;
                 let before_states = history::paragraph_states_for_ids(
                     &self.document,
                     &self.paragraph_index,
@@ -724,8 +835,13 @@ impl Session {
                 };
                 self.selection = Selection {
                     anchor: caret.clone(),
-                    focus: caret,
+                    focus: caret.clone(),
                 };
+                self.selection_visual_affinity = match caret.affinity {
+                    Affinity::Upstream => VisualAffinity::Upstream,
+                    Affinity::Downstream => VisualAffinity::Downstream,
+                };
+                let after_visual_affinity = self.selection_visual_affinity;
                 self.math_edit = None;
                 let after_states = history::paragraph_states_for_ids(
                     &self.document,
@@ -739,8 +855,8 @@ impl Session {
                         merge_group: None,
                         merge_epoch: self.history_merge_epoch,
                     },
-                    before_selection,
-                    self.selection.clone(),
+                    (before_selection, before_visual_affinity),
+                    (self.selection.clone(), after_visual_affinity),
                     Some(before_math_position),
                     None,
                 );
@@ -752,10 +868,13 @@ impl Session {
                 })
             }
             MathEditTarget::Block { block_id, .. } => {
-                let target = self
-                    .paragraph_beside_block(&block_id, Direction::Backward)?
-                    .or(self.paragraph_beside_block(&block_id, Direction::Forward)?)
-                    .ok_or(EditError::InvalidPosition)?;
+                let target =
+                    match self.paragraph_beside_math_chain(&block_id, Direction::Backward)? {
+                        Some(position) => position,
+                        None => self
+                            .paragraph_beside_math_chain(&block_id, Direction::Forward)?
+                            .ok_or(EditError::InvalidPosition)?,
+                    };
                 let (parent_ids, index) = find_block_path(&self.document.body, &block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let before_selection = self.selection.clone();
@@ -767,6 +886,10 @@ impl Session {
                 self.selection = Selection {
                     anchor: target.clone(),
                     focus: target,
+                };
+                self.selection_visual_affinity = match self.selection.focus.affinity {
+                    Affinity::Upstream => VisualAffinity::Upstream,
+                    Affinity::Downstream => VisualAffinity::Downstream,
                 };
                 let paragraph_index = build_paragraph_index(&self.document.body);
                 self.paragraph_index = paragraph_index;
@@ -887,8 +1010,8 @@ impl Session {
                 };
                 self.record_math_history(
                     patch,
-                    self.selection.clone(),
-                    self.selection.clone(),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    (self.selection.clone(), self.selection_visual_affinity),
                     Some(MathEditPosition::new(edit.target.clone(), edit.cursor)),
                     Some(MathEditPosition::new(edit.target.clone(), cursor)),
                 );
@@ -923,8 +1046,8 @@ impl Session {
                         before: vec![before],
                         after: vec![block],
                     },
-                    self.selection.clone(),
-                    self.selection.clone(),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    (self.selection.clone(), self.selection_visual_affinity),
                     Some(MathEditPosition::new(edit.target.clone(), edit.cursor)),
                     Some(MathEditPosition::new(edit.target.clone(), cursor)),
                 );
@@ -1022,22 +1145,22 @@ impl Session {
     fn record_math_history(
         &mut self,
         patch: DocumentPatch,
-        before_selection: Selection,
-        after_selection: Selection,
+        before_selection: (Selection, VisualAffinity),
+        after_selection: (Selection, VisualAffinity),
         before_math_edit: Option<MathEditPosition>,
         after_math_edit: Option<MathEditPosition>,
     ) {
         let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
-            before_selection,
-            self.selection_visual_affinity,
+            before_selection.0,
+            before_selection.1,
             self.pending_inline_style.clone(),
             self.history_state_id,
         )
         .with_math_edit(before_math_edit);
         let after_state = SessionHistoryState::new(
-            after_selection,
-            self.selection_visual_affinity,
+            after_selection.0,
+            after_selection.1,
             self.pending_inline_style.clone(),
             after_state_id,
         )

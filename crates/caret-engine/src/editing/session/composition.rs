@@ -11,7 +11,6 @@ use super::super::{
 use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use std::mem;
-use unicode_segmentation::UnicodeSegmentation;
 
 impl Session {
     /// 按 Qt UTF-16 相对范围原子提交输入法替换，支持先取消已有预编辑再应用新范围。
@@ -28,21 +27,7 @@ impl Session {
         text: &str,
     ) -> Result<Effect, EditError> {
         if self.math_edit.is_some() {
-            let mut candidate = self.clone();
-            if let Some(id) = active_composition_id {
-                candidate.run(Command::CancelComposition { id })?;
-            }
-            candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
-            candidate.run(Command::UpdateComposition {
-                id: replacement_composition_id,
-                preedit: String::new(),
-            })?;
-            let effect = candidate.run(Command::CommitComposition {
-                id: replacement_composition_id,
-                text: text.to_owned(),
-            })?;
-            *self = candidate;
-            return Ok(effect);
+            return Err(EditError::CompositionPending);
         }
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
@@ -156,6 +141,9 @@ impl Session {
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
     ) -> Result<(Self, Self, Selection), EditError> {
+        if self.math_edit.is_some() {
+            return Err(EditError::CompositionPending);
+        }
         let mut candidate = self.transaction_clone();
         if let Some((replacement_start, replacement_length)) = replacement_range {
             candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
@@ -211,32 +199,7 @@ impl Session {
         cursor_position_utf16: usize,
     ) -> Result<(Self, Selection), EditError> {
         if self.math_edit.is_some() {
-            let composition = self
-                .composition
-                .as_ref()
-                .ok_or(EditError::InvalidCompositionId)?;
-            let preedit = composition.preedit.clone();
-            let range_start = self
-                .math_edit
-                .as_ref()
-                .and_then(|edit| edit.composition_range.as_ref())
-                .map_or_else(
-                    || self.math_edit.as_ref().map_or(0, |edit| edit.cursor),
-                    |r| r.start,
-                );
-            let mut preview = self.transaction_clone();
-            preview.run(Command::CommitComposition {
-                id: composition.id,
-                text: preedit.clone(),
-            })?;
-            if let Some(edit) = &mut preview.math_edit {
-                let relative = utf16_offset_to_utf8(
-                    &preedit,
-                    cursor_position_utf16.min(preedit.encode_utf16().count()),
-                )?;
-                edit.cursor = range_start + relative;
-            }
-            return Ok((preview, self.selection.clone()));
+            return Err(EditError::CompositionPending);
         }
         let composition = self
             .composition
@@ -408,36 +371,11 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
+        if self.math_edit.is_some() {
+            return Err(EditError::CompositionPending);
+        }
         // 虚拟环境外位置没有相邻文本可供 IME 替换，保持外侧停靠点并将提交视为插入。
         if self.block_environment_exit.is_some() {
-            return Ok(());
-        }
-        if let Some(edit) = &mut self.math_edit {
-            let source = edit.source.as_str();
-            let cursor_units = i64::try_from(utf8_offset_to_utf16(source, edit.cursor)?)
-                .map_err(|_| EditError::InvalidUtf16Offset)?;
-            let start_units = cursor_units + i64::from(replacement_start);
-            let end_units = start_units + i64::from(replacement_length);
-            let text_units = i64::try_from(source.encode_utf16().count())
-                .map_err(|_| EditError::InvalidUtf16Offset)?;
-            if start_units < 0
-                || end_units < 0
-                || start_units > text_units
-                || end_units > text_units
-            {
-                return Err(EditError::InvalidUtf16Offset);
-            }
-            let (start_units, end_units) = if start_units <= end_units {
-                (start_units, end_units)
-            } else {
-                (end_units, start_units)
-            };
-            let start = utf16_offset_to_utf8(source, start_units as usize)?;
-            let end = utf16_offset_to_utf8(source, end_units as usize)?;
-            edit.composition_range = Some(
-                snap_math_grapheme_boundary(source, start, false)
-                    ..snap_math_grapheme_boundary(source, end, true),
-            );
             return Ok(());
         }
         if replacement_start == 0 && replacement_length == 0 {
@@ -556,19 +494,6 @@ impl Session {
             ..Effect::default()
         })
     }
-}
-
-fn snap_math_grapheme_boundary(source: &str, offset: usize, downstream: bool) -> usize {
-    for (start, grapheme) in source.grapheme_indices(true) {
-        if start == offset {
-            return offset;
-        }
-        let end = start + grapheme.len();
-        if offset < end {
-            return if downstream { end } else { start };
-        }
-    }
-    source.len()
 }
 
 fn combine_effects(effects: Vec<Effect>) -> Effect {

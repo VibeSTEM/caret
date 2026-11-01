@@ -58,6 +58,10 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 `TextFlow` 复用正文 Run、Run 属性、未知字段、字素边界、选区、输入法、格式事务和撤销逻辑；其节点边界以[文档树与结构](document-model/document-structure.md)为准。`InlineEnvironment` 通过通用混合树操作复用格式范围、嵌套顺序与稳定 ID 规则。适配器携带宿主路径，直接在所属内容树调用这些操作；数学源码节点仍由 Math 编辑逻辑处理。公式树与正文共用文本编辑实现，但各自保留文档节点、位置身份、事务和失败边界。文本岛编辑直接修改共享树分支，不拍平或复制第二份可变文本；同步 source 与数学树的成本计入同一原子事务。
 
+IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务仍复用正文实现。
+
+当前 043 仅接入数学源码分支，因此公式焦点下的正文格式命令会拒绝执行，避免修改宿主段落的 pending style；TextFlow 编辑分支接入后，这些命令才由宿主路径路由到文本流。
+
 ### 宿主边界与拆分
 
 普通正文执行 `\math` 命令时，Paragraph 流插入一个 `InlineMath` 原子。该 InlineMath 根流含有 TextFlow 时，必须按顺序将根流切成相邻的 `ParagraphContent::Math` 与 `ParagraphContent::Text` 项，让普通文本回到正文编辑器。
@@ -77,7 +81,7 @@ Run 与环境的未知字段按实际归属保留；只有能证明安全复制�
 | 内容 | 数学源码表示 | 编辑/导出规则 |
 | --- | --- | --- |
 | TextFlow 文本与首版支持的 InlineEnvironment | `\text{...}` 及明确支持的格式命令 | 规范序列化；非规范源解析后可规范化 |
-| Run 的 language、字体选择、underline、未知字段 | 普通 LaTeX 子集通常不能表达 | 保存在树元数据中；源码重编辑须通过稳定节点/源范围映射恢复，无法唯一对齐时拒绝；标准 LaTeX 导出遇到影响外观或语义的此类元数据时返回明确损失错误 |
+| Run 的 language、underline 与未知字段；Font 环境的字体覆盖 | 普通 LaTeX 子集通常不能完整表达 | language、underline 和未知字段保存在 Run 元数据中；字体选择保存在 `InlineEnvironment<MathContent>` 的 Font 属性中。源码重编辑须通过稳定节点/源范围映射恢复，无法唯一对齐时拒绝；标准 LaTeX 导出遇到影响外观或语义的元数据时返回明确损失错误。Font 环境的任意覆盖与 `fontFamily` 源命令语义仍需无损映射设计，当前不承诺支持任意覆盖 |
 | 编辑器命令 `\math` | 非 LaTeX 源码语法 | 正文和公式 TextFlow 编辑模式都可用的结构命令；`.cdoc` source 保存解析后的数学内容，不保存命令面板别名 |
 
 不得用重复文本的模糊搜索匹配节点身份。源码表示与树元数据的对齐必须使用解析结构和稳定源范围；无法唯一映射时拒绝提交，保留原树和焦点。布局契约与验证由[044](../../task/044-math-layout-and-rendering.md)维护。

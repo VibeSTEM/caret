@@ -87,6 +87,50 @@ fn grapheme_delete_crosses_run_and_environment_boundaries() {
 }
 
 #[test]
+fn text_flow_extension_fields_allow_mapping_but_block_lossy_edits() {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let ParagraphContent::Text(mut flow) = run("abc") else {
+        unreachable!();
+    };
+    flow.extra.insert(
+        "futureTextFlowField".to_owned(),
+        serde_json::json!({"version": 2}),
+    );
+    paragraph.inlines = vec![ParagraphContent::Text(flow)];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("extension fields are valid document data: {error}"));
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("position mapping should ignore extension data: {error}"));
+    assert_eq!(session.selection().focus.offset, 1);
+
+    let before_document = session.document().clone();
+    let before_selection = session.selection().clone();
+    assert_eq!(
+        session.run(Command::InsertText("x".to_owned())),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.selection(), &before_selection);
+    assert_eq!(session.document_generation(), 0);
+
+    let Block::Paragraph(restored) = &session.document().body[0] else {
+        panic!("document should retain the paragraph");
+    };
+    assert_eq!(
+        TextMap::new(restored)
+            .unwrap_or_else(|error| panic!("mapping remains available: {error}"))
+            .text,
+        "abc"
+    );
+    assert_eq!(restored.id, paragraph_id);
+}
+
+#[test]
 fn invalid_mid_grapheme_position_is_rejected_without_mutation() {
     let mut session = session_with(vec![run("e\u{301}")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();

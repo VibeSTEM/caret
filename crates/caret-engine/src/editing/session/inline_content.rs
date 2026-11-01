@@ -274,7 +274,6 @@ impl Session {
                 },
                 source: source.to_owned(),
                 cursor: body.start,
-                composition_range: None,
             });
         }
         Ok(Effect {

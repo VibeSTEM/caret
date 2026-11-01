@@ -81,7 +81,7 @@ fn validate_align(align: &Align) -> Result<(), String> {
                     .cells
                     .iter()
                     .zip(&stored.cells)
-                    .any(|(parsed, stored)| !same_flow_semantics(&parsed.root, &stored.root))
+                    .any(|(parsed, stored)| !same_flow_semantics(&stored.root, &parsed.root))
         })
     {
         return Err(format!("align {} source and cells disagree", align.id));
@@ -131,7 +131,7 @@ fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
         (MathContent::Math(left), MathContent::Math(right)) => same_node_semantics(left, right),
         (MathContent::Environment(left), MathContent::Environment(right)) => {
             left.kind == right.kind
-                && left.props == right.props
+                && source_environment_props_match(&left.props, &right.props)
                 && left
                     .source_range
                     .as_ref()
@@ -151,6 +151,16 @@ fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
         (MathContent::Opaque(left), MathContent::Opaque(right)) => left.raw == right.raw,
         _ => false,
     }
+}
+
+fn source_environment_props_match(
+    stored: &std::collections::BTreeMap<String, serde_json::Value>,
+    parsed: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> bool {
+    // 解析器属性来自源码命令；仅树中额外保存的属性作为编辑元数据保留。
+    parsed
+        .iter()
+        .all(|(key, value)| stored.get(key) == Some(value))
 }
 
 fn same_node_semantics(left: &MathNode, right: &MathNode) -> bool {
@@ -256,6 +266,50 @@ mod tests {
     }
 
     #[test]
+    fn formula_text_environment_properties_are_preserved_as_tree_metadata() {
+        let mut tree = parse_inline(r"\text{\textbf{x}}");
+        let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
+            panic!("formatted text formula should start with an environment");
+        };
+        environment
+            .props
+            .insert("enabled".to_owned(), serde_json::json!(false));
+        assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
+
+        let mut document = Document::blank();
+        let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+            panic!("blank document should have a paragraph");
+        };
+        paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree,
+            extra: Default::default(),
+        })];
+        assert!(crate::Session::new(document).is_ok());
+    }
+
+    #[test]
+    fn source_font_command_must_match_the_persisted_text_flow() {
+        let mut tree = parse_inline(r"\text{\textsf{x}}");
+        tree.source = r"\text{\texttt{x}}".to_owned();
+        assert!(
+            validate_tree(&tree, MathInputKind::Inline, "text")
+                .is_err_and(|error| error.contains("source and tree disagree"))
+        );
+
+        let mut document = Document::blank();
+        let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+            panic!("blank document should have a paragraph");
+        };
+        paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree,
+            extra: Default::default(),
+        })];
+        assert!(crate::Session::new(document).is_err());
+    }
+
+    #[test]
     fn matrix_flows_with_rows_and_markers_round_trip_through_cdoc() {
         let source = r"\begin{matrix}a \\ \hline \intertext{middle} b\end{matrix}";
         let tree = parse_inline(source);
@@ -316,5 +370,37 @@ mod tests {
             panic!("incorrect source range must be rejected");
         };
         assert!(error.contains("source and tree disagree"));
+    }
+
+    #[test]
+    fn align_text_style_metadata_is_preserved_but_source_font_changes_are_rejected() {
+        let mut align = match caret_math::parse(
+            r"\begin{aligned}\text{\textbf{x}}\end{aligned}",
+            MathInputKind::Align,
+        ) {
+            Ok(caret_math::ParsedMath::Align(align)) => align,
+            Ok(caret_math::ParsedMath::Tree(_)) => panic!("expected aligned formula"),
+            Err(error) => panic!("test align formula should parse: {error}"),
+        };
+        let Some(MathContent::Environment(environment)) =
+            align.rows[0].cells[0].root.content.first_mut()
+        else {
+            panic!("formatted text cell should start with an environment");
+        };
+        environment
+            .props
+            .insert("enabled".to_owned(), serde_json::json!(false));
+        assert_eq!(validate_align(&align), Ok(()));
+
+        let mut align = match caret_math::parse(
+            r"\begin{aligned}\text{\textsf{x}}\end{aligned}",
+            MathInputKind::Align,
+        ) {
+            Ok(caret_math::ParsedMath::Align(align)) => align,
+            Ok(caret_math::ParsedMath::Tree(_)) => panic!("expected aligned formula"),
+            Err(error) => panic!("test align formula should parse: {error}"),
+        };
+        align.source = align.source.replace(r"\textsf", r"\texttt");
+        assert!(validate_align(&align).is_err());
     }
 }

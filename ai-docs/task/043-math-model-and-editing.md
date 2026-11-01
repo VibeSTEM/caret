@@ -56,6 +56,8 @@
 | 2026-11-01 | `cargo test --offline --locked -p caret-doc`、`-p caret-app`、`-p caret-engine` | 模型、直接消费者及公式编辑行为通过 | caret-doc 52 项、caret-app 196 项、caret-engine 247 项通过 |
 | 2026-11-01 | `cargo test --offline --locked -p caret-tests --test document` | `.cdoc` 往返、未知数据、能力声明与失败行为通过 | 20 项通过；当前格式 fixture 与手写 envelope 已声明 `caret.paragraph.content-flow.v1` |
 | 2026-11-01 | `cargo test --offline --locked --workspace` | Workspace Rust 与 native 测试通过 | Rust 单元及集成套件通过；本机 native 聚合有 1 项 ShellLoad 失败：`documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 断言 `default_url.isLocalFile()`，ShellLoad 其余 39 项及其他 7 个 CTest 均通过 |
+| 2026-11-01 | `cargo test --offline --locked -p caret-engine`、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 数学编辑状态、元数据校验、源码模式 IME 边界及直接消费者通过 | 256 项 engine 测试通过；clippy、格式和差异检查通过。用例覆盖源码/命令查询禁用 IME、拒绝宿主格式副作用、Font 源码语义校验、结构选区保护、连续公式导航、显式退出、空公式删除及撤销边界 |
+| 2026-11-01 | `cargo test --offline --locked -p caret-engine`、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 公式删除历史、方向回退和 TextFlow 扩展字段位置映射通过 | 259 项 engine 测试通过；clippy、格式和差异检查通过。新增断言覆盖空公式删除前后视觉 affinity 的 undo/redo、Escape 仅在优先方向无段落时回退，以及含未知 TextFlow 字段时仍可映射/移动/公式进出，普通编辑则原子拒绝以免丢字段 |
 | 2026-11-01 | `cargo clippy --offline --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | lint、格式与差异检查通过 | 全部通过 |
 | 2026-11-01 | Terra 分领域审查及 Sol/medium 最终只读审查 | 边界、行为、模型与存储无阻塞问题 | 最终审查无 P0–P2；修复缺少 runs/旧 text 静默变空及文档 DTO / capability 不一致 |
 | 2026-11-01 | 性能与覆盖率门槛 | 记录代表性前后基线；Rust/native C++ coverage gate 通过 | 本轮未运行性能基准与覆盖率门槛；编辑工作副本仍复制行内段落，性能影响待基准验证 |
@@ -68,7 +70,9 @@
 
 - 2026-10-29：从 011 拆出文档模型、编辑和导航任务；以 020/011 的产品语义为准。
 - 2026-11-01：明确 043 的焦点为 `MathEdit` 源码字节位置；页面几何留给 044，表格模型与集成分别由 045/046 验收。
+- 2026-11-01：数学源码和数学命令查询禁用 IME；TextFlow 活动分支接入后再启用正文输入法事务。命令查询只接收命令行白名单，公式源码模式拒绝正文格式命令，避免误改宿主段落。显示公式之间可按方向切换，显式退出跳过连续公式并恢复到可用正文边界；无目标时保留焦点。撤销分组合并在数学焦点迁移时切断。
+- 2026-11-01：源码一致性验证比较 parser 可表达的属性，保留树独有的环境属性。数学 TextFlow 的任意 Font 覆盖仍不能单独表示：`fontFamily` 目前同时承载源命令映射与实际字体；在建立无损语义/覆盖映射前，不宣称自定义数学字体支持。正文 TextFlow 未知扩展字段现在不阻断只读位置映射，但编辑适配器仍在提交前拒绝无法归属的字段，以免降平时丢失。
 
 ## 完成摘要
 
-当前分支已将 `Paragraph.inlines` 和 MathTree 改为共享 TextFlow 的强类型混合流，加入 Paragraph/MathFlow 能力声明，并让解析、序列化、数学验证、历史估算和段落位置映射消费新模型。旧的临时 inline/TextContent 格式没有转换器；旧 MathTree schema 只读预览，不进入新编辑树。正文 TextMap 的只读扫描直接遍历新模型，但编辑与格式操作仍经临时 `EditNode` 工作副本复用旧树算法；完整的宿主路径直接编辑、正文根流提升与包装环境转换仍需验证。桌面公式绘制/光标投影尚未接入，公式命令候选保持不可执行。性能成本尚无代表性基准，不宣称共享载体已带来性能收益。044 负责公式页面布局，表格集成归 045/046。
+当前分支已将 `Paragraph.inlines` 和 MathTree 改为共享 TextFlow 的强类型混合流，加入 Paragraph/MathFlow 能力声明，并让解析、序列化、数学验证、历史估算和段落位置映射消费新模型。旧的临时 inline/TextContent 格式没有转换器；旧 MathTree schema 只读预览，不进入新编辑树。数学源码模式和数学命令查询禁用 IME，格式命令不会改动宿主段落样式；文本岛 IME 尚未接入。正文 TextMap 的只读扫描直接遍历新模型，但编辑与格式操作仍经临时 `EditNode` 工作副本复用旧树算法；完整的宿主路径直接编辑、正文根流提升与包装环境转换仍未完成。数学文本岛的自定义字体覆盖也尚无无损的源码/树表示。桌面公式绘制/光标投影尚未接入，公式命令候选保持不可执行。性能成本尚无代表性基准，不宣称共享载体已带来性能收益。044 负责公式页面布局，表格集成归 045/046。

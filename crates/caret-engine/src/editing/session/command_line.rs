@@ -77,6 +77,13 @@ impl Session {
         replacement_length: i32,
         cursor_utf16: usize,
     ) -> Result<(), EditError> {
+        if self
+            .command_line
+            .as_ref()
+            .is_some_and(|line| line.mode == CommandLineMode::Math)
+        {
+            return Err(EditError::CompositionPending);
+        }
         let Some(command_line) = &mut self.command_line else {
             return Ok(());
         };

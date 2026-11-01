@@ -105,74 +105,35 @@ fn align_row_break_is_one_navigation_and_deletion_unit() -> Result<(), Box<dyn s
 }
 
 #[test]
-fn math_ime_replacement_is_previewed_committed_and_idempotent()
+fn math_source_mode_rejects_ime_without_changing_focus_or_document()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut session = session_with_text("")?;
     session.run(Command::InsertInlineMath("abc".to_owned()))?;
     session.run(Command::EnterMath(Direction::Backward))?;
-    let (candidate, preview, _) =
-        session.composition_update_candidate(73, "X".to_owned(), Some((-1, 1)), 1)?;
-    assert_eq!(inline_source(&session).as_deref(), Some("abc"));
-    assert_eq!(inline_source(&preview).as_deref(), Some("abX"));
-
-    session.install_composition_candidate(candidate);
-    let document_during_preedit = session.document().clone();
-    assert_eq!(
-        session.run(Command::Delete(Direction::Backward)),
-        Err(EditError::CompositionPending)
-    );
-    assert_eq!(session.document(), &document_during_preedit);
-    let committed = session.run(Command::CommitComposition {
-        id: 73,
-        text: "X".to_owned(),
-    })?;
-    assert!(committed.composition_changed);
-    assert_eq!(inline_source(&session).as_deref(), Some("abX"));
-    session.run(Command::CommitComposition {
-        id: 73,
-        text: "X".to_owned(),
-    })?;
-    assert_eq!(inline_source(&session).as_deref(), Some("abX"));
-    Ok(())
-}
-
-#[test]
-fn math_ime_range_snaps_outward_to_the_composed_grapheme() -> Result<(), Box<dyn std::error::Error>>
-{
-    let grapheme = "a\u{301}";
-    let mut session = session_with_text("")?;
-    session.run(Command::InsertInlineMath(format!("{grapheme}b")))?;
-    session.run(Command::EnterMath(Direction::Backward))?;
-    let (candidate, preview, _) =
-        session.composition_update_candidate(81, "x".to_owned(), Some((-2, 0)), 1)?;
-
-    assert_eq!(inline_source(&session).as_deref(), Some("a\u{301}b"));
-    assert_eq!(inline_source(&preview).as_deref(), Some("xb"));
-    assert_eq!(
-        candidate.composition.as_ref().map(|value| value.id),
-        Some(81)
-    );
-    Ok(())
-}
-
-#[test]
-fn math_ime_replacement_entrypoint_is_atomic() -> Result<(), Box<dyn std::error::Error>> {
-    let mut session = session_with_text("")?;
-    session.run(Command::InsertInlineMath("abc".to_owned()))?;
-    session.run(Command::EnterMath(Direction::Backward))?;
-    session.commit_composition_replacement(None, 91, 92, -1, 1, "X")?;
-    assert_eq!(inline_source(&session).as_deref(), Some("abX"));
-
     let before_document = session.document().clone();
     let before_edit = session.math_edit().cloned();
     let before_generation = session.document_generation();
+    let before_session_id = session.session_id().clone();
     assert_eq!(
-        session.commit_composition_replacement(None, 93, 94, 100, 1, "Y"),
-        Err(EditError::InvalidUtf16Offset)
+        session.run(Command::UpdateComposition {
+            id: 73,
+            preedit: "X".to_owned(),
+        }),
+        Err(EditError::CompositionPending)
+    );
+    assert!(matches!(
+        session.composition_update_candidate(73, "X".to_owned(), None, 1),
+        Err(EditError::CompositionPending)
+    ));
+    assert_eq!(
+        session.commit_composition_replacement(None, 74, 75, -1, 1, "X"),
+        Err(EditError::CompositionPending)
     );
     assert_eq!(session.document(), &before_document);
     assert_eq!(session.math_edit(), before_edit.as_ref());
     assert_eq!(session.document_generation(), before_generation);
+    assert_eq!(session.session_id(), &before_session_id);
+    assert!(session.composition().is_none());
     Ok(())
 }
 
@@ -747,6 +708,56 @@ fn math_command_inserts_inline_math_and_sub_commands_edit_it()
 }
 
 #[test]
+fn math_command_query_rejects_ime_preedit_and_commit() -> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "math")?;
+    session.run(Command::BeginCommandLine)?;
+    session.run(Command::TypeCommandLine("frac".to_owned()))?;
+    let query_before = session.command_line().cloned();
+    let document_before = session.document().clone();
+    let generation_before = session.document_generation();
+
+    assert_eq!(
+        session.input_method_command_line("ni".to_owned(), "字".to_owned(), 0, 0, 2),
+        Err(EditError::CompositionPending)
+    );
+    assert_eq!(session.command_line(), query_before.as_ref());
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert!(session.composition().is_none());
+    session.run(Command::EditorKey(EditorKey::ShiftEnter))?;
+    assert_eq!(session.command_line(), query_before.as_ref());
+    assert_eq!(session.document(), &document_before);
+    Ok(())
+}
+
+#[test]
+fn undo_and_redo_from_math_command_query_restore_formula_editing() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    session.run(Command::BeginCommandLine)?;
+    session.run(Command::TypeCommandLine("frac".to_owned()))?;
+
+    session.run(Command::Undo)?;
+    assert!(session.command_line().is_none());
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        Some("")
+    );
+    assert_eq!(inline_source(&session).as_deref(), Some(""));
+
+    session.run(Command::Redo)?;
+    assert!(session.command_line().is_none());
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        Some("x")
+    );
+    assert_eq!(inline_source(&session).as_deref(), Some("x"));
+    Ok(())
+}
+
+#[test]
 fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut session = session_with_text("")?;
@@ -878,11 +889,70 @@ fn entering_fenced_inline_math_edits_inside_the_fences_from_both_sides()
 }
 
 #[test]
+fn inline_math_navigation_ignores_text_flow_extension_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Inline)?
+    else {
+        panic!("inline math should parse into a tree");
+    };
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let text = |value: &str| {
+        let mut extra = std::collections::BTreeMap::new();
+        extra.insert("futureTextFlowField".to_owned(), serde_json::json!(true));
+        ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            source_range: None,
+            extra,
+        })
+    };
+    paragraph.inlines = vec![
+        text("before"),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        }),
+        text("after"),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut session = Session::new(document)?;
+    let before_math = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: "before".len(),
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: before_math.clone(),
+        focus: before_math,
+    })))?;
+
+    session.run(Command::EnterMath(Direction::Forward))?;
+    assert!(session.math_edit().is_some());
+    session.run(Command::EditorKey(EditorKey::Escape))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.offset, "before".len() + 3);
+    Ok(())
+}
+
+#[test]
 fn backspace_deletes_an_empty_fenced_inline_formula() -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     session.run(Command::InsertInlineMath("$ $".to_owned()))?;
     session.run(Command::EnterMath(Direction::Backward))?;
+    let before_delete_affinity = session.selection_visual_affinity();
+    assert_eq!(before_delete_affinity, crate::VisualAffinity::Upstream);
     session.run(Command::Delete(Direction::Backward))?;
+    let after_delete_affinity = session.selection_visual_affinity();
+    assert_eq!(after_delete_affinity, crate::VisualAffinity::Downstream);
 
     assert!(inline_source(&session).is_none());
     assert!(session.math_edit().is_none());
@@ -890,9 +960,11 @@ fn backspace_deletes_an_empty_fenced_inline_formula() -> Result<(), EditError> {
     session.run(Command::Undo)?;
     assert!(inline_source(&session).is_some());
     assert!(session.math_edit().is_some());
+    assert_eq!(session.selection_visual_affinity(), before_delete_affinity);
     session.run(Command::Redo)?;
     assert!(inline_source(&session).is_none());
     assert!(session.math_edit().is_none());
+    assert_eq!(session.selection_visual_affinity(), after_delete_affinity);
     Ok(())
 }
 
@@ -902,7 +974,11 @@ fn undo_and_redo_restore_focus_when_deleting_an_empty_display_formula()
     let mut session = session_with_text("")?;
     accept(&mut session, "equation")?;
     assert!(session.math_edit().is_some());
+    let before_delete_affinity = session.selection_visual_affinity();
+    assert_eq!(before_delete_affinity, crate::VisualAffinity::Downstream);
     session.run(Command::Delete(Direction::Backward))?;
+    let after_delete_affinity = session.selection_visual_affinity();
+    assert_eq!(after_delete_affinity, crate::VisualAffinity::Upstream);
     assert!(session.math_edit().is_none());
     assert!(
         !session
@@ -914,6 +990,7 @@ fn undo_and_redo_restore_focus_when_deleting_an_empty_display_formula()
 
     session.run(Command::Undo)?;
     assert!(session.math_edit().is_some());
+    assert_eq!(session.selection_visual_affinity(), before_delete_affinity);
     assert!(
         session
             .document()
@@ -923,6 +1000,7 @@ fn undo_and_redo_restore_focus_when_deleting_an_empty_display_formula()
     );
     session.run(Command::Redo)?;
     assert!(session.math_edit().is_none());
+    assert_eq!(session.selection_visual_affinity(), after_delete_affinity);
     assert!(
         !session
             .document()
@@ -946,31 +1024,6 @@ fn rejecting_missing_block_selection_keeps_active_math_edit() -> Result<(), Edit
     );
     assert_eq!(session.math_edit(), before.as_ref());
     assert_eq!(session.document_generation(), generation);
-    Ok(())
-}
-
-#[test]
-fn block_selection_cannot_leave_math_during_composition() -> Result<(), EditError> {
-    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
-    accept(&mut session, "equation")?;
-    let Some(Block::Equation(equation)) = session.document().body.first() else {
-        panic!("expected equation block");
-    };
-    let equation_id = equation.id.clone();
-    let original_equation = equation.clone();
-    let target_before = session.math_edit().cloned();
-    let (candidate, _, _) = session.composition_update_candidate(61, "x".to_owned(), None, 1)?;
-    session.install_composition_candidate(candidate);
-
-    assert_eq!(
-        session.select_block_environment(equation_id),
-        Err(EditError::CompositionPending)
-    );
-    assert_eq!(session.math_edit(), target_before.as_ref());
-    assert_eq!(
-        session.document().body.first(),
-        Some(&Block::Equation(original_equation))
-    );
     Ok(())
 }
 
@@ -1149,9 +1202,233 @@ fn rejected_body_command_keeps_the_active_math_edit_target()
     let mut session = session_with_text("")?;
     accept(&mut session, "math")?;
     let target_before = session.math_edit().cloned();
+    let pending_style_before = session.pending_inline_style.clone();
     let result = session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Font));
     assert!(matches!(result, Err(EditError::UnsupportedInlineFormat)));
     assert_eq!(session.math_edit(), target_before.as_ref());
+    assert_eq!(session.pending_inline_style, pending_style_before);
+    assert!(matches!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::UnsupportedInlineFormat)
+    ));
+    assert_eq!(session.math_edit(), target_before.as_ref());
+    assert_eq!(session.pending_inline_style, pending_style_before);
+
+    session.run(Command::BeginCommandLine)?;
+    session.run(Command::TypeCommandLine("frac".to_owned()))?;
+    let command_line_before = session.command_line().cloned();
+    let document_before = session.document().clone();
+    let history_state_before = session.history_state_id();
+    assert_eq!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::UnsupportedInlineFormat)
+    );
+    assert_eq!(
+        session.run(Command::InsertText("leak".to_owned())),
+        Err(EditError::UnknownCommand)
+    );
+    assert_eq!(session.math_edit(), target_before.as_ref());
+    assert_eq!(session.command_line(), command_line_before.as_ref());
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.pending_inline_style, pending_style_before);
+    assert_eq!(session.history_state_id(), history_state_before);
+    Ok(())
+}
+
+#[test]
+fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std::error::Error>> {
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        display_math_block(false, "a")?,
+        display_math_block(true, "b&c")?,
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { align: false, .. })
+    ));
+
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { align: true, .. })
+    ));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
+
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { align: false, .. })
+    ));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+    Ok(())
+}
+
+#[test]
+fn leaving_last_display_math_without_a_paragraph_keeps_formula_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        display_math_block(false, "a")?,
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    let target = session.math_edit().cloned();
+    let selection = session.selection().clone();
+
+    session.run(Command::MoveCaret(Direction::Forward))?;
+
+    assert_eq!(session.math_edit(), target.as_ref());
+    assert_eq!(session.selection(), &selection);
+    Ok(())
+}
+
+#[test]
+fn escape_leaves_last_equation_and_align_at_the_nearest_body_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (align, source) in [(false, "a"), (true, "a&b")] {
+        let mut document = caret_doc::Document::blank();
+        document.body = vec![
+            Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+            display_math_block(align, source)?,
+        ];
+        let mut session = Session::new(document)?;
+        let paragraph_id = match session.document().body.first() {
+            Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
+            _ => panic!("document should start with a paragraph"),
+        };
+        session.run(Command::EnterMath(Direction::Forward))?;
+
+        session.run(Command::EditorKey(EditorKey::Escape))?;
+
+        assert!(session.math_edit().is_none());
+        assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+        assert_eq!(session.selection().focus.offset, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn escape_skips_adjacent_formula_blocks_and_updates_paragraph_affinity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        display_math_block(false, "a")?,
+        display_math_block(true, "b&c")?,
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    session.run(Command::EditorKey(EditorKey::Escape))?;
+
+    let Some(Block::Paragraph(after)) = session.document().body.last() else {
+        panic!("document should end with a paragraph");
+    };
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.paragraph_id, after.id);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+    assert_eq!(
+        session.selection_visual_affinity(),
+        crate::VisualAffinity::Upstream
+    );
+    Ok(())
+}
+
+#[test]
+fn escape_uses_the_opposite_side_only_when_the_preferred_side_has_no_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = Paragraph::empty(NodeId::generate());
+    let after = Paragraph::empty(NodeId::generate());
+    let after_id = after.id.clone();
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        display_math_block(false, "x")?,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    let Block::Paragraph(before) = &mut session.document.body[0] else {
+        panic!("document should start with the paragraph");
+    };
+    before.inlines = vec![ParagraphContent::Opaque(caret_doc::OpaqueNode {
+        raw: serde_json::json!({"type": "future_inline", "payload": "preserve"}),
+    })];
+
+    session.run(Command::EditorKey(EditorKey::Escape))?;
+
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.paragraph_id, after_id);
+    Ok(())
+}
+
+#[test]
+fn leaving_and_reentering_inline_math_splits_typing_undo_groups()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.begin_inline_math()?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    assert!(session.math_edit().is_none());
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::InsertText("y".to_owned()))?;
+    assert_eq!(inline_source(&session).as_deref(), Some("xy"));
+
+    session.run(Command::Undo)?;
+
+    assert_eq!(inline_source(&session).as_deref(), Some("x"));
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        Some("x")
+    );
+    Ok(())
+}
+
+#[test]
+fn deleting_empty_align_after_a_formula_chain_is_undoable() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        display_math_block(false, "a")?,
+        display_math_block(true, "b")?,
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        Some("")
+    );
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { align: true, .. })
+    ));
+
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(session.document().body.len(), 2);
+    assert!(session.math_edit().is_none());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document().body.len(), 3);
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { align: true, .. })
+    ));
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 2);
+    assert!(session.math_edit().is_none());
     Ok(())
 }
 
@@ -1169,5 +1446,59 @@ fn invalid_structure_selection_keeps_the_active_math_edit_target()
     );
     assert!(matches!(result, Err(EditError::InvalidPosition)));
     assert_eq!(session.math_edit(), target_before.as_ref());
+    Ok(())
+}
+
+#[test]
+fn structure_selection_blocks_entering_adjacent_inline_math()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = caret_doc::Document::blank();
+    let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+        panic!("blank document should start with a paragraph");
+    };
+    let tree = match caret_math::parse("x", caret_math::MathInputKind::Inline)? {
+        caret_math::ParsedMath::Tree(tree) => tree,
+        caret_math::ParsedMath::Align(_) => panic!("expected inline formula"),
+    };
+    paragraph.inlines = vec![caret_doc::ParagraphContent::Math(caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree: tree,
+        extra: Default::default(),
+    })];
+    let selected_environment_id = NodeId::generate();
+    document
+        .body
+        .push(Block::Environment(caret_doc::BlockEnvironment {
+            id: selected_environment_id.clone(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(caret_doc::Paragraph::empty(
+                NodeId::generate(),
+            ))],
+            extra: Default::default(),
+        }));
+    let mut session = Session::new(document)?;
+    session.select_block_environment(selected_environment_id.clone())?;
+    let structure_selection_before = session
+        .structure_selection()
+        .map(|(a, f)| (a.clone(), f.clone()));
+    let document_before = session.document().clone();
+
+    session.run(Command::EnterMath(Direction::Forward))?;
+
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.selected_block_environment(),
+        Some(&selected_environment_id)
+    );
+    assert_eq!(
+        session
+            .structure_selection()
+            .map(|(a, f)| (a.clone(), f.clone())),
+        structure_selection_before
+    );
+    assert_eq!(session.document(), &document_before);
     Ok(())
 }
