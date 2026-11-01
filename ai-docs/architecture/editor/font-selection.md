@@ -68,7 +68,7 @@ Run / Paragraph 的语言按 Run → Paragraph → `globalSettings.defaultLangua
 6. `SystemUi` 通用族。
 7. Fontique/Parley 的平台系统 fallback。
 
-数学公式使用独立数学字体请求；未知数学族按[公式规范](math-and-table.md#解析数学排版和字体)回退到内嵌 STIX Two Math 并报告诊断。代码布局通过 `ShapingStyle.font_role = FontRole::Code` 进入代码字体选择：普通字符先尝试显式 `defaultCodeFontFamily` 族名，再用 Fontique `GenericFamily::Monospace`，随后追加 `SystemUi` 通用族；`"<default>"` 从 Monospace 开始。Emoji presentation 字素仍优先使用 Emoji 通用族。代码角色不继承正文 Script、CJK 或数学字体偏好，并保留所选等宽字体的原生空格 advance，不应用正文的 0.5em 空格校准。Qt 命令输入仍使用 Qt 固定宽度系统字体或文档显式代码字体。当前文档模型尚无代码块节点，因此代码块节点接入时应设置此角色，不得另写字体解析逻辑。显式族名缺失或缺少字形时保留用户请求并继续候选链及平台 fallback；组合字符和其他 shaping cluster 应尽可能从同一实际字体塑形，不能把组合符从基字符处分开。真实字体解析可能因系统版本、字体安装、语言偏好和 Linux 发行版不同而变化；映射细节见[macOS](font-defaults/macos.md)、[Windows](font-defaults/windows.md)、[Linux](font-defaults/linux.md)。
+数学公式使用独立数学字体请求；未知数学族按[公式规范](math.md#解析排版与字体)回退到内嵌 STIX Two Math 并报告诊断。代码布局通过 `ShapingStyle.font_role = FontRole::Code` 进入代码字体选择：普通字符先尝试显式 `defaultCodeFontFamily` 族名，再用 Fontique `GenericFamily::Monospace`，随后追加 `SystemUi` 通用族；`"<default>"` 从 Monospace 开始。Emoji presentation 字素仍优先使用 Emoji 通用族。代码角色不继承正文 Script、CJK 或数学字体偏好，并保留所选等宽字体的原生空格 advance，不应用正文的 0.5em 空格校准。Qt 命令输入仍使用 Qt 固定宽度系统字体或文档显式代码字体。当前文档模型尚无代码块节点，因此代码块节点接入时应设置此角色，不得另写字体解析逻辑。显式族名缺失或缺少字形时保留用户请求并继续候选链及平台 fallback；组合字符和其他 shaping cluster 应尽可能从同一实际字体塑形，不能把组合符从基字符处分开。真实字体解析可能因系统版本、字体安装、语言偏好和 Linux 发行版不同而变化；映射细节见[macOS](font-defaults/macos.md)、[Windows](font-defaults/windows.md)、[Linux](font-defaults/linux.md)。
 
 字体选择候选只表达期望族名，不保证该族存在或覆盖全部字符。实际字体目录、可用族检查及显式刷新由 024 的 Fontique catalog 持有；刷新后使用新 catalog generation，失败时保留旧目录。数学字体的唯一首版回退是内嵌 STIX Two Math，其他值按公式规范报告诊断。
 
@@ -124,4 +124,4 @@ crates/caret-layout/src/
 
 行为测试至少覆盖 `Latn` 默认、多个平级 Script、语言覆盖仅作用于对应 Script、BCP 47 精确/逐级回退、未知 Script 数据往返、缺失字体请求保留、公式/代码与正文链隔离、代码族名在等宽通用族前且默认值直接使用等宽族、代码空格保持等宽 cell advance、目录刷新 generation 和 `.cdoc` 往返。测试应断言字体请求、可观察 shaping 结果或副作用，不断言某个 OS 上固定字体名；需要验证具体 fallback 时，使用固定已知字体与明确平台环境。
 
-仅有系统字体 smoke 不证明不同脚本外观一致；字体基线、fallback 选择与跨平台差异需和 [033 OpenType baseline](../../task/033-open-type-baselines.md) 的规则一起评估。公式默认字体固定 STIX Two Math；行内/显示公式与表格模型见[公式与表格](math-and-table.md)。
+仅有系统字体 smoke 不证明不同脚本外观一致；字体基线、fallback 选择与跨平台差异需和 [033 OpenType baseline](../../task/033-open-type-baselines.md) 的规则一起评估。公式默认字体固定 STIX Two Math；行内/显示公式见[数学公式](math.md)，表格模型见[表格](tables.md)。

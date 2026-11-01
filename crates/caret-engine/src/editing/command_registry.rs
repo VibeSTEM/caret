@@ -83,6 +83,7 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         alias: "\\math",
         command_id: "insert.inline_math",
         label: "Inline math",
+        // 持久化、页面布局与数学光标投影接入后再启用。
         available: false,
     },
     RegisteredCandidate {
@@ -95,18 +96,6 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         alias: "\\align",
         command_id: "insert.align",
         label: "Multiline equation",
-        available: false,
-    },
-    RegisteredCandidate {
-        alias: "\\frac",
-        command_id: "insert.equation.fraction",
-        label: "Fraction",
-        available: false,
-    },
-    RegisteredCandidate {
-        alias: "\\sqrt",
-        command_id: "insert.equation.radical",
-        label: "Square root",
         available: false,
     },
     RegisteredCandidate {
@@ -182,5 +171,68 @@ pub fn candidates() -> Vec<CommandCandidate> {
         .iter()
         .copied()
         .map(RegisteredCandidate::to_candidate)
+        .collect()
+}
+
+/// 公式编辑中 `\` 子命令的稳定 ID；候选的 `value` 是插入到公式源码的 LaTeX 模板。
+pub const MATH_INSERT_COMMAND_ID: &str = "math.insert";
+
+/// 公式内子命令：别名、显示名称与模板；模板中的第一个 `{}` 是插入后的光标位置。
+const MATH_CANDIDATES: &[(&str, &str, &str)] = &[
+    ("\\frac", "Fraction", "\\frac{}{}"),
+    ("\\sqrt", "Square root", "\\sqrt{}"),
+    ("\\superscript", "Superscript", "^{}"),
+    ("\\subscript", "Subscript", "_{}"),
+    ("\\sum", "Summation", "\\sum"),
+    ("\\int", "Integral", "\\int"),
+    ("\\infty", "Infinity", "\\infty"),
+    ("\\alpha", "Greek alpha", "\\alpha"),
+    ("\\beta", "Greek beta", "\\beta"),
+    ("\\gamma", "Greek gamma", "\\gamma"),
+    ("\\delta", "Greek delta", "\\delta"),
+    ("\\epsilon", "Greek epsilon", "\\epsilon"),
+    ("\\zeta", "Greek zeta", "\\zeta"),
+    ("\\eta", "Greek eta", "\\eta"),
+    ("\\theta", "Greek theta", "\\theta"),
+    ("\\iota", "Greek iota", "\\iota"),
+    ("\\kappa", "Greek kappa", "\\kappa"),
+    ("\\lambda", "Greek lambda", "\\lambda"),
+    ("\\mu", "Greek mu", "\\mu"),
+    ("\\nu", "Greek nu", "\\nu"),
+    ("\\xi", "Greek xi", "\\xi"),
+    ("\\pi", "Greek pi", "\\pi"),
+    ("\\rho", "Greek rho", "\\rho"),
+    ("\\sigma", "Greek sigma", "\\sigma"),
+    ("\\tau", "Greek tau", "\\tau"),
+    ("\\upsilon", "Greek upsilon", "\\upsilon"),
+    ("\\phi", "Greek phi", "\\phi"),
+    ("\\chi", "Greek chi", "\\chi"),
+    ("\\psi", "Greek psi", "\\psi"),
+    ("\\omega", "Greek omega", "\\omega"),
+    ("\\Gamma", "Greek capital Gamma", "\\Gamma"),
+    ("\\Delta", "Greek capital Delta", "\\Delta"),
+    ("\\Theta", "Greek capital Theta", "\\Theta"),
+    ("\\Lambda", "Greek capital Lambda", "\\Lambda"),
+    ("\\Xi", "Greek capital Xi", "\\Xi"),
+    ("\\Pi", "Greek capital Pi", "\\Pi"),
+    ("\\Sigma", "Greek capital Sigma", "\\Sigma"),
+    ("\\Upsilon", "Greek capital Upsilon", "\\Upsilon"),
+    ("\\Phi", "Greek capital Phi", "\\Phi"),
+    ("\\Psi", "Greek capital Psi", "\\Psi"),
+    ("\\Omega", "Greek capital Omega", "\\Omega"),
+];
+
+/// 公式编辑状态下 `\` 命令行列出的子命令。
+pub fn math_candidates() -> Vec<CommandCandidate> {
+    MATH_CANDIDATES
+        .iter()
+        .map(|(alias, label, template)| CommandCandidate {
+            alias: Cow::Borrowed(alias),
+            command_id: MATH_INSERT_COMMAND_ID,
+            label: Cow::Borrowed(label),
+            available: true,
+            value: Some((*template).to_owned()),
+            has_children: false,
+        })
         .collect()
 }

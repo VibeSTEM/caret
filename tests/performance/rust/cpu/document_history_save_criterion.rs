@@ -1,7 +1,7 @@
 //! 测量 10 万与 100 万字符文档的撤销、重做和保存快照。
 
 use caret_app::document_session::DocumentSessionService;
-use caret_doc::{Block, CdocFile, Document, InlineNode, NodeId, Paragraph, Run};
+use caret_doc::{Block, CdocFile, Document, NodeId, Paragraph, ParagraphContent, Run, TextFlow};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -36,7 +36,7 @@ impl Fixture {
                         PARAGRAPH_LANGUAGES[index % PARAGRAPH_LANGUAGES.len()].to_owned(),
                     ),
                     layout: None,
-                    inlines: vec![InlineNode::Run(Run {
+                    inlines: vec![text_flow(Run {
                         text: text.to_owned(),
                         language: None,
                         props: BTreeMap::new(),
@@ -71,6 +71,14 @@ impl Drop for Fixture {
     }
 }
 
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: BTreeMap::new(),
+    })
+}
+
 fn place_caret_in_middle(session: &mut DocumentSessionService, paragraph_index: usize) {
     let paragraph = match session.view_mut().document().body.get(paragraph_index) {
         Some(Block::Paragraph(paragraph)) => paragraph,
@@ -80,14 +88,16 @@ fn place_caret_in_middle(session: &mut DocumentSessionService, paragraph_index: 
         .inlines
         .iter()
         .find_map(|inline| match inline {
-            InlineNode::Run(run) => Some((
-                paragraph.id.to_string(),
-                run.text
-                    .grapheme_indices(true)
-                    .nth(100)
-                    .map(|(offset, _)| offset)
-                    .unwrap_or(run.text.len()),
-            )),
+            ParagraphContent::Text(flow) => flow.runs.first().map(|run| {
+                (
+                    paragraph.id.to_string(),
+                    run.text
+                        .grapheme_indices(true)
+                        .nth(100)
+                        .map(|(offset, _)| offset)
+                        .unwrap_or(run.text.len()),
+                )
+            }),
             _ => None,
         })
         .unwrap_or_else(|| panic!("基准段落必须包含文本"));

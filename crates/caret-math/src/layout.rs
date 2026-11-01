@@ -25,12 +25,13 @@ use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use caret_doc::{DocumentUnits, MathNode, NodeId};
+use caret_doc::{DocumentUnits, MathFlow, NodeId};
 
 pub use context::{MathDiagnostic, MathSize};
 pub use font::{MathFont, MathFontError, STIX_TWO_MATH};
 pub use frame::MathColor;
 
+use crate::backend::flow_nodes;
 use context::{Context, Style};
 use convert::Converter;
 use frame::Item;
@@ -128,7 +129,7 @@ pub struct MathLayout {
 /// 以给定字体与字号（pt）排版一棵数学树。
 pub fn layout_math(
     font: &MathFont,
-    root: &MathNode,
+    root: &MathFlow,
     size: f64,
     style: MathStyle,
 ) -> Result<MathLayout, MathLayoutError> {
@@ -136,7 +137,11 @@ pub fn layout_math(
     let mut converter = Converter {
         ctx: Context::new(font, size),
     };
-    let fragment = converter.node(root, Style::root(style == MathStyle::Display));
+    let backend_nodes = flow_nodes(root);
+    let fragment = match backend_nodes.as_slice() {
+        [node] => converter.node(node, Style::root(style == MathStyle::Display)),
+        nodes => converter.row(nodes, Style::root(style == MathStyle::Display)),
+    };
     let frame = fragment.frame;
     let baseline = frame.baseline;
     let mut layout = MathLayout {
@@ -259,7 +264,7 @@ impl MathLayoutEngine {
     /// 排版并缓存；相同内容、字号、样式与字体的重复请求直接返回缓存结果。
     pub fn layout(
         &self,
-        root: &MathNode,
+        root: &MathFlow,
         size: f64,
         style: MathStyle,
     ) -> Result<Arc<MathLayout>, MathLayoutError> {
@@ -299,20 +304,14 @@ impl MathLayoutEngine {
     }
 }
 
-/// 节点内容哈希：ID、类别、文本、属性与子节点；未知扩展字段不影响布局，不参与哈希。
-fn content_hash(root: &MathNode) -> u64 {
-    fn feed(node: &MathNode, hasher: &mut DefaultHasher) {
-        node.id.hash(hasher);
-        format!("{:?}", node.kind).hash(hasher);
-        node.text.hash(hasher);
-        node.attributes.hash(hasher);
-        node.children.len().hash(hasher);
-        for child in &node.children {
-            feed(child, hasher);
-        }
-    }
+/// 节点内容哈希：目前对整条 MathFlow 做 JSON 编码后哈希，包含扩展字段和源范围。
+/// 该实现避免缓存键漏掉布局相关状态，但会分配临时字节缓冲；性能影响待基准验证。
+fn content_hash(root: &MathFlow) -> u64 {
     let mut hasher = DefaultHasher::new();
-    feed(root, &mut hasher);
+    match serde_json::to_vec(root) {
+        Ok(content) => content.hash(&mut hasher),
+        Err(_) => format!("{root:?}").hash(&mut hasher),
+    }
     hasher.finish()
 }
 

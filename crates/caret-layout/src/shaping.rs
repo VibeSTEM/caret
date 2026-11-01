@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{InlineEnvironmentKind, InlineNode, Paragraph};
+use caret_doc::{FlowContent, InlineEnvironmentKind, Paragraph, ParagraphContent, TextFlow};
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
@@ -156,13 +156,17 @@ fn append_coalesced_range(
 
 /// 返回段落逻辑 UTF-8 文本；格式环境不插入字符，软换行和不透明节点各占一个码点。
 pub fn paragraph_text(paragraph: &Paragraph) -> String {
-    fn append(nodes: &[InlineNode], text: &mut String) {
+    fn append(nodes: &[ParagraphContent], text: &mut String) {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => text.push_str(&run.text),
-                InlineNode::Environment(environment) => append(&environment.children, text),
-                InlineNode::SoftBreak(_) => text.push('\n'),
-                InlineNode::Opaque(_) | InlineNode::Math(_) => text.push('\u{fffc}'),
+                FlowContent::Text(flow) => {
+                    for run in &flow.runs {
+                        text.push_str(&run.text);
+                    }
+                }
+                FlowContent::Environment(environment) => append(&environment.children, text),
+                FlowContent::SoftBreak(_) => text.push('\n'),
+                FlowContent::Opaque(_) | FlowContent::Math(_) => text.push('\u{fffc}'),
             }
         }
     }
@@ -172,30 +176,32 @@ pub fn paragraph_text(paragraph: &Paragraph) -> String {
 }
 
 fn append_inlines<'a>(
-    nodes: &'a [InlineNode],
+    nodes: &'a [ParagraphContent],
     style: &ShapingStyle,
     output: &mut Vec<StyledSpan<'a>>,
 ) {
     for node in nodes {
         match node {
-            InlineNode::Run(run) => {
-                let mut run_style = style.clone();
-                if let Some(language) = &run.language {
-                    run_style.language = Some(language.clone());
-                }
-                if !run.text.is_empty() {
-                    output.push(StyledSpan {
-                        text: &run.text,
-                        style: run_style,
-                        underline: run
-                            .props
-                            .get("underline")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false),
-                    });
+            FlowContent::Text(TextFlow { runs, .. }) => {
+                for run in runs {
+                    let mut run_style = style.clone();
+                    if let Some(language) = &run.language {
+                        run_style.language = Some(language.clone());
+                    }
+                    if !run.text.is_empty() {
+                        output.push(StyledSpan {
+                            text: &run.text,
+                            style: run_style,
+                            underline: run
+                                .props
+                                .get("underline")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false),
+                        });
+                    }
                 }
             }
-            InlineNode::Environment(environment) => {
+            FlowContent::Environment(environment) => {
                 let mut nested = style.clone();
                 match environment.kind {
                     InlineEnvironmentKind::Bold => {
@@ -224,12 +230,12 @@ fn append_inlines<'a>(
                 }
                 append_inlines(&environment.children, &nested, output);
             }
-            InlineNode::SoftBreak(_) => output.push(StyledSpan {
+            FlowContent::SoftBreak(_) => output.push(StyledSpan {
                 text: "\n",
                 style: style.clone(),
                 underline: false,
             }),
-            InlineNode::Opaque(_) | InlineNode::Math(_) => output.push(StyledSpan {
+            FlowContent::Opaque(_) | FlowContent::Math(_) => output.push(StyledSpan {
                 text: "\u{fffc}",
                 style: style.clone(),
                 underline: false,
@@ -242,16 +248,23 @@ fn append_inlines<'a>(
 mod tests {
     use std::collections::BTreeMap;
 
-    use caret_doc::{DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, Run, SoftBreak};
+    use caret_doc::{
+        DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, ParagraphContent, Run, SoftBreak,
+        TextFlow,
+    };
 
     use super::*;
     use crate::ResolvedDocumentTextSettings;
 
-    fn run(text: &str, language: Option<&str>) -> InlineNode {
-        InlineNode::Run(Run {
-            text: text.to_owned(),
-            language: language.map(str::to_owned),
-            props: BTreeMap::new(),
+    fn run(text: &str, language: Option<&str>) -> ParagraphContent {
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: text.to_owned(),
+                language: language.map(str::to_owned),
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            source_range: None,
             extra: BTreeMap::new(),
         })
     }
@@ -261,15 +274,16 @@ mod tests {
         let mut paragraph = Paragraph::empty(NodeId::generate());
         paragraph.inlines = vec![
             run("e", None),
-            InlineNode::Environment(InlineEnvironment {
+            ParagraphContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Bold,
                 definition_id: None,
+                source_range: None,
                 props: BTreeMap::new(),
                 children: vec![
                     run("\u{301}", None),
-                    InlineNode::SoftBreak(SoftBreak::default()),
-                    InlineNode::Opaque(OpaqueNode {
+                    ParagraphContent::SoftBreak(SoftBreak::default()),
+                    ParagraphContent::Opaque(OpaqueNode {
                         raw: serde_json::json!({"type": "future_object", "text": "hidden"}),
                     }),
                 ],
@@ -291,10 +305,11 @@ mod tests {
         let mut paragraph = Paragraph::empty(NodeId::generate());
         paragraph.inlines = vec![
             run("outer", None),
-            InlineNode::Environment(InlineEnvironment {
+            ParagraphContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Italic,
                 definition_id: None,
+                source_range: None,
                 props: BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]),
                 children: vec![run("local", Some("en-GB"))],
                 extra: BTreeMap::new(),

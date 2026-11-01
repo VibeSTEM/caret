@@ -1,7 +1,7 @@
 //! 验证文档文件格式、往返和兼容边界。
 
 use super::{CdocFile, DocumentError, OpenedDocument, PreviewReason, open};
-use crate::{Block, Document, InlineNode, Run};
+use crate::{Block, Document, ParagraphContent, Run, TextFlow};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -82,14 +82,96 @@ fn math_nodes_open_as_read_only_preview_until_layout_support_is_available()
 }
 
 #[test]
+fn unpublished_inline_and_math_text_formats_are_not_migrated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{"type": "run", "id": "old-run", "text": "legacy"}]
+    }]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("the unpublished inline representation must not be converted");
+    };
+    assert!(!preview.can_save());
+    assert_eq!(
+        preview.to_json_value()?["document"]["body"][0]["inlines"][0]["type"],
+        "run"
+    );
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{
+            "type": "inlineMath",
+            "id": "inline",
+            "mathTree": {
+                "schemaVersion": 2,
+                "source": "x",
+                "root": {"id": "root", "content": [{
+                    "type": "math", "id": "text-node", "kind": "text_content", "text": "x"
+                }]}
+            }
+        }]
+    }]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("the old string text node must not enter the editable MathFlow schema");
+    };
+    assert!(!preview.can_save());
+    Ok(())
+}
+
+#[test]
+fn text_nodes_without_runs_open_as_read_only_and_preserve_the_payload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{"type": "text", "text": "hello"}]
+    }]);
+
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("a text node without the current-schema runs field must not be editable");
+    };
+    assert!(!preview.can_save());
+    assert_eq!(
+        preview.to_json_value()?["document"]["body"][0]["inlines"][0],
+        json!({"type": "text", "text": "hello"})
+    );
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::UnsupportedNodeKind)
+    );
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{"type": "text", "runs": [], "text": "hello"}]
+    }]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("the unpublished string text field must not be editable with an empty runs list");
+    };
+    assert!(!preview.can_save());
+    assert_eq!(
+        preview.to_json_value()?["document"]["body"][0]["inlines"][0],
+        json!({"type": "text", "runs": [], "text": "hello"})
+    );
+    Ok(())
+}
+
+#[test]
 fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::error::Error>> {
     let cases = [
         (
             json!({
                 "type": "paragraph", "id": "paragraph", "inlines": [{
                     "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 1, "source": "x",
-                        "root": {"id": "root", "kind": "symbol", "text": "x"}
+                        "schemaVersion": 2, "source": "x",
+                        "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                     }
                 }]
             }),
@@ -98,8 +180,8 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
         (
             json!({
                 "type": "equation", "id": "equation", "mathTree": {
-                    "schemaVersion": 1, "source": "x",
-                    "root": {"id": "root", "kind": "symbol", "text": "x"}
+                    "schemaVersion": 2, "source": "x",
+                    "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                 }
             }),
             "caret.math.equation",
@@ -108,8 +190,8 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
             json!({
                 "type": "align", "id": "align", "source": "x", "rows": [{
                     "id": "row", "cells": [{
-                        "schemaVersion": 1, "source": "x",
-                        "root": {"id": "root", "kind": "symbol", "text": "x"}
+                        "schemaVersion": 2, "source": "x",
+                        "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                     }]
                 }]
             }),
@@ -132,6 +214,24 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
                 ))
         );
     }
+    Ok(())
+}
+
+#[test]
+fn paragraph_content_flow_requires_an_explicit_capability() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut envelope = blank_envelope()?;
+    envelope["requiredFeatures"] = json!(["caret.paragraph.layout-settings"]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("content-flow documents without their capability must be preview-only");
+    };
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::MissingRequiredFeature(
+                "caret.paragraph.content-flow.v1".to_owned()
+            ))
+    );
     Ok(())
 }
 
@@ -284,9 +384,10 @@ fn underline_property_round_trips_with_its_required_feature()
     envelope["document"]["body"] = json!([{
         "type": "paragraph",
         "id": "paragraph",
-        "inlines": [{"type": "run", "text": "underlined", "props": {"underline": true}}]
+        "inlines": [{"type": "text", "runs": [{"text": "underlined", "props": {"underline": true}}]}]
     }]);
-    envelope["requiredFeatures"] = json!(["caret.text.underline"]);
+    envelope["requiredFeatures"] =
+        json!(["caret.paragraph.content-flow.v1", "caret.text.underline"]);
 
     let opened = open(envelope.to_string().as_bytes())?;
     let OpenedDocument::Editable(file) = opened else {
@@ -301,7 +402,7 @@ fn underline_property_round_trips_with_its_required_feature()
                 .any(|feature| feature == "caret.text.underline"))
     );
     assert_eq!(
-        saved["document"]["body"][0]["inlines"][0]["props"]["underline"],
+        saved["document"]["body"][0]["inlines"][0]["runs"][0]["props"]["underline"],
         json!(true)
     );
 
@@ -422,7 +523,7 @@ fn media_metadata_requires_unique_nonempty_ids_and_a_media_type()
 fn nested_unknown_content_accumulates_preview_reasons_without_losing_known_structure()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
-    envelope["requiredFeatures"] = json!(["vendor.future"]);
+    envelope["requiredFeatures"] = json!(["caret.paragraph.content-flow.v1", "vendor.future"]);
     envelope["document"]["globalSettings"]["theme"] = json!({
         "formatVersion": 2,
         "namedStyles": {},
@@ -515,10 +616,14 @@ fn serialization_adds_underline_feature_after_first_edit_and_rejects_unknown_val
     let Block::Paragraph(paragraph) = &mut file.document_mut().body[0] else {
         return Err("blank document should start with a paragraph".into());
     };
-    paragraph.inlines.push(InlineNode::Run(Run {
-        text: "text".to_owned(),
-        language: None,
-        props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
+    paragraph.inlines.push(ParagraphContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "text".to_owned(),
+            language: None,
+            props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
+            extra: BTreeMap::new(),
+        }],
+        source_range: None,
         extra: BTreeMap::new(),
     }));
 
@@ -542,9 +647,10 @@ fn serialization_adds_underline_feature_after_first_edit_and_rejects_unknown_val
     let Block::Paragraph(paragraph) = &mut invalid.document_mut().body[0] else {
         return Err("blank document should start with a paragraph".into());
     };
-    let InlineNode::Run(run) = &mut paragraph.inlines[0] else {
+    let ParagraphContent::Text(flow) = &mut paragraph.inlines[0] else {
         return Err("edited paragraph should contain a run".into());
     };
+    let run = &mut flow.runs[0];
     run.props
         .insert("underline".to_owned(), serde_json::json!("extended"));
     assert_eq!(invalid.to_bytes(), Err(DocumentError::ReadOnlyPreview));

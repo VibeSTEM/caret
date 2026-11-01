@@ -23,6 +23,8 @@ pub enum EditError {
     InvalidFontFamily,
     NestingLimit,
     InvalidPageGeometry(String),
+    /// 公式源文本无法解析为目标公式类型。
+    InvalidMath(String),
     UnknownCommand,
 }
 
@@ -47,6 +49,7 @@ impl Display for EditError {
             Self::InvalidPageGeometry(reason) => {
                 write!(f, "edit.invalid_page_geometry: {reason}")
             }
+            Self::InvalidMath(reason) => write!(f, "edit.invalid_math: {reason}"),
             Self::UnknownCommand => f.write_str("edit.unknown_command"),
         }
     }

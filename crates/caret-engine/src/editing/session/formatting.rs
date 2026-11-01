@@ -3,16 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::environment::inline_adapter::{
+    RunPropertyEnvironment, run_property_for_key, run_property_for_kind,
+};
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use super::super::text_map::TextMap;
-use super::super::{Affinity, EditError, Effect, Pos};
+use super::super::{Affinity, EditError, Effect, InlineSpan, Pos};
 use super::Session;
 use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
 use inline_tree::{
-    apply_font_family_to_range, apply_formats_to_range, effective_format_at, format_spans,
-    format_value, set_run_underline_to_range, unwrap_inline_environment, wrap_format_range,
+    apply_font_family_to_range, apply_formats_to_range, clear_run_property_to_range,
+    effective_format_at, format_spans, format_value, set_run_property_to_range,
+    unwrap_inline_environment, wrap_format_range,
 };
+use std::collections::BTreeMap;
 
 fn is_collapsed_text_range(anchor: &Pos, focus: &Pos) -> bool {
     anchor.story == focus.story
@@ -24,7 +29,7 @@ fn is_collapsed_text_range(anchor: &Pos, focus: &Pos) -> bool {
 pub(super) struct PendingInlineStyle {
     bold: Option<bool>,
     italic: Option<bool>,
-    underline: Option<bool>,
+    run_properties: BTreeMap<&'static str, bool>,
     font_family: Option<String>,
 }
 
@@ -32,7 +37,7 @@ impl PendingInlineStyle {
     pub(super) fn clear(&mut self) {
         self.bold = None;
         self.italic = None;
-        self.underline = None;
+        self.run_properties.clear();
         self.font_family = None;
     }
 
@@ -69,18 +74,18 @@ impl PendingInlineStyle {
         self.font_family.as_deref()
     }
 
-    fn underline(&self) -> Option<bool> {
-        self.underline
+    fn run_property(&self, property: RunPropertyEnvironment) -> Option<bool> {
+        self.run_properties.get(property.key).copied()
     }
 
-    fn set_underline(&mut self, enabled: bool) {
-        self.underline = Some(enabled);
+    fn set_run_property(&mut self, property: RunPropertyEnvironment, enabled: bool) {
+        self.run_properties.insert(property.key, enabled);
     }
 
     pub(super) fn is_active(&self) -> bool {
         self.bold.is_some()
             || self.italic.is_some()
-            || self.underline.is_some()
+            || !self.run_properties.is_empty()
             || self.font_family.is_some()
     }
 }
@@ -109,7 +114,65 @@ impl Session {
         })
     }
 
+    pub(super) fn remove_run_property_preserving_inheritance(
+        &mut self,
+        range: &InlineSpan,
+        property: RunPropertyEnvironment,
+    ) -> Result<Effect, EditError> {
+        if self.composition.is_some() || self.command_line.is_some() {
+            return Ok(Effect::default());
+        }
+        let position = self.selection.focus.clone();
+        if position.paragraph_id != range.paragraph_id || position.story != range.story {
+            return Ok(Effect::default());
+        }
+        let mut paragraph = self.paragraph_for(&position)?.clone();
+        clear_run_property_to_range(
+            &mut paragraph.inlines,
+            range.start_utf8,
+            range.end_utf8,
+            property,
+        )?;
+        if paragraph == *self.paragraph_for(&position)? {
+            return Ok(Effect::default());
+        }
+        self.replace_paragraph(&position, paragraph)?;
+        self.text_map_cache.clear();
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            document_changed: true,
+            changed_paragraph_id: Some(position.paragraph_id),
+            ..Effect::default()
+        })
+    }
+
+    pub(super) fn remove_run_property_from_current_range(
+        &mut self,
+        kind: crate::editing::EnvironmentKind,
+    ) -> Result<Effect, EditError> {
+        let Some(property) = run_property_for_kind(kind).copied() else {
+            return Ok(Effect::default());
+        };
+        let range = self
+            .current_environment_view()?
+            .inline()
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.source == property.adapter.source && entry.kind == property.adapter.kind
+            })
+            .and_then(|entry| entry.inline_range.clone());
+        let Some(range) = range else {
+            return Ok(Effect::default());
+        };
+        self.remove_run_property_preserving_inheritance(&range, property)
+    }
+
     pub(super) fn toggle_run_underline(&mut self) -> Result<Effect, EditError> {
+        let property = run_property_for_kind(crate::editing::EnvironmentKind::Underline)
+            .copied()
+            .ok_or(EditError::UnsupportedInlineFormat)?;
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -120,19 +183,25 @@ impl Session {
             let inherited = format_spans(&paragraph.inlines)?
                 .into_iter()
                 .find(|span| {
-                    (span.start < position.offset && position.offset < span.end)
-                        || (position.offset == span.start
-                            && position.affinity == Affinity::Downstream)
-                        || (position.offset == span.end && position.affinity == Affinity::Upstream)
+                    span.run_property_target
+                        && ((span.start < position.offset && position.offset < span.end)
+                            || (position.offset == span.start
+                                && position.affinity == Affinity::Downstream)
+                            || (position.offset == span.end
+                                && position.affinity == Affinity::Upstream))
                 })
-                .and_then(|span| span.underline)
+                .and_then(|span| span.properties.get(property.key).copied())
                 .unwrap_or(false);
-            let current = self.pending_inline_style.underline().unwrap_or(inherited);
+            let current = self
+                .pending_inline_style
+                .run_property(property)
+                .unwrap_or(inherited);
             let before_pending_style = self.pending_inline_style.clone();
             let before_selection = self.selection.clone();
             let before_visual_affinity = self.selection_visual_affinity;
             let before_state_id = self.history_state_id;
-            self.pending_inline_style.set_underline(!current);
+            self.pending_inline_style
+                .set_run_property(property, !current);
             self.advance_history_merge_epoch();
             let after_state_id = before_state_id;
             self.record_history_edit(SessionHistoryEdit::new(
@@ -221,10 +290,10 @@ impl Session {
                 ..start.clone()
             })?;
             for span in format_spans(&paragraph.inlines)?.iter().filter(|span| {
-                span.underline.is_some() && span.start < range_end && span.end > range_start
+                span.run_property_target && span.start < range_end && span.end > range_start
             }) {
                 any_text = true;
-                any_disabled |= span.underline == Some(false);
+                any_disabled |= !span.properties.get(property.key).copied().unwrap_or(false);
             }
             ranges.push((
                 paragraph_id.clone(),
@@ -243,10 +312,11 @@ impl Session {
                 .ok_or(EditError::InvalidPosition)?;
             let map = TextMap::new(original)?;
             let mut paragraph = original.clone();
-            set_run_underline_to_range(
+            set_run_property_to_range(
                 &mut paragraph.inlines,
                 map.snap_to_grapheme_boundary(range_start, Affinity::Upstream),
                 map.snap_to_grapheme_boundary(range_end, Affinity::Downstream),
+                property,
                 enabled,
             )?;
             if paragraph != *original {
@@ -610,7 +680,7 @@ impl Session {
             let spans = format_spans(&paragraph.inlines)?;
             for span in spans
                 .iter()
-                .filter(|span| span.start < range_end && span.end > range_start)
+                .filter(|span| span.formatable && span.start < range_end && span.end > range_start)
             {
                 any_content = true;
                 any_disabled |= !format_value(span, kind);
@@ -704,12 +774,21 @@ impl Session {
         inline_depth: usize,
     ) -> Result<(), EditError> {
         let formats: Vec<_> = self.pending_inline_style.active_formats().collect();
+        let run_properties: Vec<_> = self
+            .pending_inline_style
+            .run_properties
+            .iter()
+            .filter_map(|(key, enabled)| {
+                run_property_for_key(key).map(|property| (*property, *enabled))
+            })
+            .collect();
         let font_family = self
             .pending_inline_style
             .active_font_family()
             .map(str::to_owned);
-        let underline = self.pending_inline_style.underline();
-        if (formats.is_empty() && font_family.is_none() && underline.is_none()) || start >= end {
+        if (formats.is_empty() && run_properties.is_empty() && font_family.is_none())
+            || start >= end
+        {
             return Ok(());
         }
         let map = TextMap::new(paragraph)?;
@@ -722,11 +801,12 @@ impl Session {
             &formats,
             inline_depth,
         )?;
-        if let Some(enabled) = underline {
-            set_run_underline_to_range(
+        for (property, enabled) in run_properties {
+            set_run_property_to_range(
                 &mut paragraph.inlines,
                 snapped_start,
                 snapped_end,
+                property,
                 enabled,
             )?;
         }

@@ -202,7 +202,7 @@ impl FontPicker {
                 );
                 values
             }
-            CommandLineMode::Command => Vec::new(),
+            CommandLineMode::Command | CommandLineMode::Math => Vec::new(),
         };
         candidates.retain_mut(|candidate| {
             candidate.available &= is_available(candidate);

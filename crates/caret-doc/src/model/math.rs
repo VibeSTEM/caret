@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// 当前 Caret 数学树 schema 版本。
-pub const MATH_TREE_SCHEMA_VERSION: u16 = 1;
+pub const MATH_TREE_SCHEMA_VERSION: u16 = 2;
 /// `.cdoc` 中单个公式源码的最大 UTF-8 字节数。
 pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
 /// 数学树允许的最大根到叶深度。
@@ -27,7 +27,19 @@ pub struct MathTree {
     /// 与 `root` 对应的 LaTeX 源码。导入时为原文；树被编辑后由 `caret-math` 序列化器
     /// 重新生成，因此始终描述当前树，而不是历史输入。`sourceRange` 相对该字符串。
     pub source: String,
-    pub root: MathNode,
+    pub root: MathFlow,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// 有序数学内容流；数学树根与节点的每个语义槽位都使用此类型。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MathFlow {
+    pub id: NodeId,
+    pub content: Vec<super::MathContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_range: Option<MathSourceRange>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -45,7 +57,7 @@ pub struct MathNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_range: Option<MathSourceRange>,
     #[serde(default)]
-    pub children: Vec<MathNode>,
+    pub children: Vec<MathFlow>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -77,10 +89,6 @@ pub enum MathNodeKind {
     CancelTo,
     Accent,
     Space,
-    TextContent,
-    TextSpace,
-    TextSymbol,
-    TextStyle,
     Color,
     TextColor,
     ColorBox,
@@ -113,7 +121,7 @@ pub(crate) fn math_node_attributes_supported(
             "valueDenominator",
             "valueUnit",
         ],
-        MathNodeKind::Text | MathNodeKind::TextStyle => &["style"],
+        MathNodeKind::Text => &["style"],
         MathNodeKind::Color | MathNodeKind::TextColor | MathNodeKind::ColorBox => &["color"],
         MathNodeKind::FColorBox => &["borderColor", "fillColor"],
         MathNodeKind::Strut => &[
@@ -131,9 +139,6 @@ pub(crate) fn math_node_attributes_supported(
         | MathNodeKind::Hline
         | MathNodeKind::OverUnder
         | MathNodeKind::CancelTo
-        | MathNodeKind::TextContent
-        | MathNodeKind::TextSpace
-        | MathNodeKind::TextSymbol
         | MathNodeKind::Style
         | MathNodeKind::Group
         | MathNodeKind::Placeholder => &[],
@@ -278,10 +283,7 @@ pub(crate) fn math_node_attributes_supported(
                     && !attributes.contains_key("valueUnit")
             }
         }
-        MathNodeKind::TextSpace => {
-            text.is_some_and(|value| matches!(value, "space" | "control_space" | "no_break_space"))
-        }
-        MathNodeKind::Text | MathNodeKind::TextStyle => enum_value(
+        MathNodeKind::Text => enum_value(
             "style",
             &[
                 "rm",
@@ -331,12 +333,7 @@ pub(crate) fn math_node_structure_supported(
     if text_present
         && !matches!(
             kind,
-            MathNodeKind::Symbol
-                | MathNodeKind::Operator
-                | MathNodeKind::SizedDelimiter
-                | MathNodeKind::TextContent
-                | MathNodeKind::TextSpace
-                | MathNodeKind::TextSymbol
+            MathNodeKind::Symbol | MathNodeKind::Operator | MathNodeKind::SizedDelimiter
         )
     {
         return false;
@@ -345,13 +342,9 @@ pub(crate) fn math_node_structure_supported(
         MathNodeKind::Row
         | MathNodeKind::Substack
         | MathNodeKind::Text
-        | MathNodeKind::TextStyle
         | MathNodeKind::Style
         | MathNodeKind::Group => text.is_none(),
-        MathNodeKind::Symbol
-        | MathNodeKind::Operator
-        | MathNodeKind::TextContent
-        | MathNodeKind::TextSymbol => text_present && children.is_empty(),
+        MathNodeKind::Symbol | MathNodeKind::Operator => text_present && children.is_empty(),
         MathNodeKind::Fraction
         | MathNodeKind::Superscript
         | MathNodeKind::Subscript
@@ -378,10 +371,9 @@ pub(crate) fn math_node_structure_supported(
         MathNodeKind::Integral => arity(2),
         MathNodeKind::Limit => arity(1),
         MathNodeKind::Hline => parent == Some(MathNodeKind::Matrix) && children.is_empty(),
-        MathNodeKind::TextSpace
-        | MathNodeKind::Space
-        | MathNodeKind::Strut
-        | MathNodeKind::Placeholder => children.is_empty(),
+        MathNodeKind::Space | MathNodeKind::Strut | MathNodeKind::Placeholder => {
+            children.is_empty()
+        }
     }
 }
 

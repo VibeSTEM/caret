@@ -6,6 +6,7 @@
 mod command;
 mod command_line;
 mod command_registry;
+mod environment;
 mod error;
 mod paragraph_ops;
 mod position;
@@ -17,9 +18,13 @@ mod text_map;
 pub use command::{Command, Direction, EditorKey};
 pub use command_line::{CommandLine, CommandLineMode};
 pub use command_registry::CommandCandidate;
+pub use environment::{
+    Capabilities, CurrentEnvironmentView, EnvironmentEntry, EnvironmentKind, EnvironmentLevel,
+    EnvironmentSource, InlineSpan,
+};
 pub use error::EditError;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
-pub use session::Session;
+pub use session::{MathEdit, MathEditTarget, Session};
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};
 

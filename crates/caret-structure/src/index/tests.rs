@@ -1,14 +1,12 @@
 //! 验证结构索引的文档顺序、嵌套范围和标题派生范围。
 
 use super::*;
-use caret_doc::{
-    BlockEnvironment, BlockEnvironmentKind, Document, InlineNode, NodeId, Paragraph, Run,
-};
+use caret_doc::{BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph, Run};
 use std::collections::BTreeMap;
 
 fn paragraph(text: &str, level: Option<u64>) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines.push(InlineNode::Run(Run {
+    paragraph.inlines.push(text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -153,4 +151,48 @@ fn environment_title_is_a_navigation_paragraph_owned_by_its_environment() {
     assert_eq!(stack.len(), 2);
     assert_eq!(stack[0].id, environment_id);
     assert_eq!(stack[1].id, title_id);
+}
+
+#[test]
+fn equation_and_align_blocks_are_indexed_without_navigation_stops() {
+    let mut document = Document::blank();
+    let before = paragraph("before", None);
+    let after = paragraph("after", None);
+    let blocks: Vec<Block> = serde_json::from_value(serde_json::json!([
+        {"type": "equation", "id": "eq", "mathTree": {
+            "schemaVersion": 2, "source": "x",
+            "root": {"id": "eq-root", "content": [
+                {"type": "math", "id": "eq-x", "kind": "symbol", "text": "x"}
+            ]}
+        }},
+        {"type": "align", "id": "al", "source": "", "rows": []}
+    ]))
+    .unwrap_or_else(|error| panic!("math blocks should decode: {error}"));
+    document.body = vec![Block::Paragraph(before.clone())];
+    document.body.extend(blocks);
+    document.body.push(Block::Paragraph(after.clone()));
+    let index = StructureIndex::build(&document);
+
+    let equation = index
+        .get(&NodeId::parse("eq").unwrap_or_else(|error| panic!("id: {error}")))
+        .unwrap_or_else(|| panic!("equation should be indexed"));
+    assert_eq!(equation.kind, StructureKind::Equation);
+    assert_eq!(equation.kind.class(), StructureClass::SingleLine);
+    assert!(equation.paragraph_id.is_none());
+    assert_eq!(equation.range.paragraph_ordinals, 1..1);
+    let align = index
+        .get(&NodeId::parse("al").unwrap_or_else(|error| panic!("id: {error}")))
+        .unwrap_or_else(|| panic!("align should be indexed"));
+    assert_eq!(align.kind, StructureKind::Align);
+    assert!(align.kind.is_math_block());
+    assert!(!align.kind.is_block_environment());
+    assert_eq!(index.navigation_paragraphs(), &[before.id, after.id]);
+}
+
+fn text_flow(run: Run) -> caret_doc::ParagraphContent {
+    caret_doc::ParagraphContent::Text(caret_doc::TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
 }

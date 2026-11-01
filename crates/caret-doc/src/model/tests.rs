@@ -1,10 +1,10 @@
 //! 验证文档模型、结构约束和默认值。
 
 use super::{
-    Align, Block, Document, DocumentFontTarget, DocumentSettings, Equation,
-    MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathNode, MathNodeKind, MathSourceRange, MathTree,
-    NodeId, is_valid_language_tag,
+    Align, Block, Document, DocumentFontTarget, DocumentSettings, Equation, InlineEnvironment,
+    InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathContent, MathFlow, MathNode, MathNodeKind,
+    MathSourceRange, MathTree, NodeId, Run, TextFlow, is_valid_language_tag,
 };
 use std::collections::BTreeMap;
 
@@ -329,7 +329,7 @@ fn known_environment_fields_with_wrong_types_are_rejected_instead_of_becoming_op
             if scope == "block" {
                 assert!(serde_json::from_value::<Block>(invalid).is_err());
             } else {
-                assert!(serde_json::from_value::<super::InlineNode>(invalid).is_err());
+                assert!(serde_json::from_value::<super::ParagraphContent>(invalid).is_err());
             }
         }
     }
@@ -340,9 +340,9 @@ fn unknown_inline_environment_kinds_remain_opaque_and_round_trip()
 -> Result<(), Box<dyn std::error::Error>> {
     let raw = serde_json::json!({
         "type": "environment", "scope": "inline", "kind": "future_style",
-        "id": "future", "children": [{"type": "run", "text": "kept"}]
+        "id": "future", "children": [{"type": "text", "runs": [{"text": "kept"}]}]
     });
-    let node: super::InlineNode = serde_json::from_value(raw.clone())?;
+    let node: super::ParagraphContent = serde_json::from_value(raw.clone())?;
     assert_eq!(serde_json::to_value(node)?, raw);
     Ok(())
 }
@@ -351,7 +351,7 @@ fn unknown_inline_environment_kinds_remain_opaque_and_round_trip()
 fn recognized_nodes_reject_non_object_or_malformed_content() {
     for invalid in [serde_json::json!(null), serde_json::json!([])] {
         assert!(serde_json::from_value::<Block>(invalid.clone()).is_err());
-        assert!(serde_json::from_value::<super::InlineNode>(invalid).is_err());
+        assert!(serde_json::from_value::<super::ParagraphContent>(invalid).is_err());
     }
     assert!(
         serde_json::from_value::<Block>(serde_json::json!({
@@ -366,8 +366,8 @@ fn recognized_nodes_reject_non_object_or_malformed_content() {
         .is_err()
     );
     assert!(
-        serde_json::from_value::<super::InlineNode>(serde_json::json!({
-            "type": "run", "text": 42
+        serde_json::from_value::<super::ParagraphContent>(serde_json::json!({
+            "type": "text", "runs": [{"text": 42}]
         }))
         .is_err()
     );
@@ -452,7 +452,7 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
             "props": {"enabled": false}, "children": [{
                 "type": "environment", "scope": "inline", "kind": "font", "id": "font",
                 "props": {"fontFamily": "CJK Font"},
-                "children": [{"type": "run", "text": "标题", "language": "zh-Hans"}]
+                "children": [{"type": "text", "runs": [{"text": "标题", "language": "zh-Hans"}]}]
             }]
         }]},
         "children": [{
@@ -460,7 +460,7 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
             "props": {"displayName": "Example"},
             "children": [{"type": "paragraph", "id": "paragraph", "inlines": [{
                 "type": "environment", "scope": "inline", "kind": "italic", "id": "italic",
-                "children": [{"type": "run", "text": "body"}]
+                "children": [{"type": "text", "runs": [{"text": "body"}]}]
             }]}]
         }]
     }))?];
@@ -477,6 +477,7 @@ fn nested_environment_features_cover_format_language_and_template_dependencies()
             "caret.env.section",
             "caret.env.templates",
             "caret.font.family-preferences",
+            "caret.paragraph.content-flow.v1",
             "caret.paragraph.layout-settings",
             "caret.text.default-font-size",
             "caret.text.language-tags",
@@ -492,9 +493,9 @@ fn math_validation_rejects_non_boundary_ranges_and_duplicate_ids()
     document.body = serde_json::from_value(serde_json::json!([{
         "type": "paragraph", "id": "paragraph", "inlines": [{
                 "type": "inlineMath", "id": "inline", "mathTree": {
-                    "schemaVersion": 1, "source": "甲x",
-                    "root": {"id": "root", "kind": "row", "children": [{
-                        "id": "symbol", "kind": "symbol", "text": "甲",
+                    "schemaVersion": 2, "source": "甲x",
+                    "root": {"id": "root", "content": [{
+                        "type": "math", "id": "symbol", "kind": "symbol", "text": "甲",
                         "sourceRange": {"start": 1, "end": 2}
                     }]}
                 }
@@ -504,9 +505,9 @@ fn math_validation_rejects_non_boundary_ranges_and_duplicate_ids()
 
     document.body = serde_json::from_value(serde_json::json!([
         {"type": "equation", "id": "equation", "mathTree": {
-            "schemaVersion": 1, "source": "x",
-            "root": {"id": "same", "kind": "row", "children": [
-                {"id": "same", "kind": "symbol", "text": "x"}
+            "schemaVersion": 2, "source": "x",
+            "root": {"id": "same", "content": [
+                {"type": "math", "id": "same", "kind": "symbol", "text": "x"}
             ]}
         }}
     ]))?;
@@ -516,11 +517,19 @@ fn math_validation_rejects_non_boundary_ranges_and_duplicate_ids()
 
 #[test]
 fn align_validation_rejects_ids_shared_across_rows_and_cells() {
+    fn as_flow(node: MathNode) -> MathFlow {
+        MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Math(node)],
+            source_range: None,
+            extra: BTreeMap::new(),
+        }
+    }
     fn tree(root_id: NodeId) -> MathTree {
         MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
             source: "x".into(),
-            root: MathNode {
+            root: as_flow(MathNode {
                 id: root_id,
                 kind: MathNodeKind::Symbol,
                 text: Some("x".into()),
@@ -528,7 +537,7 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
                 source_range: None,
                 children: Vec::new(),
                 extra: BTreeMap::new(),
-            },
+            }),
             extra: BTreeMap::new(),
         }
     }
@@ -546,12 +555,23 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
     };
     assert!(align.validate().is_err());
 
-    align.rows[0].cells[1].root.id = NodeId::generate();
+    let MathContent::Math(root) = &mut align.rows[0].cells[1].root.content[0] else {
+        panic!("cell root should contain a math node");
+    };
+    root.id = NodeId::generate();
     assert!(align.validate().is_ok());
 }
 
 #[test]
 fn math_validation_enforces_source_and_tree_limits() {
+    fn as_flow(node: MathNode) -> MathFlow {
+        MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Math(node)],
+            source_range: None,
+            extra: BTreeMap::new(),
+        }
+    }
     fn tree_with_depth(depth: usize) -> MathTree {
         let mut root = MathNode {
             id: NodeId::generate(),
@@ -569,14 +589,14 @@ fn math_validation_enforces_source_and_tree_limits() {
                 text: None,
                 attributes: BTreeMap::new(),
                 source_range: None,
-                children: vec![root],
+                children: vec![as_flow(root)],
                 extra: BTreeMap::new(),
             };
         }
         MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
             source: String::new(),
-            root,
+            root: as_flow(root),
             extra: BTreeMap::new(),
         }
     }
@@ -614,7 +634,7 @@ fn math_validation_enforces_source_and_tree_limits() {
     let tree = MathTree {
         schema_version: MATH_TREE_SCHEMA_VERSION,
         source: String::new(),
-        root: MathNode {
+        root: as_flow(MathNode {
             id: NodeId::generate(),
             kind: MathNodeKind::Matrix,
             text: None,
@@ -626,7 +646,7 @@ fn math_validation_enforces_source_and_tree_limits() {
                 ),
             ]),
             source_range: None,
-            children: vec![MathNode {
+            children: vec![as_flow(MathNode {
                 id: NodeId::generate(),
                 kind: MathNodeKind::Row,
                 text: None,
@@ -634,9 +654,9 @@ fn math_validation_enforces_source_and_tree_limits() {
                 source_range: None,
                 children: Vec::new(),
                 extra: BTreeMap::new(),
-            }],
+            })],
             extra: BTreeMap::new(),
-        },
+        }),
         extra: BTreeMap::new(),
     };
     oversized_columns.body = vec![Block::Equation(Equation {
@@ -660,7 +680,7 @@ fn math_validation_enforces_source_and_tree_limits() {
         math_tree: MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
             source: "x".to_owned(),
-            root: MathNode {
+            root: as_flow(MathNode {
                 id: NodeId::generate(),
                 kind: MathNodeKind::Symbol,
                 text: Some("x".to_owned()),
@@ -668,12 +688,83 @@ fn math_validation_enforces_source_and_tree_limits() {
                 source_range: Some(oversized_range_extra),
                 children: Vec::new(),
                 extra: BTreeMap::new(),
-            },
+            }),
             extra: BTreeMap::new(),
         },
         extra: BTreeMap::new(),
     })];
     assert!(oversized_range.validate().is_err());
+}
+
+#[test]
+fn math_inline_environments_obey_math_depth_limit() {
+    let mut content = MathContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "x".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        source_range: None,
+        extra: BTreeMap::new(),
+    });
+    for _ in 0..=MAX_MATH_TREE_DEPTH {
+        content = MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            source_range: None,
+            props: BTreeMap::new(),
+            children: vec![content],
+            extra: BTreeMap::new(),
+        });
+    }
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: "x".to_owned(),
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: vec![content],
+            source_range: None,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: tree,
+        extra: BTreeMap::new(),
+    })];
+    assert_eq!(document.validate(), Err(super::ModelError::NestingLimit));
+}
+
+#[test]
+fn math_text_runs_count_toward_the_tree_node_limit() {
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: String::new(),
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Text(TextFlow {
+                runs: vec![
+                    Run {
+                        text: String::new(),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    };
+                    super::MAX_MATH_TREE_NODES
+                ],
+                source_range: None,
+                extra: BTreeMap::new(),
+            })],
+            source_range: None,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    assert!(tree.validate().is_err());
 }
 
 #[test]
@@ -761,17 +852,22 @@ fn inline_format_values_and_nesting_are_validated() -> Result<(), Box<dyn std::e
         ));
     }
 
-    let mut inline = super::InlineNode::Run(super::Run {
-        text: "x".to_owned(),
-        language: None,
-        props: BTreeMap::new(),
+    let mut inline = super::ParagraphContent::Text(super::TextFlow {
+        runs: vec![super::Run {
+            text: "x".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        source_range: None,
         extra: BTreeMap::new(),
     });
     for _ in 0..65 {
-        inline = super::InlineNode::Environment(super::InlineEnvironment {
+        inline = super::ParagraphContent::Environment(super::InlineEnvironment {
             id: super::NodeId::generate(),
             kind: super::InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::new(),
             children: vec![inline],
             extra: BTreeMap::new(),

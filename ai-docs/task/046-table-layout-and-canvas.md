@@ -11,7 +11,7 @@
 
 ## 必读
 
-- [公式与表格](../architecture/editor/math-and-table.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)、[段落排版](../task/026-paragraph-layout.md)
+- [表格](../architecture/editor/tables.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)、[段落排版](../task/026-paragraph-layout.md)
 - [分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
 ## 范围与非目标

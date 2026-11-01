@@ -7,12 +7,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod backend;
 pub mod layout;
 mod parser;
 mod serialize;
 pub mod symbols;
 
-use std::fmt;
+use std::{fmt, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
@@ -28,6 +29,12 @@ pub enum MathInputKind {
     Equation,
     /// 多行对齐公式，内容必须是一个 `aligned` 环境，可带显示公式定界符。
     Align,
+}
+
+/// 返回解析目标剥除可选外层公式定界符后的源码范围。
+/// 编辑器用此范围设置初始插入点，避免在 `$…$` / `\(…\)` 等定界符外输入。
+pub fn input_body_range(source: &str, kind: MathInputKind) -> Result<Range<usize>, MathParseError> {
+    parser::input_body_range(source, kind)
 }
 
 /// 解析结果。行内与单行公式共用 [`MathTree`]，对齐公式按单元格拆分。

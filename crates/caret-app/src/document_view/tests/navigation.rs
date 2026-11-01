@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 fn paragraph_with_text(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines.push(InlineNode::Run(Run {
+    paragraph.inlines.push(text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -40,7 +40,7 @@ fn block_text(block: &Block) -> Option<&str> {
         return None;
     };
     paragraph.inlines.iter().find_map(|inline| match inline {
-        InlineNode::Run(run) => Some(run.text.as_str()),
+        ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
         _ => None,
     })
 }
@@ -1491,7 +1491,7 @@ fn section_title_navigation_and_backspace_keep_story_and_layout_in_sync()
                 .inlines
                 .iter()
                 .filter_map(|inline| match inline {
-                    InlineNode::Run(run) => Some(run.text.as_str()),
+                    ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
                     _ => None,
                 })
                 .collect::<String>()
@@ -1680,7 +1680,7 @@ fn cross_paragraph_cjk_drag_stops_commit_a_valid_selection()
     let Block::Paragraph(first) = &mut document.body[0] else {
         unreachable!();
     };
-    first.inlines = vec![InlineNode::Run(Run {
+    first.inlines = vec![text_flow(Run {
         text: "你好".to_owned(),
         language: Some("zh".to_owned()),
         props: Default::default(),
@@ -1688,7 +1688,7 @@ fn cross_paragraph_cjk_drag_stops_commit_a_valid_selection()
     })];
     let mut second = first.clone();
     second.id = caret_doc::NodeId::generate();
-    second.inlines = vec![InlineNode::Run(Run {
+    second.inlines = vec![text_flow(Run {
         text: "世界".to_owned(),
         language: Some("zh".to_owned()),
         props: Default::default(),
@@ -1752,7 +1752,7 @@ fn cross_paragraph_cjk_drag_stops_commit_a_valid_selection()
 fn page_click_updates_the_rust_session_selection() -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
     if let Some(Block::Paragraph(paragraph)) = document.body.first_mut() {
-        paragraph.inlines.push(InlineNode::Run(Run {
+        paragraph.inlines.push(text_flow(Run {
             text: "a".to_owned(),
             language: None,
             props: Default::default(),

@@ -25,9 +25,15 @@ pub struct StructureRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StructureKind {
     Paragraph,
-    Heading { level: u8 },
+    Heading {
+        level: u8,
+    },
     Section,
     Custom,
+    /// 独立显示公式块；光标不进入，只作为结构节点参与索引。
+    Equation,
+    /// 多行对齐公式块。
+    Align,
 }
 
 /// 面向通用界面展示的结构形态，不暴露具体结构语义名称。
@@ -46,8 +52,14 @@ impl StructureKind {
         match self {
             Self::Paragraph => StructureClass::Paragraph,
             Self::Heading { .. } => StructureClass::SingleLine,
-            Self::Section | Self::Custom => StructureClass::MultiLine,
+            Self::Equation => StructureClass::SingleLine,
+            Self::Section | Self::Custom | Self::Align => StructureClass::MultiLine,
         }
+    }
+
+    /// 是否为公式块。
+    pub const fn is_math_block(self) -> bool {
+        matches!(self, Self::Equation | Self::Align)
     }
 
     /// 是否为具有标题和子项的块环境。
@@ -272,8 +284,31 @@ impl StructureIndex {
                     entry.range.paragraph_ordinals.end = self.paragraph_ordinals.len();
                 }
             }
-            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+            Block::Equation(equation) => {
+                self.push_math_block(&equation.id, StructureKind::Equation, parent_indices);
+            }
+            Block::Align(align) => {
+                self.push_math_block(&align.id, StructureKind::Align, parent_indices);
+            }
+            Block::ExplicitBreak(_) | Block::Opaque(_) => {}
         }
+    }
+
+    /// 公式块不提供段落停靠点，范围为其所在位置的空区间。
+    fn push_math_block(&mut self, id: &NodeId, kind: StructureKind, parent_indices: &[usize]) {
+        let ordinal = self.paragraph_ordinals.len();
+        let entry_index = self.structures.len();
+        self.structures.push(IndexedStructure {
+            id: id.clone(),
+            paragraph_id: None,
+            title_environment_id: None,
+            kind,
+            parent_index: parent_indices.last().copied(),
+            range: StructureRange {
+                paragraph_ordinals: ordinal..ordinal,
+            },
+        });
+        self.structure_lookup.insert(id.clone(), entry_index);
     }
 
     fn push_paragraph(

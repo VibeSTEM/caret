@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{InlineNode, NodeId};
+use super::NodeId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -59,11 +59,13 @@ impl InlineEnvironmentKind {
 
 /// 对子节点范围应用的行内格式环境。
 #[derive(Debug, Clone, PartialEq)]
-pub struct InlineEnvironment {
+pub struct InlineEnvironment<Child> {
     pub id: NodeId,
     pub kind: InlineEnvironmentKind,
     pub definition_id: Option<String>,
+    /// 公式文本中的源码范围；正文 InlineEnvironment 不使用此字段。
+    pub source_range: Option<super::MathSourceRange>,
     pub props: BTreeMap<String, Value>,
-    pub children: Vec<InlineNode>,
+    pub children: Vec<Child>,
     pub extra: BTreeMap<String, Value>,
 }

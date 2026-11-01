@@ -6,6 +6,7 @@
 mod editing;
 mod layout;
 mod layout_view;
+mod math_validation;
 mod page_glyphs;
 
 pub use caret_doc::DocumentFontTarget;
@@ -15,9 +16,11 @@ pub use caret_structure::{
 };
 
 pub use editing::{
-    Affinity, Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError,
-    EditorKey, Effect, InlineEnvironmentRange, InputComposition, Pos, PositionMap, Selection,
-    Session, StoryId, utf8_offset_to_utf16, utf16_offset_to_utf8,
+    Affinity, Capabilities, Command, CommandCandidate, CommandLine, CommandLineMode,
+    CurrentEnvironmentView, Direction, EditError, EditorKey, Effect, EnvironmentEntry,
+    EnvironmentKind, EnvironmentLevel, EnvironmentSource, InlineEnvironmentRange, InlineSpan,
+    InputComposition, MathEdit, MathEditTarget, Pos, PositionMap, Selection, Session, StoryId,
+    utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
@@ -29,6 +32,7 @@ pub use layout_view::{
     LayoutLineView, PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
     ParagraphLayoutView, StoryView,
 };
+pub use math_validation::validate_document_math_sources;
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
     PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,

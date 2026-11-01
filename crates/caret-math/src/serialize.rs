@@ -6,19 +6,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{Align, MathNode, MathNodeKind, MathTree};
+use caret_doc::{Align, MathFlow, MathTree};
 
+use crate::backend::{BackendNodeKind as MathNodeKind, Node as MathNode, flow_nodes};
 use crate::symbols::{NAMED_COLORS, delimiter_source};
 
 /// 序列化单棵数学树（不含外层 `$` 或 `\[`）。
 pub fn serialize_tree(tree: &MathTree) -> String {
-    serialize_node(&tree.root)
+    serialize_flow(&tree.root)
 }
 
 /// 序列化任意数学节点。
-pub fn serialize_node(node: &MathNode) -> String {
+pub fn serialize_node(node: &MathFlow) -> String {
+    serialize_flow(node)
+}
+
+fn serialize_flow(flow: &MathFlow) -> String {
     let mut writer = Writer::default();
-    writer.node(node);
+    writer.children(&flow_nodes(flow));
     writer.output
 }
 
@@ -32,7 +37,7 @@ pub fn serialize_align(align: &Align) -> String {
         }
         for (cell_index, cell) in row.cells.iter().enumerate() {
             writer.raw(if cell_index == 0 { " " } else { " & " });
-            writer.node(&cell.root);
+            writer.children(&flow_nodes(&cell.root));
         }
     }
     writer.raw(" \\end{aligned}");
@@ -82,7 +87,20 @@ impl Writer {
     }
 
     fn children(&mut self, children: &[MathNode]) {
-        for (index, child) in children.iter().enumerate() {
+        let mut index = 0;
+        while index < children.len() {
+            let child = &children[index];
+            if is_text_item(child) {
+                let start = index;
+                while children.get(index).is_some_and(is_text_item) {
+                    index += 1;
+                }
+                self.command("text");
+                self.raw("{");
+                self.text_children(&children[start..index]);
+                self.raw("}");
+                continue;
+            }
             let is_last = index + 1 == children.len();
             if child.kind == MathNodeKind::Color && !is_last {
                 // `\color` 作用到列表末尾，不在末尾时用分组限定范围。
@@ -92,6 +110,7 @@ impl Writer {
             } else {
                 self.node(child);
             }
+            index += 1;
         }
     }
 
@@ -148,6 +167,10 @@ impl Writer {
             }),
             _ => false,
         };
+        if node.kind == MathNodeKind::Row && node.children.len() == 1 {
+            self.base(node.children.first());
+            return;
+        }
         if needs_group {
             self.group(node);
         } else {
@@ -526,8 +549,14 @@ impl Writer {
                                 self.raw("\\");
                                 self.output.push(character);
                             }
+                            '\u{00a0}' => self.raw("~"),
                             '\\' | '~' | '^' => {
-                                self.raw(&format!("\\symbol{{{}}}", character as u32))
+                                self.command("textchar");
+                                self.raw(&format!("{{{:X}}}", character as u32));
+                            }
+                            whitespace if whitespace.is_whitespace() => {
+                                self.command("textchar");
+                                self.raw(&format!("{{{:X}}}", whitespace as u32));
                             }
                             other => self.raw(&other.to_string()),
                         }

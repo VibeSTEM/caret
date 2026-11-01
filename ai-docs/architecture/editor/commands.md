@@ -29,7 +29,7 @@ id 用小写点分段，段内使用 snake_case：`text.insert`、`para.heading`
 | `insert.table` | 插入表格 | 一步 |
 | `table.insert_row` / `table.delete_row` / `table.insert_col` / `table.delete_col` | 改表格形状 | 一步 |
 | `struct.next` / `struct.prev` / `struct.exit` | 结构跳转 | 纯命令 |
-| `struct.section.create` | 把当前段落转换为 Section 标题 | 一步，可撤销 |
+| `struct.section.create` | 把当前 Paragraph block 转为 Section 标题，保留标题段落属性与行内内容项 | 一步，可撤销 |
 | `text.format.bold` / `text.format.italic` / `text.format.font_family` | 应用粗体、斜体或所选字体族行内环境 | 一步，可撤销；空选区的待输入样式亦可撤销 |
 | `paragraph.first_line_indent.set` | 将当前段落首行缩进设为 2 个字符宽度 | 一步，可撤销；由 `\firstlineindent` 调用，与 Tab 插入空格无关 |
 | `interaction.escape` / `interaction.enter` / `interaction.shift_enter` / `interaction.tab` / `interaction.mod_backspace` | 编辑器按键意图；由 Rust Session 根据活动交互上下文裁决，优先级见[键盘路由](../interface/keyboard-routing.md) | 视分支而定；文档变更各作为一个编辑撤销 |

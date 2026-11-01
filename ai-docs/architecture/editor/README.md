@@ -14,7 +14,7 @@
 | 注册表与撤销 | [命令](commands.md) |
 | `\` 输入 | [命令输入](command-input.md) |
 | 结构索引与跳转 | [结构导航](structure-navigation.md) |
-| 公式与表格 | [公式与表格](math-and-table.md) |
+| 数学公式与表格 | [专题索引](math-and-table.md)、[公式](math.md)、[表格](tables.md) |
 | 外部文档格式 | [文档导入与导出](document-interchange.md) |
 | 缓存键 | [增量排版](incremental-layout.md) |
 
@@ -26,6 +26,7 @@
 | --- | --- |
 | 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
 | 行内载体、语义适配层与块环境视图 | [行内载体与环境视图](document-model/inline-and-block-environments.md) |
+| Block 到 Paragraph 行内节点的当前代码链路 | [内容节点代码链路](document-model/content-code-path.md) |
 | 块环境标题、编号与结构编辑 | [环境模型](document-model/document-environments.md) |
 | 位置与模型上限 | [文档位置](document-model/document-position.md) |
 | `.cdoc` 文件格式与存储边界 | [文档存储](document-model/document-storage.md) |

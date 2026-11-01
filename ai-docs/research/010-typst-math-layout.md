@@ -2,7 +2,7 @@
 
 更新日期：2026-11-01。
 
-Caret 公式排版移植自 [Typst](https://github.com/typst/typst) v0.15.1（提交 `9dfd3a08500b7896045f907433cf7b4b02434fad`）的数学布局。本文记录选型依据、字体读取依赖的可用性、Typst 各文件的职责与 Caret 的取用范围，以及许可证处理。实现约束见[公式与表格](../architecture/editor/math-and-table.md)与 [042](../task/042-math-backend.md)。
+Caret 公式排版移植自 [Typst](https://github.com/typst/typst) v0.15.1（提交 `9dfd3a08500b7896045f907433cf7b4b02434fad`）的数学布局。本文记录选型依据、字体读取依赖的可用性、Typst 各文件的职责与 Caret 的取用范围，以及许可证处理。实现约束见[数学公式](../architecture/editor/math.md)与 [042](../task/042-math-backend.md)。
 
 ## 需求
 

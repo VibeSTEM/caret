@@ -11,7 +11,7 @@
 
 ## 必读
 
-- [文档模型](../architecture/editor/document-model.md)、[公式与表格](../architecture/editor/math-and-table.md)、[结构导航](../architecture/editor/structure-navigation.md)
+- [文档模型](../architecture/editor/document-model.md)、[表格](../architecture/editor/tables.md)、[结构导航](../architecture/editor/structure-navigation.md)
 - [快捷键](../architecture/interface/keyboard-shortcuts.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
 ## 范围与非目标

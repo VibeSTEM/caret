@@ -22,6 +22,52 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
 }
 
 #[test]
+fn math_commands_remain_unavailable_in_the_command_line_snapshot() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
+    let snapshot = runtime.command_line_state_json()?;
+    let value: Value = serde_json::from_str(&snapshot).map_err(|error| error.to_string())?;
+    let candidate = value["candidates"]
+        .as_array()
+        .and_then(|candidates| candidates.iter().find(|item| item["alias"] == "\\math"))
+        .ok_or_else(|| "matching math candidate should remain discoverable".to_owned())?;
+    assert_eq!(candidate["available"], false);
+    runtime.command_line_command_json("accept", String::new())?;
+    let after_accept: Value = serde_json::from_str(&runtime.command_line_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(after_accept["mode"], "command");
+    assert_eq!(after_accept["query"], "math");
+    Ok(())
+}
+
+#[test]
+fn math_source_command_line_snapshot_keeps_its_mode_and_cursor() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath("x".to_owned()))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::EnterMath(
+            caret_engine::Direction::Backward,
+        ))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::BeginCommandLine)
+        .map_err(|error| error.to_string())?;
+    let snapshot = runtime.command_line_state_json()?;
+    let value: Value = serde_json::from_str(&snapshot).map_err(|error| error.to_string())?;
+    assert_eq!(value["mode"], "math");
+    assert_eq!(value["prefix"], "\\");
+    assert_eq!(value["query"], "");
+    assert_eq!(value["cursor"], 0);
+    Ok(())
+}
+
+#[test]
 fn command_line_snapshot_projects_the_document_code_font() -> Result<(), String> {
     let mut document = caret_doc::Document::blank();
     document.global_settings.default_code_font_family = "Noto Sans Mono".to_owned();

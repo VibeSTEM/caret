@@ -40,6 +40,7 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
                 "active": true,
                 "mode": match command_line.mode {
                     caret_engine::CommandLineMode::Command => "command",
+                    caret_engine::CommandLineMode::Math => "math",
                     caret_engine::CommandLineMode::FontFamily => "fontFamily",
                     caret_engine::CommandLineMode::DefaultFontTarget => "defaultFontTarget",
                     caret_engine::CommandLineMode::DefaultFontScope => "defaultFontScope",
@@ -99,12 +100,27 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
             StructureKind::Heading { level } => ("heading", Some(level)),
             StructureKind::Section => ("section", None),
             StructureKind::Custom => ("custom", None),
+            StructureKind::Equation => ("equation", None),
+            StructureKind::Align => ("align", None),
         };
         let mut value = json!({ "id": entry.id, "kind": kind });
         if let Some(level) = level {
             value["level"] = json!(level);
         }
         entries.push(value);
+    }
+    if let Some(caret_engine::MathEdit {
+        target: caret_engine::MathEditTarget::Block { block_id, align },
+        ..
+    }) = session.math_edit()
+    {
+        let kind = if *align { "align" } else { "equation" };
+        if !entries
+            .iter()
+            .any(|entry| entry["id"] == block_id.to_string())
+        {
+            entries.push(json!({ "id": block_id, "kind": kind }));
+        }
     }
     Value::Array(entries)
 }
@@ -233,7 +249,7 @@ fn block_environment_highlight_rects(
 
 /// 将当前最内层行内环境投影为布局层选区矩形。
 fn inline_environment_highlight_rects(
-    range: Option<&caret_engine::InlineEnvironmentRange>,
+    range: Option<&caret_engine::InlineSpan>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
     let Some(range) = range else {
@@ -311,9 +327,12 @@ impl DocumentViewRuntime {
             .composition_preview_session
             .as_mut()
             .unwrap_or(&mut self.session);
-        let inline_environment = highlight_session
-            .current_inline_environment()
+        let environment_view = highlight_session
+            .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
+        let inline_environment = environment_view
+            .innermost_inline()
+            .and_then(|entry| entry.inline_range.as_ref());
         let focus_environment_id = current_block_environment_id(highlight_session);
         let selection = self.session.selection().clone();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
@@ -362,7 +381,7 @@ impl DocumentViewRuntime {
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "inlineEnvironmentHighlightRects".to_owned(),
-                inline_environment_highlight_rects(inline_environment.as_ref(), snapshot),
+                inline_environment_highlight_rects(inline_environment, snapshot),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -466,12 +485,15 @@ impl DocumentViewRuntime {
             )
         });
         let current_structure = current_structure_state(&self.session);
-        let inline_environment = self
+        let environment_view = self
             .composition_preview_session
             .as_mut()
             .unwrap_or(&mut self.session)
-            .current_inline_environment()
+            .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
+        let inline_environment = environment_view
+            .innermost_inline()
+            .and_then(|entry| entry.inline_range.as_ref());
         let highlight_session = self
             .composition_preview_session
             .as_ref()
@@ -485,7 +507,7 @@ impl DocumentViewRuntime {
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = self.current_snapshot()?;
         let inline_environment_rectangles =
-            inline_environment_highlight_rects(inline_environment.as_ref(), snapshot);
+            inline_environment_highlight_rects(inline_environment, snapshot);
         let rectangles = selection_rectangles_json(
             &selection,
             structure_selection

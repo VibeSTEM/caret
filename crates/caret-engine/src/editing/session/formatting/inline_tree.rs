@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::super::text_map::split_inline_nodes;
+use super::super::super::environment::inline_adapter::{
+    RUN_PROPERTY_ENVIRONMENTS, RunPropertyEnvironment, run_property_for_kind,
+};
+use super::super::super::text_map::{EditNode, from_edit_nodes, split_edit_nodes, to_edit_nodes};
 use super::super::{Affinity, EditError};
-use caret_doc::{InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId};
+use caret_doc::{InlineEnvironment, InlineEnvironmentKind, NodeId, ParagraphContent};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -15,8 +18,12 @@ pub(super) struct FormatSpan {
     pub(super) end: usize,
     pub(super) bold: bool,
     pub(super) italic: bool,
-    /// `None` 表示软换行占据偏移位置，但它本身不是可设置下划线的文字。
-    pub(super) underline: Option<bool>,
+    /// 由集中适配表识别的 Run 属性值。
+    pub(super) properties: BTreeMap<&'static str, bool>,
+    /// 公式是独立编辑对象；普通文字格式命令不能把它当作可格式化文本。
+    pub(super) formatable: bool,
+    /// 仅 Run 可承载 `Run.props`；软换行可套 InlineEnvironment，但不能改 Run 属性。
+    pub(super) run_property_target: bool,
 }
 
 pub(in crate::editing::session) fn apply_formats_to_range(
@@ -26,16 +33,11 @@ pub(in crate::editing::session) fn apply_formats_to_range(
     formats: &[(InlineEnvironmentKind, bool)],
     inline_depth: usize,
 ) -> Result<(), EditError> {
+    let mut updated = to_edit_nodes(&paragraph.inlines)?;
     for (kind, enabled) in formats {
-        wrap_format_range(
-            &mut paragraph.inlines,
-            start,
-            end,
-            *kind,
-            *enabled,
-            inline_depth,
-        )?;
+        wrap_format_range_editable(&mut updated, start, end, *kind, *enabled, inline_depth)?;
     }
+    paragraph.inlines = from_edit_nodes(updated);
     Ok(())
 }
 
@@ -49,25 +51,42 @@ pub(in crate::editing::session) fn apply_font_family_to_range(
     if start >= end {
         return Ok(());
     }
-    wrap_font_family_range(&mut paragraph.inlines, start, end, family, inline_depth)
+    let mut updated = to_edit_nodes(&paragraph.inlines)?;
+    wrap_font_family_range(&mut updated, start, end, family, inline_depth)?;
+    paragraph.inlines = from_edit_nodes(updated);
+    Ok(())
 }
 
 /// 移除指定行内环境外壳，保留其子节点并归一化新相邻的行内节点。
-pub(super) fn unwrap_inline_environment(nodes: &mut Vec<InlineNode>, target: &NodeId) -> bool {
+pub(super) fn unwrap_inline_environment(
+    nodes: &mut Vec<ParagraphContent>,
+    target: &NodeId,
+) -> bool {
+    let Ok(mut editable) = to_edit_nodes(nodes) else {
+        return false;
+    };
+    if !unwrap_editable_environment(&mut editable, target) {
+        return false;
+    }
+    *nodes = from_edit_nodes(editable);
+    true
+}
+
+fn unwrap_editable_environment(nodes: &mut Vec<EditNode>, target: &NodeId) -> bool {
     for index in 0..nodes.len() {
         if matches!(
             nodes.get(index),
-            Some(InlineNode::Environment(environment)) if &environment.id == target
+            Some(EditNode::Environment(environment)) if &environment.id == target
         ) {
-            let Some(InlineNode::Environment(environment)) = nodes.get(index).cloned() else {
+            let Some(EditNode::Environment(environment)) = nodes.get(index).cloned() else {
                 return false;
             };
             nodes.splice(index..=index, environment.children);
             normalize_inline_tree(nodes);
             return true;
         }
-        if let Some(InlineNode::Environment(environment)) = nodes.get_mut(index)
-            && unwrap_inline_environment(&mut environment.children, target)
+        if let Some(EditNode::Environment(environment)) = nodes.get_mut(index)
+            && unwrap_editable_environment(&mut environment.children, target)
         {
             normalize_inline_tree(&mut environment.children);
             return true;
@@ -76,9 +95,14 @@ pub(super) fn unwrap_inline_environment(nodes: &mut Vec<InlineNode>, target: &No
     false
 }
 
-pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, EditError> {
+pub(super) fn format_spans(nodes: &[ParagraphContent]) -> Result<Vec<FormatSpan>, EditError> {
+    let nodes = to_edit_nodes(nodes)?;
+    format_spans_editable(&nodes)
+}
+
+fn format_spans_editable(nodes: &[EditNode]) -> Result<Vec<FormatSpan>, EditError> {
     fn collect(
-        nodes: &[InlineNode],
+        nodes: &[EditNode],
         offset: &mut usize,
         bold: bool,
         italic: bool,
@@ -86,7 +110,7 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
     ) -> Result<(), EditError> {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => {
+                EditNode::Run(run) => {
                     let start = *offset;
                     *offset += run.text.len();
                     if start < *offset {
@@ -95,26 +119,32 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                             end: *offset,
                             bold,
                             italic,
-                            underline: Some(
-                                run.props
-                                    .get("underline")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false),
-                            ),
+                            properties: RUN_PROPERTY_ENVIRONMENTS
+                                .iter()
+                                .filter_map(|descriptor| {
+                                    run.props.get(descriptor.key).map(|value| {
+                                        (descriptor.key, (descriptor.is_active)(Some(value)))
+                                    })
+                                })
+                                .collect(),
+                            formatable: true,
+                            run_property_target: true,
                         });
                     }
                 }
-                InlineNode::SoftBreak(_) => {
+                EditNode::SoftBreak(_) => {
                     output.push(FormatSpan {
                         start: *offset,
                         end: *offset + 1,
                         bold,
                         italic,
-                        underline: None,
+                        properties: BTreeMap::new(),
+                        formatable: true,
+                        run_property_target: false,
                     });
                     *offset += 1;
                 }
-                InlineNode::Environment(environment) => {
+                EditNode::Environment(environment) => {
                     let mut nested_bold = bold;
                     let mut nested_italic = italic;
                     match environment.kind {
@@ -142,9 +172,20 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                         output,
                     )?;
                 }
-                InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                    return Err(EditError::UnsupportedOpaqueContent);
+                EditNode::Math(_) => {
+                    let start = *offset;
+                    *offset += '\u{fffc}'.len_utf8();
+                    output.push(FormatSpan {
+                        start,
+                        end: *offset,
+                        bold,
+                        italic,
+                        properties: BTreeMap::new(),
+                        formatable: false,
+                        run_property_target: false,
+                    });
                 }
+                EditNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
             }
         }
         Ok(())
@@ -157,6 +198,11 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
 }
 
 pub(super) fn format_value(span: &FormatSpan, kind: InlineEnvironmentKind) -> bool {
+    if let Some(property) =
+        run_property_for_kind(crate::editing::EnvironmentKind::from_inline(kind))
+    {
+        return span.properties.get(property.key).copied().unwrap_or(false);
+    }
     match kind {
         InlineEnvironmentKind::Bold => span.bold,
         InlineEnvironmentKind::Italic => span.italic,
@@ -164,38 +210,76 @@ pub(super) fn format_value(span: &FormatSpan, kind: InlineEnvironmentKind) -> bo
     }
 }
 
-pub(super) fn set_run_underline_to_range(
-    nodes: &mut Vec<InlineNode>,
+pub(super) fn set_run_property_to_range(
+    nodes: &mut Vec<ParagraphContent>,
     start: usize,
     end: usize,
+    property: RunPropertyEnvironment,
     enabled: bool,
+) -> Result<(), EditError> {
+    let mut updated = to_edit_nodes(nodes)?;
+    edit_run_property_to_range(&mut updated, start, end, property, Some(enabled))?;
+    *nodes = from_edit_nodes(updated);
+    Ok(())
+}
+
+pub(super) fn clear_run_property_to_range(
+    nodes: &mut Vec<ParagraphContent>,
+    start: usize,
+    end: usize,
+    property: RunPropertyEnvironment,
+) -> Result<(), EditError> {
+    let mut updated = to_edit_nodes(nodes)?;
+    edit_run_property_to_range(&mut updated, start, end, property, None)?;
+    *nodes = from_edit_nodes(updated);
+    Ok(())
+}
+
+fn edit_run_property_to_range(
+    nodes: &mut Vec<EditNode>,
+    start: usize,
+    end: usize,
+    property: RunPropertyEnvironment,
+    value: Option<bool>,
 ) -> Result<(), EditError> {
     if start >= end {
         return Ok(());
     }
     let original = std::mem::take(nodes);
-    let (prefix_and_selected, after) = split_inline_nodes(original, end)?;
-    let (before, mut selected) = split_inline_nodes(prefix_and_selected, start)?;
+    let (prefix_and_selected, after) = split_edit_nodes(original, end)?;
+    let (before, mut selected) = split_edit_nodes(prefix_and_selected, start)?;
     if selected.is_empty() {
         return Err(EditError::InvalidPosition);
     }
-    fn set(nodes: &mut [InlineNode], enabled: bool) -> Result<(), EditError> {
+    fn set(
+        nodes: &mut [EditNode],
+        property: RunPropertyEnvironment,
+        value: Option<bool>,
+    ) -> Result<(), EditError> {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => {
-                    run.props
-                        .insert("underline".to_owned(), Value::Bool(enabled));
+                EditNode::Run(run) => {
+                    if let Some(enabled) = value {
+                        let Some(value) =
+                            property.value_for_state.map(|to_value| to_value(enabled))
+                        else {
+                            return Err(EditError::UnsupportedInlineFormat);
+                        };
+                        run.props.insert(property.key.to_owned(), value);
+                    } else {
+                        run.props.remove(property.key);
+                    }
                 }
-                InlineNode::Environment(environment) => set(&mut environment.children, enabled)?,
-                InlineNode::SoftBreak(_) => {}
-                InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                    return Err(EditError::UnsupportedOpaqueContent);
+                EditNode::Environment(environment) => {
+                    set(&mut environment.children, property, value)?
                 }
+                EditNode::SoftBreak(_) | EditNode::Math(_) => {}
+                EditNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
             }
         }
         Ok(())
     }
-    set(&mut selected, enabled)?;
+    set(&mut selected, property, value)?;
     normalize_inline_tree(&mut selected);
     let before_len = before.len();
     let mut selected_end = before_len + selected.len();
@@ -211,12 +295,22 @@ pub(super) fn set_run_underline_to_range(
 }
 
 pub(super) fn effective_format_at(
-    nodes: &[InlineNode],
+    nodes: &[ParagraphContent],
     offset: usize,
     affinity: Affinity,
     kind: InlineEnvironmentKind,
 ) -> Result<bool, EditError> {
-    let spans = format_spans(nodes)?;
+    let editable = to_edit_nodes(nodes)?;
+    effective_format_at_editable(&editable, offset, affinity, kind)
+}
+
+fn effective_format_at_editable(
+    nodes: &[EditNode],
+    offset: usize,
+    affinity: Affinity,
+    kind: InlineEnvironmentKind,
+) -> Result<bool, EditError> {
+    let spans = format_spans_editable(nodes)?;
     Ok(spans
         .iter()
         .find(|span| {
@@ -228,7 +322,35 @@ pub(super) fn effective_format_at(
 }
 
 pub(super) fn wrap_format_range(
-    nodes: &mut Vec<InlineNode>,
+    nodes: &mut Vec<ParagraphContent>,
+    start: usize,
+    end: usize,
+    kind: InlineEnvironmentKind,
+    enabled: bool,
+    inline_depth: usize,
+) -> Result<(), EditError> {
+    let mut editable = to_edit_nodes(nodes)?;
+    wrap_format_range_editable(&mut editable, start, end, kind, enabled, inline_depth)?;
+    *nodes = from_edit_nodes(editable);
+    Ok(())
+}
+
+fn wrap_format_range_editable(
+    nodes: &mut Vec<EditNode>,
+    start: usize,
+    end: usize,
+    kind: InlineEnvironmentKind,
+    enabled: bool,
+    inline_depth: usize,
+) -> Result<(), EditError> {
+    let mut updated = nodes.clone();
+    wrap_format_range_inner(&mut updated, start, end, kind, enabled, inline_depth)?;
+    *nodes = updated;
+    Ok(())
+}
+
+fn wrap_format_range_inner(
+    nodes: &mut Vec<EditNode>,
     start: usize,
     end: usize,
     kind: InlineEnvironmentKind,
@@ -239,8 +361,8 @@ pub(super) fn wrap_format_range(
         return Ok(());
     }
     let original = std::mem::take(nodes);
-    let (prefix_and_selected, after) = split_inline_nodes(original, end)?;
-    let (before, selected) = split_inline_nodes(prefix_and_selected, start)?;
+    let (prefix_and_selected, after) = split_edit_nodes(original, end)?;
+    let (before, selected) = split_edit_nodes(prefix_and_selected, start)?;
     if selected.is_empty() {
         return Err(EditError::InvalidPosition);
     }
@@ -266,10 +388,10 @@ pub(super) fn wrap_format_range(
 /// 合并相邻且语义完全兼容的行内环境，并压紧环境边界上的兼容文本 Run。
 ///
 /// 节点 ID 不参与兼容性比较；合并时保留文档顺序靠前的节点 ID。
-fn normalize_inline_tree(nodes: &mut Vec<InlineNode>) {
+fn normalize_inline_tree(nodes: &mut Vec<EditNode>) {
     let mut normalized = Vec::with_capacity(nodes.len());
     for mut node in std::mem::take(nodes) {
-        if let InlineNode::Environment(environment) = &mut node {
+        if let EditNode::Environment(environment) = &mut node {
             normalize_inline_tree(&mut environment.children);
         }
         normalized.push(node);
@@ -281,7 +403,7 @@ fn normalize_inline_tree(nodes: &mut Vec<InlineNode>) {
     *nodes = normalized;
 }
 
-fn merge_adjacent_inline_nodes(nodes: &mut Vec<InlineNode>, index: usize) -> bool {
+fn merge_adjacent_inline_nodes(nodes: &mut Vec<EditNode>, index: usize) -> bool {
     let Some(next_index) = index.checked_add(1) else {
         return false;
     };
@@ -289,13 +411,13 @@ fn merge_adjacent_inline_nodes(nodes: &mut Vec<InlineNode>, index: usize) -> boo
         return false;
     };
     let can_merge = match (nodes.get(index), next) {
-        (Some(InlineNode::Run(left)), InlineNode::Run(right)) => {
+        (Some(EditNode::Run(left)), EditNode::Run(right)) => {
             left.language == right.language
                 && left.props == right.props
                 && left.extra.is_empty()
                 && right.extra.is_empty()
         }
-        (Some(InlineNode::Environment(left)), InlineNode::Environment(right)) => {
+        (Some(EditNode::Environment(left)), EditNode::Environment(right)) => {
             left.kind == right.kind
                 && left.definition_id == right.definition_id
                 && left.props == right.props
@@ -310,10 +432,10 @@ fn merge_adjacent_inline_nodes(nodes: &mut Vec<InlineNode>, index: usize) -> boo
 
     let right = nodes.remove(next_index);
     match (nodes.get_mut(index), right) {
-        (Some(InlineNode::Run(left)), InlineNode::Run(right)) => {
+        (Some(EditNode::Run(left)), EditNode::Run(right)) => {
             left.text.push_str(&right.text);
         }
-        (Some(InlineNode::Environment(left)), InlineNode::Environment(mut right)) => {
+        (Some(EditNode::Environment(left)), EditNode::Environment(mut right)) => {
             let seam = left.children.len();
             left.children.append(&mut right.children);
             if seam > 0 && seam < left.children.len() {
@@ -326,15 +448,15 @@ fn merge_adjacent_inline_nodes(nodes: &mut Vec<InlineNode>, index: usize) -> boo
 }
 
 fn wrap_font_family_range(
-    nodes: &mut Vec<InlineNode>,
+    nodes: &mut Vec<EditNode>,
     start: usize,
     end: usize,
     family: &str,
     inline_depth: usize,
 ) -> Result<(), EditError> {
     let original = std::mem::take(nodes);
-    let (prefix_and_selected, after) = split_inline_nodes(original, end)?;
-    let (before, selected) = split_inline_nodes(prefix_and_selected, start)?;
+    let (prefix_and_selected, after) = split_edit_nodes(original, end)?;
+    let (before, selected) = split_edit_nodes(prefix_and_selected, start)?;
     if selected.is_empty() {
         return Err(EditError::InvalidPosition);
     }
@@ -354,24 +476,25 @@ fn wrap_font_family_range(
 }
 
 fn apply_font_family_at_deepest(
-    nodes: Vec<InlineNode>,
+    nodes: Vec<EditNode>,
     family: &str,
     inherited_family: Option<&str>,
     depth: usize,
-) -> Result<Vec<InlineNode>, EditError> {
+) -> Result<Vec<EditNode>, EditError> {
     let mut output = Vec::with_capacity(nodes.len());
     let mut pending = Vec::new();
-    let flush_pending = |pending: &mut Vec<InlineNode>, output: &mut Vec<InlineNode>| {
+    let flush_pending = |pending: &mut Vec<EditNode>, output: &mut Vec<EditNode>| {
         if pending.is_empty() {
             return Ok(());
         }
         if depth >= caret_doc::MAX_DOCUMENT_NESTING_DEPTH {
             return Err(EditError::NestingLimit);
         }
-        output.push(InlineNode::Environment(InlineEnvironment {
+        output.push(EditNode::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Font,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
             children: std::mem::take(pending),
             extra: BTreeMap::new(),
@@ -381,14 +504,14 @@ fn apply_font_family_at_deepest(
 
     for node in nodes {
         match node {
-            InlineNode::Run(_) | InlineNode::SoftBreak(_) if inherited_family != Some(family) => {
+            EditNode::Run(_) | EditNode::SoftBreak(_) if inherited_family != Some(family) => {
                 pending.push(node);
             }
-            InlineNode::Run(_) | InlineNode::SoftBreak(_) => {
+            EditNode::Run(_) | EditNode::SoftBreak(_) => {
                 flush_pending(&mut pending, &mut output)?;
                 output.push(node);
             }
-            InlineNode::Environment(mut environment) => {
+            EditNode::Environment(mut environment) => {
                 flush_pending(&mut pending, &mut output)?;
                 let nested_family = if environment.kind == InlineEnvironmentKind::Font {
                     environment
@@ -406,10 +529,11 @@ fn apply_font_family_at_deepest(
                     nested_family.as_deref(),
                     depth + 1,
                 )?;
-                output.push(InlineNode::Environment(environment));
+                output.push(EditNode::Environment(environment));
             }
-            InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                return Err(EditError::UnsupportedOpaqueContent);
+            EditNode::Opaque(_) | EditNode::Math(_) => {
+                flush_pending(&mut pending, &mut output)?;
+                output.push(node);
             }
         }
     }
@@ -418,15 +542,15 @@ fn apply_font_family_at_deepest(
 }
 
 fn apply_format_at_deepest(
-    nodes: Vec<InlineNode>,
+    nodes: Vec<EditNode>,
     kind: InlineEnvironmentKind,
     enabled: bool,
     inherited_state: Option<bool>,
     depth: usize,
-) -> Result<Vec<InlineNode>, EditError> {
+) -> Result<Vec<EditNode>, EditError> {
     let mut output = Vec::with_capacity(nodes.len());
     let mut pending = Vec::new();
-    let flush_pending = |pending: &mut Vec<InlineNode>, output: &mut Vec<InlineNode>| {
+    let flush_pending = |pending: &mut Vec<EditNode>, output: &mut Vec<EditNode>| {
         if pending.is_empty() {
             return Ok(());
         }
@@ -435,10 +559,11 @@ fn apply_format_at_deepest(
         }
         let mut props = BTreeMap::new();
         props.insert("enabled".to_owned(), Value::Bool(enabled));
-        output.push(InlineNode::Environment(InlineEnvironment {
+        output.push(EditNode::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind,
             definition_id: None,
+            source_range: None,
             props,
             children: std::mem::take(pending),
             extra: BTreeMap::new(),
@@ -448,14 +573,14 @@ fn apply_format_at_deepest(
 
     for node in nodes {
         match node {
-            InlineNode::Run(_) | InlineNode::SoftBreak(_) if inherited_state != Some(enabled) => {
+            EditNode::Run(_) | EditNode::SoftBreak(_) if inherited_state != Some(enabled) => {
                 pending.push(node);
             }
-            InlineNode::Run(_) | InlineNode::SoftBreak(_) => {
+            EditNode::Run(_) | EditNode::SoftBreak(_) => {
                 flush_pending(&mut pending, &mut output)?;
                 output.push(node);
             }
-            InlineNode::Environment(mut environment) => {
+            EditNode::Environment(mut environment) => {
                 flush_pending(&mut pending, &mut output)?;
                 let child_state = if environment.kind == kind {
                     environment
@@ -472,10 +597,11 @@ fn apply_format_at_deepest(
                     child_state,
                     depth + 1,
                 )?;
-                output.push(InlineNode::Environment(environment));
+                output.push(EditNode::Environment(environment));
             }
-            InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                return Err(EditError::UnsupportedOpaqueContent);
+            EditNode::Opaque(_) | EditNode::Math(_) => {
+                flush_pending(&mut pending, &mut output)?;
+                output.push(node);
             }
         }
     }

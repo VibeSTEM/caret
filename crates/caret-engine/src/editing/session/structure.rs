@@ -11,7 +11,7 @@ use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use crate::editing::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, InlineNode, NodeId, Paragraph, Run, SoftBreak,
+    Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run, SoftBreak, TextFlow,
 };
 use caret_layout::VisualAffinity;
 use caret_structure::{StructureIndex, StructureKind, StructurePosition};
@@ -52,6 +52,11 @@ impl Session {
                 self.selection_visual_affinity,
                 self.pending_inline_style.clone(),
                 after_state_id,
+            )
+            .with_math_edit(
+                self.math_edit
+                    .as_ref()
+                    .map(super::math_edit::history_position),
             ),
         ));
         self.history_state_id = after_state_id;
@@ -136,12 +141,18 @@ impl Session {
             .map(|line| {
                 let mut paragraph = Paragraph::empty(NodeId::generate());
                 if !line.is_empty() {
-                    paragraph.inlines.push(InlineNode::Run(Run {
-                        text: line.to_owned(),
-                        language: None,
-                        props: BTreeMap::new(),
-                        extra: BTreeMap::new(),
-                    }));
+                    paragraph
+                        .inlines
+                        .push(caret_doc::ParagraphContent::Text(TextFlow {
+                            runs: vec![Run {
+                                text: line.to_owned(),
+                                language: None,
+                                props: BTreeMap::new(),
+                                extra: BTreeMap::new(),
+                            }],
+                            source_range: None,
+                            extra: BTreeMap::new(),
+                        }));
                 }
                 paragraph
             })
@@ -161,7 +172,7 @@ impl Session {
         if soft_break {
             paragraph
                 .inlines
-                .push(InlineNode::SoftBreak(SoftBreak::default()));
+                .push(caret_doc::ParagraphContent::SoftBreak(SoftBreak::default()));
         }
         self.insert_paragraphs_at_environment_exit(vec![paragraph])
     }

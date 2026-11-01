@@ -1,6 +1,6 @@
 //! 测量百万字中文长篇的整篇排版与单段编辑重排。
 
-use caret_doc::{Block, Document, InlineNode, NodeId, Paragraph, Run};
+use caret_doc::{Block, Document, NodeId, Paragraph, ParagraphContent, Run, TextFlow};
 use caret_engine::{Affinity, Command, DocumentLayoutService, Pos, Selection, Session, StoryId};
 use caret_layout::{FontCatalog, ShapingStyle};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -15,6 +15,14 @@ const PARAGRAPH_LANGUAGES: [&str; 7] =
     ["zh-Hans", "en-US", "fr-FR", "ar", "ru-RU", "el-GR", "ja-JP"];
 const FONT_SIZE_CENTIPOINTS: u16 = 1200;
 const EDIT_OFFSET_BYTES: usize = 120;
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: BTreeMap::new(),
+    })
+}
 
 fn novel_document() -> Document {
     let mut document = Document::blank();
@@ -37,7 +45,7 @@ fn novel_document() -> Document {
                 id: NodeId::generate(),
                 language: Some(PARAGRAPH_LANGUAGES[index % PARAGRAPH_LANGUAGES.len()].to_owned()),
                 layout: None,
-                inlines: vec![InlineNode::Run(Run {
+                inlines: vec![text_flow(Run {
                     text: text.to_owned(),
                     language: None,
                     props: BTreeMap::new(),

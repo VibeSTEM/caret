@@ -4,7 +4,7 @@ use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
 };
 use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -18,6 +18,14 @@ fn paragraph_text(session: &Session, block_index: usize) -> String {
         .text
 }
 
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
+}
+
 #[test]
 fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
     let mut document = Document::blank();
@@ -26,17 +34,19 @@ fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
     let Block::Paragraph(paragraph) = &mut document.body[0] else {
         panic!("blank document should start with a paragraph");
     };
-    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
         id: outer_id,
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::new(),
-        children: vec![InlineNode::Environment(InlineEnvironment {
+        children: vec![ParagraphContent::Environment(InlineEnvironment {
             id: inner_id.clone(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::new(),
-            children: vec![InlineNode::Run(Run {
+            children: vec![text_flow(Run {
                 text: "inside".to_owned(),
                 language: None,
                 props: BTreeMap::new(),
@@ -548,7 +558,7 @@ fn font_command_opens_unicode_family_picker_and_applies_selected_family() {
     let paragraph = session
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-    let Some(InlineNode::Environment(environment)) = paragraph.inlines.first() else {
+    let Some(ParagraphContent::Environment(environment)) = paragraph.inlines.first() else {
         panic!("font command should create a Font environment");
     };
     assert_eq!(environment.kind, InlineEnvironmentKind::Font);
@@ -654,6 +664,46 @@ fn unavailable_candidates_are_hidden_until_prefix_matches_and_cannot_execute() {
     assert!(session.command_line().is_some());
     assert_eq!(session.document_generation(), generation);
     assert_eq!(paragraph_text(&session, 0), "");
+}
+
+#[test]
+fn math_commands_stay_unavailable_until_the_document_and_canvas_paths_are_ready() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+
+    for (query, alias) in [
+        ("math", "\\math"),
+        ("equation", "\\equation"),
+        ("align", "\\align"),
+    ] {
+        if session.command_line().is_some() {
+            session
+                .run(Command::CancelCommandLine)
+                .unwrap_or_else(|error| panic!("command line did not close: {error}"));
+            session
+                .run(Command::BeginCommandLine)
+                .unwrap_or_else(|error| panic!("command line did not restart: {error}"));
+        }
+        session
+            .run(Command::TypeCommandLine(query.to_owned()))
+            .unwrap_or_else(|error| panic!("command query failed: {error}"));
+        let candidate = session
+            .command_line()
+            .and_then(|line| line.selected_candidate())
+            .unwrap_or_else(|| panic!("{alias} candidate should remain discoverable"));
+        assert_eq!(candidate.alias, alias);
+        assert!(!candidate.available);
+
+        let generation = session.document_generation();
+        session
+            .run(Command::AcceptCommandLine)
+            .unwrap_or_else(|error| panic!("disabled math command should be ignored: {error}"));
+        assert!(session.command_line().is_some());
+        assert_eq!(session.document_generation(), generation);
+    }
 }
 
 #[test]
@@ -1265,4 +1315,111 @@ fn undo_is_rejected_while_input_composition_is_active() {
         Err(EditError::CompositionPending)
     );
     assert_eq!(paragraph_text(&session, 0), "");
+}
+
+fn run_ok(session: &mut Session, command: Command) {
+    session
+        .run(command.clone())
+        .unwrap_or_else(|error| panic!("{command:?} failed: {error}"));
+}
+
+fn first_paragraph_math_count(session: &Session) -> usize {
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    paragraph
+        .inlines
+        .iter()
+        .filter(|node| matches!(node, ParagraphContent::Math(_)))
+        .count()
+}
+
+#[test]
+fn inline_math_is_one_atomic_object_for_insert_caret_and_delete() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath(r"x^2".to_owned()));
+    run_ok(&mut session, Command::InsertText("b".to_owned()));
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}b");
+    assert_eq!(first_paragraph_math_count(&session), 1);
+
+    // 光标左移两次：越过 b，再一步越过整个公式。
+    run_ok(&mut session, Command::MoveCaret(Direction::Backward));
+    run_ok(&mut session, Command::MoveCaret(Direction::Backward));
+    assert_eq!(session.selection().focus.offset, 1);
+
+    // 向后删除一次即删去整个公式。
+    run_ok(&mut session, Command::Delete(Direction::Forward));
+    assert_eq!(paragraph_text(&session, 0), "ab");
+    assert_eq!(first_paragraph_math_count(&session), 0);
+
+    run_ok(&mut session, Command::Undo);
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}b");
+    assert_eq!(first_paragraph_math_count(&session), 1);
+}
+
+#[test]
+fn invalid_inline_math_leaves_document_unchanged() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let result = session.run(Command::InsertInlineMath(r"\frac{".to_owned()));
+    assert!(matches!(result, Err(EditError::InvalidMath(_))));
+    assert_eq!(paragraph_text(&session, 0), "");
+}
+
+#[test]
+fn environment_stack_reports_math_and_mod_backspace_skips_it() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(
+        &mut session,
+        Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+    );
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath("y".to_owned()));
+    let inactive_view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment stack failed: {error}"));
+    assert!(
+        inactive_view
+            .inline()
+            .iter()
+            .all(|entry| entry.kind != crate::editing::EnvironmentKind::InlineMath)
+    );
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment stack failed: {error}"));
+    let kinds = view
+        .inline()
+        .iter()
+        .map(|entry| entry.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            crate::editing::EnvironmentKind::Bold,
+            crate::editing::EnvironmentKind::InlineMath
+        ]
+    );
+    let math = view
+        .innermost_inline()
+        .and_then(|entry| entry.inline_range.clone())
+        .unwrap_or_else(|| panic!("inline math should carry its range"));
+    assert_eq!(math.end_utf8 - math.start_utf8, '\u{fffc}'.len_utf8());
+
+    // Mod+Backspace 按能力跳过公式，解除外层粗体并保留公式。
+    run_ok(&mut session, Command::EditorKey(EditorKey::ModBackspace));
+    assert_eq!(first_paragraph_math_count(&session), 1);
+    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}");
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    assert!(
+        !paragraph
+            .inlines
+            .iter()
+            .any(|node| matches!(node, ParagraphContent::Environment(_)))
+    );
 }

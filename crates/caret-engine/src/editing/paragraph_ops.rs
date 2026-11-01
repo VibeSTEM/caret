@@ -5,7 +5,7 @@
 
 use super::text_map::{TextMap, inline_length};
 use super::{Affinity, Direction, EditError, Pos, StoryId};
-use caret_doc::{Block, InlineNode, NodeId, Paragraph};
+use caret_doc::{Block, FlowContent, NodeId, Paragraph, ParagraphContent};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -623,14 +623,17 @@ pub(super) fn merge_paragraph_range(
     })
 }
 
-fn inline_tree_has_unknown_fields(nodes: &[InlineNode]) -> bool {
+fn inline_tree_has_unknown_fields(nodes: &[ParagraphContent]) -> bool {
     nodes.iter().any(|node| match node {
-        InlineNode::Run(run) => !run.extra.is_empty(),
-        InlineNode::Environment(environment) => {
+        FlowContent::Text(text) => {
+            !text.extra.is_empty() || text.runs.iter().any(|run| !run.extra.is_empty())
+        }
+        FlowContent::Environment(environment) => {
             !environment.extra.is_empty() || inline_tree_has_unknown_fields(&environment.children)
         }
-        InlineNode::SoftBreak(value) => !value.extra.is_empty(),
-        InlineNode::Opaque(_) | InlineNode::Math(_) => true,
+        FlowContent::SoftBreak(value) => !value.extra.is_empty(),
+        FlowContent::Math(value) => !value.extra.is_empty(),
+        FlowContent::Opaque(_) => true,
     })
 }
 

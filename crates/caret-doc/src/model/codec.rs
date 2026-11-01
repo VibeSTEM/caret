@@ -42,24 +42,25 @@ pub(crate) fn block_from_value(value: Value) -> Result<Block, ModelError> {
     }
 }
 
-pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> {
+pub(crate) fn paragraph_content_from_value(value: Value) -> Result<ParagraphContent, ModelError> {
     let Some(object) = value.as_object() else {
         return Err(ModelError::InvalidDocument(
-            "inline node must be an object".to_owned(),
+            "paragraph content must be an object".to_owned(),
         ));
     };
     match object.get("type").and_then(Value::as_str) {
         Some("inlineMath") if supported_tree(object.get("mathTree")) => {
             serde_json::from_value(without_fields(value, &["type"])?)
-                .map(InlineNode::Math)
+                .map(ParagraphContent::Math)
                 .map_err(|error| ModelError::InvalidDocument(error.to_string()))
         }
-        Some("inlineMath") => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
-        Some("run") => serde_json::from_value(without_fields(value, &["type"])?)
-            .map(InlineNode::Run)
-            .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+        Some("inlineMath") => Ok(ParagraphContent::Opaque(OpaqueNode { raw: value })),
+        Some("text") if object.get("runs").is_some() && !object.contains_key("text") => {
+            parse_text_flow(value).map(ParagraphContent::Text)
+        }
+        Some("text") => Ok(ParagraphContent::Opaque(OpaqueNode { raw: value })),
         Some("softBreak") => serde_json::from_value(without_fields(value, &["type"])?)
-            .map(InlineNode::SoftBreak)
+            .map(ParagraphContent::SoftBreak)
             .map_err(|error| ModelError::InvalidDocument(error.to_string())),
         Some("environment") if object.get("scope").and_then(Value::as_str) == Some("inline") => {
             let kind = object.get("kind").and_then(Value::as_str);
@@ -67,13 +68,69 @@ pub(crate) fn inline_from_value(value: Value) -> Result<InlineNode, ModelError> 
                 .and_then(InlineEnvironmentKind::from_storage_name)
                 .is_some()
             {
-                parse_inline_environment(value)
+                parse_inline_environment(value, paragraph_content_from_value)
+                    .map(ParagraphContent::Environment)
             } else {
-                Ok(InlineNode::Opaque(OpaqueNode { raw: value }))
+                Ok(ParagraphContent::Opaque(OpaqueNode { raw: value }))
             }
         }
-        _ => Ok(InlineNode::Opaque(OpaqueNode { raw: value })),
+        _ => Ok(ParagraphContent::Opaque(OpaqueNode { raw: value })),
     }
+}
+
+pub(crate) fn math_content_from_value(value: Value) -> Result<MathContent, ModelError> {
+    let Some(object) = value.as_object() else {
+        return Err(ModelError::InvalidDocument(
+            "math content must be an object".to_owned(),
+        ));
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("math") => serde_json::from_value(without_fields(value, &["type"])?)
+            .map(MathContent::Math)
+            .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+        Some("text") if object.get("runs").is_some() && !object.contains_key("text") => {
+            parse_text_flow(value).map(MathContent::Text)
+        }
+        Some("text") => Ok(MathContent::Opaque(OpaqueNode { raw: value })),
+        Some("softBreak") => serde_json::from_value(without_fields(value, &["type"])?)
+            .map(MathContent::SoftBreak)
+            .map_err(|error| ModelError::InvalidDocument(error.to_string())),
+        Some("environment") if object.get("scope").and_then(Value::as_str) == Some("inline") => {
+            let kind = object.get("kind").and_then(Value::as_str);
+            if kind
+                .and_then(InlineEnvironmentKind::from_storage_name)
+                .is_some()
+            {
+                parse_inline_environment(value, math_content_from_value)
+                    .map(MathContent::Environment)
+            } else {
+                Ok(MathContent::Opaque(OpaqueNode { raw: value }))
+            }
+        }
+        _ => Ok(MathContent::Opaque(OpaqueNode { raw: value })),
+    }
+}
+
+fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
+    let mut object = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| ModelError::InvalidDocument("text flow must be an object".to_owned()))?;
+    object.remove("type");
+    let runs = take_nodes(&mut object, "runs", |value| {
+        serde_json::from_value(value)
+            .map_err(|error| ModelError::InvalidDocument(error.to_string()))
+    })?;
+    let source_range = object
+        .remove("sourceRange")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+    Ok(TextFlow {
+        runs,
+        source_range,
+        extra: object.into_iter().collect(),
+    })
 }
 
 fn supported_tree(value: Option<&Value>) -> bool {
@@ -84,7 +141,69 @@ fn supported_tree(value: Option<&Value>) -> bool {
         == Some(super::MATH_TREE_SCHEMA_VERSION as u64)
         && tree
             .get("root")
-            .is_some_and(|root| supported_math_node(root, None))
+            .is_some_and(|root| supported_math_flow(root, None))
+}
+
+fn supported_math_flow(value: &Value, parent: Option<super::MathNodeKind>) -> bool {
+    let Some(flow) = value.as_object() else {
+        return false;
+    };
+    flow.get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| {
+            content
+                .iter()
+                .all(|item| match item.get("type").and_then(Value::as_str) {
+                    Some("math") => supported_math_node(item, parent),
+                    Some("text") => {
+                        item.get("runs")
+                            .and_then(Value::as_array)
+                            .is_some_and(|runs| runs.iter().all(Value::is_object))
+                            && item.get("text").is_none()
+                    }
+                    Some("softBreak") => true,
+                    Some("environment")
+                        if item.get("scope").and_then(Value::as_str) == Some("inline") =>
+                    {
+                        item.get("kind")
+                            .and_then(Value::as_str)
+                            .and_then(InlineEnvironmentKind::from_storage_name)
+                            .is_some()
+                            && item
+                                .get("children")
+                                .and_then(Value::as_array)
+                                .is_some_and(|children| children.iter().all(supported_math_content))
+                    }
+                    _ => false,
+                })
+        })
+}
+
+fn supported_math_content(value: &Value) -> bool {
+    let Some(content) = value.as_object() else {
+        return false;
+    };
+    match content.get("type").and_then(Value::as_str) {
+        Some("math") => supported_math_node(value, None),
+        Some("text") => {
+            content
+                .get("runs")
+                .and_then(Value::as_array)
+                .is_some_and(|runs| runs.iter().all(Value::is_object))
+                && content.get("text").is_none()
+        }
+        Some("softBreak") => true,
+        Some("environment") if content.get("scope").and_then(Value::as_str) == Some("inline") => {
+            let kind = content.get("kind").and_then(Value::as_str);
+            kind.and_then(InlineEnvironmentKind::from_storage_name)
+                .is_some()
+                && content
+                    .get("children")
+                    .and_then(Value::as_array)
+                    .is_some_and(|children| children.iter().all(supported_math_content))
+        }
+        _ => false,
+    }
 }
 
 fn supported_align(object: &Map<String, Value>) -> bool {
@@ -123,19 +242,12 @@ fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bo
             attributes.insert(key.clone(), value.to_owned());
         }
     }
-    let children = match node.get("children") {
+    let child_flows = match node.get("children") {
         None => Vec::new(),
         Some(Value::Array(children)) => {
             let Some(children) = children
                 .iter()
-                .map(|child| {
-                    child.as_object()?.get("kind")?.as_str().and_then(|kind| {
-                        serde_json::from_value::<super::MathNodeKind>(Value::String(
-                            kind.to_owned(),
-                        ))
-                        .ok()
-                    })
-                })
+                .map(math_flow_primary_kind)
                 .collect::<Option<Vec<_>>>()
             else {
                 return false;
@@ -152,14 +264,34 @@ fn supported_math_node(value: &Value, parent: Option<super::MathNodeKind>) -> bo
         parent,
         kind,
         node.get("text").and_then(Value::as_str),
-        &children,
+        &child_flows,
     ) && node.get("children").is_none_or(|children| {
         children.as_array().is_some_and(|children| {
             children
                 .iter()
-                .all(|child| supported_math_node(child, Some(kind)))
+                .all(|child| supported_math_flow(child, Some(kind)))
         })
     })
+}
+
+fn math_flow_primary_kind(flow: &Value) -> Option<super::MathNodeKind> {
+    let content = flow.as_object()?.get("content")?.as_array()?;
+    if content.len() == 1 {
+        let item = content[0].as_object()?;
+        if item.get("type")?.as_str()? == "math" {
+            let kind = item
+                .get("kind")?
+                .as_str()
+                .and_then(|kind| serde_json::from_value(Value::String(kind.to_owned())).ok())?;
+            return Some(match kind {
+                super::MathNodeKind::Placeholder
+                | super::MathNodeKind::Hline
+                | super::MathNodeKind::Intertext => kind,
+                _ => super::MathNodeKind::Row,
+            });
+        }
+    }
+    Some(super::MathNodeKind::Row)
 }
 
 fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
@@ -196,7 +328,10 @@ fn parse_block_environment(value: Value) -> Result<Block, ModelError> {
     Ok(Block::Environment(node))
 }
 
-fn parse_inline_environment(value: Value) -> Result<InlineNode, ModelError> {
+fn parse_inline_environment<T>(
+    value: Value,
+    parse_child: impl FnMut(Value) -> Result<T, ModelError>,
+) -> Result<InlineEnvironment<T>, ModelError> {
     let mut object = value.as_object().cloned().ok_or_else(|| {
         ModelError::InvalidDocument("environment node must be an object".to_owned())
     })?;
@@ -208,16 +343,21 @@ fn parse_inline_environment(value: Value) -> Result<InlineNode, ModelError> {
     object.remove("scope");
     let kind = InlineEnvironmentKind::from_storage_name(&kind)
         .ok_or_else(|| ModelError::InvalidEnvironmentScope(kind.clone()))?;
-    let children = take_nodes(&mut object, "children", inline_from_value)?;
+    let children = take_nodes(&mut object, "children", parse_child)?;
     let node = InlineEnvironment {
         id: parse_id_field(&mut object)?,
         kind,
         definition_id: take_optional_string(&mut object, "definitionId")?,
+        source_range: object
+            .remove("sourceRange")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| ModelError::InvalidDocument(error.to_string()))?,
         props: take_map(&mut object, "props")?,
         children,
         extra: object.into_iter().collect(),
     };
-    Ok(InlineNode::Environment(node))
+    Ok(node)
 }
 
 fn without_fields(mut value: Value, fields: &[&str]) -> Result<Value, ModelError> {
@@ -295,6 +435,7 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
                 kind: value.kind,
                 id: &value.id,
                 definition_id: &value.definition_id,
+                source_range: None,
                 props: &value.props,
                 title: value.title.as_ref(),
                 children: &value.children,
@@ -307,25 +448,49 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
     }
 }
 
-pub(crate) fn inline_to_value(inline: &InlineNode) -> Result<Value, ModelError> {
-    match inline {
-        InlineNode::Math(value) => with_type("inlineMath", value),
-        InlineNode::Run(value) => with_type("run", value),
-        InlineNode::Environment(value) => environment_to_value(
+pub(crate) fn paragraph_content_to_value(content: &ParagraphContent) -> Result<Value, ModelError> {
+    match content {
+        ParagraphContent::Text(value) => with_type("text", value),
+        ParagraphContent::Math(value) => with_type("inlineMath", value),
+        ParagraphContent::Environment(value) => environment_to_value(
             EnvironmentValue {
                 scope: "inline",
                 kind: value.kind,
                 id: &value.id,
                 definition_id: &value.definition_id,
+                source_range: value.source_range.as_ref(),
                 props: &value.props,
                 title: None,
                 children: &value.children,
                 extra: &value.extra,
             },
-            inline_to_value,
+            paragraph_content_to_value,
         ),
-        InlineNode::SoftBreak(value) => with_type("softBreak", value),
-        InlineNode::Opaque(value) => Ok(value.raw.clone()),
+        ParagraphContent::SoftBreak(value) => with_type("softBreak", value),
+        ParagraphContent::Opaque(value) => Ok(value.raw.clone()),
+    }
+}
+
+pub(crate) fn math_content_to_value(content: &MathContent) -> Result<Value, ModelError> {
+    match content {
+        MathContent::Text(value) => with_type("text", value),
+        MathContent::Math(value) => with_type("math", value),
+        MathContent::Environment(value) => environment_to_value(
+            EnvironmentValue {
+                scope: "inline",
+                kind: value.kind,
+                id: &value.id,
+                definition_id: &value.definition_id,
+                source_range: value.source_range.as_ref(),
+                props: &value.props,
+                title: None,
+                children: &value.children,
+                extra: &value.extra,
+            },
+            math_content_to_value,
+        ),
+        MathContent::SoftBreak(value) => with_type("softBreak", value),
+        MathContent::Opaque(value) => Ok(value.raw.clone()),
     }
 }
 
@@ -365,6 +530,7 @@ struct EnvironmentValue<'a, K, T> {
     kind: K,
     id: &'a NodeId,
     definition_id: &'a Option<String>,
+    source_range: Option<&'a super::MathSourceRange>,
     props: &'a BTreeMap<String, Value>,
     title: Option<&'a Paragraph>,
     children: &'a [T],
@@ -390,6 +556,13 @@ fn environment_to_value<K: EnvironmentKindName, T>(
         object.insert(
             "definitionId".to_owned(),
             Value::String(definition_id.clone()),
+        );
+    }
+    if let Some(source_range) = environment.source_range {
+        object.insert(
+            "sourceRange".to_owned(),
+            serde_json::to_value(source_range)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))?,
         );
     }
     object.insert(
@@ -437,23 +610,44 @@ impl<'de> Deserialize<'de> for Block {
     }
 }
 
-impl Serialize for InlineNode {
+impl Serialize for ParagraphContent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        inline_to_value(self)
+        paragraph_content_to_value(self)
             .map_err(serde::ser::Error::custom)?
             .serialize(serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for InlineNode {
+impl<'de> Deserialize<'de> for ParagraphContent {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        inline_from_value(value).map_err(serde::de::Error::custom)
+        paragraph_content_from_value(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for MathContent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        math_content_to_value(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MathContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        math_content_from_value(value).map_err(serde::de::Error::custom)
     }
 }

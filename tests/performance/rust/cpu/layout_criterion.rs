@@ -1,6 +1,6 @@
 //! 测量 Parley 段落布局、命中测试与字形栅格缓存的 CPU 基线。
 
-use caret_doc::{DocumentSettings, InlineNode, NodeId, Paragraph, Run};
+use caret_doc::{DocumentSettings, NodeId, Paragraph, ParagraphContent, Run, TextFlow};
 use caret_layout::{
     FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, LineSpacing,
     ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings, ShapingStyle,
@@ -16,12 +16,20 @@ const LATIN_FRAGMENT: &str =
     "Caret paragraphs preserve source text while shaping multilingual text into visual lines. ";
 const MIXED_FRAGMENT: &str = "Caret 编辑器文字 shaping العربية Ελληνικά Кириллица 👩‍🔬。";
 
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: BTreeMap::new(),
+    })
+}
+
 fn paragraph(text: String, language: Option<&str>) -> Paragraph {
     Paragraph {
         id: NodeId::generate(),
         language: language.map(str::to_owned),
         layout: None,
-        inlines: vec![InlineNode::Run(Run {
+        inlines: vec![text_flow(Run {
             text,
             language: None,
             props: BTreeMap::new(),
@@ -73,7 +81,9 @@ fn benchmark_paragraph_layout(criterion: &mut Criterion) {
                 .inlines
                 .iter()
                 .map(|node| match node {
-                    InlineNode::Run(run) => run.text.len() as u64,
+                    ParagraphContent::Text(flow) => {
+                        flow.runs.iter().map(|run| run.text.len() as u64).sum()
+                    }
                     _ => 0,
                 })
                 .sum(),

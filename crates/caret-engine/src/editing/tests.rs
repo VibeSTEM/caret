@@ -4,13 +4,13 @@ use super::text_map::TextMap;
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Orientation, PageGeometry, PageMargins, PaperSize,
-    Paragraph, Run,
+    InlineEnvironmentKind, NodeId, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph,
+    ParagraphContent, Run, TextFlow,
 };
 use caret_layout::VisualAffinity;
 
-fn run(text: &str) -> InlineNode {
-    InlineNode::Run(Run {
+fn run(text: &str) -> ParagraphContent {
+    text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: Default::default(),
@@ -18,7 +18,7 @@ fn run(text: &str) -> InlineNode {
     })
 }
 
-fn session_with(inlines: Vec<InlineNode>) -> Session {
+fn session_with(inlines: Vec<ParagraphContent>) -> Session {
     let mut document = Document::blank();
     let Block::Paragraph(paragraph) = &mut document.body[0] else {
         unreachable!();
@@ -37,14 +37,23 @@ fn paragraph_text(paragraph: &Paragraph) -> String {
     }
 }
 
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
+}
+
 #[test]
 fn grapheme_delete_crosses_run_and_environment_boundaries() {
     let mut session = session_with(vec![
         run("e"),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
             children: vec![run("\u{301}")],
             extra: Default::default(),
@@ -258,7 +267,7 @@ fn multiline_paste_replaces_a_reversed_cross_paragraph_selection() -> Result<(),
 
 #[test]
 fn multiline_paste_rejects_unsafe_run_split_without_mutation() {
-    let mut session = session_with(vec![InlineNode::Run(Run {
+    let mut session = session_with(vec![text_flow(Run {
         text: "ab".to_owned(),
         language: None,
         props: Default::default(),
@@ -675,10 +684,11 @@ fn paragraph_range_merge_rejects_unknown_fields_without_mutation() -> Result<(),
 fn environment_end_affinity_has_a_visible_transition() {
     let mut session = session_with(vec![
         run("A"),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
             children: vec![run("B")],
             extra: Default::default(),
@@ -748,10 +758,11 @@ fn soft_break_inside_an_environment_keeps_its_scope() {
     let environment_id = NodeId::generate();
     let mut session = session_with(vec![
         run("A"),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: environment_id.clone(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
             children: vec![run("BC")],
             extra: Default::default(),
@@ -781,11 +792,14 @@ fn soft_break_inside_an_environment_keeps_its_scope() {
         Err(error) => panic!("failed to map soft break: {error}"),
     };
     assert_eq!(map.text, "AB\nC");
-    let InlineNode::Environment(environment) = &paragraph.inlines[1] else {
+    let ParagraphContent::Environment(environment) = &paragraph.inlines[1] else {
         panic!("soft break should stay inside the italic environment");
     };
     assert_eq!(environment.id, environment_id);
-    assert!(matches!(environment.children[1], InlineNode::SoftBreak(_)));
+    assert!(matches!(
+        environment.children[1],
+        ParagraphContent::SoftBreak(_)
+    ));
 }
 
 #[test]
@@ -808,18 +822,20 @@ fn grapheme_boundaries_are_transparent_to_runs_and_environments() {
         layout: None,
         inlines: vec![
             run("👩"),
-            InlineNode::Environment(InlineEnvironment {
+            ParagraphContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Bold,
                 definition_id: None,
+                source_range: None,
                 props: Default::default(),
                 children: vec![run("🏽‍")],
                 extra: Default::default(),
             }),
-            InlineNode::Environment(InlineEnvironment {
+            ParagraphContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Font,
                 definition_id: None,
+                source_range: None,
                 props: Default::default(),
                 children: vec![run("💻")],
                 extra: Default::default(),
@@ -1144,26 +1160,41 @@ fn inserted_caret_and_position_map_snap_to_new_grapheme_boundaries() {
 
 #[test]
 fn text_insertion_before_soft_break_keeps_document_order() {
-    let mut session = session_with(vec![InlineNode::SoftBreak(Default::default()), run("b")]);
+    let mut session = session_with(vec![
+        ParagraphContent::SoftBreak(Default::default()),
+        run("b"),
+    ]);
     assert!(session.run(Command::InsertText("a".to_owned())).is_ok());
     let Block::Paragraph(paragraph) = &session.document.body[0] else {
         panic!("document should contain a paragraph");
     };
     assert_eq!(paragraph_text(paragraph), "a\nb");
-    assert!(matches!(paragraph.inlines[0], InlineNode::Run(_)));
-    assert!(matches!(paragraph.inlines[1], InlineNode::SoftBreak(_)));
+    assert!(matches!(paragraph.inlines[0], ParagraphContent::Text(_)));
+    assert!(matches!(
+        paragraph.inlines[1],
+        ParagraphContent::SoftBreak(_)
+    ));
 }
 
 #[test]
 fn soft_break_insertion_before_soft_break_keeps_document_order() {
-    let mut session = session_with(vec![InlineNode::SoftBreak(Default::default()), run("b")]);
+    let mut session = session_with(vec![
+        ParagraphContent::SoftBreak(Default::default()),
+        run("b"),
+    ]);
     assert!(session.run(Command::InsertSoftBreak).is_ok());
     let Block::Paragraph(paragraph) = &session.document.body[0] else {
         panic!("document should contain a paragraph");
     };
     assert_eq!(paragraph_text(paragraph), "\n\nb");
-    assert!(matches!(paragraph.inlines[0], InlineNode::SoftBreak(_)));
-    assert!(matches!(paragraph.inlines[1], InlineNode::SoftBreak(_)));
+    assert!(matches!(
+        paragraph.inlines[0],
+        ParagraphContent::SoftBreak(_)
+    ));
+    assert!(matches!(
+        paragraph.inlines[1],
+        ParagraphContent::SoftBreak(_)
+    ));
 }
 
 #[test]
@@ -1193,10 +1224,11 @@ fn upstream_insertion_at_paragraph_start_stays_before_existing_content() {
 
 #[test]
 fn upstream_insertion_at_environment_start_stays_outside_the_environment() {
-    let mut session = session_with(vec![InlineNode::Environment(InlineEnvironment {
+    let mut session = session_with(vec![ParagraphContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: Default::default(),
         children: vec![run("B")],
         extra: Default::default(),
@@ -1221,22 +1253,26 @@ fn upstream_insertion_at_environment_start_stays_outside_the_environment() {
         panic!("document should contain a paragraph");
     };
     assert_eq!(paragraph_text(paragraph), "XB");
-    assert!(matches!(paragraph.inlines[0], InlineNode::Run(_)));
-    assert!(matches!(paragraph.inlines[1], InlineNode::Environment(_)));
+    assert!(matches!(paragraph.inlines[0], ParagraphContent::Text(_)));
+    assert!(matches!(
+        paragraph.inlines[1],
+        ParagraphContent::Environment(_)
+    ));
 }
 
 #[test]
 fn soft_break_boundary_affinity_preserves_environment_scope() {
     let mut session = session_with(vec![
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
-            children: vec![InlineNode::SoftBreak(Default::default())],
+            children: vec![ParagraphContent::SoftBreak(Default::default())],
             extra: Default::default(),
         }),
-        InlineNode::SoftBreak(Default::default()),
+        ParagraphContent::SoftBreak(Default::default()),
         run("z"),
     ]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
@@ -1258,22 +1294,26 @@ fn soft_break_boundary_affinity_preserves_environment_scope() {
     let Block::Paragraph(paragraph) = &session.document.body[0] else {
         panic!("document should contain a paragraph");
     };
-    let InlineNode::Environment(bold) = &paragraph.inlines[0] else {
+    let ParagraphContent::Environment(bold) = &paragraph.inlines[0] else {
         panic!("upstream insertion should remain inside the inner environment");
     };
-    assert!(matches!(bold.children[1], InlineNode::Run(_)));
-    assert!(matches!(paragraph.inlines[1], InlineNode::SoftBreak(_)));
+    assert!(matches!(bold.children[1], ParagraphContent::Text(_)));
+    assert!(matches!(
+        paragraph.inlines[1],
+        ParagraphContent::SoftBreak(_)
+    ));
 }
 
 #[test]
 fn missing_soft_break_side_falls_back_outside_the_environment() {
     let make_session = || {
-        session_with(vec![InlineNode::Environment(InlineEnvironment {
+        session_with(vec![ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
-            children: vec![InlineNode::SoftBreak(Default::default())],
+            children: vec![ParagraphContent::SoftBreak(Default::default())],
             extra: Default::default(),
         })])
     };
@@ -1298,7 +1338,10 @@ fn missing_soft_break_side_falls_back_outside_the_environment() {
         panic!("document should contain a paragraph");
     };
     assert_eq!(paragraph_text(start_paragraph), "X\n");
-    assert!(matches!(start_paragraph.inlines[0], InlineNode::Run(_)));
+    assert!(matches!(
+        start_paragraph.inlines[0],
+        ParagraphContent::Text(_)
+    ));
 
     let mut at_end = make_session();
     let paragraph_id = at_end.selection.focus.paragraph_id.clone();
@@ -1321,14 +1364,17 @@ fn missing_soft_break_side_falls_back_outside_the_environment() {
         panic!("document should contain a paragraph");
     };
     assert_eq!(paragraph_text(end_paragraph), "\nX");
-    assert!(matches!(end_paragraph.inlines[1], InlineNode::Run(_)));
+    assert!(matches!(
+        end_paragraph.inlines[1],
+        ParagraphContent::Text(_)
+    ));
 }
 
 #[test]
 fn deleting_soft_break_snaps_caret_and_mapped_positions_after_regional_indicator_join() {
     let mut session = session_with(vec![
         run("🇺"),
-        InlineNode::SoftBreak(Default::default()),
+        ParagraphContent::SoftBreak(Default::default()),
         run("🇸"),
     ]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
@@ -1429,7 +1475,7 @@ fn text_edits_preserve_unknown_run_fields() {
     text_run
         .extra
         .insert("futureHint".to_owned(), serde_json::json!({"keep": true}));
-    let mut session = session_with(vec![InlineNode::Run(text_run)]);
+    let mut session = session_with(vec![text_flow(text_run)]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
     let caret = Pos {
         story: StoryId::Body,
@@ -1450,9 +1496,13 @@ fn text_edits_preserve_unknown_run_fields() {
     let Block::Paragraph(paragraph) = &session.document.body[0] else {
         panic!("document should contain a paragraph");
     };
-    let InlineNode::Run(text_run) = &paragraph.inlines[0] else {
+    let ParagraphContent::Text(flow) = &paragraph.inlines[0] else {
         panic!("insertion should preserve the original run");
     };
+    let text_run = flow
+        .runs
+        .first()
+        .unwrap_or_else(|| panic!("edited TextFlow should retain its Run"));
     assert_eq!(text_run.text, "aXb");
     assert_eq!(
         text_run.extra.get("futureHint"),
@@ -1933,13 +1983,13 @@ fn ime_failure_restores_preedit_and_rejects_other_composition_ids() -> Result<()
 fn soft_break_refuses_to_split_unknown_run_fields_or_delete_unknown_break_fields()
 -> Result<(), EditError> {
     let mut unknown_run = match run("ab") {
-        InlineNode::Run(run) => run,
+        ParagraphContent::Text(flow) => flow.runs[0].clone(),
         _ => unreachable!(),
     };
     unknown_run
         .extra
         .insert("future".to_owned(), serde_json::json!(true));
-    let mut session = session_with(vec![InlineNode::Run(unknown_run)]);
+    let mut session = session_with(vec![text_flow(unknown_run)]);
     let caret = Pos {
         offset: 1,
         ..session.selection().focus.clone()
@@ -1959,7 +2009,11 @@ fn soft_break_refuses_to_split_unknown_run_fields_or_delete_unknown_break_fields
     soft_break
         .extra
         .insert("future".to_owned(), serde_json::json!({"mode": 1}));
-    let mut session = session_with(vec![run("a"), InlineNode::SoftBreak(soft_break), run("b")]);
+    let mut session = session_with(vec![
+        run("a"),
+        ParagraphContent::SoftBreak(soft_break),
+        run("b"),
+    ]);
     let anchor = Pos {
         offset: 1,
         ..session.selection().focus.clone()
@@ -1999,7 +2053,7 @@ fn empty_runs_keep_their_order_when_inserting_soft_breaks() -> Result<(), EditEr
         assert_eq!(paragraph.inlines.len(), 2);
         assert!(matches!(
             paragraph.inlines[break_index],
-            InlineNode::SoftBreak(_)
+            ParagraphContent::SoftBreak(_)
         ));
         assert_eq!(paragraph_text(paragraph), "\n");
     }
@@ -2010,10 +2064,11 @@ fn empty_runs_keep_their_order_when_inserting_soft_breaks() -> Result<(), EditEr
 fn backward_movement_at_environment_start_leaves_its_input_scope() -> Result<(), EditError> {
     let mut session = session_with(vec![
         run("a"),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
             children: vec![run("b")],
             extra: Default::default(),
@@ -2039,7 +2094,7 @@ fn backward_movement_at_environment_start_leaves_its_input_scope() -> Result<(),
     let Block::Paragraph(paragraph) = &session.document().body[0] else {
         unreachable!();
     };
-    let InlineNode::Environment(environment) = &paragraph.inlines[1] else {
+    let ParagraphContent::Environment(environment) = &paragraph.inlines[1] else {
         panic!("italic environment should keep its position");
     };
     assert_eq!(paragraph_text(paragraph), "aoutsideb");

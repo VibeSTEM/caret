@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathNode, MathNodeKind as K};
+use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K};
 
 use crate::{
     MathInputKind, MathInputStatus, MathParseError, ParsedMath, classify_input,
@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// 去掉 ID 和源范围后的结构描述，用于比较往返结果。
-fn shape(node: &MathNode) -> String {
+fn shape_node(node: &MathNode) -> String {
     let mut out = format!("{:?}", node.kind);
     if let Some(text) = &node.text {
         out.push_str(&format!("({text:?})"));
@@ -25,13 +25,78 @@ fn shape(node: &MathNode) -> String {
             &node
                 .children
                 .iter()
-                .map(shape)
+                .map(shape_flow)
                 .collect::<Vec<_>>()
                 .join(", "),
         );
         out.push(']');
     }
     out
+}
+
+fn shape_flow(flow: &MathFlow) -> String {
+    flow.content
+        .iter()
+        .map(|content| match content {
+            MathContent::Math(node) => shape_node(node),
+            MathContent::Text(text) => format!(
+                "Text({:?})",
+                text.runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>()
+            ),
+            MathContent::Environment(environment) => format!(
+                "Env({:?})[{}]",
+                environment.kind,
+                environment
+                    .children
+                    .iter()
+                    .map(shape_content)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            MathContent::SoftBreak(_) => "SoftBreak".to_owned(),
+            MathContent::Opaque(value) => format!("Opaque({})", value.raw),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn shape_content(content: &MathContent) -> String {
+    match content {
+        MathContent::Math(node) => shape_node(node),
+        MathContent::Text(text) => format!(
+            "Text({:?})",
+            text.runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>()
+        ),
+        MathContent::Environment(environment) => format!(
+            "Env({:?})[{}]",
+            environment.kind,
+            environment
+                .children
+                .iter()
+                .map(shape_content)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        MathContent::SoftBreak(_) => "SoftBreak".to_owned(),
+        MathContent::Opaque(value) => format!("Opaque({})", value.raw),
+    }
+}
+
+fn shape(flow: &MathFlow) -> String {
+    shape_flow(flow)
+}
+
+fn root_node_mut(tree: &mut caret_doc::MathTree) -> &mut MathNode {
+    let Some(MathContent::Math(node)) = tree.root.content.first_mut() else {
+        panic!("expected root math node");
+    };
+    node
 }
 
 fn tree(source: &str) -> caret_doc::MathTree {
@@ -49,12 +114,12 @@ fn root_shape(source: &str) -> String {
 fn coalesces_literal_ordinary_characters() {
     assert_eq!(
         root_shape("ab12+c"),
-        r#"Row[Symbol("ab12"){"atomClass": "ord"}, Symbol("+"){"atomClass": "bin"}, Symbol("c"){"atomClass": "ord"}]"#
+        r#"Symbol("ab12"){"atomClass": "ord"}, Symbol("+"){"atomClass": "bin"}, Symbol("c"){"atomClass": "ord"}"#
     );
     // 上标只作用于紧邻的字符，因此 `x` 不与前面的 `a` 合并。
     assert_eq!(
         root_shape("ax^2"),
-        r#"Row[Symbol("a"){"atomClass": "ord"}, Superscript[Symbol("x"){"atomClass": "ord"}, Symbol("2"){"atomClass": "ord"}]]"#
+        r#"Symbol("a"){"atomClass": "ord"}, Superscript[Symbol("x"){"atomClass": "ord"}, Symbol("2"){"atomClass": "ord"}]"#
     );
 }
 
@@ -87,7 +152,7 @@ fn builds_documented_child_order() {
 fn encodes_delimiters_spaces_and_colors() {
     assert_eq!(
         root_shape(r"\left(x\right\}"),
-        r#"Delimited{"left": "char:(", "right": "named:}"}[Row[Symbol("x"){"atomClass": "ord"}]]"#
+        r#"Delimited{"left": "char:(", "right": "named:}"}[Symbol("x"){"atomClass": "ord"}]"#
     );
     assert_eq!(
         root_shape(r"\hspace{1.5em}"),
@@ -103,14 +168,17 @@ fn encodes_delimiters_spaces_and_colors() {
 fn parses_text_mode() {
     assert_eq!(
         root_shape(r"\text{if $x$ ok}"),
-        r#"Text{"style": "text"}[TextContent("if"), TextSpace("space"), Symbol("x"){"atomClass": "ord"}, TextSpace("space"), TextContent("ok")]"#
+        r#"Text("if "), Symbol("x"){"atomClass": "ord"}, Text(" ok")"#
     );
 }
 
 #[test]
 fn records_source_ranges() {
     let tree = tree(r"\frac{a}{bc}");
-    let range = tree.root.children[1]
+    let Some(MathContent::Math(fraction)) = tree.root.content.first() else {
+        panic!("expected fraction node");
+    };
+    let range = fraction.children[1]
         .source_range
         .as_ref()
         .unwrap_or_else(|| panic!("缺少源范围"));
@@ -182,7 +250,15 @@ fn splits_align_cells_with_rebased_ranges() {
     assert_eq!(align.rows[0].cells[1].source, "= b+1");
     let cell = &align.rows[1].cells[1];
     assert_eq!(cell.source, r"= \frac{d}{e}");
-    let fraction = &cell.root.children[1];
+    let fraction = cell
+        .root
+        .content
+        .iter()
+        .find_map(|content| match content {
+            MathContent::Math(node) if node.kind == K::Fraction => Some(node),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected fraction node"));
     let range = fraction
         .source_range
         .as_ref()
@@ -200,6 +276,27 @@ fn splits_align_cells_with_rebased_ranges() {
             assert_eq!(shape(&a.root), shape(&b.root));
         }
     }
+}
+
+#[test]
+fn empty_align_keeps_an_editable_placeholder_cell() {
+    let source = r"\begin{aligned}\end{aligned}";
+    let Ok(ParsedMath::Align(align)) = parse(source, MathInputKind::Align) else {
+        panic!("empty aligned environment should parse");
+    };
+    assert_eq!(align.rows.len(), 1);
+    assert_eq!(align.rows[0].cells.len(), 1);
+    assert_eq!(align.rows[0].cells[0].source, "");
+    assert!(
+        matches!(align.rows[0].cells[0].root.content.as_slice(), [MathContent::Math(node)] if node.kind == K::Placeholder)
+    );
+
+    let serialized = serialize_align(&align);
+    let Ok(ParsedMath::Align(round_trip)) = parse(&serialized, MathInputKind::Align) else {
+        panic!("serialized empty aligned environment should parse");
+    };
+    assert_eq!(round_trip.rows.len(), 1);
+    assert_eq!(round_trip.rows[0].cells.len(), 1);
 }
 
 const ROUND_TRIP_CASES: &[&str] = &[
@@ -235,6 +332,7 @@ const ROUND_TRIP_CASES: &[&str] = &[
     r"\hspace{0.25em}",
     r"\hspace{3mu}",
     r"\text{a \% b\ c~d \textbf{e}}",
+    r"\text{a\textchar{20}\textchar{20}b\textchar{5C}\textchar{7E}\textchar{5E}}",
     r"\mathbf{x}+\mathbb{R}+\boldsymbol{\alpha}",
     r"\textcolor{blue}{x}",
     r"\textcolor[HTML]{12AB34}{y}",
@@ -269,12 +367,24 @@ fn serializer_round_trips_parser_output() {
 }
 
 #[test]
+fn math_font_commands_remain_math_nodes() {
+    let plain = tree("x");
+    let bold = tree(r"\mathbf{x}");
+    assert_ne!(shape(&plain.root), shape(&bold.root));
+    assert_eq!(serialize_tree(&bold), r"\mathbf{x}");
+}
+
+#[test]
 fn serializes_edited_trees() {
     let mut tree = tree(r"\frac{a}{b}");
-    tree.root.children.swap(0, 1);
+    root_node_mut(&mut tree).children.swap(0, 1);
     assert_eq!(serialize_tree(&tree), r"\frac{b}{a}");
     let mut tree = self::tree("x^2");
-    tree.root.children[0].text = Some("ab".to_owned());
+    let root = root_node_mut(&mut tree);
+    let Some(MathContent::Math(base)) = root.children[0].content.first_mut() else {
+        panic!("expected base node");
+    };
+    base.text = Some("ab".to_owned());
     assert_eq!(serialize_tree(&tree), "{ab}^{2}");
-    assert_eq!(K::Superscript, tree.root.kind);
+    assert_eq!(K::Superscript, root_node_mut(&mut tree).kind);
 }

@@ -8,8 +8,8 @@
 | --- | --- | --- |
 | L1 基础 | `caret-foundation`、`caret-build`、`caret-dsl-core` | 不依赖其他 workspace crate |
 | L2 叶子 | `caret-doc`、`caret-dslc` | `caret-doc` 只可到 `caret-foundation`。`caret-dslc` 只可到 `caret-dsl-core`。二者互不依赖 |
-| L3 派生 | `caret-layout`、`caret-structure` | `caret-doc`，以及 `caret-foundation`。二者互不依赖 |
-| L4 会话 | `caret-engine` | `caret-doc`、`caret-layout`、`caret-structure`、`caret-foundation` |
+| L3 派生 | `caret-layout`、`caret-structure`、`caret-math` | `caret-doc`，以及 `caret-foundation`。三者互不依赖 |
+| L4 会话 | `caret-engine` | `caret-doc`、`caret-layout`、`caret-structure`、`caret-math`、`caret-foundation` |
 | L5 应用 | `caret-app` | `caret-engine`、`caret-doc`、`caret-dsl-core`、`caret-foundation` |
 | L6 边界 | `caret-ffi` | `caret-app`、`caret-foundation` |
 | L7 组合根 | launcher、`caret-cli` | launcher 可到 `caret-ffi`、`caret-build`、`caret-dsl-core`。`caret-cli` 可到 `caret-app`、`caret-foundation`。二者互不依赖 |

@@ -3,14 +3,14 @@
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run,
 };
 use caret_engine::Command;
 use std::collections::BTreeMap;
 
 fn paragraph_with_text(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines.push(InlineNode::Run(Run {
+    paragraph.inlines.push(text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -207,12 +207,13 @@ fn ime_preedit_inline_highlight_uses_the_preview_session_geometry()
         return Err("blank document should start with a paragraph".into());
     };
     let paragraph_id = paragraph.id.clone();
-    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::new(),
-        children: vec![InlineNode::Run(Run {
+        children: vec![text_flow(Run {
             text: "abcdef".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -312,14 +313,12 @@ fn ime_deltas_include_pages_changed_by_an_earlier_preview() -> Result<(), Box<dy
             keep_lines_together: Some(true),
             ..Default::default()
         });
-        paragraph
-            .inlines
-            .push(caret_doc::InlineNode::Run(caret_doc::Run {
-                text: text.to_owned(),
-                language: None,
-                props: Default::default(),
-                extra: Default::default(),
-            }));
+        paragraph.inlines.push(text_flow(caret_doc::Run {
+            text: text.to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        }));
         paragraph
     };
     let prefix = make_paragraph("x");
@@ -788,7 +787,7 @@ fn ime_commit_at_environment_exit_inserts_after_the_environment()
         .inlines
         .iter()
         .filter_map(|inline| match inline {
-            InlineNode::Run(run) => Some(run.text.as_str()),
+            ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
             _ => None,
         })
         .collect::<String>();
@@ -843,7 +842,7 @@ fn multiline_paste_at_environment_exit_inserts_sibling_paragraphs_as_one_edit()
             .inlines
             .iter()
             .filter_map(|inline| match inline {
-                InlineNode::Run(run) => Some(run.text.as_str()),
+                ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
                 _ => None,
             })
             .collect::<String>();

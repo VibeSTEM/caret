@@ -147,6 +147,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "caret-layout",
+ "caret-math",
  "caret-structure",
  "criterion",
  "serde",
@@ -206,6 +207,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "read-fonts 0.45.0",
+ "serde_json",
  "skrifa",
 ]
 

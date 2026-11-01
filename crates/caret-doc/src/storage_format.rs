@@ -25,6 +25,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.templates",
     "caret.font.family-preferences",
     "caret.paragraph.layout-settings",
+    "caret.paragraph.content-flow.v1",
     "caret.text.default-font-size",
     "caret.text.language-tags",
     "caret.text.underline",
@@ -34,7 +35,8 @@ const KNOWN_FEATURES: &[&str] = &[
 fn requires_explicit_feature_declaration(feature: &str) -> bool {
     matches!(
         feature,
-        "caret.text.underline"
+        "caret.paragraph.content-flow.v1"
+            | "caret.text.underline"
             | "caret.math.inline"
             | "caret.math.equation"
             | "caret.math.align"
@@ -461,14 +463,32 @@ fn contains_opaque_block(blocks: &[Block]) -> bool {
     })
 }
 
-fn contains_opaque_inline(inline: &crate::model::InlineNode) -> bool {
-    use crate::model::InlineNode;
-    match inline {
-        InlineNode::Opaque(_) => true,
-        InlineNode::Environment(environment) => {
+fn contains_opaque_inline(content: &crate::model::ParagraphContent) -> bool {
+    use crate::model::ParagraphContent;
+    match content {
+        ParagraphContent::Opaque(_) => true,
+        ParagraphContent::Environment(environment) => {
             environment.children.iter().any(contains_opaque_inline)
         }
-        InlineNode::Run(_) | InlineNode::Math(_) | InlineNode::SoftBreak(_) => false,
+        ParagraphContent::Math(math) => contains_opaque_math_flow(&math.math_tree.root),
+        ParagraphContent::Text(_) | ParagraphContent::SoftBreak(_) => false,
+    }
+}
+
+fn contains_opaque_math_flow(flow: &crate::model::MathFlow) -> bool {
+    flow.content.iter().any(contains_opaque_math_content)
+}
+
+fn contains_opaque_math_content(content: &crate::model::MathContent) -> bool {
+    use crate::model::MathContent;
+    match content {
+        MathContent::Opaque(_) => true,
+        MathContent::Math(node) => node.children.iter().any(contains_opaque_math_flow),
+        MathContent::Environment(environment) => environment
+            .children
+            .iter()
+            .any(contains_opaque_math_content),
+        MathContent::Text(_) | MathContent::SoftBreak(_) => false,
     }
 }
 

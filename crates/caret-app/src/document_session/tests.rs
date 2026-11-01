@@ -111,7 +111,7 @@ fn prepared_open_rejects_a_document_edited_while_it_was_loading() -> Result<(), 
     let saved: Value =
         serde_json::from_slice(&snapshot.bytes).map_err(|error| error.to_string())?;
     assert_eq!(
-        saved["document"]["body"][0]["inlines"][0]["text"],
+        saved["document"]["body"][0]["inlines"][0]["runs"][0]["text"],
         "new edit"
     );
     Ok(())
@@ -282,7 +282,10 @@ fn editing_and_saving_preserves_unknown_optional_envelope_fields() -> Result<(),
     let saved: serde_json::Value =
         serde_json::from_slice(&snapshot.bytes).map_err(|error| error.to_string())?;
     assert_eq!(saved["futureEnvelopeData"]["retained"], true);
-    assert_eq!(saved["document"]["body"][0]["inlines"][0]["text"], "edited");
+    assert_eq!(
+        saved["document"]["body"][0]["inlines"][0]["runs"][0]["text"],
+        "edited"
+    );
     Ok(())
 }
 

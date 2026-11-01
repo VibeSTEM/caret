@@ -52,7 +52,7 @@ fn nested_environment_tree_round_trips() {
         "futureEnvironmentField": "preserved",
         "title": {
             "id": "title-1",
-            "inlines": [{"type": "run", "text": "Heading", "props": {}}]
+            "inlines": [{"type": "text", "runs": [{"text": "Heading", "props": {}}]}]
         },
         "children": [{
             "type": "environment",
@@ -70,7 +70,7 @@ fn nested_environment_tree_round_trips() {
                     "id": "bold-1",
                     "props": {"enabled": true},
                     "futureInlineField": 2,
-                    "children": [{"type": "run", "text": "text", "props": {}}]
+                    "children": [{"type": "text", "runs": [{"text": "text", "props": {}}]}]
                 }]
             }]
         }]
@@ -95,7 +95,7 @@ fn first_line_indent_round_trips_through_cdoc_storage() {
         "type": "paragraph",
         "id": "p-1",
         "layout": {"firstLineIndentChars": 2},
-        "inlines": [{"type": "run", "text": "indented", "props": {}}]
+        "inlines": [{"type": "text", "runs": [{"text": "indented", "props": {}}]}]
     }]));
     let OpenedDocument::Editable(file) = must(open(source.as_bytes())) else {
         panic!("known first-line indent data should be editable");
@@ -123,7 +123,7 @@ fn unicode_is_preserved_without_normalization() {
     let source = minimal_document(json!([{
         "type": "paragraph",
         "id": "p-1",
-        "inlines": [{"type": "run", "text": "e\u{0301} 👩‍👩‍👧‍👦", "props": {}}]
+        "inlines": [{"type": "text", "runs": [{"text": "e\u{0301} 👩‍👩‍👧‍👦", "props": {}}]}]
     }]));
     let opened = must(open(source.as_bytes()));
     let OpenedDocument::Editable(file) = opened else {
@@ -141,7 +141,7 @@ fn unknown_optional_fields_survive_open_and_save() {
     value["document"]["futureDocumentField"] = json!("keep");
     value["document"]["globalSettings"]["futureSetting"] = json!([1, 2]);
     value["document"]["body"][0]["futureParagraphField"] = json!(true);
-    value["document"]["body"][0]["inlines"][0]["futureRunField"] = json!({"x": 1});
+    value["document"]["body"][0]["inlines"][0]["runs"][0]["futureRunField"] = json!({"x": 1});
     value["document"]["pageSections"][0]["futurePageField"] = json!("keep");
     value["media"] = json!([{
         "id": "media-1",
@@ -163,7 +163,7 @@ fn unknown_optional_fields_survive_open_and_save() {
     );
     assert_eq!(output["document"]["body"][0]["futureParagraphField"], true);
     assert_eq!(
-        output["document"]["body"][0]["inlines"][0]["futureRunField"],
+        output["document"]["body"][0]["inlines"][0]["runs"][0]["futureRunField"],
         json!({"x": 1})
     );
     assert_eq!(
@@ -176,15 +176,17 @@ fn unknown_optional_fields_survive_open_and_save() {
 #[test]
 fn unknown_required_feature_opens_as_non_saveable_preview() {
     let mut value: Value = must(serde_json::from_str(MINIMAL_FIXTURE));
-    value["requiredFeatures"] = json!(["vendor.future-feature"]);
+    value["requiredFeatures"] = json!(["caret.paragraph.content-flow.v1", "vendor.future-feature"]);
     let opened = must(open(value.to_string().as_bytes()));
     let OpenedDocument::SafePreview(preview) = opened else {
         panic!("unknown required feature must be read-only");
     };
     assert!(!preview.can_save());
-    assert_eq!(
-        must(preview.to_json_value())["requiredFeatures"][0],
-        "vendor.future-feature"
+    let preview_json = must(preview.to_json_value());
+    assert!(
+        preview_json["requiredFeatures"]
+            .as_array()
+            .is_some_and(|features| features.contains(&json!("vendor.future-feature")))
     );
     assert!(matches!(
         preview.reasons.as_slice(),
@@ -262,15 +264,15 @@ fn unknown_inline_environment_remains_at_its_original_position() {
         "type": "paragraph",
         "id": "paragraph-1",
         "inlines": [
-            {"type": "run", "text": "before", "props": {}},
+            {"type": "text", "runs": [{"text": "before", "props": {}}]},
             {
                 "type": "environment",
                 "scope": "inline",
                 "kind": "futureInline",
                 "id": "unknown-inline-1",
-                "children": [{"type": "run", "text": "opaque", "props": {}}]
+                "children": [{"type": "text", "runs": [{"text": "opaque", "props": {}}]}]
             },
-            {"type": "run", "text": "after", "props": {}}
+            {"type": "text", "runs": [{"text": "after", "props": {}}]}
         ]
     }]));
     let opened = must(open(source.as_bytes()));
@@ -323,7 +325,7 @@ fn direct_run_bold_is_rejected() {
     let source = minimal_document(json!([{
         "type": "paragraph",
         "id": "p-1",
-        "inlines": [{"type": "run", "text": "x", "props": {"bold": true}}]
+        "inlines": [{"type": "text", "runs": [{"text": "x", "props": {"bold": true}}]}]
     }]));
     assert!(matches!(
         open(source.as_bytes()),
@@ -497,7 +499,7 @@ fn minimal_document(body: Value) -> String {
     json!({
         "format": "caret",
         "version": 1,
-        "requiredFeatures": [],
+        "requiredFeatures": ["caret.paragraph.content-flow.v1"],
         "media": [],
         "document": {
             "globalSettings": {},

@@ -3,7 +3,8 @@
 use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineNode, NodeId, Paragraph, Run,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph, ParagraphContent,
+    Run, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -13,7 +14,7 @@ fn paragraph() -> Paragraph {
 
 fn paragraph_with_text(text: &str) -> Paragraph {
     let mut paragraph = paragraph();
-    paragraph.inlines.push(InlineNode::Run(Run {
+    paragraph.inlines.push(text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -23,12 +24,18 @@ fn paragraph_with_text(text: &str) -> Paragraph {
 }
 
 fn paragraph_text(paragraph: &Paragraph) -> String {
-    fn collect(nodes: &[InlineNode], text: &mut String) {
+    fn collect(nodes: &[ParagraphContent], text: &mut String) {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => text.push_str(&run.text),
-                InlineNode::Environment(environment) => collect(&environment.children, text),
-                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) | InlineNode::Math(_) => {}
+                ParagraphContent::Text(flow) => {
+                    for run in &flow.runs {
+                        text.push_str(&run.text);
+                    }
+                }
+                ParagraphContent::Environment(environment) => collect(&environment.children, text),
+                ParagraphContent::SoftBreak(_)
+                | ParagraphContent::Opaque(_)
+                | ParagraphContent::Math(_) => {}
             }
         }
     }
@@ -47,6 +54,14 @@ fn environment(kind: BlockEnvironmentKind, children: Vec<Block>) -> Block {
         title: None,
         children,
         extra: BTreeMap::new(),
+    })
+}
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
     })
 }
 
@@ -219,7 +234,7 @@ fn composition_at_virtual_environment_exit_is_one_undoable_edit()
         Block::Paragraph(paragraph) => paragraph,
         _ => return Err("组字提交应在环境外创建段落".into()),
     };
-    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+    let [ParagraphContent::Environment(font)] = paragraph.inlines.as_slice() else {
         return Err("虚拟环境外的组字提交应继承待输入字体环境".into());
     };
     assert_eq!(font.kind, caret_doc::InlineEnvironmentKind::Font);
@@ -506,7 +521,7 @@ fn failed_structure_deletion_does_not_partially_edit_earlier_paragraphs()
     let after_id = after.id.clone();
     after
         .inlines
-        .push(InlineNode::SoftBreak(caret_doc::SoftBreak {
+        .push(ParagraphContent::SoftBreak(caret_doc::SoftBreak {
             extra: BTreeMap::from([("futureMetadata".to_owned(), serde_json::Value::Bool(true))]),
         }));
     let mut document = Document::blank();
@@ -1160,7 +1175,7 @@ fn typing_at_virtual_environment_exit_materializes_one_outside_paragraph()
         Block::Paragraph(paragraph) => paragraph,
         _ => return Err("环境外输入应在 Section 前创建段落".into()),
     };
-    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+    let [ParagraphContent::Environment(font)] = paragraph.inlines.as_slice() else {
         return Err("虚拟环境外输入应继承待输入字体环境".into());
     };
     assert_eq!(font.kind, caret_doc::InlineEnvironmentKind::Font);
@@ -1252,7 +1267,7 @@ fn enter_at_virtual_environment_exit_materializes_outside_paragraphs()
             assert_eq!(session.selection().focus.offset, expected_offset);
             assert!(matches!(
                 (key, outside.inlines.as_slice()),
-                (EditorKey::Enter, []) | (EditorKey::ShiftEnter, [InlineNode::SoftBreak(_)])
+                (EditorKey::Enter, []) | (EditorKey::ShiftEnter, [ParagraphContent::SoftBreak(_)])
             ));
 
             session.run(Command::InsertText("after".to_owned()))?;
@@ -1277,14 +1292,12 @@ fn custom_environment_command_wraps_current_paragraph_and_focus_index_tracks_it(
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
     let mut content = paragraph();
-    content
-        .inlines
-        .push(caret_doc::InlineNode::Run(caret_doc::Run {
-            text: "content".to_owned(),
-            language: None,
-            props: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        }));
+    content.inlines.push(text_flow(caret_doc::Run {
+        text: "content".to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    }));
     let content_id = content.id.clone();
     document.body = vec![Block::Paragraph(content)];
     let mut session = Session::new(document)?;

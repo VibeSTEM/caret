@@ -11,6 +11,8 @@ mod formatting;
 mod history;
 mod inline_content;
 mod keyboards;
+mod math_edit;
+pub use math_edit::{MathEdit, MathEditTarget};
 mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;
@@ -56,6 +58,7 @@ pub struct Session {
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
+    math_edit: Option<MathEdit>,
     block_environment_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
     selected_block_environments: Vec<NodeId>,
@@ -76,6 +79,7 @@ impl Session {
         document
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        crate::validate_document_math_sources(&document).map_err(EditError::InvalidDocument)?;
         let (paragraph, story) = first_paragraph(&document.body)
             .ok_or_else(|| EditError::InvalidDocument("document has no paragraph".to_owned()))?;
         let pos = Pos {
@@ -99,6 +103,7 @@ impl Session {
             composition: None,
             pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
+            math_edit: None,
             block_environment_exit: None,
             selected_block_environment: None,
             selected_block_environments: Vec::new(),
@@ -191,6 +196,9 @@ impl Session {
         &mut self,
         environment_id: NodeId,
     ) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
         let exists = self
             .structure_index
             .structures()
@@ -199,6 +207,7 @@ impl Session {
         if !exists {
             return Err(EditError::InvalidPosition);
         }
+        self.math_edit = None;
         let changed = self.selected_block_environment.as_ref() != Some(&environment_id);
         self.selected_block_environment = Some(environment_id);
         self.selected_block_environments =
@@ -234,6 +243,41 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        self.run_with_inline_math_focus(command, false)
+    }
+
+    pub(super) fn run_with_inline_math_focus(
+        &mut self,
+        command: Command,
+        focus_inserted_inline_math: bool,
+    ) -> Result<Effect, EditError> {
+        let previous_math_edit = self.math_edit.clone();
+        let result = self.run_inner(command, focus_inserted_inline_math);
+        if result.is_err() && self.math_edit.is_none() {
+            self.math_edit = previous_math_edit;
+        }
+        result
+    }
+
+    fn run_inner(
+        &mut self,
+        command: Command,
+        focus_inserted_inline_math: bool,
+    ) -> Result<Effect, EditError> {
+        if self.math_edit.is_some()
+            && self.command_line.is_none()
+            && matches!(command, Command::Undo | Command::Redo)
+        {
+            let effect = self.restore_history(command == Command::Redo)?;
+            self.command_line = None;
+            return Ok(effect);
+        }
+        if let Some(effect) = self.run_math_edit(&command)? {
+            return Ok(effect);
+        }
+        if let Command::EnterMath(direction) = command {
+            return self.enter_math(direction);
+        }
         let inserted_text = match &command {
             Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
             Command::InsertOneCharacterWidthSpace => Some("\u{2003}"),
@@ -367,6 +411,7 @@ impl Session {
         let before_visual_affinity = self.selection_visual_affinity;
         let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
+        let before_math_edit = self.math_edit.as_ref().map(math_edit::history_position);
         let adjacent_delete_paragraph = match &command {
             Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
                 self.adjacent_paragraph_for_delete(*direction)?
@@ -432,6 +477,10 @@ impl Session {
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),
             Command::PasteText(text) => self.paste_text(&text),
             Command::InsertSoftBreak => self.insert_soft_break(),
+            Command::InsertInlineMath(source) => {
+                self.insert_inline_math_with_edit_target(&source, focus_inserted_inline_math)
+            }
+            Command::EnterMath(direction) => self.enter_math(direction),
             Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),
@@ -449,6 +498,9 @@ impl Session {
             Command::ToggleRunUnderline => self.toggle_run_underline(),
             Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
                 self.remove_inline_environment_preserving_content(&environment_id)
+            }
+            Command::RemoveRunPropertyPreservingContent(kind) => {
+                self.remove_run_property_from_current_range(kind)
             }
             Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
             Command::SetParagraphFirstLineIndentChars(chars) => {
@@ -553,13 +605,15 @@ impl Session {
                     before_visual_affinity,
                     before_pending_style,
                     before_state_id,
-                ),
+                )
+                .with_math_edit(before_math_edit),
                 SessionHistoryState::new(
                     self.selection.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
                     after_state_id,
-                ),
+                )
+                .with_math_edit(self.math_edit.as_ref().map(math_edit::history_position)),
             );
             self.record_history_edit(edit);
             self.history_state_id = after_state_id;
@@ -636,6 +690,7 @@ impl Session {
         let Some(transition) = transition else {
             return Ok(Effect::default());
         };
+        let previous_math_edit = self.math_edit.clone();
         let (
             selection,
             visual_affinity,
@@ -643,11 +698,16 @@ impl Session {
             state_id,
             changed_paragraph_id,
             document_changed,
+            math_edit_position,
         ) = history::restore_history_transition(transition);
-        let selection_changed = self.selection != selection;
+        let restored_math_edit = math_edit_position
+            .and_then(|position| math_edit::restore_math_edit(&self.document, position));
+        let selection_changed =
+            self.selection != selection || previous_math_edit != restored_math_edit;
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
+        self.math_edit = restored_math_edit;
         self.selected_block_environment = None;
         self.block_environment_exit = None;
         self.history_state_id = state_id;
@@ -799,6 +859,7 @@ impl Clone for Session {
             composition: self.composition.clone(),
             pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
+            math_edit: self.math_edit.clone(),
             block_environment_exit: self.block_environment_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
@@ -824,10 +885,12 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertTwoCharacterWidthSpace
             | Command::PasteText(_)
             | Command::InsertSoftBreak
+            | Command::InsertInlineMath(_)
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
             | Command::ToggleRunUnderline
             | Command::RemoveInlineEnvironmentPreservingContent(_)
+            | Command::RemoveRunPropertyPreservingContent(_)
             | Command::SetInlineFontFamily(_)
             | Command::SetParagraphFirstLineIndentChars(_)
             | Command::Delete(_)
