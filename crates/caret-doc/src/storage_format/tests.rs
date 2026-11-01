@@ -624,6 +624,7 @@ fn serialization_adds_underline_feature_after_first_edit_and_rejects_unknown_val
             extra: BTreeMap::new(),
         }],
         source_range: None,
+        source_map: Vec::new(),
         extra: BTreeMap::new(),
     }));
 

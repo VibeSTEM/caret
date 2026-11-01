@@ -12,7 +12,9 @@ mod history;
 mod inline_content;
 mod keyboards;
 mod math_edit;
-pub use math_edit::{MathEdit, MathEditTarget};
+pub use math_edit::{
+    MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath, MathTextFlowPathStep,
+};
 mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;
@@ -481,6 +483,7 @@ impl Session {
                 self.insert_inline_math_with_edit_target(&source, focus_inserted_inline_math)
             }
             Command::EnterMath(direction) => self.enter_math(direction),
+            Command::SetMathTextSelection { .. } => Err(EditError::InvalidPosition),
             Command::InsertParagraphBreak => self.split_paragraph(),
             Command::Delete(direction) => self.delete(direction),
             Command::MoveCaret(direction) => self.move_caret(direction),

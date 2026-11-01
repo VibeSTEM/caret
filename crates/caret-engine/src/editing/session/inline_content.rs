@@ -274,7 +274,7 @@ impl Session {
                 },
                 source: source.to_owned(),
                 cursor: body.start,
-                composition_range: None,
+                branch: super::math_edit::MathEditBranch::Source,
             });
         }
         Ok(Effect {

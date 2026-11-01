@@ -10,13 +10,15 @@ use super::super::paragraph_ops::build_paragraph_index;
 use metadata::{preserve_align_metadata, preserve_math_tree_metadata, unchanged_source_boundaries};
 use metadata::{preserve_display_math_metadata, preserve_math_tree_metadata_for_edit};
 use navigation::{
-    align_cell_at, math_input_body_range, next_math_caret_stop, previous_math_caret_stop,
+    align_cell_at, math_input_body_range, next_grapheme_end, next_math_caret_stop,
+    previous_grapheme_start, previous_math_caret_stop,
 };
-#[cfg(test)]
-use navigation::{next_grapheme_end, previous_grapheme_start};
 
+mod align_source;
 mod metadata;
 mod navigation;
+mod path;
+mod text_branch;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, Pos, Selection,
@@ -26,14 +28,19 @@ use super::Session;
 use super::history::{
     self, DocumentPatch, EditGroup, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
 };
-use crate::StructureIndex;
+use crate::{StructureIndex, VisualAffinity};
 #[cfg(test)]
 use caret_doc::MathTree;
 use caret_doc::{
     Align, Block, Equation, InlineMath, MathContent, MathFlow, MathNode, NodeId, Paragraph,
     ParagraphContent,
 };
+pub use path::{MathTextFlowPath, MathTextFlowPathStep};
 use std::sync::Arc;
+use text_branch::{
+    MathTextEdit, is_grapheme_boundary, replace_text_flow_range, snap_text_cursor,
+    validate_text_flow_edit,
+};
 
 pub(super) const ALIGN_BEGIN: &str = "\\begin{aligned}";
 const ALIGN_END: &str = "\\end{aligned}";
@@ -52,20 +59,34 @@ pub enum MathEditTarget {
     Block { block_id: NodeId, align: bool },
 }
 
-/// 公式编辑状态：源码与源码内的 UTF-8 光标。不属于文档修订。
+/// 数学编辑器当前操作的文本载体。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MathEditBranch {
+    /// 编辑 LaTeX 源码；`MathEdit.cursor` 是源码 UTF-8 字节偏移。
+    Source,
+    /// 编辑公式树内的 TextFlow；光标和锚点按拼接文本的 UTF-8 字节计数。
+    Text {
+        path: MathTextFlowPath,
+        anchor: usize,
+    },
+}
+
+/// 公式编辑状态：源码树、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathEdit {
     pub target: MathEditTarget,
     pub source: String,
     pub cursor: usize,
-    /// 输入法预编辑暂时替换的 UTF-8 源码范围。
-    pub(super) composition_range: Option<Range<usize>>,
+    /// 光标所属的数学树分支；源码和 TextFlow 分别使用各自的字节坐标。
+    pub branch: MathEditBranch,
 }
 
 impl MathEdit {
     /// 对齐公式中光标所在的行、单元格及单元格内偏移；单元格源码已去掉首尾空白。
     pub fn align_cell_at_cursor(&self) -> Option<(usize, usize, usize)> {
-        if !matches!(self.target, MathEditTarget::Block { align: true, .. }) {
+        if !matches!(self.target, MathEditTarget::Block { align: true, .. })
+            || !matches!(self.branch, MathEditBranch::Source)
+        {
             return None;
         }
         align_cell_at(&self.source, self.cursor)
@@ -92,19 +113,105 @@ pub(super) fn restore_math_edit(
             }
         }
     };
-    if position.cursor > source.len() || !source.is_char_boundary(position.cursor) {
-        return None;
+    match &position.branch {
+        MathEditBranch::Source => {
+            if position.cursor > source.len() || !source.is_char_boundary(position.cursor) {
+                return None;
+            }
+        }
+        MathEditBranch::Text { path, anchor } => {
+            let tree = math_tree_for_target(document, &position.target, path.align_cell())?;
+            let text = path.resolve(tree)?;
+            if host_source_range_for_path(document, &position.target, path)?
+                != path.host_source_range()
+            {
+                return None;
+            }
+            let display_text = text
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            if position.cursor > display_text.len()
+                || *anchor > display_text.len()
+                || !display_text.is_char_boundary(position.cursor)
+                || !display_text.is_char_boundary(*anchor)
+                || !is_grapheme_boundary(&display_text, position.cursor)
+                || !is_grapheme_boundary(&display_text, *anchor)
+            {
+                return None;
+            }
+        }
     }
     Some(MathEdit {
         target: position.target,
         source,
         cursor: position.cursor,
-        composition_range: None,
+        branch: position.branch,
     })
 }
 
+fn host_source_range_for_path(
+    document: &caret_doc::Document,
+    target: &MathEditTarget,
+    path: &MathTextFlowPath,
+) -> Option<(usize, usize)> {
+    let (start, end) = path.source_range();
+    let base = match (target, path.align_cell()) {
+        (MathEditTarget::Inline { .. }, None)
+        | (MathEditTarget::Block { align: false, .. }, None) => 0,
+        (
+            MathEditTarget::Block {
+                block_id,
+                align: true,
+            },
+            Some((row, cell)),
+        ) => {
+            let Block::Align(align) = find_block_by_id(&document.body, block_id)? else {
+                return None;
+            };
+            align_source::cell_source_ranges(align)?
+                .get(row)?
+                .get(cell)?
+                .start
+                .checked_sub(align_source::align_body_range(&align.source)?.start)?
+        }
+        _ => return None,
+    };
+    Some((base + start as usize, base + end as usize))
+}
+
+fn math_tree_for_target<'a>(
+    document: &'a caret_doc::Document,
+    target: &MathEditTarget,
+    align_cell: Option<(usize, usize)>,
+) -> Option<&'a caret_doc::MathTree> {
+    match target {
+        MathEditTarget::Inline {
+            paragraph_id,
+            math_id,
+        } => {
+            if align_cell.is_some() {
+                return None;
+            }
+            find_inline_math_in_blocks(&document.body, paragraph_id, math_id)
+                .map(|math| &math.math_tree)
+        }
+        MathEditTarget::Block { block_id, align } => {
+            let block = find_block_by_id(&document.body, block_id)?;
+            match (block, align, align_cell) {
+                (Block::Equation(equation), false, None) => Some(&equation.math_tree),
+                (Block::Align(value), true, Some((row, cell))) => {
+                    value.rows.get(row)?.cells.get(cell)
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
 pub(super) fn history_position(edit: &MathEdit) -> MathEditPosition {
-    MathEditPosition::new(edit.target.clone(), edit.cursor)
+    MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone())
 }
 
 fn find_inline_math_in_blocks<'a>(
@@ -143,7 +250,7 @@ impl Session {
             return Ok(None);
         }
         if self.composition.is_some()
-            && !matches!(
+            || matches!(
                 command,
                 Command::UpdateComposition { .. }
                     | Command::CommitComposition { .. }
@@ -152,44 +259,96 @@ impl Session {
         {
             return Err(EditError::CompositionPending);
         }
+        if self.math_edit_is_text_branch() && matches!(command, Command::BeginCommandLine) {
+            return Err(EditError::UnknownCommand);
+        }
         if self.command_line.is_some() {
-            // 子命令行打开时，命令行命令照常执行；其余命令先关闭命令行。
-            return Ok(None);
+            if matches!(
+                command,
+                Command::ToggleInlineFormat(_)
+                    | Command::ToggleRunUnderline
+                    | Command::SetInlineFontFamily(_)
+                    | Command::RemoveInlineEnvironmentPreservingContent(_)
+                    | Command::RemoveRunPropertyPreservingContent(_)
+            ) {
+                return Err(EditError::UnsupportedInlineFormat);
+            }
+            return if matches!(
+                command,
+                Command::BeginCommandLine
+                    | Command::TypeCommandLine(_)
+                    | Command::BackspaceCommandLine
+                    | Command::MoveCommandLineCursor(_)
+                    | Command::MoveCommandLineSelection(_)
+                    | Command::SelectCommandLineCandidate(_)
+                    | Command::TabCommandLine
+                    | Command::AcceptCommandLine
+                    | Command::CancelCommandLine
+                    | Command::Undo
+                    | Command::Redo
+                    | Command::Delete(Direction::Backward)
+                    | Command::EditorKey(
+                        EditorKey::Escape
+                            | EditorKey::Enter
+                            | EditorKey::Tab
+                            | EditorKey::ShiftEnter
+                    )
+            ) {
+                Ok(None)
+            } else if matches!(command, Command::EditorKey(EditorKey::ModBackspace)) {
+                Ok(Some(Effect::default()))
+            } else {
+                Err(EditError::UnknownCommand)
+            };
         }
         let effect = match command {
+            Command::InsertText(text) if self.math_edit_is_text_branch() => {
+                self.math_text_insert(text)?
+            }
+            Command::PasteText(text) if self.math_edit_is_text_branch() => {
+                self.math_text_insert(text)?
+            }
+            Command::SetMathTextSelection { anchor, focus } => {
+                self.set_math_text_selection(*anchor, *focus)?
+            }
             Command::InsertText(text) => self.math_insert_text(text)?,
             Command::PasteText(text) => self.math_insert_raw(text, text.len())?,
-            Command::CommitComposition { id, text } => self.commit_math_composition(*id, text)?,
-            Command::UpdateComposition { id, preedit } => {
-                self.update_composition(*id, preedit.clone())?
+            Command::Delete(Direction::Backward) if self.math_edit_is_text_branch() => {
+                self.math_text_delete(Direction::Backward)?
             }
-            Command::CancelComposition { id } => {
-                let effect = self.cancel_composition(*id)?;
-                if let Some(edit) = &mut self.math_edit {
-                    edit.composition_range = None;
-                }
-                effect
+            Command::Delete(Direction::Forward) if self.math_edit_is_text_branch() => {
+                self.math_text_delete(Direction::Forward)?
             }
             Command::Delete(Direction::Backward) => self.math_delete_backward()?,
             Command::Delete(Direction::Forward) => self.math_delete_forward()?,
             Command::MoveCaret(direction) => self.math_move(*direction)?,
             Command::EnterMath(_) => Effect::default(),
-            Command::RemoveRunPropertyPreservingContent(_) => Effect::default(),
+            Command::ToggleInlineFormat(_)
+            | Command::ToggleRunUnderline
+            | Command::SetInlineFontFamily(_)
+            | Command::RemoveInlineEnvironmentPreservingContent(_)
+            | Command::RemoveRunPropertyPreservingContent(_) => {
+                return Err(EditError::UnsupportedInlineFormat);
+            }
             Command::EditorKey(EditorKey::Enter)
                 if matches!(
                     self.math_edit.as_ref().map(|edit| &edit.target),
                     Some(MathEditTarget::Block { align: true, .. })
-                ) =>
+                ) && !self.math_edit_is_text_branch() =>
             {
                 self.math_insert_raw(ALIGN_ROW_BREAK, ALIGN_ROW_BREAK.len())?
+            }
+            Command::EditorKey(EditorKey::Enter) if self.math_edit_is_text_branch() => {
+                return Err(EditError::UnsupportedNewline);
             }
             Command::InsertOneCharacterWidthSpace | Command::InsertTwoCharacterWidthSpace => {
                 // 数学槽位导航尚未定义；Tab 保留公式焦点，不回退为正文空格输入。
                 Effect::default()
             }
             Command::EditorKey(EditorKey::Tab) => Effect::default(),
+            Command::EditorKey(EditorKey::ShiftEnter) => Effect::default(),
             Command::EditorKey(EditorKey::Escape | EditorKey::Enter) => {
-                self.exit_math_edit(Direction::Forward)?
+                self.exit_math_edit(Direction::Forward, true)?
             }
             Command::BeginCommandLine => {
                 self.command_line = Some(CommandLine::math(self.selection.focus.clone()));
@@ -276,7 +435,7 @@ impl Session {
             target: MathEditTarget::Block { block_id, align },
             source: String::new(),
             cursor: 0,
-            composition_range: None,
+            branch: MathEditBranch::Source,
         });
         let index = build_paragraph_index(&self.document.body);
         self.finalize_structure_edit(
@@ -302,6 +461,9 @@ impl Session {
     pub(super) fn enter_math(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
+            || self.structure_selection.is_some()
+            || self.selected_block_environment.is_some()
+            || !self.selected_block_environments.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
             || self.block_environment_exit.is_some()
@@ -336,6 +498,7 @@ impl Session {
                 anchor: position.clone(),
                 focus: position,
             };
+            self.selection_visual_affinity = VisualAffinity::Upstream;
             self.math_edit = Some(MathEdit {
                 target: MathEditTarget::Inline {
                     paragraph_id: paragraph.id.clone(),
@@ -343,8 +506,9 @@ impl Session {
                 },
                 source,
                 cursor,
-                composition_range: None,
+                branch: MathEditBranch::Source,
             });
+            self.advance_history_merge_epoch();
             return Ok(Effect {
                 selection_changed: true,
                 ..Effect::default()
@@ -400,8 +564,9 @@ impl Session {
             target: MathEditTarget::Block { block_id, align },
             source,
             cursor,
-            composition_range: None,
+            branch: MathEditBranch::Source,
         });
+        self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
             ..Effect::default()
@@ -450,48 +615,6 @@ impl Session {
         self.write_math_source(source, cursor, Some(EditGroup::InsertText), source_edit)
     }
 
-    fn commit_math_composition(&mut self, id: u64, text: &str) -> Result<Effect, EditError> {
-        if self.last_committed_composition == Some(id) {
-            return Ok(Effect::default());
-        }
-        let composition = self
-            .composition
-            .as_ref()
-            .filter(|composition| composition.id == id)
-            .cloned()
-            .ok_or(EditError::InvalidCompositionId)?;
-        let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-        let range = edit
-            .composition_range
-            .clone()
-            .unwrap_or(edit.cursor..edit.cursor);
-        if range.start > range.end
-            || range.end > edit.source.len()
-            || !edit.source.is_char_boundary(range.start)
-            || !edit.source.is_char_boundary(range.end)
-        {
-            return Err(EditError::InvalidUtf16Offset);
-        }
-        let mut source = edit.source.clone();
-        source.replace_range(range.clone(), text);
-        let cursor = range.start + text.len();
-        self.composition = None;
-        match self.write_math_source(source, cursor, Some(EditGroup::Composition), range) {
-            Ok(mut effect) => {
-                self.last_committed_composition = Some(id);
-                if let Some(edit) = &mut self.math_edit {
-                    edit.composition_range = None;
-                }
-                effect.composition_changed = true;
-                Ok(effect)
-            }
-            Err(error) => {
-                self.composition = Some(composition);
-                Err(error)
-            }
-        }
-    }
-
     fn math_insert_raw(&mut self, text: &str, cursor_in_text: usize) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         let mut source = edit.source.clone();
@@ -516,7 +639,7 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         if cursor == 0 {
-            return self.exit_math_edit(Direction::Backward);
+            return self.exit_math_edit(Direction::Backward, false);
         }
         if let Some(construct_range) = self.empty_construct_range(&edit) {
             let mut next = source.to_owned();
@@ -547,7 +670,7 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         let body_source = source.get(body.clone()).ok_or(EditError::InvalidPosition)?;
         let Some(next_end) = next_math_caret_stop(body_source, cursor) else {
-            return self.exit_math_edit(Direction::Forward);
+            return self.exit_math_edit(Direction::Forward, false);
         };
         let start = body.start + cursor;
         let end = body.start + next_end;
@@ -557,8 +680,102 @@ impl Session {
     }
 
     fn math_move(&mut self, direction: Direction) -> Result<Effect, EditError> {
-        let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-        let body = math_input_body_range(edit).ok_or(EditError::InvalidPosition)?;
+        let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        if let MathEditBranch::Text { path, anchor } = &edit.branch {
+            if *anchor != edit.cursor {
+                let cursor = match direction {
+                    Direction::Backward => (*anchor).min(edit.cursor),
+                    Direction::Forward => (*anchor).max(edit.cursor),
+                };
+                if let Some(current) = &mut self.math_edit {
+                    current.cursor = cursor;
+                    current.branch = MathEditBranch::Text {
+                        path: path.clone(),
+                        anchor: cursor,
+                    };
+                }
+                self.advance_history_merge_epoch();
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+            let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+            let display_text = text
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            let stop = match direction {
+                Direction::Forward => next_grapheme_end(&display_text, edit.cursor),
+                Direction::Backward => previous_grapheme_start(&display_text, edit.cursor),
+            };
+            if let Some(cursor) = stop {
+                if let Some(current) = &mut self.math_edit {
+                    current.cursor = cursor;
+                    if let MathEditBranch::Text { anchor, .. } = &mut current.branch {
+                        *anchor = cursor;
+                    }
+                }
+            } else {
+                if let Some(adjacent_path) =
+                    path::adjacent_text_flow_path(tree, path, direction == Direction::Forward)
+                {
+                    let adjacent_text = adjacent_path
+                        .resolve(tree)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let adjacent_display = adjacent_text
+                        .runs
+                        .iter()
+                        .map(|run| run.text.as_str())
+                        .collect::<String>();
+                    let cursor = if direction == Direction::Forward {
+                        0
+                    } else {
+                        adjacent_display.len()
+                    };
+                    if let Some(current) = &mut self.math_edit {
+                        current.branch = MathEditBranch::Text {
+                            path: adjacent_path,
+                            anchor: cursor,
+                        };
+                        current.cursor = cursor;
+                    }
+                    self.advance_history_merge_epoch();
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                let (start, end) = path.host_source_range();
+                let exit_cursor = if display_text.is_empty() {
+                    let Some(exit_cursor) = (match direction {
+                        Direction::Backward => previous_math_caret_stop(&edit.source, start),
+                        Direction::Forward => next_math_caret_stop(&edit.source, end),
+                    }) else {
+                        // 空文本岛若紧贴公式边缘且同向没有源码停靠点，继续退出公式以避免边界重入陷阱。
+                        return self.exit_math_edit(direction, false);
+                    };
+                    exit_cursor
+                } else {
+                    match direction {
+                        Direction::Backward => start,
+                        Direction::Forward => end,
+                    }
+                };
+                if let Some(current) = &mut self.math_edit {
+                    current.branch = MathEditBranch::Source;
+                    current.cursor = exit_cursor;
+                }
+            }
+            self.advance_history_merge_epoch();
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let source = edit
             .source
             .get(body.clone())
@@ -567,20 +784,175 @@ impl Session {
             .cursor
             .checked_sub(body.start)
             .ok_or(EditError::InvalidPosition)?;
+        let adjacent_text_path = match direction {
+            Direction::Backward => {
+                self.math_text_path_at_source_boundary(&edit, edit.cursor, false)
+            }
+            Direction::Forward => self.math_text_path_at_source_boundary(&edit, edit.cursor, true),
+        };
+        if let Some(path) = adjacent_text_path {
+            let text = path
+                .resolve(self.math_tree_for_edit(&edit, path.align_cell())?)
+                .ok_or(EditError::InvalidPosition)?;
+            let text_cursor = match direction {
+                Direction::Backward => text.runs.iter().map(|run| run.text.len()).sum(),
+                Direction::Forward => 0,
+            };
+            self.enter_math_text_branch(path, text_cursor);
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         let stop = match direction {
             Direction::Forward => next_math_caret_stop(source, cursor),
             Direction::Backward => previous_math_caret_stop(source, cursor),
         };
         match stop {
             Some(stop) => {
-                self.set_math_cursor(body.start + stop);
+                let source_cursor = body.start + stop;
+                if direction == Direction::Backward
+                    && let Some(path) =
+                        self.math_text_path_at_source_boundary(&edit, source_cursor, false)
+                {
+                    let text = path
+                        .resolve(self.math_tree_for_edit(&edit, path.align_cell())?)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let cursor = text.runs.iter().map(|run| run.text.len()).sum();
+                    self.enter_math_text_branch(path, cursor);
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                if direction == Direction::Forward
+                    && let Some(path) =
+                        self.math_text_path_at_source_boundary(&edit, source_cursor, true)
+                {
+                    self.enter_math_text_branch(path, 0);
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                self.set_math_cursor(source_cursor);
                 Ok(Effect {
                     selection_changed: true,
                     ..Effect::default()
                 })
             }
-            None => self.exit_math_edit(direction),
+            None => self.exit_math_edit(direction, false),
         }
+    }
+
+    fn math_edit_is_text_branch(&self) -> bool {
+        self.math_edit
+            .as_ref()
+            .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Text { .. }))
+    }
+
+    /// 将宿主测得的字节位置限制在当前 TextFlow，并拒绝半个 UTF-8 字符或 grapheme。
+    fn set_math_text_selection(
+        &mut self,
+        anchor: usize,
+        focus: usize,
+    ) -> Result<Effect, EditError> {
+        let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let MathEditBranch::Text {
+            path,
+            anchor: old_anchor,
+        } = &edit.branch
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let display = text
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>();
+        if [anchor, focus].into_iter().any(|offset| {
+            offset > display.len()
+                || !display.is_char_boundary(offset)
+                || !is_grapheme_boundary(&display, offset)
+        }) {
+            return Err(EditError::InvalidPosition);
+        }
+        if *old_anchor == anchor && edit.cursor == focus {
+            return Ok(Effect::default());
+        }
+        if let Some(current) = &mut self.math_edit {
+            current.cursor = focus;
+            current.branch = MathEditBranch::Text {
+                path: path.clone(),
+                anchor,
+            };
+        }
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
+    fn math_tree_for_edit<'a>(
+        &'a self,
+        edit: &MathEdit,
+        align_cell: Option<(usize, usize)>,
+    ) -> Result<&'a caret_doc::MathTree, EditError> {
+        math_tree_for_target(&self.document, &edit.target, align_cell)
+            .ok_or(EditError::InvalidPosition)
+    }
+
+    fn math_text_path_at_source_boundary(
+        &self,
+        edit: &MathEdit,
+        source_offset: usize,
+        forward: bool,
+    ) -> Option<MathTextFlowPath> {
+        if let MathEditTarget::Block {
+            block_id,
+            align: true,
+        } = &edit.target
+        {
+            let Block::Align(align) = find_block_by_id(&self.document.body, block_id)? else {
+                return None;
+            };
+            let body_start = align_source::align_body_range(&align.source)?.start;
+            let cell_ranges = align_source::cell_source_ranges(align)?;
+            let (row, cell, cell_range) =
+                cell_ranges.iter().enumerate().find_map(|(row, cells)| {
+                    cells.iter().enumerate().find_map(|(cell, range)| {
+                        let local_start = range.start.checked_sub(body_start)?;
+                        let local_end = range.end.checked_sub(body_start)?;
+                        (local_start <= source_offset && source_offset <= local_end)
+                            .then_some((row, cell, range))
+                    })
+                })?;
+            let tree = align.rows.get(row)?.cells.get(cell)?;
+            let cell_start = cell_range.start.checked_sub(body_start)?;
+            let cell_offset = source_offset.checked_sub(cell_start)?;
+            if cell_offset > tree.source.len() {
+                return None;
+            }
+            let path =
+                path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
+            return path.with_host_source_base(cell_start);
+        }
+        let tree = self.math_tree_for_edit(edit, None).ok()?;
+        path::path_at_source_boundary(tree, source_offset, forward, None)
+    }
+
+    fn enter_math_text_branch(&mut self, path: MathTextFlowPath, cursor: usize) {
+        if let Some(edit) = &mut self.math_edit {
+            edit.cursor = cursor;
+            edit.branch = MathEditBranch::Text {
+                path,
+                anchor: cursor,
+            };
+        }
+        self.advance_history_merge_epoch();
     }
 
     /// 移动公式内光标；光标移动切断连续输入的撤销合并。
@@ -594,27 +966,31 @@ impl Session {
     }
 
     /// 退出公式编辑，把正文光标放到公式之前（向后）或之后（向前）。
-    pub(super) fn exit_math_edit(&mut self, direction: Direction) -> Result<Effect, EditError> {
-        let Some(edit) = self.math_edit.take() else {
+    pub(super) fn exit_math_edit(
+        &mut self,
+        direction: Direction,
+        allow_fallback: bool,
+    ) -> Result<Effect, EditError> {
+        let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
-        match edit.target {
+        match &edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
                 math_id,
             } => {
                 let story = self
-                    .story_for_paragraph(&paragraph_id)
+                    .story_for_paragraph(paragraph_id)
                     .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
                 let probe = Pos {
                     story,
-                    paragraph_id,
+                    paragraph_id: paragraph_id.clone(),
                     offset: 0,
                     affinity: Affinity::Downstream,
                 };
                 let start = inline_math_slots(self.paragraph_for(&probe)?)?
                     .into_iter()
-                    .find(|(_, id)| *id == math_id)
+                    .find(|(_, id)| id == math_id)
                     .map(|(start, _)| start)
                     .ok_or(EditError::InvalidPosition)?;
                 let position = match direction {
@@ -629,24 +1005,139 @@ impl Session {
                         ..probe
                     },
                 };
-                self.selection = Selection {
-                    anchor: position.clone(),
-                    focus: position,
-                };
+                self.set_math_exit_selection(position);
             }
             MathEditTarget::Block { block_id, .. } => {
-                if let Some(position) = self.paragraph_beside_block(&block_id, direction)? {
-                    self.selection = Selection {
-                        anchor: position.clone(),
-                        focus: position,
+                if allow_fallback {
+                    let other_direction = match direction {
+                        Direction::Backward => Direction::Forward,
+                        Direction::Forward => Direction::Backward,
                     };
+                    let position = match self.paragraph_beside_math_chain(block_id, direction)? {
+                        Some(position) => Some(position),
+                        None => self.paragraph_beside_math_chain(block_id, other_direction)?,
+                    };
+                    let Some(position) = position else {
+                        return Ok(Effect::default());
+                    };
+                    self.set_math_exit_selection(position);
+                } else if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
+                    self.set_math_exit_selection(position);
+                } else if let Some(next_edit) = self.math_edit_beside_block(block_id, direction)? {
+                    self.math_edit = Some(next_edit);
+                    self.advance_history_merge_epoch();
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                } else {
+                    return Ok(Effect::default());
                 }
             }
         }
+        self.math_edit = None;
+        self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
             ..Effect::default()
         })
+    }
+
+    fn set_math_exit_selection(&mut self, position: Pos) {
+        self.selection = Selection {
+            anchor: position.clone(),
+            focus: position.clone(),
+        };
+        self.selection_visual_affinity = match position.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+    }
+
+    /// 显式退出时跳过连续公式块，寻找最近的同级正文段落。
+    fn paragraph_beside_math_chain(
+        &self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Option<Pos>, EditError> {
+        let (parent_ids, mut index) =
+            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
+        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        loop {
+            let Some(next_index) = (match direction {
+                Direction::Forward => index.checked_add(1),
+                Direction::Backward => index.checked_sub(1),
+            }) else {
+                return Ok(None);
+            };
+            index = next_index;
+            let Some(block) = siblings.get(index) else {
+                return Ok(None);
+            };
+            match block {
+                Block::Paragraph(paragraph) => {
+                    let offset = match direction {
+                        Direction::Forward => 0,
+                        Direction::Backward => TextMap::new(paragraph)?.text.len(),
+                    };
+                    return Ok(Some(Pos {
+                        story: StoryId::Body,
+                        paragraph_id: paragraph.id.clone(),
+                        offset,
+                        affinity: match direction {
+                            Direction::Forward => Affinity::Upstream,
+                            Direction::Backward => Affinity::Downstream,
+                        },
+                    }));
+                }
+                Block::Equation(_) | Block::Align(_) => {}
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    /// 连续显示公式之间按块顺序移动公式焦点，不经过旧正文选区。
+    fn math_edit_beside_block(
+        &self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Option<MathEdit>, EditError> {
+        let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
+            return Err(EditError::InvalidPosition);
+        };
+        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+        let neighbour = match direction {
+            Direction::Forward => index.checked_add(1),
+            Direction::Backward => index.checked_sub(1),
+        };
+        let Some(block) = neighbour.and_then(|index| siblings.get(index)) else {
+            return Ok(None);
+        };
+        let (block_id, align, source) = match block {
+            Block::Equation(equation) => (
+                equation.id.clone(),
+                false,
+                equation.math_tree.source.clone(),
+            ),
+            Block::Align(align) => (align.id.clone(), true, align_body(&align.source)),
+            _ => return Ok(None),
+        };
+        let body = if align {
+            0..source.len()
+        } else {
+            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+        };
+        let cursor = match direction {
+            Direction::Forward => body.start,
+            Direction::Backward => body.end,
+        };
+        Ok(Some(MathEdit {
+            target: MathEditTarget::Block { block_id, align },
+            source,
+            cursor,
+            branch: MathEditBranch::Source,
+        }))
     }
 
     /// 块公式前（向后）或后（向前）的同级正文段落边缘。
@@ -674,7 +1165,10 @@ impl Session {
             story: StoryId::Body,
             paragraph_id: paragraph.id.clone(),
             offset,
-            affinity: Affinity::Downstream,
+            affinity: match direction {
+                Direction::Forward => Affinity::Upstream,
+                Direction::Backward => Affinity::Downstream,
+            },
         }))
     }
 
@@ -683,7 +1177,8 @@ impl Session {
         let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
-        let before_math_position = MathEditPosition::new(edit.target.clone(), edit.cursor);
+        let before_math_position =
+            MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone());
         match edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
@@ -705,6 +1200,7 @@ impl Session {
                     .map(|(start, _)| start)
                     .ok_or(EditError::InvalidPosition)?;
                 let before_selection = self.selection.clone();
+                let before_visual_affinity = self.selection_visual_affinity;
                 let before_states = history::paragraph_states_for_ids(
                     &self.document,
                     &self.paragraph_index,
@@ -724,8 +1220,13 @@ impl Session {
                 };
                 self.selection = Selection {
                     anchor: caret.clone(),
-                    focus: caret,
+                    focus: caret.clone(),
                 };
+                self.selection_visual_affinity = match caret.affinity {
+                    Affinity::Upstream => VisualAffinity::Upstream,
+                    Affinity::Downstream => VisualAffinity::Downstream,
+                };
+                let after_visual_affinity = self.selection_visual_affinity;
                 self.math_edit = None;
                 let after_states = history::paragraph_states_for_ids(
                     &self.document,
@@ -739,8 +1240,8 @@ impl Session {
                         merge_group: None,
                         merge_epoch: self.history_merge_epoch,
                     },
-                    before_selection,
-                    self.selection.clone(),
+                    (before_selection, before_visual_affinity),
+                    (self.selection.clone(), after_visual_affinity),
                     Some(before_math_position),
                     None,
                 );
@@ -752,10 +1253,13 @@ impl Session {
                 })
             }
             MathEditTarget::Block { block_id, .. } => {
-                let target = self
-                    .paragraph_beside_block(&block_id, Direction::Backward)?
-                    .or(self.paragraph_beside_block(&block_id, Direction::Forward)?)
-                    .ok_or(EditError::InvalidPosition)?;
+                let target =
+                    match self.paragraph_beside_math_chain(&block_id, Direction::Backward)? {
+                        Some(position) => position,
+                        None => self
+                            .paragraph_beside_math_chain(&block_id, Direction::Forward)?
+                            .ok_or(EditError::InvalidPosition)?,
+                    };
                 let (parent_ids, index) = find_block_path(&self.document.body, &block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let before_selection = self.selection.clone();
@@ -767,6 +1271,10 @@ impl Session {
                 self.selection = Selection {
                     anchor: target.clone(),
                     focus: target,
+                };
+                self.selection_visual_affinity = match self.selection.focus.affinity {
+                    Affinity::Upstream => VisualAffinity::Upstream,
+                    Affinity::Downstream => VisualAffinity::Downstream,
                 };
                 let paragraph_index = build_paragraph_index(&self.document.body);
                 self.paragraph_index = paragraph_index;
@@ -816,8 +1324,38 @@ impl Session {
         merge_group: Option<EditGroup>,
         old_edit: std::ops::Range<usize>,
     ) -> Result<Effect, EditError> {
+        self.write_math_source_in_branch(source, cursor, merge_group, old_edit, None)
+    }
+
+    fn write_math_source_in_branch(
+        &mut self,
+        source: String,
+        cursor: usize,
+        merge_group: Option<EditGroup>,
+        old_edit: std::ops::Range<usize>,
+        text_branch: Option<(MathTextFlowPath, usize)>,
+    ) -> Result<Effect, EditError> {
+        self.write_math_source_with_metadata(
+            source,
+            cursor,
+            merge_group,
+            old_edit,
+            text_branch,
+            None,
+        )
+    }
+
+    fn write_math_source_with_metadata(
+        &mut self,
+        source: String,
+        cursor: usize,
+        merge_group: Option<EditGroup>,
+        old_edit: std::ops::Range<usize>,
+        text_branch: Option<(MathTextFlowPath, usize)>,
+        text_edit: Option<MathTextEdit>,
+    ) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        if source == edit.source {
+        if source == edit.source && text_edit.is_none() {
             self.set_math_cursor(cursor);
             return Ok(Effect::default());
         }
@@ -833,6 +1371,19 @@ impl Session {
             .checked_sub(edit.source.len() - old_edit.len())
             .ok_or(EditError::InvalidPosition)?;
         let new_edit = old_edit.start..old_edit.start + inserted_len;
+        let path_old_edit = text_edit
+            .as_ref()
+            .map(|text_edit| text_edit.source_edit.clone())
+            .unwrap_or_else(|| old_edit.clone());
+        let path_new_edit = text_edit.as_ref().map_or_else(
+            || new_edit.clone(),
+            |text_edit| {
+                text_edit.source_edit.start
+                    ..text_edit.source_edit.start + text_edit.source_replacement_len
+            },
+        );
+        let mut next_branch = MathEditBranch::Source;
+        let mut next_cursor = cursor;
         match &edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
@@ -856,6 +1407,18 @@ impl Session {
                 let mut paragraph = self.paragraph_for(&position)?.clone();
                 let math = find_inline_math_mut(&mut paragraph.inlines, math_id)
                     .ok_or(EditError::InvalidPosition)?;
+                if let Some(text_edit) = &text_edit {
+                    let text = text_edit
+                        .path
+                        .resolve_mut(&mut math.math_tree)
+                        .ok_or(EditError::InvalidPosition)?;
+                    validate_text_flow_edit(
+                        text,
+                        text_edit.range.clone(),
+                        !text_edit.inserted.is_empty(),
+                    )?;
+                    replace_text_flow_range(text, text_edit.range.clone(), &text_edit.inserted)?;
+                }
                 if !preserve_math_tree_metadata_for_edit(
                     &math.math_tree,
                     &mut math_tree,
@@ -865,6 +1428,42 @@ impl Session {
                     return Err(EditError::InvalidMath(
                         "editing would discard unmapped math metadata".to_owned(),
                     ));
+                }
+                if let Some((path, text_cursor)) = &text_branch {
+                    match path.rebase(
+                        &math_tree,
+                        path_old_edit.clone(),
+                        path_new_edit.clone(),
+                        old_edit.clone(),
+                        new_edit.clone(),
+                    ) {
+                        Some(rebased) => {
+                            let display = rebased
+                                .resolve(&math_tree)
+                                .ok_or(EditError::InvalidPosition)?
+                                .runs
+                                .iter()
+                                .map(|run| run.text.as_str())
+                                .collect::<String>();
+                            let snap_forward = text_edit
+                                .as_ref()
+                                .is_none_or(|text_edit| text_edit.snap_forward);
+                            next_cursor = snap_text_cursor(&display, *text_cursor, snap_forward)
+                                .ok_or(EditError::InvalidPosition)?;
+                            next_branch = MathEditBranch::Text {
+                                path: rebased,
+                                anchor: next_cursor,
+                            };
+                        }
+                        None if text_edit
+                            .as_ref()
+                            .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
+                        {
+                            // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
+                            next_cursor = old_edit.start;
+                        }
+                        None => return Err(EditError::InvalidPosition),
+                    }
                 }
                 math.math_tree = math_tree;
                 let before_states = history::paragraph_states_for_ids(
@@ -887,14 +1486,71 @@ impl Session {
                 };
                 self.record_math_history(
                     patch,
-                    self.selection.clone(),
-                    self.selection.clone(),
-                    Some(MathEditPosition::new(edit.target.clone(), edit.cursor)),
-                    Some(MathEditPosition::new(edit.target.clone(), cursor)),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    Some(MathEditPosition::with_branch(
+                        edit.target.clone(),
+                        edit.cursor,
+                        edit.branch.clone(),
+                    )),
+                    Some(MathEditPosition::with_branch(
+                        edit.target.clone(),
+                        next_cursor,
+                        next_branch.clone(),
+                    )),
                 );
             }
             MathEditTarget::Block { block_id, align } => {
                 let mut block = display_math_block_with_id(*align, &source, block_id.clone())?;
+                if let Some((path, text_cursor)) = &text_branch {
+                    let tree = match (&block, path.align_cell()) {
+                        (Block::Equation(equation), None) => &equation.math_tree,
+                        (Block::Align(align), Some((row, cell))) => align
+                            .rows
+                            .get(row)
+                            .and_then(|row| row.cells.get(cell))
+                            .ok_or(EditError::InvalidPosition)?,
+                        _ => return Err(EditError::InvalidPosition),
+                    };
+                    match path.rebase(
+                        tree,
+                        path_old_edit.clone(),
+                        path_new_edit.clone(),
+                        old_edit.clone(),
+                        new_edit.clone(),
+                    ) {
+                        Some(rebased) => {
+                            let display = rebased
+                                .resolve(tree)
+                                .ok_or(EditError::InvalidPosition)?
+                                .runs
+                                .iter()
+                                .map(|run| run.text.as_str())
+                                .collect::<String>();
+                            let text_cursor = snap_text_cursor(
+                                &display,
+                                *text_cursor,
+                                text_edit
+                                    .as_ref()
+                                    .is_none_or(|text_edit| text_edit.snap_forward),
+                            )
+                            .ok_or(EditError::InvalidPosition)?;
+                            next_branch = MathEditBranch::Text {
+                                path: rebased,
+                                anchor: text_cursor,
+                            };
+                            next_cursor = text_cursor;
+                        }
+                        None if text_edit
+                            .as_ref()
+                            .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
+                        {
+                            // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
+                            next_cursor = old_edit.start;
+                        }
+                        None => return Err(EditError::InvalidPosition),
+                    }
+                }
                 let original = find_block_path(&self.document.body, block_id).and_then(
                     |(parent_ids, index)| {
                         block_list_ref(&self.document.body, &parent_ids)
@@ -902,12 +1558,45 @@ impl Session {
                             .get(index)
                     },
                 );
-                if let Some(original) = original
-                    && !preserve_display_math_metadata(original, &mut block, &old_edit, &new_edit)
-                {
-                    return Err(EditError::InvalidMath(
-                        "editing would discard unmapped math metadata".to_owned(),
-                    ));
+                if let Some(original) = original {
+                    let mut metadata_block = original.clone();
+                    if let Some(text_edit) = &text_edit {
+                        let tree = match (&mut metadata_block, text_edit.path.align_cell()) {
+                            (Block::Equation(equation), None) => &mut equation.math_tree,
+                            (Block::Align(align), Some((row, cell))) => &mut align
+                                .rows
+                                .get_mut(row)
+                                .ok_or(EditError::InvalidPosition)?
+                                .cells
+                                .get_mut(cell)
+                                .ok_or(EditError::InvalidPosition)?,
+                            _ => return Err(EditError::InvalidPosition),
+                        };
+                        let text = text_edit
+                            .path
+                            .resolve_mut(tree)
+                            .ok_or(EditError::InvalidPosition)?;
+                        validate_text_flow_edit(
+                            text,
+                            text_edit.range.clone(),
+                            !text_edit.inserted.is_empty(),
+                        )?;
+                        replace_text_flow_range(
+                            text,
+                            text_edit.range.clone(),
+                            &text_edit.inserted,
+                        )?;
+                    }
+                    if !preserve_display_math_metadata(
+                        &metadata_block,
+                        &mut block,
+                        &old_edit,
+                        &new_edit,
+                    ) {
+                        return Err(EditError::InvalidMath(
+                            "editing would discard unmapped math metadata".to_owned(),
+                        ));
+                    }
                 }
                 let (parent_ids, index) = find_block_path(&self.document.body, block_id)
                     .ok_or(EditError::InvalidPosition)?;
@@ -923,16 +1612,25 @@ impl Session {
                         before: vec![before],
                         after: vec![block],
                     },
-                    self.selection.clone(),
-                    self.selection.clone(),
-                    Some(MathEditPosition::new(edit.target.clone(), edit.cursor)),
-                    Some(MathEditPosition::new(edit.target.clone(), cursor)),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    (self.selection.clone(), self.selection_visual_affinity),
+                    Some(MathEditPosition::with_branch(
+                        edit.target.clone(),
+                        edit.cursor,
+                        edit.branch.clone(),
+                    )),
+                    Some(MathEditPosition::with_branch(
+                        edit.target.clone(),
+                        next_cursor,
+                        next_branch.clone(),
+                    )),
                 );
             }
         }
         if let Some(current) = &mut self.math_edit {
             current.source = source;
-            current.cursor = cursor;
+            current.cursor = next_cursor;
+            current.branch = next_branch;
         }
         let changed_paragraph_id = match &edit.target {
             MathEditTarget::Inline { paragraph_id, .. } => Some(paragraph_id.clone()),
@@ -1022,22 +1720,22 @@ impl Session {
     fn record_math_history(
         &mut self,
         patch: DocumentPatch,
-        before_selection: Selection,
-        after_selection: Selection,
+        before_selection: (Selection, VisualAffinity),
+        after_selection: (Selection, VisualAffinity),
         before_math_edit: Option<MathEditPosition>,
         after_math_edit: Option<MathEditPosition>,
     ) {
         let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
-            before_selection,
-            self.selection_visual_affinity,
+            before_selection.0,
+            before_selection.1,
             self.pending_inline_style.clone(),
             self.history_state_id,
         )
         .with_math_edit(before_math_edit);
         let after_state = SessionHistoryState::new(
-            after_selection,
-            self.selection_visual_affinity,
+            after_selection.0,
+            after_selection.1,
             self.pending_inline_style.clone(),
             after_state_id,
         )
@@ -1185,12 +1883,9 @@ fn display_math_block_with_id(align: bool, source: &str, id: NodeId) -> Result<B
 
 /// 对齐公式完整源码中 `aligned` 环境的内部；不是该形式时整体返回。
 fn align_body(source: &str) -> String {
-    let trimmed = source.trim();
-    trimmed
-        .strip_prefix(ALIGN_BEGIN)
-        .and_then(|rest| rest.strip_suffix(ALIGN_END))
-        .unwrap_or(trimmed)
-        .to_owned()
+    align_source::align_body_range(source)
+        .map(|range| source[range].to_owned())
+        .unwrap_or_else(|| source.trim().to_owned())
 }
 
 #[cfg(test)]

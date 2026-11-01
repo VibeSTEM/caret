@@ -126,9 +126,16 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+    let source_map = object
+        .remove("sourceMap")
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| ModelError::InvalidDocument(error.to_string()))?
+        .unwrap_or_default();
     Ok(TextFlow {
         runs,
         source_range,
+        source_map,
         extra: object.into_iter().collect(),
     })
 }

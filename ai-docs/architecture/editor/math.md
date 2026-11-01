@@ -20,6 +20,8 @@
 
 MathTree 是已提交文档内容的权威。源码模式编辑使用临时 source buffer；接受时解析并与原树对齐，随后原子提交新树与规范化 source。TextFlow 模式直接改写目标文本流，并由同一事务更新所属源片段。能由首版数学源码表达的 TextFlow 格式必须有规范表示；源码无法表达的属性与未知字段沿稳定节点/源范围映射保留。MathFlow、MathNode、MathContent 中的 TextFlow 与 InlineEnvironment 使用相对 `MathTree.source` 的半开 UTF-8 `sourceRange`。若本次源码编辑会丢失无法安全映射的字段，拒绝提交并保留原树、有效焦点和错误信息。解析、序列化、范围或事务失败不得改写现有公式。
 
+数学 `TextFlow.sourceMap` 由解析器生成，逐段映射拼接 Run 文本中的 UTF-8 字节区间到 `MathTree.source`。转义符号、`\textchar` 和折叠空白会让显示长度与源码长度不同；这类区间只能在映射项边界处编辑，不能按字节长度直接换算。空 `\text{}` 使用零长度文本区间和源码锚点保留编辑入口。正文 TextFlow 不允许 sourceRange 或 sourceMap；数学 source mapping 由 `caret.math.text-flow-source-map.v1` 能力声明。
+
 ### 文档树中的位置
 
 段落中的公式是 `ParagraphContent::Math(InlineMath)`；显示公式 `Equation` 与 `Align` 是块节点。段落与行内树的结构字段由[文档树与结构](document-model/document-structure.md)定义，公式与文本的适配规则由[行内与块级环境适配](document-model/inline-and-block-environments.md)定义。
@@ -58,6 +60,10 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 `TextFlow` 复用正文 Run、Run 属性、未知字段、字素边界、选区、输入法、格式事务和撤销逻辑；其节点边界以[文档树与结构](document-model/document-structure.md)为准。`InlineEnvironment` 通过通用混合树操作复用格式范围、嵌套顺序与稳定 ID 规则。适配器携带宿主路径，直接在所属内容树调用这些操作；数学源码节点仍由 Math 编辑逻辑处理。公式树与正文共用文本编辑实现，但各自保留文档节点、位置身份、事务和失败边界。文本岛编辑直接修改共享树分支，不拍平或复制第二份可变文本；同步 source 与数学树的成本计入同一原子事务。
 
+IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务仍复用正文实现。
+
+当前 043 仅接入数学源码分支，因此公式焦点下的正文格式命令会拒绝执行，避免修改宿主段落的 pending style；TextFlow 编辑分支接入后，这些命令才由宿主路径路由到文本流。
+
 ### 宿主边界与拆分
 
 普通正文执行 `\math` 命令时，Paragraph 流插入一个 `InlineMath` 原子。该 InlineMath 根流含有 TextFlow 时，必须按顺序将根流切成相邻的 `ParagraphContent::Math` 与 `ParagraphContent::Text` 项，让普通文本回到正文编辑器。
@@ -77,7 +83,7 @@ Run 与环境的未知字段按实际归属保留；只有能证明安全复制�
 | 内容 | 数学源码表示 | 编辑/导出规则 |
 | --- | --- | --- |
 | TextFlow 文本与首版支持的 InlineEnvironment | `\text{...}` 及明确支持的格式命令 | 规范序列化；非规范源解析后可规范化 |
-| Run 的 language、字体选择、underline、未知字段 | 普通 LaTeX 子集通常不能表达 | 保存在树元数据中；源码重编辑须通过稳定节点/源范围映射恢复，无法唯一对齐时拒绝；标准 LaTeX 导出遇到影响外观或语义的此类元数据时返回明确损失错误 |
+| Run 的 language、underline 与未知字段；Font 环境的字体覆盖 | 普通 LaTeX 子集通常不能完整表达 | language、underline 和未知字段保存在 Run 元数据中；字体选择保存在 `InlineEnvironment<MathContent>` 的 Font 属性中。源码重编辑须通过稳定节点/源范围映射恢复，无法唯一对齐时拒绝；标准 LaTeX 导出遇到影响外观或语义的元数据时返回明确损失错误。Font 环境的任意覆盖与 `fontFamily` 源命令语义仍需无损映射设计，当前不承诺支持任意覆盖 |
 | 编辑器命令 `\math` | 非 LaTeX 源码语法 | 正文和公式 TextFlow 编辑模式都可用的结构命令；`.cdoc` source 保存解析后的数学内容，不保存命令面板别名 |
 
 不得用重复文本的模糊搜索匹配节点身份。源码表示与树元数据的对齐必须使用解析结构和稳定源范围；无法唯一映射时拒绝提交，保留原树和焦点。布局契约与验证由[044](../../task/044-math-layout-and-rendering.md)维护。
@@ -90,6 +96,7 @@ Run 与环境的未知字段按实际归属保留；只有能证明安全复制�
 
 - 完整产品路径接入后，`\math`、`\equation`、`\align` 分别插入行内公式、单行显示公式、多行对齐公式，并进入公式编辑。当前三个命令在桌面命令面板中保持不可执行，避免创建无法保存或呈现的文档内容。
 - 公式编辑状态记录目标公式、当前编辑分支和该分支的位置。源码模式使用 UTF-8 字节位置；TextFlow 模式使用正文文本位置语义。切换模式时，适配器用公式树位置映射恢复焦点；失败时保留原文档与有效位置。
+- 数学 TextFlow 的 `SetMathTextSelection` 以当前 TextFlow 内 UTF-8 字节偏移设置 anchor/focus；两端必须落在同一流内的 grapheme 边界。输入和退格/删除替换该选区，左右键将选区折叠到对应边界。文本到源码的映射若不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的选区等待槽位级物理路径映射，不用单岛路径伪装支持；此命令提供 engine 位置入口，不代表 044 的命中与选区绘制已接入。
 - 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与 Enter 可退出公式。
 - `_` 与 `^` 插入带空组的下标与上标，`{` 自动补 `}`，`}` 跳出组。
 - 公式编辑中 `\` 打开数学命令，不打开正文命令；`Align` 中 Enter 插入 `\\` 结束一行，`&` 为对齐点。

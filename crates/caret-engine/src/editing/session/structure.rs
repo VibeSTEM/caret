@@ -151,6 +151,7 @@ impl Session {
                                 extra: BTreeMap::new(),
                             }],
                             source_range: None,
+                            source_map: Vec::new(),
                             extra: BTreeMap::new(),
                         }));
                 }

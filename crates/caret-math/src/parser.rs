@@ -363,6 +363,9 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
                 .get("style")
                 .is_some_and(|style| style == "text") =>
         {
+            if node.children.is_empty() {
+                push_math_text(content, String::new(), node.source_range);
+            }
             for child in node.children {
                 append_parser_node(content, child);
             }
@@ -398,6 +401,9 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
                 _ => unreachable!(),
             };
             let mut children = Vec::new();
+            if node.children.is_empty() {
+                push_math_text(&mut children, String::new(), node.source_range.clone());
+            }
             for child in node.children {
                 append_parser_node(&mut children, child);
             }
@@ -455,6 +461,19 @@ fn push_math_text(
             .zip(source_range.as_ref())
             .is_some_and(|(previous, next)| previous.end == next.start);
         if contiguous {
+            // 已有映射末尾就是新 Run 的显示字节偏移，追加时无需重扫前序 Run。
+            let text_start = flow
+                .source_map
+                .last()
+                .map_or(0, |entry| entry.text_end as usize);
+            if let Some(range) = source_range.as_ref() {
+                flow.source_map.push(caret_doc::TextFlowSourceMapEntry {
+                    text_start: text_start as u32,
+                    text_end: text_start.saturating_add(text.len()) as u32,
+                    source_range: range.clone(),
+                    extra: BTreeMap::new(),
+                });
+            }
             flow.runs.push(Run {
                 text,
                 language: None,
@@ -467,6 +486,17 @@ fn push_math_text(
             return;
         }
     }
+    let source_map = source_range
+        .as_ref()
+        .map(|range| {
+            vec![caret_doc::TextFlowSourceMapEntry {
+                text_start: 0,
+                text_end: text.len() as u32,
+                source_range: range.clone(),
+                extra: BTreeMap::new(),
+            }]
+        })
+        .unwrap_or_default();
     content.push(MathContent::Text(TextFlow {
         runs: vec![Run {
             text,
@@ -475,6 +505,7 @@ fn push_math_text(
             extra: BTreeMap::new(),
         }],
         source_range,
+        source_map,
         extra: BTreeMap::new(),
     }));
 }
@@ -1491,6 +1522,7 @@ impl<'s> Parser<'s> {
     fn parse_text_body(&mut self) -> ParseResult<Vec<MathNode>> {
         use MathNodeKind as K;
         let mut items = Vec::new();
+        let body_start = self.pos;
         let mut run_start: Option<usize> = None;
         let mut depth = 0usize;
         loop {
@@ -1525,6 +1557,15 @@ impl<'s> Parser<'s> {
                 '}' => {
                     self.bump();
                     if depth == 0 {
+                        if items.is_empty() {
+                            items.push(self.node(
+                                K::TextContent,
+                                Some(String::new()),
+                                &[],
+                                Some(body_start..body_start),
+                                Vec::new(),
+                            ));
+                        }
                         return Ok(items);
                     }
                     depth -= 1;

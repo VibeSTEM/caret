@@ -24,7 +24,9 @@ mod validation;
 pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
-pub use inline::{FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow};
+pub use inline::{
+    FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow, TextFlowSourceMapEntry,
+};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES,

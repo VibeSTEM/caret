@@ -6,7 +6,7 @@
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
-use super::math_edit::MathEditTarget;
+use super::math_edit::{MathEditBranch, MathEditTarget};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget,
     DocumentSettings, Equation, MathNode, MathTree, NodeId, PageGeometry, Paragraph,
@@ -179,15 +179,28 @@ pub(super) struct SessionHistoryState {
 pub(super) struct MathEditPosition {
     pub(super) target: MathEditTarget,
     pub(super) cursor: usize,
+    pub(super) branch: MathEditBranch,
 }
 
 impl MathEditPosition {
-    pub(super) fn new(target: MathEditTarget, cursor: usize) -> Self {
-        Self { target, cursor }
+    pub(super) fn with_branch(
+        target: MathEditTarget,
+        cursor: usize,
+        branch: MathEditBranch,
+    ) -> Self {
+        Self {
+            target,
+            cursor,
+            branch,
+        }
     }
 
     fn estimated_bytes(&self) -> usize {
         size_of::<Self>()
+            + match &self.branch {
+                MathEditBranch::Source => 0,
+                MathEditBranch::Text { path, .. } => path.estimated_bytes(),
+            }
             + match &self.target {
                 MathEditTarget::Inline {
                     paragraph_id,
@@ -1274,6 +1287,15 @@ fn math_content_estimated_bytes(content: &caret_doc::MathContent) -> usize {
                             + string_value_map_bytes(&run.extra)
                     })
                     .sum::<usize>()
+                + text.source_map.capacity() * size_of::<caret_doc::TextFlowSourceMapEntry>()
+                + text
+                    .source_map
+                    .iter()
+                    .map(|entry| {
+                        string_value_map_bytes(&entry.source_range.extra)
+                            + string_value_map_bytes(&entry.extra)
+                    })
+                    .sum::<usize>()
                 + string_value_map_bytes(&text.extra)
         }
         MathContent::Math(node) => math_node_estimated_bytes(node),
@@ -1529,6 +1551,7 @@ pub(super) fn restore_history_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use caret_doc::MathContent;
     use caret_math::{MathInputKind, ParsedMath};
     use serde_json::json;
 
@@ -1552,5 +1575,13 @@ mod tests {
             json!({"description": "retained extension data".repeat(8)}),
         );
         assert!(math_tree_estimated_bytes(&fraction) > before_extra);
+
+        let mapped = parsed_tree(r"\text{x}");
+        let mut unmapped = mapped.clone();
+        let Some(MathContent::Text(flow)) = unmapped.root.content.first_mut() else {
+            panic!("text command should produce a text flow");
+        };
+        flow.source_map = Vec::new();
+        assert!(math_tree_estimated_bytes(&mapped) > math_tree_estimated_bytes(&unmapped));
     }
 }

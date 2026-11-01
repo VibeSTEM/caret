@@ -8,6 +8,8 @@ mod command_line;
 mod command_registry;
 mod environment;
 mod error;
+mod flow_map;
+mod grapheme;
 mod paragraph_ops;
 mod position;
 mod session;
@@ -24,7 +26,9 @@ pub use environment::{
 };
 pub use error::EditError;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
-pub use session::{MathEdit, MathEditTarget, Session};
+pub use session::{
+    MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath, MathTextFlowPathStep, Session,
+};
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};
 
