@@ -564,6 +564,70 @@ fn preserve_math_content_metadata(
                 .flat_map(|run| run.text.chars())
                 .eq(updated.runs.iter().flat_map(|run| run.text.chars()));
             if same_text {
+                let mut metadata_preserved = true;
+                let mut matched_entries = HashSet::new();
+                // 未知字段只沿未编辑且唯一的源码映射迁移，避免把扩展数据猜配到别的文本。
+                let mut previous_entries = HashMap::<(u32, u32, usize, usize), Vec<usize>>::new();
+                let mut updated_entry_counts = HashMap::<(u32, u32, usize, usize), usize>::new();
+                for (index, entry) in previous.source_map.iter().enumerate() {
+                    let old_range =
+                        entry.source_range.start as usize..entry.source_range.end as usize;
+                    if let Some((start, end)) =
+                        map_unchanged_range(&old_range, prefix_end, previous_tail, updated_tail)
+                    {
+                        previous_entries
+                            .entry((entry.text_start, entry.text_end, start, end))
+                            .or_default()
+                            .push(index);
+                    }
+                }
+                for entry in &updated.source_map {
+                    *updated_entry_counts
+                        .entry((
+                            entry.text_start,
+                            entry.text_end,
+                            entry.source_range.start as usize,
+                            entry.source_range.end as usize,
+                        ))
+                        .or_default() += 1;
+                }
+                for updated_entry in &mut updated.source_map {
+                    let key = (
+                        updated_entry.text_start,
+                        updated_entry.text_end,
+                        updated_entry.source_range.start as usize,
+                        updated_entry.source_range.end as usize,
+                    );
+                    if let Some(indices) = previous_entries.get(&key)
+                        && indices.len() == 1
+                        && updated_entry_counts.get(&key) == Some(&1)
+                        && let Some(index) = indices.first().copied()
+                        && !matched_entries.contains(&index)
+                    {
+                        let old_entry = &previous.source_map[index];
+                        matched_entries.insert(index);
+                        updated_entry.extra.clone_from(&old_entry.extra);
+                        updated_entry
+                            .source_range
+                            .extra
+                            .clone_from(&old_entry.source_range.extra);
+                    } else if !updated_entry.extra.is_empty()
+                        || !updated_entry.source_range.extra.is_empty()
+                    {
+                        metadata_preserved = false;
+                    }
+                }
+                if previous
+                    .source_map
+                    .iter()
+                    .enumerate()
+                    .any(|(index, entry)| {
+                        !matched_entries.contains(&index)
+                            && (!entry.extra.is_empty() || !entry.source_range.extra.is_empty())
+                    })
+                {
+                    metadata_preserved = false;
+                }
                 updated.runs.clone_from(&previous.runs);
                 updated.extra.clone_from(&previous.extra);
                 if let Some(old) = &previous.source_range {
@@ -572,7 +636,7 @@ fn preserve_math_content_metadata(
                     };
                     new.extra.clone_from(&old.extra);
                 }
-                true
+                metadata_preserved
             } else {
                 previous.extra.is_empty()
                     && previous
@@ -582,6 +646,10 @@ fn preserve_math_content_metadata(
                     && previous.runs.iter().all(|run| {
                         run.language.is_none() && run.props.is_empty() && run.extra.is_empty()
                     })
+                    && previous
+                        .source_map
+                        .iter()
+                        .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
             }
         }
         (MathContent::Environment(previous), MathContent::Environment(updated))
@@ -708,6 +776,10 @@ fn content_has_metadata(content: &MathContent) -> bool {
                 || text.runs.iter().any(|run| {
                     run.language.is_some() || !run.props.is_empty() || !run.extra.is_empty()
                 })
+                || text
+                    .source_map
+                    .iter()
+                    .any(|entry| !entry.extra.is_empty() || !entry.source_range.extra.is_empty())
         }
         MathContent::Math(node) => node_has_metadata(node),
         MathContent::Environment(environment) => {

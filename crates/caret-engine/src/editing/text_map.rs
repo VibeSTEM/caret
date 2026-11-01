@@ -76,6 +76,7 @@ pub(super) fn from_edit_nodes(nodes: Vec<EditNode>) -> Vec<ParagraphContent> {
             contents.push(FlowContent::Text(TextFlow {
                 runs: std::mem::take(runs),
                 source_range: None,
+                source_map: Vec::new(),
                 extra: Default::default(),
             }));
         }

@@ -16,6 +16,26 @@ pub struct TextFlow {
     pub runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_range: Option<MathSourceRange>,
+    /// 数学文本显示字节到 LaTeX 源码的分段映射；正文流必须为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_map: Vec<TextFlowSourceMapEntry>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// 将 TextFlow 显示文本中的 UTF-8 字节区间映射回公式源码。
+///
+/// 转义命令和折叠空白的显示长度可能不同于源码长度，因此只有区间两端总是可逆；
+/// 编辑器必须把非等长区间作为一个映射单元处理。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextFlowSourceMapEntry {
+    /// 相对所有 Run 拼接文本的半开 UTF-8 字节区间。
+    pub text_start: u32,
+    pub text_end: u32,
+    /// 相对所属 MathTree.source 的半开 UTF-8 字节区间。
+    pub source_range: MathSourceRange,
+    /// 尚未识别的映射字段，随该映射项原样保留。
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
 }

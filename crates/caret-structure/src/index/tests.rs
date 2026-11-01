@@ -193,6 +193,7 @@ fn text_flow(run: Run) -> caret_doc::ParagraphContent {
     caret_doc::ParagraphContent::Text(caret_doc::TextFlow {
         runs: vec![run],
         source_range: None,
+        source_map: Vec::new(),
         extra: Default::default(),
     })
 }

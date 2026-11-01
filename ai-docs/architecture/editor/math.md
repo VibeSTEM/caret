@@ -20,6 +20,8 @@
 
 MathTree 是已提交文档内容的权威。源码模式编辑使用临时 source buffer；接受时解析并与原树对齐，随后原子提交新树与规范化 source。TextFlow 模式直接改写目标文本流，并由同一事务更新所属源片段。能由首版数学源码表达的 TextFlow 格式必须有规范表示；源码无法表达的属性与未知字段沿稳定节点/源范围映射保留。MathFlow、MathNode、MathContent 中的 TextFlow 与 InlineEnvironment 使用相对 `MathTree.source` 的半开 UTF-8 `sourceRange`。若本次源码编辑会丢失无法安全映射的字段，拒绝提交并保留原树、有效焦点和错误信息。解析、序列化、范围或事务失败不得改写现有公式。
 
+数学 `TextFlow.sourceMap` 由解析器生成，逐段映射拼接 Run 文本中的 UTF-8 字节区间到 `MathTree.source`。转义符号、`\textchar` 和折叠空白会让显示长度与源码长度不同；这类区间只能在映射项边界处编辑，不能按字节长度直接换算。空 `\text{}` 使用零长度文本区间和源码锚点保留编辑入口。正文 TextFlow 不允许 sourceRange 或 sourceMap；数学 source mapping 由 `caret.math.text-flow-source-map.v1` 能力声明。
+
 ### 文档树中的位置
 
 段落中的公式是 `ParagraphContent::Math(InlineMath)`；显示公式 `Equation` 与 `Align` 是块节点。段落与行内树的结构字段由[文档树与结构](document-model/document-structure.md)定义，公式与文本的适配规则由[行内与块级环境适配](document-model/inline-and-block-environments.md)定义。

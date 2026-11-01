@@ -127,6 +127,16 @@ fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
                     .iter()
                     .flat_map(|run| run.text.chars())
                     .eq(right.runs.iter().flat_map(|run| run.text.chars()))
+                && left.source_map.len() == right.source_map.len()
+                && left
+                    .source_map
+                    .iter()
+                    .zip(&right.source_map)
+                    .all(|(left, right)| {
+                        (left.text_start, left.text_end) == (right.text_start, right.text_end)
+                            && (left.source_range.start, left.source_range.end)
+                                == (right.source_range.start, right.source_range.end)
+                    })
         }
         (MathContent::Math(left), MathContent::Math(right)) => same_node_semantics(left, right),
         (MathContent::Environment(left), MathContent::Environment(right)) => {
@@ -263,6 +273,19 @@ mod tests {
                 .insert("vendorRange".to_owned(), serde_json::json!(7));
         }
         assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
+    }
+
+    #[test]
+    fn formula_text_source_map_must_match_the_parser_output() {
+        let mut tree = parse_inline(r"\text{a\%b}");
+        let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
+            panic!("text formula should start with a text flow");
+        };
+        text.source_map[1].source_range.start += 1;
+        assert!(
+            validate_tree(&tree, MathInputKind::Inline, "text")
+                .is_err_and(|error| error.contains("source and tree disagree"))
+        );
     }
 
     #[test]

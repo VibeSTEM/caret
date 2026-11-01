@@ -1274,6 +1274,15 @@ fn math_content_estimated_bytes(content: &caret_doc::MathContent) -> usize {
                             + string_value_map_bytes(&run.extra)
                     })
                     .sum::<usize>()
+                + text.source_map.capacity() * size_of::<caret_doc::TextFlowSourceMapEntry>()
+                + text
+                    .source_map
+                    .iter()
+                    .map(|entry| {
+                        string_value_map_bytes(&entry.source_range.extra)
+                            + string_value_map_bytes(&entry.extra)
+                    })
+                    .sum::<usize>()
                 + string_value_map_bytes(&text.extra)
         }
         MathContent::Math(node) => math_node_estimated_bytes(node),
@@ -1529,6 +1538,7 @@ pub(super) fn restore_history_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use caret_doc::MathContent;
     use caret_math::{MathInputKind, ParsedMath};
     use serde_json::json;
 
@@ -1552,5 +1562,13 @@ mod tests {
             json!({"description": "retained extension data".repeat(8)}),
         );
         assert!(math_tree_estimated_bytes(&fraction) > before_extra);
+
+        let mapped = parsed_tree(r"\text{x}");
+        let mut unmapped = mapped.clone();
+        let Some(MathContent::Text(flow)) = unmapped.root.content.first_mut() else {
+            panic!("text command should produce a text flow");
+        };
+        flow.source_map = Vec::new();
+        assert!(math_tree_estimated_bytes(&mapped) > math_tree_estimated_bytes(&unmapped));
     }
 }

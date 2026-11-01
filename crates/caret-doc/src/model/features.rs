@@ -176,7 +176,12 @@ fn collect_math_content_features(
     features: &mut std::collections::BTreeSet<String>,
 ) {
     match content {
-        MathContent::Text(text) => collect_text_flow_features(text, features),
+        MathContent::Text(text) => {
+            if !text.source_map.is_empty() {
+                features.insert("caret.math.text-flow-source-map.v1".to_owned());
+            }
+            collect_text_flow_features(text, features);
+        }
         MathContent::Math(node) => {
             if !node.attributes.is_empty()
                 || matches!(

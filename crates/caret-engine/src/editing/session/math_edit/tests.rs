@@ -271,6 +271,13 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
             .extra
             .insert("vendorRange".to_owned(), serde_json::json!(5));
     }
+    text.source_map[0]
+        .extra
+        .insert("vendorMap".to_owned(), serde_json::json!(6));
+    text.source_map[0]
+        .source_range
+        .extra
+        .insert("vendorMapRange".to_owned(), serde_json::json!(7));
 
     let updated_source = source.replace("+x", "+y");
     let mut updated = parsed_inline_tree(&updated_source);
@@ -292,6 +299,8 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
     assert_eq!(text.runs[0].language.as_deref(), Some("en"));
     assert_eq!(text.runs[0].props["underline"], true);
     assert_eq!(text.runs[0].extra["vendorRun"], 4);
+    assert_eq!(text.source_map[0].extra["vendorMap"], 6);
+    assert_eq!(text.source_map[0].source_range.extra["vendorMapRange"], 7);
     let Some(range) = &text.source_range else {
         panic!("mapped TextFlow should retain its source range");
     };
@@ -305,6 +314,26 @@ fn math_edit_refuses_to_drop_unknown_fields_from_an_unmapped_node() {
         .extra
         .insert("futureNodeValue".to_owned(), serde_json::json!("keep"));
     let mut updated = parsed_inline_tree(r"\frac{a}{b}");
+
+    assert!(!preserve_math_tree_metadata(&previous, &mut updated));
+}
+
+#[test]
+fn duplicate_text_source_map_targets_refuse_ambiguous_metadata_transfer() {
+    let mut previous = parsed_inline_tree(r"\text{x}");
+    let Some(MathContent::Text(previous_text)) = previous.root.content.first_mut() else {
+        panic!("text formula should start with a TextFlow");
+    };
+    previous_text.source_map[0]
+        .extra
+        .insert("vendorMapping".to_owned(), serde_json::json!(true));
+    let mut updated = parsed_inline_tree(r"\text{x}");
+    let Some(MathContent::Text(updated_text)) = updated.root.content.first_mut() else {
+        panic!("text formula should start with a TextFlow");
+    };
+    updated_text
+        .source_map
+        .push(updated_text.source_map[0].clone());
 
     assert!(!preserve_math_tree_metadata(&previous, &mut updated));
 }
@@ -369,6 +398,46 @@ fn deleting_a_node_with_unmappable_metadata_keeps_document_and_math_focus() -> R
         }
     }
     assert!(refused, "metadata-bearing node deletion should be rejected");
+    Ok(())
+}
+
+#[test]
+fn deleting_mapped_math_text_with_mapping_metadata_is_atomic() -> Result<(), EditError> {
+    let mut math_tree = parsed_inline_tree(r"\text{x}");
+    let Some(MathContent::Text(text)) = math_tree.root.content.first_mut() else {
+        panic!("text formula should start with a TextFlow");
+    };
+    text.source_map[0]
+        .extra
+        .insert("vendorMapping".to_owned(), serde_json::json!(true));
+    text.source_map[0]
+        .source_range
+        .extra
+        .insert("vendorRange".to_owned(), serde_json::json!(true));
+
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines.push(ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: std::collections::BTreeMap::new(),
+    }));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut session = Session::new(document).map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    let document_before = session.document().clone();
+    let edit_before = session.math_edit().cloned();
+    let generation_before = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.math_edit(), edit_before.as_ref());
+    assert_eq!(session.document_generation(), generation_before);
     Ok(())
 }
 
@@ -633,6 +702,7 @@ fn session_with_text(text: &str) -> Result<Session, Box<dyn std::error::Error>> 
                     extra: BTreeMap::new(),
                 }],
                 source_range: None,
+                source_map: Vec::new(),
                 extra: BTreeMap::new(),
             }));
     }
@@ -908,6 +978,7 @@ fn inline_math_navigation_ignores_text_flow_extension_fields()
                 extra: Default::default(),
             }],
             source_range: None,
+            source_map: Vec::new(),
             extra,
         })
     };

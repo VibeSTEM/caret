@@ -441,6 +441,7 @@ impl ParagraphLayouter {
                     extra: Default::default(),
                 }],
                 source_range: None,
+                source_map: Vec::new(),
                 extra: Default::default(),
             })],
             mark_style: Default::default(),

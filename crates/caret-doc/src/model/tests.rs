@@ -215,6 +215,38 @@ fn documents_declare_paragraph_layout_semantics() {
 }
 
 #[test]
+fn math_text_source_map_declares_its_required_feature() -> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    document.body = serde_json::from_value(serde_json::json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": MATH_TREE_SCHEMA_VERSION,
+                "source": r"\text{x}",
+                "root": {"id": "root", "content": [{
+                    "type": "text",
+                    "runs": [{"text": "x"}],
+                    "sourceRange": {"start": 6, "end": 7},
+                    "sourceMap": [{
+                        "textStart": 0,
+                        "textEnd": 1,
+                        "sourceRange": {"start": 6, "end": 7}
+                    }]
+                }]}
+            }
+        }]
+    }]))?;
+    document.validate()?;
+
+    assert!(
+        document
+            .required_features()
+            .iter()
+            .any(|feature| feature == "caret.math.text-flow-source-map.v1")
+    );
+    Ok(())
+}
+
+#[test]
 fn custom_default_font_size_declares_its_required_capability() {
     let mut document = Document::blank();
     document.global_settings.default_font_size_centipoints = 1450;
@@ -706,6 +738,7 @@ fn math_inline_environments_obey_math_depth_limit() {
             extra: BTreeMap::new(),
         }],
         source_range: None,
+        source_map: Vec::new(),
         extra: BTreeMap::new(),
     });
     for _ in 0..=MAX_MATH_TREE_DEPTH {
@@ -757,6 +790,7 @@ fn math_text_runs_count_toward_the_tree_node_limit() {
                     super::MAX_MATH_TREE_NODES
                 ],
                 source_range: None,
+                source_map: Vec::new(),
                 extra: BTreeMap::new(),
             })],
             source_range: None,
@@ -860,6 +894,7 @@ fn inline_format_values_and_nesting_are_validated() -> Result<(), Box<dyn std::e
             extra: BTreeMap::new(),
         }],
         source_range: None,
+        source_map: Vec::new(),
         extra: BTreeMap::new(),
     });
     for _ in 0..65 {
@@ -880,4 +915,35 @@ fn inline_format_values_and_nesting_are_validated() -> Result<(), Box<dyn std::e
     paragraph.inlines.push(inline);
     assert_eq!(document.validate(), Err(super::ModelError::NestingLimit));
     Ok(())
+}
+
+#[test]
+fn paragraph_text_flow_rejects_math_source_ranges() {
+    let mut document = Document::blank();
+    let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+        panic!("blank document should contain a paragraph");
+    };
+    paragraph
+        .inlines
+        .push(super::ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "text".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            source_range: Some(MathSourceRange {
+                start: 0,
+                end: 4,
+                extra: BTreeMap::new(),
+            }),
+            source_map: Vec::new(),
+            extra: BTreeMap::new(),
+        }));
+
+    assert!(matches!(
+        document.validate(),
+        Err(super::ModelError::InvalidDocument(message))
+            if message == "TextFlow source mapping is only valid inside a math tree"
+    ));
 }

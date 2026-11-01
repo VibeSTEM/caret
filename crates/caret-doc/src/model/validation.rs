@@ -280,6 +280,11 @@ fn validate_paragraph_content<'a>(
     validate_depth(depth, node_count)?;
     match content {
         ParagraphContent::Text(text) => {
+            if text.source_range.is_some() || !text.source_map.is_empty() {
+                return Err(ModelError::InvalidDocument(
+                    "TextFlow source mapping is only valid inside a math tree".to_owned(),
+                ));
+            }
             validate_text_flow(text, None)?;
             for _ in &text.runs {
                 count_document_node(node_count)?;
@@ -359,8 +364,107 @@ fn validate_text_flow(text: &TextFlow, source: Option<&str>) -> Result<(), Model
     if let (Some(source), Some(range)) = (source, text.source_range.as_ref()) {
         validate_math_range(range, source)?;
     }
+    let text_length = text.runs.iter().try_fold(0usize, |length, run| {
+        length
+            .checked_add(run.text.len())
+            .ok_or(ModelError::InvalidDocument(
+                "text flow length exceeds addressable size".to_owned(),
+            ))
+    })?;
+    let mut previous_text_end = 0usize;
+    let mut previous_source_end = None;
+    if !text.source_map.is_empty() && text.source_range.is_none() {
+        return Err(ModelError::InvalidDocument(
+            "TextFlow sourceMap requires a sourceRange".to_owned(),
+        ));
+    }
+    if text.source_map.len() > MAX_MATH_TREE_NODES {
+        return Err(ModelError::InvalidDocument(
+            "TextFlow sourceMap exceeds node limit".to_owned(),
+        ));
+    }
+    // 映射按显示字节递增；游标只向前扫描，避免每个边界都从首个 Run 重新遍历。
+    let mut run_index = 0usize;
+    let mut run_start = 0usize;
+    for entry in &text.source_map {
+        let (text_start, text_end) = (entry.text_start as usize, entry.text_end as usize);
+        if text_start > text_end
+            || text_end > text_length
+            || text_start < previous_text_end
+            || !text_flow_char_boundary(&text.runs, text_start, &mut run_index, &mut run_start)
+            || !text_flow_char_boundary(&text.runs, text_end, &mut run_index, &mut run_start)
+            || text_start != previous_text_end
+            || source.is_none()
+        {
+            return Err(ModelError::InvalidDocument(
+                "invalid TextFlow source map range".to_owned(),
+            ));
+        }
+        let Some(source) = source else {
+            return Err(ModelError::InvalidDocument(
+                "TextFlow sourceMap is only valid inside a math tree".to_owned(),
+            ));
+        };
+        validate_math_range(&entry.source_range, source)?;
+        if text.source_range.as_ref().is_some_and(|flow_range| {
+            entry.source_range.start < flow_range.start || entry.source_range.end > flow_range.end
+        }) {
+            return Err(ModelError::InvalidDocument(
+                "TextFlow sourceMap must stay inside its sourceRange".to_owned(),
+            ));
+        }
+        if previous_source_end.is_some_and(|end| entry.source_range.start < end) {
+            return Err(ModelError::InvalidDocument(
+                "TextFlow source map ranges must follow source order".to_owned(),
+            ));
+        }
+        previous_text_end = text_end;
+        previous_source_end = Some(entry.source_range.end);
+    }
+    if !text.source_map.is_empty()
+        && previous_text_end != text_length
+        && !(text_length == 0 && text.source_map.len() == 1)
+    {
+        return Err(ModelError::InvalidDocument(
+            "TextFlow sourceMap must cover all display text".to_owned(),
+        ));
+    }
     for run in &text.runs {
         validate_run(run)?;
+    }
+    Ok(())
+}
+
+fn text_flow_char_boundary(
+    runs: &[Run],
+    offset: usize,
+    run_index: &mut usize,
+    run_start: &mut usize,
+) -> bool {
+    while let Some(run) = runs.get(*run_index) {
+        let Some(run_end) = run_start.checked_add(run.text.len()) else {
+            return false;
+        };
+        if offset <= run_end {
+            return run.text.is_char_boundary(offset.saturating_sub(*run_start));
+        }
+        *run_start = run_end;
+        *run_index += 1;
+    }
+    offset == *run_start
+}
+
+fn count_text_flow_source_map(
+    text: &TextFlow,
+    budget: &mut MathValidationBudget,
+) -> Result<(), ModelError> {
+    for entry in &text.source_map {
+        count_math_node(budget)?;
+        budget.payload_bytes = budget
+            .payload_bytes
+            .saturating_add(std::mem::size_of::<TextFlowSourceMapEntry>());
+        add_math_extra_bytes(&entry.source_range.extra, &mut budget.payload_bytes)?;
+        add_math_extra_bytes(&entry.extra, &mut budget.payload_bytes)?;
     }
     Ok(())
 }
@@ -423,6 +527,7 @@ fn validate_math_flow<'a>(
                 if let Some(range) = &text.source_range {
                     add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
                 }
+                count_text_flow_source_map(text, budget)?;
                 validate_text_flow(text, Some(source))?;
                 for run in &text.runs {
                     count_document_node(node_count)?;
@@ -482,6 +587,7 @@ fn validate_math_content<'a>(
             if let Some(range) = &text.source_range {
                 add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
             }
+            count_text_flow_source_map(text, budget)?;
             validate_text_flow(text, Some(source))?;
             for run in &text.runs {
                 count_document_node(node_count)?;

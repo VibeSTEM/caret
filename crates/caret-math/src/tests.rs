@@ -173,6 +173,108 @@ fn parses_text_mode() {
 }
 
 #[test]
+fn preserves_empty_text_flows_as_editable_tree_content() {
+    for source in [r"\text{}", r"\text{\textbf{}}"] {
+        let original = tree(source);
+        let text_flow = match original.root.content.as_slice() {
+            [MathContent::Text(flow)] => Some(flow),
+            [MathContent::Environment(environment)] => match environment.children.as_slice() {
+                [MathContent::Text(flow)] => Some(flow),
+                _ => None,
+            },
+            _ => None,
+        }
+        .unwrap_or_else(|| panic!("{source} should retain an empty TextFlow"));
+        assert_eq!(text_flow.runs.len(), 1);
+        assert!(text_flow.runs[0].text.is_empty());
+
+        let serialized = serialize_tree(&original);
+        let round_trip = tree(&serialized);
+        assert_eq!(shape(&original.root), shape(&round_trip.root));
+    }
+}
+
+#[test]
+fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
+    let escaped = tree(r"\text{a\%b}");
+    let Some(MathContent::Text(flow)) = escaped.root.content.first() else {
+        panic!("text command should produce a TextFlow");
+    };
+    assert_eq!(
+        flow.runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "a%b"
+    );
+    assert_eq!(
+        flow.source_map
+            .iter()
+            .map(|entry| (
+                entry.text_start,
+                entry.text_end,
+                entry.source_range.start,
+                entry.source_range.end,
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 6, 7), (1, 2, 7, 9), (2, 3, 9, 10)]
+    );
+    let mut invalid_gap = escaped.clone();
+    let Some(MathContent::Text(flow)) = invalid_gap.root.content.first_mut() else {
+        panic!("text command should produce a TextFlow");
+    };
+    flow.source_map[1].text_start = 2;
+    assert!(invalid_gap.validate().is_err());
+
+    let collapsed = tree(r"\text{a   b}");
+    let Some(MathContent::Text(flow)) = collapsed.root.content.first() else {
+        panic!("text command should produce a TextFlow");
+    };
+    assert_eq!(
+        flow.runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "a b"
+    );
+    assert_eq!(
+        flow.source_map
+            .iter()
+            .map(|entry| (
+                entry.text_start,
+                entry.text_end,
+                entry.source_range.start,
+                entry.source_range.end,
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 6, 7), (1, 2, 7, 10), (2, 3, 10, 11)]
+    );
+
+    let mut invalid_boundary = escaped.clone();
+    let Some(MathContent::Text(flow)) = invalid_boundary.root.content.first_mut() else {
+        panic!("text command should produce a TextFlow");
+    };
+    flow.source_map[0].text_end = 2;
+    assert!(invalid_boundary.validate().is_err());
+    let mut invalid_utf8_boundary = tree(r"\text{é}");
+    let Some(MathContent::Text(flow)) = invalid_utf8_boundary.root.content.first_mut() else {
+        panic!("text command should produce a TextFlow");
+    };
+    flow.source_map[0].text_start = 1;
+    assert!(invalid_utf8_boundary.validate().is_err());
+
+    let empty = tree(r"\text{}");
+    let Some(MathContent::Text(flow)) = empty.root.content.first() else {
+        panic!("empty text command should retain a TextFlow");
+    };
+    assert_eq!(flow.source_map.len(), 1);
+    assert_eq!(flow.source_map[0].text_start, 0);
+    assert_eq!(flow.source_map[0].text_end, 0);
+    assert_eq!(flow.source_map[0].source_range.start, 6);
+    assert_eq!(flow.source_map[0].source_range.end, 6);
+}
+
+#[test]
 fn records_source_ranges() {
     let tree = tree(r"\frac{a}{bc}");
     let Some(MathContent::Math(fraction)) = tree.root.content.first() else {
