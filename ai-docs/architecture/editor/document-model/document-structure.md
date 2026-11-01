@@ -1,10 +1,10 @@
 # 文档树与结构
 
-更新日期：2026-10-30。本文是当前 DTO、文档树和页面层级的权威定义。语义草图不等于当前 Rust DTO/JSON 的逐字段描述，不照搬 OOXML，也不承诺 DOCX 兼容；内置与自定义环境的详细规则见[环境模型](document-environments.md)。位置与上限见[文档位置](document-position.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-01。本文是当前 DTO、文档树和页面层级的权威定义。语义草图不等于当前 Rust DTO/JSON 的逐字段描述，不照搬 OOXML，也不承诺 DOCX 兼容；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；行内/块级语义适配见[行内与块级环境适配](inline-and-block-environments.md)。位置与上限见[文档位置](document-position.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 当前实现
 
-当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 当前包含 Paragraph、BlockEnvironment、ExplicitBreak 和 Opaque，`InlineNode` 当前包含 Run、InlineEnvironment、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Equation、Align、Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
+当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、ExplicitBreak 和 Opaque，`InlineNode` 包含 Run、InlineEnvironment、InlineMath、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
 
 本页下文中的 `EnvironmentNode` 是语义层的统称；树形图是目标模型草图。当前 `.cdoc` 的具体字段以 `crates/caret-doc/src/model/` 中的 DTO 和 codec 为准。文档修订、布局缓存代际、焦点和选区属于运行时状态，不序列化进 `Document`。
 
@@ -18,8 +18,8 @@
 
 | 节点层级 | 所属容器 | 当前及规划中的内容 |
 | --- | --- | --- |
-| `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
-| `InlineNode` | `Paragraph.inlines` 的有序行内流 | `Run`、行内 `EnvironmentNode`、`SoftBreak`、未知行内节点；行内格式环境通过子节点保存作用范围 |
+| `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
+| `InlineNode` | `Paragraph.inlines` 的有序行内流 | `Run`、行内 `EnvironmentNode`、`InlineMath`、`SoftBreak`、未知行内节点；行内格式环境通过子节点保存作用范围 |
 
 页面角色组织块流；`Paragraph` 承载行内流并负责段落级排版。行内节点共享段落逻辑文本坐标，Run 边界和行内环境边界不改变 UTF-8 偏移或跨节点字素分段。实际 DTO 以本节开头列出的 `caret-doc` 类型为准。
 
@@ -27,7 +27,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](../command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体、下划线和局部字体使用 inline `EnvironmentNode`。各属性的语义和编辑规则见[文字格式语义](../text-formatting.md)。环境 kind、稳定存储名称、必需能力及模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。当前粗体、斜体、局部字体和下划线均使用 inline `EnvironmentNode`；目标架构将下划线改为 `Run.props.underline`，并经语义适配层接入交互。载体现状与目标见[行内与块级环境适配](inline-and-block-environments.md)，格式语义见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -101,7 +101,7 @@ Paragraph
 ```
 
 
-详细的块级/行内环境、格式能力和编辑语义见[环境模型](document-environments.md)。
+块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[行内与块级环境适配](inline-and-block-environments.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。
 
 ## 文本与实现边界
 

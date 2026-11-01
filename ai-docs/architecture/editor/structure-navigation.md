@@ -8,7 +8,9 @@
 
 当前文档模型实现的块结构是 Paragraph、由段落大纲属性识别的 Heading，以及 `BlockEnvironmentKind` 的 `Section`、`Custom`。`Section` 和 `Custom` 共享可嵌套的标题/子项容器；`Section` 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。
 
-行内 `EnvironmentNode`（Bold、Italic、Underline、Font）与 `InlineMath` 都是行内环境，参与格式和位置映射，不是块级导航停靠点。`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部位置用 `MathPos`，不额外插入 Paragraph 之上的结构层级。Equation 与 Align 作为块级环境进入 StructureIndex，提供结构栈与范围，但当前不是导航停靠点。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
+行内与块级当前环境的权威适配规则见[行内与块级环境适配](document-model/inline-and-block-environments.md)。行内 `EnvironmentNode`、Run 下划线范围和 `InlineMath` 分别保留自己的载体与编辑入口，不作为块级导航停靠点。
+
+`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部编辑当前由 `MathEdit` 通过源码字节游标定位。Equation 与 Align 作为块级公式节点进入结构范围；当前 `MathEdit.target` 标识活动公式，不改变持久化树。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
 
 当前 `StructureClass` 只有 `Paragraph`、`SingleLine`、`MultiLine`、`Table` 和 `Figure` 内容块类别；页面组合层不是该枚举的同级成员。未来页面组合角色是否进入导航索引，按文档模型的层级语义另行接入。
 
@@ -73,9 +75,11 @@ qml/Canvas/                         # 画布组合与 Theme 绑定
 
 ## 当前环境高亮
 
-环境统一由 `EnvironmentKind` 描述，每个 kind 给出层级（`block` / `inline`）与能力集（如能否解除包裹）。Rust 从当前结构栈中每个层级各取最内层环境，投影为交互快照的 `environmentHighlights` 数组；每项含 `level`、`kind` 与页面局部 pt 矩形 `rects`。块级矩形来自同代布局快照的环境范围，按页拆分；行内级矩形（含行内公式盒）来自布局层的选区矩形，按视觉行拆分。没有矩形的层级不输出。
+当前环境采用语义视图设计，不要求每项都对应同类持久化节点。目标适配器按 Inline 与 Block 分层，具体来源和操作见[行内与块级环境适配](document-model/inline-and-block-environments.md)。目标快照保留来源类型与逻辑范围，真实节点使用持久化 ID，Run 属性范围不生成 ID。
 
-画布按层级着色：块级为奶油黄，行内级为粉色，不绘制轮廓框。颜色来自 QML Theme 的 GUI token，不写入文档或排版主题；滚动和缩放只改变绘制坐标。Qt 只绘制快照给出的矩形，不遍历文档树；光标离开环境时对应层级清空，布局、分页或字体度量变化时改用新快照。分层规则见[画布与交互背景](../interface/canvas-highlighting.md)。
+044 尚未完成数学焦点到环境几何的适配。完成后，Rust 再用同代布局快照把候选映射为块范围、行内文本选区或公式盒；Qt 消费 `environmentHighlights` 绘制，不推导语义或范围。能力须区分宿主原子边界与公式内部可编辑性。
+
+画布按层级着色：块级为奶油黄，行内级为粉色，两组可以同时绘制且不画轮廓框。颜色来自 QML Theme 的 GUI token，不写入文档或排版主题；滚动和缩放只改变绘制坐标。Qt 只绘制快照给出的矩形，不遍历文档树；光标离开某个环境时只清空对应层级，布局、分页或字体度量变化时改用新快照。分层规则见[画布与交互背景](../interface/canvas-highlighting.md)。
 
 `Mod+Backspace` 解除光标所在的最内层可解除环境：是否可解除由该环境 kind 的能力集决定，不按节点类型逐一判断。
 

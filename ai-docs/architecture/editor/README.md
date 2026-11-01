@@ -24,6 +24,7 @@
 | 权威主题 | 文档 |
 | --- | --- |
 | 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
-| 环境、标题与编号 | [环境模型](document-model/document-environments.md) |
+| 行内载体、语义适配层与块环境视图 | [行内载体与环境视图](document-model/inline-and-block-environments.md) |
+| 块环境标题、编号与结构编辑 | [环境模型](document-model/document-environments.md) |
 | 位置与模型上限 | [文档位置](document-model/document-position.md) |
 | `.cdoc` 文件格式与存储边界 | [文档存储](document-model/document-storage.md) |

@@ -4,13 +4,13 @@
 
 ## 公式节点和 LaTeX 语义
 
-公式是可编辑的语义树，不是普通正文中的 LaTeX 源码。Caret 持有稳定、版本化的文档节点、占位符和 `MathPos`；解析器直接产出这棵树，没有中间 AST。公式布局从同一数学树产生绘制、命中测试与光标几何。
+公式是可编辑的语义树，不是普通正文中的 LaTeX 源码。Caret 持有稳定、版本化的文档节点与数学树；解析器直接产出这棵树，没有中间 AST。当前公式编辑状态 `MathEdit` 以源码和 UTF-8 字节游标定位；公式布局从同一数学树产生绘制、命中测试与光标几何。
 
 首版采用 LaTeX 对应名称：
 
 | Caret 节点 | LaTeX 术语 / 写法 | 位置与语义 |
 | --- | --- | --- |
-| `InlineMath` | inline math：`$...$`、`\(...\)` | 段落内的行内对象，内部位置用 `MathPos` |
+| `InlineMath` | inline math：`$...$`、`\(...\)` | 段落内的行内对象，内部编辑使用 `MathEdit` 的源码字节游标 |
 | `Equation` | `equation*` / `\[...\]` / `$$...$$` | 独占一行的无编号显示公式块；不是可自动折成普通段落的文本行 |
 | `Align` | `align*` | 多行无编号显示公式；每行有对齐单元格，`&` 是对齐点，`\\` 是公式行分隔 |
 
@@ -44,7 +44,7 @@
 }
 ```
 
-`<compact math tree>` 是说明性占位符，代表 `MathTree { schemaVersion, source, root, extra }`：`source` 是与当前树对应的 LaTeX，`root` 是有序 `MathNode` 树，`extra` 保留未知字段。
+`<compact math tree>` 是说明性占位符，代表 `MathTree { schemaVersion, source, root, extra }`：`source` 是公式编辑的输入权威，成功解析后与 `root` 保持一致；`root` 是有序 `MathNode` 树，`extra` 保留未知字段。
 
 ### 数学树的规模约束
 
@@ -90,4 +90,4 @@ LaTeX 没有唯一公式字体。M3 首版内置 STIX Two Math（OFL），三平
 
 ## M3 集成验收
 
-[011 总体验收](../../task/011-impl-math.md)由 [042 后端选型](../../task/042-math-backend.md)、[043 模型与编辑](../../task/043-math-model-and-editing.md)及 [044 布局、渲染与集成](../../task/044-math-layout-and-rendering.md)拆分推进。042 已完成，043 依赖 010 与 042，044 依赖 012 表格和 027 画布。[012 表格总体验收](../../task/012-impl-table.md)由 [045 模型与交互](../../task/045-table-model-and-editing.md)及 [046 布局与画布](../../task/046-table-layout-and-canvas.md)拆分；表格模型只持有通用 Caret 块序列，不直接依赖公式后端。044 负责接通单元格内公式的插入、编辑、导航、绘制、命中、撤销和保存往返。M3 只有在 011 汇总验收和单元格集成证据齐全后才算完成，013 也只有在该证据存在时才能开始。
+[011 总体验收](../../task/011-impl-math.md)由 [042 后端选型](../../task/042-math-backend.md)、[043 模型与编辑](../../task/043-math-model-and-editing.md)及 [044 布局与渲染](../../task/044-math-layout-and-rendering.md)拆分推进。042 已完成，043 依赖 010 与 042，044 依赖 027 画布，不依赖表格。045/046 分别承接单元格公式模型编辑与布局画布集成。[012 表格总体验收](../../task/012-impl-table.md)由 [045 模型与交互](../../task/045-table-model-and-editing.md)及 [046 布局与画布](../../task/046-table-layout-and-canvas.md)拆分；表格模型只持有通用 Caret 块序列，不直接依赖公式后端。045 负责单元格内公式节点的模型、编辑目标、导航及保存往返；046 在单元格坐标与裁剪边界内复用 044 的公式布局，接通绘制、命中、光标和高亮。表格模块不依赖 `caret-math`，由 engine 组合表格几何与数学几何。M3 只有在 011 汇总验收和单元格集成证据齐全后才算完成，013 也只有在该证据存在时才能开始。

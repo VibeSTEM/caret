@@ -1,11 +1,14 @@
-# 环境模型
+# 块环境模型
 
-更新日期：2026-10-30。本文是内置环境、自定义环境、标题、编号及环境编辑语义的权威定义。基础 DTO 与页面结构见[文档树与结构](document-structure.md)，位置映射见[文档位置](document-position.md)，格式解析见[文字格式语义](../text-formatting.md)。
+更新日期：2026-11-01。本文定义 Section、Custom 等块环境的标题、编号、模板、嵌套和结构编辑语义。Custom 的 Page/Inline scope 只在本文说明共享定义约束；对应节点及交互尚未实现。行内与块级适配见[行内与块级环境适配](inline-and-block-environments.md)；基础 DTO 与页面结构见[文档树与结构](document-structure.md)，位置映射见[文档位置](document-position.md)。
 
-`children` 按顺序保存环境拥有的正文节点：块级环境存段落、嵌套块环境、表格等 `Block`；行内环境存 Run、嵌套行内环境等 `InlineNode`。块级环境的 `title` 单独保存，不是 `children` 的首项。整体删除块级环境会删除标题和子树。解除环境则保留所有可见内容：有标题时将其转成普通 Paragraph，放在原位置的提升子项之前；Section 的当前自动编号物化为标题段落中的普通文字。提升子项保留原顺序和节点 ID，标题段落保留自身 ID；环境节点及其编号定义被移除。无标题 Section 按编号规则不显示、不占号，解除时只提升子项，不合成标题段落。
+`children` 按顺序保存块环境拥有的正文节点：Paragraph、嵌套块环境、表格等 `Block`。行内格式载体不属于本文的块树语义。块级环境的 `title` 单独保存，不是 `children` 的首项。
 
-文档级语言字段与语言回退见[多文字体系字体选择](../font-selection.md)；格式优先级与环境模板覆盖见[文字格式语义](../text-formatting.md)。页面几何由 `PageSection` 承载，模型见[文档树与结构](document-structure.md)。
-Run 的 Unicode 码点保留、未知字段参与局部合并等规则见[文档树与结构](document-structure.md)。
+整体删除块级环境会删除标题和子树。解除环境则保留所有可见内容：有标题时将其转成普通 Paragraph，放在原位置的提升子项之前；Section 的当前自动编号物化为标题段落中的普通文字。提升子项保留原顺序和节点 ID，标题段落保留自身 ID；环境节点及其编号定义被移除。
+
+无标题 Section 按编号规则不显示、不占号，解除时只提升子项，不合成标题段落。
+
+文档级语言字段与语言回退见[多文字体系字体选择](../font-selection.md)；格式优先级与环境模板覆盖见[文字格式语义](../text-formatting.md)。页面几何由 `PageSection` 承载，模型见[文档树与结构](document-structure.md)。Run 的 Unicode 码点保留与未知字段参与局部合并等规则，也见[文档树与结构](document-structure.md)。
 
 块级环境的 `title` 始终是单个 Paragraph。标题中按 Enter 时，光标前文本留在标题，后半段移入新建的正文首段，并插到已有正文内容之前；光标在标题开头或末尾时，允许标题前缀或新正文段为空。标题内的文本选区按“删除选区，再在选区起点拆分”一次提交。普通文本 Selection 只接受同一 `Story` 内的范围；GUI 指针拖选若跨越环境标题/正文或环境内外边界，会在 Rust 校验两个合法位置后提升为整块结构选区，并把焦点放到拖动方向对应的环境边界。无效 UTF-8/字素位置不得改变现有选区。标题 Enter 不会隐式改写跨 Story 文本范围。若正文首项是表格或嵌套环境，也在它之前插入 Paragraph。标题不会被拆成多个标题段。IME composition 尚未提交时 Return 由输入法消费，不触发 Enter 命令。
 
@@ -15,7 +18,7 @@ Section 首个正文 Paragraph 的段首 Backspace 删除标题与正文之间�
 
 普通 Backspace 在折叠光标位于空环境起点，或从环境末尾外侧停靠点向回删除时可移除空环境；在空 Section 后继外部段落的段首按 Backspace 时，将该段内容合并到 Section 标题末尾并移除外部段落。非空环境不会因普通 Backspace 被删除。若用户通过 Shift+方向键或指针拖选选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。第一次 Escape 收起整个环境选区，第二次才离开当前结构。撤销或重做后清除不再对应当前文档的虚拟环境外侧停靠状态。
 
-Mod+Backspace 在折叠光标位于行内环境时优先解除最内层行内环境并保留子内容；否则解除当前块环境并保留标题和正文。两种解除均为单次编辑撤销；Rust 根据当前编辑上下文仲裁行内与块环境动作。上述结构编辑由 Rust 事务维护位置映射与撤销状态；索引和导航几何的消费方式见[结构导航](../structure-navigation.md)。
+Mod+Backspace 在键盘上下文允许且当前焦点位于块环境时，解除当前块环境并保留标题和正文。行内候选的优先级、Run 属性解除以及行内/块级命令仲裁见[行内与块级环境适配](inline-and-block-environments.md)。块环境编辑由 Rust 事务维护位置映射与撤销状态；索引和导航几何的消费方式见[结构导航](../structure-navigation.md)。
 
 环境区分内置语义 kind 和可组合定义。内置 kind 固定 scope、合法子项和结构行为；Custom 是可跨 scope 选择的定义族，具体实例的 scope 必须与其 `definitionId` 指向的定义一致。主题快照提供内置 kind 默认模板、命名变体和自定义环境定义，实例 `props` 保存局部覆盖。`definitionId` 缺省表示使用 Custom 的通用默认模板；存在时必须能在当前文档嵌入的快照中解析到同 scope 定义。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版内置 kind 如下：
 
@@ -47,20 +50,16 @@ Page scope 定义基于 `BodyPage` 或 `TitlePage` 内置角色的 PageContent �
 
 | kind | scope | 子内容 | 语义 |
 | --- | --- | --- | --- |
-| `Bold` | inline | `InlineNode` | 粗体作用域；可选 `enabled: true|false` 显式开启/关闭继承的粗体，缺省兼容为 true |
-| `Italic` | inline | `InlineNode` | 斜体作用域；可选 `enabled: true|false` 显式开启/关闭继承的斜体，缺省兼容为 true |
-| `Font` | inline | `InlineNode` | 指定字体族的局部作用域；内层字体覆盖外层 |
 | `Section` | block | `Block` | 可选标题、章节结构和编号 |
 | `Custom` | Page / Block / Inline（由定义选择；当前实现仅 Block） | `PageContent` / `Block` / `InlineNode` | 可命名的声明式自定义环境定义；scope 决定合法内容容器 |
 
-每种环境的 `props` 只保存其注册语义允许的实例级覆盖；环境模板与命名样式存于所选主题快照。文件可以定义基于内置 kind 的环境模板，但不能任意发明新的结构 kind。模板引用的 `baseKind` 必须与实例 `kind` 一致。
+每种块环境的 `props` 只保存其注册语义允许的实例级覆盖；环境模板与命名样式存于所选主题快照。文件可以定义基于内置 kind 的环境模板，但不能任意发明新的结构 kind。模板引用的 `baseKind` 必须与实例 `kind` 一致。
 
 - `kind` 来自内置注册表，模板不能声明新的结构语义。未知 kind 和未知能力的打开/保存策略以[`.cdoc` 存储规范](document-storage.md)为准。
 
 
 
-- 行内格式环境仅在 kind、状态、模板、属性和上下文兼容时压平或合并；拆分时原节点 ID 留在文档顺序靠前的片段，其余片段分配新 ID；合并时保留顺序靠前的 ID，撤销恢复原树与 ID。具体 Bold/Italic/Font 操作见[文字格式语义](../text-formatting.md)。
-- `Section`、`Custom` 是块级 EnvironmentNode，拥有块子项和可选独立标题；`Section` 另有编号规则。`Custom` 是不绑定特定学术/排版语义的可嵌套容器，可通过 `props.displayName` 设置实例显示名，并由 `definitionId` 选择主题模板；不设置时使用通用名称。行内环境没有标题。
+- `Section`、`Custom` 是块级 EnvironmentNode，拥有块子项和可选独立标题；`Section` 另有编号规则。`Custom` 是不绑定特定学术/排版语义的可嵌套容器，可通过 `props.displayName` 设置实例显示名，并由 `definitionId` 选择主题模板；不设置时使用通用名称。块环境的标题规则见本文件；行内载体与标题无关。
 - 一个 Section 的语义层级示例：
 
 ```text
