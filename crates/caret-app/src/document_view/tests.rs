@@ -8,6 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 mod ime;
 mod keyboard;
 mod layout;
+mod math;
 mod navigation;
 
 /// 快照 JSON 经 serde_json 默认（非逐位精确）的浮点解析回读，末位可能相差 1 ulp，

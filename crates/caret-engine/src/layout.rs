@@ -1098,5 +1098,7 @@ fn display_math_input<'a>(paragraph: Paragraph, environment_ids: &[NodeId]) -> L
     }
 }
 
+mod math_caret;
+
 #[cfg(test)]
 mod tests;

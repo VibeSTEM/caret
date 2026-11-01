@@ -33,6 +33,8 @@ pub enum Command {
     InsertSoftBreak,
     /// 以 LaTeX 源文本在插入点放入一个原子行内公式。
     InsertInlineMath(String),
+    /// 进入光标旁的公式（行内公式或相邻显示公式块）编辑。
+    EnterMath(Direction),
     InsertParagraphBreak,
     Delete(Direction),
     MoveCaret(Direction),
@@ -87,6 +89,7 @@ impl Command {
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
             Self::InsertInlineMath(_) => "insert.inline_math",
+            Self::EnterMath(_) => "math.enter",
             Self::InsertParagraphBreak => "text.split_paragraph",
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",

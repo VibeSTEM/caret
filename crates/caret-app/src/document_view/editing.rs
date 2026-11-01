@@ -160,6 +160,9 @@ impl DocumentViewRuntime {
         text: String,
         allow_delta: bool,
     ) -> Result<String, String> {
+        if self.session.math_edit().is_some() {
+            return self.run_math_edit_command(Command::InsertText(text), "text.insert");
+        }
         self.base_snapshot()?;
         let selection = self.session.selection();
         let reusable_paragraph_id = (self.session.block_environment_exit().is_none()
@@ -231,6 +234,9 @@ impl DocumentViewRuntime {
         command: Command,
         error_context: &str,
     ) -> Result<String, String> {
+        if self.session.math_edit().is_some() {
+            return self.run_math_edit_command(command, error_context);
+        }
         let selection = self.session.selection();
         let reusable_paragraph_id = (self.session.selected_block_environment().is_none()
             && selection.anchor.paragraph_id == selection.focus.paragraph_id)
@@ -283,7 +289,37 @@ impl DocumentViewRuntime {
             }
             self.last_snapshot = Some(updated);
         }
+        if self.session.math_edit().is_some() {
+            // 刚进入公式编辑（如 `\math`、`\equation`）：整篇重排以纳入新公式盒。
+            self.last_snapshot = None;
+            return self.layout_snapshot_json();
+        }
         self.layout_snapshot_json_with_delta(delete_delta)
+    }
+
+    /// 公式编辑中的命令：公式盒尺寸可能影响整段乃至后续分页，统一整篇重排。
+    fn run_math_edit_command(
+        &mut self,
+        command: Command,
+        error_context: &str,
+    ) -> Result<String, String> {
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("{error_context}: {error}"))?;
+        if effect.composition_changed {
+            self.composition_id = None;
+            self.composition_preview_session = None;
+            self.composition_snapshot = None;
+            self.composition_range = None;
+        }
+        self.anchor_visual_affinity = self.session.selection_visual_affinity();
+        self.preferred_visual_x_pt = None;
+        if !effect.document_changed {
+            return self.interaction_state_json();
+        }
+        self.last_snapshot = None;
+        self.layout_snapshot_json()
     }
 }
 

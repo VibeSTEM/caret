@@ -39,7 +39,9 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
             json!({
                 "active": true,
                 "mode": match command_line.mode {
-                    caret_engine::CommandLineMode::Command => "command",
+                    // 公式子命令与顶层命令共用 `\` 前缀与补全界面，只是候选来源不同。
+                    caret_engine::CommandLineMode::Command
+                    | caret_engine::CommandLineMode::Math => "command",
                     caret_engine::CommandLineMode::FontFamily => "fontFamily",
                     caret_engine::CommandLineMode::DefaultFontTarget => "defaultFontTarget",
                     caret_engine::CommandLineMode::DefaultFontScope => "defaultFontScope",
@@ -477,6 +479,12 @@ impl DocumentViewRuntime {
             .session
             .structure_selection()
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+        // 公式编辑时插入点画在公式节点上，需要文档中的公式树。
+        let math_edit = self
+            .session
+            .math_edit()
+            .cloned()
+            .map(|edit| (edit, self.session.document().clone()));
         let snapshot = self.current_snapshot()?;
         let environment_highlights = environment_highlights_json(&environment_stack, snapshot);
         let rectangles = selection_rectangles_json(
@@ -534,6 +542,10 @@ impl DocumentViewRuntime {
             .caret_geometry(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
         let caret = caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
+        let caret = math_edit
+            .as_ref()
+            .and_then(|(edit, document)| snapshot.math_caret_geometry(document, edit))
+            .unwrap_or(caret);
         let font_size_centipoints = snapshot
             .font_size_centipoints_at(focus, visual_affinity)
             .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;

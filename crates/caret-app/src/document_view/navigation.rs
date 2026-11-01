@@ -34,12 +34,41 @@ impl DocumentViewRuntime {
         self.interaction_state_json()
     }
 
+    /// 公式编辑中左右键在公式源码内移动；正文中折叠光标紧邻公式时先进入公式。
+    fn move_math_caret(&mut self, forward: bool, extend: bool) -> Result<Option<String>, String> {
+        let direction = if forward {
+            Direction::Forward
+        } else {
+            Direction::Backward
+        };
+        let command = if self.session.math_edit().is_some() {
+            Command::MoveCaret(direction)
+        } else if !extend {
+            Command::EnterMath(direction)
+        } else {
+            return Ok(None);
+        };
+        let effect = self
+            .session
+            .run(command)
+            .map_err(|error| format!("navigation.math: {error}"))?;
+        if !effect.selection_changed {
+            return Ok(None);
+        }
+        self.anchor_visual_affinity = self.session.selection_visual_affinity();
+        self.preferred_visual_x_pt = None;
+        self.interaction_state_json().map(Some)
+    }
+
     /// 按 Parley 的视觉顺序移动焦点；非扩展选区时先折叠到对应视觉边缘。
     pub fn move_visual_caret_json(
         &mut self,
         forward: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if let Some(response) = self.move_math_caret(forward, extend)? {
+            return Ok(response);
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session

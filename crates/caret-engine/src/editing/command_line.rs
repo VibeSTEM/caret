@@ -20,6 +20,8 @@ pub enum CommandLineMode {
     DefaultFontScope,
     DefaultFontLanguage,
     DefaultFontFamily,
+    /// 公式编辑中的子命令；查询区分大小写，以区分 `\\gamma` 与 `\\Gamma`。
+    Math,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +47,14 @@ impl CommandLine {
             font_picker: None,
             preedit: String::new(),
             preedit_cursor_utf16: 0,
+        }
+    }
+
+    /// 公式编辑中打开的子命令行。
+    pub fn math(at: Pos) -> Self {
+        Self {
+            mode: CommandLineMode::Math,
+            ..Self::new(at)
         }
     }
 
@@ -180,7 +190,7 @@ impl CommandLine {
 
     pub fn prefix(&self) -> String {
         match self.mode {
-            CommandLineMode::Command => "\\".to_owned(),
+            CommandLineMode::Command | CommandLineMode::Math => "\\".to_owned(),
             CommandLineMode::FontFamily => "\\font ".to_owned(),
             CommandLineMode::DefaultFontTarget => "\\defaultfont ".to_owned(),
             CommandLineMode::DefaultFontScope => format!(
@@ -247,9 +257,14 @@ impl CommandLine {
             });
         }
 
+        let source = if self.mode == CommandLineMode::Math {
+            command_registry::math_candidates
+        } else {
+            command_registry::candidates
+        };
         let mut candidates = Vec::new();
         if self.query.is_empty() {
-            for candidate in command_registry::candidates() {
+            for candidate in source() {
                 let mut candidate = candidate;
                 candidate.available &= is_available(&candidate);
                 if candidate.available {
@@ -258,19 +273,40 @@ impl CommandLine {
             }
             return candidates;
         }
+        if self.mode == CommandLineMode::Math {
+            // 先列出区分大小写的别名前缀匹配，再列出不区分大小写的名称匹配。
+            let query = self.query.clone();
+            let lowercase = query.to_lowercase();
+            append_matches(
+                &mut candidates,
+                source,
+                |candidate| candidate.alias[1..].starts_with(&query),
+                &mut is_available,
+            );
+            append_matches(
+                &mut candidates,
+                source,
+                |candidate| candidate.label.to_lowercase().contains(&lowercase),
+                &mut is_available,
+            );
+            return candidates;
+        }
         let query = self.query.to_ascii_lowercase();
         append_matches(
             &mut candidates,
+            source,
             |candidate| candidate.alias[1..].starts_with(&query),
             &mut is_available,
         );
         append_matches(
             &mut candidates,
+            source,
             |candidate| candidate.command_id.starts_with(&query),
             &mut is_available,
         );
         append_matches(
             &mut candidates,
+            source,
             |candidate| candidate.label.to_ascii_lowercase().starts_with(&query),
             &mut is_available,
         );
@@ -296,6 +332,13 @@ impl CommandLine {
                 if text.chars().all(|character| character.is_ascii_graphic()) =>
             {
                 text.to_ascii_lowercase()
+            }
+            CommandLineMode::Math
+                if text
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic()) =>
+            {
+                text.to_owned()
             }
             CommandLineMode::DefaultFontTarget | CommandLineMode::DefaultFontLanguage
                 if !text.chars().any(char::is_control) =>
@@ -428,10 +471,11 @@ fn grapheme_byte_offset(text: &str, target_utf16: usize, round_up: bool) -> Opti
 
 fn append_matches(
     candidates: &mut Vec<CommandCandidate>,
+    source: fn() -> Vec<CommandCandidate>,
     mut matches_query: impl FnMut(&CommandCandidate) -> bool,
     mut is_available: impl FnMut(&CommandCandidate) -> bool,
 ) {
-    for candidate in command_registry::candidates() {
+    for candidate in source() {
         if !matches_query(&candidate)
             || candidates
                 .iter()

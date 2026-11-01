@@ -141,6 +141,13 @@ pub(super) enum DocumentPatch {
         environment: Box<BlockEnvironment>,
         environment_estimated_bytes: usize,
     },
+    /// 同一父级下一段连续块的整体替换；用于插入或修改显示公式、对齐公式块。
+    BlockRange {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        before: Vec<Block>,
+        after: Vec<Block>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +378,22 @@ impl DocumentPatch {
                     + size_of::<Box<Paragraph>>()
                     + node_id_bytes(environment_id)
             }
+            Self::BlockRange {
+                parent_environment_ids,
+                before,
+                after,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + before
+                        .iter()
+                        .chain(after)
+                        .map(block_estimated_bytes)
+                        .sum::<usize>()
+            }
             Self::EnvironmentInsertion {
                 parent_environment_ids,
                 environment_estimated_bytes,
@@ -469,6 +492,18 @@ impl DocumentPatch {
                 *kind,
                 false,
             ),
+            Self::BlockRange {
+                parent_environment_ids,
+                sibling_index,
+                before,
+                after,
+            } => apply_block_range(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                after,
+                before,
+            ),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
                 sibling_index,
@@ -566,6 +601,18 @@ impl DocumentPatch {
                 environment_id,
                 *kind,
                 true,
+            ),
+            Self::BlockRange {
+                parent_environment_ids,
+                sibling_index,
+                before,
+                after,
+            } => apply_block_range(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                before,
+                after,
             ),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
@@ -901,6 +948,26 @@ fn apply_environment_insertion(
     {
         blocks.remove(sibling_index);
     }
+}
+
+/// 把 `current` 所在的连续块替换为 `replacement`；位置或内容不符时不改文档。
+fn apply_block_range(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    current: &[Block],
+    replacement: &[Block],
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    let Some(end) = sibling_index.checked_add(current.len()) else {
+        return;
+    };
+    if blocks.get(sibling_index..end) != Some(current) {
+        return;
+    }
+    blocks.splice(sibling_index..end, replacement.iter().cloned());
 }
 
 fn apply_environment_boundary_paragraphs(
