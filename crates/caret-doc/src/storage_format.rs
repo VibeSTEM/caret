@@ -31,18 +31,13 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
-    "caret.text.underline",
     "caret.theme.snapshot",
 ];
 
 fn requires_explicit_feature_declaration(feature: &str) -> bool {
     matches!(
         feature,
-        "caret.text.underline"
-            | "caret.math.inline"
-            | "caret.math.equation"
-            | "caret.math.align"
-            | "caret.math.syntax.v1"
+        "caret.math.inline" | "caret.math.equation" | "caret.math.align" | "caret.math.syntax.v1"
     )
 }
 
@@ -355,8 +350,6 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
     {
         reasons.push(PreviewReason::UnsupportedThemeVersion(theme.format_version));
     }
-    // 特性检查基于原始内容；之后再把旧的 Run 下划线读入为行内环境。
-    file.document.migrate_run_underline();
     if reasons.is_empty() {
         // 正文、媒体和特性列表已在上方校验；避免对整棵文档树重复遍历。
         file.refresh_required_features();

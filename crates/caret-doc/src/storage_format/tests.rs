@@ -1,9 +1,8 @@
 //! 验证文档文件格式、往返和兼容边界。
 
 use super::{CdocFile, DocumentError, OpenedDocument, PreviewReason, open};
-use crate::{Block, Document, InlineNode, Run};
+use crate::Document;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
     let file = CdocFile::new(Document::blank())?;
@@ -280,67 +279,6 @@ fn default_code_font_family_is_persisted_and_restored() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn legacy_run_underline_opens_as_underline_environment() -> Result<(), Box<dyn std::error::Error>> {
-    let mut envelope = blank_envelope()?;
-    envelope["document"]["body"] = json!([{
-        "type": "paragraph",
-        "id": "paragraph",
-        "inlines": [
-            {"type": "run", "text": "a", "props": {"underline": true}},
-            {"type": "run", "text": "b", "props": {"underline": true}},
-            {"type": "run", "text": "c", "props": {"underline": false}}
-        ]
-    }]);
-    envelope["requiredFeatures"] = json!(["caret.text.underline"]);
-
-    let opened = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::Editable(file) = opened else {
-        panic!("supported underline data should be editable");
-    };
-    let saved: Value = serde_json::from_slice(&file.to_bytes()?)?;
-    let features = saved["requiredFeatures"]
-        .as_array()
-        .ok_or("missing feature list")?;
-    assert!(
-        features
-            .iter()
-            .any(|feature| feature == "caret.env.underline")
-    );
-    assert!(
-        !features
-            .iter()
-            .any(|feature| feature == "caret.text.underline")
-    );
-    // 相邻的下划线 Run 合并为一个 Underline 环境；false 被去掉。
-    let inlines = &saved["document"]["body"][0]["inlines"];
-    assert_eq!(inlines[0]["type"], json!("environment"));
-    assert_eq!(inlines[0]["kind"], json!("underline"));
-    assert_eq!(inlines[0]["children"].as_array().map(Vec::len), Some(2));
-    assert!(
-        inlines[0]["children"][0]["props"]
-            .get("underline")
-            .is_none()
-    );
-    assert!(inlines[1]["props"].get("underline").is_none());
-    assert_eq!(inlines[1]["text"], json!("c"));
-
-    envelope["requiredFeatures"] = json!([]);
-    let opened = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::SafePreview(preview) = opened else {
-        panic!("unmarked underline property must be read-only");
-    };
-    assert!(
-        preview
-            .reasons
-            .contains(&PreviewReason::MissingRequiredFeature(
-                "caret.text.underline".to_owned()
-            ))
-    );
-    assert!(!preview.can_save());
-    Ok(())
-}
-
-#[test]
 fn malformed_envelope_metadata_is_rejected_before_document_decoding()
 -> Result<(), Box<dyn std::error::Error>> {
     assert!(matches!(
@@ -524,49 +462,6 @@ fn serialization_recalculates_features_for_an_edited_document_without_mutating_i
             .iter()
             .any(|feature| feature == "caret.text.language-tags")
     );
-    Ok(())
-}
-
-#[test]
-fn serialization_adds_underline_feature_after_first_edit_and_rejects_unknown_values()
--> Result<(), Box<dyn std::error::Error>> {
-    let mut file = CdocFile::new(Document::blank())?;
-    let Block::Paragraph(paragraph) = &mut file.document_mut().body[0] else {
-        return Err("blank document should start with a paragraph".into());
-    };
-    paragraph.inlines.push(InlineNode::Run(Run {
-        text: "text".to_owned(),
-        language: None,
-        props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
-        extra: BTreeMap::new(),
-    }));
-
-    let bytes = file.to_bytes()?;
-    assert!(
-        !file
-            .required_features()
-            .iter()
-            .any(|feature| feature == "caret.text.underline"),
-        "serializing an edited document must not mutate the open session"
-    );
-    let json: Value = serde_json::from_slice(&bytes)?;
-    assert!(json["requiredFeatures"].as_array().is_some_and(|features| {
-        features
-            .iter()
-            .any(|feature| feature == "caret.text.underline")
-    }));
-    assert!(!open(&bytes)?.is_read_only());
-
-    let mut invalid = file;
-    let Block::Paragraph(paragraph) = &mut invalid.document_mut().body[0] else {
-        return Err("blank document should start with a paragraph".into());
-    };
-    let InlineNode::Run(run) = &mut paragraph.inlines[0] else {
-        return Err("edited paragraph should contain a run".into());
-    };
-    run.props
-        .insert("underline".to_owned(), serde_json::json!("extended"));
-    assert_eq!(invalid.to_bytes(), Err(DocumentError::ReadOnlyPreview));
     Ok(())
 }
 
