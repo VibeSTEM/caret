@@ -19,6 +19,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.explicit-format-state",
     "caret.env.font",
     "caret.env.italic",
+    "caret.env.underline",
     "caret.env.section",
     "caret.env.custom",
     "caret.env.templates",
@@ -354,6 +355,8 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
     {
         reasons.push(PreviewReason::UnsupportedThemeVersion(theme.format_version));
     }
+    // 特性检查基于原始内容；之后再把旧的 Run 下划线读入为行内环境。
+    file.document.migrate_run_underline();
     if reasons.is_empty() {
         // 正文、媒体和特性列表已在上方校验；避免对整棵文档树重复遍历。
         file.refresh_required_features();

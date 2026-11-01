@@ -306,7 +306,7 @@ fn validate_inline<'a>(
                     .is_some_and(|value| !value.is_boolean())
             {
                 return Err(ModelError::InvalidDocument(
-                    "Bold/Italic enabled must be boolean".to_owned(),
+                    "Bold/Italic/Underline enabled must be boolean".to_owned(),
                 ));
             }
             if environment.kind.supports_font_family()

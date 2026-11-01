@@ -15,8 +15,7 @@ pub(super) struct FormatSpan {
     pub(super) end: usize,
     pub(super) bold: bool,
     pub(super) italic: bool,
-    /// `None` 表示软换行占据偏移位置，但它本身不是可设置下划线的文字。
-    pub(super) underline: Option<bool>,
+    pub(super) underline: bool,
 }
 
 pub(in crate::editing::session) fn apply_formats_to_range(
@@ -82,6 +81,7 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
         offset: &mut usize,
         bold: bool,
         italic: bool,
+        underline: bool,
         output: &mut Vec<FormatSpan>,
     ) -> Result<(), EditError> {
         for node in nodes {
@@ -95,12 +95,7 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                             end: *offset,
                             bold,
                             italic,
-                            underline: Some(
-                                run.props
-                                    .get("underline")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false),
-                            ),
+                            underline,
                         });
                     }
                 }
@@ -110,13 +105,14 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                         end: *offset + 1,
                         bold,
                         italic,
-                        underline: None,
+                        underline,
                     });
                     *offset += 1;
                 }
                 InlineNode::Environment(environment) => {
                     let mut nested_bold = bold;
                     let mut nested_italic = italic;
+                    let mut nested_underline = underline;
                     match environment.kind {
                         InlineEnvironmentKind::Bold => {
                             nested_bold = environment
@@ -132,6 +128,13 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                                 .and_then(Value::as_bool)
                                 .unwrap_or(true);
                         }
+                        InlineEnvironmentKind::Underline => {
+                            nested_underline = environment
+                                .props
+                                .get("enabled")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true);
+                        }
                         InlineEnvironmentKind::Font => {}
                     }
                     collect(
@@ -139,6 +142,7 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
                         offset,
                         nested_bold,
                         nested_italic,
+                        nested_underline,
                         output,
                     )?;
                 }
@@ -152,7 +156,7 @@ pub(super) fn format_spans(nodes: &[InlineNode]) -> Result<Vec<FormatSpan>, Edit
 
     let mut spans = Vec::new();
     let mut offset = 0;
-    collect(nodes, &mut offset, false, false, &mut spans)?;
+    collect(nodes, &mut offset, false, false, false, &mut spans)?;
     Ok(spans)
 }
 
@@ -160,54 +164,9 @@ pub(super) fn format_value(span: &FormatSpan, kind: InlineEnvironmentKind) -> bo
     match kind {
         InlineEnvironmentKind::Bold => span.bold,
         InlineEnvironmentKind::Italic => span.italic,
+        InlineEnvironmentKind::Underline => span.underline,
         InlineEnvironmentKind::Font => false,
     }
-}
-
-pub(super) fn set_run_underline_to_range(
-    nodes: &mut Vec<InlineNode>,
-    start: usize,
-    end: usize,
-    enabled: bool,
-) -> Result<(), EditError> {
-    if start >= end {
-        return Ok(());
-    }
-    let original = std::mem::take(nodes);
-    let (prefix_and_selected, after) = split_inline_nodes(original, end)?;
-    let (before, mut selected) = split_inline_nodes(prefix_and_selected, start)?;
-    if selected.is_empty() {
-        return Err(EditError::InvalidPosition);
-    }
-    fn set(nodes: &mut [InlineNode], enabled: bool) -> Result<(), EditError> {
-        for node in nodes {
-            match node {
-                InlineNode::Run(run) => {
-                    run.props
-                        .insert("underline".to_owned(), Value::Bool(enabled));
-                }
-                InlineNode::Environment(environment) => set(&mut environment.children, enabled)?,
-                InlineNode::SoftBreak(_) => {}
-                InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                    return Err(EditError::UnsupportedOpaqueContent);
-                }
-            }
-        }
-        Ok(())
-    }
-    set(&mut selected, enabled)?;
-    normalize_inline_tree(&mut selected);
-    let before_len = before.len();
-    let mut selected_end = before_len + selected.len();
-    nodes.reserve(before_len + selected.len() + after.len());
-    nodes.extend(before);
-    nodes.extend(selected);
-    nodes.extend(after);
-    if before_len > 0 && merge_adjacent_inline_nodes(nodes, before_len - 1) {
-        selected_end = selected_end.saturating_sub(1);
-    }
-    merge_adjacent_inline_nodes(nodes, selected_end.saturating_sub(1));
-    Ok(())
 }
 
 pub(super) fn effective_format_at(

@@ -447,7 +447,6 @@ impl Session {
                 unreachable!("structure edit commands returned above")
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
-            Command::ToggleRunUnderline => self.toggle_run_underline(),
             Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
                 self.remove_inline_environment_preserving_content(&environment_id)
             }
@@ -828,7 +827,6 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertInlineMath(_)
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
-            | Command::ToggleRunUnderline
             | Command::RemoveInlineEnvironmentPreservingContent(_)
             | Command::SetInlineFontFamily(_)
             | Command::SetParagraphFirstLineIndentChars(_)

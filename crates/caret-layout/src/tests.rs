@@ -1184,11 +1184,17 @@ fn persistent_underline_follows_shaped_runs_across_soft_wrap_without_changing_li
     let mut layouter = ParagraphLayouter::new();
     let mut model = paragraph("underline中文underline", Some("zh-Hans"));
     let plain_model = model.clone();
-    let InlineNode::Run(run) = &mut model.inlines[0] else {
-        unreachable!();
-    };
-    run.props
-        .insert("underline".to_owned(), serde_json::json!(true));
+    let children = std::mem::take(&mut model.inlines);
+    model
+        .inlines
+        .push(InlineNode::Environment(caret_doc::InlineEnvironment {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::InlineEnvironmentKind::Underline,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children,
+            extra: BTreeMap::new(),
+        }));
     let (_, layout) = layouter
         .layout(
             &mut catalog,
