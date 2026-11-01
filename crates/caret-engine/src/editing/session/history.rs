@@ -6,7 +6,7 @@
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
-use super::math_edit::MathEditTarget;
+use super::math_edit::{MathEditBranch, MathEditTarget};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget,
     DocumentSettings, Equation, MathNode, MathTree, NodeId, PageGeometry, Paragraph,
@@ -179,15 +179,28 @@ pub(super) struct SessionHistoryState {
 pub(super) struct MathEditPosition {
     pub(super) target: MathEditTarget,
     pub(super) cursor: usize,
+    pub(super) branch: MathEditBranch,
 }
 
 impl MathEditPosition {
-    pub(super) fn new(target: MathEditTarget, cursor: usize) -> Self {
-        Self { target, cursor }
+    pub(super) fn with_branch(
+        target: MathEditTarget,
+        cursor: usize,
+        branch: MathEditBranch,
+    ) -> Self {
+        Self {
+            target,
+            cursor,
+            branch,
+        }
     }
 
     fn estimated_bytes(&self) -> usize {
         size_of::<Self>()
+            + match &self.branch {
+                MathEditBranch::Source => 0,
+                MathEditBranch::Text { path, .. } => path.estimated_bytes(),
+            }
             + match &self.target {
                 MathEditTarget::Inline {
                     paragraph_id,

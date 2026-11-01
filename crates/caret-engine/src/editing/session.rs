@@ -12,7 +12,9 @@ mod history;
 mod inline_content;
 mod keyboards;
 mod math_edit;
-pub use math_edit::{MathEdit, MathEditTarget};
+pub use math_edit::{
+    MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath, MathTextFlowPathStep,
+};
 mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;

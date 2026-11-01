@@ -24,9 +24,16 @@ pub(super) fn preserve_display_math_metadata(
             )
         }
         (Block::Align(original), Block::Align(updated)) => {
-            let prefix_len = super::ALIGN_BEGIN.len();
-            let old_full_edit = old_edit.start + prefix_len..old_edit.end + prefix_len;
-            let new_full_edit = new_edit.start + prefix_len..new_edit.end + prefix_len;
+            let Some(old_body) = super::align_source::align_body_range(&original.source) else {
+                return false;
+            };
+            let Some(new_body) = super::align_source::align_body_range(&updated.source) else {
+                return false;
+            };
+            let old_body_start = old_body.start;
+            let new_body_start = new_body.start;
+            let old_full_edit = old_edit.start + old_body_start..old_edit.end + old_body_start;
+            let new_full_edit = new_edit.start + new_body_start..new_edit.end + new_body_start;
             preserve_align_metadata(original, updated, &old_full_edit, &new_full_edit)
         }
         _ => false,
@@ -41,8 +48,40 @@ pub(super) fn preserve_align_metadata(
     new_edit: &std::ops::Range<usize>,
 ) -> bool {
     updated.extra.clone_from(&previous.extra);
-    let previous_cells = align_cell_source_ranges(previous);
-    let updated_cells = align_cell_source_ranges(updated);
+    let Some(mut previous_cells) = align_cell_source_ranges(previous) else {
+        return false;
+    };
+    let Some(mut updated_cells) = align_cell_source_ranges(updated) else {
+        return false;
+    };
+    let Some(previous_body_start) =
+        super::align_source::align_body_range(&previous.source).map(|range| range.start)
+    else {
+        return false;
+    };
+    let Some(updated_body_start) =
+        super::align_source::align_body_range(&updated.source).map(|range| range.start)
+    else {
+        return false;
+    };
+    for range in previous_cells.iter_mut().flatten() {
+        range.start -= previous_body_start;
+        range.end -= previous_body_start;
+    }
+    for range in updated_cells.iter_mut().flatten() {
+        range.start -= updated_body_start;
+        range.end -= updated_body_start;
+    }
+    let (Some(old_start), Some(old_end), Some(new_start), Some(new_end)) = (
+        old_edit.start.checked_sub(previous_body_start),
+        old_edit.end.checked_sub(previous_body_start),
+        new_edit.start.checked_sub(updated_body_start),
+        new_edit.end.checked_sub(updated_body_start),
+    ) else {
+        return false;
+    };
+    let old_edit = old_start..old_end;
+    let new_edit = new_start..new_end;
     let previous_rows = align_row_source_ranges(&previous_cells);
     let updated_rows = align_row_source_ranges(&updated_cells);
     let prefix_end = old_edit.start;
@@ -52,12 +91,12 @@ pub(super) fn preserve_align_metadata(
     let changed_previous_rows = previous_rows
         .iter()
         .enumerate()
-        .filter(|(_, range)| range_intersects_edit(range, old_edit))
+        .filter(|(_, range)| range_intersects_edit(range, &old_edit))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     let changed_updated_rows = updated_rows
         .iter()
-        .filter(|range| range_intersects_edit(range, new_edit))
+        .filter(|range| range_intersects_edit(range, &new_edit))
         .count();
     if (previous.rows.len() != updated.rows.len()
         || changed_previous_rows.len() != changed_updated_rows)
@@ -93,8 +132,8 @@ pub(super) fn preserve_align_metadata(
     map_changed_rows(
         &previous_rows,
         &updated_rows,
-        old_edit,
-        new_edit,
+        &old_edit,
+        &new_edit,
         &mut row_mapping,
         &mut matched_rows,
     );
@@ -150,8 +189,8 @@ pub(super) fn preserve_align_metadata(
         }
     }
 
-    let old_changed_cells = changed_cell_candidates(&previous_cells, old_edit);
-    let new_changed_cells = changed_cell_candidates(&updated_cells, new_edit);
+    let old_changed_cells = changed_cell_candidates(&previous_cells, &old_edit);
+    let new_changed_cells = changed_cell_candidates(&updated_cells, &new_edit);
     if old_changed_cells.len() == 1 && new_changed_cells.len() == 1 {
         let (old_row, old_cell) = old_changed_cells[0];
         let (new_row, new_cell) = new_changed_cells[0];
@@ -159,12 +198,12 @@ pub(super) fn preserve_align_metadata(
             let old_cell_range = &previous_cells[old_row][old_cell];
             let new_cell_range = &updated_cells[new_row][new_cell];
             let old_local_edit = local_edit_range(
-                old_edit,
+                &old_edit,
                 old_cell_range,
                 previous.rows[old_row].cells[old_cell].source.len(),
             );
             let new_local_edit = local_edit_range(
-                new_edit,
+                &new_edit,
                 new_cell_range,
                 updated.rows[new_row].cells[new_cell].source.len(),
             );
@@ -191,121 +230,8 @@ pub(super) fn preserve_align_metadata(
 }
 
 /// 按树内单元格源码的文档顺序，在 Align 原始源码中定位其字节范围。
-fn align_cell_source_ranges(align: &Align) -> Vec<Vec<std::ops::Range<usize>>> {
-    let source = &align.source;
-    let body_start = source
-        .find("\\begin{aligned}")
-        .map_or(0, |start| start + "\\begin{aligned}".len());
-    let body_end = source[body_start..]
-        .find("\\end{aligned}")
-        .map_or(source.len(), |offset| body_start + offset);
-    let mut parsed_rows = Vec::<Vec<std::ops::Range<usize>>>::new();
-    let mut row = Vec::new();
-    let mut cell_start = body_start;
-    let mut cursor = body_start;
-    let mut brace_depth = 0usize;
-    let mut environment_depth = 0usize;
-    while cursor < body_end {
-        let remaining = &source[cursor..body_end];
-        let Some(character) = remaining.chars().next() else {
-            break;
-        };
-        if character == '%' {
-            cursor += remaining
-                .find('\n')
-                .map_or(remaining.len(), |newline| newline + 1);
-            continue;
-        }
-        if character == '\\' {
-            if brace_depth == 0 && environment_depth == 0 && remaining.starts_with("\\\\") {
-                row.push(cell_start..cursor);
-                parsed_rows.push(std::mem::take(&mut row));
-                cursor += 2;
-                cell_start = cursor;
-                continue;
-            }
-            if let Some((command, after_command)) = align_control_word(remaining)
-                && matches!(command, "begin" | "end")
-                && let Some((name, after_group)) = control_group(&remaining[after_command..])
-            {
-                if command == "begin" {
-                    environment_depth += 1;
-                } else {
-                    environment_depth = environment_depth.saturating_sub(1);
-                }
-                cursor += after_command + after_group;
-                let _ = name;
-                continue;
-            }
-            let Some(escaped) = remaining[1..].chars().next() else {
-                break;
-            };
-            if escaped.is_ascii_alphabetic() {
-                let word_end = remaining
-                    .char_indices()
-                    .skip(1)
-                    .take_while(|(_, ch)| ch.is_ascii_alphabetic())
-                    .last()
-                    .map_or(1, |(index, ch)| index + ch.len_utf8());
-                cursor += word_end;
-            } else {
-                cursor += 1 + escaped.len_utf8();
-            }
-            continue;
-        }
-        match character {
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '&' if brace_depth == 0 && environment_depth == 0 => {
-                row.push(cell_start..cursor);
-                cursor += 1;
-                cell_start = cursor;
-                continue;
-            }
-            _ => {}
-        }
-        cursor += character.len_utf8();
-    }
-    row.push(cell_start..body_end);
-    parsed_rows.push(row);
-
-    align
-        .rows
-        .iter()
-        .zip(parsed_rows)
-        .map(|(row, ranges)| {
-            row.cells
-                .iter()
-                .zip(ranges)
-                .map(|(cell, range)| {
-                    if cell.source.is_empty() {
-                        return range.start..range.start;
-                    }
-                    source[range.clone()]
-                        .find(&cell.source)
-                        .map(|offset| {
-                            let start = range.start + offset;
-                            start..start + cell.source.len()
-                        })
-                        .unwrap_or(range)
-                })
-                .collect()
-        })
-        .collect()
-}
-
-fn align_control_word(source: &str) -> Option<(&str, usize)> {
-    let tail = source.strip_prefix('\\')?;
-    let length = tail.bytes().take_while(u8::is_ascii_alphabetic).count();
-    (length > 0).then(|| (&tail[..length], length + 1))
-}
-
-fn control_group(source: &str) -> Option<(&str, usize)> {
-    let source = source.trim_start();
-    let skipped = source.len() - source.trim_start().len();
-    let body = source.strip_prefix('{')?;
-    let close = body.find('}')?;
-    Some((&body[..close], skipped + close + 2))
+pub(super) fn align_cell_source_ranges(align: &Align) -> Option<Vec<Vec<std::ops::Range<usize>>>> {
+    super::align_source::cell_source_ranges(align)
 }
 
 fn align_row_source_ranges(cells: &[Vec<std::ops::Range<usize>>]) -> Vec<std::ops::Range<usize>> {
