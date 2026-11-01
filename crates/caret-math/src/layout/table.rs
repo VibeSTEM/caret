@@ -5,7 +5,7 @@
 // 本文件移植自 Typst：
 //   仓库：https://github.com/typst/typst
 //   原路径：crates/typst-layout/src/math/table.rs
-//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
 //   修改：单元格改为单个片段（列对齐由 Caret 按列指定，不做单元格内子列）；
 //   新增整行（`\intertext`）；横竖线以实心矩形输出；行高下限沿用 Typst 的“分母样式圆括号”。

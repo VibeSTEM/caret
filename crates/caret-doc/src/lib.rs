@@ -6,10 +6,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod document_units;
 mod model;
 mod page_geometry;
 mod storage_format;
 
+pub use document_units::DocumentUnits;
 pub use model::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_CODE_FONT_FAMILY, Document,
     DocumentFontTarget, DocumentSettings, Equation, ExplicitBreak, InlineEnvironment,

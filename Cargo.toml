@@ -22,9 +22,9 @@ default-members = ["crates/launcher"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# 支持下限由当前使用的标准库 / 依赖 API 决定（Atomic::try_update 要求 1.95）。
+# 支持下限由当前使用的标准库 / 依赖 API 决定（MSRV 与锁定工具链统一为 1.99）。
 # 日常工具链由 rust-toolchain.toml 锁定；resolver 3 按此下限解析依赖。
-rust-version = "1.95"
+rust-version = "1.99"
 license = "Apache-2.0"
 repository = "https://github.com/VibeSTEM/caret"
 

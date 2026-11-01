@@ -50,6 +50,41 @@ fn unsupported_required_feature_cannot_replace_the_current_session() -> Result<(
 }
 
 #[test]
+fn math_feature_stays_read_only_until_formula_layout_is_supported() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    service.view_mut().insert_text_json("existing".to_owned())?;
+    let before = service.save_snapshot()?;
+    let mut value: Value =
+        serde_json::from_slice(&before.bytes).map_err(|error| error.to_string())?;
+    value["document"]["body"][0]["inlines"] = json!([{
+        "type": "inlineMath",
+        "id": "inline-math",
+        "mathTree": {
+            "schemaVersion": 1,
+            "source": "x",
+            "root": {
+                "id": "root",
+                "kind": "row",
+                "children": [{"id": "x", "kind": "symbol", "text": "x"}]
+            }
+        }
+    }]);
+    value["requiredFeatures"] = json!(["caret.math.inline", "caret.math.syntax.v1"]);
+    let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+
+    let result = DocumentSessionService::prepare_open(
+        &bytes,
+        std::path::Path::new("math.cdoc"),
+        service.session_generation() + 1,
+    );
+
+    assert!(matches!(result, Err(ref error) if error == "cdoc.safe_preview_read_only"));
+    assert_eq!(service.document_generation(), before.document_generation);
+    assert_eq!(service.save_snapshot()?, before);
+    Ok(())
+}
+
+#[test]
 fn prepared_open_rejects_a_document_edited_while_it_was_loading() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     let before = service.save_snapshot()?;

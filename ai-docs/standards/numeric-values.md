@@ -13,7 +13,7 @@
 
 缩放因子必须由单位定义固定下来，不能由消费者猜测。Rust schema 校验范围，Qt 适配器在转换前做必要的范围检查。整数乘除使用检查运算或安全的中间类型；转换为 `f32`、`f64` 或 `qreal` 前验证范围，浮点输入还必须拒绝 NaN 和无穷值。
 
-同一单位换算只定义在一个领域工具中。Qt 画布中的 pt → logical px、字号 centipoints → centipixels 与 centipixels → logical px 转换由 `DocumentUnits` 管理；跨 QML 传递整数字号和整数百分之一逻辑像素，只有消费 Qt 几何 API 时再转换为浮点像素。QML 中字号增减仍使用 centipoints 整数，不先转 pt 浮点。
+同一单位换算只定义在一个领域工具中。Rust 文档字号与段落距离的 centipoints ↔ pt 转换由 `caret_doc::DocumentUnits` 管理；Qt 画布中的 pt → logical px、字号 centipoints → centipixels 与 centipixels → logical px 转换由 QML `DocumentUnits` 门面及其 C++ 实现管理。跨 QML 传递整数字号和整数百分之一逻辑像素，只有消费 Qt 几何 API 时再转换为浮点像素。QML 中字号增减仍使用 centipoints 整数，不先转 pt 浮点。单位归属、转换入口和边界见[文档单位架构](../architecture/editor/document-units.md)。
 
 缩放百分比与浮点倍率必须通过 `DocumentUnits.percentToFactor()` / `DocumentUnits.factorToPercent()` 转换；C++ 内部调用对应的 `document_units::percent_to_factor()`。调用点不得内联 `/100`、`*100`、`0.01` 等换算，也不得新增第二套 helper。`CanvasPolicy` 只负责允许的缩放范围和步进，不复制单位换算。pt、centipixels 与 logical px 也必须复用 `DocumentUnits` 中的对应转换。
 

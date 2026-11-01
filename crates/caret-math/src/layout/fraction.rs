@@ -5,7 +5,7 @@
 // 本文件移植自 Typst：
 //   仓库：https://github.com/typst/typst
 //   原路径：crates/typst-layout/src/math/fraction.rs
-//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
 //   修改：改为接收已排好的分子分母片段与 Caret 样式；横线以实心矩形输出；去掉斜分式与描边样式。
 

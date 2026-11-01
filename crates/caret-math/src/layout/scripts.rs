@@ -5,7 +5,7 @@
 // 本文件移植自 Typst：
 //   仓库：https://github.com/typst/typst
 //   原路径：crates/typst-layout/src/math/scripts.rs
-//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
 //   修改：只保留右上、右下与上、下四个位置（Caret 文档树没有前置上下标）；
 //   常量改由 Caret 上下文读取；结果直接返回片段。

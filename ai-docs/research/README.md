@@ -15,3 +15,4 @@
 | 007 | [多文字体系字体选择器](007-font-selection.md) | 字体选择外部资料与历史调研；当前设计规范见架构文档 |
 | 008 | [Office Open XML 行距、段距与分页语义](008-office-open-xml-spacing-pagination.md) | 以 ECMA-376 / ISO/IEC 29500 为准，记录 WordprocessingML 排版属性及互操作边界 |
 | 009 | [Rust AutoSave 库评估](009-autosave-rust-library-audit.md) | 评估防抖、文件通知与 AutoSave crate 是否适合 Caret 的文档生命周期 |
+| 010 | [Typst 数学排版移植](010-typst-math-layout.md) | 公式排版的来源选型、MATH 表依赖与移植范围；移植代码按 Apache-2.0 保留来源 |

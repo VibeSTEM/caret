@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use crate::{Affinity, Pos, Selection, Session, StoryId};
-use caret_doc::{Block, Document, NodeId, Paragraph};
+use caret_doc::{Block, Document, DocumentUnits, NodeId, Paragraph};
 use caret_layout::{
     FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
     ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
@@ -535,15 +535,7 @@ impl DocumentLayoutSnapshot {
 }
 
 fn font_size_centipoints(font_size_pt: f32) -> Option<u16> {
-    let centipoints = f64::from(font_size_pt) * 100.0;
-    if !centipoints.is_finite() || centipoints < 1.0 || centipoints > f64::from(u16::MAX) {
-        return None;
-    }
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "字号已校验并四舍五入到 u16 范围"
-    )]
-    u16::try_from(centipoints.round() as u32).ok()
+    DocumentUnits::points_to_font_size_centipoints(font_size_pt)
 }
 
 /// 可复用塑形器；调用方跨文档代际复用字体目录，避免按段落扫描系统字体。
@@ -562,12 +554,6 @@ struct LineGridMetricsCache {
 }
 
 impl DocumentLayoutService {
-    /// 常驻公式后端缓存的条目数；未排过公式时为 None。
-    #[cfg(test)]
-    pub(crate) fn math_cache_len(&self) -> Option<usize> {
-        self.math.as_ref().map(MathLayoutEngine::cached_len)
-    }
-
     pub fn new() -> Self {
         Self::default()
     }

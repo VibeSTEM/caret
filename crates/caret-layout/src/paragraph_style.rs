@@ -4,7 +4,8 @@
 // 署名：Yuki Lu
 
 use caret_doc::{
-    DocumentSettings, ParagraphLayoutOverrides, ParagraphLineSpacing as StoredLineSpacing,
+    DocumentSettings, DocumentUnits, ParagraphLayoutOverrides,
+    ParagraphLineSpacing as StoredLineSpacing,
 };
 
 use crate::LineSpacing;
@@ -62,21 +63,19 @@ pub fn resolve_paragraph_style(
         }
         _ => return Err(ParagraphStyleError::InvalidLineSpacing),
     };
-    let centipoints_to_points = |value: u32| value as f32 * 0.01;
-
     Ok(ResolvedParagraphStyle {
         line_spacing,
         first_line_indent_chars: overrides.and_then(|value| value.first_line_indent_chars),
-        space_before_pt: centipoints_to_points(
+        space_before_pt: DocumentUnits::centipoints_to_points(
             overrides
                 .and_then(|value| value.space_before_centipoints)
                 .unwrap_or(defaults.space_before_centipoints),
-        ),
-        space_after_pt: centipoints_to_points(
+        ) as f32,
+        space_after_pt: DocumentUnits::centipoints_to_points(
             overrides
                 .and_then(|value| value.space_after_centipoints)
                 .unwrap_or(defaults.space_after_centipoints),
-        ),
+        ) as f32,
         widow_orphan_control: overrides
             .and_then(|value| value.widow_orphan_control)
             .unwrap_or(defaults.widow_orphan_control),

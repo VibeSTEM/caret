@@ -17,9 +17,9 @@ use read_fonts::types::GlyphId;
 use skrifa::MetadataProvider;
 use skrifa::instance::{LocationRef, Size};
 
-/// 内置数学字体字节，许可证见 `fonts/stix-two-math/OFL.txt`。
+/// 内置数学字体字节，许可证见仓库公共字体资源目录中的 `OFL.txt`。
 pub const STIX_TWO_MATH: &[u8] =
-    include_bytes!("../../fonts/stix-two-math/STIXTwoMath-Regular.otf");
+    include_bytes!("../../../../resources/fonts/math/stix-two-math/STIXTwoMath-Regular.otf");
 
 /// 伸展方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

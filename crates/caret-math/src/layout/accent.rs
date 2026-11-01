@@ -5,7 +5,7 @@
 // 本文件移植自 Typst：
 //   仓库：https://github.com/typst/typst
 //   原路径：crates/typst-layout/src/math/accent.rs、line.rs、cancel.rs
-//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
 //   修改：合并三个文件；去掉 flac 字形替换与精确帧宽选项；横线改为实心矩形；
 //   删除线固定沿包围盒对角线并输出为 Caret 的线段项；新增 `\cancelto` 的目标放置。

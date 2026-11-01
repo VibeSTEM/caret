@@ -27,6 +27,7 @@ fn root(source: &str) -> MathNode {
 
 fn lay(source: &str, style: MathStyle) -> MathLayout {
     layout_math(font(), &root(source), SIZE, style)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"))
 }
 
 fn display(source: &str) -> MathLayout {
@@ -241,7 +242,8 @@ fn matrix_rows_stack() {
 #[test]
 fn node_boxes_cover_children() {
     let tree = root(r"\frac{a}{b}");
-    let layout = layout_math(font(), &tree, SIZE, MathStyle::Display);
+    let layout = layout_math(font(), &tree, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     let first = layout
         .nodes
         .first()
@@ -280,8 +282,10 @@ fn cancel_draws_lines() {
 #[test]
 fn layout_scales_with_size() {
     let tree = root(r"\frac{x^2}{y}");
-    let small = layout_math(font(), &tree, 10.0, MathStyle::Display);
-    let large = layout_math(font(), &tree, 20.0, MathStyle::Display);
+    let small = layout_math(font(), &tree, 10.0, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let large = layout_math(font(), &tree, 20.0, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     assert!((large.width - 2.0 * small.width).abs() < 1e-3);
     assert!((large.ascent - 2.0 * small.ascent).abs() < 1e-3);
 }
@@ -290,18 +294,49 @@ fn layout_scales_with_size() {
 fn engine_caches_per_key() {
     let engine = MathLayoutEngine::new().unwrap_or_else(|error| panic!("{error}"));
     let tree = root("x+1");
-    let first = engine.layout(&tree, SIZE, MathStyle::Inline);
-    let second = engine.layout(&tree, SIZE, MathStyle::Inline);
+    let first = engine
+        .layout(&tree, SIZE, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let second = engine
+        .layout(&tree, SIZE, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(engine.cached_len(), 1);
-    let _display = engine.layout(&tree, SIZE, MathStyle::Display);
-    let _larger = engine.layout(&tree, SIZE * 2.0, MathStyle::Inline);
+    let _display = engine
+        .layout(&tree, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let _larger = engine
+        .layout(&tree, SIZE * 2.0, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     assert_eq!(engine.cached_len(), 3);
     let other = root("x+2");
-    let _other = engine.layout(&other, SIZE, MathStyle::Inline);
+    let _other = engine
+        .layout(&other, SIZE, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     assert_eq!(engine.cached_len(), 4);
     engine.clear_cache();
     assert_eq!(engine.cached_len(), 0);
+}
+
+#[test]
+fn layout_rejects_invalid_sizes_without_caching_them() {
+    let engine = MathLayoutEngine::new().unwrap_or_else(|error| panic!("{error}"));
+    let tree = root("x");
+    for size in [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        0.0,
+        -1.0,
+        655.36,
+    ] {
+        assert_eq!(
+            engine.layout(&tree, size, MathStyle::Inline),
+            Err(super::MathLayoutError::InvalidSize)
+        );
+    }
+    assert_eq!(engine.cached_len(), 0);
+    assert!(engine.layout(&tree, 0.01, MathStyle::Inline).is_ok());
 }
 
 #[test]

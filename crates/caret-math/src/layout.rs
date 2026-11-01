@@ -21,10 +21,11 @@ mod scripts;
 mod table;
 
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use caret_doc::{MathNode, NodeId};
+use caret_doc::{DocumentUnits, MathNode, NodeId};
 
 pub use context::{MathDiagnostic, MathSize};
 pub use font::{MathFont, MathFontError, STIX_TWO_MATH};
@@ -42,6 +43,22 @@ pub enum MathStyle {
     /// 显示公式（TeX display style）。
     Display,
 }
+
+/// 数学排版输入错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathLayoutError {
+    InvalidSize,
+}
+
+impl Display for MathLayoutError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSize => formatter.write_str("math.layout.invalid_size"),
+        }
+    }
+}
+
+impl std::error::Error for MathLayoutError {}
 
 /// 布局输出的绘制项；坐标以公式左端基线为原点，y 向下。
 #[derive(Debug, Clone, PartialEq)]
@@ -109,7 +126,13 @@ pub struct MathLayout {
 }
 
 /// 以给定字体与字号（pt）排版一棵数学树。
-pub fn layout_math(font: &MathFont, root: &MathNode, size: f64, style: MathStyle) -> MathLayout {
+pub fn layout_math(
+    font: &MathFont,
+    root: &MathNode,
+    size: f64,
+    style: MathStyle,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
     let mut converter = Converter {
         ctx: Context::new(font, size),
     };
@@ -187,7 +210,14 @@ pub fn layout_math(font: &MathFont, root: &MathNode, size: f64, style: MathStyle
             }),
         }
     }
-    layout
+    Ok(layout)
+}
+
+fn validate_size(size: f64) -> Result<(), MathLayoutError> {
+    if !size.is_finite() || size <= 0.0 || size > DocumentUnits::max_font_size_points() {
+        return Err(MathLayoutError::InvalidSize);
+    }
+    Ok(())
 }
 
 /// 缓存键：内容哈希（含节点 ID）、字号位模式、样式、字体标识。
@@ -227,7 +257,13 @@ impl MathLayoutEngine {
     }
 
     /// 排版并缓存；相同内容、字号、样式与字体的重复请求直接返回缓存结果。
-    pub fn layout(&self, root: &MathNode, size: f64, style: MathStyle) -> Arc<MathLayout> {
+    pub fn layout(
+        &self,
+        root: &MathNode,
+        size: f64,
+        style: MathStyle,
+    ) -> Result<Arc<MathLayout>, MathLayoutError> {
+        validate_size(size)?;
         let key = CacheKey {
             content: content_hash(root),
             size_bits: size.to_bits(),
@@ -235,15 +271,15 @@ impl MathLayoutEngine {
             font: self.font.identity(),
         };
         if let Some(hit) = self.lock().get(&key) {
-            return Arc::clone(hit);
+            return Ok(Arc::clone(hit));
         }
-        let layout = Arc::new(layout_math(self.font, root, size, style));
+        let layout = Arc::new(layout_math(self.font, root, size, style)?);
         let mut cache = self.lock();
         if cache.len() >= CACHE_LIMIT {
             cache.clear();
         }
         cache.insert(key, Arc::clone(&layout));
-        layout
+        Ok(layout)
     }
 
     /// 当前缓存条目数。

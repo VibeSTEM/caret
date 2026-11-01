@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use caret_doc::DocumentUnits;
 use parley::Layout;
 
 use crate::{
@@ -67,7 +68,8 @@ pub(super) fn make_paragraph_lines(
     let mut parley_line_heights_pt = Vec::with_capacity(lines.len());
     let mut baseline_adjustments_pt = Vec::with_capacity(lines.len());
     let mut font_metrics = Vec::new();
-    let line_grid_font_size_pt = f32::from(line_grid_font_size_centipoints) / 100.0;
+    let line_grid_font_size_pt =
+        DocumentUnits::centipoints_to_points(u32::from(line_grid_font_size_centipoints)) as f32;
     let mut top_pt = 0.0f32;
     for (index, line) in lines.iter().enumerate() {
         let metrics = line.metrics();

@@ -11,7 +11,7 @@ fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn math_nodes_round_trip_with_caret_owned_schema_and_features()
+fn math_nodes_open_as_read_only_preview_until_layout_support_is_available()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([
@@ -56,30 +56,28 @@ fn math_nodes_round_trip_with_caret_owned_schema_and_features()
     ]);
 
     let opened = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::Editable(file) = opened else {
-        panic!("Caret math nodes should be editable by this implementation");
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("formula nodes must remain read-only until layout support is integrated");
     };
-    assert!(
-        file.required_features()
-            .iter()
-            .any(|feature| feature == "caret.math.inline")
+    assert!(!preview.can_save());
+    let preserved = preview.to_json_value()?;
+    assert_eq!(
+        preserved["document"]["body"][0]["inlines"][0]["mathTree"]["source"],
+        "x^2"
     );
-    assert!(
-        file.required_features()
-            .iter()
-            .any(|feature| feature == "caret.math.equation")
+    assert_eq!(
+        preserved["document"]["body"][1]["mathTree"]["source"],
+        "a+b"
     );
-    assert!(
-        file.required_features()
-            .iter()
-            .any(|feature| feature == "caret.math.align")
+    assert_eq!(
+        preserved["document"]["body"][2]["rows"][0]["cells"][0]["source"],
+        "a=b"
     );
-
-    let reopened = open(&file.to_bytes()?)?;
-    let OpenedDocument::Editable(reopened) = reopened else {
-        panic!("saved Caret math nodes should remain editable");
-    };
-    assert_eq!(reopened.document().body, file.document().body);
+    assert!(preview.reasons.iter().any(|reason| matches!(
+        reason,
+        PreviewReason::UnsupportedRequiredFeature(feature)
+            if feature.starts_with("caret.math.")
+    )));
     Ok(())
 }
 

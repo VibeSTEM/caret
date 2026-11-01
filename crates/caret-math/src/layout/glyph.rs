@@ -5,7 +5,7 @@
 // 本文件移植自 Typst：
 //   仓库：https://github.com/typst/typst
 //   原路径：crates/typst-layout/src/math/fragment/glyph.rs
-//   提交：84cca406aafe7f830ed3f37f1cc6f0c8b6b65a03（v0.15.1）
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
 //   修改：改写为 Caret 的 read-fonts 字体封装与左上角帧模型；去掉 ssty/flac 字形替换、
 //   字体回退与 span 记录；组装件直接展开为逐字形定位项。

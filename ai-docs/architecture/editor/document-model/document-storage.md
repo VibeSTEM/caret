@@ -1,6 +1,6 @@
 # `.cdoc` 存储格式
 
-更新日期：2026-10-30。本文是原生文件信封、兼容和原子写入语义的权威定义。持久化节点结构见[文档树与结构](document-structure.md)；文档范围和任务状态见[架构总览](../../README.md)与[任务索引](../../../task-index.md)。
+更新日期：2026-11-01。本文是原生文件信封、兼容和原子写入语义的权威定义。持久化节点结构见[文档树与结构](document-structure.md)；文档范围和任务状态见[架构总览](../../README.md)与[任务索引](../../../task-index.md)。
 
 `requiredFeatures` 使用稳定的 `caret.` 命名空间。当前登记表由 `crates/caret-doc/src/model/features.rs` 与存储校验实现共同定义：
 
@@ -19,9 +19,13 @@
 | `caret.env.section` | 块级章节、层级计数和生成标签 |
 | `caret.env.custom` | 当前已实现的块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
+| `caret.math.align` | 多行对齐公式 |
+| `caret.math.equation` | 单行显示公式 |
+| `caret.math.inline` | 行内公式 |
+| `caret.math.syntax.v1` | 当前数学语法子集 |
 | `caret.text.default-font-size` | 文档默认字号 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
-| `caret.text.underline` | Run 的显式下划线属性，包括显式开启和关闭 |
+| `caret.text.underline` | Run 直接下划线属性 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 按字节序去重排序；除编码器始终声明的基础能力外，只列文档实际使用的能力。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
@@ -53,4 +57,4 @@ Page/Inline 自定义环境尚未实现；接入时应新增 scope 专属的必�
 
 保存先写同目录临时文件，fsync，再替换原文件。中途失败时原来的文件还在。畸形 JSON 返回错误，不 panic。
 
-每个发布过的版本留一份夹具：读、写、再读必须相等；更高版本必须报错。
+每个发布过的版本留一份夹具：读、写、再读必须相等；更高版本必须报错。本文的版本迁移契约适用于已发布格式；未稳定发布的早期开发分支不构成兼容承诺。

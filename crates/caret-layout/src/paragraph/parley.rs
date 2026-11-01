@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use caret_doc::Paragraph;
+use caret_doc::{DocumentUnits, Paragraph};
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
@@ -632,7 +632,7 @@ fn cache_space_adjustments(
 }
 
 fn font_size_pt(font_size_centipoints: u16) -> f32 {
-    f32::from(font_size_centipoints) * 0.01
+    DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints)) as f32
 }
 
 fn font_families(names: &[String], emoji: bool, code: bool) -> Vec<FontFamilyName<'_>> {

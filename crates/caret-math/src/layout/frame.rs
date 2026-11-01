@@ -4,7 +4,14 @@
 //! 片段在帧之外携带数学专有属性（类别、斜体校正、重音附着点、角落字距来源）。
 //
 // SPDX-License-Identifier: Apache-2.0
-// 署名：Yuki Lu
+//
+// 本文件改写自 Typst：
+//   仓库：https://github.com/typst/typst
+//   原路径：crates/typst-layout/src/math/fragment/mod.rs
+//   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
+//   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
+//   修改：以 Caret 自有类型保存坐标、基线与绘制项；统一为左上角原点和 y 向下，
+//   子帧立即展平；数学专有属性随片段而非通用绘制项保存。
 
 use caret_doc::NodeId;
 

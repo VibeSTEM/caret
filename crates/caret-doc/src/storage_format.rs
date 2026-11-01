@@ -14,6 +14,7 @@ pub const CURRENT_THEME_FORMAT_VERSION: u32 = 1;
 const MAX_MEDIA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_MEDIA_BASE64_BYTES: usize = MAX_MEDIA_BYTES.div_ceil(3) * 4;
 
+// 公式 schema 可解码为安全预览；完整正文布局与绘制路径由 044 接入前保持只读。
 const KNOWN_FEATURES: &[&str] = &[
     "caret.env.bold",
     "caret.env.explicit-format-state",
@@ -23,10 +24,6 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.custom",
     "caret.env.templates",
     "caret.font.family-preferences",
-    "caret.math.align",
-    "caret.math.equation",
-    "caret.math.inline",
-    "caret.math.syntax.v1",
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
