@@ -8,6 +8,7 @@ mod command_line;
 mod command_registry;
 mod environment;
 mod error;
+mod flow_map;
 mod grapheme;
 mod paragraph_ops;
 mod position;

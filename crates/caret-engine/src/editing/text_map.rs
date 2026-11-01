@@ -6,6 +6,8 @@
 use super::environment::inline_adapter::{
     INLINE_MATH_ADAPTER, RUN_PROPERTY_ENVIRONMENTS, for_inline_environment,
 };
+pub(crate) use super::flow_map::OBJECT_REPLACEMENT;
+use super::flow_map::{FlowPathOptions, FlowSpanKind, build_flow_map_with_spans};
 use super::grapheme::GraphemeMap;
 use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, Pos};
 use caret_doc::{
@@ -138,9 +140,6 @@ pub fn utf8_offset_to_utf16(text: &str, offset: usize) -> Result<usize, EditErro
     Ok(prefix.encode_utf16().count())
 }
 
-/// 行内原子对象在逻辑文本中的占位字符。
-pub(crate) const OBJECT_REPLACEMENT: char = '\u{fffc}';
-
 #[derive(Debug, Clone)]
 struct Span {
     start: usize,
@@ -174,21 +173,56 @@ pub(super) struct EnvironmentSpan {
 
 impl TextMap {
     pub(super) fn new(paragraph: &Paragraph) -> Result<Self, EditError> {
-        let mut text = String::new();
-        let mut spans = Vec::new();
-        let mut environment_spans = Vec::new();
         let mut object_spans = Vec::new();
-        collect_paragraph_text(
+        let flow_map = build_flow_map_with_spans(
             &paragraph.inlines,
-            &mut Vec::new(),
-            &mut text,
-            &mut spans,
-            &mut EnvironmentSpans {
-                environments: &mut environment_spans,
-                objects: &mut object_spans,
+            |math| math.id.clone(),
+            FlowPathOptions {
+                physical: false,
+                legacy_edit: true,
             },
-            0,
+            |span| {
+                let is_soft_break = match span.kind {
+                    FlowSpanKind::Run => false,
+                    FlowSpanKind::SoftBreak => true,
+                    FlowSpanKind::MathAtom(id) => {
+                        object_spans.push(EnvironmentSpan {
+                            id: Some(id),
+                            source: INLINE_MATH_ADAPTER.source,
+                            start: span.range.start,
+                            end: span.range.end,
+                            kind: INLINE_MATH_ADAPTER.kind,
+                            depth: span.environment_depth,
+                        });
+                        true
+                    }
+                };
+                Ok(Span {
+                    start: span.range.start,
+                    end: span.range.end,
+                    path: span.legacy_edit_path.ok_or(EditError::InvalidPosition)?,
+                    is_soft_break,
+                })
+            },
         )?;
+        let text = flow_map.text;
+        let grapheme_boundaries = flow_map.grapheme_boundaries;
+        let environment_spans = flow_map
+            .environments
+            .into_iter()
+            .map(|environment| {
+                let adapter = for_inline_environment(environment.kind);
+                EnvironmentSpan {
+                    id: Some(environment.id),
+                    source: adapter.source,
+                    start: environment.range.start,
+                    end: environment.range.end,
+                    kind: adapter.kind,
+                    depth: environment.depth,
+                }
+            })
+            .collect::<Vec<_>>();
+        let spans = flow_map.spans;
         let property_spans = RUN_PROPERTY_ENVIRONMENTS
             .iter()
             .map(|property| collect_paragraph_run_property_spans(&paragraph.inlines, *property))
@@ -196,7 +230,6 @@ impl TextMap {
             .into_iter()
             .flatten()
             .collect();
-        let grapheme_boundaries = GraphemeMap::new(&text).into_boundaries();
         Ok(Self {
             text,
             spans,
@@ -571,97 +604,6 @@ impl TextMap {
     }
 }
 
-/// Build logical spans directly from the persisted tree. This read path runs for every caret
-/// lookup, so it must not clone the entire inline tree just to flatten TextFlow runs.
-fn collect_paragraph_text(
-    contents: &[ParagraphContent],
-    path: &mut Vec<usize>,
-    text: &mut String,
-    spans: &mut Vec<Span>,
-    environment_spans: &mut EnvironmentSpans<'_>,
-    environment_depth: usize,
-) -> Result<(), EditError> {
-    let mut logical_index = 0;
-    for content in contents {
-        match content {
-            FlowContent::Text(flow) => {
-                for run in &flow.runs {
-                    path.push(logical_index);
-                    let start = text.len();
-                    text.push_str(&run.text);
-                    spans.push(Span {
-                        start,
-                        end: text.len(),
-                        path: path.clone(),
-                        is_soft_break: false,
-                    });
-                    path.pop();
-                    logical_index += 1;
-                }
-            }
-            FlowContent::Environment(environment) => {
-                path.push(logical_index);
-                let start = text.len();
-                collect_paragraph_text(
-                    &environment.children,
-                    path,
-                    text,
-                    spans,
-                    environment_spans,
-                    environment_depth + 1,
-                )?;
-                let adapter = for_inline_environment(environment.kind);
-                environment_spans.environments.push(EnvironmentSpan {
-                    id: Some(environment.id.clone()),
-                    source: adapter.source,
-                    start,
-                    end: text.len(),
-                    kind: adapter.kind,
-                    depth: environment_depth,
-                });
-                path.pop();
-                logical_index += 1;
-            }
-            FlowContent::SoftBreak(_) => {
-                path.push(logical_index);
-                let start = text.len();
-                text.push('\n');
-                spans.push(Span {
-                    start,
-                    end: text.len(),
-                    path: path.clone(),
-                    is_soft_break: true,
-                });
-                path.pop();
-                logical_index += 1;
-            }
-            FlowContent::Math(math) => {
-                path.push(logical_index);
-                let start = text.len();
-                text.push(OBJECT_REPLACEMENT);
-                environment_spans.objects.push(EnvironmentSpan {
-                    id: Some(math.id.clone()),
-                    source: INLINE_MATH_ADAPTER.source,
-                    start,
-                    end: text.len(),
-                    kind: INLINE_MATH_ADAPTER.kind,
-                    depth: environment_depth,
-                });
-                spans.push(Span {
-                    start,
-                    end: text.len(),
-                    path: path.clone(),
-                    is_soft_break: true,
-                });
-                path.pop();
-                logical_index += 1;
-            }
-            FlowContent::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
-        }
-    }
-    Ok(())
-}
-
 fn collect_paragraph_run_property_spans(
     contents: &[ParagraphContent],
     property: super::environment::inline_adapter::RunPropertyEnvironment,
@@ -746,12 +688,6 @@ fn collect_paragraph_run_property_spans(
     };
     flush(&mut active_start, offset, &mut output);
     Ok(output)
-}
-
-/// 收集文本时同时累积格式环境与原子对象两类范围。
-struct EnvironmentSpans<'a> {
-    environments: &'a mut Vec<EnvironmentSpan>,
-    objects: &'a mut Vec<EnvironmentSpan>,
 }
 
 fn normalize_run_neighborhood(nodes: &mut Vec<EditNode>, index: usize) {
