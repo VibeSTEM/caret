@@ -91,6 +91,127 @@ fn text_island_accepts_plain_input_and_rebases_its_path() -> Result<(), EditErro
 }
 
 #[test]
+fn math_text_selection_replaces_and_undo_restores_the_selection() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+
+    session.run(Command::InsertText("XY".to_owned()))?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{aXYd}"));
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(edit.cursor, 3);
+    assert!(matches!(
+        edit.branch,
+        MathEditBranch::Text { anchor: 3, .. }
+    ));
+
+    session.run(Command::Undo)?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{abcd}"));
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(edit.cursor, 3);
+    assert!(matches!(
+        edit.branch,
+        MathEditBranch::Text { anchor: 1, .. }
+    ));
+    session.run(Command::Redo)?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{aXYd}"));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
+    Ok(())
+}
+
+#[test]
+fn math_text_selection_delete_collapses_at_start_and_arrows_collapse_by_direction()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 3,
+        focus: 1,
+    })?;
+    session.run(Command::Delete(Direction::Forward))?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{ad}"));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    session.run(Command::Undo)?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(edit.cursor, 1);
+    assert!(matches!(
+        edit.branch,
+        MathEditBranch::Text { anchor: 3, .. }
+    ));
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { anchor: 3, .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_text_selection_rejects_non_grapheme_positions_atomically() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath("\\text{a\u{301}b}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+    assert_eq!(
+        session.run(Command::SetMathTextSelection {
+            anchor: 1,
+            focus: 3
+        }),
+        Err(EditError::InvalidPosition)
+    );
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+    Ok(())
+}
+
+#[test]
+fn math_text_selection_replaces_a_complete_escaped_source_mapping() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{a\_b}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 2,
+    })?;
+    session.run(Command::InsertText("X".to_owned()))?;
+
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{aXb}"));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(2));
+    Ok(())
+}
+
+#[test]
+fn inserting_empty_text_deletes_a_selected_math_text_range() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abc}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 2,
+    })?;
+    session.run(Command::InsertText(String::new()))?;
+
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{ac}"));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+    Ok(())
+}
+
+#[test]
 fn adjacent_text_islands_share_caret_navigation() -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     let inserted = session.run(Command::InsertInlineMath(

@@ -308,6 +308,9 @@ impl Session {
             Command::PasteText(text) if self.math_edit_is_text_branch() => {
                 self.math_text_insert(text)?
             }
+            Command::SetMathTextSelection { anchor, focus } => {
+                self.set_math_text_selection(*anchor, *focus)?
+            }
             Command::InsertText(text) => self.math_insert_text(text)?,
             Command::PasteText(text) => self.math_insert_raw(text, text.len())?,
             Command::Delete(Direction::Backward) if self.math_edit_is_text_branch() => {
@@ -678,7 +681,25 @@ impl Session {
 
     fn math_move(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        if let MathEditBranch::Text { path, .. } = &edit.branch {
+        if let MathEditBranch::Text { path, anchor } = &edit.branch {
+            if *anchor != edit.cursor {
+                let cursor = match direction {
+                    Direction::Backward => (*anchor).min(edit.cursor),
+                    Direction::Forward => (*anchor).max(edit.cursor),
+                };
+                if let Some(current) = &mut self.math_edit {
+                    current.cursor = cursor;
+                    current.branch = MathEditBranch::Text {
+                        path: path.clone(),
+                        anchor: cursor,
+                    };
+                }
+                self.advance_history_merge_epoch();
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
             let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
             let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
             let display_text = text
@@ -828,6 +849,51 @@ impl Session {
         self.math_edit
             .as_ref()
             .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Text { .. }))
+    }
+
+    /// 将宿主测得的字节位置限制在当前 TextFlow，并拒绝半个 UTF-8 字符或 grapheme。
+    fn set_math_text_selection(
+        &mut self,
+        anchor: usize,
+        focus: usize,
+    ) -> Result<Effect, EditError> {
+        let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let MathEditBranch::Text {
+            path,
+            anchor: old_anchor,
+        } = &edit.branch
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let display = text
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>();
+        if [anchor, focus].into_iter().any(|offset| {
+            offset > display.len()
+                || !display.is_char_boundary(offset)
+                || !is_grapheme_boundary(&display, offset)
+        }) {
+            return Err(EditError::InvalidPosition);
+        }
+        if *old_anchor == anchor && edit.cursor == focus {
+            return Ok(Effect::default());
+        }
+        if let Some(current) = &mut self.math_edit {
+            current.cursor = focus;
+            current.branch = MathEditBranch::Text {
+                path: path.clone(),
+                anchor,
+            };
+        }
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
     }
 
     fn math_tree_for_edit<'a>(
@@ -1289,7 +1355,7 @@ impl Session {
         text_edit: Option<MathTextEdit>,
     ) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        if source == edit.source {
+        if source == edit.source && text_edit.is_none() {
             self.set_math_cursor(cursor);
             return Ok(Effect::default());
         }

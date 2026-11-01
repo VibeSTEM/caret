@@ -246,10 +246,10 @@ impl Session {
     /// 将文本岛中的直接输入映射到可逆源码区间，并复用公式解析与历史事务。
     pub(super) fn math_text_insert(&mut self, inserted: &str) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, .. } = &edit.branch else {
+        let MathEditBranch::Text { path, anchor } = &edit.branch else {
             return Err(EditError::InvalidPosition);
         };
-        if inserted.is_empty() {
+        if inserted.is_empty() && anchor == &edit.cursor {
             return Ok(Effect::default());
         }
         if inserted
@@ -260,29 +260,53 @@ impl Session {
         }
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
         let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
-        let local_source_cursor =
-            text_source_boundary(text, edit.cursor).ok_or(EditError::InvalidPosition)?;
-        let source_cursor = path
-            .host_offset(local_source_cursor)
+        let range = (*anchor).min(edit.cursor)..(*anchor).max(edit.cursor);
+        let (local_source_range, removes_entire_flow) = if range.is_empty() {
+            let cursor =
+                text_source_boundary(text, range.start).ok_or(EditError::InvalidPosition)?;
+            (cursor..cursor, false)
+        } else {
+            let display = text
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            if range.end > display.len()
+                || !is_grapheme_boundary(&display, range.start)
+                || !is_grapheme_boundary(&display, range.end)
+            {
+                return Err(EditError::InvalidPosition);
+            }
+            (
+                text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?,
+                range.start == 0 && range.end == display.len() && inserted.is_empty(),
+            )
+        };
+        let source_range = path
+            .host_offset(local_source_range.start)
+            .and_then(|start| {
+                path.host_offset(local_source_range.end)
+                    .map(|end| start..end)
+            })
             .ok_or(EditError::InvalidPosition)?;
         let mut source = edit.source.clone();
         let encoded = encode_math_text(inserted);
-        source.insert_str(source_cursor, &encoded);
-        let next_cursor = edit.cursor + inserted.len();
+        source.replace_range(source_range.clone(), &encoded);
+        let next_cursor = range.start + inserted.len();
         self.write_math_source_with_metadata(
             source,
             next_cursor,
             Some(EditGroup::InsertText),
-            source_cursor..source_cursor,
+            source_range.clone(),
             Some((path.clone(), next_cursor)),
             Some(MathTextEdit {
                 path: path.clone(),
-                range: edit.cursor..edit.cursor,
+                range,
                 inserted: inserted.to_owned(),
-                source_edit: local_source_cursor..local_source_cursor,
+                source_edit: local_source_range,
                 source_replacement_len: encoded.len(),
                 snap_forward: true,
-                removes_entire_flow: false,
+                removes_entire_flow,
             }),
         )
     }
@@ -290,7 +314,7 @@ impl Session {
     /// 删除文本岛内一个 grapheme cluster；非精确源码映射不执行修改。
     pub(super) fn math_text_delete(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, .. } = &edit.branch else {
+        let MathEditBranch::Text { path, anchor } = &edit.branch else {
             return Err(EditError::InvalidPosition);
         };
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
@@ -300,12 +324,16 @@ impl Session {
             .iter()
             .map(|run| run.text.as_str())
             .collect::<String>();
-        let range = match direction {
-            Direction::Backward => {
-                previous_grapheme_start(&display, edit.cursor).map(|start| start..edit.cursor)
-            }
-            Direction::Forward => {
-                next_grapheme_end(&display, edit.cursor).map(|end| edit.cursor..end)
+        let range = if anchor != &edit.cursor {
+            Some((*anchor).min(edit.cursor)..(*anchor).max(edit.cursor))
+        } else {
+            match direction {
+                Direction::Backward => {
+                    previous_grapheme_start(&display, edit.cursor).map(|start| start..edit.cursor)
+                }
+                Direction::Forward => {
+                    next_grapheme_end(&display, edit.cursor).map(|end| edit.cursor..end)
+                }
             }
         };
         let Some(range) = range else {

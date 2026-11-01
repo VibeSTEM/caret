@@ -35,6 +35,11 @@ pub enum Command {
     InsertInlineMath(String),
     /// 进入光标旁的公式（行内公式或相邻显示公式块）编辑。
     EnterMath(Direction),
+    /// 设置当前公式文本岛内的 UTF-8 字节选区；布局与命中仍由宿主适配器提供位置。
+    SetMathTextSelection {
+        anchor: usize,
+        focus: usize,
+    },
     InsertParagraphBreak,
     Delete(Direction),
     MoveCaret(Direction),
@@ -92,6 +97,7 @@ impl Command {
             Self::InsertSoftBreak => "text.soft_break",
             Self::InsertInlineMath(_) => "insert.inline_math",
             Self::EnterMath(_) => "math.enter",
+            Self::SetMathTextSelection { .. } => "math.text_selection.set",
             Self::InsertParagraphBreak => "text.split_paragraph",
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
