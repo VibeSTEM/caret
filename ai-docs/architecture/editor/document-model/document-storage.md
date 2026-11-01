@@ -22,7 +22,6 @@
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
 | `caret.text.default-font-size` | 文档默认字号 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
-| `caret.text.underline` | Run 上的布尔下划线属性；读取时转为 `underline` 行内环境，保存时不再写出 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 按字节序去重排序；除编码器始终声明的基础能力外，只列文档实际使用的能力。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
