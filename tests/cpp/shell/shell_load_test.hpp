@@ -18,6 +18,7 @@ class ShellLoadTest : public QObject {
   private slots:
     void initTestCase();
     void moduleImportsAndThemeBindingTracksSnapshot();
+    void builtinCodeFontIsAvailableToQt();
     void autoScrollTextMovesOnlyWhenActiveAndOverflowing();
     void autoScrollTextRepeatsWithTheDocumentedPauseCycle();
     void unknownIconRefusesColoring();

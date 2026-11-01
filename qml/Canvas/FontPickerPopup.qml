@@ -77,7 +77,7 @@ CommandPopupFrame {
             model: !root.popupEnabled || root.fontFamilyMode ? [] : root.commandLine.candidates || []
             delegate: Text {
                 required property var modelData
-                font.family: PlatformFonts.fixedFamily
+                font.family: PlatformFonts.codeFamily
                 font.pixelSize: root.fontFamilyMode ? Theme.fontBody : Theme.fontSmall
                 text: root.aliasFor(modelData)
             }

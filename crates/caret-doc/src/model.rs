@@ -36,8 +36,8 @@ pub use math::{
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
 
-/// 代码字体使用当前平台的系统等宽字体。
-pub const DEFAULT_CODE_FONT_FAMILY: &str = "<default>";
+/// 文档字体设置的统一默认标记；具体字体由字体角色解析。
+pub const DEFAULT_FONT_FAMILY: &str = "<default>";
 
 // 保留节点转换函数在 crate 内原有的访问路径。
 #[allow(unused_imports)]
@@ -154,9 +154,9 @@ pub struct DocumentSettings {
     pub default_font_family: Option<String>,
     /// CJK 文字体系共用默认值；脚本和语言覆盖可继续收紧范围。
     pub default_cjk_font_family: Option<String>,
-    /// 公式上下文使用的默认数学字体族。
+    /// 公式上下文使用的字体族；`<default>` 解析为内置数学字体。
     pub default_math_font_family: Option<String>,
-    /// 命令输入与代码块使用的字体族；`<default>` 表示当前平台系统等宽字体。
+    /// 命令输入与代码块使用的字体族；`<default>` 解析为内置等宽字体。
     pub default_code_font_family: String,
     /// 全局正文默认字号，单位为百分之一 pt。
     #[serde(default = "default_font_size_centipoints")]
@@ -217,8 +217,8 @@ impl Default for DocumentSettings {
             default_language: None,
             default_font_family: None,
             default_cjk_font_family: None,
-            default_math_font_family: None,
-            default_code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
+            default_math_font_family: Some(DEFAULT_FONT_FAMILY.to_owned()),
+            default_code_font_family: DEFAULT_FONT_FAMILY.to_owned(),
             default_font_size_centipoints: default_font_size_centipoints(),
             script_font_families: BTreeMap::new(),
             language_script_font_families: BTreeMap::new(),

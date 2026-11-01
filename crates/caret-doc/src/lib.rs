@@ -13,7 +13,7 @@ mod storage_format;
 
 pub use document_units::DocumentUnits;
 pub use model::{
-    Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_CODE_FONT_FAMILY, Document,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_FONT_FAMILY, Document,
     DocumentFontTarget, DocumentSettings, Equation, ExplicitBreak, FlowContent, InlineEnvironment,
     InlineEnvironmentKind, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_DOCUMENT_NESTING_DEPTH,
     MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES,

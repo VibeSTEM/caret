@@ -13,9 +13,9 @@
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
-use super::font::Axis;
 use super::frame::{Fragment, Frame, Item, Point};
 use super::glyph::stretch;
+use crate::fonts::Axis;
 
 /// 删除线粗细（pt）。
 const CANCEL_STROKE: f64 = 0.5;

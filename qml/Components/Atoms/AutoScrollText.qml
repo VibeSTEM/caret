@@ -65,7 +65,7 @@ Flickable {
 
             PropertyChanges {
                 displayText.font: Qt.font({
-                    family: PlatformFonts.fixedFamily,
+                    family: PlatformFonts.codeFamily,
                     pixelSize: root.fontPixelSize
                 })
             }

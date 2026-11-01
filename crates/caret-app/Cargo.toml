@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 base64.workspace = true
+caret-code.workspace = true
 caret-doc.workspace = true
 caret-dsl-core.workspace = true
 caret-engine.workspace = true

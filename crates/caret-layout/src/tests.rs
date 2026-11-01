@@ -36,6 +36,17 @@ fn font_catalog() -> FontCatalog {
     FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"))
 }
 
+#[test]
+fn font_catalog_includes_the_embedded_code_font() {
+    let catalog = font_catalog();
+    assert!(
+        catalog.families().iter().any(|family| family
+            .name
+            .eq_ignore_ascii_case(caret_code::BUILTIN_FONT_FAMILY)),
+        "embedded code font is missing from the selectable catalog"
+    );
+}
+
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
@@ -911,6 +922,50 @@ fn font_environment_and_nested_bold_reach_parley_style_ranges() {
                     && run.font_attrs().weight == fontique::FontWeight::BOLD
             })
     );
+}
+
+#[test]
+fn font_environment_default_marker_does_not_request_a_literal_font() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let paragraph = Paragraph {
+        id: NodeId::generate(),
+        language: Some("en".to_owned()),
+        layout: None,
+        inlines: vec![ParagraphContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Font,
+            definition_id: None,
+            source_range: None,
+            props: BTreeMap::from([(
+                "fontFamily".to_owned(),
+                serde_json::Value::String(caret_doc::DEFAULT_FONT_FAMILY.to_owned()),
+            )]),
+            children: vec![text_flow(Run {
+                text: "ordinary text".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        mark_style: BTreeMap::new(),
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    let mut layouter = ParagraphLayouter::new();
+    let (_, result) = layouter
+        .layout(
+            &mut catalog,
+            &paragraph,
+            &settings,
+            &ShapingStyle::new(1200),
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("default-font environment layout failed: {error}"));
+
+    assert!(!result.requested_family_missing);
+    assert!(result.layout.lines().next().is_some());
 }
 
 #[test]

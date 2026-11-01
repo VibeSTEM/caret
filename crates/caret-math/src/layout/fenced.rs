@@ -12,9 +12,9 @@
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
-use super::font::Axis;
 use super::frame::Fragment;
 use super::glyph::{center_on_axis, glyph_fragment, stretch};
+use crate::fonts::Axis;
 use crate::symbols::AtomClass;
 
 /// 定界符允许的短缺量（em）。

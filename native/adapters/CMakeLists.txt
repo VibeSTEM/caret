@@ -17,12 +17,27 @@ qt_add_qml_module(
   SOURCES
   platform_fonts.hpp
   platform_fonts.cpp
+  fonts/code.hpp
+  fonts/code.cpp
   document_path_adapter.hpp
   document_path_adapter.cpp
   window_chrome_metrics.hpp
   window_chrome_metrics.cpp
   icon_provider.hpp
   icon_provider.cpp)
+qt_add_resources(
+  caret_adapters
+  caret_code_fonts
+  PREFIX
+  "/caret/fonts"
+  BASE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/fonts/code/jetbrains-mono"
+  FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/fonts/code/jetbrains-mono/JetBrainsMono-Regular.ttf"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/fonts/code/jetbrains-mono/JetBrainsMono-Bold.ttf"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/fonts/code/jetbrains-mono/JetBrainsMono-Italic.ttf"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/fonts/code/jetbrains-mono/JetBrainsMono-BoldItalic.ttf"
+)
 if(APPLE)
   target_sources(caret_adapters PRIVATE window_chrome_metrics_mac.mm)
 endif()

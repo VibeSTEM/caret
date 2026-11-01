@@ -8,6 +8,7 @@
 // 署名：Yuki Lu
 
 mod backend;
+mod fonts;
 pub mod layout;
 mod parser;
 mod serialize;
@@ -17,6 +18,7 @@ use std::{fmt, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
+pub use fonts::BUILTIN_FONT_FAMILY;
 pub use parser::{classify_input, is_incomplete_input_prefix, parse};
 pub use serialize::{serialize_align, serialize_node, serialize_tree};
 

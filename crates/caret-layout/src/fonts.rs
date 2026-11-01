@@ -3,11 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+pub(crate) mod code;
+pub(crate) mod math;
+
 use fontique::{Collection, CollectionOptions, SourceCache};
 use std::collections::HashSet;
 use std::sync::Arc;
 #[cfg(windows)]
 use std::{env, fs, path::PathBuf};
+
+/// 将共享默认标记转换为“由字体角色提供默认值”，避免把标记送入后端查询。
+pub(crate) fn requested_family(family: Option<&str>) -> Option<&str> {
+    match family {
+        None | Some(caret_doc::DEFAULT_FONT_FAMILY) => None,
+        Some(family) => Some(family),
+    }
+}
 
 /// 字体目录条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +87,10 @@ impl FontCatalog {
             system_fonts: true,
         });
         collection.load_system_fonts();
+        if collection.family_names().next().is_none() {
+            return Err(FontCatalogError::Empty);
+        }
+        code::register(&mut collection);
         #[cfg(windows)]
         collection.load_fonts_from_paths(installed_font_paths());
         let mut font_context = parley::FontContext {

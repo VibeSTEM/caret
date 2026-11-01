@@ -81,6 +81,14 @@ fn collect_licenses(destination: &Path) -> Result<(), Box<dyn Error>> {
     }
     fs::create_dir_all(destination)?;
     fs::copy(root.join("LICENSE"), destination.join("Caret-LICENSE"))?;
+    fs::copy(
+        root.join("resources/fonts/code/jetbrains-mono/OFL.txt"),
+        destination.join("JetBrains-Mono-OFL.txt"),
+    )?;
+    fs::copy(
+        root.join("resources/fonts/math/stix-two-math/OFL.txt"),
+        destination.join("STIX-Two-Math-OFL.txt"),
+    )?;
     let packages = metadata["packages"]
         .as_array()
         .ok_or("Cargo metadata 缺少 packages")?;

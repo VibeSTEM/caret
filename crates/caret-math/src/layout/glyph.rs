@@ -13,8 +13,8 @@
 use read_fonts::tables::math::MathConstant;
 
 use super::context::{Context, Style};
-use super::font::{Assembly, AssemblyPart, Axis, Corner};
 use super::frame::{Fragment, Frame, GlyphSource, Item, MathColor, Point};
+use crate::fonts::{Assembly, AssemblyPart, Axis, Corner};
 use crate::symbols::AtomClass;
 
 /// 组装件中延伸段的最大重复次数，防止病态字体导致无限循环。

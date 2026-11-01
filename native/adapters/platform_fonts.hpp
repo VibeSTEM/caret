@@ -1,4 +1,4 @@
-// 提供供 QML 查询系统字体族的 Qt 适配器。
+// 向 QML 提供内置代码字体族名和 Qt 可查询的字体目录。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -17,16 +17,16 @@ class PlatformFonts final : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    Q_PROPERTY(QString fixedFamily READ fixedFamily CONSTANT)
+    Q_PROPERTY(QString codeFamily READ codeFamily CONSTANT)
 
   public:
     explicit PlatformFonts(QObject* parent = nullptr);
-    [[nodiscard]] auto fixedFamily() const -> const QString&;
+    [[nodiscard]] auto codeFamily() const -> const QString&;
     Q_INVOKABLE [[nodiscard]] auto containsFamily(const QString& family) const -> bool;
 
   private:
-    const QString m_fixedFamily;
-    const QSet<QString> m_familyNames;
+    const QString m_codeFamily;
+    QSet<QString> m_familyNames;
 };
 
 } // namespace caret

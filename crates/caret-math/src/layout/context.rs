@@ -5,8 +5,8 @@
 
 use read_fonts::tables::math::MathConstant;
 
-use super::font::MathFont;
 use super::frame::MathColor;
+use crate::fonts::MathFont;
 
 /// TeX 的四级数学字号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

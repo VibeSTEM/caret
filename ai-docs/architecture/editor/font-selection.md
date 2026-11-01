@@ -18,18 +18,18 @@
 | Script `Latn` | `script:Latn` | `globalSettings.defaultFontFamily` | `"defaultFontFamily": "Latin Family"` | Latin 默认族；也是正文候选链中的文档级通用回退 |
 | 任意其他 Script | `script:<ISO15924>` | `globalSettings.scriptFontFamilies[script]` | `"scriptFontFamilies": { "Cyrl": "Cyrillic Family" }` | 该 Unicode Script 的默认族 |
 | Script + Language | `script:<ISO15924>:language:<BCP47>` | `globalSettings.languageScriptFontFamilies[script][language]` | `"languageScriptFontFamilies": { "Cyrl": { "sr": "Serbian Family" } }` | 实际 Script 匹配且 BCP 47 语言匹配的文字 |
-| 数学 | 非 Script 目标 | `globalSettings.defaultMathFontFamily` | `"defaultMathFontFamily": "STIX Two Math"` | 语义公式；首版固定 STIX Two Math |
-| 代码 | 非 Script 目标 | `globalSettings.defaultCodeFontFamily` | `"defaultCodeFontFamily": "<default>"` | 命令输入和代码块；必须使用等宽字体语义 |
+| 数学 | 非 Script 目标 | `globalSettings.defaultMathFontFamily` | `"defaultMathFontFamily": "<default>"` | 语义公式；`<default>` 为内置 STIX Two Math |
+| 代码 | 非 Script 目标 | `globalSettings.defaultCodeFontFamily` | `"defaultCodeFontFamily": "<default>"` | 命令输入和代码块；`<default>` 为内置 JetBrains Mono |
 
 例如 `Cyrl:sr` 写入 `languageScriptFontFamilies.Cyrl.sr`，只影响同时匹配 Cyrl 脚本和 `sr` 语言的文字；不能因段落语言是塞尔维亚语就把其中的 Latin 字符改用西里尔字体。`Hani:ja` 只覆盖 Han 字符，不会把 Hiragana 或 Katakana 重新分类为 Han。常见的 `Hani:zh-Hans`、`Hani:zh-Hant`、`Hani:ja`，以及 `Hira:ja`、`Kana:ja`、`Hang:ko`、`Bopo:zh-Hant` 都遵循相同规则。
 
 字段语义：
 
-- `defaultFontFamily` 是 `Latn` 的 Script 默认；缺省时不创建人为字体名，继续由后端系统回退。
+- `<default>` 是所有文档字体族字段共用的标记，不是字体族名。正文 Script 字段使用它时不添加显式候选，继续由系统字体后端按字符回退；数学和代码字段分别解析为内置 STIX Two Math 与 JetBrains Mono。该含义由字体角色决定，不由 Qt/QML 再解释。
+- `defaultFontFamily` 是 `Latn` 的 Script 默认；缺省或设为 `<default>` 时不创建人为字体名，继续由后端系统回退。
 - `scriptFontFamilies` 保存其他 Script 的显式字体族请求。为读取旧文档，若其中已有 `Latn` 项，则它在有效字体解析中优先于 `defaultFontFamily`；选择器读取和编辑时也遵守此优先级，清除该目标会同时清除 Latin 默认项。新文档和新建目标使用 `defaultFontFamily`，不再新增 `scriptFontFamilies.Latn`。
 - `languageScriptFontFamilies` 是按 Script 分组的语言覆盖，不是全局 Language → Font 映射。
-- `defaultMathFontFamily` 与 `defaultCodeFontFamily` 不进入正文 Script 候选层级。
-- `defaultCodeFontFamily` 的保留值 `"<default>"` 表示平台等宽通用族，不是可查询的字体族名。Qt 命令输入使用 `QFontDatabase::FixedFont`；Rust shaping 的代码字体角色使用 Fontique `GenericFamily::Monospace`。两者的解析后端和具体行为不同，不能假设解析到同一字体；平台映射见[平台映射目录](font-defaults/README.md)。
+- `defaultMathFontFamily` 与 `defaultCodeFontFamily` 不进入正文 Script 候选层级。数学默认值使用内置 STIX Two Math；代码默认值使用内置 JetBrains Mono。显式族名先于内置默认族，缺少字形时再由 shaping 后端处理字符 fallback。
 - `defaultCjkFontFamily` 是历史字段，仅旧文档解析兼容；新选择器、命令和样例不得继续写入或扩散。当前正文候选路径仍会在 Hani/Hira/Kana/Hang/Bopo 且没有更具体值时读取它。移除该字段需另行设计 `.cdoc` 数据迁移。
 
 完整示例：
@@ -38,7 +38,7 @@
 {
   "globalSettings": {
     "defaultFontFamily": "Latin Family",
-    "defaultMathFontFamily": "STIX Two Math",
+    "defaultMathFontFamily": "<default>",
     "defaultCodeFontFamily": "<default>",
     "scriptFontFamilies": {
       "Cyrl": "Cyrillic Family",
@@ -68,7 +68,7 @@ Run / Paragraph 的语言按 Run → Paragraph → `globalSettings.defaultLangua
 6. `SystemUi` 通用族。
 7. Fontique/Parley 的平台系统 fallback。
 
-数学公式使用独立数学字体请求；未知数学族按[公式规范](math.md#解析排版与字体)回退到内嵌 STIX Two Math 并报告诊断。代码布局通过 `ShapingStyle.font_role = FontRole::Code` 进入代码字体选择：普通字符先尝试显式 `defaultCodeFontFamily` 族名，再用 Fontique `GenericFamily::Monospace`，随后追加 `SystemUi` 通用族；`"<default>"` 从 Monospace 开始。Emoji presentation 字素仍优先使用 Emoji 通用族。代码角色不继承正文 Script、CJK 或数学字体偏好，并保留所选等宽字体的原生空格 advance，不应用正文的 0.5em 空格校准。Qt 命令输入仍使用 Qt 固定宽度系统字体或文档显式代码字体。当前文档模型尚无代码块节点，因此代码块节点接入时应设置此角色，不得另写字体解析逻辑。显式族名缺失或缺少字形时保留用户请求并继续候选链及平台 fallback；组合字符和其他 shaping cluster 应尽可能从同一实际字体塑形，不能把组合符从基字符处分开。真实字体解析可能因系统版本、字体安装、语言偏好和 Linux 发行版不同而变化；映射细节见[macOS](font-defaults/macos.md)、[Windows](font-defaults/windows.md)、[Linux](font-defaults/linux.md)。
+数学与代码共用 `fonts/{math,code}.rs` 角色适配器；共享默认标记规范化由 `fonts.rs` 提供，Rust shaping 候选优先级由 `font_selection.rs` 唯一管理。数学族名和 MATH 字体数据由 `caret-math` 提供；`caret-layout` 仅消费该稳定常量，不复制字体族名。当前 MathLayoutEngine 仍直接使用内置 STIX Two Math，文档数学字体偏好尚未接入实际公式布局；接入与诊断由 044 完成。候选模型的目标行为是 `<default>` 解析为内嵌 STIX Two Math，未知显式族按[公式规范](math.md#解析排版与字体)回退并报告诊断。代码布局通过 `ShapingStyle.font_role = FontRole::Code` 进入代码字体选择：普通字符先尝试局部显式族、文档显式 `defaultCodeFontFamily`，再尝试内置 JetBrains Mono，最后由 Fontique/system fallback 处理缺字。Emoji presentation 字素仍优先使用 Emoji 通用族。代码角色不继承正文 Script、CJK 或数学字体偏好，并保留所选等宽字体的原生空格 advance，不应用正文的 0.5em 空格校准。Qt 命令输入从同一 `caret-code` 字体族常量投影默认 UI 字体；它不参与 Rust shaping 候选解析。当前文档模型尚无代码块节点，因此代码块节点接入时应设置此角色，不得另写字体解析逻辑。显式族名缺失或缺少字形时保留用户请求并继续候选链及平台 fallback；组合字符和其他 shaping cluster 应尽可能从同一实际字体塑形，不能把组合符从基字符处分开。正文字符的系统 fallback 可能因系统版本、字体安装和语言偏好不同而变化；映射细节见[macOS](font-defaults/macos.md)、[Windows](font-defaults/windows.md)、[Linux](font-defaults/linux.md)。
 
 字体选择候选只表达期望族名，不保证该族存在或覆盖全部字符。实际字体目录、可用族检查及显式刷新由 024 的 Fontique catalog 持有；刷新后使用新 catalog generation，失败时保留旧目录。数学字体的唯一首版回退是内嵌 STIX Two Math，其他值按公式规范报告诊断。
 
@@ -122,6 +122,6 @@ crates/caret-layout/src/
 
 ## 验收边界
 
-行为测试至少覆盖 `Latn` 默认、多个平级 Script、语言覆盖仅作用于对应 Script、BCP 47 精确/逐级回退、未知 Script 数据往返、缺失字体请求保留、公式/代码与正文链隔离、代码族名在等宽通用族前且默认值直接使用等宽族、代码空格保持等宽 cell advance、目录刷新 generation 和 `.cdoc` 往返。测试应断言字体请求、可观察 shaping 结果或副作用，不断言某个 OS 上固定字体名；需要验证具体 fallback 时，使用固定已知字体与明确平台环境。
+行为测试至少覆盖 `Latn` 系统默认、统一 `<default>` 标记在正文/数学/代码角色的解析、多个平级 Script、语言覆盖仅作用于对应 Script、BCP 47 精确/逐级回退、未知 Script 数据往返、缺失字体请求保留、公式/代码与正文链隔离、显式代码字体先于 JetBrains Mono、内置字体目录注册、代码空格保持等宽 cell advance、目录刷新 generation 和 `.cdoc` 往返。测试应断言字体请求、可观察 shaping 结果或副作用，不断言某个 OS 上固定字体名；需要验证具体 fallback 时，使用固定已知字体与明确平台环境。
 
-仅有系统字体 smoke 不证明不同脚本外观一致；字体基线、fallback 选择与跨平台差异需和 [033 OpenType baseline](../../task/033-open-type-baselines.md) 的规则一起评估。公式默认字体固定 STIX Two Math；行内/显示公式见[数学公式](math.md)，表格模型见[表格](tables.md)。
+仅有系统字体 smoke 不证明不同脚本外观一致；字体基线、fallback 选择与跨平台差异需和 [033 OpenType baseline](../../task/033-open-type-baselines.md) 的规则一起评估。数学默认字体固定为内置 STIX Two Math，代码默认字体固定为内置 JetBrains Mono；行内/显示公式见[数学公式](math.md)，表格模型见[表格](tables.md)。

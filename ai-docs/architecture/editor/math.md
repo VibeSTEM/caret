@@ -52,7 +52,7 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 - **输出**：042 的 `MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；044 将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：042 的 `MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；044 的布局服务负责组合和复用。
 
-M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档保留 `defaultMathFontFamily` 作为扩展入口；未设置时使用 STIX Two Math，其他值原样保留。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
+M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档 `defaultMathFontFamily` 使用统一 `<default>` 字段值；当前 `MathLayoutEngine` 仍固定使用内置 STIX，尚不读取该设置或为显式其他值生成诊断。044 接通数学字体选择后再实现候选解析和回退诊断。字体角色默认标记的定义见[字体选择规范](font-selection.md)。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
 
 ## 公式中的普通文本
 

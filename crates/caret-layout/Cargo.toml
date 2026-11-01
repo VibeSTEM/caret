@@ -8,7 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+caret-code.workspace = true
 caret-doc.workspace = true
+caret-math.workspace = true
 fontique.workspace = true
 icu_segmenter.workspace = true
 icu_locale_core.workspace = true
