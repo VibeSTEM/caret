@@ -10,6 +10,7 @@
 | 文档字体目标、映射与 fallback（唯一权威） | [多文字体系字体选择](font-selection.md) |
 | 各平台脚本/语言与代码字体默认映射 | [平台字体映射目录](font-defaults/README.md) |
 | 页面、行距与分页 | [页面与段落排版](page-layout.md) |
+| 文档单位及跨层换算 | [文档单位](document-units.md) |
 | 注册表与撤销 | [命令](commands.md) |
 | `\` 输入 | [命令输入](command-input.md) |
 | 结构索引与跳转 | [结构导航](structure-navigation.md) |
@@ -24,6 +25,7 @@
 | 权威主题 | 文档 |
 | --- | --- |
 | 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
-| 环境、标题与编号 | [环境模型](document-model/document-environments.md) |
+| 行内载体、语义适配层与块环境视图 | [行内载体与环境视图](document-model/inline-and-block-environments.md) |
+| 块环境标题、编号与结构编辑 | [环境模型](document-model/document-environments.md) |
 | 位置与模型上限 | [文档位置](document-model/document-position.md) |
 | `.cdoc` 文件格式与存储边界 | [文档存储](document-model/document-storage.md) |

@@ -1,0 +1,14 @@
+Caret
+Copyright 2026 Caret contributors
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software derived from Typst
+(https://github.com/typst/typst), commit
+9dfd3a08500b7896045f907433cf7b4b02434fad (v0.15.1),
+Copyright 2023 Typst Project Developers, licensed under the
+Apache License, Version 2.0.
+
+The math layout files under crates/caret-math/src/layout/ that carry a
+"本文件移植自 Typst" / "本文件改写自 Typst" header were ported from Typst's
+crates/typst-layout/src/math/ and crates/typst-library/src/math/ and have
+been modified; each file header lists the original paths and the changes.

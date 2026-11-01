@@ -11,6 +11,255 @@ fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn math_nodes_open_as_read_only_preview_until_layout_support_is_available()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([
+        {
+            "type": "paragraph",
+            "id": "paragraph",
+            "inlines": [{
+                "type": "inlineMath", "id": "inline", "mathTree": {
+                    "schemaVersion": 1, "source": "x^2",
+                    "root": {"id": "inline-root", "kind": "row", "children": [
+                        {"id": "inline-x", "kind": "symbol", "text": "x", "sourceRange": {"start": 0, "end": 1, "vendorRangeHint": 42}},
+                        {"id": "inline-power", "kind": "superscript", "children": [
+                            {"id": "inline-base", "kind": "symbol", "text": "x"},
+                            {"id": "inline-2", "kind": "symbol", "text": "2", "sourceRange": {"start": 2, "end": 3}}
+                        ]}
+                    ]}
+                }
+            }]
+        },
+        {
+            "type": "equation", "id": "equation", "mathTree": {
+                "schemaVersion": 1, "source": "a+b",
+                "root": {"id": "equation-root", "kind": "row", "children": []}
+            }
+        },
+        {
+            "type": "align", "id": "align", "source": "a=b",
+            "rows": [{
+                "id": "align-row", "cells": [{
+                    "schemaVersion": 1, "source": "a=b",
+                    "root": {"id": "align-cell-root", "kind": "row", "children": []}
+                }]
+            }]
+        }
+    ]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.align",
+        "caret.math.equation",
+        "caret.math.inline",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("formula nodes must remain read-only until layout support is integrated");
+    };
+    assert!(!preview.can_save());
+    let preserved = preview.to_json_value()?;
+    assert_eq!(
+        preserved["document"]["body"][0]["inlines"][0]["mathTree"]["source"],
+        "x^2"
+    );
+    assert_eq!(
+        preserved["document"]["body"][1]["mathTree"]["source"],
+        "a+b"
+    );
+    assert_eq!(
+        preserved["document"]["body"][2]["rows"][0]["cells"][0]["source"],
+        "a=b"
+    );
+    assert!(preview.reasons.iter().any(|reason| matches!(
+        reason,
+        PreviewReason::UnsupportedRequiredFeature(feature)
+            if feature.starts_with("caret.math.")
+    )));
+    Ok(())
+}
+
+#[test]
+fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (
+            json!({
+                "type": "paragraph", "id": "paragraph", "inlines": [{
+                    "type": "inlineMath", "id": "inline", "mathTree": {
+                        "schemaVersion": 1, "source": "x",
+                        "root": {"id": "root", "kind": "symbol", "text": "x"}
+                    }
+                }]
+            }),
+            "caret.math.inline",
+        ),
+        (
+            json!({
+                "type": "equation", "id": "equation", "mathTree": {
+                    "schemaVersion": 1, "source": "x",
+                    "root": {"id": "root", "kind": "symbol", "text": "x"}
+                }
+            }),
+            "caret.math.equation",
+        ),
+        (
+            json!({
+                "type": "align", "id": "align", "source": "x", "rows": [{
+                    "id": "row", "cells": [{
+                        "schemaVersion": 1, "source": "x",
+                        "root": {"id": "root", "kind": "symbol", "text": "x"}
+                    }]
+                }]
+            }),
+            "caret.math.align",
+        ),
+    ];
+    for (node, missing_feature) in cases {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([node]);
+        let bytes = envelope.to_string();
+        let opened = open(bytes.as_bytes())?;
+        let OpenedDocument::SafePreview(preview) = opened else {
+            panic!("math data without its required feature must be read-only");
+        };
+        assert!(
+            preview
+                .reasons
+                .contains(&PreviewReason::MissingRequiredFeature(
+                    missing_feature.to_owned()
+                ))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn std::error::Error>>
+{
+    let cases = [
+        (
+            json!({
+                "type": "paragraph", "id": "paragraph", "inlines": [{
+                    "type": "inlineMath", "id": "inline", "mathTree": {
+                        "schemaVersion": 2, "source": "future",
+                        "root": {"id": "root", "kind": "row", "children": []}
+                    }
+                }]
+            }),
+            "caret.math.inline",
+        ),
+        (
+            json!({
+                "type": "equation", "id": "equation", "mathTree": {
+                    "schemaVersion": 2, "source": "future",
+                    "root": {"id": "root", "kind": "row", "children": []}
+                }
+            }),
+            "caret.math.equation",
+        ),
+        (
+            json!({
+                "type": "align", "id": "align", "source": "future", "rows": [{
+                    "id": "row", "cells": [{
+                        "schemaVersion": 2, "source": "future",
+                        "root": {"id": "root", "kind": "row", "children": []}
+                    }]
+                }]
+            }),
+            "caret.math.align",
+        ),
+        (
+            json!({
+                "type": "paragraph", "id": "paragraph", "inlines": [{
+                    "type": "inlineMath", "id": "inline", "mathTree": {
+                        "schemaVersion": 1, "source": "future",
+                        "root": {"id": "root", "kind": "future_kind", "children": []}
+                    }
+                }]
+            }),
+            "caret.math.inline",
+        ),
+    ];
+    for (node, feature) in cases {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([node]);
+        envelope["requiredFeatures"] = json!([
+            feature,
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let opened = open(envelope.to_string().as_bytes())?;
+        let OpenedDocument::SafePreview(preview) = opened else {
+            panic!("future or unknown math data must remain opaque and read-only");
+        };
+        assert!(!preview.can_save());
+        assert!(preview.to_json_value()?["document"]["body"][0].is_object());
+    }
+    Ok(())
+}
+
+#[test]
+fn unknown_math_attribute_value_opens_as_read_only_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": 1, "source": "\\frac{a}{b}",
+                "root": {"id": "root", "kind": "fraction", "attributes": {"style": "future_fraction"}, "children": []}
+            }
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.inline",
+        "caret.math.syntax.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+    let opened = open(envelope.to_string().as_bytes())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        panic!("unknown math attribute values must not be editable");
+    };
+    assert!(!preview.can_save());
+    Ok(())
+}
+
+#[test]
+fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    for root in [
+        json!({"id": "root", "kind": "sized_delimiter", "text": "char:(", "attributes": {"atomClass": "open"}, "children": []}),
+        json!({"id": "root", "kind": "fraction", "attributes": {"style": "frac"}, "children": []}),
+        json!({"id": "root", "kind": "text", "text": "中文", "attributes": {"style": "text"}, "children": []}),
+        json!({"id": "root", "kind": "matrix", "attributes": {"style": "equation", "columns": ""}, "children": []}),
+        json!({"id": "root", "kind": "hline", "children": []}),
+    ] {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([{
+            "type": "paragraph", "id": "paragraph", "inlines": [{
+                "type": "inlineMath", "id": "inline", "mathTree": {
+                    "schemaVersion": 1, "source": "x", "root": root
+                }
+            }]
+        }]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.inline",
+            "caret.math.syntax.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let opened = open(envelope.to_string().as_bytes())?;
+        let OpenedDocument::SafePreview(preview) = opened else {
+            panic!("incomplete or malformed math nodes must not be editable");
+        };
+        assert!(!preview.can_save());
+    }
+    Ok(())
+}
+
+#[test]
 fn default_code_font_family_is_persisted_and_restored() -> Result<(), Box<dyn std::error::Error>> {
     let file = CdocFile::new(Document::blank())?;
     let bytes = file.to_bytes()?;

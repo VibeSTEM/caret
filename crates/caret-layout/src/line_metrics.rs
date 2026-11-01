@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use caret_doc::DocumentUnits;
 use std::ops::Range;
 
 /// 有限的行内字形 ink bounds，坐标相对其所属基线，单位为 pt。
@@ -170,9 +171,11 @@ pub fn calculate_line_metrics_with_grid(
                 .max(object_floor_pt)
         }
         LineSpacing::AtLeast { min_centipoints } => {
-            required_height_pt.max(min_centipoints as f32 * 0.01)
+            required_height_pt.max(DocumentUnits::centipoints_to_points(min_centipoints) as f32)
         }
-        LineSpacing::Exactly { centipoints } if centipoints > 0 => centipoints as f32 * 0.01,
+        LineSpacing::Exactly { centipoints } if centipoints > 0 => {
+            DocumentUnits::centipoints_to_points(centipoints) as f32
+        }
         _ => return Err(LineMetricsError::InvalidLineSpacing),
     };
     if !height_pt.is_finite() || height_pt <= 0.0 {

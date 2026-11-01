@@ -162,7 +162,7 @@ pub fn paragraph_text(paragraph: &Paragraph) -> String {
                 InlineNode::Run(run) => text.push_str(&run.text),
                 InlineNode::Environment(environment) => append(&environment.children, text),
                 InlineNode::SoftBreak(_) => text.push('\n'),
-                InlineNode::Opaque(_) => text.push('\u{fffc}'),
+                InlineNode::Opaque(_) | InlineNode::Math(_) => text.push('\u{fffc}'),
             }
         }
     }
@@ -229,7 +229,7 @@ fn append_inlines<'a>(
                 style: style.clone(),
                 underline: false,
             }),
-            InlineNode::Opaque(_) => output.push(StyledSpan {
+            InlineNode::Opaque(_) | InlineNode::Math(_) => output.push(StyledSpan {
                 text: "\u{fffc}",
                 style: style.clone(),
                 underline: false,

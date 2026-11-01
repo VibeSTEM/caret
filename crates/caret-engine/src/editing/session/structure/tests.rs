@@ -28,7 +28,7 @@ fn paragraph_text(paragraph: &Paragraph) -> String {
             match node {
                 InlineNode::Run(run) => text.push_str(&run.text),
                 InlineNode::Environment(environment) => collect(&environment.children, text),
-                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) => {}
+                InlineNode::SoftBreak(_) | InlineNode::Opaque(_) | InlineNode::Math(_) => {}
             }
         }
     }
