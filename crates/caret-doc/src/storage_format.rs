@@ -19,7 +19,6 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.explicit-format-state",
     "caret.env.font",
     "caret.env.italic",
-    "caret.env.underline",
     "caret.env.section",
     "caret.env.custom",
     "caret.env.templates",
@@ -31,6 +30,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.paragraph.layout-settings",
     "caret.text.default-font-size",
     "caret.text.language-tags",
+    "caret.text.underline",
     "caret.theme.snapshot",
 ];
 

@@ -7,7 +7,7 @@ use caret_doc::{
     BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, NodeId, PageGeometry,
 };
 
-use super::Selection;
+use super::{EnvironmentKind, Selection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -42,10 +42,12 @@ pub enum Command {
     ExitBlockEnvironment(Direction),
     RemoveBlockEnvironmentPreservingContent,
     RemoveInlineEnvironmentPreservingContent(NodeId),
+    RemoveRunPropertyPreservingContent(EnvironmentKind),
     ExpandStructureSelection,
     ExitStructure,
     CreateBlockEnvironment(BlockEnvironmentKind),
     ToggleInlineFormat(InlineEnvironmentKind),
+    ToggleRunUnderline,
     SetInlineFontFamily(String),
     SetParagraphFirstLineIndentChars(u16),
     SetDefaultFontFamily(Option<String>),
@@ -101,6 +103,9 @@ impl Command {
             Self::RemoveInlineEnvironmentPreservingContent(_) => {
                 "text.format.remove_environment_preserving_content"
             }
+            Self::RemoveRunPropertyPreservingContent(_) => {
+                "text.format.remove_run_property_preserving_content"
+            }
             Self::ExpandStructureSelection => "selection.expand_structure",
             Self::ExitStructure => "struct.exit",
             Self::CreateBlockEnvironment(BlockEnvironmentKind::Section) => "struct.section.create",
@@ -108,7 +113,7 @@ impl Command {
             Self::ToggleInlineFormat(InlineEnvironmentKind::Bold) => "text.format.bold",
             Self::ToggleInlineFormat(InlineEnvironmentKind::Italic) => "text.format.italic",
             Self::ToggleInlineFormat(InlineEnvironmentKind::Font) => "text.format.font",
-            Self::ToggleInlineFormat(InlineEnvironmentKind::Underline) => "text.format.underline",
+            Self::ToggleRunUnderline => "text.format.underline",
             Self::SetInlineFontFamily(_) => "text.format.font_family",
             Self::SetParagraphFirstLineIndentChars(_) => "paragraph.first_line_indent.set",
             Self::SetDefaultFontFamily(_) => "document.default_font_family.set",

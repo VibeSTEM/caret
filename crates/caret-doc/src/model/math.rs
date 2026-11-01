@@ -51,7 +51,7 @@ pub struct MathNode {
 }
 
 /// 可编辑数学树的节点类别；有序子节点保留 TeX 原子和符号次序。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MathNodeKind {
     Row,

@@ -202,6 +202,25 @@ fn splits_align_cells_with_rebased_ranges() {
     }
 }
 
+#[test]
+fn empty_align_keeps_an_editable_placeholder_cell() {
+    let source = r"\begin{aligned}\end{aligned}";
+    let Ok(ParsedMath::Align(align)) = parse(source, MathInputKind::Align) else {
+        panic!("empty aligned environment should parse");
+    };
+    assert_eq!(align.rows.len(), 1);
+    assert_eq!(align.rows[0].cells.len(), 1);
+    assert_eq!(align.rows[0].cells[0].source, "");
+    assert_eq!(align.rows[0].cells[0].root.kind, K::Placeholder);
+
+    let serialized = serialize_align(&align);
+    let Ok(ParsedMath::Align(round_trip)) = parse(&serialized, MathInputKind::Align) else {
+        panic!("serialized empty aligned environment should parse");
+    };
+    assert_eq!(round_trip.rows.len(), 1);
+    assert_eq!(round_trip.rows[0].cells.len(), 1);
+}
+
 const ROUND_TRIP_CASES: &[&str] = &[
     "x",
     "ab+12",

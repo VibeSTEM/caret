@@ -197,6 +197,10 @@ fn strip_fences(source: &str, kind: MathInputKind) -> ParseResult<Range<usize>> 
     Ok(inner_start..end - close.len())
 }
 
+pub(super) fn input_body_range(source: &str, kind: MathInputKind) -> ParseResult<Range<usize>> {
+    strip_fences(source, kind)
+}
+
 fn parse_align(
     parser: &mut Parser<'_>,
     source: &str,
@@ -220,12 +224,19 @@ fn parse_align(
     }
     parser.read_command();
     parser.read_raw_group()?;
-    let rows = parser.parse_matrix_rows("aligned")?;
+    let mut rows = parser.parse_matrix_rows("aligned")?;
     let env_end = parser.pos;
     parser.skip_space();
     if parser.pos < body.end {
         return Err(MathParseError::InputKindMismatch {
             expected: MathInputKind::Align,
+        });
+    }
+    if rows.is_empty() {
+        let placeholder = parser.placeholder();
+        rows.push(MatrixRow::Cells {
+            cells: vec![(placeholder, env_end..env_end)],
+            range: env_end..env_end,
         });
     }
     let mut align_rows = Vec::new();

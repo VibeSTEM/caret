@@ -1,7 +1,11 @@
 //! 验证文档存储、读写失败和原子替换。
 
 use super::{DocumentStorage, DocumentStorageError};
-use caret_doc::{CdocFile, Document, DocumentError};
+use caret_doc::{
+    Block, CdocFile, Document, DocumentError, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION,
+    MathNode, MathNodeKind, MathTree, NodeId,
+};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -97,6 +101,53 @@ fn snapshot_write_validates_before_replacing_and_round_trips()
         DocumentStorageError::Document(DocumentError::InvalidJson(_))
     ));
     assert_eq!(DocumentStorage.read_file_bytes(&path)?, bytes);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn opening_rejects_math_source_tree_mismatch_without_mutating_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::temp_dir().join(format!(
+        "caret-document-storage-invalid-math-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root)?;
+    let path = root.join("document.cdoc");
+    let tree = MathTree {
+        schema_version: MATH_TREE_SCHEMA_VERSION,
+        source: "y".to_owned(),
+        root: MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Symbol,
+            text: Some("x".to_owned()),
+            attributes: BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
+            source_range: None,
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    if let Some(Block::Paragraph(paragraph)) = document.body.first_mut() {
+        paragraph.inlines = vec![InlineNode::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree,
+            extra: Default::default(),
+        })];
+    }
+    let bytes = CdocFile::new(document)?.to_bytes()?;
+    fs::write(&path, &bytes)?;
+
+    let Err(error) = DocumentStorage.open_file(&path) else {
+        panic!("mismatched formula source/root should not open as editable");
+    };
+    assert!(matches!(
+        error,
+        DocumentStorageError::Document(DocumentError::InvalidDocument(_))
+    ));
+    assert_eq!(fs::read(&path)?, bytes);
     fs::remove_dir_all(root)?;
     Ok(())
 }

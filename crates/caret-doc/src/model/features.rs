@@ -131,6 +131,14 @@ fn collect_inline_features(inline: &InlineNode, features: &mut std::collections:
             if run.language.is_some() {
                 features.insert("caret.text.language-tags".to_owned());
             }
+            if run
+                .props
+                .get("underline")
+                .and_then(serde_json::Value::as_bool)
+                .is_some()
+            {
+                features.insert("caret.text.underline".to_owned());
+            }
         }
         InlineNode::Math(math) => {
             features.insert("caret.math.inline".to_owned());

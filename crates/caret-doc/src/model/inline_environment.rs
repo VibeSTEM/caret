@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 pub enum InlineEnvironmentKind {
     Bold,
     Italic,
-    Underline,
     Font,
 }
 
@@ -24,7 +23,6 @@ impl InlineEnvironmentKind {
         match self {
             Self::Bold => "bold",
             Self::Italic => "italic",
-            Self::Underline => "underline",
             Self::Font => "font",
         }
     }
@@ -34,7 +32,6 @@ impl InlineEnvironmentKind {
         match value {
             "bold" => Some(Self::Bold),
             "italic" => Some(Self::Italic),
-            "underline" => Some(Self::Underline),
             "font" => Some(Self::Font),
             _ => None,
         }
@@ -45,14 +42,13 @@ impl InlineEnvironmentKind {
         match self {
             Self::Bold => "caret.env.bold",
             Self::Italic => "caret.env.italic",
-            Self::Underline => "caret.env.underline",
             Self::Font => "caret.env.font",
         }
     }
 
-    /// Bold、Italic 与 Underline 支持用 `enabled` 显式关闭继承格式。
+    /// Bold 与 Italic 支持用 `enabled` 显式关闭继承格式。
     pub const fn supports_enabled(self) -> bool {
-        matches!(self, Self::Bold | Self::Italic | Self::Underline)
+        matches!(self, Self::Bold | Self::Italic)
     }
 
     /// Font 环境以 `fontFamily` 指定局部字体族。

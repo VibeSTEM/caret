@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{Affinity, EditError, EnvironmentKind, Pos};
+use super::environment::inline_adapter::{
+    INLINE_MATH_ADAPTER, RUN_PROPERTY_ENVIRONMENTS, for_inline_environment,
+};
+use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, Pos};
 use caret_doc::{InlineEnvironment, InlineNode, NodeId, Paragraph, Run, SoftBreak};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -50,16 +53,19 @@ pub(super) struct TextMap {
     pub(super) environment_spans: Vec<EnvironmentSpan>,
     /// 原子对象（行内公式）作为行内环境的范围；不参与格式边界判断。
     pub(super) object_spans: Vec<EnvironmentSpan>,
+    /// 由连续 Run 下划线属性投影出的逻辑范围。
+    property_spans: Vec<EnvironmentSpan>,
     pub(super) grapheme_boundaries: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct EnvironmentSpan {
-    pub(super) id: NodeId,
+    pub(super) id: Option<NodeId>,
+    pub(super) source: EnvironmentSource,
     pub(super) start: usize,
     pub(super) end: usize,
     pub(super) kind: EnvironmentKind,
-    depth: usize,
+    pub(super) depth: usize,
 }
 
 impl TextMap {
@@ -79,6 +85,13 @@ impl TextMap {
             },
             0,
         )?;
+        let property_spans = RUN_PROPERTY_ENVIRONMENTS
+            .iter()
+            .map(|property| collect_run_property_spans(paragraph, *property))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let mut grapheme_boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
         grapheme_boundaries.push(text.len());
         grapheme_boundaries.dedup();
@@ -87,6 +100,7 @@ impl TextMap {
             spans,
             environment_spans,
             object_spans,
+            property_spans,
             grapheme_boundaries,
         })
     }
@@ -115,7 +129,7 @@ impl TextMap {
                         || (offset == span.end && affinity == Affinity::Upstream))
             })
             .max_by_key(|span| span.depth)
-            .map(|span| (span.id.clone(), span.start, span.end))
+            .and_then(|span| span.id.clone().map(|id| (id, span.start, span.end)))
     }
 
     /// 返回焦点按亲和性所属的全部行内环境（含原子公式），由外到内排列。
@@ -127,7 +141,7 @@ impl TextMap {
         let mut stack = self
             .environment_spans
             .iter()
-            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
             .filter(|span| {
                 span.start < span.end
                     && ((span.start < offset && offset < span.end)
@@ -139,14 +153,26 @@ impl TextMap {
         stack
     }
 
+    pub(super) fn inline_math_span(&self, id: &NodeId) -> Option<&EnvironmentSpan> {
+        self.object_spans
+            .iter()
+            .find(|span| span.id.as_ref() == Some(id))
+    }
+
     pub(super) fn has_environment_start(&self, offset: usize) -> bool {
         self.environment_spans
             .iter()
+            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
             .any(|span| span.start == offset)
     }
 
     pub(super) fn has_environment_end(&self, offset: usize) -> bool {
-        self.environment_spans.iter().any(|span| span.end == offset)
+        self.environment_spans
+            .iter()
+            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
+            .any(|span| span.end == offset)
     }
 
     pub(super) fn has_environment_boundary(&self, offset: usize) -> bool {
@@ -488,11 +514,13 @@ fn collect_text(
                     environment_spans,
                     environment_depth + 1,
                 )?;
+                let adapter = for_inline_environment(*kind);
                 environment_spans.environments.push(EnvironmentSpan {
-                    id: id.clone(),
+                    id: Some(id.clone()),
+                    source: adapter.source,
                     start,
                     end: text.len(),
-                    kind: EnvironmentKind::from_inline(*kind),
+                    kind: adapter.kind,
                     depth: environment_depth,
                 });
             }
@@ -511,10 +539,11 @@ fn collect_text(
                 let start = text.len();
                 text.push(OBJECT_REPLACEMENT);
                 environment_spans.objects.push(EnvironmentSpan {
-                    id: math.id.clone(),
+                    id: Some(math.id.clone()),
+                    source: INLINE_MATH_ADAPTER.source,
                     start,
                     end: text.len(),
-                    kind: EnvironmentKind::InlineMath,
+                    kind: INLINE_MATH_ADAPTER.kind,
                     depth: environment_depth,
                 });
                 spans.push(Span {
@@ -537,6 +566,90 @@ fn collect_text(
 struct EnvironmentSpans<'a> {
     environments: &'a mut Vec<EnvironmentSpan>,
     objects: &'a mut Vec<EnvironmentSpan>,
+}
+
+fn collect_run_property_spans(
+    paragraph: &Paragraph,
+    property: super::environment::inline_adapter::RunPropertyEnvironment,
+) -> Result<Vec<EnvironmentSpan>, EditError> {
+    fn visit(
+        nodes: &[InlineNode],
+        offset: &mut usize,
+        active_start: &mut Option<usize>,
+        output: &mut Vec<EnvironmentSpan>,
+        property: super::environment::inline_adapter::RunPropertyEnvironment,
+    ) -> Result<(), EditError> {
+        let flush = |active_start: &mut Option<usize>, offset: usize, output: &mut Vec<_>| {
+            if let Some(start) = active_start.take()
+                && start < offset
+            {
+                output.push(EnvironmentSpan {
+                    id: None,
+                    source: property.adapter.source,
+                    start,
+                    end: offset,
+                    kind: property.adapter.kind,
+                    depth: 0,
+                });
+            }
+        };
+        for node in nodes {
+            match node {
+                InlineNode::Run(run) => {
+                    let enabled = (property.is_active)(run.props.get(property.key));
+                    if enabled {
+                        active_start.get_or_insert(*offset);
+                    } else {
+                        flush(active_start, *offset, output);
+                    }
+                    *offset += run.text.len();
+                }
+                InlineNode::Environment(environment) => {
+                    visit(
+                        &environment.children,
+                        offset,
+                        active_start,
+                        output,
+                        property,
+                    )?;
+                }
+                InlineNode::SoftBreak(_) => {
+                    flush(active_start, *offset, output);
+                    *offset += 1;
+                }
+                InlineNode::Math(_) => {
+                    flush(active_start, *offset, output);
+                    *offset += OBJECT_REPLACEMENT.len_utf8();
+                }
+                InlineNode::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            }
+        }
+        Ok(())
+    }
+
+    let mut output = Vec::new();
+    let mut offset = 0;
+    let mut active_start = None;
+    visit(
+        &paragraph.inlines,
+        &mut offset,
+        &mut active_start,
+        &mut output,
+        property,
+    )?;
+    if let Some(start) = active_start
+        && start < offset
+    {
+        output.push(EnvironmentSpan {
+            id: None,
+            source: property.adapter.source,
+            start,
+            end: offset,
+            kind: property.adapter.kind,
+            depth: 0,
+        });
+    }
+    Ok(output)
 }
 
 fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {

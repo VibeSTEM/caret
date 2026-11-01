@@ -27,7 +27,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](../command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。当前粗体、斜体、局部字体和下划线均使用 inline `EnvironmentNode`；目标架构将下划线改为 `Run.props.underline`，并经语义适配层接入交互。载体现状与目标见[行内与块级环境适配](inline-and-block-environments.md)，格式语义见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`；下划线使用 `Run.props.underline`，并经语义适配层接入交互。载体现状与目标见[行内与块级环境适配](inline-and-block-environments.md)，格式语义见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
 
 Rust 文件按数据职责和编辑职责对应：
 

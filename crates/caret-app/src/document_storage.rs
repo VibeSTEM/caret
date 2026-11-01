@@ -55,12 +55,21 @@ impl DocumentStorage {
 
     pub fn open_file(&self, path: &Path) -> Result<OpenedDocument, DocumentStorageError> {
         let bytes = fs::read(path).map_err(DocumentStorageError::Io)?;
-        Ok(open(&bytes)?)
+        let opened = open(&bytes)?;
+        if let OpenedDocument::Editable(file) = &opened {
+            caret_engine::validate_document_math_sources(&file.document).map_err(|reason| {
+                DocumentStorageError::Document(DocumentError::InvalidDocument(reason))
+            })?;
+        }
+        Ok(opened)
     }
 
     /// 只接受可编辑文档类型；安全预览无法传入此方法。
     /// 先写入同目录临时文件并同步，再原子替换目标。
     pub fn save_file(&self, path: &Path, document: &CdocFile) -> Result<(), DocumentStorageError> {
+        caret_engine::validate_document_math_sources(&document.document).map_err(|reason| {
+            DocumentStorageError::Document(DocumentError::InvalidDocument(reason))
+        })?;
         let payload = document.to_bytes()?;
         // 目录同步采用最佳努力；成功返回表示文件已替换，与 Settings 共用同一提交点。
         atomic_file::write(path, &payload)
@@ -71,11 +80,14 @@ impl DocumentStorage {
     /// 原子写入 Rust 已生成并验证的文档快照。
     pub fn save_snapshot(&self, path: &Path, bytes: &[u8]) -> Result<(), DocumentStorageError> {
         let opened = open(bytes)?;
-        let OpenedDocument::Editable(_) = opened else {
+        let OpenedDocument::Editable(file) = opened else {
             return Err(DocumentStorageError::Document(
                 DocumentError::ReadOnlyPreview,
             ));
         };
+        caret_engine::validate_document_math_sources(&file.document).map_err(|reason| {
+            DocumentStorageError::Document(DocumentError::InvalidDocument(reason))
+        })?;
         atomic_file::write(path, bytes)
             .map(|_| ())
             .map_err(DocumentStorageError::from)

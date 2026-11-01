@@ -1328,11 +1328,12 @@ fn environment_stack_reports_math_and_mod_backspace_skips_it() {
     );
     run_ok(&mut session, Command::InsertText("a".to_owned()));
     run_ok(&mut session, Command::InsertInlineMath("y".to_owned()));
-    let stack = session
-        .current_environment_stack()
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    let view = session
+        .current_environment_view()
         .unwrap_or_else(|error| panic!("environment stack failed: {error}"));
-    let kinds = stack
-        .entries()
+    let kinds = view
+        .inline()
         .iter()
         .map(|entry| entry.kind)
         .collect::<Vec<_>>();
@@ -1343,8 +1344,8 @@ fn environment_stack_reports_math_and_mod_backspace_skips_it() {
             crate::editing::EnvironmentKind::InlineMath
         ]
     );
-    let math = stack
-        .innermost()
+    let math = view
+        .innermost_inline()
         .and_then(|entry| entry.inline_range.clone())
         .unwrap_or_else(|| panic!("inline math should carry its range"));
     assert_eq!(math.end_utf8 - math.start_utf8, '\u{fffc}'.len_utf8());

@@ -19,8 +19,8 @@ pub use command::{Command, Direction, EditorKey};
 pub use command_line::{CommandLine, CommandLineMode};
 pub use command_registry::CommandCandidate;
 pub use environment::{
-    Capabilities, CurrentEnvironment, CurrentEnvironmentStack, EnvironmentKind, EnvironmentLevel,
-    InlineSpan,
+    Capabilities, CurrentEnvironmentView, EnvironmentEntry, EnvironmentKind, EnvironmentLevel,
+    EnvironmentSource, InlineSpan,
 };
 pub use error::EditError;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};

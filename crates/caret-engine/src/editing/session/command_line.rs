@@ -414,9 +414,7 @@ impl Session {
             "text.format.italic" => self.run(Command::ToggleInlineFormat(
                 caret_doc::InlineEnvironmentKind::Italic,
             )),
-            "text.format.underline" => self.run(Command::ToggleInlineFormat(
-                caret_doc::InlineEnvironmentKind::Underline,
-            )),
+            "text.format.underline" => self.run(Command::ToggleRunUnderline),
             "text.format.font_family" => candidate
                 .value
                 .map(|family| self.run(Command::SetInlineFontFamily(family)))

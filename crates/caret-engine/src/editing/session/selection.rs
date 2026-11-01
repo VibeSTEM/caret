@@ -341,8 +341,6 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
-        // 结构选区与公式内编辑互斥。
-        self.math_edit = None;
         if self.composition.is_some()
             || self
                 .command_line
@@ -357,6 +355,8 @@ impl Session {
         if selected.is_empty() {
             return Err(EditError::InvalidPosition);
         }
+        // 目标与范围均有效后，才切换离开公式编辑状态。
+        self.math_edit = None;
         let cancels_command_line_preedit = self
             .command_line
             .as_ref()

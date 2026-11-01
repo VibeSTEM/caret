@@ -52,7 +52,7 @@
 ## 验收标准
 
 - [x] 三种公式在 `.cdoc` 中为 Caret 自有 schema，未知字段保留，保存重开稳定。
-- [ ] 畸形或不匹配的 source/root 数据在读入与保存时安全拒绝或进入明示的只读预览；合法编辑往返保持一致。
+- [x] 畸形或不匹配的 source/root 数据在进入可编辑会话与应用保存入口时安全拒绝；合法编辑往返保持一致。
 - [x] 超深、超长、节点过多的输入安全拒绝，正文不变。
 - [x] 行内公式作为一个原子对象插入、删除和移动光标；无效输入不改文档。
 - [x] 块级 `Equation`/`Align` 可通过命令插入并进入编辑。
@@ -64,8 +64,9 @@
 | --- | --- | --- | --- |
 | 2026-11-01 | Linux：`cargo test -p caret-doc -p caret-math` | schema、上限、往返测试通过 | 通过 |
 | 2026-11-01 | Linux：`cargo test -p caret-engine` | 行内公式原子插入、删除、无效输入与环境栈测试通过 | 通过 |
-
 | 2026-11-01 | Linux：`cargo test -p caret-engine math_edit`、`cargo test -p caret-app math` | `\math`/`\equation`/`\align` → 回车 → 公式内输入与 `\` 子命令 → 退出、撤销的端到端测试通过 | 通过 |
+| 2026-11-01 | macOS：`cargo test --locked --workspace` | source/root 语义校验、公式状态迁移、模型和布局回归通过 | 通过；包含 native CTest 8/8 |
+| 2026-11-01 | macOS：分别运行 `cargo test -p caret-engine --locked align_cell_mapping`、`cargo test -p caret-engine --locked empty_equation_keeps_a_visible_math_caret`、`cargo test -p caret-engine --locked empty_align_keeps_a_visible_math_caret`、`cargo test -p caret-engine --locked math_history_estimate_counts_nodes_and_extension_payloads`、`cargo test -p caret-math --locked empty_align_keeps_an_editable_placeholder_cell` | 嵌套环境分隔符、空公式插入点、历史内存估算和空对齐单元格通过 | 通过 |
 
 ## 风险与回退
 
@@ -76,8 +77,11 @@ schema 发布后靠 `schemaVersion` 与 `extra` 保持兼容。解析器只覆�
 - 2026-11-01：解析器直接产出 `caret-doc` 数学树，不保留中间 AST；编辑以 source 为真值并在成功解析后同步更新 root。
 - 2026-11-01：行内公式以 U+FFFC 原子对象进入段落文本，与格式边界分开记录。
 
-- 2026-11-01：公式内编辑以源码为真值：`MathEdit` 保存目标公式、LaTeX 源码与源码字节偏移；每次修改重新解析，失败则拒绝且文档不变。tree/source 一致性须在验证与保存入口覆盖。插入点只停在花括号组内与 token 边界，控制词按整体删除。
+- 2026-11-01：公式编辑以 LaTeX 源码和 UTF-8 焦点偏移为输入状态；公式树适配器负责把同一焦点映射到分子、分母等结构节点。控制词对应的可见符号作为一个停靠点，普通内容按字素移动；分式相邻参数间的 `}{` 是一步结构导航。空参数退格删除其空结构，多余 `}` 输入拒绝且不改变文档。`InlineMath` 是段落行内载体，`\frac` 是其 `MathTree` 内部的 `MathNodeKind::Fraction`，不另建行内环境。
+- 2026-11-01：`caret-doc` 只负责稳定 schema 与结构约束；依赖解析器的语义校验放在 `caret-engine::Session::new` 和 app 存储边界，避免 `caret-doc` 反向依赖 `caret-math`。
+- 2026-11-01：编辑重解析时保留数学树及可唯一映射的未修改节点 ID 与 `extra`；公式历史估算遍历节点、扩展字段及对齐行/单元格，不再按源码长度乘常数估算。
+- 2026-11-01：嵌套 LaTeX 环境中的 `&` 与 `\\` 不作为外层 `aligned` 单元格/行分隔符；空 `aligned` 持有一个占位单元格，确保 MathEdit 有有效插入点。
 
 ## 完成摘要
 
-未完成。模型、解析、序列化、三种公式的命令插入与公式内编辑已完成；source/root 一致性与失败原子性仍需验收。表格单元格公式模型、编辑目标和导航归 045。
+未完成。模型、解析、序列化、三种公式的命令插入与公式内编辑、可编辑会话和保存边界的 source/root 语义校验已接通。公式输入法预编辑仍没有公式专用状态与预览路径；公式内 Undo/Redo 尚未恢复公式焦点和源码偏移。实现前需覆盖替换、取消、失败恢复与撤销契约；表格单元格公式模型、编辑目标和导航归 045。

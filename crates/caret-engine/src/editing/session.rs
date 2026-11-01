@@ -79,6 +79,7 @@ impl Session {
         document
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        crate::validate_document_math_sources(&document).map_err(EditError::InvalidDocument)?;
         let (paragraph, story) = first_paragraph(&document.body)
             .ok_or_else(|| EditError::InvalidDocument("document has no paragraph".to_owned()))?;
         let pos = Pos {
@@ -195,7 +196,6 @@ impl Session {
         &mut self,
         environment_id: NodeId,
     ) -> Result<Effect, EditError> {
-        self.math_edit = None;
         let exists = self
             .structure_index
             .structures()
@@ -204,6 +204,7 @@ impl Session {
         if !exists {
             return Err(EditError::InvalidPosition);
         }
+        self.math_edit = None;
         let changed = self.selected_block_environment.as_ref() != Some(&environment_id);
         self.selected_block_environment = Some(environment_id);
         self.selected_block_environments =
@@ -239,6 +240,15 @@ impl Session {
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
     pub fn run(&mut self, command: Command) -> Result<Effect, EditError> {
+        let previous_math_edit = self.math_edit.clone();
+        let result = self.run_inner(command);
+        if result.is_err() && self.math_edit.is_none() {
+            self.math_edit = previous_math_edit;
+        }
+        result
+    }
+
+    fn run_inner(&mut self, command: Command) -> Result<Effect, EditError> {
         if let Some(effect) = self.run_math_edit(&command)? {
             return Ok(effect);
         }
@@ -459,8 +469,12 @@ impl Session {
                 unreachable!("structure edit commands returned above")
             }
             Command::ToggleInlineFormat(kind) => self.toggle_inline_format(kind),
+            Command::ToggleRunUnderline => self.toggle_run_underline(),
             Command::RemoveInlineEnvironmentPreservingContent(environment_id) => {
                 self.remove_inline_environment_preserving_content(&environment_id)
+            }
+            Command::RemoveRunPropertyPreservingContent(kind) => {
+                self.remove_run_property_from_current_range(kind)
             }
             Command::SetInlineFontFamily(family) => self.set_inline_font_family(&family),
             Command::SetParagraphFirstLineIndentChars(chars) => {
@@ -840,7 +854,9 @@ fn is_paragraph_edit(command: &Command) -> bool {
             | Command::InsertInlineMath(_)
             | Command::InsertParagraphBreak
             | Command::ToggleInlineFormat(_)
+            | Command::ToggleRunUnderline
             | Command::RemoveInlineEnvironmentPreservingContent(_)
+            | Command::RemoveRunPropertyPreservingContent(_)
             | Command::SetInlineFontFamily(_)
             | Command::SetParagraphFirstLineIndentChars(_)
             | Command::Delete(_)

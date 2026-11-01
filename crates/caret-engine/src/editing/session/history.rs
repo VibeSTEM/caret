@@ -7,8 +7,8 @@ use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_a
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, DocumentSettings,
-    NodeId, PageGeometry, Paragraph,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget,
+    DocumentSettings, Equation, MathNode, MathTree, NodeId, PageGeometry, Paragraph,
 };
 use caret_layout::VisualAffinity;
 use std::mem::size_of;
@@ -1120,9 +1120,8 @@ fn block_estimated_bytes(block: &Block) -> usize {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
             Block::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
-            // 公式树节点数与源码长度近似成正比，按源码长度的常数倍粗估。
-            Block::Equation(value) => size_of_val(value) + value.math_tree.source.len() * 8,
-            Block::Align(value) => size_of_val(value) + value.source.len() * 8,
+            Block::Equation(value) => equation_estimated_bytes(value),
+            Block::Align(value) => align_estimated_bytes(value),
         }
 }
 
@@ -1153,8 +1152,68 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
             InlineNode::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
-            InlineNode::Math(value) => size_of_val(value) + value.math_tree.source.len() * 8,
+            InlineNode::Math(value) => {
+                size_of_val(value) + math_tree_estimated_bytes(&value.math_tree)
+            }
         }
+}
+
+fn equation_estimated_bytes(equation: &Equation) -> usize {
+    size_of_val(equation)
+        + node_id_bytes(&equation.id)
+        + math_tree_estimated_bytes(&equation.math_tree)
+        + string_value_map_bytes(&equation.extra)
+}
+
+fn align_estimated_bytes(align: &Align) -> usize {
+    size_of_val(align)
+        + node_id_bytes(&align.id)
+        + align.source.capacity()
+        + align.rows.capacity() * size_of::<caret_doc::MathAlignRow>()
+        + align
+            .rows
+            .iter()
+            .map(|row| {
+                size_of::<caret_doc::MathAlignRow>()
+                    + node_id_bytes(&row.id)
+                    + row.cells.capacity() * size_of::<MathTree>()
+                    + row
+                        .cells
+                        .iter()
+                        .map(math_tree_estimated_bytes)
+                        .sum::<usize>()
+                    + string_value_map_bytes(&row.extra)
+            })
+            .sum::<usize>()
+        + string_value_map_bytes(&align.extra)
+}
+
+fn math_tree_estimated_bytes(tree: &MathTree) -> usize {
+    size_of::<MathTree>()
+        + tree.source.capacity()
+        + math_node_estimated_bytes(&tree.root)
+        + string_value_map_bytes(&tree.extra)
+}
+
+fn math_node_estimated_bytes(node: &MathNode) -> usize {
+    size_of::<MathNode>()
+        + node_id_bytes(&node.id)
+        + node.text.as_ref().map_or(0, String::capacity)
+        + node
+            .attributes
+            .iter()
+            .map(|(key, value)| size_of::<String>() * 2 + key.capacity() + value.capacity())
+            .sum::<usize>()
+        + node.source_range.as_ref().map_or(0, |range| {
+            size_of_val(range) + string_value_map_bytes(&range.extra)
+        })
+        + node.children.capacity() * size_of::<MathNode>()
+        + node
+            .children
+            .iter()
+            .map(math_node_estimated_bytes)
+            .sum::<usize>()
+        + string_value_map_bytes(&node.extra)
 }
 
 pub(super) fn history_memory_limit() -> usize {
@@ -1365,4 +1424,33 @@ pub(super) fn restore_history_transition(
         transition.changed_paragraph_id,
         transition.document_changed,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caret_math::{MathInputKind, ParsedMath};
+    use serde_json::json;
+
+    fn parsed_tree(source: &str) -> MathTree {
+        match caret_math::parse(source, MathInputKind::Inline) {
+            Ok(ParsedMath::Tree(tree)) => tree,
+            Ok(ParsedMath::Align(_)) => panic!("expected a formula tree"),
+            Err(error) => panic!("test formula should parse: {error}"),
+        }
+    }
+
+    #[test]
+    fn math_history_estimate_counts_nodes_and_extension_payloads() {
+        let leaf = parsed_tree("x");
+        let mut fraction = parsed_tree(r"\frac{a}{b}");
+        assert!(math_tree_estimated_bytes(&fraction) > math_tree_estimated_bytes(&leaf));
+
+        let before_extra = math_tree_estimated_bytes(&fraction);
+        fraction.root.extra.insert(
+            "futurePayload".to_owned(),
+            json!({"description": "retained extension data".repeat(8)}),
+        );
+        assert!(math_tree_estimated_bytes(&fraction) > before_extra);
+    }
 }

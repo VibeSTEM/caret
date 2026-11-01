@@ -291,6 +291,15 @@ fn validate_inline<'a>(
                     });
                 }
             }
+            if run
+                .props
+                .get("underline")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return Err(ModelError::InvalidDocument(
+                    "Run underline must be boolean".to_owned(),
+                ));
+            }
             Ok(())
         }
         InlineNode::Math(math) => {
@@ -306,7 +315,7 @@ fn validate_inline<'a>(
                     .is_some_and(|value| !value.is_boolean())
             {
                 return Err(ModelError::InvalidDocument(
-                    "Bold/Italic/Underline enabled must be boolean".to_owned(),
+                    "Bold/Italic enabled must be boolean".to_owned(),
                 ));
             }
             if environment.kind.supports_font_family()
