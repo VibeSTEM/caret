@@ -1,7 +1,7 @@
 //! 验证格式命令的用户可见范围、撤销和待输入行为。
 
 use super::*;
-use crate::editing::{Command, Direction, Selection, StoryId};
+use crate::editing::{Affinity, Command, Direction, Selection, StoryId};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
     InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
@@ -98,12 +98,6 @@ fn assert_all_format(
 }
 
 fn assert_all_underline(session: &Session, paragraph_id: &NodeId, expected: bool) {
-    assert_all_format(
-        session,
-        paragraph_id,
-        InlineEnvironmentKind::Underline,
-        expected,
-    );
     let position = Pos {
         story: StoryId::Body,
         paragraph_id: paragraph_id.clone(),
@@ -113,21 +107,43 @@ fn assert_all_underline(session: &Session, paragraph_id: &NodeId, expected: bool
     let paragraph = session
         .paragraph_for(&position)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-    fn no_run_underline(nodes: &[InlineNode]) -> bool {
-        nodes.iter().all(|node| match node {
-            InlineNode::Run(run) => !run.props.contains_key("underline"),
-            InlineNode::Environment(environment) => no_run_underline(&environment.children),
-            _ => true,
-        })
-    }
-    // 下划线只由行内环境表达，Run 上不再出现直接格式属性。
-    assert!(no_run_underline(&paragraph.inlines));
+    let spans = format_spans(&paragraph.inlines)
+        .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
+    let underline_key = crate::editing::environment::inline_adapter::run_property_for_kind(
+        crate::editing::EnvironmentKind::Underline,
+    )
+    .map(|property| property.key)
+    .unwrap_or_else(|| panic!("underline Run property adapter missing"));
+    let text_spans = spans
+        .iter()
+        .filter(|span| span.start < span.end && span.run_property_target)
+        .collect::<Vec<_>>();
+    assert!(!text_spans.is_empty());
+    assert!(
+        text_spans
+            .iter()
+            .all(|span| span.properties.get(underline_key).copied().unwrap_or(false) == expected),
+        "unexpected Run-property spans: {text_spans:?}"
+    );
 }
 
-const TOGGLE_UNDERLINE: Command = Command::ToggleInlineFormat(InlineEnvironmentKind::Underline);
+fn underlined_run(text: &str) -> InlineNode {
+    let mut value = Run {
+        text: text.to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    value
+        .props
+        .insert("underline".to_owned(), Value::Bool(true));
+    InlineNode::Run(value)
+}
+
+const TOGGLE_UNDERLINE: Command = Command::ToggleRunUnderline;
 
 #[test]
-fn underline_command_wraps_selection_in_environment_and_undo_restores() {
+fn underline_command_sets_run_property_and_undo_restores_it() {
     let mut session = session_with_paragraphs(vec![paragraph("alpha")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
     let start = session.selection.focus.clone();
@@ -148,8 +164,7 @@ fn underline_command_wraps_selection_in_environment_and_undo_restores() {
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     assert!(matches!(
         paragraph.inlines.as_slice(),
-        [InlineNode::Environment(environment)]
-            if environment.kind == InlineEnvironmentKind::Underline
+        [InlineNode::Run(run)] if run.props.get("underline") == Some(&Value::Bool(true))
     ));
 
     session
@@ -165,11 +180,7 @@ fn underline_command_wraps_selection_in_environment_and_undo_restores() {
 #[test]
 fn underline_command_unifies_mixed_selection_and_supports_pending_typing() {
     let first = Paragraph {
-        inlines: vec![inline_environment(
-            NodeId::generate(),
-            InlineEnvironmentKind::Underline,
-            vec![run("on")],
-        )],
+        inlines: vec![underlined_run("on")],
         ..Paragraph::empty(NodeId::generate())
     };
     let first_id = first.id.clone();
@@ -207,17 +218,9 @@ fn underline_command_unifies_mixed_selection_and_supports_pending_typing() {
 }
 
 #[test]
-fn underline_environment_is_current_environment_and_mod_backspace_unwraps_it() {
-    let environment_id = NodeId::generate();
+fn run_underline_is_an_inline_candidate_and_mod_backspace_clears_the_property() {
     let model = Paragraph {
-        inlines: vec![
-            run("a"),
-            inline_environment(
-                environment_id.clone(),
-                InlineEnvironmentKind::Underline,
-                vec![run("bc")],
-            ),
-        ],
+        inlines: vec![run("a"), underlined_run("bc")],
         ..Paragraph::empty(NodeId::generate())
     };
     let paragraph_id = model.id.clone();
@@ -228,23 +231,163 @@ fn underline_environment_is_current_environment_and_mod_backspace_unwraps_it() {
         ..session.selection.focus.clone()
     };
     select(&mut session, inside.clone(), inside.clone());
-    let stack = session
-        .current_environment_stack()
-        .unwrap_or_else(|error| panic!("environment stack failed: {error}"));
-    let innermost = stack
-        .innermost()
-        .unwrap_or_else(|| panic!("underline environment missing from stack"));
-    assert_eq!(innermost.id, environment_id);
-    assert_eq!(innermost.kind.as_str(), "underline");
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view failed: {error}"));
+    let underline = view
+        .innermost_inline()
+        .unwrap_or_else(|| panic!("Run underline missing from inline view"));
+    assert_eq!(underline.kind, crate::editing::EnvironmentKind::Underline);
+    assert_eq!(
+        underline.source,
+        crate::editing::EnvironmentSource::RunProperty
+    );
+    assert!(underline.id.is_none());
+    let range = underline
+        .inline_range
+        .as_ref()
+        .unwrap_or_else(|| panic!("Run underline should expose its logical range"));
+    assert_eq!((range.start_utf8, range.end_utf8), (1, 3));
 
+    let generation_before = session.document_generation();
     session
         .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
         .unwrap_or_else(|error| panic!("mod backspace failed: {error}"));
+    assert!(session.document_generation() > generation_before);
     assert_all_underline(&session, &paragraph_id, false);
     let paragraph = session
         .paragraph_for(&inside)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     assert_eq!(visible_text(&paragraph.inlines), "abc");
+    assert!(paragraph.inlines.iter().all(|node| match node {
+        InlineNode::Run(run) => !run.props.contains_key("underline"),
+        _ => true,
+    }));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("underline removal undo failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&inside)
+        .unwrap_or_else(|error| panic!("restored paragraph lookup failed: {error}"));
+    assert!(matches!(
+        paragraph.inlines.get(1),
+        Some(InlineNode::Run(run)) if run.props.get("underline") == Some(&Value::Bool(true))
+    ));
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("underline removal redo failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, false);
+}
+
+#[test]
+fn run_property_boundary_changes_affinity_before_caret_leaves_the_range() {
+    let mut session = session_with_paragraphs(vec![Paragraph {
+        id: NodeId::generate(),
+        inlines: vec![underlined_run("abc"), run("d")],
+        ..Paragraph::empty(NodeId::generate())
+    }]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    session
+        .set_selection(Some(Selection {
+            anchor: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 3,
+                affinity: Affinity::Upstream,
+            },
+            focus: Pos {
+                story: StoryId::Body,
+                paragraph_id,
+                offset: 3,
+                affinity: Affinity::Upstream,
+            },
+        }))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("caret boundary move failed: {error}"));
+    assert_eq!(session.selection.focus.offset, 3);
+    assert_eq!(session.selection.focus.affinity, Affinity::Downstream);
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("caret exit move failed: {error}"));
+    assert_eq!(session.selection.focus.offset, 4);
+}
+
+#[test]
+fn text_formatting_only_changes_text_around_inline_math() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    session
+        .run(Command::InsertText("a".to_owned()))
+        .unwrap_or_else(|error| panic!("prefix insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath("x^2".to_owned()))
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("b".to_owned()))
+        .unwrap_or_else(|error| panic!("suffix insertion failed: {error}"));
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let paragraph_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let original = session
+        .paragraph_for(&paragraph_position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"))
+        .clone();
+    let math_before = original
+        .inlines
+        .iter()
+        .find_map(|node| match node {
+            InlineNode::Math(math) => Some(math.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("inline math missing"));
+    session
+        .set_selection(Some(Selection {
+            anchor: Pos {
+                offset: 0,
+                ..paragraph_position.clone()
+            },
+            focus: Pos {
+                offset: 5,
+                affinity: Affinity::Upstream,
+                ..paragraph_position.clone()
+            },
+        }))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    session
+        .run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))
+        .unwrap_or_else(|error| panic!("text formatting failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&paragraph_position)
+        .unwrap_or_else(|error| panic!("updated paragraph lookup failed: {error}"));
+    let math_after = paragraph
+        .inlines
+        .iter()
+        .flat_map(|node| match node {
+            InlineNode::Environment(environment) => environment.children.iter(),
+            _ => std::slice::from_ref(node).iter(),
+        })
+        .find_map(|node| match node {
+            InlineNode::Math(math) => Some(math),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("formatting removed inline math"));
+    assert_eq!(math_after, &math_before);
+    assert_eq!(visible_text(&paragraph.inlines), "ab");
+    let text_spans = format_spans(&paragraph.inlines)
+        .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
+    assert!(
+        text_spans
+            .iter()
+            .filter(|span| span.formatable)
+            .all(|span| span.bold)
+    );
+    assert!(text_spans.iter().any(|span| !span.formatable));
 }
 
 #[test]
@@ -257,18 +400,16 @@ fn pending_underline_survives_undo_redo_and_ime_commit_without_mutating_during_p
     assert_eq!(
         session
             .pending_inline_style
-            .get(InlineEnvironmentKind::Underline),
+            .run_properties
+            .values()
+            .next()
+            .copied(),
         Some(true)
     );
     session
         .run(Command::Undo)
         .unwrap_or_else(|error| panic!("pending underline undo failed: {error}"));
-    assert_eq!(
-        session
-            .pending_inline_style
-            .get(InlineEnvironmentKind::Underline),
-        None
-    );
+    assert!(session.pending_inline_style.run_properties.is_empty());
     session
         .run(Command::Redo)
         .unwrap_or_else(|error| panic!("pending underline redo failed: {error}"));

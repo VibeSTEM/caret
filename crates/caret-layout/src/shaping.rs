@@ -75,7 +75,7 @@ pub(crate) fn paragraph_style_spans<'a>(
             .or_else(|| base_style.language.clone())
     });
     let mut spans = Vec::new();
-    append_inlines(&paragraph.inlines, &base, false, &mut spans);
+    append_inlines(&paragraph.inlines, &base, &mut spans);
     spans
 }
 
@@ -174,7 +174,6 @@ pub fn paragraph_text(paragraph: &Paragraph) -> String {
 fn append_inlines<'a>(
     nodes: &'a [InlineNode],
     style: &ShapingStyle,
-    underline: bool,
     output: &mut Vec<StyledSpan<'a>>,
 ) {
     for node in nodes {
@@ -188,13 +187,16 @@ fn append_inlines<'a>(
                     output.push(StyledSpan {
                         text: &run.text,
                         style: run_style,
-                        underline,
+                        underline: run
+                            .props
+                            .get("underline")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
                     });
                 }
             }
             InlineNode::Environment(environment) => {
                 let mut nested = style.clone();
-                let mut nested_underline = underline;
                 match environment.kind {
                     InlineEnvironmentKind::Bold => {
                         nested.bold = environment
@@ -210,13 +212,6 @@ fn append_inlines<'a>(
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(true);
                     }
-                    InlineEnvironmentKind::Underline => {
-                        nested_underline = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
                     InlineEnvironmentKind::Font => {
                         if let Some(family) = environment
                             .props
@@ -227,7 +222,7 @@ fn append_inlines<'a>(
                         }
                     }
                 }
-                append_inlines(&environment.children, &nested, nested_underline, output);
+                append_inlines(&environment.children, &nested, output);
             }
             InlineNode::SoftBreak(_) => output.push(StyledSpan {
                 text: "\n",
