@@ -6,9 +6,10 @@
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
+use super::math_edit::MathEditTarget;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, DocumentSettings,
-    NodeId, PageGeometry, Paragraph,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget,
+    DocumentSettings, Equation, MathNode, MathTree, NodeId, PageGeometry, Paragraph,
 };
 use caret_layout::VisualAffinity;
 use std::mem::size_of;
@@ -141,6 +142,13 @@ pub(super) enum DocumentPatch {
         environment: Box<BlockEnvironment>,
         environment_estimated_bytes: usize,
     },
+    /// 同一父级下一段连续块的整体替换；用于插入或修改显示公式、对齐公式块。
+    BlockRange {
+        parent_environment_ids: Vec<NodeId>,
+        sibling_index: usize,
+        before: Vec<Block>,
+        after: Vec<Block>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +171,31 @@ pub(super) struct SessionHistoryState {
     selection: Selection,
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
+    math_edit: Option<MathEditPosition>,
     state_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MathEditPosition {
+    pub(super) target: MathEditTarget,
+    pub(super) cursor: usize,
+}
+
+impl MathEditPosition {
+    pub(super) fn new(target: MathEditTarget, cursor: usize) -> Self {
+        Self { target, cursor }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        size_of::<Self>()
+            + match &self.target {
+                MathEditTarget::Inline {
+                    paragraph_id,
+                    math_id,
+                } => node_id_bytes(paragraph_id) + node_id_bytes(math_id),
+                MathEditTarget::Block { block_id, .. } => node_id_bytes(block_id),
+            }
+    }
 }
 
 impl SessionHistoryState {
@@ -177,8 +209,14 @@ impl SessionHistoryState {
             selection,
             visual_affinity,
             pending_style,
+            math_edit: None,
             state_id,
         }
+    }
+
+    pub(super) fn with_math_edit(mut self, math_edit: Option<MathEditPosition>) -> Self {
+        self.math_edit = math_edit;
+        self
     }
 }
 
@@ -187,6 +225,7 @@ pub(super) struct HistoryTransition {
     pub selection: Selection,
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
+    pub math_edit: Option<MathEditPosition>,
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
     pub document_changed: bool,
@@ -210,6 +249,16 @@ impl SessionHistoryEdit {
             + self.patch.estimated_bytes()
             + selection_id_bytes(&self.before.selection)
             + selection_id_bytes(&self.after.selection)
+            + self
+                .before
+                .math_edit
+                .as_ref()
+                .map_or(0, MathEditPosition::estimated_bytes)
+            + self
+                .after
+                .math_edit
+                .as_ref()
+                .map_or(0, MathEditPosition::estimated_bytes)
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -225,6 +274,7 @@ impl SessionHistoryEdit {
             selection: self.before.selection.clone(),
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
+            math_edit: self.before.math_edit.clone(),
             state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -236,6 +286,7 @@ impl SessionHistoryEdit {
             selection: self.after.selection.clone(),
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
+            math_edit: self.after.math_edit.clone(),
             state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -286,6 +337,7 @@ impl Edit for SessionHistoryEdit {
             || self.after.state_id != other.before.state_id
             || self.after.selection != other.before.selection
             || self.after.visual_affinity != other.before.visual_affinity
+            || self.after.math_edit != other.before.math_edit
             || self.before.selection.anchor == self.before.selection.focus
                 && other.before.selection.anchor != other.before.selection.focus
             || current_after.len() != 1
@@ -370,6 +422,22 @@ impl DocumentPatch {
                     + paragraph_estimated_bytes
                     + size_of::<Box<Paragraph>>()
                     + node_id_bytes(environment_id)
+            }
+            Self::BlockRange {
+                parent_environment_ids,
+                before,
+                after,
+                ..
+            } => {
+                parent_environment_ids
+                    .iter()
+                    .map(node_id_bytes)
+                    .sum::<usize>()
+                    + before
+                        .iter()
+                        .chain(after)
+                        .map(block_estimated_bytes)
+                        .sum::<usize>()
             }
             Self::EnvironmentInsertion {
                 parent_environment_ids,
@@ -469,6 +537,18 @@ impl DocumentPatch {
                 *kind,
                 false,
             ),
+            Self::BlockRange {
+                parent_environment_ids,
+                sibling_index,
+                before,
+                after,
+            } => apply_block_range(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                after,
+                before,
+            ),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
                 sibling_index,
@@ -566,6 +646,18 @@ impl DocumentPatch {
                 environment_id,
                 *kind,
                 true,
+            ),
+            Self::BlockRange {
+                parent_environment_ids,
+                sibling_index,
+                before,
+                after,
+            } => apply_block_range(
+                document,
+                parent_environment_ids,
+                *sibling_index,
+                before,
+                after,
             ),
             Self::EnvironmentInsertion {
                 parent_environment_ids,
@@ -903,6 +995,26 @@ fn apply_environment_insertion(
     }
 }
 
+/// 把 `current` 所在的连续块替换为 `replacement`；位置或内容不符时不改文档。
+fn apply_block_range(
+    document: &mut Document,
+    parent_environment_ids: &[NodeId],
+    sibling_index: usize,
+    current: &[Block],
+    replacement: &[Block],
+) {
+    let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
+        return;
+    };
+    let Some(end) = sibling_index.checked_add(current.len()) else {
+        return;
+    };
+    if blocks.get(sibling_index..end) != Some(current) {
+        return;
+    }
+    blocks.splice(sibling_index..end, replacement.iter().cloned());
+}
+
 fn apply_environment_boundary_paragraphs(
     document: &mut Document,
     parent_environment_ids: &[NodeId],
@@ -1053,24 +1165,31 @@ fn block_estimated_bytes(block: &Block) -> usize {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
             Block::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
-            // 公式树节点数与源码长度近似成正比，按源码长度的常数倍粗估。
-            Block::Equation(value) => size_of_val(value) + value.math_tree.source.len() * 8,
-            Block::Align(value) => size_of_val(value) + value.source.len() * 8,
+            Block::Equation(value) => equation_estimated_bytes(value),
+            Block::Align(value) => align_estimated_bytes(value),
         }
 }
 
-fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
-    use caret_doc::InlineNode;
-    size_of::<InlineNode>()
+fn inline_estimated_bytes(node: &caret_doc::ParagraphContent) -> usize {
+    use caret_doc::ParagraphContent;
+    size_of::<ParagraphContent>()
         + match node {
-            InlineNode::Run(run) => {
-                size_of_val(run)
-                    + run.language.as_ref().map_or(0, String::len)
-                    + run.text.len()
-                    + string_value_map_bytes(&run.props)
-                    + string_value_map_bytes(&run.extra)
+            ParagraphContent::Text(text) => {
+                size_of_val(text)
+                    + text
+                        .runs
+                        .iter()
+                        .map(|run| {
+                            size_of_val(run)
+                                + run.language.as_ref().map_or(0, String::len)
+                                + run.text.len()
+                                + string_value_map_bytes(&run.props)
+                                + string_value_map_bytes(&run.extra)
+                        })
+                        .sum::<usize>()
+                    + string_value_map_bytes(&text.extra)
             }
-            InlineNode::Environment(environment) => {
+            ParagraphContent::Environment(environment) => {
                 size_of_val(environment)
                     + node_id_bytes(&environment.id)
                     + environment.definition_id.as_ref().map_or(0, String::len)
@@ -1082,12 +1201,117 @@ fn inline_estimated_bytes(node: &caret_doc::InlineNode) -> usize {
                         .map(inline_estimated_bytes)
                         .sum::<usize>()
             }
-            InlineNode::SoftBreak(value) => {
+            ParagraphContent::SoftBreak(value) => {
                 size_of_val(value) + string_value_map_bytes(&value.extra)
             }
-            InlineNode::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
-            InlineNode::Math(value) => size_of_val(value) + value.math_tree.source.len() * 8,
+            ParagraphContent::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
+            ParagraphContent::Math(value) => {
+                size_of_val(value) + math_tree_estimated_bytes(&value.math_tree)
+            }
         }
+}
+
+fn equation_estimated_bytes(equation: &Equation) -> usize {
+    size_of_val(equation)
+        + node_id_bytes(&equation.id)
+        + math_tree_estimated_bytes(&equation.math_tree)
+        + string_value_map_bytes(&equation.extra)
+}
+
+fn align_estimated_bytes(align: &Align) -> usize {
+    size_of_val(align)
+        + node_id_bytes(&align.id)
+        + align.source.capacity()
+        + align.rows.capacity() * size_of::<caret_doc::MathAlignRow>()
+        + align
+            .rows
+            .iter()
+            .map(|row| {
+                size_of::<caret_doc::MathAlignRow>()
+                    + node_id_bytes(&row.id)
+                    + row.cells.capacity() * size_of::<MathTree>()
+                    + row
+                        .cells
+                        .iter()
+                        .map(math_tree_estimated_bytes)
+                        .sum::<usize>()
+                    + string_value_map_bytes(&row.extra)
+            })
+            .sum::<usize>()
+        + string_value_map_bytes(&align.extra)
+}
+
+fn math_tree_estimated_bytes(tree: &MathTree) -> usize {
+    size_of::<MathTree>()
+        + tree.source.capacity()
+        + math_flow_estimated_bytes(&tree.root)
+        + string_value_map_bytes(&tree.extra)
+}
+
+fn math_flow_estimated_bytes(node: &caret_doc::MathFlow) -> usize {
+    size_of::<caret_doc::MathFlow>()
+        + node.id.as_str().len()
+        + node
+            .content
+            .iter()
+            .map(math_content_estimated_bytes)
+            .sum::<usize>()
+        + string_value_map_bytes(&node.extra)
+}
+
+fn math_content_estimated_bytes(content: &caret_doc::MathContent) -> usize {
+    use caret_doc::MathContent;
+    match content {
+        MathContent::Text(text) => {
+            size_of_val(text)
+                + text
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        size_of_val(run)
+                            + run.text.len()
+                            + string_value_map_bytes(&run.props)
+                            + string_value_map_bytes(&run.extra)
+                    })
+                    .sum::<usize>()
+                + string_value_map_bytes(&text.extra)
+        }
+        MathContent::Math(node) => math_node_estimated_bytes(node),
+        MathContent::Environment(environment) => {
+            size_of_val(environment)
+                + node_id_bytes(&environment.id)
+                + string_value_map_bytes(&environment.props)
+                + environment
+                    .children
+                    .iter()
+                    .map(math_content_estimated_bytes)
+                    .sum::<usize>()
+                + string_value_map_bytes(&environment.extra)
+        }
+        MathContent::SoftBreak(value) => size_of_val(value) + string_value_map_bytes(&value.extra),
+        MathContent::Opaque(value) => size_of_val(value) + value.raw.to_string().len(),
+    }
+}
+
+fn math_node_estimated_bytes(node: &MathNode) -> usize {
+    size_of::<MathNode>()
+        + node_id_bytes(&node.id)
+        + node.text.as_ref().map_or(0, String::capacity)
+        + node
+            .attributes
+            .iter()
+            .map(|(key, value)| size_of::<String>() * 2 + key.capacity() + value.capacity())
+            .sum::<usize>()
+        + node.source_range.as_ref().map_or(0, |range| {
+            size_of_val(range) + string_value_map_bytes(&range.extra)
+        })
+        + node.children.capacity() * size_of::<caret_doc::MathFlow>()
+        + node
+            .children
+            .iter()
+            .map(math_flow_estimated_bytes)
+            .sum::<usize>()
+        + string_value_map_bytes(&node.extra)
 }
 
 pub(super) fn history_memory_limit() -> usize {
@@ -1289,6 +1513,7 @@ pub(super) fn restore_history_transition(
     u64,
     Option<NodeId>,
     bool,
+    Option<MathEditPosition>,
 ) {
     (
         transition.selection,
@@ -1297,5 +1522,35 @@ pub(super) fn restore_history_transition(
         transition.state_id,
         transition.changed_paragraph_id,
         transition.document_changed,
+        transition.math_edit,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use caret_math::{MathInputKind, ParsedMath};
+    use serde_json::json;
+
+    fn parsed_tree(source: &str) -> MathTree {
+        match caret_math::parse(source, MathInputKind::Inline) {
+            Ok(ParsedMath::Tree(tree)) => tree,
+            Ok(ParsedMath::Align(_)) => panic!("expected a formula tree"),
+            Err(error) => panic!("test formula should parse: {error}"),
+        }
+    }
+
+    #[test]
+    fn math_history_estimate_counts_nodes_and_extension_payloads() {
+        let leaf = parsed_tree("x");
+        let mut fraction = parsed_tree(r"\frac{a}{b}");
+        assert!(math_tree_estimated_bytes(&fraction) > math_tree_estimated_bytes(&leaf));
+
+        let before_extra = math_tree_estimated_bytes(&fraction);
+        fraction.root.extra.insert(
+            "futurePayload".to_owned(),
+            json!({"description": "retained extension data".repeat(8)}),
+        );
+        assert!(math_tree_estimated_bytes(&fraction) > before_extra);
+    }
 }

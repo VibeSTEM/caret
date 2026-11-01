@@ -13,7 +13,7 @@
 
 - [文档格式导入与导出](../architecture/editor/document-interchange.md)
 - [文档模型](../architecture/editor/document-model.md)
-- [公式与表格](../architecture/editor/math-and-table.md)
+- [公式与表格索引](../architecture/editor/math-and-table.md)
 - [测试规范](../standards/testing.md)
 
 ## 范围与非目标

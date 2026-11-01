@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use caret_doc::{
-    DocumentSettings, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    DocumentSettings, InlineEnvironment, InlineEnvironmentKind, NodeId, Paragraph,
+    ParagraphContent, Run, TextFlow,
 };
 use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 
@@ -19,7 +20,7 @@ fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
         id: NodeId::generate(),
         language: language.map(str::to_owned),
         layout: None,
-        inlines: vec![InlineNode::Run(Run {
+        inlines: vec![text_flow(Run {
             text: text.to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -33,6 +34,14 @@ fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
 
 fn font_catalog() -> FontCatalog {
     FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"))
+}
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
 }
 
 #[test]
@@ -296,13 +305,13 @@ fn space_calibration_preserves_shaping_across_equal_style_runs() {
     let mut layouter = ParagraphLayouter::new();
     let mut split = paragraph("", Some("en"));
     split.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "a off".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "ice".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -639,8 +648,9 @@ fn run_language_and_paragraph_environment_styles_reach_parley() {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::new(),
-        children: vec![InlineNode::Run(Run {
+        children: vec![text_flow(Run {
             text: "Bold Thai text ภาษาไทย".to_owned(),
             language: Some("th-TH".to_owned()),
             props: BTreeMap::new(),
@@ -648,7 +658,7 @@ fn run_language_and_paragraph_environment_styles_reach_parley() {
         })],
         extra: BTreeMap::new(),
     };
-    paragraph.inlines = vec![InlineNode::Environment(bold)];
+    paragraph.inlines = vec![ParagraphContent::Environment(bold)];
     let (text, result) = layouter
         .layout(
             &mut catalog,
@@ -794,13 +804,13 @@ fn same_style_run_boundaries_preserve_positioned_glyphs() {
     let text = "office العربية e\u{301}";
     let mut split = paragraph("", None);
     split.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "office العربية e".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "\u{301}".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -843,26 +853,28 @@ fn font_environment_and_nested_bold_reach_parley_style_ranges() {
         language: Some("en".to_owned()),
         layout: None,
         inlines: vec![
-            InlineNode::Run(Run {
+            text_flow(Run {
                 text: "plain ".to_owned(),
                 language: None,
                 props: BTreeMap::new(),
                 extra: BTreeMap::new(),
             }),
-            InlineNode::Environment(InlineEnvironment {
+            ParagraphContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Font,
                 definition_id: None,
+                source_range: None,
                 props: BTreeMap::from([(
                     "fontFamily".to_owned(),
                     serde_json::Value::String(family),
                 )]),
-                children: vec![InlineNode::Environment(InlineEnvironment {
+                children: vec![ParagraphContent::Environment(InlineEnvironment {
                     id: NodeId::generate(),
                     kind: InlineEnvironmentKind::Bold,
                     definition_id: None,
+                    source_range: None,
                     props: BTreeMap::new(),
-                    children: vec![InlineNode::Run(Run {
+                    children: vec![text_flow(Run {
                         text: "bold".to_owned(),
                         language: None,
                         props: BTreeMap::new(),
@@ -983,18 +995,19 @@ fn empty_and_trailing_break_lines_keep_positive_metrics() {
 fn paragraph_empty_line_scan_handles_split_crlf_without_copying_text() {
     let mut paragraph = paragraph("", Some("en"));
     paragraph.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "first\r".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::new(),
-            children: vec![InlineNode::Run(Run {
+            children: vec![text_flow(Run {
                 text: "\nsecond".to_owned(),
                 language: None,
                 props: BTreeMap::new(),
@@ -1006,7 +1019,7 @@ fn paragraph_empty_line_scan_handles_split_crlf_without_copying_text() {
     assert!(!paragraph_has_empty_line(&paragraph));
     paragraph
         .inlines
-        .push(InlineNode::SoftBreak(caret_doc::SoftBreak {
+        .push(ParagraphContent::SoftBreak(caret_doc::SoftBreak {
             extra: BTreeMap::new(),
         }));
     assert!(paragraph_has_empty_line(&paragraph));
@@ -1184,9 +1197,10 @@ fn persistent_underline_follows_shaped_runs_across_soft_wrap_without_changing_li
     let mut layouter = ParagraphLayouter::new();
     let mut model = paragraph("underline中文underline", Some("zh-Hans"));
     let plain_model = model.clone();
-    let InlineNode::Run(run) = &mut model.inlines[0] else {
+    let ParagraphContent::Text(flow) = &mut model.inlines[0] else {
         unreachable!();
     };
+    let run = &mut flow.runs[0];
     run.props
         .insert("underline".to_owned(), serde_json::json!(true));
     let (_, layout) = layouter
@@ -1567,13 +1581,13 @@ fn hit_testing_snaps_combining_cluster_to_its_logical_edges() {
     let text = "e\u{301}";
     let mut split = paragraph("", Some("en"));
     split.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "e".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "\u{301}".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -1622,18 +1636,19 @@ fn grapheme_boundaries_cross_run_and_environment_boundaries() {
     let mut layouter = ParagraphLayouter::new();
     let mut paragraph = paragraph("", Some("en"));
     paragraph.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "e".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::new(),
-            children: vec![InlineNode::Run(Run {
+            children: vec![text_flow(Run {
                 text: "\u{301}".to_owned(),
                 language: None,
                 props: BTreeMap::new(),

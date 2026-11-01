@@ -24,12 +24,12 @@ mod validation;
 pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
-pub use inline::{InlineNode, SoftBreak};
+pub use inline::{FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES,
-    MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathNode,
-    MathNodeKind, MathSourceRange, MathTree,
+    MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow,
+    MathNode, MathNodeKind, MathSourceRange, MathTree,
 };
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
@@ -39,7 +39,9 @@ pub const DEFAULT_CODE_FONT_FAMILY: &str = "<default>";
 
 // 保留节点转换函数在 crate 内原有的访问路径。
 #[allow(unused_imports)]
-pub(crate) use codec::{block_from_value, block_to_value, inline_from_value, inline_to_value};
+pub(crate) use codec::{
+    block_from_value, block_to_value, paragraph_content_from_value, paragraph_content_to_value,
+};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

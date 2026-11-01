@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use caret_doc::MathNode;
+use caret_doc::{MathContent, MathFlow};
 
 use super::{MathItem, MathLayout, MathLayoutEngine, MathStyle, layout_math};
 use crate::layout::MathFont;
@@ -18,7 +18,7 @@ fn font() -> &'static MathFont {
     MathFont::builtin().unwrap_or_else(|error| panic!("内置字体加载失败：{error}"))
 }
 
-fn root(source: &str) -> MathNode {
+fn root(source: &str) -> MathFlow {
     match parse(source, MathInputKind::Equation) {
         Ok(ParsedMath::Tree(tree)) => tree.root,
         other => panic!("{source}: {other:?}"),
@@ -248,7 +248,10 @@ fn node_boxes_cover_children() {
         .nodes
         .first()
         .unwrap_or_else(|| panic!("应记录根节点"));
-    assert_eq!(first.id, tree.id);
+    let Some(MathContent::Math(root_node)) = tree.content.first() else {
+        panic!("formula should start with a math node");
+    };
+    assert_eq!(first.id, root_node.id);
     assert!((first.width - layout.width).abs() < EPSILON);
     for node in &layout.nodes {
         assert!(node.x >= -EPSILON && node.x + node.width <= layout.width + EPSILON);

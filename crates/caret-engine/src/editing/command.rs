@@ -7,7 +7,7 @@ use caret_doc::{
     BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, NodeId, PageGeometry,
 };
 
-use super::Selection;
+use super::{EnvironmentKind, Selection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -31,6 +31,10 @@ pub enum Command {
     InsertTwoCharacterWidthSpace,
     PasteText(String),
     InsertSoftBreak,
+    /// 以 LaTeX 源文本在插入点放入一个原子行内公式。
+    InsertInlineMath(String),
+    /// 进入光标旁的公式（行内公式或相邻显示公式块）编辑。
+    EnterMath(Direction),
     InsertParagraphBreak,
     Delete(Direction),
     MoveCaret(Direction),
@@ -38,6 +42,7 @@ pub enum Command {
     ExitBlockEnvironment(Direction),
     RemoveBlockEnvironmentPreservingContent,
     RemoveInlineEnvironmentPreservingContent(NodeId),
+    RemoveRunPropertyPreservingContent(EnvironmentKind),
     ExpandStructureSelection,
     ExitStructure,
     CreateBlockEnvironment(BlockEnvironmentKind),
@@ -85,6 +90,8 @@ impl Command {
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
             Self::PasteText(_) => "clipboard.paste",
             Self::InsertSoftBreak => "text.soft_break",
+            Self::InsertInlineMath(_) => "insert.inline_math",
+            Self::EnterMath(_) => "math.enter",
             Self::InsertParagraphBreak => "text.split_paragraph",
             Self::Delete(_) => "text.delete",
             Self::MoveCaret(_) => "caret.move",
@@ -95,6 +102,9 @@ impl Command {
             Self::RemoveBlockEnvironmentPreservingContent => "struct.remove_preserving_content",
             Self::RemoveInlineEnvironmentPreservingContent(_) => {
                 "text.format.remove_environment_preserving_content"
+            }
+            Self::RemoveRunPropertyPreservingContent(_) => {
+                "text.format.remove_run_property_preserving_content"
             }
             Self::ExpandStructureSelection => "selection.expand_structure",
             Self::ExitStructure => "struct.exit",

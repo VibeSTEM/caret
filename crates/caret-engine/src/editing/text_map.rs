@@ -3,9 +3,115 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{Affinity, EditError, Pos};
-use caret_doc::{InlineEnvironment, InlineNode, NodeId, Paragraph, Run, SoftBreak};
+use super::environment::inline_adapter::{
+    INLINE_MATH_ADAPTER, RUN_PROPERTY_ENVIRONMENTS, for_inline_environment,
+};
+use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, Pos};
+use caret_doc::{
+    FlowContent, InlineEnvironment, InlineMath, NodeId, OpaqueNode, Paragraph, ParagraphContent,
+    Run, SoftBreak, TextFlow,
+};
 use unicode_segmentation::UnicodeSegmentation;
+
+/// 可编辑的临时文本流视图；文档本身始终存储 `ParagraphContent::Text(TextFlow)`。
+#[derive(Debug, Clone)]
+pub(super) enum EditNode {
+    Run(Run),
+    Environment(InlineEnvironment<EditNode>),
+    SoftBreak(SoftBreak),
+    Opaque(OpaqueNode),
+    Math(InlineMath),
+}
+
+struct InlineEditAdapter<'a> {
+    storage: &'a mut Vec<ParagraphContent>,
+    nodes: Vec<EditNode>,
+}
+
+impl<'a> InlineEditAdapter<'a> {
+    fn new(storage: &'a mut Vec<ParagraphContent>) -> Result<Self, EditError> {
+        let nodes = to_edit_nodes(storage)?;
+        Ok(Self { storage, nodes })
+    }
+
+    fn commit(self) {
+        *self.storage = from_edit_nodes(self.nodes);
+    }
+}
+
+pub(super) fn to_edit_nodes(contents: &[ParagraphContent]) -> Result<Vec<EditNode>, EditError> {
+    let mut nodes = Vec::new();
+    for content in contents {
+        match content {
+            FlowContent::Text(flow) => {
+                if flow.source_range.is_some() || !flow.extra.is_empty() {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
+                nodes.extend(flow.runs.iter().cloned().map(EditNode::Run));
+            }
+            FlowContent::Math(math) => nodes.push(EditNode::Math(math.clone())),
+            FlowContent::Environment(environment) => {
+                nodes.push(EditNode::Environment(InlineEnvironment {
+                    id: environment.id.clone(),
+                    kind: environment.kind,
+                    definition_id: environment.definition_id.clone(),
+                    source_range: None,
+                    props: environment.props.clone(),
+                    children: to_edit_nodes(&environment.children)?,
+                    extra: environment.extra.clone(),
+                }))
+            }
+            FlowContent::SoftBreak(value) => nodes.push(EditNode::SoftBreak(value.clone())),
+            FlowContent::Opaque(value) => nodes.push(EditNode::Opaque(value.clone())),
+        }
+    }
+    Ok(nodes)
+}
+
+pub(super) fn from_edit_nodes(nodes: Vec<EditNode>) -> Vec<ParagraphContent> {
+    let mut contents = Vec::new();
+    let mut runs = Vec::new();
+    let flush = |runs: &mut Vec<Run>, contents: &mut Vec<ParagraphContent>| {
+        if !runs.is_empty() {
+            contents.push(FlowContent::Text(TextFlow {
+                runs: std::mem::take(runs),
+                source_range: None,
+                extra: Default::default(),
+            }));
+        }
+    };
+    for node in nodes {
+        match node {
+            EditNode::Run(run) => runs.push(run),
+            EditNode::Environment(environment) => {
+                flush(&mut runs, &mut contents);
+                contents.push(FlowContent::Environment(InlineEnvironment {
+                    id: environment.id,
+                    kind: environment.kind,
+                    definition_id: environment.definition_id,
+                    source_range: None,
+                    props: environment.props,
+                    children: from_edit_nodes(environment.children),
+                    extra: environment.extra,
+                }));
+            }
+            EditNode::SoftBreak(value) => {
+                flush(&mut runs, &mut contents);
+                contents.push(FlowContent::SoftBreak(value));
+            }
+            EditNode::Opaque(value) => {
+                flush(&mut runs, &mut contents);
+                contents.push(FlowContent::Opaque(value));
+            }
+            EditNode::Math(value) => {
+                flush(&mut runs, &mut contents);
+                contents.push(FlowContent::Math(value));
+            }
+        }
+    }
+    flush(&mut runs, &mut contents);
+    contents
+}
 
 /// Maps a Qt UTF-16 code-unit offset to a Rust UTF-8 byte offset.
 pub fn utf16_offset_to_utf8(text: &str, offset: usize) -> Result<usize, EditError> {
@@ -31,11 +137,15 @@ pub fn utf8_offset_to_utf16(text: &str, offset: usize) -> Result<usize, EditErro
     Ok(prefix.encode_utf16().count())
 }
 
+/// 行内原子对象在逻辑文本中的占位字符。
+pub(crate) const OBJECT_REPLACEMENT: char = '\u{fffc}';
+
 #[derive(Debug, Clone)]
 struct Span {
     start: usize,
     end: usize,
     path: Vec<usize>,
+    /// 原子节点（软换行或行内公式）：整体插入与删除，内部无插入点。
     is_soft_break: bool,
 }
 
@@ -44,15 +154,21 @@ pub(super) struct TextMap {
     pub(super) text: String,
     spans: Vec<Span>,
     pub(super) environment_spans: Vec<EnvironmentSpan>,
+    /// 原子对象（行内公式）作为行内环境的范围；不参与格式边界判断。
+    pub(super) object_spans: Vec<EnvironmentSpan>,
+    /// 由连续 Run 下划线属性投影出的逻辑范围。
+    property_spans: Vec<EnvironmentSpan>,
     pub(super) grapheme_boundaries: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct EnvironmentSpan {
-    pub(super) id: NodeId,
+    pub(super) id: Option<NodeId>,
+    pub(super) source: EnvironmentSource,
     pub(super) start: usize,
     pub(super) end: usize,
-    depth: usize,
+    pub(super) kind: EnvironmentKind,
+    pub(super) depth: usize,
 }
 
 impl TextMap {
@@ -60,14 +176,25 @@ impl TextMap {
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut environment_spans = Vec::new();
-        collect_text(
+        let mut object_spans = Vec::new();
+        collect_paragraph_text(
             &paragraph.inlines,
             &mut Vec::new(),
             &mut text,
             &mut spans,
-            &mut environment_spans,
+            &mut EnvironmentSpans {
+                environments: &mut environment_spans,
+                objects: &mut object_spans,
+            },
             0,
         )?;
+        let property_spans = RUN_PROPERTY_ENVIRONMENTS
+            .iter()
+            .map(|property| collect_paragraph_run_property_spans(&paragraph.inlines, *property))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let mut grapheme_boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
         grapheme_boundaries.push(text.len());
         grapheme_boundaries.dedup();
@@ -75,6 +202,8 @@ impl TextMap {
             text,
             spans,
             environment_spans,
+            object_spans,
+            property_spans,
             grapheme_boundaries,
         })
     }
@@ -103,17 +232,51 @@ impl TextMap {
                         || (offset == span.end && affinity == Affinity::Upstream))
             })
             .max_by_key(|span| span.depth)
-            .map(|span| (span.id.clone(), span.start, span.end))
+            .and_then(|span| span.id.clone().map(|id| (id, span.start, span.end)))
+    }
+
+    /// 返回焦点按亲和性所属的全部行内环境（含原子公式），由外到内排列。
+    pub(super) fn inline_environment_stack_at(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+    ) -> Vec<&EnvironmentSpan> {
+        let mut stack = self
+            .environment_spans
+            .iter()
+            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
+            .filter(|span| {
+                span.start < span.end
+                    && ((span.start < offset && offset < span.end)
+                        || (offset == span.start && affinity == Affinity::Downstream)
+                        || (offset == span.end && affinity == Affinity::Upstream))
+            })
+            .collect::<Vec<_>>();
+        stack.sort_by_key(|span| span.depth);
+        stack
+    }
+
+    pub(super) fn inline_math_span(&self, id: &NodeId) -> Option<&EnvironmentSpan> {
+        self.object_spans
+            .iter()
+            .find(|span| span.id.as_ref() == Some(id))
     }
 
     pub(super) fn has_environment_start(&self, offset: usize) -> bool {
         self.environment_spans
             .iter()
+            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
             .any(|span| span.start == offset)
     }
 
     pub(super) fn has_environment_end(&self, offset: usize) -> bool {
-        self.environment_spans.iter().any(|span| span.end == offset)
+        self.environment_spans
+            .iter()
+            .chain(self.object_spans.iter())
+            .chain(self.property_spans.iter())
+            .any(|span| span.end == offset)
     }
 
     pub(super) fn has_environment_boundary(&self, offset: usize) -> bool {
@@ -183,6 +346,7 @@ impl TextMap {
         affinity: Affinity,
         text: &str,
     ) -> Result<(), EditError> {
+        let mut adapter = InlineEditAdapter::new(&mut paragraph.inlines)?;
         if text.is_empty() {
             return Ok(());
         }
@@ -210,28 +374,29 @@ impl TextMap {
                 });
         if let Some(span) = candidate {
             let local = offset.saturating_sub(span.start);
-            if mutate_inline_at_path(&mut paragraph.inlines, &span.path, &mut |node| {
-                if let InlineNode::Run(run) = node {
+            if mutate_inline_at_path(&mut adapter.nodes, &span.path, &mut |node| {
+                if let EditNode::Run(run) = node {
                     run.text.insert_str(local, text);
                 }
             }) {
                 normalize_run_neighborhood(
-                    inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+                    inline_list_at_path_mut(&mut adapter.nodes, &span.path)
                         .ok_or(EditError::InvalidPosition)?,
                     *span.path.last().ok_or(EditError::InvalidPosition)?,
                 );
+                adapter.commit();
                 return Ok(());
             }
         }
         let soft_break = self.soft_break_at_boundary(offset, affinity);
         if let Some(span) = soft_break {
-            let list = inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+            let list = inline_list_at_path_mut(&mut adapter.nodes, &span.path)
                 .ok_or(EditError::InvalidPosition)?;
             let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
             let insertion_index = index + usize::from(span.end == offset);
             list.insert(
                 insertion_index,
-                InlineNode::Run(Run {
+                EditNode::Run(Run {
                     text: text.to_owned(),
                     language: None,
                     props: Default::default(),
@@ -239,22 +404,24 @@ impl TextMap {
                 }),
             );
             normalize_run_neighborhood(list, insertion_index);
+            adapter.commit();
             return Ok(());
         }
-        let run = InlineNode::Run(Run {
+        let run = EditNode::Run(Run {
             text: text.to_owned(),
             language: None,
             props: Default::default(),
             extra: Default::default(),
         });
         if offset == 0 && affinity == Affinity::Upstream {
-            paragraph.inlines.insert(0, run);
-            normalize_run_neighborhood(&mut paragraph.inlines, 0);
+            adapter.nodes.insert(0, run);
+            normalize_run_neighborhood(&mut adapter.nodes, 0);
         } else {
-            paragraph.inlines.push(run);
-            let index = paragraph.inlines.len() - 1;
-            normalize_run_neighborhood(&mut paragraph.inlines, index);
+            adapter.nodes.push(run);
+            let index = adapter.nodes.len() - 1;
+            normalize_run_neighborhood(&mut adapter.nodes, index);
         }
+        adapter.commit();
         Ok(())
     }
 
@@ -264,6 +431,27 @@ impl TextMap {
         offset: usize,
         affinity: Affinity,
     ) -> Result<(), EditError> {
+        self.insert_atomic(
+            paragraph,
+            offset,
+            affinity,
+            FlowContent::SoftBreak(SoftBreak::default()),
+        )
+    }
+
+    /// 在插入点放入一个原子行内节点（软换行或行内公式），必要时拆分所在文本段。
+    pub(super) fn insert_atomic(
+        &self,
+        paragraph: &mut Paragraph,
+        offset: usize,
+        affinity: Affinity,
+        node: ParagraphContent,
+    ) -> Result<(), EditError> {
+        let mut adapter = InlineEditAdapter::new(&mut paragraph.inlines)?;
+        let node = to_edit_nodes(&[node])?
+            .into_iter()
+            .next()
+            .ok_or(EditError::InvalidPosition)?;
         let interior = self
             .spans
             .iter()
@@ -289,28 +477,25 @@ impl TextMap {
         let Some(span) = candidate else {
             let soft_break = self.soft_break_at_boundary(offset, affinity);
             if let Some(span) = soft_break {
-                let list = inline_list_at_path_mut(&mut paragraph.inlines, &span.path)
+                let list = inline_list_at_path_mut(&mut adapter.nodes, &span.path)
                     .ok_or(EditError::InvalidPosition)?;
                 let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
                 let insertion_index = index + usize::from(span.end == offset);
-                list.insert(insertion_index, InlineNode::SoftBreak(SoftBreak::default()));
+                list.insert(insertion_index, node.clone());
             } else if offset == 0 && affinity == Affinity::Upstream {
-                paragraph
-                    .inlines
-                    .insert(0, InlineNode::SoftBreak(SoftBreak::default()));
+                adapter.nodes.insert(0, node.clone());
             } else {
-                paragraph
-                    .inlines
-                    .push(InlineNode::SoftBreak(SoftBreak::default()));
+                adapter.nodes.push(node.clone());
             }
+            adapter.commit();
             return Ok(());
         };
         let local = offset.saturating_sub(span.start);
-        let Some(list) = inline_list_at_path_mut(&mut paragraph.inlines, &span.path) else {
+        let Some(list) = inline_list_at_path_mut(&mut adapter.nodes, &span.path) else {
             return Err(EditError::InvalidPosition);
         };
         let index = *span.path.last().ok_or(EditError::InvalidPosition)?;
-        let Some(InlineNode::Run(run)) = list.get(index) else {
+        let Some(EditNode::Run(run)) = list.get(index) else {
             return Err(EditError::InvalidPosition);
         };
         if local > run.text.len() || !run.text.is_char_boundary(local) {
@@ -318,7 +503,8 @@ impl TextMap {
         }
         if run.text.is_empty() {
             let break_index = index + usize::from(affinity == Affinity::Upstream);
-            list.insert(break_index, InlineNode::SoftBreak(SoftBreak::default()));
+            list.insert(break_index, node.clone());
+            adapter.commit();
             return Ok(());
         }
         let left = Run {
@@ -338,13 +524,14 @@ impl TextMap {
         }
         let mut replacement = Vec::with_capacity(3);
         if local > 0 {
-            replacement.push(InlineNode::Run(left));
+            replacement.push(EditNode::Run(left));
         }
-        replacement.push(InlineNode::SoftBreak(SoftBreak::default()));
+        replacement.push(node.clone());
         if local < run.text.len() {
-            replacement.push(InlineNode::Run(right));
+            replacement.push(EditNode::Run(right));
         }
         list.splice(index..=index, replacement);
+        adapter.commit();
         Ok(())
     }
 
@@ -354,6 +541,7 @@ impl TextMap {
         start: usize,
         end: usize,
     ) -> Result<(), EditError> {
+        let mut adapter = InlineEditAdapter::new(&mut paragraph.inlines)?;
         if start >= end || end > self.text.len() {
             return Err(EditError::InvalidPosition);
         }
@@ -366,20 +554,22 @@ impl TextMap {
                 continue;
             }
             if span.is_soft_break {
-                let node = inline_at_path(&paragraph.inlines, &span.path)
-                    .ok_or(EditError::InvalidPosition)?;
+                let node =
+                    inline_at_path(&adapter.nodes, &span.path).ok_or(EditError::InvalidPosition)?;
                 match node {
-                    InlineNode::SoftBreak(value) if value.extra.is_empty() => {
+                    EditNode::SoftBreak(value) if value.extra.is_empty() => {
                         removals.push(span.path.clone());
                     }
-                    InlineNode::SoftBreak(_) => return Err(EditError::UnsupportedOpaqueContent),
+                    EditNode::SoftBreak(_) => return Err(EditError::UnsupportedOpaqueContent),
+                    // 行内公式按 U+FFFC 原子删除。
+                    EditNode::Math(_) => removals.push(span.path.clone()),
                     _ => return Err(EditError::InvalidPosition),
                 }
                 continue;
             }
             let local_start = overlap_start - span.start;
             let local_end = overlap_end - span.start;
-            let Some(InlineNode::Run(run)) = inline_at_path(&paragraph.inlines, &span.path) else {
+            let Some(EditNode::Run(run)) = inline_at_path(&adapter.nodes, &span.path) else {
                 return Err(EditError::InvalidPosition);
             };
             if run.text.get(local_start..local_end).is_none() {
@@ -389,8 +579,8 @@ impl TextMap {
         }
         for (path, local_start, local_end) in run_edits {
             let mut found = false;
-            mutate_inline_at_path(&mut paragraph.inlines, &path, &mut |node| {
-                if let InlineNode::Run(run) = node {
+            mutate_inline_at_path(&mut adapter.nodes, &path, &mut |node| {
+                if let EditNode::Run(run) = node {
                     run.text.replace_range(local_start..local_end, "");
                     found = true;
                 }
@@ -401,52 +591,69 @@ impl TextMap {
         }
         removals.sort_by(|left, right| right.cmp(left));
         for path in removals {
-            remove_inline_at_path(&mut paragraph.inlines, &path)
-                .ok_or(EditError::InvalidPosition)?;
+            remove_inline_at_path(&mut adapter.nodes, &path).ok_or(EditError::InvalidPosition)?;
         }
+        adapter.commit();
         Ok(())
     }
 }
 
-fn collect_text(
-    nodes: &[InlineNode],
+/// Build logical spans directly from the persisted tree. This read path runs for every caret
+/// lookup, so it must not clone the entire inline tree just to flatten TextFlow runs.
+fn collect_paragraph_text(
+    contents: &[ParagraphContent],
     path: &mut Vec<usize>,
     text: &mut String,
     spans: &mut Vec<Span>,
-    environment_spans: &mut Vec<EnvironmentSpan>,
+    environment_spans: &mut EnvironmentSpans<'_>,
     environment_depth: usize,
 ) -> Result<(), EditError> {
-    for (index, node) in nodes.iter().enumerate() {
-        path.push(index);
-        match node {
-            InlineNode::Run(run) => {
-                let start = text.len();
-                text.push_str(&run.text);
-                spans.push(Span {
-                    start,
-                    end: text.len(),
-                    path: path.clone(),
-                    is_soft_break: false,
-                });
+    let mut logical_index = 0;
+    for content in contents {
+        match content {
+            FlowContent::Text(flow) => {
+                if flow.source_range.is_some() || !flow.extra.is_empty() {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
+                for run in &flow.runs {
+                    path.push(logical_index);
+                    let start = text.len();
+                    text.push_str(&run.text);
+                    spans.push(Span {
+                        start,
+                        end: text.len(),
+                        path: path.clone(),
+                        is_soft_break: false,
+                    });
+                    path.pop();
+                    logical_index += 1;
+                }
             }
-            InlineNode::Environment(InlineEnvironment { id, children, .. }) => {
+            FlowContent::Environment(environment) => {
+                path.push(logical_index);
                 let start = text.len();
-                collect_text(
-                    children,
+                collect_paragraph_text(
+                    &environment.children,
                     path,
                     text,
                     spans,
                     environment_spans,
                     environment_depth + 1,
                 )?;
-                environment_spans.push(EnvironmentSpan {
-                    id: id.clone(),
+                let adapter = for_inline_environment(environment.kind);
+                environment_spans.environments.push(EnvironmentSpan {
+                    id: Some(environment.id.clone()),
+                    source: adapter.source,
                     start,
                     end: text.len(),
+                    kind: adapter.kind,
                     depth: environment_depth,
                 });
+                path.pop();
+                logical_index += 1;
             }
-            InlineNode::SoftBreak(_) => {
+            FlowContent::SoftBreak(_) => {
+                path.push(logical_index);
                 let start = text.len();
                 text.push('\n');
                 spans.push(Span {
@@ -455,25 +662,140 @@ fn collect_text(
                     path: path.clone(),
                     is_soft_break: true,
                 });
+                path.pop();
+                logical_index += 1;
             }
-            InlineNode::Opaque(_) | InlineNode::Math(_) => {
-                return Err(EditError::UnsupportedOpaqueContent);
+            FlowContent::Math(math) => {
+                path.push(logical_index);
+                let start = text.len();
+                text.push(OBJECT_REPLACEMENT);
+                environment_spans.objects.push(EnvironmentSpan {
+                    id: Some(math.id.clone()),
+                    source: INLINE_MATH_ADAPTER.source,
+                    start,
+                    end: text.len(),
+                    kind: INLINE_MATH_ADAPTER.kind,
+                    depth: environment_depth,
+                });
+                spans.push(Span {
+                    start,
+                    end: text.len(),
+                    path: path.clone(),
+                    is_soft_break: true,
+                });
+                path.pop();
+                logical_index += 1;
             }
+            FlowContent::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
         }
-        path.pop();
     }
     Ok(())
 }
 
-fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
-    if nodes.is_empty() || !matches!(nodes.get(index), Some(InlineNode::Run(_))) {
+fn collect_paragraph_run_property_spans(
+    contents: &[ParagraphContent],
+    property: super::environment::inline_adapter::RunPropertyEnvironment,
+) -> Result<Vec<EnvironmentSpan>, EditError> {
+    fn visit(
+        contents: &[ParagraphContent],
+        offset: &mut usize,
+        active_start: &mut Option<usize>,
+        output: &mut Vec<EnvironmentSpan>,
+        property: super::environment::inline_adapter::RunPropertyEnvironment,
+    ) -> Result<(), EditError> {
+        let flush = |active_start: &mut Option<usize>, offset: usize, output: &mut Vec<_>| {
+            if let Some(start) = active_start.take()
+                && start < offset
+            {
+                output.push(EnvironmentSpan {
+                    id: None,
+                    source: property.adapter.source,
+                    start,
+                    end: offset,
+                    kind: property.adapter.kind,
+                    depth: 0,
+                });
+            }
+        };
+        for content in contents {
+            match content {
+                FlowContent::Text(flow) => {
+                    if flow.source_range.is_some() || !flow.extra.is_empty() {
+                        return Err(EditError::UnsupportedOpaqueContent);
+                    }
+                    for run in &flow.runs {
+                        if (property.is_active)(run.props.get(property.key)) {
+                            active_start.get_or_insert(*offset);
+                        } else {
+                            flush(active_start, *offset, output);
+                        }
+                        *offset += run.text.len();
+                    }
+                }
+                FlowContent::Environment(environment) => visit(
+                    &environment.children,
+                    offset,
+                    active_start,
+                    output,
+                    property,
+                )?,
+                FlowContent::SoftBreak(_) => {
+                    flush(active_start, *offset, output);
+                    *offset += 1;
+                }
+                FlowContent::Math(_) => {
+                    flush(active_start, *offset, output);
+                    *offset += OBJECT_REPLACEMENT.len_utf8();
+                }
+                FlowContent::Opaque(_) => return Err(EditError::UnsupportedOpaqueContent),
+            }
+        }
+        Ok(())
+    }
+
+    let mut output = Vec::new();
+    let mut offset = 0;
+    let mut active_start = None;
+    visit(
+        contents,
+        &mut offset,
+        &mut active_start,
+        &mut output,
+        property,
+    )?;
+    let flush = |active_start: &mut Option<usize>, offset: usize, output: &mut Vec<_>| {
+        if let Some(start) = active_start.take()
+            && start < offset
+        {
+            output.push(EnvironmentSpan {
+                id: None,
+                source: property.adapter.source,
+                start,
+                end: offset,
+                kind: property.adapter.kind,
+                depth: 0,
+            });
+        }
+    };
+    flush(&mut active_start, offset, &mut output);
+    Ok(output)
+}
+
+/// 收集文本时同时累积格式环境与原子对象两类范围。
+struct EnvironmentSpans<'a> {
+    environments: &'a mut Vec<EnvironmentSpan>,
+    objects: &'a mut Vec<EnvironmentSpan>,
+}
+
+fn normalize_run_neighborhood(nodes: &mut Vec<EditNode>, index: usize) {
+    if nodes.is_empty() || !matches!(nodes.get(index), Some(EditNode::Run(_))) {
         return;
     }
     let mut current = index;
     while current > 0 {
         let previous_is_empty_default = matches!(
             nodes.get(current - 1),
-            Some(InlineNode::Run(run))
+            Some(EditNode::Run(run))
                 if run.text.is_empty()
                     && run.language.is_none()
                     && run.props.is_empty()
@@ -485,7 +807,7 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
             continue;
         }
         let can_merge = match (nodes.get(current - 1), nodes.get(current)) {
-            (Some(InlineNode::Run(previous)), Some(InlineNode::Run(current))) => {
+            (Some(EditNode::Run(previous)), Some(EditNode::Run(current))) => {
                 previous.language == current.language
                     && previous.props == current.props
                     && previous.extra.is_empty()
@@ -496,11 +818,11 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
         if !can_merge {
             break;
         }
-        let Some(InlineNode::Run(current_run)) = nodes.get(current) else {
+        let Some(EditNode::Run(current_run)) = nodes.get(current) else {
             break;
         };
         let current_text = current_run.text.clone();
-        if let Some(InlineNode::Run(previous_run)) = nodes.get_mut(current - 1) {
+        if let Some(EditNode::Run(previous_run)) = nodes.get_mut(current - 1) {
             previous_run.text.push_str(&current_text);
         }
         nodes.remove(current);
@@ -509,7 +831,7 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
     while current + 1 < nodes.len() {
         let next_is_empty_default = matches!(
             nodes.get(current + 1),
-            Some(InlineNode::Run(run))
+            Some(EditNode::Run(run))
                 if run.text.is_empty()
                     && run.language.is_none()
                     && run.props.is_empty()
@@ -520,7 +842,7 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
             continue;
         }
         let can_merge = match (nodes.get(current), nodes.get(current + 1)) {
-            (Some(InlineNode::Run(current)), Some(InlineNode::Run(next))) => {
+            (Some(EditNode::Run(current)), Some(EditNode::Run(next))) => {
                 current.language == next.language
                     && current.props == next.props
                     && current.extra.is_empty()
@@ -531,42 +853,60 @@ fn normalize_run_neighborhood(nodes: &mut Vec<InlineNode>, index: usize) {
         if !can_merge {
             break;
         }
-        let Some(InlineNode::Run(next_run)) = nodes.get(current + 1) else {
+        let Some(EditNode::Run(next_run)) = nodes.get(current + 1) else {
             break;
         };
         let next_text = next_run.text.clone();
-        if let Some(InlineNode::Run(current_run)) = nodes.get_mut(current) {
+        if let Some(EditNode::Run(current_run)) = nodes.get_mut(current) {
             current_run.text.push_str(&next_text);
         }
         nodes.remove(current + 1);
     }
 }
 
-pub(super) fn inline_length(node: &InlineNode) -> Result<usize, EditError> {
+pub(super) fn inline_length(node: &ParagraphContent) -> Result<usize, EditError> {
+    let edit = to_edit_nodes(std::slice::from_ref(node))?;
+    edit.iter().try_fold(0usize, |sum, item| {
+        sum.checked_add(edit_inline_length(item)?)
+            .ok_or(EditError::InvalidPosition)
+    })
+}
+
+pub(super) fn split_inline_nodes(
+    nodes: Vec<ParagraphContent>,
+    offset: usize,
+) -> Result<(Vec<ParagraphContent>, Vec<ParagraphContent>), EditError> {
+    let edit = to_edit_nodes(&nodes)?;
+    let (left, right) = split_edit_nodes(edit, offset)?;
+    Ok((from_edit_nodes(left), from_edit_nodes(right)))
+}
+
+fn edit_inline_length(node: &EditNode) -> Result<usize, EditError> {
     match node {
-        InlineNode::Run(run) => Ok(run.text.len()),
-        InlineNode::Environment(environment) => {
+        EditNode::Run(run) => Ok(run.text.len()),
+        EditNode::Environment(environment) => {
             environment
                 .children
                 .iter()
                 .try_fold(0usize, |length, child| {
                     length
-                        .checked_add(inline_length(child)?)
+                        .checked_add(edit_inline_length(child)?)
                         .ok_or(EditError::InvalidPosition)
                 })
         }
-        InlineNode::SoftBreak(_) => Ok(1),
-        InlineNode::Opaque(_) | InlineNode::Math(_) => Err(EditError::UnsupportedOpaqueContent),
+        EditNode::SoftBreak(_) => Ok(1),
+        EditNode::Math(_) => Ok(OBJECT_REPLACEMENT.len_utf8()),
+        EditNode::Opaque(_) => Err(EditError::UnsupportedOpaqueContent),
     }
 }
 
-pub(super) fn split_inline_nodes(
-    nodes: Vec<InlineNode>,
+pub(super) fn split_edit_nodes(
+    nodes: Vec<EditNode>,
     offset: usize,
-) -> Result<(Vec<InlineNode>, Vec<InlineNode>), EditError> {
+) -> Result<(Vec<EditNode>, Vec<EditNode>), EditError> {
     let total = nodes.iter().try_fold(0usize, |length, node| {
         length
-            .checked_add(inline_length(node)?)
+            .checked_add(edit_inline_length(node)?)
             .ok_or(EditError::InvalidPosition)
     })?;
     if offset > total {
@@ -576,14 +916,14 @@ pub(super) fn split_inline_nodes(
     let mut right = Vec::new();
     let mut consumed = 0usize;
     for node in nodes {
-        let length = inline_length(&node)?;
+        let length = edit_inline_length(&node)?;
         let end = consumed + length;
         if end <= offset {
             left.push(node);
         } else if consumed >= offset {
             right.push(node);
         } else {
-            let (left_node, right_node) = split_inline_node(node, offset - consumed)?;
+            let (left_node, right_node) = split_edit_node(node, offset - consumed)?;
             if let Some(left_node) = left_node {
                 left.push(left_node);
             }
@@ -596,11 +936,11 @@ pub(super) fn split_inline_nodes(
     Ok((left, right))
 }
 
-fn split_inline_node(
-    node: InlineNode,
+fn split_edit_node(
+    node: EditNode,
     offset: usize,
-) -> Result<(Option<InlineNode>, Option<InlineNode>), EditError> {
-    let length = inline_length(&node)?;
+) -> Result<(Option<EditNode>, Option<EditNode>), EditError> {
+    let length = edit_inline_length(&node)?;
     if offset > length {
         return Err(EditError::InvalidPosition);
     }
@@ -611,7 +951,7 @@ fn split_inline_node(
         return Ok((Some(node), None));
     }
     match node {
-        InlineNode::Run(run) => {
+        EditNode::Run(run) => {
             if !run.extra.is_empty() || !run.text.is_char_boundary(offset) {
                 return Err(EditError::UnsupportedOpaqueContent);
             }
@@ -627,55 +967,56 @@ fn split_inline_node(
                 props: run.props,
                 extra: Default::default(),
             };
-            Ok((Some(InlineNode::Run(left)), Some(InlineNode::Run(right))))
+            Ok((Some(EditNode::Run(left)), Some(EditNode::Run(right))))
         }
-        InlineNode::Environment(mut environment) => {
+        EditNode::Environment(mut environment) => {
             if !environment.extra.is_empty() {
                 return Err(EditError::UnsupportedOpaqueContent);
             }
-            let (left_children, right_children) = split_inline_nodes(environment.children, offset)?;
+            let (left_children, right_children) = split_edit_nodes(environment.children, offset)?;
             let right_environment = InlineEnvironment {
                 id: NodeId::generate(),
                 kind: environment.kind,
                 definition_id: environment.definition_id.clone(),
+                source_range: None,
                 props: environment.props.clone(),
                 children: right_children,
                 extra: Default::default(),
             };
             environment.children = left_children;
             Ok((
-                Some(InlineNode::Environment(environment)),
-                Some(InlineNode::Environment(right_environment)),
+                Some(EditNode::Environment(environment)),
+                Some(EditNode::Environment(right_environment)),
             ))
         }
-        InlineNode::SoftBreak(_) | InlineNode::Opaque(_) | InlineNode::Math(_) => {
+        EditNode::SoftBreak(_) | EditNode::Opaque(_) | EditNode::Math(_) => {
             Err(EditError::InvalidPosition)
         }
     }
 }
 
-fn inline_at_path<'a>(nodes: &'a [InlineNode], path: &[usize]) -> Option<&'a InlineNode> {
+fn inline_at_path<'a>(nodes: &'a [EditNode], path: &[usize]) -> Option<&'a EditNode> {
     let (index, rest) = path.split_first()?;
     let node = nodes.get(*index)?;
     if rest.is_empty() {
         return Some(node);
     }
     match node {
-        InlineNode::Environment(environment) => inline_at_path(&environment.children, rest),
+        EditNode::Environment(environment) => inline_at_path(&environment.children, rest),
         _ => None,
     }
 }
 
 fn inline_list_at_path_mut<'a>(
-    nodes: &'a mut Vec<InlineNode>,
+    nodes: &'a mut Vec<EditNode>,
     path: &[usize],
-) -> Option<&'a mut Vec<InlineNode>> {
+) -> Option<&'a mut Vec<EditNode>> {
     let (index, rest) = path.split_first()?;
     if rest.is_empty() {
         return Some(nodes);
     }
     match nodes.get_mut(*index)? {
-        InlineNode::Environment(environment) => {
+        EditNode::Environment(environment) => {
             inline_list_at_path_mut(&mut environment.children, rest)
         }
         _ => None,
@@ -683,9 +1024,9 @@ fn inline_list_at_path_mut<'a>(
 }
 
 fn mutate_inline_at_path(
-    nodes: &mut [InlineNode],
+    nodes: &mut [EditNode],
     path: &[usize],
-    operation: &mut impl FnMut(&mut InlineNode),
+    operation: &mut impl FnMut(&mut EditNode),
 ) -> bool {
     let Some((index, rest)) = path.split_first() else {
         return false;
@@ -698,20 +1039,20 @@ fn mutate_inline_at_path(
         return true;
     }
     match node {
-        InlineNode::Environment(environment) => {
+        EditNode::Environment(environment) => {
             mutate_inline_at_path(&mut environment.children, rest, operation)
         }
         _ => false,
     }
 }
 
-fn remove_inline_at_path(nodes: &mut Vec<InlineNode>, path: &[usize]) -> Option<InlineNode> {
+fn remove_inline_at_path(nodes: &mut Vec<EditNode>, path: &[usize]) -> Option<EditNode> {
     let (index, rest) = path.split_first()?;
     if rest.is_empty() {
         return (*index < nodes.len()).then(|| nodes.remove(*index));
     }
     match nodes.get_mut(*index)? {
-        InlineNode::Environment(environment) => {
+        EditNode::Environment(environment) => {
             remove_inline_at_path(&mut environment.children, rest)
         }
         _ => None,

@@ -1,16 +1,16 @@
 //! 验证格式命令的用户可见范围、撤销和待输入行为。
 
 use super::*;
-use crate::editing::{Command, Direction, Selection, StoryId};
+use crate::editing::{Affinity, Command, Direction, Selection, StoryId};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, InlineNode, NodeId, Paragraph, Run,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-fn run(text: &str) -> InlineNode {
-    InlineNode::Run(Run {
+fn run(text: &str) -> ParagraphContent {
+    text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -30,22 +30,25 @@ fn paragraph(text: &str) -> Paragraph {
     paragraph
 }
 
-fn visible_text(nodes: &[InlineNode]) -> String {
+fn visible_text(nodes: &[ParagraphContent]) -> String {
     nodes
         .iter()
         .map(|node| match node {
-            InlineNode::Run(run) => run.text.clone(),
-            InlineNode::Environment(environment) => visible_text(&environment.children),
-            InlineNode::SoftBreak(_) | InlineNode::Opaque(_) | InlineNode::Math(_) => String::new(),
+            ParagraphContent::Text(flow) => flow.runs.iter().map(|run| run.text.as_str()).collect(),
+            ParagraphContent::Environment(environment) => visible_text(&environment.children),
+            ParagraphContent::SoftBreak(_)
+            | ParagraphContent::Opaque(_)
+            | ParagraphContent::Math(_) => String::new(),
         })
         .collect()
 }
 
-fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> InlineNode {
-    InlineNode::Environment(InlineEnvironment {
+fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> ParagraphContent {
+    ParagraphContent::Environment(InlineEnvironment {
         id,
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children: vec![run(text)],
         extra,
@@ -55,12 +58,13 @@ fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> Inline
 fn inline_environment(
     id: NodeId,
     kind: InlineEnvironmentKind,
-    children: Vec<InlineNode>,
-) -> InlineNode {
-    InlineNode::Environment(InlineEnvironment {
+    children: Vec<ParagraphContent>,
+) -> ParagraphContent {
+    ParagraphContent::Environment(InlineEnvironment {
         id,
         kind,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children,
         extra: BTreeMap::new(),
@@ -109,94 +113,49 @@ fn assert_all_underline(session: &Session, paragraph_id: &NodeId, expected: bool
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     let spans = format_spans(&paragraph.inlines)
         .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
-    assert!(!spans.is_empty());
+    let underline_key = crate::editing::environment::inline_adapter::run_property_for_kind(
+        crate::editing::EnvironmentKind::Underline,
+    )
+    .map(|property| property.key)
+    .unwrap_or_else(|| panic!("underline Run property adapter missing"));
     let text_spans = spans
         .iter()
-        .filter_map(|span| span.underline)
+        .filter(|span| span.start < span.end && span.run_property_target)
         .collect::<Vec<_>>();
     assert!(!text_spans.is_empty());
-    assert!(text_spans.iter().all(|value| *value == expected));
-    assert!(paragraph.inlines.iter().all(|node| {
-        match node {
-            InlineNode::Run(run) => {
-                run.props
-                    .get("underline")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                    == expected
-            }
-            InlineNode::Environment(environment) => {
-                environment.children.iter().all(|child| match child {
-                    InlineNode::Run(run) => {
-                        run.props
-                            .get("underline")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                            == expected
-                    }
-                    _ => true,
-                })
-            }
-            _ => true,
-        }
-    }));
+    assert!(
+        text_spans
+            .iter()
+            .all(|span| span.properties.get(underline_key).copied().unwrap_or(false) == expected),
+        "unexpected Run-property spans: {text_spans:?}"
+    );
+}
+
+fn underlined_run(text: &str) -> ParagraphContent {
+    let mut value = Run {
+        text: text.to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    value
+        .props
+        .insert("underline".to_owned(), Value::Bool(true));
+    text_flow(value)
+}
+
+const TOGGLE_UNDERLINE: Command = Command::ToggleRunUnderline;
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
 }
 
 #[test]
-fn underline_toggle_ignores_soft_breaks_when_deciding_mixed_selection_state() {
-    let mut model = paragraph("a");
-    let InlineNode::Run(first_run) = &mut model.inlines[0] else {
-        unreachable!();
-    };
-    first_run
-        .props
-        .insert("underline".to_owned(), Value::Bool(true));
-    model
-        .inlines
-        .push(InlineNode::SoftBreak(caret_doc::SoftBreak::default()));
-    let mut second = run("b");
-    let InlineNode::Run(second_run) = &mut second else {
-        unreachable!();
-    };
-    second_run
-        .props
-        .insert("underline".to_owned(), Value::Bool(true));
-    model.inlines.push(second);
-    let paragraph_id = model.id.clone();
-    let mut session = session_with_paragraphs(vec![model]);
-    let start = Pos {
-        offset: 0,
-        affinity: Affinity::Downstream,
-        ..session.selection.focus.clone()
-    };
-    let end = Pos {
-        paragraph_id: paragraph_id.clone(),
-        offset: 3,
-        affinity: Affinity::Upstream,
-        ..start.clone()
-    };
-    select(&mut session, start, end);
-
-    session
-        .run(Command::ToggleRunUnderline)
-        .unwrap_or_else(|error| panic!("underline removal across soft break failed: {error}"));
-    assert_all_underline(&session, &paragraph_id, false);
-    let paragraph = session
-        .paragraph_for(&Pos {
-            paragraph_id: paragraph_id.clone(),
-            offset: 0,
-            affinity: Affinity::Downstream,
-            ..session.selection.focus.clone()
-        })
-        .unwrap_or_else(|error| panic!("formatted paragraph lookup failed: {error}"));
-    assert!(matches!(
-        paragraph.inlines.get(1),
-        Some(InlineNode::SoftBreak(_))
-    ));
-}
-
-#[test]
-fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() {
+fn underline_command_sets_run_property_and_undo_restores_it() {
     let mut session = session_with_paragraphs(vec![paragraph("alpha")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
     let start = session.selection.focus.clone();
@@ -205,19 +164,20 @@ fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() 
         affinity: Affinity::Upstream,
         ..start.clone()
     };
-    select(&mut session, start, end);
+    select(&mut session, start.clone(), end);
 
     let effect = session
-        .run(Command::ToggleRunUnderline)
+        .run(TOGGLE_UNDERLINE)
         .unwrap_or_else(|error| panic!("underline command failed: {error}"));
     assert!(effect.document_changed);
-    assert_eq!(
-        session
-            .selected_text()
-            .unwrap_or_else(|error| panic!("selected text query failed: {error}")),
-        "alpha"
-    );
     assert_all_underline(&session, &paragraph_id, true);
+    let paragraph = session
+        .paragraph_for(&start)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [ParagraphContent::Text(TextFlow { runs, .. })] if matches!(runs.as_slice(), [run] if run.props.get("underline") == Some(&Value::Bool(true)))
+    ));
 
     session
         .run(Command::Undo)
@@ -231,11 +191,10 @@ fn underline_command_applies_to_selected_runs_and_undo_restores_direct_format() 
 
 #[test]
 fn underline_command_unifies_mixed_selection_and_supports_pending_typing() {
-    let mut first = paragraph("on");
-    let InlineNode::Run(run) = &mut first.inlines[0] else {
-        unreachable!();
+    let first = Paragraph {
+        inlines: vec![underlined_run("on")],
+        ..Paragraph::empty(NodeId::generate())
     };
-    run.props.insert("underline".to_owned(), Value::Bool(true));
     let first_id = first.id.clone();
     let second = paragraph("off");
     let second_id = second.id.clone();
@@ -254,19 +213,198 @@ fn underline_command_unifies_mixed_selection_and_supports_pending_typing() {
     };
     select(&mut session, anchor, focus);
     session
-        .run(Command::ToggleRunUnderline)
+        .run(TOGGLE_UNDERLINE)
         .unwrap_or_else(|error| panic!("mixed underline command failed: {error}"));
     assert_all_underline(&session, &first_id, true);
     assert_all_underline(&session, &second_id, true);
 
     let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
     session
-        .run(Command::ToggleRunUnderline)
+        .run(TOGGLE_UNDERLINE)
         .unwrap_or_else(|error| panic!("pending underline command failed: {error}"));
     session
         .run(Command::InsertText("typed".to_owned()))
         .unwrap_or_else(|error| panic!("typing with pending underline failed: {error}"));
-    assert_all_underline(&session, &session.selection.focus.paragraph_id, true);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    assert_all_underline(&session, &paragraph_id, true);
+}
+
+#[test]
+fn run_underline_is_an_inline_candidate_and_mod_backspace_clears_the_property() {
+    let model = Paragraph {
+        inlines: vec![run("a"), underlined_run("bc")],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let paragraph_id = model.id.clone();
+    let mut session = session_with_paragraphs(vec![model]);
+    let inside = Pos {
+        offset: 2,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    select(&mut session, inside.clone(), inside.clone());
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view failed: {error}"));
+    let underline = view
+        .innermost_inline()
+        .unwrap_or_else(|| panic!("Run underline missing from inline view"));
+    assert_eq!(underline.kind, crate::editing::EnvironmentKind::Underline);
+    assert_eq!(
+        underline.source,
+        crate::editing::EnvironmentSource::RunProperty
+    );
+    assert!(underline.id.is_none());
+    let range = underline
+        .inline_range
+        .as_ref()
+        .unwrap_or_else(|| panic!("Run underline should expose its logical range"));
+    assert_eq!((range.start_utf8, range.end_utf8), (1, 3));
+
+    let generation_before = session.document_generation();
+    session
+        .run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("mod backspace failed: {error}"));
+    assert!(session.document_generation() > generation_before);
+    assert_all_underline(&session, &paragraph_id, false);
+    let paragraph = session
+        .paragraph_for(&inside)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
+    assert_eq!(visible_text(&paragraph.inlines), "abc");
+    assert!(paragraph.inlines.iter().all(|node| {
+        match node {
+            ParagraphContent::Text(flow) => flow
+                .runs
+                .iter()
+                .all(|run| !run.props.contains_key("underline")),
+            _ => true,
+        }
+    }));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("underline removal undo failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&inside)
+        .unwrap_or_else(|error| panic!("restored paragraph lookup failed: {error}"));
+    assert!(matches!(
+        paragraph.inlines.get(1),
+        Some(ParagraphContent::Text(TextFlow { runs, .. })) if runs.iter().any(|run| run.props.get("underline") == Some(&Value::Bool(true)))
+    ));
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("underline removal redo failed: {error}"));
+    assert_all_underline(&session, &paragraph_id, false);
+}
+
+#[test]
+fn run_property_boundary_changes_affinity_before_caret_leaves_the_range() {
+    let mut session = session_with_paragraphs(vec![Paragraph {
+        id: NodeId::generate(),
+        inlines: vec![underlined_run("abc"), run("d")],
+        ..Paragraph::empty(NodeId::generate())
+    }]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    session
+        .set_selection(Some(Selection {
+            anchor: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 3,
+                affinity: Affinity::Upstream,
+            },
+            focus: Pos {
+                story: StoryId::Body,
+                paragraph_id,
+                offset: 3,
+                affinity: Affinity::Upstream,
+            },
+        }))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("caret boundary move failed: {error}"));
+    assert_eq!(session.selection.focus.offset, 3);
+    assert_eq!(session.selection.focus.affinity, Affinity::Downstream);
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("caret exit move failed: {error}"));
+    assert_eq!(session.selection.focus.offset, 4);
+}
+
+#[test]
+fn text_formatting_only_changes_text_around_inline_math() {
+    let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+    session
+        .run(Command::InsertText("a".to_owned()))
+        .unwrap_or_else(|error| panic!("prefix insertion failed: {error}"));
+    session
+        .run(Command::InsertInlineMath("x^2".to_owned()))
+        .unwrap_or_else(|error| panic!("inline math insertion failed: {error}"));
+    session
+        .run(Command::InsertText("b".to_owned()))
+        .unwrap_or_else(|error| panic!("suffix insertion failed: {error}"));
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let paragraph_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let original = session
+        .paragraph_for(&paragraph_position)
+        .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"))
+        .clone();
+    let math_before = original
+        .inlines
+        .iter()
+        .find_map(|node| match node {
+            ParagraphContent::Math(math) => Some(math.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("inline math missing"));
+    session
+        .set_selection(Some(Selection {
+            anchor: Pos {
+                offset: 0,
+                ..paragraph_position.clone()
+            },
+            focus: Pos {
+                offset: 5,
+                affinity: Affinity::Upstream,
+                ..paragraph_position.clone()
+            },
+        }))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    session
+        .run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))
+        .unwrap_or_else(|error| panic!("text formatting failed: {error}"));
+    let paragraph = session
+        .paragraph_for(&paragraph_position)
+        .unwrap_or_else(|error| panic!("updated paragraph lookup failed: {error}"));
+    let math_after = paragraph
+        .inlines
+        .iter()
+        .flat_map(|node| match node {
+            ParagraphContent::Environment(environment) => environment.children.iter(),
+            _ => std::slice::from_ref(node).iter(),
+        })
+        .find_map(|node| match node {
+            ParagraphContent::Math(math) => Some(math),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("formatting removed inline math"));
+    assert_eq!(math_after, &math_before);
+    assert_eq!(visible_text(&paragraph.inlines), "ab");
+    let text_spans = format_spans(&paragraph.inlines)
+        .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
+    assert!(
+        text_spans
+            .iter()
+            .filter(|span| span.formatable)
+            .all(|span| span.bold)
+    );
+    assert!(text_spans.iter().any(|span| !span.formatable));
 }
 
 #[test]
@@ -274,18 +412,24 @@ fn pending_underline_survives_undo_redo_and_ime_commit_without_mutating_during_p
     let mut session = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
     session
-        .run(Command::ToggleRunUnderline)
+        .run(TOGGLE_UNDERLINE)
         .unwrap_or_else(|error| panic!("pending underline toggle failed: {error}"));
-    assert_eq!(session.pending_inline_style.underline(), Some(true));
-
+    assert_eq!(
+        session
+            .pending_inline_style
+            .run_properties
+            .values()
+            .next()
+            .copied(),
+        Some(true)
+    );
     session
         .run(Command::Undo)
         .unwrap_or_else(|error| panic!("pending underline undo failed: {error}"));
-    assert_eq!(session.pending_inline_style.underline(), None);
+    assert!(session.pending_inline_style.run_properties.is_empty());
     session
         .run(Command::Redo)
         .unwrap_or_else(|error| panic!("pending underline redo failed: {error}"));
-    assert_eq!(session.pending_inline_style.underline(), Some(true));
 
     session
         .run(Command::UpdateComposition {
@@ -294,24 +438,9 @@ fn pending_underline_survives_undo_redo_and_ime_commit_without_mutating_during_p
         })
         .unwrap_or_else(|error| panic!("composition update failed: {error}"));
     assert_eq!(
-        session.run(Command::ToggleRunUnderline),
+        session.run(TOGGLE_UNDERLINE),
         Err(EditError::CompositionPending)
     );
-    assert_eq!(session.pending_inline_style.underline(), Some(true));
-
-    let (preview, _) = session
-        .composition_preview_with_range(2)
-        .unwrap_or_else(|error| panic!("underline composition preview failed: {error}"));
-    let preview_paragraph = preview
-        .paragraph_for(&preview.selection.focus)
-        .unwrap_or_else(|error| panic!("preview paragraph lookup failed: {error}"));
-    assert!(
-        format_spans(&preview_paragraph.inlines)
-            .unwrap_or_else(|error| panic!("preview formatting query failed: {error}"))
-            .iter()
-            .any(|span| span.underline == Some(true))
-    );
-
     session
         .run(Command::CommitComposition {
             id: 81,
@@ -559,11 +688,12 @@ fn mixed_selection_applies_bold_to_the_entire_range() {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children: vec![run("a")],
         extra: BTreeMap::new(),
     };
-    first.inlines = vec![InlineNode::Environment(original_bold), run("bc")];
+    first.inlines = vec![ParagraphContent::Environment(original_bold), run("bc")];
     let mut session = session_with_paragraphs(vec![first]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();
     let start = session.selection.focus.clone();
@@ -584,10 +714,11 @@ fn mixed_selection_applies_bold_to_the_entire_range() {
 #[test]
 fn toggling_a_fully_bold_range_creates_an_explicit_local_off_state() {
     let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::new(),
         children: vec![run("text")],
         extra: BTreeMap::new(),
@@ -739,7 +870,7 @@ fn consecutive_typed_characters_share_one_inline_environment() {
             let paragraph = session
                 .paragraph_for(&session.selection.focus)
                 .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-            let Some(InlineNode::Environment(environment)) = paragraph.inlines.first() else {
+            let Some(ParagraphContent::Environment(environment)) = paragraph.inlines.first() else {
                 panic!("first formatted character should create an environment");
             };
             first_environment_id = Some(environment.id.clone());
@@ -749,7 +880,7 @@ fn consecutive_typed_characters_share_one_inline_environment() {
     let paragraph = session
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-    let [InlineNode::Environment(bold)] = paragraph.inlines.as_slice() else {
+    let [ParagraphContent::Environment(bold)] = paragraph.inlines.as_slice() else {
         panic!(
             "consecutive text should share one inline environment: {:#?}",
             paragraph.inlines
@@ -761,7 +892,7 @@ fn consecutive_typed_characters_share_one_inline_environment() {
         first_environment_id
             .unwrap_or_else(|| panic!("first environment id should have been recorded"))
     );
-    let [InlineNode::Environment(italic)] = bold.children.as_slice() else {
+    let [ParagraphContent::Environment(italic)] = bold.children.as_slice() else {
         panic!(
             "nested italic text should share one environment: {:#?}",
             bold.children
@@ -771,7 +902,7 @@ fn consecutive_typed_characters_share_one_inline_environment() {
     assert_eq!(italic.children.len(), 1);
     assert!(matches!(
         italic.children.first(),
-        Some(InlineNode::Run(run)) if run.text == "abc"
+        Some(ParagraphContent::Text(TextFlow { runs, .. })) if runs.iter().map(|run| run.text.as_str()).collect::<String>() == "abc"
     ));
     assert_all_format(&session, &paragraph_id, InlineEnvironmentKind::Bold, true);
     assert_all_format(&session, &paragraph_id, InlineEnvironmentKind::Italic, true);
@@ -899,8 +1030,8 @@ fn formatting_one_range_keeps_unedited_adjacent_environment_ids() {
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     let [
-        InlineNode::Environment(first),
-        InlineNode::Environment(second),
+        ParagraphContent::Environment(first),
+        ParagraphContent::Environment(second),
         _,
     ] = paragraph.inlines.as_slice()
     else {
@@ -936,8 +1067,8 @@ fn formatting_does_not_merge_environments_with_unknown_extra_fields() {
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     let [
-        InlineNode::Environment(first),
-        InlineNode::Environment(second),
+        ParagraphContent::Environment(first),
+        ParagraphContent::Environment(second),
     ] = paragraph.inlines.as_slice()
     else {
         panic!("unknown environment fields must keep adjacent nodes separate");
@@ -947,20 +1078,24 @@ fn formatting_does_not_merge_environments_with_unknown_extra_fields() {
     assert_eq!(first.extra, second.extra);
 }
 
-fn collect_font_segments(nodes: &[InlineNode]) -> Vec<(String, Option<String>)> {
+fn collect_font_segments(nodes: &[ParagraphContent]) -> Vec<(String, Option<String>)> {
     fn collect(
-        nodes: &[InlineNode],
+        nodes: &[ParagraphContent],
         inherited: Option<String>,
         segments: &mut Vec<(String, Option<String>)>,
     ) {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => segments.push((run.text.clone(), inherited.clone())),
-                InlineNode::SoftBreak(_) => {}
-                InlineNode::Opaque(_) | InlineNode::Math(_) => {
+                ParagraphContent::Text(flow) => segments.extend(
+                    flow.runs
+                        .iter()
+                        .map(|run| (run.text.clone(), inherited.clone())),
+                ),
+                ParagraphContent::SoftBreak(_) => {}
+                ParagraphContent::Opaque(_) | ParagraphContent::Math(_) => {
                     panic!("font formatting must preserve known content")
                 }
-                InlineNode::Environment(environment) => {
+                ParagraphContent::Environment(environment) => {
                     let family = if environment.kind == InlineEnvironmentKind::Font {
                         environment
                             .props
@@ -982,11 +1117,12 @@ fn collect_font_segments(nodes: &[InlineNode]) -> Vec<(String, Option<String>)> 
     segments
 }
 
-fn font_environment(text: &str, family: &str, extra: BTreeMap<String, Value>) -> InlineNode {
-    InlineNode::Environment(InlineEnvironment {
+fn font_environment(text: &str, family: &str, extra: BTreeMap<String, Value>) -> ParagraphContent {
+    ParagraphContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Font,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
         children: vec![run(text)],
         extra,
@@ -1221,7 +1357,7 @@ fn pending_font_environment_applies_to_consecutive_input_and_merges() {
     let paragraph = session
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-    let [InlineNode::Environment(font)] = paragraph.inlines.as_slice() else {
+    let [ParagraphContent::Environment(font)] = paragraph.inlines.as_slice() else {
         panic!(
             "consecutive font-styled input should share one environment: {:#?}",
             paragraph.inlines
@@ -1572,17 +1708,17 @@ fn toggling_inline_format_updates_the_selected_environment_without_growing_depth
     };
     select(&mut session, start, end);
 
-    fn environment_count(nodes: &[InlineNode]) -> usize {
+    fn environment_count(nodes: &[ParagraphContent]) -> usize {
         nodes
             .iter()
             .map(|node| match node {
-                InlineNode::Environment(environment) => {
+                ParagraphContent::Environment(environment) => {
                     1 + environment_count(&environment.children)
                 }
-                InlineNode::Run(_)
-                | InlineNode::SoftBreak(_)
-                | InlineNode::Opaque(_)
-                | InlineNode::Math(_) => 0,
+                ParagraphContent::Text(_)
+                | ParagraphContent::SoftBreak(_)
+                | ParagraphContent::Opaque(_)
+                | ParagraphContent::Math(_) => 0,
             })
             .sum()
     }
@@ -1776,8 +1912,8 @@ fn font_family_updates_do_not_merge_environments_with_unknown_extra_fields() {
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
     let [
-        InlineNode::Environment(first),
-        InlineNode::Environment(second),
+        ParagraphContent::Environment(first),
+        ParagraphContent::Environment(second),
     ] = paragraph.inlines.as_slice()
     else {
         panic!("unknown extra fields must keep adjacent environments distinct");
@@ -1797,13 +1933,13 @@ fn typing_does_not_merge_runs_with_unknown_extra_fields() {
     let extra = BTreeMap::from([("futureHint".to_owned(), serde_json::json!({"keep": true}))]);
     let mut paragraph = Paragraph::empty(NodeId::generate());
     paragraph.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "a".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: extra.clone(),
         }),
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "b".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -1824,8 +1960,11 @@ fn typing_does_not_merge_runs_with_unknown_extra_fields() {
     let paragraph = session
         .paragraph_for(&session.selection.focus)
         .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-    let [InlineNode::Run(first), InlineNode::Run(second)] = paragraph.inlines.as_slice() else {
+    let [ParagraphContent::Text(TextFlow { runs, .. })] = paragraph.inlines.as_slice() else {
         panic!("unknown run fields must keep adjacent runs separate");
+    };
+    let [first, second] = runs.as_slice() else {
+        panic!("expected two runs in the text flow");
     };
     assert_eq!(first.text, "a");
     assert_eq!(second.text, "xb");

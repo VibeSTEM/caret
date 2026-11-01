@@ -49,7 +49,7 @@ Esc 和 Shift+Esc 由当前焦点作用域处理；事件到达画布后交给 R
 
 ## 命令与公式
 
-交互细节见[命令输入](../editor/command-input.md)和[公式与表格](../editor/math-and-table.md)。
+交互细节见[命令输入](../editor/command-input.md)和[数学公式](../editor/math.md)。
 
 | 动作 | 键 |
 | --- | --- |

@@ -1,8 +1,8 @@
 //! 验证页面字形快照、裁剪与栅格缓存。
 
 use caret_doc::{
-    Block, Document, InlineEnvironment, InlineEnvironmentKind, InlineNode, NodeId, Paragraph,
-    ParagraphLineSpacing, Run,
+    Block, Document, InlineEnvironment, InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent,
+    ParagraphLineSpacing, Run, TextFlow,
 };
 use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
 
@@ -10,8 +10,8 @@ use crate::{DocumentLayoutService, DocumentLayoutSnapshot};
 
 use super::{PageGlyphError, PageGlyphRasterizer};
 
-fn text_run(text: &str, language: Option<&str>) -> InlineNode {
-    InlineNode::Run(Run {
+fn text_run(text: &str, language: Option<&str>) -> ParagraphContent {
+    text_flow(Run {
         text: text.to_owned(),
         language: language.map(str::to_owned),
         props: Default::default(),
@@ -46,6 +46,14 @@ fn layout(document: &Document) -> DocumentLayoutSnapshot {
     DocumentLayoutService::new()
         .layout(document, 17, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("document layout failed: {error}"))
+}
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
 }
 
 #[test]
@@ -261,10 +269,11 @@ fn unicode_visual_runs_keep_exact_font_instances_and_glyph_order() {
     };
     paragraph.inlines = vec![
         text_run("Latin e\u{301} ", Some("en")),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: Default::default(),
             children: vec![text_run("אבג 中文 😀", Some("he"))],
             extra: Default::default(),

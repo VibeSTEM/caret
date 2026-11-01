@@ -3,7 +3,8 @@
 use caret_app::document_session::DocumentSessionService;
 use caret_app::document_storage::DocumentStorage;
 use caret_doc::{
-    Block, CdocFile, Document, InlineNode, NodeId, OpenedDocument, Paragraph, Run, open,
+    Block, CdocFile, Document, NodeId, OpenedDocument, Paragraph, ParagraphContent, Run, TextFlow,
+    open,
 };
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::collections::BTreeMap;
@@ -55,6 +56,14 @@ impl Drop for BenchmarkDocument {
     }
 }
 
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: BTreeMap::new(),
+    })
+}
+
 fn novel_document() -> Document {
     let paragraphs: Vec<_> = NOVEL_SOURCE.lines().collect();
     assert_eq!(paragraphs.len(), 5_000, "百万字语料段落数量不符");
@@ -68,7 +77,7 @@ fn novel_document() -> Document {
                 id: NodeId::generate(),
                 language: Some(PARAGRAPH_LANGUAGES[index % PARAGRAPH_LANGUAGES.len()].to_owned()),
                 layout: None,
-                inlines: vec![InlineNode::Run(Run {
+                inlines: vec![text_flow(Run {
                     text: text.to_owned(),
                     language: None,
                     props: BTreeMap::new(),
@@ -109,7 +118,7 @@ fn place_caret_after_first_grapheme(
         .inlines
         .iter()
         .find_map(|inline| match inline {
-            InlineNode::Run(run) => Some(run.text.as_str()),
+            ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
             _ => None,
         })
         .unwrap_or_else(|| panic!("性能文档目标段落必须包含文本"));
@@ -153,16 +162,16 @@ fn document_character_count(blocks: &[Block]) -> usize {
         .sum()
 }
 
-fn inline_character_count(inline: &InlineNode) -> usize {
+fn inline_character_count(inline: &ParagraphContent) -> usize {
     match inline {
-        InlineNode::Run(run) => run.text.chars().count(),
-        InlineNode::Environment(environment) => environment
+        ParagraphContent::Text(flow) => flow.runs.iter().map(|run| run.text.chars().count()).sum(),
+        ParagraphContent::Environment(environment) => environment
             .children
             .iter()
             .map(inline_character_count)
             .sum(),
-        InlineNode::SoftBreak(_) => 1,
-        InlineNode::Opaque(_) | InlineNode::Math(_) => 0,
+        ParagraphContent::SoftBreak(_) => 1,
+        ParagraphContent::Opaque(_) | ParagraphContent::Math(_) => 0,
     }
 }
 

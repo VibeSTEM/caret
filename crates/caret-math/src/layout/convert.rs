@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathNode, MathNodeKind as K};
 use read_fonts::tables::math::MathConstant as C;
 
 use super::accent::{CancelKind, layout_accent, layout_cancel, layout_cancel_to, layout_line};
@@ -18,6 +17,8 @@ use super::radical::layout_radical;
 use super::run::layout_row;
 use super::scripts::{Attachments, layout_attachments};
 use super::table::{Align, TableRow, TableSpec, layout_table};
+use crate::backend::BackendNodeKind as K;
+use crate::backend::Node as MathNode;
 use crate::symbols::{AtomClass, accent_char, delimiter_char, literal_display_char, named_symbol};
 
 /// 占位框颜色。
@@ -55,7 +56,7 @@ impl Converter<'_> {
     }
 
     /// 把子节点序列排成一行；嵌套 Row 与 `\color` 展开到同一行参与间距计算。
-    fn row(&mut self, children: &[MathNode], style: Style) -> Fragment {
+    pub(crate) fn row(&mut self, children: &[MathNode], style: Style) -> Fragment {
         let mut fragments = Vec::with_capacity(children.len());
         self.collect(children, style, &mut fragments);
         if fragments.is_empty() {

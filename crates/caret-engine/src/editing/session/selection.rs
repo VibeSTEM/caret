@@ -355,6 +355,8 @@ impl Session {
         if selected.is_empty() {
             return Err(EditError::InvalidPosition);
         }
+        // 目标与范围均有效后，才切换离开公式编辑状态。
+        self.math_edit = None;
         let cancels_command_line_preedit = self
             .command_line
             .as_ref()

@@ -11,6 +11,7 @@ publish = false
 caret-doc.workspace = true
 read-fonts.workspace = true
 skrifa.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

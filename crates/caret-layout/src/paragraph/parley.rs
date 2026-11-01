@@ -433,10 +433,14 @@ impl ParagraphLayouter {
             id: caret_doc::NodeId::generate(),
             language: language.map(str::to_owned),
             layout: None,
-            inlines: vec![caret_doc::InlineNode::Run(caret_doc::Run {
-                text: sample.to_string(),
-                language: None,
-                props: Default::default(),
+            inlines: vec![caret_doc::ParagraphContent::Text(caret_doc::TextFlow {
+                runs: vec![caret_doc::Run {
+                    text: sample.to_string(),
+                    language: None,
+                    props: Default::default(),
+                    extra: Default::default(),
+                }],
+                source_range: None,
                 extra: Default::default(),
             })],
             mark_style: Default::default(),

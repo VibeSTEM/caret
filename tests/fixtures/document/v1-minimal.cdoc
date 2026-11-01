@@ -1,7 +1,7 @@
 {
   "format": "caret",
   "version": 1,
-  "requiredFeatures": [],
+  "requiredFeatures": ["caret.paragraph.content-flow.v1"],
   "media": [],
   "document": {
     "globalSettings": {},
@@ -11,9 +11,8 @@
         "id": "paragraph-1",
         "inlines": [
           {
-            "type": "run",
-            "text": "Caret",
-            "props": {}
+            "type": "text",
+            "runs": [{"text": "Caret", "props": {}}]
           }
         ]
       }

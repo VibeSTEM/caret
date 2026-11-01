@@ -1,12 +1,14 @@
 # 文档树与结构
 
-更新日期：2026-11-01。本文是当前 DTO、文档树和页面层级的权威定义。语义草图不等于当前 Rust DTO/JSON 的逐字段描述，不照搬 OOXML，也不承诺 DOCX 兼容；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；行内/块级语义适配见[行内与块级环境适配](inline-and-block-environments.md)。位置与上限见[文档位置](document-position.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-01。本文是当前 DTO、文档树和页面层级的权威定义。语义草图不等于当前 Rust DTO/JSON 的逐字段描述，不照搬 OOXML，也不承诺 DOCX 兼容；当前 Block 到 Paragraph 行内节点的代码流向见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；行内/块级语义适配见[行内与块级环境适配](inline-and-block-environments.md)。位置与上限见[文档位置](document-position.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 当前实现
 
-当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、ExplicitBreak 和 Opaque，`InlineNode` 包含 Run、InlineEnvironment、InlineMath、SoftBreak 和 Opaque。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
+当前 `caret-doc` 的实际树形 DTO 是 `Document { body: Vec<Block>, page_sections, global_settings }`；`Block` 包含 Paragraph、BlockEnvironment、Equation、Align、ExplicitBreak 和 Opaque。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，文本、行内公式、行内环境、软换行和不透明内容由不同分支承载。块环境与行内环境是不同的 Rust 类型，均没有统一的带 `scope` 字段的 `EnvironmentNode` DTO。Heading 由 Paragraph 的属性识别。Table、Figure 等是语义模型的后续节点，不代表它们已在当前 `caret-doc` 中实现。
 
-本页下文中的 `EnvironmentNode` 是语义层的统称；树形图是目标模型草图。当前 `.cdoc` 的具体字段以 `crates/caret-doc/src/model/` 中的 DTO 和 codec 为准。文档修订、布局缓存代际、焦点和选区属于运行时状态，不序列化进 `Document`。
+`ParagraphContent` 是段落和行内环境使用的有序内容项，包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak` 与 `Opaque`。文本编辑复用 `TextFlow`、Run、字素位置、IME 和段落事务；公式文本岛使用同一 TextFlow 载体，但仍受 MathFlow 槽位与 MathEdit 事务约束。未来 Code 分支由代码编辑任务定稿，当前模型没有 CodeSpan。`Paragraph` block 继续持有段落级语言、布局和直接属性；公式文本项的结构和编辑语义见[数学公式](../math.md#公式中的普通文本)。当前采用的内容 schema 不为未发布的旧临时 inline/TextContent 格式提供转换器。Section 标题仍是 Paragraph block wrapper，Section 正文仍是 `Vec<Block>`。
+
+本页下文中的 `EnvironmentNode` 是语义层的统称；树形图描述概念结构。当前 `.cdoc` 的具体字段以 `crates/caret-doc/src/model/` 中的 DTO 和 codec 为准。文档修订、布局缓存代际、焦点和选区属于运行时状态，不序列化进 `Document`。
 
 相关设计各维护一份权威定义：本文维护持久化树、节点语义、页面角色和通用结构类别；[结构导航](../structure-navigation.md)维护索引、导航及几何投影；[多文字体系字体选择](../font-selection.md)维护字体候选与 fallback；[文字格式语义](../text-formatting.md)维护格式解析和格式命令行为。任务文档只记录实现进度与验收，不重复这些契约。
 
@@ -14,20 +16,23 @@
 
 ### Block 与 Inline 节点
 
-`Block` 和 `InlineNode` 是文档树的两类内容节点，归属不同的容器：
+`Block` 和 `ParagraphContent` 是文档树的两类内容节点，归属不同的容器：
 
 | 节点层级 | 所属容器 | 当前及规划中的内容 |
 | --- | --- | --- |
 | `Block` | 页面内容的有序块流 | `Paragraph`、块级 `EnvironmentNode`、`Equation`、`Align`、显式分页；块环境通过有序 `children` 持有可嵌套块内容 |
-| `InlineNode` | `Paragraph.inlines` 的有序行内流 | `Run`、行内 `EnvironmentNode`、`InlineMath`、`SoftBreak`、未知行内节点；行内格式环境通过子节点保存作用范围 |
+| `ParagraphContent` | Paragraph block 或行内格式环境的有序子项 | `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak`、未知行内项 |
+| `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言与未知字段；不含 Math 节点或块级布局 |
 
-页面角色组织块流；`Paragraph` 承载行内流并负责段落级排版。行内节点共享段落逻辑文本坐标，Run 边界和行内环境边界不改变 UTF-8 偏移或跨节点字素分段。实际 DTO 以本节开头列出的 `caret-doc` 类型为准。
+页面角色组织块流；`Paragraph` 持有 `Vec<ParagraphContent>` 并负责段落级排版。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。共享 split/merge 操作面向强类型有序流，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。该结构由 `caret-doc` 当前 DTO 实现。
+
+共享结构用于消除重复编辑策略，不自动构成性能保证。只读位置查询直接遍历 TextFlow；当前编辑器仍在段落副本上通过临时 EditNode 视图复用既有树操作，成功后提交。该适配会增加编辑期间的分配，尚无代表性基准证明其开销可忽略；若测量显示为热点，应改为按宿主路径直接编辑共享流。枚举载荷尺寸、位置索引更新和格式范围扫描也须基于代表性输入测量后评估。
 
 ### 编辑命令与内容插入
 
-“行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 Paragraph 的行内树；`\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph。命令模式、按键入口和补全规则由[命令输入](../command-input.md)定义；节点本身及其持久化语义仍由本文定义。
+“行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 ParagraphContent；`\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph wrapper。`\section` 的段落转换和 Section title 语义见[块环境模型](document-environments.md)；Section children 仍由块流持有。命令模式、按键入口和补全规则由[命令输入](../command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。粗体、斜体和局部字体使用 inline `EnvironmentNode`；下划线使用 `Run.props.underline`，并经语义适配层接入交互。载体现状与目标见[行内与块级环境适配](inline-and-block-environments.md)，格式语义见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。`ParagraphContent::Text(TextFlow)` 持有普通文字内容。粗体、斜体、局部字体和下划线的载体及语义适配见[行内与块级环境适配](inline-and-block-environments.md)，格式命令见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -36,7 +41,7 @@ crates/caret-doc/src/model.rs           文档根 DTO 与公开导出
 crates/caret-doc/src/model/block.rs     Block、块环境、显式分页
 crates/caret-doc/src/model/paragraph.rs Paragraph 与段落直接布局覆盖
 crates/caret-doc/src/model/run.rs       Run 与 Run 直接属性
-crates/caret-doc/src/model/inline.rs    InlineNode 与软换行
+crates/caret-doc/src/model/inline.rs    TextFlow、ParagraphContent / MathContent 与软换行
 crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
@@ -84,21 +89,25 @@ Document
 `PageContent` 是统一的页面组合类型；`BodyPage` 与 `TitlePage` 是不同 `role`，不是两套节点类型。`Title` 是可放在任一页面角色中的 `SingleLine` 内容块。标题页可以自然分页，不为塞进单个物理页而强行缩放或裁切。Author/Date 是否允许重复、是否绑定文档元数据，尚未决定。
 
 ```text
-Block = Paragraph | EnvironmentNode(scope: block) | Title | Equation | Align | Table | ExplicitBreak
-InlineNode = Run | EnvironmentNode(scope: inline) | InlineMath | InlineObject | SoftBreak
-Run = { text, props, language?: Bcp47 }  # text 保留原始 Unicode 码点序列
+Document { body: Vec<Block>, pageSections, globalSettings, extra }
+Block = Paragraph | Environment(BlockEnvironment) | Equation | Align | ExplicitBreak | Opaque
+Paragraph { id, language?, layout?, inlines: Vec<ParagraphContent>, markStyle, props, extra }
+ParagraphContent = Text(TextFlow) | Math(InlineMath) | Environment(InlineEnvironment<ParagraphContent>) | SoftBreak | Opaque
+TextFlow { runs: Vec<Run>, sourceRange?: MathSourceRange, extra }
+Run { text, language?, props, extra }  # text 保留原始 Unicode 码点序列
+InlineEnvironment<Child> { id, kind, definitionId?, sourceRange?, props, children: Vec<Child>, extra }
 
-EnvironmentNode(scope: block).children: Vec<Block>
-EnvironmentNode(scope: block).title: Option<Paragraph>  # 与 children 分开
-EnvironmentNode(scope: inline).children: Vec<InlineNode>
-
-Paragraph
-├── language?    # BCP 47 override for the document default
-├── inlines       # Run、行内 EnvironmentNode 和行内对象组成的有序内容
-├── markStyle     # 段落标记/空段落的有效字符格式
-├── props         # 段落样式、缩进与间距
-└── extra         # 未知可选字段保留；运行时修订代际不属于 Paragraph DTO
+BlockEnvironment { id, kind, definitionId?, props, title?: Paragraph, children: Vec<Block>, extra }
+Equation { id, mathTree, extra }
+Align { id, source, rows: Vec<MathAlignRow>, extra }
+MathAlignRow { id, cells: Vec<MathTree>, extra }
+MathTree { schemaVersion, source, root: MathFlow, extra }
+MathFlow { id, content: Vec<MathContent>, sourceRange?, extra }
+MathContent = Math(MathNode) | Text(TextFlow) | Environment(InlineEnvironment<MathContent>) | SoftBreak | Opaque
+MathNode { id, kind, text?, attributes, sourceRange?, children: Vec<MathFlow>, extra }
 ```
+
+图中列的是当前 `caret-doc` DTO；`CodeSpan`、`Title`、`Table`、`Figure` 和页面组合均为规划概念，不能视为已持久化节点。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
 
 
 块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[行内与块级环境适配](inline-and-block-environments.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。

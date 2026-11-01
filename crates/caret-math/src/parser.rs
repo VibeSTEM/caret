@@ -1,7 +1,8 @@
 //! LaTeX 数学子集解析器，直接构造 `caret-doc` 数学树。
 //!
 //! 解析过程只做一次自顶向下扫描：数学模式跳过空白与 `%` 注释，文本模式逐字符
-//! 保留空格。所有节点记录相对输入的 UTF-8 字节范围；占位节点没有范围。
+//! 保留空格。所有节点记录相对输入的 UTF-8 字节范围；源码空花括号产生的占位节点记录花括号范围，
+//! 由结构补齐的占位节点没有范围。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -10,10 +11,13 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use caret_doc::{
-    Align, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH,
-    MAX_MATH_TREE_NODES, MathAlignRow, MathNode, MathNodeKind, MathSourceRange, MathTree, NodeId,
+    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION,
+    MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MathAlignRow, MathContent,
+    MathFlow, MathSourceRange, MathTree, NodeId, Run, TextFlow,
 };
+use serde_json::Value;
 
+use crate::backend::BackendNodeKind as MathNodeKind;
 use crate::symbols::{
     NAMED_COLORS, accent_attribute, encode_delimiter, literal_class, named_symbol,
     text_operator_limits,
@@ -21,6 +25,18 @@ use crate::symbols::{
 use crate::{MathInputKind, MathInputStatus, MathParseError, ParsedMath};
 
 type ParseResult<T> = Result<T, MathParseError>;
+
+/// LaTeX parser 暂存用节点；解析完成后立即降为持久化内容流模型。
+#[derive(Debug, Clone)]
+struct MathNode {
+    id: NodeId,
+    kind: MathNodeKind,
+    text: Option<String>,
+    attributes: BTreeMap<String, String>,
+    source_range: Option<MathSourceRange>,
+    children: Vec<MathNode>,
+    extra: BTreeMap<String, Value>,
+}
 
 /// 递归下降的嵌套上限。文档树深度另行检查，这里只防止栈被恶意输入耗尽。
 const MAX_RECURSION: usize = MAX_MATH_TREE_DEPTH * 4;
@@ -75,7 +91,7 @@ pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
                 source: source.to_owned(),
-                root,
+                root: parser_root_to_flow(root),
                 extra: BTreeMap::new(),
             };
             tree.validate().map_err(invalid_tree)?;
@@ -196,6 +212,10 @@ fn strip_fences(source: &str, kind: MathInputKind) -> ParseResult<Range<usize>> 
     Ok(inner_start..end - close.len())
 }
 
+pub(super) fn input_body_range(source: &str, kind: MathInputKind) -> ParseResult<Range<usize>> {
+    strip_fences(source, kind)
+}
+
 fn parse_align(
     parser: &mut Parser<'_>,
     source: &str,
@@ -219,12 +239,19 @@ fn parse_align(
     }
     parser.read_command();
     parser.read_raw_group()?;
-    let rows = parser.parse_matrix_rows("aligned")?;
+    let mut rows = parser.parse_matrix_rows("aligned")?;
     let env_end = parser.pos;
     parser.skip_space();
     if parser.pos < body.end {
         return Err(MathParseError::InputKindMismatch {
             expected: MathInputKind::Align,
+        });
+    }
+    if rows.is_empty() {
+        let placeholder = parser.placeholder();
+        rows.push(MatrixRow::Cells {
+            cells: vec![(placeholder, env_end..env_end)],
+            range: env_end..env_end,
         });
     }
     let mut align_rows = Vec::new();
@@ -242,7 +269,7 @@ fn parse_align(
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
                 source: source[span].to_owned(),
-                root: node,
+                root: parser_root_to_flow(node),
                 extra: BTreeMap::new(),
             };
             tree.validate().map_err(invalid_tree)?;
@@ -262,6 +289,194 @@ fn parse_align(
     };
     align.validate().map_err(invalid_tree)?;
     Ok(ParsedMath::Align(align))
+}
+
+fn parser_root_to_flow(root: MathNode) -> MathFlow {
+    if root.kind == MathNodeKind::Row {
+        return parser_row_to_flow(root);
+    }
+    let id = NodeId::generate();
+    let mut content = Vec::new();
+    append_parser_node(&mut content, root);
+    MathFlow {
+        id,
+        content,
+        source_range: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn parser_slot_to_flow(node: MathNode) -> MathFlow {
+    if node.kind == MathNodeKind::Row {
+        return parser_row_to_flow(node);
+    }
+    let source_range = node.source_range.clone();
+    let id = NodeId::generate();
+    let mut content = Vec::new();
+    append_parser_node(&mut content, node);
+    MathFlow {
+        id,
+        content,
+        source_range,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn parser_row_to_flow(row: MathNode) -> MathFlow {
+    let mut content = Vec::new();
+    for node in row.children {
+        append_parser_node(&mut content, node);
+    }
+    MathFlow {
+        id: row.id,
+        content,
+        source_range: row.source_range,
+        extra: row.extra,
+    }
+}
+
+fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
+    match node.kind {
+        MathNodeKind::Row => {
+            for child in node.children {
+                append_parser_node(content, child);
+            }
+        }
+        MathNodeKind::TextContent => {
+            push_math_text(content, node.text.unwrap_or_default(), node.source_range);
+        }
+        MathNodeKind::TextSpace => {
+            let text = match node.text.as_deref() {
+                Some("no_break_space") => "\u{00a0}",
+                Some("control_space") | Some("space") | None => " ",
+                Some(_) => " ",
+            };
+            push_math_text(content, text.to_owned(), node.source_range);
+        }
+        MathNodeKind::TextSymbol => {
+            let text = node.text.unwrap_or_default();
+            push_math_text(content, text, node.source_range);
+        }
+        MathNodeKind::Text
+            if node
+                .attributes
+                .get("style")
+                .is_some_and(|style| style == "text") =>
+        {
+            for child in node.children {
+                append_parser_node(content, child);
+            }
+        }
+        MathNodeKind::TextStyle
+            if node
+                .attributes
+                .get("style")
+                .is_some_and(|style| matches!(style.as_str(), "bf" | "it" | "sf" | "tt")) =>
+        {
+            let style = node
+                .attributes
+                .get("style")
+                .map(String::as_str)
+                .unwrap_or_default();
+            let (kind, props) = match style {
+                "bf" => (InlineEnvironmentKind::Bold, BTreeMap::new()),
+                "it" => (InlineEnvironmentKind::Italic, BTreeMap::new()),
+                "sf" => (
+                    InlineEnvironmentKind::Font,
+                    BTreeMap::from([(
+                        "fontFamily".to_owned(),
+                        Value::String("sans-serif".to_owned()),
+                    )]),
+                ),
+                "tt" => (
+                    InlineEnvironmentKind::Font,
+                    BTreeMap::from([(
+                        "fontFamily".to_owned(),
+                        Value::String("monospace".to_owned()),
+                    )]),
+                ),
+                _ => unreachable!(),
+            };
+            let mut children = Vec::new();
+            for child in node.children {
+                append_parser_node(&mut children, child);
+            }
+            content.push(MathContent::Environment(InlineEnvironment {
+                id: node.id,
+                kind,
+                definition_id: None,
+                source_range: node.source_range,
+                props,
+                children,
+                extra: node.extra,
+            }));
+        }
+        _ => {
+            let Some(kind) = node.kind.persisted() else {
+                match node.kind {
+                    MathNodeKind::TextContent | MathNodeKind::TextSymbol => {
+                        push_math_text(content, node.text.unwrap_or_default(), node.source_range);
+                    }
+                    MathNodeKind::TextSpace => {
+                        push_math_text(content, " ".to_owned(), node.source_range);
+                    }
+                    MathNodeKind::TextStyle => {
+                        for child in node.children {
+                            append_parser_node(content, child);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            };
+            let children = node.children.into_iter().map(parser_slot_to_flow).collect();
+            content.push(MathContent::Math(caret_doc::MathNode {
+                id: node.id,
+                kind,
+                text: node.text,
+                attributes: node.attributes,
+                source_range: node.source_range,
+                children,
+                extra: node.extra,
+            }));
+        }
+    }
+}
+
+fn push_math_text(
+    content: &mut Vec<MathContent>,
+    text: String,
+    source_range: Option<MathSourceRange>,
+) {
+    if let Some(MathContent::Text(flow)) = content.last_mut() {
+        let contiguous = flow
+            .source_range
+            .as_ref()
+            .zip(source_range.as_ref())
+            .is_some_and(|(previous, next)| previous.end == next.start);
+        if contiguous {
+            flow.runs.push(Run {
+                text,
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            });
+            if let (Some(previous), Some(next)) = (&mut flow.source_range, source_range) {
+                previous.end = next.end;
+            }
+            return;
+        }
+    }
+    content.push(MathContent::Text(TextFlow {
+        runs: vec![Run {
+            text,
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        source_range,
+        extra: BTreeMap::new(),
+    }));
 }
 
 /// 把节点范围平移为相对单元格源码。
@@ -465,6 +680,17 @@ impl<'s> Parser<'s> {
 
     fn placeholder(&mut self) -> MathNode {
         self.node(MathNodeKind::Placeholder, None, &[], None, Vec::new())
+    }
+
+    /// 源码中的空花括号 `{}`：占位节点记录花括号范围，供公式内光标定位到该空槽。
+    fn empty_group(&mut self, range: Range<usize>) -> MathNode {
+        self.node(
+            MathNodeKind::Placeholder,
+            None,
+            &[],
+            Some(range),
+            Vec::new(),
+        )
     }
 
     /// 由列表构造 Row，相邻的字面普通字符合并为一个多字符符号。
@@ -694,7 +920,7 @@ impl<'s> Parser<'s> {
                 self.bump();
                 let (items, _) = self.parse_list(Stops::BRACE)?;
                 if items.is_empty() {
-                    return Ok(self.placeholder());
+                    return Ok(self.empty_group(start..self.pos));
                 }
                 Ok(self.list_node(items, start..self.pos))
             }
@@ -758,7 +984,7 @@ impl<'s> Parser<'s> {
             self.bump();
             let (items, _) = self.parse_list(Stops::BRACE)?;
             if items.is_empty() {
-                return Ok(self.placeholder());
+                return Ok(self.empty_group(start..self.pos));
             }
             return Ok(self.node(MathNodeKind::Group, None, &[], Some(start..self.pos), items));
         }
@@ -1356,6 +1582,21 @@ impl<'s> Parser<'s> {
                                 &[("style", name[4..].to_owned())],
                                 Some(start..self.pos),
                                 children,
+                            );
+                            items.push(node);
+                        }
+                        "textchar" => {
+                            let encoded = self.read_raw_group()?;
+                            let character = u32::from_str_radix(&encoded, 16)
+                                .ok()
+                                .and_then(char::from_u32)
+                                .ok_or_else(|| self.error_at(start, "invalid text character"))?;
+                            let node = self.node(
+                                K::TextSymbol,
+                                Some(character.to_string()),
+                                &[],
+                                Some(start..self.pos),
+                                Vec::new(),
                             );
                             items.push(node);
                         }

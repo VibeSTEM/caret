@@ -14,13 +14,13 @@ mod storage_format;
 pub use document_units::DocumentUnits;
 pub use model::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, DEFAULT_CODE_FONT_FAMILY, Document,
-    DocumentFontTarget, DocumentSettings, Equation, ExplicitBreak, InlineEnvironment,
-    InlineEnvironmentKind, InlineMath, InlineNode, MATH_TREE_SCHEMA_VERSION,
-    MAX_DOCUMENT_NESTING_DEPTH, MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES,
-    MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathNode, MathNodeKind, MathSourceRange, MathTree,
-    Media, ModelError, NodeId, OpaqueNode, PageSection, Paragraph, ParagraphLayoutOverrides,
-    ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, ThemeSnapshot,
-    default_font_size_centipoints, is_valid_language_tag,
+    DocumentFontTarget, DocumentSettings, Equation, ExplicitBreak, FlowContent, InlineEnvironment,
+    InlineEnvironmentKind, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_DOCUMENT_NESTING_DEPTH,
+    MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES,
+    MathAlignRow, MathContent, MathFlow, MathNode, MathNodeKind, MathSourceRange, MathTree, Media,
+    ModelError, NodeId, OpaqueNode, PageSection, Paragraph, ParagraphContent,
+    ParagraphLayoutOverrides, ParagraphLayoutStyle, ParagraphLineSpacing, Run, SoftBreak, TextFlow,
+    ThemeSnapshot, default_font_size_centipoints, is_valid_language_tag,
 };
 pub use page_geometry::{
     Orientation, PageGeometry, PageGeometryError, PageMargins, PaperSize, millimeters_to_points,

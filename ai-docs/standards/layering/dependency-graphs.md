@@ -20,6 +20,7 @@ flowchart TB
   subgraph L3["L3 派生"]
     layout["caret-layout"]
     structure["caret-structure"]
+    math["caret-math"]
   end
   subgraph L2["L2 叶子"]
     doc["caret-doc"]
@@ -46,10 +47,13 @@ flowchart TB
   engine --> doc
   engine --> layout
   engine --> structure
+  engine --> math
   layout --> doc
   structure --> doc
+  math --> doc
   dslc --> dslcore
   layout ~~~ structure
+  structure ~~~ math
   doc ~~~ dslc
   foundation ~~~ build
   build ~~~ dslcore

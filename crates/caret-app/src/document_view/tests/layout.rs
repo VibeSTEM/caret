@@ -2,8 +2,8 @@
 
 use super::*;
 use caret_doc::{
-    BlockEnvironment, BlockEnvironmentKind, InlineEnvironment, InlineEnvironmentKind, InlineNode,
-    NodeId, Paragraph, Run,
+    BlockEnvironment, BlockEnvironmentKind, InlineEnvironment, InlineEnvironmentKind, NodeId,
+    Paragraph, ParagraphContent, Run,
 };
 use std::collections::BTreeMap;
 
@@ -90,18 +90,19 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
     let text = "Latin العربية 日本語 mixed content ".repeat(24);
     let paragraph_id = paragraph.id.clone();
     paragraph.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: prefix.to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::Environment(InlineEnvironment {
+        ParagraphContent::Environment(InlineEnvironment {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
+            source_range: None,
             props: BTreeMap::new(),
-            children: vec![InlineNode::Run(Run {
+            children: vec![text_flow(Run {
                 text: text.clone(),
                 language: None,
                 props: BTreeMap::new(),
@@ -109,7 +110,7 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
             })],
             extra: BTreeMap::new(),
         }),
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: " outside".to_owned(),
             language: None,
             props: BTreeMap::new(),
@@ -226,16 +227,66 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
 }
 
 #[test]
+fn run_property_environment_highlight_uses_its_inline_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("blank document should start with a paragraph".into());
+    };
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![text_flow(Run {
+        text: "underlined text".to_owned(),
+        language: None,
+        props: BTreeMap::from([("underline".to_owned(), Value::Bool(true))]),
+        extra: BTreeMap::new(),
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: 3,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))?;
+
+    let view = runtime.session.current_environment_view()?;
+    assert_eq!(
+        view.innermost_inline().map(|entry| entry.source),
+        Some(caret_engine::EnvironmentSource::RunProperty)
+    );
+    assert_eq!(
+        view.innermost_inline().map(|entry| entry.kind),
+        Some(caret_engine::EnvironmentKind::Underline)
+    );
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let rectangles = snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("inline environment rectangles were omitted"))?;
+    assert_eq!(rectangles.len(), 1);
+    assert!(rectangles[0]["x1Pt"].as_f64() > rectangles[0]["x0Pt"].as_f64());
+    Ok(())
+}
+
+#[test]
 fn empty_inline_environment_does_not_hide_visible_block_highlight()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::blank();
     let section_id = NodeId::generate();
     let mut paragraph = Paragraph::empty(NodeId::generate());
     let paragraph_id = paragraph.id.clone();
-    paragraph.inlines = vec![InlineNode::Environment(InlineEnvironment {
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
+        source_range: None,
         props: BTreeMap::new(),
         children: Vec::new(),
         extra: BTreeMap::new(),
@@ -348,7 +399,7 @@ fn visible_page_rasterization_returns_binary_glyph_images() -> Result<(), Box<dy
     let Block::Paragraph(paragraph) = &mut document.body[0] else {
         panic!("blank document should contain a paragraph");
     };
-    paragraph.inlines = vec![InlineNode::Run(Run {
+    paragraph.inlines = vec![text_flow(Run {
         text: "A".to_owned(),
         language: Some("en".to_owned()),
         props: Default::default(),

@@ -6,7 +6,7 @@
 
 结构类别、页面角色和节点语义的唯一权威定义见[文档树与结构](document-model/document-structure.md#页面层级与内容块形态)。本文件只规定结构索引、导航和焦点几何如何消费这些定义，不重述页面/内容分类。结构索引保存具体领域语义；界面只消费稳定 ID 和 Rust 投影，不根据标题文字、QML 节点树或具体 kind 再推断一次。
 
-当前文档模型实现的块结构是 Paragraph、由段落大纲属性识别的 Heading，以及 `BlockEnvironmentKind` 的 `Section`、`Custom`。`Section` 和 `Custom` 共享可嵌套的标题/子项容器；`Section` 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。
+当前 `StructureIndex` 为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境以及 Equation/Align 公式块建立条目。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 条目没有 Paragraph 停靠点，不进入段落导航序列。当前 Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 根流提升后的文本进入 ParagraphContent，固定数学槽位仍在 MathFlow 内。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
 
 行内与块级当前环境的权威适配规则见[行内与块级环境适配](document-model/inline-and-block-environments.md)。行内 `EnvironmentNode`、Run 下划线范围和 `InlineMath` 分别保留自己的载体与编辑入口，不作为块级导航停靠点。
 

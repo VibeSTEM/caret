@@ -12,7 +12,7 @@
 ## 必读
 
 - [文档格式导入与导出](../architecture/editor/document-interchange.md)
-- [公式与表格](../architecture/editor/math-and-table.md)
+- [数学公式](../architecture/editor/math.md)
 - [文档模型](../architecture/editor/document-model.md)
 - [测试规范](../standards/testing.md)
 

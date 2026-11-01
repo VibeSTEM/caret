@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{InlineNode, Paragraph};
+use caret_doc::{FlowContent, Paragraph, ParagraphContent, TextFlow};
 use std::ops::Range;
 
 use crate::{LineMetrics, LineMetricsError};
@@ -25,17 +25,19 @@ pub fn has_empty_line(text: &str) -> bool {
 
 /// 不创建拼接后的正文副本，检查段落是否需要段落标记行度量。
 pub fn paragraph_has_empty_line(paragraph: &Paragraph) -> bool {
-    fn visit(nodes: &[InlineNode], state: &mut EmptyLineState) {
+    fn visit(nodes: &[ParagraphContent], state: &mut EmptyLineState) {
         for node in nodes {
             match node {
-                InlineNode::Run(run) => {
-                    for character in run.text.chars() {
-                        state.push(character);
+                FlowContent::Text(TextFlow { runs, .. }) => {
+                    for run in runs {
+                        for character in run.text.chars() {
+                            state.push(character);
+                        }
                     }
                 }
-                InlineNode::Environment(environment) => visit(&environment.children, state),
-                InlineNode::SoftBreak(_) => state.push('\n'),
-                InlineNode::Opaque(_) | InlineNode::Math(_) => state.push('\u{fffc}'),
+                FlowContent::Environment(environment) => visit(&environment.children, state),
+                FlowContent::SoftBreak(_) => state.push('\n'),
+                FlowContent::Opaque(_) | FlowContent::Math(_) => state.push('\u{fffc}'),
             }
         }
     }

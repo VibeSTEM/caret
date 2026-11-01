@@ -2,8 +2,8 @@
 
 use crate::{Affinity, Command, Pos, Selection, Session, StoryId};
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, ExplicitBreak, InlineNode, NodeId,
-    OpaqueNode, Paragraph, Run, SoftBreak,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, ExplicitBreak, NodeId, OpaqueNode,
+    Paragraph, ParagraphContent, Run, SoftBreak, TextFlow,
 };
 use caret_layout::{FontCatalog, FontCatalogError, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use super::{DocumentLayoutError, DocumentLayoutService};
 
 fn paragraph(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines = vec![InlineNode::Run(Run {
+    paragraph.inlines = vec![text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: BTreeMap::new(),
@@ -29,6 +29,14 @@ fn single_line_y_offset(snapshot: &super::DocumentLayoutSnapshot, paragraph_id: 
         .find(|fragment| &fragment.paragraph_id == paragraph_id)
         .unwrap_or_else(|| panic!("paragraph {paragraph_id} is missing from the first page"))
         .y_offset_pt
+}
+
+fn text_flow(run: Run) -> ParagraphContent {
+    ParagraphContent::Text(TextFlow {
+        runs: vec![run],
+        source_range: None,
+        extra: Default::default(),
+    })
 }
 
 #[test]
@@ -258,7 +266,7 @@ fn document_layout_snapshot_uses_parley_lines_and_pagination() {
         panic!("blank document should start with a paragraph");
     };
     paragraph.language = Some("en".to_owned());
-    paragraph.inlines = vec![InlineNode::Run(Run {
+    paragraph.inlines = vec![text_flow(Run {
         text: text.clone(),
         language: None,
         props: BTreeMap::new(),
@@ -470,7 +478,7 @@ fn long_paragraph_selection_uses_page_local_line_positions() {
     let Block::Paragraph(paragraph) = &mut document.body[0] else {
         panic!("blank document should start with a paragraph");
     };
-    paragraph.inlines = vec![InlineNode::Run(Run {
+    paragraph.inlines = vec![text_flow(Run {
         text: text.clone(),
         language: None,
         props: BTreeMap::new(),
@@ -777,14 +785,14 @@ fn line_grid_stays_stable_across_language_and_soft_wrapped_lines() {
     let mut wrapped = paragraph("Latin first 中文 second line");
     wrapped.language = Some("zh-Hans".to_owned());
     wrapped.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "Latin first".to_owned(),
             language: None,
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::SoftBreak(SoftBreak::default()),
-        InlineNode::Run(Run {
+        ParagraphContent::SoftBreak(SoftBreak::default()),
+        text_flow(Run {
             text: "中文 second line".to_owned(),
             language: Some("zh-Hans".to_owned()),
             props: BTreeMap::new(),
@@ -949,14 +957,14 @@ fn soft_break_is_selected_logically_without_a_trailing_highlight_block() {
         unreachable!();
     };
     paragraph.inlines = vec![
-        InlineNode::Run(Run {
+        text_flow(Run {
             text: "你好".to_owned(),
             language: Some("zh".to_owned()),
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }),
-        InlineNode::SoftBreak(SoftBreak::default()),
-        InlineNode::Run(Run {
+        ParagraphContent::SoftBreak(SoftBreak::default()),
+        text_flow(Run {
             text: "你好".to_owned(),
             language: Some("zh".to_owned()),
             props: BTreeMap::new(),

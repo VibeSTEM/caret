@@ -38,9 +38,9 @@ Document
         └── Custom(Block, definitionId)
             └── children: Vec<Block>
                 └── Paragraph
-                    └── inlines: Vec<InlineNode>
-                        └── Custom(Inline, definitionId)
-                            └── children: Vec<InlineNode>
+                    └── inlines: Vec<ParagraphContent>
+                        └── Environment(InlineEnvironment<ParagraphContent>)
+                            └── kind: Custom, definitionId
 }
 ```
 
@@ -51,7 +51,7 @@ Page scope 定义基于 `BodyPage` 或 `TitlePage` 内置角色的 PageContent �
 | kind | scope | 子内容 | 语义 |
 | --- | --- | --- | --- |
 | `Section` | block | `Block` | 可选标题、章节结构和编号 |
-| `Custom` | Page / Block / Inline（由定义选择；当前实现仅 Block） | `PageContent` / `Block` / `InlineNode` | 可命名的声明式自定义环境定义；scope 决定合法内容容器 |
+| `Custom` | Page / Block / Inline（由定义选择；当前实现仅 Block） | `PageContent` / `Block` / `ParagraphContent` | 可命名的声明式自定义环境定义；scope 决定合法内容容器 |
 
 每种块环境的 `props` 只保存其注册语义允许的实例级覆盖；环境模板与命名样式存于所选主题快照。文件可以定义基于内置 kind 的环境模板，但不能任意发明新的结构 kind。模板引用的 `baseKind` 必须与实例 `kind` 一致。
 
@@ -75,7 +75,9 @@ Section(id, props, definitionId?)
         └── children: [Paragraph, ...]
 ```
 
-这里 `heading` 是 Section 标题的语义角色，不是一个额外持久化 `EnvironmentNode`；当前 DTO 用 `title: Option<Paragraph>` 保存它。编号是 Section 的派生标签，绘制在 heading 段落之前，不作为 Run 或标题文字存储。Heading 的默认视觉样式由 Section 模板提供；单个标题的局部覆盖由其 Paragraph 表达。普通 Paragraph 可带局部 `outlineLevel`，作为不拥有子树的独立大纲标题。
+这里 `heading` 是 Section 标题的语义角色，不是一个额外持久化 `EnvironmentNode`；DTO 用 `title: Option<Paragraph>` 保存它。Paragraph 是块级外壳，其行内序列由 `Vec<ParagraphContent>` 承载。编号是 Section 的派生标签，绘制在 heading 段落之前，不作为 Run 或标题文字存储。Heading 的默认视觉样式由 Section 模板提供；单个标题的局部覆盖由其 Paragraph 表达。普通 Paragraph 可带局部 `outlineLevel`，作为不拥有子树的独立大纲标题。
+
+`\section` 执行时，Section title 接收原 Paragraph wrapper 的行内内容项及段落级属性；Section 正文继续使用 `children: Vec<Block>`。数学文本岛与行内公式的 split/merge 规则由[数学公式](../math.md#宿主边界与拆分)维护。
 - 章节编号由 `Section` 持有的编号定义生成，并作为标题 Paragraph 前的虚拟标签绘制。启用编号的 Section 构成编号层级与计数流：顶层共用文档级计数流；子级按最近的已编号 Section 祖先和显示层级计数。关闭编号的 Section 和 `Custom` 对标签路径及计数流都透明，其已编号后代继续使用最近已编号祖先的计数流，因此不同未编号容器下同层后代按文档顺序接续序号。例如 Section `1` 下有未编号容器 A、B，A 内首个编号 Section 为 `1.1`，B 内首个编号 Section 为 `1.2`。关闭编号的节点本身不占序号。模板为编号提供默认显示开关与逐层格式，实例可覆盖；格式至少支持阿拉伯数字、小写/大写罗马数字和中文数字。模板可定制标签显示格式，但不能改变层级和计数关系。`title: None` 的 Section 不显示标签且不占自身序号，作为结构容器对后代编号透明；空标题 Paragraph 则可正常显示标签并占号。编号在视觉上类似行内文本，但不持久化为 Run、不进入标题文本或 UTF-8 偏移，因此插入、移动或删除同一计数流中的 Section 后可重新编号。解除 Section 时，先为整个操作范围快照当前显示标签，再原子提升子树并物化标签，结果不依赖遍历顺序。
 
 块级环境可折叠、可选中和通过结构命令整体删除，默认删除该节点、独立标题及子树；若要保留内容，提供明确的“解除环境”操作，按上述规则把标题和正文移回父级。行内格式环境按文字范围编辑和删除。两者都不能让普通文本删除隐式破坏外层结构。命令事务、失败原子性和后续撤销由 018 衔接。环境种类、scope、编号定义、嵌套约束、标题的位置映射及块移动后的 ID/位置映射按本文规则维护，实现任务补充具体 API 和测试。

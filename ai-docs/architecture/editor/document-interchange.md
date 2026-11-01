@@ -47,7 +47,7 @@ TeX 导入导出必须完整覆盖 Caret 文档节点和媒体；用标准 LaTeX
 
 ## `.cdoc` 正文 JSON 示例
 
-公式节点在 Caret 正文树中的示意见[公式与表格](math-and-table.md#正文结构示意)。它用于说明规范文档模型的结构，不是导入导出 IR，也不是已定稿的 `.cdoc` JSON schema。
+公式节点在 Caret 正文树中的示意见[数学公式](math.md#文档树中的位置)。它用于说明规范文档模型的结构，不是导入导出 IR，也不是已定稿的 `.cdoc` JSON schema。
 
 ## 后续任务
 

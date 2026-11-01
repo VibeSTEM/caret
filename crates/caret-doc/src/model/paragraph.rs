@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{InlineNode, NodeId, ParagraphLineSpacing};
+use super::{NodeId, ParagraphContent, ParagraphLineSpacing};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ pub struct Paragraph {
     #[serde(default)]
     pub layout: Option<ParagraphLayoutOverrides>,
     #[serde(default)]
-    pub inlines: Vec<InlineNode>,
+    pub inlines: Vec<ParagraphContent>,
     #[serde(default)]
     pub mark_style: BTreeMap<String, Value>,
     #[serde(default)]

@@ -4,7 +4,7 @@ use super::*;
 
 fn paragraph_with_text(text: &str) -> caret_doc::Paragraph {
     let mut paragraph = caret_doc::Paragraph::empty(caret_doc::NodeId::generate());
-    paragraph.inlines.push(InlineNode::Run(Run {
+    paragraph.inlines.push(text_flow(Run {
         text: text.to_owned(),
         language: None,
         props: Default::default(),
@@ -18,7 +18,7 @@ fn paragraph_text(paragraph: &caret_doc::Paragraph) -> String {
         .inlines
         .iter()
         .filter_map(|inline| match inline {
-            InlineNode::Run(run) => Some(run.text.as_str()),
+            ParagraphContent::Text(flow) => flow.runs.first().map(|run| run.text.as_str()),
             _ => None,
         })
         .collect()
@@ -243,7 +243,8 @@ fn font_command_uses_system_catalog_and_applies_the_selected_family_locally()
     else {
         return Err(std::io::Error::other("font-styled paragraph is missing").into());
     };
-    let Some(caret_doc::InlineNode::Environment(environment)) = paragraph.inlines.first() else {
+    let Some(caret_doc::ParagraphContent::Environment(environment)) = paragraph.inlines.first()
+    else {
         return Err(std::io::Error::other("font environment was not created").into());
     };
     assert_eq!(environment.kind, caret_doc::InlineEnvironmentKind::Font);

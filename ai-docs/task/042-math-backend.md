@@ -11,7 +11,7 @@
 
 ## 必读
 
-- [公式与表格](../architecture/editor/math-and-table.md)、[文档模型](../architecture/editor/document-model.md)
+- [数学公式](../architecture/editor/math.md)、[文档模型](../architecture/editor/document-model.md)
 - [研究 010：Typst 数学排版移植](../research/010-typst-math-layout.md)、[源码署名](../standards/source-attribution.md)
 - [测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
@@ -45,7 +45,7 @@
 
 - [x] 移植来源、提交、许可证与修改记录写在每个移植文件头，并汇总到 `NOTICE`。
 - [x] 解析器对超深、超长、节点过多的输入返回错误而不崩溃。
-- [x] `parse(serialize(tree))` 与原树结构一致（节点 ID 与源范围除外）。
+- [x] 当前 042 数学树的 `parse(serialize(tree))` 与解析器可表示的结构一致（节点 ID 与源范围除外）；后续 MathFlow 元数据恢复规则见[数学公式架构](../architecture/editor/math.md)。
 - [x] 排版输出含字形 ID、规则线、线段、填充/描边矩形与数学节点盒，由 044 映射到 Caret 页面字形快照。
 - [x] `cargo math-backend` 不依赖 Qt/原生构建即可运行。
 - [x] 已解析的数学 `.cdoc` 特性在完整布局接入前进入只读安全预览，避免应用接受无法显示的公式内容。
