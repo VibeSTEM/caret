@@ -64,12 +64,12 @@ impl MathTextFlowPath {
         base.checked_add(local_offset)
     }
 
-    pub(super) fn with_host_source_base(mut self, base: usize) -> Self {
+    pub(super) fn with_host_source_base(mut self, base: usize) -> Option<Self> {
         self.host_source_range = (
-            base + self.source_range.0 as usize,
-            base + self.source_range.1 as usize,
+            base.checked_add(self.source_range.0 as usize)?,
+            base.checked_add(self.source_range.1 as usize)?,
         );
-        self
+        Some(self)
     }
 
     /// 返回所属 Align 的行和 cell；独立数学树不含该归属。
@@ -249,6 +249,80 @@ pub(super) fn path_at_source_boundary(
     )
 }
 
+/// 查找同一 MathFlow 槽位中相邻的文本岛；环境包装透明，数学节点与软换行形成边界。
+pub(super) fn adjacent_text_flow_path(
+    tree: &MathTree,
+    current: &MathTextFlowPath,
+    forward: bool,
+) -> Option<MathTextFlowPath> {
+    current.resolve(tree)?;
+    let flow_prefix_end = current
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, MathTextFlowPathStep::Operand(_)))
+        .map_or(0, |index| index + 1);
+    let flow_prefix = &current.steps[..flow_prefix_end];
+    let flow = resolve_flow_path(&tree.root, flow_prefix)?;
+    let mut candidates = Vec::new();
+    collect_text_island_candidates(
+        &flow.content,
+        false,
+        &mut flow_prefix.to_vec(),
+        current.align_cell,
+        &mut candidates,
+    );
+    let index = candidates.iter().position(|candidate| {
+        candidate
+            .as_ref()
+            .is_some_and(|candidate| candidate.steps == current.steps)
+    })?;
+    let adjacent = if forward {
+        candidates.get(index + 1)?
+    } else {
+        candidates.get(index.checked_sub(1)?)?
+    };
+    let adjacent = adjacent.clone()?;
+    let host_base = current
+        .host_source_range
+        .0
+        .checked_sub(current.source_range.0 as usize)?;
+    adjacent.with_host_source_base(host_base)
+}
+
+fn collect_text_island_candidates(
+    contents: &[MathContent],
+    environment_children: bool,
+    path: &mut Vec<MathTextFlowPathStep>,
+    align_cell: Option<(usize, usize)>,
+    candidates: &mut Vec<Option<MathTextFlowPath>>,
+) {
+    for (index, content) in contents.iter().enumerate() {
+        path.push(if environment_children {
+            MathTextFlowPathStep::EnvironmentChild(index)
+        } else {
+            MathTextFlowPathStep::Content(index)
+        });
+        match content {
+            MathContent::Text(text) => {
+                candidates.push(text.source_range.as_ref().map(|range| {
+                    MathTextFlowPath::new(path.clone(), (range.start, range.end), align_cell)
+                }));
+            }
+            MathContent::Environment(environment) => collect_text_island_candidates(
+                &environment.children,
+                true,
+                path,
+                align_cell,
+                candidates,
+            ),
+            MathContent::Math(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {
+                candidates.push(None);
+            }
+        }
+        path.pop();
+    }
+}
+
 enum PathTarget<'a> {
     Flow(&'a MathFlow),
     Content(&'a MathContent),
@@ -263,6 +337,26 @@ fn resolve_content_path<'a>(
     root: &'a MathFlow,
     steps: &[MathTextFlowPathStep],
 ) -> Option<&'a MathContent> {
+    match resolve_path_target(root, steps)? {
+        PathTarget::Content(content) => Some(content),
+        PathTarget::Flow(_) => None,
+    }
+}
+
+fn resolve_flow_path<'a>(
+    root: &'a MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<&'a MathFlow> {
+    match resolve_path_target(root, steps)? {
+        PathTarget::Flow(flow) => Some(flow),
+        PathTarget::Content(_) => None,
+    }
+}
+
+fn resolve_path_target<'a>(
+    root: &'a MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<PathTarget<'a>> {
     let mut target = PathTarget::Flow(root);
     for step in steps {
         target = match (target, step) {
@@ -280,10 +374,7 @@ fn resolve_content_path<'a>(
             _ => return None,
         };
     }
-    match target {
-        PathTarget::Content(content) => Some(content),
-        PathTarget::Flow(_) => None,
-    }
+    Some(target)
 }
 
 fn resolve_content_path_mut<'a>(

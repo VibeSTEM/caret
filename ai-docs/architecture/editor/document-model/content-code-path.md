@@ -76,7 +76,7 @@ FlowMap 用 `FlowPathOptions` 选择输出路径：物理路径引用 ParagraphC
 
 正文与公式文本共用 `editing/grapheme.rs` 的字素边界、移动和吸附算法；两类宿主仍分别构建逻辑文本范围。编辑操作目前通过 `text_map.rs` 中的临时 `EditNode` 事务视图复用既有树操作，成功后显式提交，错误时丢弃；这避免失败写回，但仍会复制被编辑段落的行内内容。它不是第二份持久化表示，性能成本也不能视为已消除。若基准确认该成本影响常见输入，应进一步改为沿宿主路径直接操作 TextFlow 与包装节点。
 
-MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。正文和公式目前只共享字素边界算法；数学编辑尚未把相邻 TextFlow/InlineEnvironment 组成同一个逻辑文本流，因此跨内容节点的组合字素仍会被拆分。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
+MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。TextFlow 字素边界可跨 Run 及 InlineEnvironment 导航；到达文本岛端点时，光标会在同一 MathFlow 固定槽位内进入相邻 TextFlow，环境包装透明，MathNode、SoftBreak 和 Opaque 是停靠边界，空 TextFlow 仍是可到达的位置。Align 邻接导航保留 cell 宿主源码基址；过期源路径或目标路径无法解析时，在修改活动分支前拒绝操作。宿主基址的 checked 算术若失败会被视为没有相邻岛，调用方沿普通源码边界逻辑处理；合法文档的长度上限使该情况不可达。数学侧目前以 MathTextFlowPath 扫描该相邻关系，尚未消费通用 FlowMap；跨相邻 TextFlow 的组合字素仍未合并。邻接查找只在文本岛边界执行，但会扫描所在槽位并临时收集候选路径；该成本尚未基准测量。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
 
 公式后端视图位于 `caret-math/src/backend.rs`，只在单次序列化或布局调用期间建立，不进入文档存储、编辑状态或兼容读取。旧的临时数学字符串节点格式没有迁移转换器；旧 schema 不被当作当前 MathTree 读取。
 

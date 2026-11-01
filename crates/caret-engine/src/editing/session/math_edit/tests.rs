@@ -91,6 +91,126 @@ fn text_island_accepts_plain_input_and_rebases_its_path() -> Result<(), EditErro
 }
 
 #[test]
+fn adjacent_text_islands_share_caret_navigation() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    let inserted = session.run(Command::InsertInlineMath(
+        r"\text{\textbf{a}}\text{b}".to_owned(),
+    ));
+    assert!(
+        inserted.is_ok(),
+        "inline math insertion failed: {inserted:?}"
+    );
+    let entered = session.run(Command::EnterMath(Direction::Backward));
+    assert!(entered.is_ok(), "entering math failed: {entered:?}");
+    let entered_text = session.run(Command::MoveCaret(Direction::Backward));
+    assert!(
+        entered_text.is_ok(),
+        "moving into text island failed: {entered_text:?}"
+    );
+    assert!(
+        matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Text { .. })
+        ),
+        "formula movement did not select a text island: {:?}",
+        session.math_edit()
+    );
+    let second_range = match &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    {
+        MathEditBranch::Text { path, .. } => path.source_range(),
+        MathEditBranch::Source => return Err(EditError::InvalidPosition),
+    };
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    let moved_within = session.run(Command::MoveCaret(Direction::Backward));
+    assert!(
+        moved_within.is_ok(),
+        "moving inside the island failed: {moved_within:?}"
+    );
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
+    let crossed_backward = session.run(Command::MoveCaret(Direction::Backward));
+    assert!(
+        crossed_backward.is_ok(),
+        "crossing to previous island failed: {crossed_backward:?}"
+    );
+    let first_range = match &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    {
+        MathEditBranch::Text { path, .. } => path.source_range(),
+        MathEditBranch::Source => return Err(EditError::InvalidPosition),
+    };
+    assert_ne!(first_range, second_range);
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    let crossed_forward = session.run(Command::MoveCaret(Direction::Forward));
+    assert!(
+        crossed_forward.is_ok(),
+        "crossing to next island failed: {crossed_forward:?}"
+    );
+    let next_range = match &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    {
+        MathEditBranch::Text { path, .. } => path.source_range(),
+        MathEditBranch::Source => return Err(EditError::InvalidPosition),
+    };
+    assert_eq!(next_range, second_range);
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
+    Ok(())
+}
+
+#[test]
+fn math_atoms_separate_text_islands_but_empty_islands_keep_a_caret_stop() -> Result<(), EditError> {
+    let mut separated = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    separated.run(Command::InsertInlineMath(r"\text{a}x\text{b}".to_owned()))?;
+    separated.run(Command::EnterMath(Direction::Backward))?;
+    separated.run(Command::MoveCaret(Direction::Backward))?;
+    separated.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(separated.math_edit().map(|edit| edit.cursor), Some(0));
+    separated.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(matches!(
+        separated.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Source)
+    ));
+
+    let mut empty = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    empty.run(Command::InsertInlineMath(r"\text{}\text{b}".to_owned()))?;
+    empty.run(Command::EnterMath(Direction::Backward))?;
+    empty.run(Command::MoveCaret(Direction::Backward))?;
+    empty.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(empty.math_edit().map(|edit| edit.cursor), Some(0));
+    empty.run(Command::MoveCaret(Direction::Backward))?;
+    let edit = empty.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(path.source_range().0, path.source_range().1);
+    assert_eq!(edit.cursor, 0);
+
+    empty.run(Command::MoveCaret(Direction::Forward))?;
+    let edit = empty.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_ne!(path.source_range().0, path.source_range().1);
+    assert_eq!(edit.cursor, 0);
+    empty.run(Command::MoveCaret(Direction::Backward))?;
+    let edit = empty.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(path.source_range().0, path.source_range().1);
+    assert_eq!(edit.cursor, 0);
+    Ok(())
+}
+
+#[test]
 fn text_island_boundary_exit_and_reverse_motion_reenter_text_mode() -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     session.run(Command::InsertInlineMath(r"\text{ab}".to_owned()))?;
@@ -419,6 +539,42 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
     assert!(matches!(
         align.document().body.first(),
         Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcX}")
+    ));
+    Ok(())
+}
+
+#[test]
+fn adjacent_align_text_islands_keep_cell_host_offsets_through_edit_and_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    session.run(Command::InsertText(r"\text{a}&\text{b}\text{c}".to_owned()))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { path, .. }) if path.align_cell() == Some((0, 1))
+    ));
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    session.run(Command::InsertText("X".to_owned()))?;
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Align(value))
+            if value.rows[0].cells[0].source.contains(r"\text{a}")
+                && value.rows[0].cells[1].source.contains(r"\text{bX}\text{c}")
+    ));
+    session.run(Command::Undo)?;
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Align(value)) if value.rows[0].cells[1].source.contains(r"\text{b}\text{c}")
+    ));
+    session.run(Command::Redo)?;
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Align(value)) if value.rows[0].cells[1].source.contains(r"\text{bX}\text{c}")
     ));
     Ok(())
 }

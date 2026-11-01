@@ -698,6 +698,35 @@ impl Session {
                     }
                 }
             } else {
+                if let Some(adjacent_path) =
+                    path::adjacent_text_flow_path(tree, path, direction == Direction::Forward)
+                {
+                    let adjacent_text = adjacent_path
+                        .resolve(tree)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let adjacent_display = adjacent_text
+                        .runs
+                        .iter()
+                        .map(|run| run.text.as_str())
+                        .collect::<String>();
+                    let cursor = if direction == Direction::Forward {
+                        0
+                    } else {
+                        adjacent_display.len()
+                    };
+                    if let Some(current) = &mut self.math_edit {
+                        current.branch = MathEditBranch::Text {
+                            path: adjacent_path,
+                            anchor: cursor,
+                        };
+                        current.cursor = cursor;
+                    }
+                    self.advance_history_merge_epoch();
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
                 let (start, end) = path.host_source_range();
                 let exit_cursor = if display_text.is_empty() {
                     let Some(exit_cursor) = (match direction {
@@ -843,7 +872,7 @@ impl Session {
             }
             let path =
                 path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
-            return Some(path.with_host_source_base(cell_start));
+            return path.with_host_source_base(cell_start);
         }
         let tree = self.math_tree_for_edit(edit, None).ok()?;
         path::path_at_source_boundary(tree, source_offset, forward, None)
