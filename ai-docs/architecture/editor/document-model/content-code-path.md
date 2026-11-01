@@ -70,9 +70,9 @@ flowchart TB
 | `Equation` / `Align` | 与 InlineMath 共用 MathTree、解析器和公式编辑事务 | 块级宿主、Align cell 边界 | `caret-doc/src/model/math.rs`、`editing/environment/block_adapter/block_math.rs` |
 | BlockEnvironment | 标题 Paragraph 复用正文模型和布局；子项递归 Block | 块父链、结构范围和块级编辑 | `caret-structure/src/index.rs`、`editing/environment/block_adapter/block_environment.rs` |
 
-`TextMap::new` 直接遍历 ParagraphContent，不为只读位置查询克隆整棵行内树。编辑操作目前通过 `text_map.rs` 中的临时 `EditNode` 事务视图复用既有树操作，成功后显式提交，错误时丢弃；这避免失败写回，但仍会复制被编辑段落的行内内容。它不是第二份持久化表示，性能成本也不能视为已消除。若基准确认该成本影响常见输入，应进一步改为沿宿主路径直接操作 TextFlow 与包装节点。
+`TextMap::new` 直接遍历 ParagraphContent，不为只读位置查询克隆整棵行内树。正文与公式文本目前共用 `editing/grapheme.rs` 的字素边界、移动和吸附算法；两类宿主仍分别构建自己的逻辑文本范围。编辑操作目前通过 `text_map.rs` 中的临时 `EditNode` 事务视图复用既有树操作，成功后显式提交，错误时丢弃；这避免失败写回，但仍会复制被编辑段落的行内内容。它不是第二份持久化表示，性能成本也不能视为已消除。若基准确认该成本影响常见输入，应进一步改为沿宿主路径直接操作 TextFlow 与包装节点。
 
-MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
+MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。正文和公式目前只共享字素边界算法；数学编辑尚未把相邻 TextFlow/InlineEnvironment 组成同一个逻辑文本流，因此跨内容节点的组合字素仍会被拆分。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
 
 公式后端视图位于 `caret-math/src/backend.rs`，只在单次序列化或布局调用期间建立，不进入文档存储、编辑状态或兼容读取。旧的临时数学字符串节点格式没有迁移转换器；旧 schema 不被当作当前 MathTree 读取。
 

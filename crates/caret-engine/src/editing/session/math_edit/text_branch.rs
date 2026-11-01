@@ -3,14 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::ops::Range;
-use unicode_segmentation::UnicodeSegmentation;
-
+use super::super::super::grapheme::GraphemeMap;
 use super::super::history::EditGroup;
-use super::super::{Direction, EditError, Effect};
+use super::super::{Affinity, Direction, EditError, Effect};
 use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
+use std::ops::Range;
 
 #[derive(Debug, Clone)]
 pub(super) struct MathTextEdit {
@@ -98,29 +97,19 @@ fn text_source_range(text: &caret_doc::TextFlow, range: Range<usize>) -> Option<
 }
 
 pub(super) fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
-    offset == text.len()
-        || text
-            .grapheme_indices(true)
-            .any(|(start, _)| start == offset)
+    GraphemeMap::is_boundary_in(text, offset)
 }
 
 pub(super) fn snap_text_cursor(text: &str, offset: usize, forward: bool) -> Option<usize> {
-    if offset > text.len() || !text.is_char_boundary(offset) {
-        return None;
-    }
-    if is_grapheme_boundary(text, offset) {
-        return Some(offset);
-    }
-    if forward {
-        text.grapheme_indices(true)
-            .map(|(start, grapheme)| start + grapheme.len())
-            .find(|boundary| *boundary > offset)
-    } else {
-        text.grapheme_indices(true)
-            .map(|(start, _)| start)
-            .take_while(|boundary| *boundary < offset)
-            .last()
-    }
+    GraphemeMap::snap_in(
+        text,
+        offset,
+        if forward {
+            Affinity::Downstream
+        } else {
+            Affinity::Upstream
+        },
+    )
 }
 
 pub(super) fn replace_text_flow_range(

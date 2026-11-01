@@ -6,12 +6,12 @@
 use super::environment::inline_adapter::{
     INLINE_MATH_ADAPTER, RUN_PROPERTY_ENVIRONMENTS, for_inline_environment,
 };
+use super::grapheme::GraphemeMap;
 use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, Pos};
 use caret_doc::{
     FlowContent, InlineEnvironment, InlineMath, NodeId, OpaqueNode, Paragraph, ParagraphContent,
     Run, SoftBreak, TextFlow,
 };
-use unicode_segmentation::UnicodeSegmentation;
 
 /// 可编辑的临时文本流视图；文档本身始终存储 `ParagraphContent::Text(TextFlow)`。
 #[derive(Debug, Clone)]
@@ -196,9 +196,7 @@ impl TextMap {
             .into_iter()
             .flatten()
             .collect();
-        let mut grapheme_boundaries: Vec<_> = text.grapheme_indices(true).map(|(i, _)| i).collect();
-        grapheme_boundaries.push(text.len());
-        grapheme_boundaries.dedup();
+        let grapheme_boundaries = GraphemeMap::new(&text).into_boundaries();
         Ok(Self {
             text,
             spans,
@@ -285,41 +283,15 @@ impl TextMap {
     }
 
     pub(super) fn snap_to_grapheme_boundary(&self, offset: usize, affinity: Affinity) -> usize {
-        match self.grapheme_boundaries.binary_search(&offset) {
-            Ok(_) => offset,
-            Err(index) => match affinity {
-                Affinity::Upstream => self
-                    .grapheme_boundaries
-                    .get(index.saturating_sub(1))
-                    .copied()
-                    .unwrap_or(0),
-                Affinity::Downstream => self
-                    .grapheme_boundaries
-                    .get(index)
-                    .copied()
-                    .unwrap_or(self.text.len()),
-            },
-        }
+        GraphemeMap::snap_boundaries(&self.grapheme_boundaries, offset, affinity)
     }
 
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
-        let Ok(index) = self.grapheme_boundaries.binary_search(&offset) else {
-            return offset;
-        };
-        index
-            .checked_sub(1)
-            .and_then(|previous| self.grapheme_boundaries.get(previous).copied())
-            .unwrap_or(offset)
+        GraphemeMap::previous_boundary(&self.grapheme_boundaries, offset).unwrap_or(offset)
     }
 
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
-        let Ok(index) = self.grapheme_boundaries.binary_search(&offset) else {
-            return offset;
-        };
-        self.grapheme_boundaries
-            .get(index + 1)
-            .copied()
-            .unwrap_or(offset)
+        GraphemeMap::next_boundary(&self.grapheme_boundaries, offset).unwrap_or(offset)
     }
 
     fn soft_break_at_boundary(&self, offset: usize, affinity: Affinity) -> Option<&Span> {

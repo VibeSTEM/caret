@@ -4,8 +4,8 @@
 // 署名：Yuki Lu
 
 use std::ops::Range;
-use unicode_segmentation::UnicodeSegmentation;
 
+use super::super::super::grapheme::GraphemeMap;
 use super::{MathEdit, MathEditTarget};
 
 pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
@@ -39,19 +39,11 @@ pub(super) fn align_cell_at(source: &str, cursor: usize) -> Option<(usize, usize
 }
 
 pub(super) fn previous_grapheme_start(source: &str, cursor: usize) -> Option<usize> {
-    source
-        .get(..cursor)?
-        .grapheme_indices(true)
-        .next_back()
-        .map(|(start, _)| start)
+    GraphemeMap::previous_in(source, cursor)
 }
 
 pub(super) fn next_grapheme_end(source: &str, cursor: usize) -> Option<usize> {
-    source
-        .get(cursor..)?
-        .graphemes(true)
-        .next()
-        .map(|grapheme| cursor + grapheme.len())
+    GraphemeMap::next_in(source, cursor)
 }
 
 pub(super) fn previous_math_caret_stop(source: &str, cursor: usize) -> Option<usize> {
