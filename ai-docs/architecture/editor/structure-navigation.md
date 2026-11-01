@@ -8,7 +8,7 @@
 
 当前文档模型实现的块结构是 Paragraph、由段落大纲属性识别的 Heading，以及 `BlockEnvironmentKind` 的 `Section`、`Custom`。`Section` 和 `Custom` 共享可嵌套的标题/子项容器；`Section` 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。
 
-行内 `EnvironmentNode`（如 Bold、Italic、Font）与 `InlineMath` 都是行内环境，参与格式和位置映射，不是块级导航停靠点。`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部位置用 `MathPos`，不额外插入 Paragraph 之上的结构层级。Equation 与 Align 作为块级环境进入 StructureIndex，提供结构栈与范围，但当前不是导航停靠点。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
+行内 `EnvironmentNode`（Bold、Italic、Underline、Font）与 `InlineMath` 都是行内环境，参与格式和位置映射，不是块级导航停靠点。`InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部位置用 `MathPos`，不额外插入 Paragraph 之上的结构层级。Equation 与 Align 作为块级环境进入 StructureIndex，提供结构栈与范围，但当前不是导航停靠点。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
 
 当前 `StructureClass` 只有 `Paragraph`、`SingleLine`、`MultiLine`、`Table` 和 `Figure` 内容块类别；页面组合层不是该枚举的同级成员。未来页面组合角色是否进入导航索引，按文档模型的层级语义另行接入。
 

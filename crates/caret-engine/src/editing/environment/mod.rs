@@ -36,6 +36,7 @@ pub enum EnvironmentKind {
     Custom,
     Bold,
     Italic,
+    Underline,
     Font,
     InlineMath,
     Equation,
@@ -59,6 +60,7 @@ impl EnvironmentKind {
         match kind {
             InlineEnvironmentKind::Bold => Self::Bold,
             InlineEnvironmentKind::Italic => Self::Italic,
+            InlineEnvironmentKind::Underline => Self::Underline,
             InlineEnvironmentKind::Font => Self::Font,
         }
     }
@@ -74,7 +76,9 @@ impl EnvironmentKind {
     /// 环境所处层级。
     pub const fn level(self) -> EnvironmentLevel {
         match self {
-            Self::Bold | Self::Italic | Self::Font | Self::InlineMath => EnvironmentLevel::Inline,
+            Self::Bold | Self::Italic | Self::Underline | Self::Font | Self::InlineMath => {
+                EnvironmentLevel::Inline
+            }
             Self::Section | Self::Custom | Self::Equation | Self::Align => EnvironmentLevel::Block,
         }
     }
@@ -82,7 +86,12 @@ impl EnvironmentKind {
     /// 环境种类的编辑能力。
     pub const fn capabilities(self) -> Capabilities {
         match self {
-            Self::Section | Self::Custom | Self::Bold | Self::Italic | Self::Font => Capabilities {
+            Self::Section
+            | Self::Custom
+            | Self::Bold
+            | Self::Italic
+            | Self::Underline
+            | Self::Font => Capabilities {
                 unwrap_preserving_content: true,
                 editable_text: true,
                 atomic: false,
@@ -102,6 +111,7 @@ impl EnvironmentKind {
             Self::Custom => "custom",
             Self::Bold => "bold",
             Self::Italic => "italic",
+            Self::Underline => "underline",
             Self::Font => "font",
             Self::InlineMath => "inline_math",
             Self::Equation => "equation",

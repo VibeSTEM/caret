@@ -25,6 +25,7 @@ pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
 pub use inline::{InlineNode, SoftBreak};
+use inline_environment::migrate_run_underline;
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES,
@@ -131,6 +132,31 @@ pub struct Document {
 }
 
 impl Document {
+    /// 把旧文件中 Run 的布尔下划线属性迁移为 Underline 行内环境。
+    pub(crate) fn migrate_run_underline(&mut self) {
+        fn paragraph(paragraph: &mut Paragraph) {
+            paragraph.inlines = migrate_run_underline(std::mem::take(&mut paragraph.inlines));
+        }
+        fn blocks(items: &mut [Block]) {
+            for block in items {
+                match block {
+                    Block::Paragraph(value) => paragraph(value),
+                    Block::Environment(environment) => {
+                        if let Some(title) = environment.title.as_mut() {
+                            paragraph(title);
+                        }
+                        blocks(&mut environment.children);
+                    }
+                    Block::Equation(_)
+                    | Block::Align(_)
+                    | Block::ExplicitBreak(_)
+                    | Block::Opaque(_) => {}
+                }
+            }
+        }
+        blocks(&mut self.body);
+    }
+
     pub fn blank() -> Self {
         let paragraph = Paragraph::empty(NodeId::generate());
         Self {

@@ -13,15 +13,16 @@
 | `caret.env.bold` | 行内粗体环境 |
 | `caret.font.family-preferences` | 文档字体族偏好 |
 | `caret.paragraph.layout-settings` | 段落排版设置 |
-| `caret.env.explicit-format-state` | Bold/Italic 环境中显式的 `enabled` 状态，包括局部关闭及重新开启 |
+| `caret.env.explicit-format-state` | Bold/Italic/Underline 环境中显式的 `enabled` 状态，包括局部关闭及重新开启 |
 | `caret.env.font` | 行内字体族环境 |
 | `caret.env.italic` | 行内斜体环境 |
+| `caret.env.underline` | 行内下划线环境 |
 | `caret.env.section` | 块级章节、层级计数和生成标签 |
 | `caret.env.custom` | 当前已实现的块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
 | `caret.text.default-font-size` | 文档默认字号 |
 | `caret.text.language-tags` | BCP 47 文档/段落/Run 语言标签 |
-| `caret.text.underline` | Run 的显式下划线属性，包括显式开启和关闭 |
+| `caret.text.underline` | Run 上的布尔下划线属性；读取时转为 `underline` 行内环境，保存时不再写出 |
 | `caret.theme.snapshot` | `.cdoc` 内嵌文档排版主题快照 |
 
 `requiredFeatures` 按字节序去重排序；除编码器始终声明的基础能力外，只列文档实际使用的能力。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
