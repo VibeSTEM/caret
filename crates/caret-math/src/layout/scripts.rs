@@ -13,9 +13,9 @@
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
-use super::font::Corner;
 use super::frame::{Fragment, Frame, Point};
 use super::glyph::kern_at_height;
+use crate::fonts::Corner;
 
 /// 四个附着位置：右上、右下、上限、下限。
 #[derive(Default)]

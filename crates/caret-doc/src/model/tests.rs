@@ -161,22 +161,26 @@ fn missing_global_text_and_paragraph_settings_use_bundled_defaults()
 
     assert_eq!(settings.paragraph_layout, default);
     assert_eq!(settings.default_font_size_centipoints, 1200);
+    assert_eq!(
+        settings.default_math_font_family.as_deref(),
+        Some(super::DEFAULT_FONT_FAMILY)
+    );
     assert_eq!(settings.paragraph_layout.space_before_centipoints, 0);
     assert_eq!(settings.paragraph_layout.space_after_centipoints, 800);
     assert!(settings.paragraph_layout.widow_orphan_control);
     assert_eq!(
         settings.default_code_font_family,
-        super::DEFAULT_CODE_FONT_FAMILY
+        super::DEFAULT_FONT_FAMILY
     );
     Ok(())
 }
 
 #[test]
-fn code_font_family_default_marker_is_valid_and_empty_family_is_rejected() {
+fn font_role_default_markers_are_valid_and_empty_family_is_rejected() {
     let mut document = Document::blank();
     assert_eq!(
         document.global_settings.default_code_font_family,
-        super::DEFAULT_CODE_FONT_FAMILY
+        super::DEFAULT_FONT_FAMILY
     );
     assert!(document.validate().is_ok());
 

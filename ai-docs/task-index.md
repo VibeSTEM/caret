@@ -95,5 +95,6 @@
 | 061 | 字符格式 | [字色、高亮与字符底纹](task/061-text-paint-formatting.md) | P2 | 022、024、027 | M | ready |
 | 062 | 段落格式 | [段落格式命令](task/062-paragraph-formatting.md) | P2 | 022、026、027 | M | ready |
 | 063 | 文档样式 | [文档排版主题与命名样式](task/063-document-typography-styles.md) | P2 | 020、021 | L | ready |
+| 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | in-progress |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

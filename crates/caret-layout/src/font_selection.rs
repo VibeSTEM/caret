@@ -1,10 +1,11 @@
-//! 编译文档字体偏好，并按实际脚本、语言和公式上下文生成候选字体族。
+//! 编译正文、数学与代码字体偏好，并按角色和实际脚本生成候选字体族。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::fonts::{code, math};
 use caret_doc::DocumentSettings;
 use icu_locale_core::{Locale, subtags::Script};
 use icu_properties::{
@@ -73,6 +74,7 @@ pub struct FontSelectionContext<'a> {
     pub script: Script,
     /// Run/Paragraph/文档继承后得到的 BCP 47 语言。
     pub language: Option<&'a str>,
+    /// 数学公式使用独立字体角色，不继承正文 Script 字体偏好。
     pub math_context: bool,
     /// Font EnvironmentNode 等局部显式请求，优先于所有文档默认值。
     pub explicit_family: Option<&'a str>,
@@ -149,12 +151,7 @@ impl FontPreferenceRules {
     pub fn from_document_settings(
         settings: &DocumentSettings,
     ) -> Result<Self, FontPreferenceError> {
-        let code_family =
-            if settings.default_code_font_family == caret_doc::DEFAULT_CODE_FONT_FAMILY {
-                None
-            } else {
-                checked_family(Some(&settings.default_code_font_family))?
-            };
+        let code_family = checked_family(Some(&settings.default_code_font_family))?;
         let mut result = Self {
             default_family: checked_family(settings.default_font_family.as_deref())?,
             cjk_family: checked_family(settings.default_cjk_font_family.as_deref())?,
@@ -162,37 +159,40 @@ impl FontPreferenceRules {
             code_family,
             ..Self::default()
         };
+        let mut seen_scripts = BTreeSet::new();
         for (raw_script, family) in &settings.script_font_families {
             let Some(script) = parse_script(raw_script)? else {
                 continue;
             };
-            let family = checked_family(Some(family))?.ok_or(FontPreferenceError::EmptyFamily)?;
-            match result.scripts.entry(script) {
-                Entry::Vacant(entry) => {
-                    entry.insert(family);
-                }
-                Entry::Occupied(_) => {
-                    return Err(FontPreferenceError::DuplicateScriptTag(raw_script.clone()));
-                }
+            if !seen_scripts.insert(script) {
+                return Err(FontPreferenceError::DuplicateScriptTag(raw_script.clone()));
+            }
+            if let Some(family) = checked_family(Some(family))? {
+                result.scripts.insert(script, family);
             }
         }
+        let mut seen_language_scripts = BTreeSet::new();
         for (raw_script, languages) in &settings.language_script_font_families {
             let Some(script) = parse_script(raw_script)? else {
                 continue;
             };
-            let Entry::Vacant(entry) = result.language_scripts.entry(script) else {
+            if !seen_language_scripts.insert(script) {
                 return Err(FontPreferenceError::DuplicateScriptTag(raw_script.clone()));
-            };
+            }
             let mut normalized = BTreeMap::new();
+            let mut seen_languages = BTreeSet::new();
             for (language, family) in languages {
                 let key = language_key(language);
-                let family =
-                    checked_family(Some(family))?.ok_or(FontPreferenceError::EmptyFamily)?;
-                if normalized.insert(key, family).is_some() {
+                if !seen_languages.insert(key.clone()) {
                     return Err(FontPreferenceError::DuplicateLanguageTag(language.clone()));
                 }
+                if let Some(family) = checked_family(Some(family))? {
+                    normalized.insert(key, family);
+                }
             }
-            entry.insert(normalized);
+            if !normalized.is_empty() {
+                result.language_scripts.insert(script, normalized);
+            }
         }
         Ok(result)
     }
@@ -219,6 +219,11 @@ impl FontPreferenceRules {
                 self.code_family.as_deref(),
                 FontPreferenceSource::Code,
             );
+            push_candidate(
+                &mut result,
+                Some(code::default_family()),
+                FontPreferenceSource::Code,
+            );
             return result;
         }
         if context.math_context {
@@ -227,6 +232,12 @@ impl FontPreferenceRules {
                 self.math_family.as_deref(),
                 FontPreferenceSource::Math,
             );
+            push_candidate(
+                &mut result,
+                Some(math::default_family()),
+                FontPreferenceSource::Math,
+            );
+            return result;
         }
         if let Some(language) = context.language
             && let Some(languages) = self.language_scripts.get(&context.script)
@@ -261,15 +272,11 @@ impl FontPreferenceRules {
 }
 
 fn checked_family(family: Option<&str>) -> Result<Option<String>, FontPreferenceError> {
-    family
-        .map(|family| {
-            if family.trim().is_empty() {
-                Err(FontPreferenceError::EmptyFamily)
-            } else {
-                Ok(family.to_owned())
-            }
-        })
-        .transpose()
+    match crate::fonts::requested_family(family) {
+        None => Ok(None),
+        Some(family) if family.trim().is_empty() => Err(FontPreferenceError::EmptyFamily),
+        Some(family) => Ok(Some(family.to_owned())),
+    }
 }
 
 fn parse_script(tag: &str) -> Result<Option<Script>, FontPreferenceError> {
@@ -336,7 +343,9 @@ fn push_candidate<'a>(
     family: Option<&'a str>,
     source: FontPreferenceSource,
 ) {
-    let Some(family) = family.filter(|family| !family.trim().is_empty()) else {
+    let Some(family) =
+        crate::fonts::requested_family(family).filter(|family| !family.trim().is_empty())
+    else {
         return;
     };
     if !result

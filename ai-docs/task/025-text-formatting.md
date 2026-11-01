@@ -23,7 +23,7 @@
 - 行内环境格式对非空选区按字素边界操作，保留文本、选区方向、位置映射和 Undo；空选区使用 Rust Session 的 pending typing style。Run/Paragraph 直接属性与环境格式不建立重复存储来源。
 - `\firstlineindent` 将当前段落首行缩进设为两个字符宽度，任意光标位置可用并作为段落属性持久化；正文 Tab 插入两个字符宽度空格，`\singlecharspace` / `\doublecharspace` 分别插入一个/两个字符宽度空格。普通 U+0020 空格按半个 em 排版。
 - `\font` 和 `\defaultfont` 在命令输入中提供字体族与 Script/Script+Language 选择；候选与目标规则复用 Rust 字体服务。命令弹窗的后续交互和布局完善由[059](059-command-font-picker.md)跟进。
-- `defaultCodeFontFamily` 是独立文档字段，`"<default>"` 表示平台等宽字体；命令输入使用该字体角色，Rust shaping 为未来代码块接入 `FontRole::Code`。代码块节点不属于本任务。
+- `defaultCodeFontFamily` 是独立文档字段，统一标记 `"<default>"` 解析为内置 JetBrains Mono；命令输入使用该字体角色，Rust shaping 为未来代码块接入 `FontRole::Code`。代码块节点不属于本任务。数学字段也使用同一标记并解析为内置 STIX Two Math。
 - 块环境命令由 010 管理；将块命令应用于选区由[057](057-block-environment-selection-commands.md)管理。当前环境高亮由光标位置派生，不属于格式命令。
 - 不实现完整 Office 样式兼容、全部下划线类型、透明色、工具栏格式控件或代码块节点；数学字体 UI 继续由 011 决定，首版使用 STIX Two Math。
 
@@ -49,7 +49,7 @@
 
 - [x] `\bold` / `\italic` 使用行内 `EnvironmentNode`；支持选中文本、混合选区统一应用、显式局部关闭、空选区 pending typing、跨段格式、IME、Undo/Redo、环境拆分/合并和节点 ID 保留。行为测试覆盖格式树与可见文本/位置语义。
 - [x] 文档字体默认值按 Script 与 Script+Language 目标由 Rust 文档设置持有；`\defaultfont` 可键盘导航目标层级并提交设置，`\font` 可查询本机字体并将所选字体应用为局部 Font 环境。字体缺失保留请求并由 shaping fallback 处理；UI 不扫描目录。
-- [x] `defaultCodeFontFamily` 默认值、校验、`.cdoc` 持久化和快照投影已接通；代码 shaping 使用显式字体或平台 Monospace，保持代码角色等宽空格语义。实际代码块节点尚未实现。
+- [x] `defaultCodeFontFamily` 默认值、校验、`.cdoc` 持久化和快照投影已接通；代码 shaping 使用显式字体或内置 JetBrains Mono，保持代码角色等宽空格语义。实际代码块节点尚未实现。
 - [x] 历史实现：`\underline` 曾以 Run 直接属性保存，并接通选区、pending typing、软换行、IME、Undo/Redo、Rust/Parley 装饰几何和 Qt QSG 绘制；对应历史行为测试通过。该存储结果不代表当前目标架构已经实现。
 - [ ] 按[行内与块级环境适配](../architecture/editor/document-model/inline-and-block-environments.md)统一下划线载体、范围高亮与 Mod+Backspace 写回；补齐 Run 边界、InlineMath 边界、键盘上下文和失败原子性验证。`.cdoc` 尚未稳定发布，不要求兼容早期开发分支格式。
 - [x] `\firstlineindent`、Tab、`\singlecharspace`、`\doublecharspace` 与普通 U+0020 半字宽排版语义已接通；首行缩进参与布局、光标/选区几何、撤销/重做和 `.cdoc` 往返。

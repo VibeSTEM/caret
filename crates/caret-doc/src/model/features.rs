@@ -19,10 +19,14 @@ impl Document {
         if self.global_settings.theme.is_some() {
             features.insert("caret.theme.snapshot".to_owned());
         }
-        if self.global_settings.default_font_family.is_some()
-            || self.global_settings.default_cjk_font_family.is_some()
-            || self.global_settings.default_math_font_family.is_some()
-            || self.global_settings.default_code_font_family != DEFAULT_CODE_FONT_FAMILY
+        if has_custom_family(self.global_settings.default_font_family.as_deref())
+            || has_custom_family(self.global_settings.default_cjk_font_family.as_deref())
+            || self
+                .global_settings
+                .default_math_font_family
+                .as_deref()
+                .is_some_and(|family| family != DEFAULT_FONT_FAMILY)
+            || self.global_settings.default_code_font_family != DEFAULT_FONT_FAMILY
             || !self.global_settings.script_font_families.is_empty()
             || !self
                 .global_settings
@@ -44,6 +48,10 @@ impl Document {
         }
         features.into_iter().collect()
     }
+}
+
+fn has_custom_family(family: Option<&str>) -> bool {
+    family.is_some_and(|family| family != DEFAULT_FONT_FAMILY)
 }
 
 fn block_has_language(block: &Block) -> bool {

@@ -100,7 +100,7 @@ CommandPopupFrame {
             model: root.popupEnabled ? root.commandLine.candidates || [] : []
             delegate: Text {
                 required property var modelData
-                font.family: PlatformFonts.fixedFamily
+                font.family: PlatformFonts.codeFamily
                 font.pixelSize: Theme.fontSmall
                 text: modelData.alias || ""
             }

@@ -177,18 +177,23 @@ jobs:
               codesign --verify --deep --strict "$moved/caret.app"
               binary="$moved/caret.app/Contents/MacOS/caret"
               test -f "$moved/caret.app/Contents/Resources/licenses/Caret-LICENSE"
+              licenses="$moved/caret.app/Contents/Resources/licenses"
               ;;
             Windows)
               binary="$moved/bin/caret.exe"
               test -f "$binary"
               test -f "$moved/share/caret/licenses/Caret-LICENSE"
+              licenses="$moved/share/caret/licenses"
               ;;
             Linux)
               binary="$moved/bin/caret"
               test -x "$binary"
               test -f "$moved/share/caret/licenses/Caret-LICENSE"
+              licenses="$moved/share/caret/licenses"
               ;;
           esac
+          test -f "$licenses/JetBrains-Mono-OFL.txt"
+          test -f "$licenses/STIX-Two-Math-OFL.txt"
           if [[ "$RUNNER_OS" == Linux ]]; then
             QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software "$binary" --quit-after-load
           else

@@ -3,6 +3,7 @@
 
 #include "document_units.hpp"
 #include "icon_provider.hpp"
+#include "platform_fonts.hpp"
 #include "preferences_view_model.hpp"
 #include "settings_dialog_controller.hpp"
 #include "settings_view_model.hpp"
@@ -19,6 +20,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHash>
 #include <QIODevice>
@@ -33,6 +35,7 @@
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QVariant>
 #include <QtCore/Qt>
@@ -134,6 +137,17 @@ void ShellLoadTest::moduleImportsAndThemeBindingTracksSnapshot() {
     QVERIFY(view_model->availableThemes().contains(QStringLiteral("dark")));
     QCOMPARE(probe->property("background").value<QColor>(), QColor(QStringLiteral("#ffffff")));
     delete probe;
+}
+
+void ShellLoadTest::builtinCodeFontIsAvailableToQt() {
+    caret::PlatformFonts fonts;
+    QCOMPARE(fonts.codeFamily(), QStringLiteral("JetBrains Mono"));
+    QVERIFY(fonts.containsFamily(fonts.codeFamily()));
+    const QStringList styles = QFontDatabase().styles(fonts.codeFamily());
+    QVERIFY(styles.contains(QStringLiteral("Regular")));
+    QVERIFY(styles.contains(QStringLiteral("Bold")));
+    QVERIFY(styles.contains(QStringLiteral("Italic")));
+    QVERIFY(styles.contains(QStringLiteral("Bold Italic")));
 }
 
 void ShellLoadTest::autoScrollTextMovesOnlyWhenActiveAndOverflowing() {

@@ -90,6 +90,7 @@ name = "caret-app"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "caret-code",
  "caret-doc",
  "caret-dsl-core",
  "caret-engine",
@@ -112,6 +113,10 @@ dependencies = [
  "sha2",
  "shlex",
 ]
+
+[[package]]
+name = "caret-code"
+version = "0.1.0"
 
 [[package]]
 name = "caret-doc"
@@ -187,7 +192,9 @@ dependencies = [
 name = "caret-layout"
 version = "0.1.0"
 dependencies = [
+ "caret-code",
  "caret-doc",
+ "caret-math",
  "criterion",
  "fontique",
  "icu_locale_core",

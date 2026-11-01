@@ -12,9 +12,9 @@
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, MathSize, Style};
-use super::font::Axis;
 use super::frame::{Fragment, Frame, Item, Point};
 use super::glyph::{glyph_fragment, stretch};
+use crate::fonts::Axis;
 use crate::symbols::AtomClass;
 
 /// 排版根式；TeXbook 第 443 页规则 11 与第 360 页 `\root` 定义。

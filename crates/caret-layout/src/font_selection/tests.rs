@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use caret_doc::{CdocFile, Document, DocumentSettings, OpenedDocument};
 use icu_locale_core::subtags::Script;
 
-use super::{FontPreferenceError, FontPreferenceRules, FontPreferenceSource, FontSelectionContext};
+use super::{
+    FontPreferenceError, FontPreferenceRules, FontPreferenceSource, FontSelectionContext, math,
+};
 
 fn script(tag: &str) -> Script {
     tag.parse()
@@ -25,6 +27,17 @@ fn context(script_tag: &str) -> FontSelectionContext<'_> {
         explicit_family: None,
         code: false,
     }
+}
+
+#[test]
+fn shared_family_normalization_ignores_default_marker_and_keeps_explicit_names() {
+    for requested in [None, Some(caret_doc::DEFAULT_FONT_FAMILY)] {
+        assert_eq!(crate::fonts::requested_family(requested), None);
+    }
+    assert_eq!(
+        crate::fonts::requested_family(Some("Explicit Family")),
+        Some("Explicit Family")
+    );
 }
 
 #[test]
@@ -70,24 +83,23 @@ fn font_settings_roundtrip_preserves_unknown_script_and_declares_capability() {
 }
 
 #[test]
-fn explicit_math_language_script_and_defaults_keep_their_order() {
+fn math_role_uses_explicit_family_before_its_builtin_family() {
     let settings = DocumentSettings {
-        default_font_family: Some("Latin".to_owned()),
-        default_cjk_font_family: Some("CJK".to_owned()),
-        default_math_font_family: Some("Math".to_owned()),
-        script_font_families: BTreeMap::from([("Hani".to_owned(), "Han".to_owned())]),
+        default_font_family: Some("Body Latin".to_owned()),
+        default_math_font_family: Some("Math Override".to_owned()),
+        script_font_families: BTreeMap::from([("Latn".to_owned(), "Script Latin".to_owned())]),
         language_script_font_families: BTreeMap::from([(
-            "Hani".to_owned(),
-            BTreeMap::from([("ja".to_owned(), "Japanese Han".to_owned())]),
+            "Latn".to_owned(),
+            BTreeMap::from([("en".to_owned(), "English Latin".to_owned())]),
         )]),
         ..DocumentSettings::default()
     };
     let rules = compiled(&settings);
     let candidates = rules.family_candidates(FontSelectionContext {
-        language: Some("ja-JP"),
         math_context: true,
-        explicit_family: Some("Local"),
-        ..context("Hani")
+        language: Some("en-US"),
+        explicit_family: Some("Local Override"),
+        ..context("Latn")
     });
 
     assert_eq!(
@@ -95,18 +107,18 @@ fn explicit_math_language_script_and_defaults_keep_their_order() {
             .iter()
             .map(|candidate| candidate.family)
             .collect::<Vec<_>>(),
-        ["Local", "Math", "Japanese Han", "Han", "CJK", "Latin"]
+        ["Local Override", "Math Override", math::default_family()]
     );
     assert_eq!(candidates[0].source, FontPreferenceSource::Explicit);
     assert_eq!(candidates[1].source, FontPreferenceSource::Math);
+    assert_eq!(candidates[2].source, FontPreferenceSource::Math);
 }
 
 #[test]
-fn code_font_uses_only_explicit_code_family_then_monospace_fallback() {
+fn code_font_uses_explicit_family_then_document_family_then_builtin_family() {
     let settings = DocumentSettings {
         default_font_family: Some("Body Latin".to_owned()),
         default_cjk_font_family: Some("Body CJK".to_owned()),
-        default_math_font_family: Some("Math".to_owned()),
         default_code_font_family: "Code Family".to_owned(),
         script_font_families: BTreeMap::from([("Latn".to_owned(), "Script Latin".to_owned())]),
         ..DocumentSettings::default()
@@ -114,7 +126,6 @@ fn code_font_uses_only_explicit_code_family_then_monospace_fallback() {
     let rules = compiled(&settings);
     let candidates = rules.family_candidates(FontSelectionContext {
         code: true,
-        math_context: true,
         explicit_family: Some("Inline Override"),
         ..context("Latn")
     });
@@ -124,18 +135,25 @@ fn code_font_uses_only_explicit_code_family_then_monospace_fallback() {
             .iter()
             .map(|candidate| candidate.family)
             .collect::<Vec<_>>(),
-        ["Inline Override", "Code Family"]
+        [
+            "Inline Override",
+            "Code Family",
+            caret_code::BUILTIN_FONT_FAMILY
+        ]
     );
     assert_eq!(candidates[1].source, FontPreferenceSource::Code);
 
     let default_rules = compiled(&DocumentSettings::default());
-    assert!(
+    assert_eq!(
         default_rules
             .family_candidates(FontSelectionContext {
                 code: true,
                 ..context("Latn")
             })
-            .is_empty()
+            .iter()
+            .map(|candidate| candidate.family)
+            .collect::<Vec<_>>(),
+        [caret_code::BUILTIN_FONT_FAMILY]
     );
 }
 
@@ -277,16 +295,14 @@ fn normalization_rejects_ambiguous_keys_and_keeps_one_duplicate_family() {
     ));
     let settings = DocumentSettings {
         default_font_family: Some("Same Font".to_owned()),
-        default_math_font_family: Some("same font".to_owned()),
+        script_font_families: BTreeMap::from([("Latn".to_owned(), "same font".to_owned())]),
         ..DocumentSettings::default()
     };
     let rules = compiled(&settings);
-    let candidates = rules.family_candidates(FontSelectionContext {
-        math_context: true,
-        ..context("Latn")
-    });
+    let candidates = rules.family_candidates(context("Latn"));
     assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].source, FontPreferenceSource::Math);
+    assert_eq!(candidates[0].source, FontPreferenceSource::Script);
+    assert_eq!(candidates[0].family, "same font");
 }
 
 #[test]
@@ -359,4 +375,28 @@ fn empty_requested_families_are_rejected_and_grandfathered_languages_match_exact
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].family, "Private Latin");
     assert_eq!(candidates[0].source, FontPreferenceSource::LanguageScript);
+}
+
+#[test]
+fn default_marker_in_script_preferences_means_no_script_override() {
+    let rules = compiled(&DocumentSettings {
+        default_font_family: Some("Body Default".to_owned()),
+        script_font_families: BTreeMap::from([(
+            "Latn".to_owned(),
+            caret_doc::DEFAULT_FONT_FAMILY.to_owned(),
+        )]),
+        language_script_font_families: BTreeMap::from([(
+            "Latn".to_owned(),
+            BTreeMap::from([("en".to_owned(), caret_doc::DEFAULT_FONT_FAMILY.to_owned())]),
+        )]),
+        ..DocumentSettings::default()
+    });
+    let candidates = rules.family_candidates(FontSelectionContext {
+        language: Some("en-US"),
+        ..context("Latn")
+    });
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].family, "Body Default");
+    assert_eq!(candidates[0].source, FontPreferenceSource::Default);
 }

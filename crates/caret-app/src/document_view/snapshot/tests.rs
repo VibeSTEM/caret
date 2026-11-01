@@ -76,17 +76,15 @@ fn command_line_snapshot_projects_the_document_code_font() -> Result<(), String>
     let explicit: Value = serde_json::from_str(&runtime.command_line_state_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(explicit["codeFontFamily"], "Noto Sans Mono");
-    assert_eq!(explicit["codeFontFamilyUsesSystemDefault"], false);
 
     let mut default_document = caret_doc::Document::blank();
     default_document.global_settings.default_code_font_family =
-        caret_doc::DEFAULT_CODE_FONT_FAMILY.to_owned();
+        caret_doc::DEFAULT_FONT_FAMILY.to_owned();
     let mut default_runtime = DocumentViewRuntime::new(default_document)?;
     default_runtime.command_line_command_json("begin", String::new())?;
     let default: Value = serde_json::from_str(&default_runtime.command_line_state_json()?)
         .map_err(|error| error.to_string())?;
-    assert_eq!(default["codeFontFamily"], "<default>");
-    assert_eq!(default["codeFontFamilyUsesSystemDefault"], true);
+    assert_eq!(default["codeFontFamily"], caret_code::BUILTIN_FONT_FAMILY);
     Ok(())
 }
 

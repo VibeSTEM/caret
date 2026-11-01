@@ -31,7 +31,7 @@
 
 - [ ] `InlineMath`、`Equation`、`Align` 的模型与源码语义符合[数学公式架构](../architecture/editor/math.md)；插入、编辑、离开和失败恢复行为通过。
 - [x] 数学语法由 `caret-math` 解析与排版；排版移植来源及修改记录完整。
-- [x] `.cdoc` 数学 schema 由 Caret 持有；首版内置 STIX Two Math 并保留 `defaultMathFontFamily`。
+- [x] `.cdoc` 数学 schema 由 Caret 持有；首版内置 STIX Two Math 并保留 `defaultMathFontFamily`。该字段使用统一 `<default>` 标记时解析为该内置字体，详情见[字体选择规范](../architecture/editor/font-selection.md)。
 - [ ] 超限或不支持的输入不崩溃、不丢源文本；错误位置可定位，失败不改动有效状态。
 - [ ] 方向键、Esc、Enter、鼠标与选区命令可在公式边界正确进出，撤销步符合用户操作。
 - [ ] 045 完成单元格公式模型、插入编辑、导航、撤销和保存往返。

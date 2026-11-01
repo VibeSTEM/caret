@@ -24,10 +24,10 @@ Caret 已有 Rust 文档字体设置接口、字体目录和按 Unicode Script /
 - 等待字体设置界面的独立布局设计完成后，再实现专用 UI；不并入现有通用 Settings 对话框的页面布局。
 - 复用 Rust 文档字体设置 API 和 024 的 Fontique `FontCatalog`；不得由 QML 扫描字体目录或维护第二份字体选择规则。
 - 选择目标只使用 `Script` 与 `Script+Language` 两类；Unicode Script 平级，`Latn` 置首，语言覆盖位于对应 Script 下。完整映射见[字体选择规范](../architecture/editor/font-selection.md)。
-- 代码字体 `defaultCodeFontFamily` 是独立的等宽字体文档字段，不嵌入 Script 目标树；默认 `"<default>"` 表示平台系统等宽字体。数学字体首版继续使用 STIX Two Math，不提供切换 UI。
+- 代码字体 `defaultCodeFontFamily` 是独立的等宽字体文档字段，不嵌入 Script 目标树；统一默认值 `"<default>"` 使用内置 JetBrains Mono。数学字段也使用该默认标记并解析为内置 STIX Two Math，不提供数学字体切换 UI。标记含义与跨层实现以[字体选择规范](../architecture/editor/font-selection.md)为准。
 - 选择字体后经 Rust 既有文档设置 API 提交并写入当前文档；保存重开保持请求族名。字体缺失或覆盖不足时保留请求并展示状态，实际字形继续由既有 shaping/fallback 路径解析。
 - 目录刷新、查询、过滤和覆盖信息复用既有 generation/caching 机制；热路径不扫描磁盘。
-- 不重新实现字体枚举、Unicode 覆盖判断、fallback 或命令候选弹窗；不分发字体、不复制字体文件，不承诺跨平台度量一致。
+- 不重新实现字体枚举、Unicode 覆盖判断、fallback 或命令候选弹窗；代码与数学默认字体由公共资源目录内置，不由本任务复制字体文件，不承诺跨平台度量一致。
 
 ## 前置条件与待决策
 
@@ -56,7 +56,7 @@ Caret 已有 Rust 文档字体设置接口、字体目录和按 Unicode Script /
 - [ ] `Script` 与 `Script+Language` 的目标层级、持久字段和优先级符合[字体选择规范](../architecture/editor/font-selection.md)，没有 Latin/CJK 一级分类。
 - [ ] 文档字体设置通过 Rust 当前文档 API 更新，保存重开保持；应用级 Preferences 不覆盖文档显式字体值。
 - [ ] 缺失/无覆盖字体的请求值保留且状态可见；实际 fallback 可查询；取消或提交失败不会产生部分更新或过期 UI 状态。
-- [ ] 代码字体仅接受等宽族且 `"<default>"` 行为符合平台映射；数学字体保持 STIX Two Math。
+- [ ] 代码字体仅接受等宽族且 `"<default>"` 解析为 JetBrains Mono；数学字段的同一标记解析为 STIX Two Math。
 - [ ] 目录 generation 内的查询可复用，刷新后正确失效；输入与 shaping 热路径没有目录扫描。
 - [ ] 所有支持 locale 的 UI 文案有翻译；字体名称作为系统数据不被翻译。
 - [ ] 行为测试覆盖选择、取消/失败、缺失字体、目录刷新、持久化和跨层状态；独立评审通过。

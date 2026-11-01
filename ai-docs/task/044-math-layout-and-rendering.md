@@ -11,14 +11,14 @@
 
 ## 必读
 
-- [数学公式](../architecture/editor/math.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)
+- [数学公式](../architecture/editor/math.md)、[字体选择规范](../architecture/editor/font-selection.md)、[内置字体角色](064-builtin-font-roles.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)
 - [分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
 ## 范围与非目标
 
 实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
 
-覆盖正文中的行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的唯一支持值与诊断回退。公式文本岛的行内 shaping 和宿主边界遵循[数学公式架构](../architecture/editor/math.md#公式中的普通文本)：复用正文 shaping，不获得宿主段落块级布局。
+覆盖正文中的行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的统一 `<default>` 标记与诊断回退。标记到角色默认字体的映射由[内置字体角色任务](064-builtin-font-roles.md)和[字体选择规范](../architecture/editor/font-selection.md)定义；本任务只消费数学字体接口。公式文本岛的行内 shaping 和宿主边界遵循[数学公式架构](../architecture/editor/math.md#公式中的普通文本)：复用正文 shaping，不获得宿主段落块级布局。
 
 不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
 

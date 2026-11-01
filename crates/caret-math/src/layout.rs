@@ -11,7 +11,6 @@ mod alphabet;
 mod context;
 mod convert;
 mod fenced;
-mod font;
 mod fraction;
 mod frame;
 mod glyph;
@@ -27,8 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use caret_doc::{DocumentUnits, MathFlow, NodeId};
 
+pub use crate::fonts::{MathFont, MathFontError, STIX_TWO_MATH};
 pub use context::{MathDiagnostic, MathSize};
-pub use font::{MathFont, MathFontError, STIX_TWO_MATH};
 pub use frame::MathColor;
 
 use crate::backend::flow_nodes;

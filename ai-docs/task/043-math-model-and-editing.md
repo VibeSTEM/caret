@@ -17,7 +17,7 @@
 
 ## 范围与非目标
 
-实现三种公式载体的 Caret 持久化模型，以及公式插入、源码编辑、位置与键盘行为。MathEdit 标识目标公式、活动编辑分支和分支内位置；源码模式使用 UTF-8 字节偏移，文本岛模式复用正文 TextFlow 位置语义。Paragraph 行内树、公式文本分支和两者的编辑适配遵循[数学公式架构](../architecture/editor/math.md)，不嵌套 Paragraph block 或复制正文编辑逻辑。首版无自动编号、无 `\label` / `\ref`；支持的分隔符、行分隔和失败保留规则以 011 为准。保留 `defaultMathFontFamily`，新文档默认 STIX Two Math，首版只支持该字体。
+实现三种公式载体的 Caret 持久化模型，以及公式插入、源码编辑、位置与键盘行为。MathEdit 标识目标公式、活动编辑分支和分支内位置；源码模式使用 UTF-8 字节偏移，文本岛模式复用正文 TextFlow 位置语义。Paragraph 行内树、公式文本分支和两者的编辑适配遵循[数学公式架构](../architecture/editor/math.md)，不嵌套 Paragraph block 或复制正文编辑逻辑。首版无自动编号、无 `\label` / `\ref`；支持的分隔符、行分隔和失败保留规则以 011 为准。保留 `defaultMathFontFamily`，统一默认标记 `<default>` 解析为内置 STIX Two Math，首版只支持该字体。
 
 本任务不实现 Qt 绘制和大范围布局优化，不写入第三方 AST，不实现表格行列编辑。
 

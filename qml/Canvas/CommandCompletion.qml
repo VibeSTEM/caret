@@ -89,7 +89,7 @@ Item {
                 id: queryText
                 height: queryScroll.height
                 color: Theme.colorText
-                font.family: root.commandLine.codeFontFamilyUsesSystemDefault === true || !root.requestedCodeFontAvailable ? PlatformFonts.fixedFamily : (root.commandLine.codeFontFamily || PlatformFonts.fixedFamily)
+                font.family: root.requestedCodeFontAvailable ? root.commandLine.codeFontFamily : PlatformFonts.codeFamily
                 font.pixelSize: root.commandFontPixelSize
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.NoWrap
