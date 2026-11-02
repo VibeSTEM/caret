@@ -58,11 +58,11 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 `\text{...}` 是公式中的 Text 编辑分支，与 Math 源码编辑模式平级。Paragraph 的行内流以 `Vec<ParagraphContent>` 表达；枚举分支包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`，并为未来的 `Code(CodeSpan)` 保留扩展位置。043 从现有 `Paragraph.inlines` 及其编辑操作抽取共享 `TextFlow`，不另写文本编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
 
-`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；其节点边界以[文档树与结构](document-model/document-structure.md)为准。目标结构是由宿主路径适配器直接调用正文的选区、输入法、格式事务和撤销操作，不复制第二份可变文本。当前 engine 的 Paragraph 插入/删除已通过物理 `FlowPath` 直接编辑 TextFlow，Math TextFlow 复用同一 Run 范围替换原语；Paragraph 与 Math 仍由各自宿主适配器负责位置映射、元数据验证及事务提交。跨 TextFlow 选区、正文格式适配器和输入法事务尚未接入；相关状态见[043](../../task/043-math-model-and-editing.md)。数学源码节点仍由 Math 编辑逻辑处理，source 与数学树同步属于同一事务。
+`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；其节点边界以[文档树与结构](document-model/document-structure.md)为准。宿主路径适配器复用正文的位置与格式语义，但各自负责位置映射、元数据验证及事务提交，不复制第二份可变文本。当前 engine 的 Paragraph 插入/删除已通过物理 `FlowPath` 直接编辑 TextFlow，Math TextFlow 复用同一 Run 范围替换原语与 Run 属性描述符；跨 TextFlow 选区、InlineEnvironment 格式事务和输入法事务尚未接入，相关状态见[043](../../task/043-math-model-and-editing.md)。数学源码节点仍由 Math 编辑逻辑处理，source 与数学树同步属于同一事务。
 
 目标行为是 IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务复用正文实现。当前 engine 尚未接入公式 TextFlow 的 IME composition 事务，不能启用该路径。
 
-当前公式源码分支拒绝正文格式命令，避免误改宿主段落的 pending style。TextFlow 分支已有直接 Run 编辑，但尚未接入通用格式命令或 IME composition 事务；在这些路径接入前，公式文本岛不应宣称与正文编辑行为等价。未适配命令必须显式拒绝或定义委派行为，不得静默清除 MathEdit 后落到宿主旧选区。当前 `Mod+Backspace` 将行内公式整体替换为 `MathTree.source` 对应的普通文本，退出公式编辑并保留外层 InlineEnvironment；不额外添加 `$` 或 `\math(...)` 命令外壳，源码中已有的分隔符会原样保留。光标按可逆 sourceMap 映射到正文源码位置；无法唯一映射或结果边界落在 grapheme 内、含换行或有无法无损表达的数学元数据时，转换原子拒绝。Run 属性不从公式边界推断。Equation/Align 暂不转换，避免操作相邻段落。公式 TextFlow 内部格式命令仍待正文格式适配接入。
+当前公式源码分支拒绝正文格式命令，避免误改宿主段落的 pending style。TextFlow 分支的 `ToggleRunUnderline` 通过 Run 属性适配器在目标 TextFlow 内编辑：选区操作只拆分受影响的 Run，保留 TextFlow/sourceMap 与其他 Run 元数据；部分拆分需要复制未知 Run 字段时原子拒绝，整 Run 更新则保留字段。折叠光标使用同一 `PendingInlineStyle`，新输入写入 Run 属性，数学光标移动或 TextFlow 选区变化时清除待输入格式。该命令适用于 InlineMath、Equation 和 Align cell；数学源码分支仍显式拒绝正文格式命令。Bold、Italic、Font 等 InlineEnvironment 的格式事务及 IME composition 尚未接入，不能据此宣称文本岛与正文编辑行为完全等价。未适配命令必须显式拒绝或定义委派行为，不得静默清除 MathEdit 后落到宿主旧选区。当前 `Mod+Backspace` 将行内公式整体替换为 `MathTree.source` 对应的普通文本，退出公式编辑并保留外层 InlineEnvironment；不额外添加 `$` 或 `\math(...)` 命令外壳，源码中已有的分隔符会原样保留。光标按可逆 sourceMap 映射到正文源码位置；无法唯一映射或结果边界落在 grapheme 内、含换行或有无法无损表达的数学元数据时，转换原子拒绝。Run 属性不从公式边界推断。Equation/Align 暂不转换，避免操作相邻段落。
 
 ### 宿主边界与拆分
 

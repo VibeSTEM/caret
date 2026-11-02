@@ -74,12 +74,18 @@ impl PendingInlineStyle {
         self.font_family.as_deref()
     }
 
-    fn run_property(&self, property: RunPropertyEnvironment) -> Option<bool> {
+    pub(super) fn run_property(&self, property: RunPropertyEnvironment) -> Option<bool> {
         self.run_properties.get(property.key).copied()
     }
 
-    fn set_run_property(&mut self, property: RunPropertyEnvironment, enabled: bool) {
+    pub(super) fn set_run_property(&mut self, property: RunPropertyEnvironment, enabled: bool) {
         self.run_properties.insert(property.key, enabled);
+    }
+
+    pub(super) fn active_run_properties(&self) -> impl Iterator<Item = (&'static str, bool)> + '_ {
+        self.run_properties
+            .iter()
+            .map(|(key, enabled)| (*key, *enabled))
     }
 
     pub(super) fn is_active(&self) -> bool {

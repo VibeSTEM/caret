@@ -53,6 +53,15 @@ fn first_math_text_flow_mut(flow: &mut MathFlow) -> Option<&mut caret_doc::TextF
         .find_map(first_math_content_text_mut)
 }
 
+fn active_math_text_flow(session: &Session) -> Result<&caret_doc::TextFlow, EditError> {
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    path.resolve(session.math_tree_for_edit(edit, path.align_cell())?)
+        .ok_or(EditError::InvalidPosition)
+}
+
 fn first_math_content_text_mut(content: &mut MathContent) -> Option<&mut caret_doc::TextFlow> {
     match content {
         MathContent::Text(text) => Some(text),
@@ -738,6 +747,140 @@ fn text_island_accepts_plain_input_and_rebases_its_path() -> Result<(), EditErro
     session.run(Command::Delete(Direction::Backward))?;
     assert_eq!(inline_source(&session).as_deref(), Some(r"\text{abc}"));
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
+    Ok(())
+}
+
+#[test]
+fn math_text_run_property_splits_range_and_undoes_without_reparsing_source() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    let source = session.math_edit().map(|edit| edit.source.clone());
+
+    let effect = session.run(Command::ToggleRunUnderline)?;
+    assert!(effect.document_changed);
+    assert_eq!(session.math_edit().map(|edit| edit.source.clone()), source);
+    assert!(matches!(
+        active_math_text_flow(&session)?.runs.as_slice(),
+        [before, selected, after]
+            if before.text == "a"
+                && selected.text == "bc"
+                && selected.props.get("underline") == Some(&serde_json::Value::Bool(true))
+                && after.text == "d"
+    ));
+
+    session.run(Command::Undo)?;
+    assert_eq!(
+        active_math_text_flow(&session)?
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "abcd"
+    );
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        source.as_deref()
+    );
+    session.run(Command::Redo)?;
+    assert!(active_math_text_flow(&session)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    Ok(())
+}
+
+#[test]
+fn math_text_pending_run_property_styles_inserted_text_and_moves_clear_it() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{ab}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+    let original_edit = session.math_edit().cloned();
+    session.run(Command::ToggleRunUnderline)?;
+    assert!(session.pending_inline_style.is_active());
+    session.run(Command::Undo)?;
+    assert!(!session.pending_inline_style.is_active());
+    assert_eq!(session.math_edit(), original_edit.as_ref());
+    session.run(Command::Redo)?;
+    assert!(session.pending_inline_style.is_active());
+    session.run(Command::InsertText("X".to_owned()))?;
+    assert!(active_math_text_flow(&session)?.runs.iter().any(|run| {
+        run.text == "X" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(!session.pending_inline_style.is_active());
+    Ok(())
+}
+
+#[test]
+fn math_text_run_property_rejects_partial_unknown_run_metadata_atomically() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditTarget::Inline { math_id, .. } = edit.target else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math =
+        find_inline_math_mut(&mut paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+    first_math_text_flow_mut(&mut math.math_tree.root)
+        .and_then(|text| text.runs.first_mut())
+        .ok_or(EditError::InvalidPosition)?
+        .extra
+        .insert("futureRunField".to_owned(), serde_json::json!("opaque"));
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+
+    assert_eq!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 4,
+    })?;
+    session.run(Command::ToggleRunUnderline)?;
+    let run = active_math_text_flow(&session)?
+        .runs
+        .first()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(run.text, "abcd");
+    assert_eq!(
+        run.extra.get("futureRunField"),
+        Some(&serde_json::json!("opaque"))
+    );
+    assert_eq!(
+        run.props.get("underline"),
+        Some(&serde_json::Value::Bool(true))
+    );
     Ok(())
 }
 
@@ -1658,6 +1801,25 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         equation.document().body.first(),
         Some(Block::Equation(value)) if value.math_tree.source == r"\text{abcX}"
     ));
+    equation.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    equation.run(Command::ToggleRunUnderline)?;
+    assert!(active_math_text_flow(&equation)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    equation.run(Command::Undo)?;
+    assert!(
+        active_math_text_flow(&equation)?
+            .runs
+            .iter()
+            .all(|run| { run.props.get("underline") != Some(&serde_json::Value::Bool(true)) })
+    );
+    equation.run(Command::Redo)?;
+    assert!(active_math_text_flow(&equation)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
 
     let mut align = session_with_text("")?;
     accept(&mut align, "align")?;
@@ -1672,6 +1834,25 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         align.document().body.first(),
         Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcX}")
     ));
+    align.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    align.run(Command::ToggleRunUnderline)?;
+    assert!(active_math_text_flow(&align)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    align.run(Command::Undo)?;
+    assert!(
+        active_math_text_flow(&align)?
+            .runs
+            .iter()
+            .all(|run| { run.props.get("underline") != Some(&serde_json::Value::Bool(true)) })
+    );
+    align.run(Command::Redo)?;
+    assert!(active_math_text_flow(&align)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
     Ok(())
 }
 

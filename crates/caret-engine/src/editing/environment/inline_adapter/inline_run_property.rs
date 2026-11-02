@@ -5,6 +5,7 @@
 
 use super::super::{EnvironmentKind, EnvironmentSource};
 use super::InlineAdapter;
+use caret_doc::Run;
 use serde_json::Value;
 
 /// 可作为 Inline 候选的 Run 属性。属性键只在此表登记，投影和编辑逻辑按表驱动。
@@ -47,4 +48,21 @@ pub(crate) fn run_property_for_key(key: &str) -> Option<&'static RunPropertyEnvi
     RUN_PROPERTY_ENVIRONMENTS
         .iter()
         .find(|descriptor| descriptor.key == key)
+}
+
+/// 按属性描述符修改 Run，供各宿主载体共享相同的属性编码语义。
+pub(crate) fn set_run_property_value(
+    run: &mut Run,
+    descriptor: RunPropertyEnvironment,
+    enabled: Option<bool>,
+) -> Result<(), crate::editing::EditError> {
+    if let Some(enabled) = enabled {
+        let Some(value) = descriptor.value_for_state.map(|to_value| to_value(enabled)) else {
+            return Err(crate::editing::EditError::UnsupportedInlineFormat);
+        };
+        run.props.insert(descriptor.key.to_owned(), value);
+    } else {
+        run.props.remove(descriptor.key);
+    }
+    Ok(())
 }

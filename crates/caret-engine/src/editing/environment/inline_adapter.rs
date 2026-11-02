@@ -13,6 +13,7 @@ pub(crate) use inline_environment::for_inline_environment;
 pub(crate) use inline_math::INLINE_MATH_ADAPTER;
 pub(crate) use inline_run_property::{
     RUN_PROPERTY_ENVIRONMENTS, RunPropertyEnvironment, run_property_for_key, run_property_for_kind,
+    set_run_property_value,
 };
 
 /// 统一适配后的行内语义来源与 kind。
