@@ -106,6 +106,30 @@ qt_add_resources(caret_shell "caret_shell_icons" PREFIX "/qt/qml/Caret/Shell" FI
 
 if(BUILD_TESTING)
   add_executable(
+    caret_code_font_failure_test
+    ../native/adapters/fonts/code.cpp ../native/adapters/fonts/code.hpp
+    ../tests/cpp/shell/code_font_failure_test.cpp)
+  qt_add_resources(
+    caret_code_font_failure_test
+    caret_code_fonts
+    PREFIX
+    "/caret/fonts"
+    BASE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../resources/fonts/code/jetbrains-mono"
+    FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../resources/fonts/code/jetbrains-mono/JetBrainsMono-Regular.ttf")
+  caret_native_defaults(caret_code_font_failure_test)
+  target_include_directories(caret_code_font_failure_test
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../native/adapters/fonts")
+  target_link_libraries(caret_code_font_failure_test PRIVATE Qt6::Gui Qt6::Test)
+  add_test(NAME caret_code_font_failure_test COMMAND caret_code_font_failure_test)
+  set_tests_properties(
+    caret_code_font_failure_test
+    PROPERTIES
+      ENVIRONMENT
+      "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${QT_STAGING}/plugins;QT_FORCE_STDERR_LOGGING=1")
+
+  add_executable(
     caret_shell_load_test
     ../tests/cpp/shell/shell_load_test.cpp
     ../tests/cpp/shell/shell_load_test.hpp

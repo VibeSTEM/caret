@@ -8,10 +8,12 @@
 #include <QDebug>
 #include <QFile>
 #include <QFontDatabase>
+#include <QIODevice>
 #include <QList>
-#include <QResource>
 #include <QString>
-#include <QStringList>
+#include <QtCore/qcontainerfwd.h>
+#include <QtCore/qlogging.h>
+#include <QtCore/qtresource.h>
 #include <mutex>
 
 static void initialize_caret_code_fonts() { Q_INIT_RESOURCE(caret_code_fonts); }
