@@ -26,7 +26,7 @@
 
 页面角色组织块流；`Paragraph` 持有 `Vec<ParagraphContent>` 并负责段落级排版。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。共享 split/merge 操作面向强类型有序流，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。该结构由 `caret-doc` 当前 DTO 实现。
 
-共享结构用于消除重复编辑策略，不自动构成性能保证。只读位置查询直接遍历 TextFlow；当前编辑器仍在段落副本上通过临时 EditNode 视图复用既有树操作，成功后提交。该适配会增加编辑期间的分配，尚无代表性基准证明其开销可忽略；若测量显示为热点，应改为按宿主路径直接编辑共享流。枚举载荷尺寸、位置索引更新和格式范围扫描也须基于代表性输入测量后评估。
+共享结构用于消除重复编辑策略，不自动构成性能保证。正文 TextFlow 插入沿物理 FlowPath 直接修改宿主流并归一化受影响邻域；删除按 TextFlow 范围修改并移除选中原子；原子插入与格式树操作仍通过临时 EditNode 视图复用既有树事务，成功后提交。Math TextFlow 共用 Run 范围替换原语，但由 MathEdit 宿主适配器负责源码、sourceMap、元数据和历史事务。双路径投影、位置索引更新、格式范围扫描及公式整树重解析的成本尚无代表性基准，不能据此宣称性能收益。
 
 ### 编辑命令与内容插入
 

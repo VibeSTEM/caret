@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::super::flow_edit::insertion_template;
 use super::super::super::grapheme::GraphemeMap;
 use super::super::history::EditGroup;
 use super::super::{Affinity, Direction, EditError, Effect};
@@ -20,6 +21,7 @@ pub(super) struct MathTextEdit {
     pub(super) source_replacement_len: usize,
     pub(super) snap_forward: bool,
     pub(super) removes_entire_flow: bool,
+    pub(super) split_math_entry: bool,
 }
 
 pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
@@ -112,77 +114,7 @@ pub(super) fn snap_text_cursor(text: &str, offset: usize, forward: bool) -> Opti
     )
 }
 
-pub(super) fn replace_text_flow_range(
-    text: &mut caret_doc::TextFlow,
-    range: Range<usize>,
-    inserted: &str,
-) -> Result<(), EditError> {
-    let length = text.runs.iter().map(|run| run.text.len()).sum::<usize>();
-    if range.start > range.end
-        || range.end > length
-        || !text_boundary(&text.runs, range.start)
-        || !text_boundary(&text.runs, range.end)
-    {
-        return Err(EditError::InvalidPosition);
-    }
-
-    let template = insertion_template(&text.runs, range.start)
-        .cloned()
-        .unwrap_or(caret_doc::Run {
-            text: String::new(),
-            language: None,
-            props: Default::default(),
-            extra: Default::default(),
-        });
-
-    let mut before = Vec::new();
-    let mut after = Vec::new();
-    let mut offset = 0;
-    for run in &text.runs {
-        let end = offset + run.text.len();
-        if run.text.is_empty() {
-            if offset <= range.end {
-                before.push(run.clone());
-            } else {
-                after.push(run.clone());
-            }
-        } else if offset < range.start {
-            let prefix_end = end.min(range.start);
-            if prefix_end > offset {
-                let mut fragment = run.clone();
-                fragment.text = run.text[..prefix_end - offset].to_owned();
-                before.push(fragment);
-            }
-        } else if range.start < range.end && offset >= range.start && end <= range.end {
-            let mut placeholder = run.clone();
-            placeholder.text.clear();
-            before.push(placeholder);
-        }
-        offset = end;
-    }
-    if !inserted.is_empty() {
-        let mut inserted_run = template;
-        inserted_run.text = inserted.to_owned();
-        before.push(inserted_run);
-    }
-    let mut offset = 0;
-    for run in &text.runs {
-        let end = offset + run.text.len();
-        if !run.text.is_empty() && end > range.end {
-            let suffix_start = offset.max(range.end);
-            if suffix_start < end {
-                let mut fragment = run.clone();
-                fragment.text = run.text[suffix_start - offset..].to_owned();
-                after.push(fragment);
-            }
-        }
-        offset = end;
-    }
-    before.extend(after);
-    text.runs = before;
-    Ok(())
-}
-
+/// 拒绝无法安全迁移到新源码位置的 Run 扩展字段。
 pub(super) fn validate_text_flow_edit(
     text: &caret_doc::TextFlow,
     range: Range<usize>,
@@ -212,37 +144,79 @@ pub(super) fn validate_text_flow_edit(
     Ok(())
 }
 
-fn insertion_template(runs: &[caret_doc::Run], position: usize) -> Option<&caret_doc::Run> {
-    let mut offset = 0;
-    let mut preceding = None;
-    for run in runs {
-        let end = offset + run.text.len();
-        if run.text.is_empty() && offset == position {
-            return Some(run);
-        }
-        if offset <= position && position < end {
-            return Some(run);
-        }
-        if end == position {
-            preceding = Some(run);
-        }
-        offset = end;
-    }
-    preceding
-}
-
-fn text_boundary(runs: &[caret_doc::Run], position: usize) -> bool {
-    let mut offset = 0;
-    for run in runs {
-        if position >= offset && position <= offset + run.text.len() {
-            return run.text.is_char_boundary(position - offset);
-        }
-        offset += run.text.len();
-    }
-    position == offset
-}
-
 impl Session {
+    /// 将文本岛选区替换成源码分支入口，并保留其前后文本岛。
+    pub(super) fn math_text_enter_math(
+        &mut self,
+        initial_source: &str,
+    ) -> Result<Effect, EditError> {
+        let body = caret_math::input_body_range(initial_source, caret_math::MathInputKind::Inline)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let initial_source = initial_source.get(body).ok_or(EditError::InvalidPosition)?;
+        caret_math::parse(initial_source, caret_math::MathInputKind::Inline)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let MathEditBranch::Text { path, anchor } = &edit.branch else {
+            return Err(EditError::InvalidPosition);
+        };
+        let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let range = (*anchor).min(edit.cursor)..(*anchor).max(edit.cursor);
+        let source_edit = if range.is_empty() {
+            let cursor =
+                text_source_boundary(text, range.start).ok_or(EditError::InvalidPosition)?;
+            cursor..cursor
+        } else {
+            let display = text
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>();
+            if range.end > display.len()
+                || !is_grapheme_boundary(&display, range.start)
+                || !is_grapheme_boundary(&display, range.end)
+            {
+                return Err(EditError::InvalidPosition);
+            }
+            text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?
+        };
+        let local_source_edit = source_edit;
+        let source_edit = path
+            .host_offset(local_source_edit.start)
+            .and_then(|start| {
+                path.host_offset(local_source_edit.end)
+                    .map(|end| start..end)
+            })
+            .ok_or(EditError::InvalidPosition)?;
+        let mut replacement = String::with_capacity(initial_source.len() + 2);
+        replacement.push('$');
+        replacement.push_str(initial_source);
+        replacement.push('$');
+        let cursor = source_edit
+            .start
+            .checked_add(1 + initial_source.len())
+            .ok_or(EditError::InvalidPosition)?;
+        let mut source = edit.source.clone();
+        source.replace_range(source_edit.clone(), &replacement);
+        self.write_math_source_with_metadata(
+            source,
+            cursor,
+            None,
+            source_edit,
+            None,
+            Some(MathTextEdit {
+                path: path.clone(),
+                range,
+                inserted: String::new(),
+                source_edit: local_source_edit,
+                source_replacement_len: replacement.len(),
+                snap_forward: false,
+                removes_entire_flow: false,
+                split_math_entry: true,
+            }),
+        )
+    }
+
     /// 将文本岛中的直接输入映射到可逆源码区间，并复用公式解析与历史事务。
     pub(super) fn math_text_insert(&mut self, inserted: &str) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
@@ -307,6 +281,7 @@ impl Session {
                 source_replacement_len: encoded.len(),
                 snap_forward: true,
                 removes_entire_flow,
+                split_math_entry: false,
             }),
         )
     }
@@ -367,6 +342,7 @@ impl Session {
                 source_replacement_len: 0,
                 snap_forward: false,
                 removes_entire_flow: range.start == 0 && range.end == display.len(),
+                split_math_entry: false,
             }),
         )
     }

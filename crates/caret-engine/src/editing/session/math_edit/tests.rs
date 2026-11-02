@@ -53,6 +53,15 @@ fn first_math_text_flow_mut(flow: &mut MathFlow) -> Option<&mut caret_doc::TextF
         .find_map(first_math_content_text_mut)
 }
 
+fn active_math_text_flow(session: &Session) -> Result<&caret_doc::TextFlow, EditError> {
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    path.resolve(session.math_tree_for_edit(edit, path.align_cell())?)
+        .ok_or(EditError::InvalidPosition)
+}
+
 fn first_math_content_text_mut(content: &mut MathContent) -> Option<&mut caret_doc::TextFlow> {
     match content {
         MathContent::Text(text) => Some(text),
@@ -742,6 +751,500 @@ fn text_island_accepts_plain_input_and_rebases_its_path() -> Result<(), EditErro
 }
 
 #[test]
+fn math_text_run_property_splits_range_and_undoes_without_reparsing_source() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    let source = session.math_edit().map(|edit| edit.source.clone());
+
+    let effect = session.run(Command::ToggleRunUnderline)?;
+    assert!(effect.document_changed);
+    assert_eq!(session.math_edit().map(|edit| edit.source.clone()), source);
+    assert!(matches!(
+        active_math_text_flow(&session)?.runs.as_slice(),
+        [before, selected, after]
+            if before.text == "a"
+                && selected.text == "bc"
+                && selected.props.get("underline") == Some(&serde_json::Value::Bool(true))
+                && after.text == "d"
+    ));
+
+    session.run(Command::Undo)?;
+    assert_eq!(
+        active_math_text_flow(&session)?
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "abcd"
+    );
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        source.as_deref()
+    );
+    session.run(Command::Redo)?;
+    assert!(active_math_text_flow(&session)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    Ok(())
+}
+
+#[test]
+fn math_text_pending_run_property_styles_inserted_text_and_moves_clear_it() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{ab}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+    let original_edit = session.math_edit().cloned();
+    session.run(Command::ToggleRunUnderline)?;
+    assert!(session.pending_inline_style.is_active());
+    session.run(Command::Undo)?;
+    assert!(!session.pending_inline_style.is_active());
+    assert_eq!(session.math_edit(), original_edit.as_ref());
+    session.run(Command::Redo)?;
+    assert!(session.pending_inline_style.is_active());
+    session.run(Command::InsertText("X".to_owned()))?;
+    assert!(active_math_text_flow(&session)?.runs.iter().any(|run| {
+        run.text == "X" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(!session.pending_inline_style.is_active());
+    Ok(())
+}
+
+#[test]
+fn math_text_run_property_rejects_partial_unknown_run_metadata_atomically() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditTarget::Inline { math_id, .. } = edit.target else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math =
+        find_inline_math_mut(&mut paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+    first_math_text_flow_mut(&mut math.math_tree.root)
+        .and_then(|text| text.runs.first_mut())
+        .ok_or(EditError::InvalidPosition)?
+        .extra
+        .insert("futureRunField".to_owned(), serde_json::json!("opaque"));
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+
+    assert_eq!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 4,
+    })?;
+    session.run(Command::ToggleRunUnderline)?;
+    let run = active_math_text_flow(&session)?
+        .runs
+        .first()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(run.text, "abcd");
+    assert_eq!(
+        run.extra.get("futureRunField"),
+        Some(&serde_json::json!("opaque"))
+    );
+    assert_eq!(
+        run.props.get("underline"),
+        Some(&serde_json::Value::Bool(true))
+    );
+    Ok(())
+}
+
+#[test]
+fn starting_math_from_a_text_island_splits_the_text_source_and_is_undoable() -> Result<(), EditError>
+{
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+
+    session.begin_inline_math()?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{ab$$cd}"));
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(edit.cursor, r"\text{ab$".len());
+    assert!(matches!(edit.branch, MathEditBranch::Source));
+
+    session.run(Command::InsertText("x".to_owned()))?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{ab$x$cd}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Source)
+    ));
+
+    session.run(Command::Undo)?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{ab$$cd}"));
+    session.run(Command::Undo)?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{abcd}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn starting_math_inside_nested_text_style_keeps_the_wrapper() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session
+        .run(Command::InsertInlineMath(
+            r"\text{\textbf{abcd}}".to_owned(),
+        ))
+        .unwrap_or_else(|error| panic!("insert formula failed: {error}"));
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .unwrap_or_else(|error| panic!("enter formula failed: {error}"));
+    for _ in 0..16 {
+        if matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Text { .. })
+        ) {
+            break;
+        }
+        session
+            .run(Command::MoveCaret(Direction::Backward))
+            .unwrap_or_else(|error| panic!("move into text failed: {error}"));
+    }
+    session
+        .run(Command::SetMathTextSelection {
+            anchor: 2,
+            focus: 2,
+        })
+        .unwrap_or_else(|error| panic!("set text position failed: {error}"));
+
+    session
+        .begin_inline_math()
+        .unwrap_or_else(|error| panic!("start math failed: {error}"));
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("insert math source failed: {error}"));
+    assert_eq!(
+        inline_source(&session).as_deref(),
+        Some(r"\text{\textbf{ab$x$cd}}")
+    );
+    let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(ParagraphContent::Math(math)) = paragraph.inlines.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(MathContent::Environment(bold)) = math.math_tree.root.content.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(bold.kind, caret_doc::InlineEnvironmentKind::Bold);
+    assert!(matches!(bold.children.first(), Some(MathContent::Text(_))));
+    assert!(
+        bold.children
+            .iter()
+            .any(|child| matches!(child, MathContent::Math(_)))
+    );
+    assert!(matches!(bold.children.last(), Some(MathContent::Text(_))));
+    Ok(())
+}
+
+#[test]
+fn starting_math_splits_known_run_properties_across_text_flows() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditTarget::Inline { math_id, .. } = &edit.target else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math_id = math_id.clone();
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math =
+        find_inline_math_mut(&mut paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+    let text =
+        first_math_text_flow_mut(&mut math.math_tree.root).ok_or(EditError::InvalidPosition)?;
+    text.runs
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .props
+        .insert("underline".to_owned(), serde_json::Value::Bool(true));
+
+    session.begin_inline_math()?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(ParagraphContent::Math(math)) = paragraph.inlines.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let text_flows = math
+        .math_tree
+        .root
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            MathContent::Text(text) => Some(text),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(text_flows.len(), 2);
+    assert_eq!(text_flows[0].runs[0].text, "ab");
+    assert_eq!(text_flows[1].runs[0].text, "cd");
+    for text in text_flows {
+        assert_eq!(
+            text.runs[0].props.get("underline"),
+            Some(&serde_json::Value::Bool(true))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn starting_math_rejects_unmappable_run_metadata_atomically() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditTarget::Inline { math_id, .. } = &edit.target else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math_id = math_id.clone();
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math =
+        find_inline_math_mut(&mut paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+    first_math_text_flow_mut(&mut math.math_tree.root)
+        .and_then(|text| text.runs.first_mut())
+        .ok_or(EditError::InvalidPosition)?
+        .extra
+        .insert("futureRunField".to_owned(), serde_json::json!("opaque"));
+
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+    assert!(matches!(
+        session.begin_inline_math(),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+    Ok(())
+}
+
+#[test]
+fn starting_math_normalizes_inline_fences_and_preserves_multirange_mapping_metadata()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{a\%bc}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 4,
+        focus: 4,
+    })?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditTarget::Inline { math_id, .. } = &edit.target else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math_id = math_id.clone();
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math =
+        find_inline_math_mut(&mut paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+    let text =
+        first_math_text_flow_mut(&mut math.math_tree.root).ok_or(EditError::InvalidPosition)?;
+    let escaped = text
+        .source_map
+        .iter_mut()
+        .find(|entry| {
+            entry.source_range.end - entry.source_range.start > entry.text_end - entry.text_start
+        })
+        .ok_or(EditError::InvalidPosition)?;
+    escaped
+        .extra
+        .insert("futureMapField".to_owned(), serde_json::json!("preserve"));
+
+    session.run(Command::InsertInlineMath("$x$".to_owned()))?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"\text{a\%bc$x$}"));
+    let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(ParagraphContent::Math(math)) = paragraph.inlines.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let mut root = math.math_tree.root.clone();
+    let text = first_math_text_flow_mut(&mut root).ok_or(EditError::InvalidPosition)?;
+    let preserved = text
+        .source_map
+        .iter()
+        .any(|entry| entry.extra.get("futureMapField") == Some(&serde_json::json!("preserve")));
+    assert!(preserved);
+    Ok(())
+}
+
+#[test]
+fn starting_math_from_nonfirst_align_cell_keeps_unicode_host_offset()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    session.run(Command::InsertText("α & \\text{abc}".to_owned()))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { path, .. }) if path.align_cell() == Some((0, 1))
+    ));
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+
+    session.run(Command::InsertInlineMath("\\(y\\)".to_owned()))?;
+
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Align(value))
+            if value.rows[0].cells[0].source == "α"
+                && value.rows[0].cells[1].source.contains(r"\text{a$y$bc}")
+    ));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Source)
+    ));
+    Ok(())
+}
+
+#[test]
+fn starting_math_inside_equation_text_flow_is_undoable() -> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "equation")?;
+    session.run(Command::InsertText(r"\text{abc}".to_owned()))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+
+    session.run(Command::InsertInlineMath(r"\(y\)".to_owned()))?;
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Equation(value)) if value.math_tree.source == r"\text{a$y$bc}"
+    ));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Source)
+    ));
+
+    session.run(Command::Undo)?;
+    assert!(matches!(
+        session.document().body.first(),
+        Some(Block::Equation(value)) if value.math_tree.source == r"\text{abc}"
+    ));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn invalid_inline_fence_in_text_island_preserves_document_and_focus() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::InsertInlineMath("$x$$y$".to_owned())),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+    Ok(())
+}
+
+#[test]
+fn invalid_math_source_from_a_text_island_keeps_document_and_focus() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    let before_document = session.document().clone();
+    let before_edit = session.math_edit().cloned();
+    let before_generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::InsertInlineMath("}".to_owned())),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &before_document);
+    assert_eq!(session.math_edit(), before_edit.as_ref());
+    assert_eq!(session.document_generation(), before_generation);
+    Ok(())
+}
+
+#[test]
 fn math_text_selection_replaces_and_undo_restores_the_selection() -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     session.run(Command::InsertInlineMath(r"\text{abcd}".to_owned()))?;
@@ -1298,6 +1801,25 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         equation.document().body.first(),
         Some(Block::Equation(value)) if value.math_tree.source == r"\text{abcX}"
     ));
+    equation.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    equation.run(Command::ToggleRunUnderline)?;
+    assert!(active_math_text_flow(&equation)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    equation.run(Command::Undo)?;
+    assert!(
+        active_math_text_flow(&equation)?
+            .runs
+            .iter()
+            .all(|run| { run.props.get("underline") != Some(&serde_json::Value::Bool(true)) })
+    );
+    equation.run(Command::Redo)?;
+    assert!(active_math_text_flow(&equation)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
 
     let mut align = session_with_text("")?;
     accept(&mut align, "align")?;
@@ -1312,6 +1834,25 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         align.document().body.first(),
         Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcX}")
     ));
+    align.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 3,
+    })?;
+    align.run(Command::ToggleRunUnderline)?;
+    assert!(active_math_text_flow(&align)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
+    align.run(Command::Undo)?;
+    assert!(
+        active_math_text_flow(&align)?
+            .runs
+            .iter()
+            .all(|run| { run.props.get("underline") != Some(&serde_json::Value::Bool(true)) })
+    );
+    align.run(Command::Redo)?;
+    assert!(active_math_text_flow(&align)?.runs.iter().any(|run| {
+        run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+    }));
     Ok(())
 }
 
@@ -1762,7 +2303,7 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
     environment.definition_id = Some("template.bold".to_owned());
     environment
         .props
-        .insert("enabled".to_owned(), serde_json::json!(false));
+        .insert("vendorProperty".to_owned(), serde_json::json!("kept"));
     environment
         .extra
         .insert("vendorEnvironment".to_owned(), serde_json::json!(3));
@@ -1802,7 +2343,7 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
         .unwrap_or_else(|| panic!("mapped environment should remain"));
     assert_eq!(environment.id, environment_id);
     assert_eq!(environment.definition_id.as_deref(), Some("template.bold"));
-    assert_eq!(environment.props["enabled"], false);
+    assert_eq!(environment.props["vendorProperty"], "kept");
     assert_eq!(environment.extra["vendorEnvironment"], 3);
     let text = first_text(&mut updated.root.content)
         .unwrap_or_else(|| panic!("mapped TextFlow should remain"));

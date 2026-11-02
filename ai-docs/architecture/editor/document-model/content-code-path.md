@@ -39,7 +39,7 @@ flowchart TB
     TF --> FLOWMAP["FlowMap generic read<br/>logical text / spans / optional physical paths / graphemes"]
     IE --> FLOWMAP
     IM --> FLOWMAP
-    FLOWMAP --> TEXTMAP["Paragraph TextMap adapter<br/>environment + Run property spans<br/>legacy EditNode write paths"]
+    FLOWMAP --> TEXTMAP["Paragraph TextMap adapter<br/>logical ranges + physical and legacy paths"]
     TF --> SHAPING["caret-layout shaping<br/>Parley styled spans"]
     IE --> SHAPING
     IM --> SHAPING
@@ -72,9 +72,9 @@ flowchart TB
 
 `flow_map.rs` 的 `build_flow_map_with_spans` 只依赖泛型 `FlowContent<T>`、Run 与 InlineEnvironment；宿主提供 Math 原子的标记投影和 span 适配器。它一次拼接逻辑文本并生成 Run/原子范围、环境范围和字素边界，物理路径按宿主选项生成。字素分段遵循[文档位置规范](document-position.md#位置)：Run 与 InlineEnvironment 透明，公式原子和 SoftBreak 两侧设置结构停靠点。正文 `TextMap::new` 直接把正文 span 写入该映射的唯一 span Vec，再由正文适配器补充 Run 属性范围。公式目前尚未消费 FlowMap；MathFlow 的固定操作数槽位仍由 MathEdit 单独选择宿主后逐个处理。
 
-FlowMap 用 `FlowPathOptions` 选择输出路径：物理路径引用 ParagraphContent/Environment 子向量及 TextFlow 内 Run；`legacy_edit_path` 引用展平的 `EditNode` 临时树。两者不能互换。当前 `TextMap` 只请求 `legacy_edit_path`，不构造后再丢弃物理路径；MathFlow 适配器尚未接入。接入时，宿主只能使用物理路径，并须按目标公式身份及 generation 使其在树变更后失效。只在确有物理路径消费者时才分配 O(深度) 路径；性能收益尚无基准测量，不做量化主张。正文写入器迁移到物理路径后，才能删除旧路径并重新评估成本。
+FlowMap 用 `FlowPathOptions` 选择输出路径：物理路径引用 ParagraphContent/Environment 子向量及 TextFlow 内 Run；`legacy_edit_path` 引用展平的 `EditNode` 临时树。两者不能互换。TextMap 目前为混合段落同时生成两种路径：物理路径支持 TextFlow 范围写入与环境邻域归一化；legacy 路径供尚未迁移的原子插入和格式树事务使用。共享低层 TextFlow 范围替换位于 `editing/flow_edit.rs`，不负责宿主索引、元数据或历史事务。MathFlow 尚未消费通用 FlowMap；其宿主路径按公式身份和编辑状态解析，提交仍由 MathEdit 管理。双路径投影会为 Run 产生路径数据，成本尚无基准测量，不作性能收益主张。
 
-正文与公式文本共用 `editing/grapheme.rs` 的字素边界、移动和吸附算法；两类宿主仍分别构建逻辑文本范围。编辑操作目前通过 `text_map.rs` 中的临时 `EditNode` 事务视图复用既有树操作，成功后显式提交，错误时丢弃；这避免失败写回，但仍会复制被编辑段落的行内内容。它不是第二份持久化表示，性能成本也不能视为已消除。若基准确认该成本影响常见输入，应进一步改为沿宿主路径直接操作 TextFlow 与包装节点。
+正文与公式文本共用 `editing/grapheme.rs` 的字素边界、移动和吸附算法以及 `editing/flow_edit.rs` 的 Run 范围替换。正文直接输入沿 FlowPath 修改 TextFlow 并归一化受影响邻域；删除按 TextFlow 范围修改并移除选中原子；Math TextFlow 在候选 MathTree 上做同一范围替换，再由宿主适配器同步源码、sourceMap、位置和历史事务。正文原子插入与格式树编辑仍通过 `text_map.rs` 的 EditNode 事务视图复制被编辑段落内容，成功后提交，失败时丢弃。Math 文本岛执行 `InsertInlineMath` 时按 sourceMap 映射位置，在原 `\text{...}` 中插入 `$...$`；公式解析器生成中间 MathNode 和前后 TextFlow，宿主事务保留格式包装与可无损迁移的 Run/sourceMap 元数据。共享原语减少了重复范围编辑实现，但性能成本尚无基准，不宣称提升。
 
 MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。TextFlow 字素边界可跨 Run 及 InlineEnvironment 导航；到达文本岛端点时，光标会在同一 MathFlow 固定槽位内进入相邻 TextFlow，环境包装透明，MathNode、SoftBreak 和 Opaque 是停靠边界，空 TextFlow 仍是可到达的位置。Align 邻接导航保留 cell 宿主源码基址；过期源路径或目标路径无法解析时，在修改活动分支前拒绝操作。宿主基址的 checked 算术若失败会被视为没有相邻岛，调用方沿普通源码边界逻辑处理；合法文档的长度上限使该情况不可达。数学侧目前以 MathTextFlowPath 扫描该相邻关系，尚未消费通用 FlowMap；跨相邻 TextFlow 的组合字素仍未合并。邻接查找只在文本岛边界执行，但会扫描所在槽位并临时收集候选路径；该成本尚未基准测量。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
 
@@ -83,14 +83,14 @@ MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlo
 ## 边界与尚未接入项
 
 - `TextFlow` 是正文和公式文本岛共用的唯一文本载体；`TextContent` 不作为新持久化树的文本表示。
-- 普通正文的 `\math` 根流提升、带格式包装的宿主转换，以及数学槽位内部的 Math/TextFlow 切分，目标规则见[数学公式](../math.md#宿主边界与拆分)；这些结构转换仍待 043 实现。
+- Math TextFlow 内执行 `\math` 时的 MathNode/TextFlow 切分已实现；普通正文根流提升及带格式包装的宿主转换仍待 043 实现，规则见[数学公式](../math.md#宿主边界与拆分)。
 - 044 的公式 layout 结果尚未接入 Caret 页面布局、命中测试和公式光标几何。`caret-math` 单独布局成功不能替代这些用户可观察路径的验证。
 - Qt/QML 消费 `caret-app` 快照；Run、InlineEnvironment、MathTree 和 Block 的语义由 Rust 模型、编辑器与布局模块持有。
 
 ## 代码入口
 
 - 模型与编解码：`crates/caret-doc/src/model/{inline,inline_environment,paragraph,math,codec,validation}.rs`
-- 编辑适配与事务：`crates/caret-engine/src/editing/{flow_map.rs,grapheme.rs,text_map.rs,environment.rs,environment/,session/inline_content.rs,session/formatting/inline_tree.rs,session/math_edit.rs}`
+- 编辑适配与事务：`crates/caret-engine/src/editing/{flow_map.rs,flow_edit.rs,grapheme.rs,text_map.rs,environment.rs,environment/,session/inline_content.rs,session/formatting/inline_tree.rs,session/math_edit.rs}`；公式文本拆分元数据在 `session/math_edit/text_split_metadata.rs`
 - 公式解析、序列化与布局后端：`crates/caret-math/src/{parser.rs,serialize.rs,backend.rs,layout.rs}`
 - 正文 shaping 与分页：`crates/caret-layout/src/{paragraph.rs,shaping.rs}`、`crates/caret-engine/src/layout.rs`
 - 块结构索引：`crates/caret-structure/src/index.rs`

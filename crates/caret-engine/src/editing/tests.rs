@@ -1008,6 +1008,87 @@ fn reversed_selection_replacement_uses_the_ordered_text_range() {
 }
 
 #[test]
+fn replacement_across_runs_preserves_partial_run_metadata() {
+    let mut first = Run {
+        text: "ab".to_owned(),
+        language: Some("en".to_owned()),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    first
+        .extra
+        .insert("vendorFirst".to_owned(), serde_json::json!({"keep": true}));
+    let mut selected = Run {
+        text: "CD".to_owned(),
+        language: Some("fr".to_owned()),
+        props: Default::default(),
+        extra: Default::default(),
+    };
+    selected.extra.insert(
+        "vendorSelected".to_owned(),
+        serde_json::json!({"keep": true}),
+    );
+    let mut session = session_with(vec![ParagraphContent::Text(TextFlow {
+        runs: vec![
+            first,
+            selected,
+            Run {
+                text: "xy".to_owned(),
+                language: Some("de".to_owned()),
+                props: Default::default(),
+                extra: Default::default(),
+            },
+        ],
+        source_range: None,
+        source_map: Vec::new(),
+        extra: Default::default(),
+    })]);
+    let paragraph_id = session.selection.focus.paragraph_id.clone();
+    let start = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let end = Pos {
+        offset: 4,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    assert!(
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: start,
+                focus: end
+            })))
+            .is_ok()
+    );
+    assert!(session.run(Command::InsertText("X".to_owned())).is_ok());
+
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("edited body should remain a paragraph");
+    };
+    let ParagraphContent::Text(flow) = &paragraph.inlines[0] else {
+        panic!("replacement should remain in the original TextFlow");
+    };
+    assert_eq!(paragraph_text(paragraph), "aXxy");
+    assert_eq!(flow.runs[0].text, "a");
+    assert_eq!(flow.runs[0].language.as_deref(), Some("en"));
+    assert_eq!(
+        flow.runs[0].extra.get("vendorFirst"),
+        Some(&serde_json::json!({"keep": true}))
+    );
+    assert_eq!(flow.runs[1].text, "");
+    assert_eq!(flow.runs[1].language.as_deref(), Some("fr"));
+    assert_eq!(
+        flow.runs[1].extra.get("vendorSelected"),
+        Some(&serde_json::json!({"keep": true}))
+    );
+    assert_eq!(flow.runs[2].text, "Xxy");
+    assert_eq!(flow.runs[2].language.as_deref(), Some("de"));
+}
+
+#[test]
 fn replacement_stays_at_the_original_cut_when_deletion_joins_graphemes() {
     let mut session = session_with(vec![run("🇦_🇧")]);
     let paragraph_id = session.selection.focus.paragraph_id.clone();

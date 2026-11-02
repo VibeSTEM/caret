@@ -5,6 +5,7 @@
 
 use super::super::super::environment::inline_adapter::{
     RUN_PROPERTY_ENVIRONMENTS, RunPropertyEnvironment, run_property_for_kind,
+    set_run_property_value,
 };
 use super::super::super::text_map::{EditNode, from_edit_nodes, split_edit_nodes, to_edit_nodes};
 use super::super::{Affinity, EditError};
@@ -259,16 +260,7 @@ fn edit_run_property_to_range(
         for node in nodes {
             match node {
                 EditNode::Run(run) => {
-                    if let Some(enabled) = value {
-                        let Some(value) =
-                            property.value_for_state.map(|to_value| to_value(enabled))
-                        else {
-                            return Err(EditError::UnsupportedInlineFormat);
-                        };
-                        run.props.insert(property.key.to_owned(), value);
-                    } else {
-                        run.props.remove(property.key);
-                    }
+                    set_run_property_value(run, property, value)?;
                 }
                 EditNode::Environment(environment) => {
                     set(&mut environment.children, property, value)?
