@@ -326,16 +326,23 @@ mod tests {
     #[test]
     fn formula_text_environment_semantics_match_source_and_keep_extensions() {
         let mut tree = parse_inline(r"\text{\textbf{x}}");
-        let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
-            panic!("formatted text formula should start with an environment");
-        };
-        environment
-            .props
-            .insert("vendorProperty".to_owned(), serde_json::json!("kept"));
+        {
+            let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
+                panic!("formatted text formula should start with an environment");
+            };
+            environment
+                .props
+                .insert("vendorProperty".to_owned(), serde_json::json!("kept"));
+        }
         assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
-        environment
-            .props
-            .insert("enabled".to_owned(), serde_json::json!(false));
+        {
+            let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
+                panic!("formatted text formula should start with an environment");
+            };
+            environment
+                .props
+                .insert("enabled".to_owned(), serde_json::json!(false));
+        }
         assert!(
             validate_tree(&tree, MathInputKind::Inline, "text")
                 .is_err_and(|error| error.contains("source and tree disagree"))
