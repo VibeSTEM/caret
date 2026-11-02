@@ -7,9 +7,9 @@
 
 ## 目标与背景
 
-为数学 `\text{...}` 内的字体环境确定并实现可靠的字体语义，重点覆盖 `\textsf{...}` 与 `\texttt{...}`。仓库内置的 STIX Two Math 含数学无衬线和等宽字母数字字形，但这些是供技术符号使用的 Unicode 数学字母表变体，不是完整的文本字体族；当前布局把拉丁字母和数字映射到这些字形，其他字符仍由数学字体排版。仓库目前只带 STIX Two Math 文件；STIX Two 家族另外提供独立文本字体文件，是否引入需与复用 JetBrains Mono、应用包体积及缺字行为一起评估。[LaTeX 的字体选择规范](https://www.latex-project.org/help/documentation/fntguide.pdf)将 `\textsf` / `\texttt` 定义为文本字体族选择，不能默认等同于 `\mathsf` / `\mathtt` 数学字母表变体；[STIX Two 上游文件说明](https://github.com/stipub/stixfonts/blob/master/README.md)区分 Math 与 Text 字体文件。
+数学表达式的默认布局使用 STIX Two Math；显式 `MathLayoutEngine::with_font` 可注入其他数学字体。数学 `\text{...}` 是正文文本岛，044 负责接入 TextFlow shaping 能力；这不预先决定该文本岛选择正文默认字体还是其他字体。当前 parser 对数学源码中的 `\textsf{...}` / `\texttt{...}` 有两种载体：在 `\text{...}` 文本参数内转成 `InlineEnvironment::Font`，在一般 MathFlow 解析路径中表示为 `MathNode::Text` style。当前 `caret-math` 默认布局把相应拉丁字母和数字映射到 STIX Two Math 中的 Unicode 数学无衬线/等宽字母数字字形；未映射字符尝试使用当前 MathFont 的原字符，字体缺字时发出诊断并绘制缺字框。这些变体是技术字母表，不是完整文本字体族。仓库目前只带 STIX Two Math 文件；STIX Two 家族另外提供独立文本字体文件，是否引入需与复用 JetBrains Mono、应用包体积及缺字行为一起评估。[LaTeX 的字体选择规范](https://www.latex-project.org/help/documentation/fntguide.pdf)将 `\textsf` / `\texttt` 定义为文本字体族选择，不能默认等同于 `\mathsf` / `\mathtt` 数学字母表变体；[STIX Two 上游文件说明](https://github.com/stipub/stixfonts/blob/master/README.md)区分 Math 与 Text 字体文件。
 
-当前 `caret-math` 对 `\textsf` / `\texttt` 使用 `InlineEnvironment::Font`，但布局没有独立文本字体实例或按 TextFlow 运行塑形的字体 family 选择；不支持的 family 还可能在公开布局入口静默退回 Roman。043 的 engine 源码一致性校验只保护文档接入边界，不能替代本任务的字体设计与后端诊断。
+当前 parser 仅在 `\text{...}` 的文本参数内把 `\textsf` / `\texttt` 转成 `InlineEnvironment::Font`；一般 MathFlow 中则用 `MathNode::Text` style 表示。布局没有独立文本字体实例或按 TextFlow 运行塑形的字体 family 选择；不支持的 family 还可能在公开布局入口静默退回 Roman。043 的 engine 源码一致性校验只保护文档接入边界，不能替代本任务的字体设计与后端诊断。
 
 ## 必读
 
@@ -20,9 +20,9 @@
 
 ## 范围与非目标
 
-- 决定数学 `\textsf` / `\texttt` 是解析为正文字体 family 语义，并由文本 shaping 使用合适字体；实现字体选择、回退、字形度量和基线适配。
+- 设计并决定数学 `\textsf` / `\texttt` 的呈现策略：继续使用 STIX Two Math 内置的数学字母表变体，还是解析为正文文本 family 并复用文本 shaping；比较源码语义、混排效果和资源/运行成本后再实现唯一选择。
 - 评估 `\texttt` 与内置 JetBrains Mono（064 的 Code 角色）、`\textsf` 与可复用的正文/内置字体角色之间的关系；记录内置资源、许可、包体积、字体查询和跨平台一致性成本后再选定映射。
-- 明确文本字体如何与 `\textbf` / `\textit` 组合，如何处理标点、空格、数字、拉丁字母、希腊字母、CJK、缺字与混合 fallback；不把 Unicode 数学字母表映射当成完整文本字体替代。
+- 保持“数学表达式使用 MathFont、`\text{...}` 文本岛复用 044 的 TextFlow shaping 能力”两层职责清晰；明确文本岛是否继承正文默认字体，以及 `\textsf` / `\texttt` 如何与 `\textbf` / `\textit` 组合。检查 MathFlow 内 `MathNode::Text` 与文本岛 `InlineEnvironment::Font` 是否保持一致，并处理标点、空格、数字、Latin、Greek、CJK、缺字和混合 fallback。
 - 序列化仍保留 LaTeX 命令与稳定 `InlineEnvironment` 模型；字体缺失、未知 family 或源树不一致时给出明确错误/诊断，不静默退回错误字体。
 - `\mathsf` / `\mathtt` 属于数学字母表样式，本任务不改变其数学语义；不实现字体选择 UI、任意用户字体导入、一般 Font 环境 UI 或公式编辑事务。
 
@@ -45,7 +45,7 @@
 
 ## 验收标准
 
-- [ ] `\textsf` / `\texttt` 按已确认的文本 family 语义排版；不与 `\mathsf` / `\mathtt` 数学字母表变体混淆。
+- [ ] `\textsf` / `\texttt` 按唯一设计决策排版；文档说明其与 LaTeX 文本 family 语义的关系，并和 `\mathsf` / `\mathtt` 数学字母表变体区分。
 - [ ] 字体选择、粗体/斜体组合、标点与 CJK fallback 在 Rust 布局和 Qt glyph 渲染中一致；基线、命中与光标几何使用同一 generation 快照。
 - [ ] 内置字体资源与许可随 Rust、Qt 和三平台 Runtime 正确加载；不依赖开发机已安装字体提供基础显示。
 - [ ] 缺失字体/字形、未知 family、布局或序列化失败有稳定诊断，文档树、源码、焦点及 generation 保持有效。
@@ -56,7 +56,7 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | caret-math/caret-layout 字体样式行为测试 | 文本 family 与数学字母表语义分离且组合正确 | 未执行 |
+| — | caret-math/caret-layout 字体样式行为测试 | MathFlow 中 `MathNode::Text` 与文本岛的字体策略符合决策，文本 family 与数学字母表语义正确区分 | 未执行 |
 | — | Rust 与 Qt 字体资源加载/缺字行为 | 内置资源可加载，fallback 与诊断确定 | 未执行 |
 | — | Latin、Greek、CJK、标点混排布局基准 | 基线、行高和热点成本可复现 | 未执行 |
 | — | 三平台 Runtime package 检查 | 资源和许可文件完整 | 未执行 |
@@ -67,7 +67,8 @@
 
 ## 决策与工作记录
 
-- 2026-11-02：从 043/044 中拆出数学 TextFlow 的 `\textsf` / `\texttt` 字体 family 设计与实现；043 继续负责行内格式事务，044 负责一般公式布局/文本塑形快照，本任务决定并接通数学文本 family 语义。
+- 2026-11-02：从 043/044 中拆出数学 TextFlow 的 `\textsf` / `\texttt` 字体命令设计与实现；043 继续负责行内格式事务，044 负责一般公式布局/文本塑形快照，本任务决定并接通数学文本字体命令语义。
+- 2026-11-02：明确 MathLayoutEngine 默认 MathFont 与 044 TextFlow shaping 接入是不同阶段；065 比较 STIX 数学字母表变体与文本 family，不预设文本岛的默认族或新增字体资源，并覆盖 MathFlow 的 `MathNode::Text` 和 TextFlow 内 Font 环境。
 
 ## 完成摘要
 

@@ -78,13 +78,13 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 Run 与环境的未知字段按实际归属保留；只有能证明安全复制或归属唯一时才迁移到新片段，否则整笔编辑原子拒绝。合并只在未知字段、属性和身份可无损处理时发生。位置映射同步更新光标、选区与环境范围；Underline 由独立 Run 属性适配器处理。结构原子及 SoftBreak 的字素停靠边界见[文档位置规范](document-model/document-position.md#位置)。一次切换是一个 Rust 文档事务。
 
-文本岛的布局复用正文 shaping 的字体回退、语言和 Run 样式，但不获得段落块布局、段落前后距或分页语义。数学源码支持范围如下；标准 LaTeX 导出遇到无法表示且会影响外观或语义的属性时返回明确损失错误，不静默降级。
+文本岛的布局目标是复用正文 shaping 的字体回退、语言和 Run 样式，但不获得段落块布局、段落前后距或分页语义。当前 `caret-math` 仍用 MathFont 排版这些文本；044 负责接入 TextFlow shaping，065 决定文本岛中的字体族策略。数学源码支持范围如下；标准 LaTeX 导出遇到无法表示且会影响外观或语义的属性时返回明确损失错误，不静默降级。
 
 | 内容 | 数学源码表示 | 编辑/导出规则 |
 | --- | --- | --- |
 | TextFlow 文本与首版支持的 InlineEnvironment | `\text{...}` 及明确支持的格式命令 | 规范序列化；非规范源解析后可规范化 |
 | Run 的 language、underline 与未知扩展字段 | 普通 LaTeX 子集通常不能完整表达 | Run 属性和未知扩展字段沿稳定节点/源范围映射保留；无法唯一对齐时拒绝源码编辑。标准 LaTeX 导出遇到影响外观或语义的元数据时返回明确损失错误 |
-| Font 环境的 `fontFamily` | 当前将 `sans-serif` / `monospace` 映射为 `\textsf` / `\texttt` | 内置 STIX Two Math 含 Unicode 数学无衬线与等宽字母数字字形；当前布局只将拉丁字母和数字映射到这些字形，其他字符仍用同一数学字体。它们不是独立的完整文本字体族。源码校验要求属性与解析结果一致；任意字体覆盖暂不支持。文本 family 语义、字体选择和 fallback 由[065](../../task/065-math-text-font-environments.md)设计实现 |
+| 数学文本岛中的 Font 环境 | 当前 `caret-math` 将 `sans-serif` / `monospace` 映射为 `\textsf` / `\texttt` 对应的 STIX 数学字母表变体 | 当前 `MathLayoutEngine::new()` 默认使用 STIX Two Math；公开的 `with_font` 可注入其他数学字体。当前 `caret-math` 后端仍用 MathFont 排版 TextFlow；未映射字符尝试使用当前 MathFont 的原字符，缺字时发出诊断并绘制缺字框。044 目标是让 TextFlow 复用正文 shaping 能力；这不决定文本岛的默认字体族。`\textsf` / `\texttt` 与 LaTeX 文本 family 语义的关系、字重组合、字体资源和 fallback 由[065](../../task/065-math-text-font-environments.md)设计实现 |
 | 编辑器命令 `\math` | 非 LaTeX 源码语法 | 正文和公式 TextFlow 编辑模式都可用的结构命令；`.cdoc` source 保存解析后的数学内容，不保存命令面板别名 |
 
 不得用重复文本的模糊搜索匹配节点身份。源码表示与树元数据的对齐必须使用解析结构和稳定源范围；无法唯一映射时拒绝提交，保留原树和焦点。布局契约与验证由[044](../../task/044-math-layout-and-rendering.md)维护。
