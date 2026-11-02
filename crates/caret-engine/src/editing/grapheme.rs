@@ -14,12 +14,27 @@ pub(super) struct GraphemeMap {
 }
 
 impl GraphemeMap {
-    /// 构建边界表；调用方先按宿主规则拼接连续的文本片段。
-    pub(super) fn new(text: &str) -> Self {
-        let mut boundaries = text
-            .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
+    /// 在结构原子两侧强制停靠点，同时保留其余相邻文本的 Unicode 字素分段。
+    pub(super) fn new_with_fences(text: &str, fences: &[usize]) -> Self {
+        let mut boundaries = vec![0];
+        let mut start = 0;
+        for &fence in fences {
+            if fence <= start || fence > text.len() || !text.is_char_boundary(fence) {
+                continue;
+            }
+            boundaries.extend(
+                text[start..fence]
+                    .grapheme_indices(true)
+                    .map(|(index, grapheme)| start + index + grapheme.len()),
+            );
+            boundaries.push(fence);
+            start = fence;
+        }
+        boundaries.extend(
+            text[start..]
+                .grapheme_indices(true)
+                .map(|(index, grapheme)| start + index + grapheme.len()),
+        );
         boundaries.push(text.len());
         boundaries.dedup();
         Self { boundaries }
@@ -110,7 +125,7 @@ mod tests {
     #[test]
     fn shared_map_keeps_combining_and_emoji_clusters_atomic() {
         let text = "a\u{301}👩🏽‍💻🇺🇳";
-        let map = GraphemeMap::new(text);
+        let map = GraphemeMap::new_with_fences(text, &[]);
         let combining_end = "a\u{301}".len();
         let emoji_end = combining_end + "👩🏽‍💻".len();
 

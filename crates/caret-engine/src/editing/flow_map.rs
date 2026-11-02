@@ -60,6 +60,7 @@ pub(super) struct FlowMap<SpanData> {
     /// 后序排列，与原正文 environment span 顺序一致。
     pub(super) environments: Vec<FlowEnvironmentRange>,
     pub(super) grapheme_boundaries: Vec<usize>,
+    grapheme_fences: Vec<usize>,
 }
 
 struct FlowPosition<'a> {
@@ -89,6 +90,7 @@ pub(super) fn build_flow_map_with_spans<T, AtomTag, SpanData>(
         spans: Vec::new(),
         environments: Vec::new(),
         grapheme_boundaries: Vec::new(),
+        grapheme_fences: Vec::new(),
     };
     visit(
         contents,
@@ -99,7 +101,9 @@ pub(super) fn build_flow_map_with_spans<T, AtomTag, SpanData>(
         path_mode,
         0,
     )?;
-    map.grapheme_boundaries = GraphemeMap::new(&map.text).into_boundaries();
+    let grapheme_fences = std::mem::take(&mut map.grapheme_fences);
+    map.grapheme_boundaries =
+        GraphemeMap::new_with_fences(&map.text, &grapheme_fences).into_boundaries();
     Ok(map)
 }
 
@@ -167,6 +171,7 @@ fn visit<T, AtomTag, SpanData>(
             FlowContent::SoftBreak(_) => {
                 paths.physical.push(content_index);
                 paths.legacy_edit.push(logical_index);
+                map.grapheme_fences.push(map.text.len());
                 append_span(
                     map,
                     "\n",
@@ -180,6 +185,7 @@ fn visit<T, AtomTag, SpanData>(
                     path_mode,
                     project_span,
                 )?;
+                map.grapheme_fences.push(map.text.len());
                 paths.legacy_edit.pop();
                 paths.physical.pop();
                 logical_index += 1;
@@ -187,6 +193,7 @@ fn visit<T, AtomTag, SpanData>(
             FlowContent::Math(atom) => {
                 paths.physical.push(content_index);
                 paths.legacy_edit.push(logical_index);
+                map.grapheme_fences.push(map.text.len());
                 let mut encoded = [0; 4];
                 append_span(
                     map,
@@ -201,6 +208,7 @@ fn visit<T, AtomTag, SpanData>(
                     path_mode,
                     project_span,
                 )?;
+                map.grapheme_fences.push(map.text.len());
                 paths.legacy_edit.pop();
                 paths.physical.pop();
                 logical_index += 1;
@@ -357,5 +365,45 @@ mod tests {
             ),
             Err(EditError::UnsupportedOpaqueContent)
         ));
+    }
+
+    #[test]
+    fn math_atom_stays_atomic_next_to_combining_text() {
+        let contents = [text("a"), FlowContent::Math(()), text("\u{301}")];
+        let map = build_flow_map_with_spans(
+            &contents,
+            |_| (),
+            FlowPathOptions {
+                physical: true,
+                legacy_edit: false,
+            },
+            Ok,
+        )
+        .unwrap_or_else(|error| panic!("valid flow was rejected: {error}"));
+
+        assert_eq!(map.text, "a\u{fffc}\u{301}");
+        assert_eq!(map.grapheme_boundaries, [0, 1, 4, 6]);
+    }
+
+    #[test]
+    fn soft_break_remains_a_stop_between_crlf_adjacent_runs() {
+        let contents = [
+            text("\r"),
+            FlowContent::SoftBreak(caret_doc::SoftBreak::default()),
+            text("\n"),
+        ];
+        let map = build_flow_map_with_spans(
+            &contents,
+            |_| (),
+            FlowPathOptions {
+                physical: true,
+                legacy_edit: false,
+            },
+            Ok,
+        )
+        .unwrap_or_else(|error| panic!("valid flow was rejected: {error}"));
+
+        assert_eq!(map.text, "\r\n\n");
+        assert_eq!(map.grapheme_boundaries, [0, 1, 2, 3]);
     }
 }

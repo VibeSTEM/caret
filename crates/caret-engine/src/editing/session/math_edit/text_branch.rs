@@ -22,7 +22,7 @@ pub(super) struct MathTextEdit {
     pub(super) removes_entire_flow: bool,
 }
 
-fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
+pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
     let text_len = text.runs.iter().map(|run| run.text.len()).sum::<usize>();
     if offset > text_len {
         return None;

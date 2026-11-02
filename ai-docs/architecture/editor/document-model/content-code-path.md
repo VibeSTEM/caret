@@ -1,6 +1,6 @@
 # Block、正文与公式内容的代码链路
 
-更新日期：2026-11-01。本文记录当前模型和代码的实际调用路径；持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
+更新日期：2026-11-02。本文记录当前模型和代码的实际调用路径；持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
 
 ## 文档模型与消费者
 
@@ -70,7 +70,7 @@ flowchart TB
 | `Equation` / `Align` | 与 InlineMath 共用 MathTree、解析器和公式编辑事务 | 块级宿主、Align cell 边界 | `caret-doc/src/model/math.rs`、`editing/environment/block_adapter/block_math.rs` |
 | BlockEnvironment | 标题 Paragraph 复用正文模型和布局；子项递归 Block | 块父链、结构范围和块级编辑 | `caret-structure/src/index.rs`、`editing/environment/block_adapter/block_environment.rs` |
 
-`flow_map.rs` 的 `build_flow_map_with_spans` 只依赖泛型 `FlowContent<T>`、Run 与 InlineEnvironment；宿主提供 Math 原子的标记投影和 span 适配器。它一次拼接逻辑文本并生成 Run/原子范围、环境范围、整流字素边界，物理路径按宿主选项生成。正文 `TextMap::new` 直接把正文 span 写入该映射的唯一 span Vec，再由正文适配器补充 Run 属性范围。公式目前尚未消费 FlowMap；MathFlow 的固定操作数槽位仍由 MathEdit 单独选择宿主后逐个处理。
+`flow_map.rs` 的 `build_flow_map_with_spans` 只依赖泛型 `FlowContent<T>`、Run 与 InlineEnvironment；宿主提供 Math 原子的标记投影和 span 适配器。它一次拼接逻辑文本并生成 Run/原子范围、环境范围和字素边界，物理路径按宿主选项生成。字素分段遵循[文档位置规范](document-position.md#位置)：Run 与 InlineEnvironment 透明，公式原子和 SoftBreak 两侧设置结构停靠点。正文 `TextMap::new` 直接把正文 span 写入该映射的唯一 span Vec，再由正文适配器补充 Run 属性范围。公式目前尚未消费 FlowMap；MathFlow 的固定操作数槽位仍由 MathEdit 单独选择宿主后逐个处理。
 
 FlowMap 用 `FlowPathOptions` 选择输出路径：物理路径引用 ParagraphContent/Environment 子向量及 TextFlow 内 Run；`legacy_edit_path` 引用展平的 `EditNode` 临时树。两者不能互换。当前 `TextMap` 只请求 `legacy_edit_path`，不构造后再丢弃物理路径；MathFlow 适配器尚未接入。接入时，宿主只能使用物理路径，并须按目标公式身份及 generation 使其在树变更后失效。只在确有物理路径消费者时才分配 O(深度) 路径；性能收益尚无基准测量，不做量化主张。正文写入器迁移到物理路径后，才能删除旧路径并重新评估成本。
 

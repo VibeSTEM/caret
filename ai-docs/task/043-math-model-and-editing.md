@@ -3,11 +3,11 @@
 - 状态：in-progress
 - 依赖：010、042
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-11-01
+- 创建 / 更新：2026-10-29 / 2026-11-02
 
 ## 目标与背景
 
-为可编辑公式建立版本化 Caret 数学树，并实现公式创建、内部编辑、位置和键盘导航。公式树属于 `.cdoc` 稳定文档模型；`latex-rust` AST 只能存在解析/排版适配器边界。总体验收由 [011 M3 公式](011-impl-math.md)管理。
+为可编辑公式建立版本化 Caret 数学树，并实现公式创建、内部编辑、位置和键盘导航。公式树属于 `.cdoc` 稳定文档模型；第三方解析或排版表示不得进入持久化模型。总体验收由 [011 M3 公式](011-impl-math.md)管理。
 
 ## 必读
 
@@ -41,13 +41,13 @@
 
 ## 验收标准
 
-- [ ] 三种公式类型使用 Caret 自有 `.cdoc` schema、稳定 ID 与未知字段保留；ParagraphContent 和 MathFlow 使用定稿 schema，并按文档存储规则声明两项必需能力。未发布临时格式不提供迁移路径。
+- [ ] 三种公式类型使用 Caret 自有 `.cdoc` schema、稳定 ID 与未知字段保留；ParagraphContent 和 MathFlow 使用定稿 schema，并按文档存储规则声明相应必需能力（paragraph content-flow、math content-flow、math text-flow source-map）。未发布临时格式不提供迁移路径。
 - [ ] 目标 MathFlow 与 042 当前数学树布局不同，需完成模型/序列化/能力 schema 定稿及其往返验证；不提出紧凑表示或性能收益主张。任何性能优化需先记录代表性基线。
 - [x] 首版编号环境、自动编号、`\label` 与 `\ref` 明确不作为无编号公式接受；不支持语法由解析器拒绝且不改动现有文档。
 - [ ] 持久化 schema、页面绘制/光标投影及块布局接入后，命令可插入三种公式；在这些调用链完成前，桌面候选保持不可执行。数学源码与文本岛是平级编辑模式，文本岛复用正文光标、格式、IME 与撤销事务。
 - [ ] 源码解析、无效范围和替换失败保持文档、编辑目标与 generation 不变；插入点拆分、粘贴、格式合并、文本岛切换和公式对象身份有回归测试。
 - [x] 公式的绘制、版面命中、正文 shaping 与页面几何归 044；单元格模型/交互归 045，单元格画布集成归 046。
-- [ ] caret-engine 直接消费者验证、格式与 lint 通过；分领域审查及独立最终评审通过。
+- [ ] caret-engine 直接消费者验证、格式与 lint 通过；分领域审查及独立最终评审通过。需复验模型/布局直接消费者；Rust 与 native C++ 覆盖率门槛、本任务性能基线及桌面 IME/命中黑盒行为目前未验证，其中绘制/命中归 044。
 
 ## 验证计划与结果
 
@@ -71,6 +71,11 @@
 | 2026-11-01 | `cargo test --offline --locked -p caret-engine math_text_selection`、`cargo test --offline --locked -p caret-engine`、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 同一 Math TextFlow 的选区编辑、边界、源码映射与失败原子性通过 | 定向 5 项及 engine 294 项通过，clippy、格式和差异检查通过。覆盖正反 anchor/focus、空文本删除选区、转义源码映射整段替换、非法组合字素位置失败时文档/焦点/generation 不变，以及 undo/redo 恢复选区/结果；跨 TextFlow 选区、鼠标命中/绘制和 IME 仍未接入 |
 | 2026-11-01 | Terra/medium TextFlow 领域与架构评审、Sol/medium 独立最终评审 | 选区状态、编辑原子性与本轮完整 diff 无 P0–P2 问题 | 评审提出每次输入拼接完整文本岛及验证表顺序两项 P3；已避免折叠插入点的文本岛拼接，并按执行顺序整理验证记录。未涉及 Qt/FFI/翻译；覆盖率门槛与性能基准未运行 |
 | 2026-11-01 | 性能与覆盖率门槛 | 记录代表性前后基线；Rust/native C++ coverage gate 通过 | 本轮未运行性能基准与覆盖率门槛；编辑工作副本仍复制行内段落，性能影响待基准验证 |
+| 2026-11-02 | `cargo test --offline --locked -p caret-engine`（302 项）、`cargo test --offline --locked -p caret-app`（196 项）、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 公式宿主命令隔离、原子边界、删除后位置映射及直接 app 消费者通过 | engine 302 项、app 196 项通过；clippy、格式和差异检查通过。覆盖公式原子/SoftBreak 两侧 grapheme fence，删除空公式后合簇时的两侧位置映射、合法插入点、undo/redo 和继续输入；`SetSelection(Some/None)`、视觉 affinity、全局设置、行内/块公式 `Mod+Backspace`、失败原子性。Rust/native coverage gate、性能基线及 Qt Quick 鼠标/IME 黑盒尚未运行；044 负责数学布局与命中几何，本轮无 native/QML 改动 |
+| 2026-11-02 | `cargo test --offline --locked -p caret-engine`（314 项）、`cargo test --offline --locked -p caret-app`（196 项）、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 行内公式 `Mod+Backspace` 降级事务及宿主焦点迁移 | engine 314 项、app 196 项通过；clippy、格式和差异检查通过；首轮发现的测试辅助 panic 已移除并复验通过。黑盒覆盖空源码、原样源码文本、多行失败原子性、源码光标继续输入、文本岛 sourceMap 正反向选区、合簇导致映射边界变化时拒绝转换、源码生成字体属性、Run/环境额外元数据失败原子性、外层 InlineEnvironment、pending style 清理与撤销/重做；公式命令行按键经统一 Mod+Backspace 路由且保持 no-op。Rust/native coverage gate、性能基线及 Qt Quick 鼠标/IME 黑盒尚未运行；044 负责数学布局与命中几何，本轮无 native/QML 改动 |
+
+| 2026-11-02 | `cargo coverage`、`cargo coverage native` | Rust/native coverage 与原生行为门槛 | Rust coverage 全局 gate 通过：函数 2475/2854（86.72%），行 30196/33960（88.92%）。native coverage 未能生成报告：CTest 8/9 通过，既有 `Qml.ShellLoad::documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 因 `default_url.isLocalFile()` 失败；该测试在本分支前已有相同失败记录，本分支没有 native/QML 改动。native C++ coverage 阈值仍待可通过 CTest 的环境验证；性能基线未测。
+| 2026-11-02 | Terra/medium 数学编辑与模型评审、Sol/medium 独立完整 diff final review | 公式降级事务、元数据无损检查、统一快捷键路由和文档一致性 | 空源码、sourceMap 正反选区、grapheme 边界、全树语义校验、命令行 no-op 与数学降级路由均无剩余 P0–P2；已修复评审发现的问题并复验。Review 未运行构建或测试，验证结果以本表所列命令为准。
 
 ## 风险与回退
 
@@ -83,9 +88,10 @@
 - 2026-11-01：数学源码和数学命令查询禁用 IME；TextFlow 活动分支接入后再启用正文输入法事务。命令查询只接收命令行白名单，公式源码模式拒绝正文格式命令，避免误改宿主段落。显示公式之间可按方向切换，显式退出跳过连续公式并恢复到可用正文边界；无目标时保留焦点。撤销分组合并在数学焦点迁移时切断。
 - 2026-11-01：源码一致性验证比较 parser 可表达的属性，保留树独有的环境属性。数学 TextFlow 的任意 Font 覆盖仍不能单独表示：`fontFamily` 目前同时承载源命令映射与实际字体；在建立无损语义/覆盖映射前，不宣称自定义数学字体支持。正文 TextFlow 未知扩展字段现在不阻断只读位置映射，但编辑适配器仍在提交前拒绝无法归属的字段，以免降平时丢失。
 - 2026-11-01：`TextFlow.sourceRange` 仅对数学树有宿主意义；正文段落不持有可供它引用的公式源码，因此模型验证拒绝 Paragraph TextFlow 的 sourceRange，避免把无效数据送到编辑层后才失败。
-- 2026-11-01：解析器必须保留零长度文本岛；`\text{}` 现在生成一个空 Run 的 TextFlow，保证模型和序列化能表达文本编辑入口。Session 现有类型化 `MathTextFlowPath` 活动分支，可在 InlineMath、Equation 和 Align cell 中用 sourceMap 定位、编辑、重建路径并恢复历史位置；该实现尚未接入 IME、文本选区及行内格式命令。
+- 2026-11-01：解析器必须保留零长度文本岛；`\text{}` 现在生成一个空 Run 的 TextFlow，保证模型和序列化能表达文本编辑入口。Session 现有类型化 `MathTextFlowPath` 活动分支，可在 InlineMath、Equation 和 Align cell 中用 sourceMap 定位、编辑、重建路径并恢复历史位置；当时尚未接入 IME、文本选区及行内格式命令。
 - 2026-11-01：TextFlow 新增 `sourceMap`，把显示字节区间逐段映射到公式源码，防止转义字符被按相同字节长度错误换算；不等长映射项只能按边界整体处理。普通段落禁止这类数学源映射，公式树能力由 `caret.math.text-flow-source-map.v1` 明确声明。
 - 2026-11-01：`sourceMap` 的模型校验要求显示字节区间连续覆盖文本且边界位于 UTF-8 字符边界；engine 将存储映射逐项与解析器生成映射比较。源码重解析按映射键索引并保留映射项及 sourceRange 的未知字段；若文本删除/改写使字段无法唯一映射，事务拒绝并保留有效状态。解析构建和模型校验使用增量偏移/有序游标，避免密集短 Run 的重复全量扫描。
+- 2026-11-02：公式原子和显式 SoftBreak 两侧是 grapheme fence，保证原子可单独定位/删除，且结构换行保持独立停靠点；删除 InlineMath 后按结果正文的字素边界吸附插入点，并发布 TextEdit 位置映射。公式焦点下有效 `SetSelection` 迁移到正文并更新视觉 affinity，非法目标保留 MathEdit；清除选区命令保留公式焦点；全局文档设置保留公式焦点。`Mod+Backspace` 将行内公式整体替换为原样 LaTeX 源码文本，保留外层 InlineEnvironment；公式源码或文本岛中可无损映射的光标/选区迁移到降级文本，空公式也转换为空 TextFlow，并以单次事务支持撤销。含换行、不可逆 sourceMap 位置、结果字素边界不兼容或无法无损表达的扩展字段会原子拒绝；不从公式边界推断 Run 属性。Equation/Align 尚不支持该降级操作。
 
 ## 完成摘要
 

@@ -7,10 +7,19 @@ use super::super::Session;
 use crate::editing::{Command, EditError, Effect, EnvironmentSource};
 
 impl Session {
-    /// 按环境能力解除光标所在最内层可解除环境：行内环境优先，公式等原子环境跳过。
+    /// 优先处理 IME/命令行和数学焦点，再解除光标所在最内层可解除环境。
     pub(super) fn handle_mod_backspace(&mut self) -> Result<Effect, EditError> {
-        if self.composition.is_some() || self.command_line.is_some() {
+        if self.composition.is_some() {
             return self.run(Command::RemoveBlockEnvironmentPreservingContent);
+        }
+        if self.command_line.is_some() {
+            if self.math_edit().is_some() {
+                return Ok(Effect::default());
+            }
+            return self.run(Command::RemoveBlockEnvironmentPreservingContent);
+        }
+        if self.math_edit().is_some() {
+            return self.handle_math_mod_backspace();
         }
         if self.selection.anchor == self.selection.focus
             && let Some(environment) = self

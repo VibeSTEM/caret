@@ -65,6 +65,17 @@ fn validate_tree(tree: &MathTree, kind: MathInputKind, id: &str) -> Result<(), S
     }
 }
 
+/// 返回源码可表达语义一致的解析树；树独有元数据由编辑事务另行核验。
+pub(crate) fn parse_tree_with_same_semantics(
+    tree: &MathTree,
+    kind: MathInputKind,
+) -> Option<MathTree> {
+    let caret_math::ParsedMath::Tree(parsed) = caret_math::parse(&tree.source, kind).ok()? else {
+        return None;
+    };
+    same_flow_semantics(&tree.root, &parsed.root).then_some(parsed)
+}
+
 fn validate_align(align: &Align) -> Result<(), String> {
     let parsed = caret_math::parse(&align.source, MathInputKind::Align)
         .map_err(|error| format!("align {} source does not parse: {error}", align.id))?;

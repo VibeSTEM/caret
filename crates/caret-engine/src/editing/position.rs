@@ -97,13 +97,10 @@ impl PositionMap {
             } if &position.paragraph_id == paragraph_id => {
                 let offset = if position.offset < *start {
                     position.offset
+                } else if position.offset == *start && position.affinity == Affinity::Upstream {
+                    *start
                 } else if position.offset > *end {
                     position.offset - (*end - *start) + *inserted_len
-                } else if start == end
-                    && position.offset == *start
-                    && position.affinity == Affinity::Upstream
-                {
-                    *start
                 } else {
                     *start + *inserted_len
                 };
