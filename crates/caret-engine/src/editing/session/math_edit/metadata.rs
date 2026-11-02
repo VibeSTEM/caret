@@ -735,6 +735,81 @@ fn tree_has_metadata(tree: &MathTree) -> bool {
     !tree.extra.is_empty() || flow_has_metadata(&tree.root)
 }
 
+/// 检查降级为源码文本时无法由正文 Run 或其宿主包装表达的字段。
+pub(super) fn can_materialize_source_as_text(tree: &MathTree) -> bool {
+    let Some(parsed) = crate::math_validation::parse_tree_with_same_semantics(
+        tree,
+        caret_math::MathInputKind::Inline,
+    ) else {
+        return false;
+    };
+    tree.extra.is_empty() && flow_source_is_textual(&tree.root, &parsed.root)
+}
+
+fn flow_source_is_textual(flow: &MathFlow, parsed: &MathFlow) -> bool {
+    flow.extra.is_empty()
+        && flow
+            .source_range
+            .as_ref()
+            .is_none_or(|range| range.extra.is_empty())
+        && flow.content.len() == parsed.content.len()
+        && flow
+            .content
+            .iter()
+            .zip(&parsed.content)
+            .all(|(content, parsed)| content_source_is_textual(content, parsed))
+}
+
+fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> bool {
+    match (content, parsed) {
+        (MathContent::Text(text), MathContent::Text(_)) => {
+            text.extra.is_empty()
+                && text
+                    .source_range
+                    .as_ref()
+                    .is_none_or(|range| range.extra.is_empty())
+                && text.runs.iter().all(|run| {
+                    run.language.is_none() && run.props.is_empty() && run.extra.is_empty()
+                })
+                && text
+                    .source_map
+                    .iter()
+                    .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
+        }
+        (MathContent::Math(node), MathContent::Math(parsed_node)) => {
+            node.extra.is_empty()
+                && node
+                    .source_range
+                    .as_ref()
+                    .is_none_or(|range| range.extra.is_empty())
+                && node.children.len() == parsed_node.children.len()
+                && node
+                    .children
+                    .iter()
+                    .zip(&parsed_node.children)
+                    .all(|(flow, parsed)| flow_source_is_textual(flow, parsed))
+        }
+        (MathContent::Environment(environment), MathContent::Environment(parsed_environment)) => {
+            environment.definition_id.is_none()
+                && environment.props == parsed_environment.props
+                && environment.extra.is_empty()
+                && environment
+                    .source_range
+                    .as_ref()
+                    .is_none_or(|range| range.extra.is_empty())
+                && environment.children.len() == parsed_environment.children.len()
+                && environment
+                    .children
+                    .iter()
+                    .zip(&parsed_environment.children)
+                    .all(|(child, parsed)| content_source_is_textual(child, parsed))
+        }
+        (MathContent::SoftBreak(value), MathContent::SoftBreak(_)) => value.extra.is_empty(),
+        (MathContent::Opaque(_), _) | (_, MathContent::Opaque(_)) => false,
+        _ => false,
+    }
+}
+
 fn row_has_metadata(row: &caret_doc::MathAlignRow) -> bool {
     !row.extra.is_empty() || row.cells.iter().any(tree_has_metadata)
 }

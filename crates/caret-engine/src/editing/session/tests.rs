@@ -1370,7 +1370,7 @@ fn invalid_inline_math_leaves_document_unchanged() {
 }
 
 #[test]
-fn environment_stack_reports_math_and_mod_backspace_skips_it() {
+fn environment_stack_reports_math_and_mod_backspace_downgrades_it() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));
     run_ok(
@@ -1409,18 +1409,62 @@ fn environment_stack_reports_math_and_mod_backspace_skips_it() {
         .and_then(|entry| entry.inline_range.clone())
         .unwrap_or_else(|| panic!("inline math should carry its range"));
     assert_eq!(math.end_utf8 - math.start_utf8, '\u{fffc}'.len_utf8());
+    let mut before_math = session.selection().focus.clone();
+    before_math.offset = math.start_utf8;
+    before_math.affinity = crate::editing::Affinity::Upstream;
+    let mut after_math = session.selection().focus.clone();
+    after_math.offset = math.end_utf8;
+    after_math.affinity = crate::editing::Affinity::Downstream;
 
-    // Mod+Backspace 按能力跳过公式，解除外层粗体并保留公式。
-    run_ok(&mut session, Command::EditorKey(EditorKey::ModBackspace));
-    assert_eq!(first_paragraph_math_count(&session), 1);
-    assert_eq!(paragraph_text(&session, 0), "a\u{fffc}");
+    // Mod+Backspace 将公式原子替换为源码文本，保留包围它的 Bold 环境。
+    let before_document = session.document.clone();
+    let before_math_edit = session.math_edit().cloned();
+    let before_pending_style = session.pending_inline_style.clone();
+    let effect = session
+        .run(Command::EditorKey(EditorKey::ModBackspace))
+        .unwrap_or_else(|error| panic!("formula downgrade failed: {error}"));
+    assert!(effect.document_changed);
+    assert_eq!(session.selection().focus.offset, 2);
+    assert_eq!(session.pending_inline_style, Default::default());
+    let position_map = effect
+        .position_map
+        .as_ref()
+        .unwrap_or_else(|| panic!("formula downgrade must publish a position map"));
+    let mapped_before = position_map.map(&before_math);
+    let mapped_after = position_map.map(&after_math);
+    assert_eq!(mapped_before.offset, 1);
+    assert_eq!(mapped_before.affinity, crate::editing::Affinity::Upstream);
+    assert_eq!(mapped_after.offset, 2);
+    assert_eq!(mapped_after.affinity, crate::editing::Affinity::Downstream);
+    assert_ne!(session.document, before_document);
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_math_count(&session), 0);
+    assert_eq!(paragraph_text(&session, 0), "ay");
     let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
         panic!("first block should be a paragraph");
     };
-    assert!(
-        !paragraph
-            .inlines
-            .iter()
-            .any(|node| matches!(node, ParagraphContent::Environment(_)))
-    );
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [ParagraphContent::Environment(_)]
+    ));
+
+    run_ok(&mut session, Command::Undo);
+    assert_eq!(session.document, before_document);
+    assert_eq!(session.math_edit(), before_math_edit.as_ref());
+    assert_eq!(session.pending_inline_style, before_pending_style);
+    run_ok(&mut session, Command::Redo);
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.pending_inline_style, Default::default());
+    assert_eq!(paragraph_text(&session, 0), "ay");
+    run_ok(&mut session, Command::InsertText("!".to_owned()));
+    assert_eq!(paragraph_text(&session, 0), "ay!");
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [ParagraphContent::Environment(environment), ParagraphContent::Text(text)]
+            if environment.kind == InlineEnvironmentKind::Bold
+                && text.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "!"
+    ));
 }

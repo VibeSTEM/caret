@@ -1,6 +1,6 @@
 # 数学公式
 
-更新日期：2026-11-01。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。任务进度见[011 总体验收](../../task/011-impl-math.md)及其拆分任务；公式与表格之间的工作边界见[专题索引](math-and-table.md)。
+更新日期：2026-11-02。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。任务进度见[011 总体验收](../../task/011-impl-math.md)及其拆分任务；公式与表格之间的工作边界见[专题索引](math-and-table.md)。
 
 ## 公式节点与 LaTeX 语义
 
@@ -58,11 +58,11 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 `\text{...}` 是公式中的 Text 编辑分支，与 Math 源码编辑模式平级。Paragraph 的行内流以 `Vec<ParagraphContent>` 表达；枚举分支包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`，并为未来的 `Code(CodeSpan)` 保留扩展位置。043 从现有 `Paragraph.inlines` 及其编辑操作抽取共享 `TextFlow`，不另写文本编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
 
-`TextFlow` 复用正文 Run、Run 属性、未知字段、字素边界、选区、输入法、格式事务和撤销逻辑；其节点边界以[文档树与结构](document-model/document-structure.md)为准。`InlineEnvironment` 通过通用混合树操作复用格式范围、嵌套顺序与稳定 ID 规则。适配器携带宿主路径，直接在所属内容树调用这些操作；数学源码节点仍由 Math 编辑逻辑处理。公式树与正文共用文本编辑实现，但各自保留文档节点、位置身份、事务和失败边界。文本岛编辑直接修改共享树分支，不拍平或复制第二份可变文本；同步 source 与数学树的成本计入同一原子事务。
+`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；其节点边界以[文档树与结构](document-model/document-structure.md)为准。目标结构是由宿主路径适配器直接调用正文的选区、输入法、格式事务和撤销操作，不复制第二份可变文本。当前 engine 已实现数学 TextFlow 的树路径、sourceMap 定位、单流选区、Run 编辑及原子事务，但尚未接入跨 TextFlow 选区、正文格式适配器和输入法事务；相关状态见[043](../../task/043-math-model-and-editing.md)。数学源码节点仍由 Math 编辑逻辑处理，source 与数学树同步属于同一事务。
 
-IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务仍复用正文实现。
+目标行为是 IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务复用正文实现。当前 engine 尚未接入公式 TextFlow 的 IME composition 事务，不能启用该路径。
 
-当前 043 仅接入数学源码分支，因此公式焦点下的正文格式命令会拒绝执行，避免修改宿主段落的 pending style；TextFlow 编辑分支接入后，这些命令才由宿主路径路由到文本流。
+当前公式源码分支拒绝正文格式命令，避免误改宿主段落的 pending style。TextFlow 分支已有直接 Run 编辑，但尚未接入通用格式命令或 IME composition 事务；在这些路径接入前，公式文本岛不应宣称与正文编辑行为等价。未适配命令必须显式拒绝或定义委派行为，不得静默清除 MathEdit 后落到宿主旧选区。当前 `Mod+Backspace` 将行内公式整体替换为 `MathTree.source` 对应的普通文本，退出公式编辑并保留外层 InlineEnvironment；不额外添加 `$` 或 `\math(...)` 命令外壳，源码中已有的分隔符会原样保留。光标按可逆 sourceMap 映射到正文源码位置；无法唯一映射或结果边界落在 grapheme 内、含换行或有无法无损表达的数学元数据时，转换原子拒绝。Run 属性不从公式边界推断。Equation/Align 暂不转换，避免操作相邻段落。公式 TextFlow 内部格式命令仍待正文格式适配接入。
 
 ### 宿主边界与拆分
 
@@ -76,7 +76,7 @@ IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询
 
 统一 split/merge 操作接收强类型有序流和宿主路径，由宿主适配器访问节点与位置。ParagraphContent 与 MathContent 共用同一操作策略，但不抹平成无类型数据；Bold、Italic、Font 只声明包装语义，不各自实现拼接算法。根流提升时，`InlineEnvironment<MathContent>` 转为 `InlineEnvironment<ParagraphContent>`，每个输入包装仍对应一个输出包装，不因子项类型转换而复制节点。只有其他编辑操作确实把同一包装拆为多个非连续范围时，才创建多个包装节点；原稳定 ID 保留在首个存活的同 kind/同语义包装上，其他节点分配新 ID。InlineMath 宿主 ID 保留在首个仍存在的 Math 输出项；若输出中没有 Math 项，则该 ID 从树中移除。MathNode 内部稳定 ID 原样保留。无 ID 的节点不凭空生成身份。
 
-Run 与环境的未知字段按实际归属保留；只有能证明安全复制或归属唯一时才迁移到新片段，否则整笔编辑原子拒绝。合并只在未知字段、属性和身份可无损处理时发生。位置映射同步更新光标、选区与环境范围；Underline 由独立 Run 属性适配器处理。一次切换是一个 Rust 文档事务。
+Run 与环境的未知字段按实际归属保留；只有能证明安全复制或归属唯一时才迁移到新片段，否则整笔编辑原子拒绝。合并只在未知字段、属性和身份可无损处理时发生。位置映射同步更新光标、选区与环境范围；Underline 由独立 Run 属性适配器处理。结构原子及 SoftBreak 的字素停靠边界见[文档位置规范](document-model/document-position.md#位置)。一次切换是一个 Rust 文档事务。
 
 文本岛的布局复用正文 shaping 的字体回退、语言和 Run 样式，但不获得段落块布局、段落前后距或分页语义。数学源码支持范围如下；标准 LaTeX 导出遇到无法表示且会影响外观或语义的属性时返回明确损失错误，不静默降级。
 
@@ -96,7 +96,7 @@ Run 与环境的未知字段按实际归属保留；只有能证明安全复制�
 
 - 完整产品路径接入后，`\math`、`\equation`、`\align` 分别插入行内公式、单行显示公式、多行对齐公式，并进入公式编辑。当前三个命令在桌面命令面板中保持不可执行，避免创建无法保存或呈现的文档内容。
 - 公式编辑状态记录目标公式、当前编辑分支和该分支的位置。源码模式使用 UTF-8 字节位置；TextFlow 模式使用正文文本位置语义。切换模式时，适配器用公式树位置映射恢复焦点；失败时保留原文档与有效位置。
-- 数学 TextFlow 的 `SetMathTextSelection` 以当前 TextFlow 内 UTF-8 字节偏移设置 anchor/focus；两端必须落在同一流内的 grapheme 边界。输入和退格/删除替换该选区，左右键将选区折叠到对应边界。文本到源码的映射若不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的选区等待槽位级物理路径映射，不用单岛路径伪装支持；此命令提供 engine 位置入口，不代表 044 的命中与选区绘制已接入。
+- 数学 TextFlow 的 `SetMathTextSelection` 当前以单个 TextFlow 内 UTF-8 字节偏移设置 anchor/focus；两端必须落在 grapheme 边界。输入和退格/删除替换该选区，左右键将选区折叠到对应边界。文本到源码的映射若不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的统一选区仍待实现；公式原子与相邻文本之间必须保留可用 caret 边界。该 engine 位置入口不代表 044 的命中与选区绘制已接入。
 - 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与 Enter 可退出公式。
 - `_` 与 `^` 插入带空组的下标与上标，`{` 自动补 `}`，`}` 跳出组。
 - 公式编辑中 `\` 打开数学命令，不打开正文命令；`Align` 中 Enter 插入 `\\` 结束一行，`&` 为对齐点。

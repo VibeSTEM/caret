@@ -15,14 +15,15 @@ use navigation::{
 };
 
 mod align_source;
+mod demotion;
 mod metadata;
 mod navigation;
 mod path;
 mod text_branch;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
-    Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, Pos, Selection,
-    StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, Pos, PositionMap,
+    Selection, StoryId,
 };
 use super::Session;
 use super::history::{
@@ -244,7 +245,7 @@ impl Session {
         self.math_edit.as_ref()
     }
 
-    /// 公式编辑期间截获输入；返回 `None` 表示命令照常执行（并已退出公式编辑）。
+    /// 公式编辑期间截获输入；`None` 表示命令由 Session 的常规分派继续处理。
     pub(super) fn run_math_edit(&mut self, command: &Command) -> Result<Option<Effect>, EditError> {
         if self.math_edit.is_none() {
             return Ok(None);
@@ -292,14 +293,16 @@ impl Session {
                             | EditorKey::Enter
                             | EditorKey::Tab
                             | EditorKey::ShiftEnter
+                            | EditorKey::ModBackspace
                     )
             ) {
                 Ok(None)
-            } else if matches!(command, Command::EditorKey(EditorKey::ModBackspace)) {
-                Ok(Some(Effect::default()))
             } else {
                 Err(EditError::UnknownCommand)
             };
+        }
+        if matches!(command, Command::EditorKey(EditorKey::ModBackspace)) {
+            return Ok(None);
         }
         let effect = match command {
             Command::InsertText(text) if self.math_edit_is_text_branch() => {
@@ -313,6 +316,9 @@ impl Session {
             }
             Command::InsertText(text) => self.math_insert_text(text)?,
             Command::PasteText(text) => self.math_insert_raw(text, text.len())?,
+            Command::InsertSoftBreak | Command::InsertParagraphBreak => {
+                return Err(EditError::UnsupportedNewline);
+            }
             Command::Delete(Direction::Backward) if self.math_edit_is_text_branch() => {
                 self.math_text_delete(Direction::Backward)?
             }
@@ -347,6 +353,42 @@ impl Session {
             }
             Command::EditorKey(EditorKey::Tab) => Effect::default(),
             Command::EditorKey(EditorKey::ShiftEnter) => Effect::default(),
+            Command::SetSelection(None) => {
+                if self.math_edit_is_text_branch() {
+                    let cursor = self
+                        .math_edit
+                        .as_ref()
+                        .ok_or(EditError::InvalidPosition)?
+                        .cursor;
+                    self.set_math_text_selection(cursor, cursor)?
+                } else {
+                    Effect::default()
+                }
+            }
+            Command::SetSelection(Some(selection)) => {
+                // 鼠标选区先按正文位置规则验证；失败时保留原公式编辑状态。
+                let active_edit = self.math_edit.take();
+                match self.set_selection(Some(selection.clone())) {
+                    Ok(mut effect) => {
+                        self.command_line = None;
+                        self.pending_inline_style.clear();
+                        self.selection_visual_affinity = match self.selection.focus.affinity {
+                            Affinity::Upstream => VisualAffinity::Upstream,
+                            Affinity::Downstream => VisualAffinity::Downstream,
+                        };
+                        self.advance_history_merge_epoch();
+                        effect.selection_changed |= active_edit.is_some();
+                        return Ok(Some(effect));
+                    }
+                    Err(error) => {
+                        self.math_edit = active_edit;
+                        return Err(error);
+                    }
+                }
+            }
+            Command::SetPageGeometry(_)
+            | Command::SetDefaultFontFamily(_)
+            | Command::SetDocumentFontFamily { .. } => return Ok(None),
             Command::EditorKey(EditorKey::Escape | EditorKey::Enter) => {
                 self.exit_math_edit(Direction::Forward, true)?
             }
@@ -354,12 +396,15 @@ impl Session {
                 self.command_line = Some(CommandLine::math(self.selection.focus.clone()));
                 Effect::default()
             }
-            _ => {
-                self.math_edit = None;
-                return Ok(None);
-            }
+            // 编辑目标仍是公式时，拒绝尚未适配的命令，避免它们落到公式宿主正文。
+            _ => return Err(EditError::UnknownCommand),
         };
         Ok(Some(effect))
+    }
+
+    /// 供统一按键路由在数学焦点下执行对应的降级事务。
+    pub(super) fn handle_math_mod_backspace(&mut self) -> Result<Effect, EditError> {
+        self.math_mod_backspace()
     }
 
     /// `\math`：插入空行内公式并进入编辑。
@@ -1211,11 +1256,20 @@ impl Session {
                     start,
                     start + OBJECT_REPLACEMENT.len_utf8(),
                 )?;
+                let result_map = TextMap::new(&paragraph)?;
+                let caret_affinity = if result_map.grapheme_boundaries.binary_search(&start).is_ok()
+                {
+                    Affinity::Downstream
+                } else {
+                    Affinity::Upstream
+                };
+                let caret_offset = result_map.snap_to_grapheme_boundary(start, caret_affinity);
+                let result_boundaries = result_map.grapheme_boundaries.clone();
                 self.replace_paragraph(&position, paragraph)?;
                 self.text_map_cache.clear();
                 let caret = Pos {
-                    offset: start,
-                    affinity: Affinity::Downstream,
+                    offset: caret_offset,
+                    affinity: caret_affinity,
                     ..position
                 };
                 self.selection = Selection {
@@ -1248,7 +1302,15 @@ impl Session {
                 Ok(Effect {
                     document_changed: true,
                     selection_changed: true,
-                    changed_paragraph_id: Some(paragraph_id),
+                    changed_paragraph_id: Some(paragraph_id.clone()),
+                    position_map: Some(PositionMap::TextEdit {
+                        paragraph_id,
+                        start,
+                        end: start + OBJECT_REPLACEMENT.len_utf8(),
+                        inserted_len: 0,
+                        snap_graphemes: true,
+                        result_boundaries,
+                    }),
                     ..Effect::default()
                 })
             }
@@ -1725,11 +1787,31 @@ impl Session {
         before_math_edit: Option<MathEditPosition>,
         after_math_edit: Option<MathEditPosition>,
     ) {
+        let before_pending_style = self.pending_inline_style.clone();
+        self.record_math_history_with_pending_style(
+            patch,
+            before_selection,
+            after_selection,
+            before_math_edit,
+            after_math_edit,
+            before_pending_style,
+        );
+    }
+
+    fn record_math_history_with_pending_style(
+        &mut self,
+        patch: DocumentPatch,
+        before_selection: (Selection, VisualAffinity),
+        after_selection: (Selection, VisualAffinity),
+        before_math_edit: Option<MathEditPosition>,
+        after_math_edit: Option<MathEditPosition>,
+        before_pending_style: super::formatting::PendingInlineStyle,
+    ) {
         let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
             before_selection.0,
             before_selection.1,
-            self.pending_inline_style.clone(),
+            before_pending_style,
             self.history_state_id,
         )
         .with_math_edit(before_math_edit);
