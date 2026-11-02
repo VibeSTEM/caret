@@ -80,6 +80,7 @@
 | 2026-11-02 | `cargo coverage`、`cargo coverage native` | Rust/native coverage 与原生行为门槛 | Rust coverage 全局 gate 通过：函数 2475/2854（86.72%），行 30196/33960（88.92%）。native coverage 未能生成报告：CTest 8/9 通过，既有 `Qml.ShellLoad::documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 因 `default_url.isLocalFile()` 失败；该测试在本分支前已有相同失败记录，本分支没有 native/QML 改动。native C++ coverage 阈值仍待可通过 CTest 的环境验证；性能基线未测。
 | 2026-11-02 | Terra/medium 数学编辑与模型评审、Sol/medium 独立完整 diff final review | 公式降级事务、元数据无损检查、统一快捷键路由和文档一致性 | 空源码、sourceMap 正反选区、grapheme 边界、全树语义校验、命令行 no-op 与数学降级路由均无剩余 P0–P2；已修复评审发现的问题并复验。Review 未运行构建或测试，验证结果以本表所列命令为准。
 | 2026-11-02 | `cargo fmt --all -- --check`、`git diff HEAD --check`、Terra/medium 语义审查、Sol/medium 完整 diff final review | 数学源码语义属性校验与 065 字体任务拆分一致 | Bold/Italic 未由源码表达的 `enabled: false` 由 engine 文档入口拒绝；未知属性和非对应环境类型同名字段仍按扩展元数据保留。043 保留 Font 行内树编辑事务；065 负责 `\textsf` / `\texttt` 字体选择、资源与 fallback；044 验收范围和 011 依赖已同步。格式/差异检查通过，Sol final review 无 P0–P3。本轮未运行 Rust 测试或 coverage；`caret-math` 公开布局/序列化入口诊断仍由 044/065 跟进 |
+| 2026-11-02 | `cargo test --offline --locked -p caret-engine formula_text_environment_semantics_match_source_and_keep_extensions`、`cargo check --offline --locked --workspace --all-targets`、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | PR #87 合并后 CI 暴露的测试借用冲突修复 | 将测试中的可变树借用限制在独立作用域；定向测试、workspace 全目标检查、engine 全目标 Clippy、格式和差异检查均通过。对应 GitHub Actions run 41412107383 的 `cargo check and build` 与 `cargo lint (clippy)` 均由此 E0502 失败；其他失败项无。覆盖率、性能基线未运行 |
 
 ## 风险与回退
 
