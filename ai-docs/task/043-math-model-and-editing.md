@@ -29,7 +29,7 @@
 
 1. 校验 042 提供的三种公式节点、稳定 ID、源内容与深度/长度限制；确认模型由 Caret schema 持有。
 2. 实现 `\math`、`\equation`、`\align` 插入，源码更新、分组/命令停靠点、空槽编辑、Align 行分隔和公式进出；正文格式命令与公式输入分流。
-3. 将 `Paragraph.inlines` 统一为 `Vec<ParagraphContent>`；043 接入 Text、Math 和 InlineEnvironment 分支，Code 仅保留后续扩展位置。MathFlow 与 Paragraph 共用 TextFlow 载体，固定数学槽位各自保留 MathFlow。抽取现有段落文本存储/操作边界；InlineEnvironment 子项使用同一混合序列，`\bold`、斜体、字体与 Math 通过通用 split/merge 操作维护范围，underline 仍由 Run 属性适配器处理。普通正文根流中的公式 TextFlow 必须提升为 Paragraph 文本项；经过格式包装时递归转换子项但保留单个包装节点。嵌套分数等固定槽位内的切分不得越过槽边界。文本岛适配器沿树路径复用正文输入法和编辑事务，不构造内容副本。
+3. 将 `Paragraph.inlines` 统一为 `Vec<ParagraphContent>`；043 接入 Text、Math 和 InlineEnvironment 分支，Code 仅保留后续扩展位置。MathFlow 与 Paragraph 共用 TextFlow 载体，固定数学槽位各自保留 MathFlow。抽取现有段落文本存储/操作边界；InlineEnvironment 子项使用同一混合序列，Bold、Italic、Font 与 Math 通过通用 split/merge 操作维护范围，underline 仍由 Run 属性适配器处理。Font `fontFamily` 的文本族映射、字体资源与 fallback 归入[065](065-math-text-font-environments.md)，043 仍负责其行内树编辑事务。普通正文根流中的公式 TextFlow 必须提升为 Paragraph 文本项；经过格式包装时递归转换子项但保留单个包装节点。嵌套分数等固定槽位内的切分不得越过槽边界。文本岛适配器沿树路径复用正文输入法和编辑事务，不构造内容副本。
 4. 将每次公式和文本岛编辑作为原子事务接入撤销/重做。解析、范围、兼容性或输入法替换失败时保留原文档与有效焦点状态。
 5. 覆盖插入点拆分、粘贴、文本岛输入法替换、稳定 ID/未知字段、错误恢复、边界导航及保存往返。
 6. 按[数学公式架构](../architecture/editor/math.md)定稿 ParagraphContent/MathFlow 节点、宿主参数化的 InlineEnvironment、TextFlow 持久化字段与 sourceMap、MathTree schema 版本及 `caret.paragraph.content-flow.v1`、`caret.math.content-flow.v1`、`caret.math.text-flow-source-map.v1` 能力。未发布的临时 inline/TextContent 格式不兼容、不迁移。编辑尽量局限于所属树分支；性能结论须基于代表性公式的节点数、分配、扫描、内存和序列化测量，不因共享实现直接推断性能提升。
@@ -79,6 +79,7 @@
 
 | 2026-11-02 | `cargo coverage`、`cargo coverage native` | Rust/native coverage 与原生行为门槛 | Rust coverage 全局 gate 通过：函数 2475/2854（86.72%），行 30196/33960（88.92%）。native coverage 未能生成报告：CTest 8/9 通过，既有 `Qml.ShellLoad::documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 因 `default_url.isLocalFile()` 失败；该测试在本分支前已有相同失败记录，本分支没有 native/QML 改动。native C++ coverage 阈值仍待可通过 CTest 的环境验证；性能基线未测。
 | 2026-11-02 | Terra/medium 数学编辑与模型评审、Sol/medium 独立完整 diff final review | 公式降级事务、元数据无损检查、统一快捷键路由和文档一致性 | 空源码、sourceMap 正反选区、grapheme 边界、全树语义校验、命令行 no-op 与数学降级路由均无剩余 P0–P2；已修复评审发现的问题并复验。Review 未运行构建或测试，验证结果以本表所列命令为准。
+| 2026-11-02 | `cargo fmt --all -- --check`、`git diff HEAD --check`、Terra/medium 语义审查、Sol/medium 完整 diff final review | 数学源码语义属性校验与 065 字体任务拆分一致 | Bold/Italic 未由源码表达的 `enabled: false` 由 engine 文档入口拒绝；未知属性和非对应环境类型同名字段仍按扩展元数据保留。043 保留 Font 行内树编辑事务；065 负责 `\textsf` / `\texttt` 字体选择、资源与 fallback；044 验收范围和 011 依赖已同步。格式/差异检查通过，Sol final review 无 P0–P3。本轮未运行 Rust 测试或 coverage；`caret-math` 公开布局/序列化入口诊断仍由 044/065 跟进 |
 
 ## 风险与回退
 
@@ -89,7 +90,8 @@
 - 2026-10-29：从 011 拆出文档模型、编辑和导航任务；以 020/011 的产品语义为准。
 - 2026-11-01：明确 043 的焦点为 `MathEdit` 源码字节位置；页面几何留给 044，表格模型与集成分别由 045/046 验收。
 - 2026-11-01：数学源码和数学命令查询禁用 IME；TextFlow 活动分支接入后再启用正文输入法事务。命令查询只接收命令行白名单，公式源码模式拒绝正文格式命令，避免误改宿主段落。显示公式之间可按方向切换，显式退出跳过连续公式并恢复到可用正文边界；无目标时保留焦点。撤销分组合并在数学焦点迁移时切断。
-- 2026-11-01：源码一致性验证比较 parser 可表达的属性，保留树独有的环境属性。数学 TextFlow 的任意 Font 覆盖仍不能单独表示：`fontFamily` 目前同时承载源命令映射与实际字体；在建立无损语义/覆盖映射前，不宣称自定义数学字体支持。正文 TextFlow 未知扩展字段现在不阻断只读位置映射，但编辑适配器仍在提交前拒绝无法归属的字段，以免降平时丢失。
+- 2026-11-01：源码一致性验证比较解析器可表达的环境语义，并保留非语义扩展属性。Bold/Italic 的 `enabled` 与 Font 的 `fontFamily` 是已知语义属性，必须和源码解析结果一致；未被当前源码表达的关闭状态或任意字体覆盖不能伪装成扩展元数据。数学 TextFlow 的任意 Font 覆盖仍不能单独表示：`fontFamily` 目前同时承载源命令映射与实际字体；在建立无损语义/覆盖映射前，不宣称自定义数学字体支持。正文 TextFlow 未知扩展字段现在不阻断只读位置映射，但编辑适配器仍在提交前拒绝无法归属的字段，以免降平时丢失。
+- 2026-11-02：engine 的 MathTree 源码一致性边界拒绝 Bold/Italic 的未表达 `enabled: false` 和不匹配/不受支持的 Font `fontFamily`，同时保留未知扩展属性及非对应环境类型的同名属性。该检查不覆盖 `caret-math` 的公开 serializer/layout 直接调用；044 需为不受支持样式增加诊断。
 - 2026-11-01：`TextFlow.sourceRange` 仅对数学树有宿主意义；正文段落不持有可供它引用的公式源码，因此模型验证拒绝 Paragraph TextFlow 的 sourceRange，避免把无效数据送到编辑层后才失败。
 - 2026-11-01：解析器必须保留零长度文本岛；`\text{}` 现在生成一个空 Run 的 TextFlow，保证模型和序列化能表达文本编辑入口。Session 现有类型化 `MathTextFlowPath` 活动分支，可在 InlineMath、Equation 和 Align cell 中用 sourceMap 定位、编辑、重建路径并恢复历史位置；当时尚未接入 IME、文本选区及行内格式命令。
 - 2026-11-01：TextFlow 新增 `sourceMap`，把显示字节区间逐段映射到公式源码，防止转义字符被按相同字节长度错误换算；不等长映射项只能按边界整体处理。普通段落禁止这类数学源映射，公式树能力由 `caret.math.text-flow-source-map.v1` 明确声明。

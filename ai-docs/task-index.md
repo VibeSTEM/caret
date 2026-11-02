@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-01。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-02。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -42,7 +42,7 @@
 | 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | done |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | done |
 | 010 | 结构导航 | [M2：结构导航与结构命令](task/010-impl-structure.md) | P2 | 009、020 | M | done |
-| 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044、045、046 | M | planned |
+| 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044、045、046、065 | M | planned |
 | 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046 | S | planned |
 | 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
 | 014 | CLI | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | ready |
@@ -96,5 +96,6 @@
 | 062 | 段落格式 | [段落格式命令](task/062-paragraph-formatting.md) | P2 | 022、026、027 | M | ready |
 | 063 | 文档样式 | [文档排版主题与命名样式](task/063-document-typography-styles.md) | P2 | 020、021 | L | ready |
 | 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | in-progress |
+| 065 | 数学字体 | [数学文本字体环境与 `\textsf` / `\texttt`](task/065-math-text-font-environments.md) | P2 | 043、044、064 | M | planned |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

@@ -2303,7 +2303,7 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
     environment.definition_id = Some("template.bold".to_owned());
     environment
         .props
-        .insert("enabled".to_owned(), serde_json::json!(false));
+        .insert("vendorProperty".to_owned(), serde_json::json!("kept"));
     environment
         .extra
         .insert("vendorEnvironment".to_owned(), serde_json::json!(3));
@@ -2343,7 +2343,7 @@ fn metadata_mapping_preserves_math_text_runs_and_environment_identity() {
         .unwrap_or_else(|| panic!("mapped environment should remain"));
     assert_eq!(environment.id, environment_id);
     assert_eq!(environment.definition_id.as_deref(), Some("template.bold"));
-    assert_eq!(environment.props["enabled"], false);
+    assert_eq!(environment.props["vendorProperty"], "kept");
     assert_eq!(environment.extra["vendorEnvironment"], 3);
     let text = first_text(&mut updated.root.content)
         .unwrap_or_else(|| panic!("mapped TextFlow should remain"));

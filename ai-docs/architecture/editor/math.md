@@ -18,7 +18,7 @@
 
 首版只支持无编号显示公式：不实现自动编号、`\label`、`\ref`；编号版 `equation` / `align` 不得静默丢弃编号语义，首版应明确报不支持并保留输入。公式源文本可保留用于错误位置和导出；解析或规范化后不保证与原始 LaTeX 字符串相同。未支持的命令必须报错并保留原内容。正文 Shift+Enter 的 `SoftBreak` 与 `Align` 行分隔是不同结构。
 
-MathTree 是已提交文档内容的权威。源码模式编辑使用临时 source buffer；接受时解析并与原树对齐，随后原子提交新树与规范化 source。TextFlow 模式直接改写目标文本流，并由同一事务更新所属源片段。能由首版数学源码表达的 TextFlow 格式必须有规范表示；源码无法表达的属性与未知字段沿稳定节点/源范围映射保留。MathFlow、MathNode、MathContent 中的 TextFlow 与 InlineEnvironment 使用相对 `MathTree.source` 的半开 UTF-8 `sourceRange`。若本次源码编辑会丢失无法安全映射的字段，拒绝提交并保留原树、有效焦点和错误信息。解析、序列化、范围或事务失败不得改写现有公式。
+MathTree 是已提交文档内容的权威。源码模式编辑使用临时 source buffer；接受时解析并与原树对齐，随后原子提交新树与规范化 source。TextFlow 模式直接改写目标文本流，并由同一事务更新所属源片段。能由首版数学源码表达的 TextFlow 格式必须有规范表示；源码无法表达的属性与未知字段沿稳定节点/源范围映射保留。已知的语义属性不能仅作为“额外元数据”绕过源码一致性校验：Bold/Italic 环境当前未由源码表达的 `enabled: false`，以及不属于首版无衬线/等宽映射的 Font `fontFamily` 必须在 engine 文档接入边界拒绝，避免文档树与数学渲染语义分离。非对应环境类型的同名属性仍按扩展元数据处理。此校验不覆盖 `caret-math` 的公开序列化与布局入口；044 需为这些直接调用补齐对不受支持语义的诊断，避免静默降级。MathFlow、MathNode、MathContent 中的 TextFlow 与 InlineEnvironment 使用相对 `MathTree.source` 的半开 UTF-8 `sourceRange`。若本次源码编辑会丢失无法安全映射的字段，拒绝提交并保留原树、有效焦点和错误信息。解析、序列化、范围或事务失败不得改写现有公式。
 
 数学 `TextFlow.sourceMap` 由解析器生成，逐段映射拼接 Run 文本中的 UTF-8 字节区间到 `MathTree.source`。转义符号、`\textchar` 和折叠空白会让显示长度与源码长度不同；这类区间只能在映射项边界处编辑，不能按字节长度直接换算。空 `\text{}` 使用零长度文本区间和源码锚点保留编辑入口。正文 TextFlow 不允许 sourceRange 或 sourceMap；数学 source mapping 由 `caret.math.text-flow-source-map.v1` 能力声明。
 
@@ -83,7 +83,8 @@ Run 与环境的未知字段按实际归属保留；只有能证明安全复制�
 | 内容 | 数学源码表示 | 编辑/导出规则 |
 | --- | --- | --- |
 | TextFlow 文本与首版支持的 InlineEnvironment | `\text{...}` 及明确支持的格式命令 | 规范序列化；非规范源解析后可规范化 |
-| Run 的 language、underline 与未知字段；Font 环境的字体覆盖 | 普通 LaTeX 子集通常不能完整表达 | language、underline 和未知字段保存在 Run 元数据中；字体选择保存在 `InlineEnvironment<MathContent>` 的 Font 属性中。源码重编辑须通过稳定节点/源范围映射恢复，无法唯一对齐时拒绝；标准 LaTeX 导出遇到影响外观或语义的元数据时返回明确损失错误。Font 环境的任意覆盖与 `fontFamily` 源命令语义仍需无损映射设计，当前不承诺支持任意覆盖 |
+| Run 的 language、underline 与未知扩展字段 | 普通 LaTeX 子集通常不能完整表达 | Run 属性和未知扩展字段沿稳定节点/源范围映射保留；无法唯一对齐时拒绝源码编辑。标准 LaTeX 导出遇到影响外观或语义的元数据时返回明确损失错误 |
+| Font 环境的 `fontFamily` | 当前将 `sans-serif` / `monospace` 映射为 `\textsf` / `\texttt` | 内置 STIX Two Math 含 Unicode 数学无衬线与等宽字母数字字形；当前布局只将拉丁字母和数字映射到这些字形，其他字符仍用同一数学字体。它们不是独立的完整文本字体族。源码校验要求属性与解析结果一致；任意字体覆盖暂不支持。文本 family 语义、字体选择和 fallback 由[065](../../task/065-math-text-font-environments.md)设计实现 |
 | 编辑器命令 `\math` | 非 LaTeX 源码语法 | 正文和公式 TextFlow 编辑模式都可用的结构命令；`.cdoc` source 保存解析后的数学内容，不保存命令面板别名 |
 
 不得用重复文本的模糊搜索匹配节点身份。源码表示与树元数据的对齐必须使用解析结构和稳定源范围；无法唯一映射时拒绝提交，保留原树和焦点。布局契约与验证由[044](../../task/044-math-layout-and-rendering.md)维护。

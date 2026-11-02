@@ -152,7 +152,7 @@ fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
         (MathContent::Math(left), MathContent::Math(right)) => same_node_semantics(left, right),
         (MathContent::Environment(left), MathContent::Environment(right)) => {
             left.kind == right.kind
-                && source_environment_props_match(&left.props, &right.props)
+                && source_environment_props_match(left.kind, &left.props, &right.props)
                 && left
                     .source_range
                     .as_ref()
@@ -175,13 +175,37 @@ fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
 }
 
 fn source_environment_props_match(
+    kind: caret_doc::InlineEnvironmentKind,
     stored: &std::collections::BTreeMap<String, serde_json::Value>,
     parsed: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> bool {
-    // 解析器属性来自源码命令；仅树中额外保存的属性作为编辑元数据保留。
-    parsed
+    // 未知属性可作为元数据保留；已知样式属性必须能由源码准确表达。
+    let parsed_props_match = parsed
         .iter()
-        .all(|(key, value)| stored.get(key) == Some(value))
+        .all(|(key, value)| stored.get(key) == Some(value));
+    if !parsed_props_match {
+        return false;
+    }
+
+    let enabled_is_representable = !kind.supports_enabled()
+        || match stored.get("enabled") {
+            None => true,
+            Some(serde_json::Value::Bool(enabled)) => {
+                parsed
+                    .get("enabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true)
+                    == *enabled
+            }
+            Some(_) => false,
+        };
+    let font_is_representable = !kind.supports_font_family()
+        || match stored.get("fontFamily") {
+            None => true,
+            Some(family) => parsed.get("fontFamily") == Some(family),
+        };
+
+    enabled_is_representable && font_is_representable
 }
 
 fn same_node_semantics(left: &MathNode, right: &MathNode) -> bool {
@@ -300,15 +324,22 @@ mod tests {
     }
 
     #[test]
-    fn formula_text_environment_properties_are_preserved_as_tree_metadata() {
+    fn formula_text_environment_semantics_match_source_and_keep_extensions() {
         let mut tree = parse_inline(r"\text{\textbf{x}}");
         let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
             panic!("formatted text formula should start with an environment");
         };
         environment
             .props
-            .insert("enabled".to_owned(), serde_json::json!(false));
+            .insert("vendorProperty".to_owned(), serde_json::json!("kept"));
         assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
+        environment
+            .props
+            .insert("enabled".to_owned(), serde_json::json!(false));
+        assert!(
+            validate_tree(&tree, MathInputKind::Inline, "text")
+                .is_err_and(|error| error.contains("source and tree disagree"))
+        );
 
         let mut document = Document::blank();
         let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
@@ -319,7 +350,7 @@ mod tests {
             math_tree: tree,
             extra: Default::default(),
         })];
-        assert!(crate::Session::new(document).is_ok());
+        assert!(crate::Session::new(document).is_err());
     }
 
     #[test]
@@ -407,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn align_text_style_metadata_is_preserved_but_source_font_changes_are_rejected() {
+    fn align_text_style_semantics_must_match_the_source() {
         let mut align = match caret_math::parse(
             r"\begin{aligned}\text{\textbf{x}}\end{aligned}",
             MathInputKind::Align,
@@ -424,7 +455,7 @@ mod tests {
         environment
             .props
             .insert("enabled".to_owned(), serde_json::json!(false));
-        assert_eq!(validate_align(&align), Ok(()));
+        assert!(validate_align(&align).is_err());
 
         let mut align = match caret_math::parse(
             r"\begin{aligned}\text{\textsf{x}}\end{aligned}",

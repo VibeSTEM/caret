@@ -41,7 +41,7 @@
 
 - [ ] `InlineMath` 与块级 `Equation`/`Align` 可显示；多行对齐、基线、括号/分数等伸展符号使用数学布局度量。
 - [ ] 绘制、命中、光标几何引用同一 generation/几何快照，旧异步结果不能覆盖新布局。
-- [ ] 数学 `\\text{...}` 英文、中文内容按正文字体与语言 shaping 显示；Run 属性和 InlineEnvironment 生效；缺失字体/字形有定义明确的 fallback/诊断。
+- [ ] 数学 `\text{...}` 英文、中文内容按正文 shaping 的字体与语言规则显示；已支持的 Run 属性和 InlineEnvironment 生效。数学文本 `\textsf` / `\texttt` 的字体族选择与专用 fallback 由[065](065-math-text-font-environments.md)验收，不作为 044 的完成前置；044 仍为数学字形提供确定的缺字 fallback/诊断。
 - [ ] 同一公式快照在缩放与三平台检查中不依赖临时栅格图；页面内编辑没有显著重复重排，性能结果记录基线和测试输入。
 - [ ] 无 SVG/PNG-only 交互路径；测试、格式、lint、独立评审通过。
 
