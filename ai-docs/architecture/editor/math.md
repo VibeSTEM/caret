@@ -58,7 +58,7 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 `\text{...}` 是公式中的 Text 编辑分支，与 Math 源码编辑模式平级。Paragraph 的行内流以 `Vec<ParagraphContent>` 表达；枚举分支包含 `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`，并为未来的 `Code(CodeSpan)` 保留扩展位置。043 从现有 `Paragraph.inlines` 及其编辑操作抽取共享 `TextFlow`，不另写文本编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
 
-`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；其节点边界以[文档树与结构](document-model/document-structure.md)为准。目标结构是由宿主路径适配器直接调用正文的选区、输入法、格式事务和撤销操作，不复制第二份可变文本。当前 engine 已实现数学 TextFlow 的树路径、sourceMap 定位、单流选区、Run 编辑及原子事务，但尚未接入跨 TextFlow 选区、正文格式适配器和输入法事务；相关状态见[043](../../task/043-math-model-and-editing.md)。数学源码节点仍由 Math 编辑逻辑处理，source 与数学树同步属于同一事务。
+`TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；其节点边界以[文档树与结构](document-model/document-structure.md)为准。目标结构是由宿主路径适配器直接调用正文的选区、输入法、格式事务和撤销操作，不复制第二份可变文本。当前 engine 的 Paragraph 插入/删除已通过物理 `FlowPath` 直接编辑 TextFlow，Math TextFlow 复用同一 Run 范围替换原语；Paragraph 与 Math 仍由各自宿主适配器负责位置映射、元数据验证及事务提交。跨 TextFlow 选区、正文格式适配器和输入法事务尚未接入；相关状态见[043](../../task/043-math-model-and-editing.md)。数学源码节点仍由 Math 编辑逻辑处理，source 与数学树同步属于同一事务。
 
 目标行为是 IME 只在活动分支为 TextFlow 时启用。数学源码及数学命令查询不接受预编辑、替换或组字预览；布局接入后 Qt 的 `ImEnabled` 状态由 Rust 活动分支投影，TextFlow 的替换事务复用正文实现。当前 engine 尚未接入公式 TextFlow 的 IME composition 事务，不能启用该路径。
 
@@ -70,7 +70,7 @@ M3 首版内置 STIX Two Math（OFL），三平台不依赖本机字体。文档
 
 若根流子项被 Bold、Italic、Font 等 `InlineEnvironment` 包装，转换其 children 中的 Math/Text 项，但保留一个对应的 `InlineEnvironment<ParagraphContent>` 包装及原有范围、顺序和 ID。例如 `\math(\bold{a\text{x}b})` 规范化为一个 Bold 包装，其 children 为 Math、Text、Math；不拆成三个相邻 Bold。不得因包装环境改变提升结果。
 
-分数、根式、上下标等内部槽位的 `\text{...}` 始终留在该槽位自己的 MathFlow 中。在这类文本岛内输入 `\math` 时，只结束当前 TextFlow，并在同一槽位插入 MathNode 兄弟项，后续文本成为新的 TextFlow，绝不提升到 Paragraph，以免改变分式操作数、脚本作用域和数学排版。Equation/Align 没有 Paragraph 宿主，其根流始终保留数学混合内容。
+分数、根式、上下标等内部槽位的 `\text{...}` 始终留在该槽位自己的 MathFlow 中。在这类文本岛内输入 `\math` 时，适配层在当前文本源码边界插入 `$...$` 数学区间，再由解析器拆为同一槽位中的 MathNode 兄弟项与前后 TextFlow；后续输入留在数学源码分支，绝不提升到 Paragraph，以免改变分式操作数、脚本作用域和数学排版。以解析结果而不是直接闭合花括号实现切换，确保嵌套 `\textbf`、斜体等文本格式环境继续包围原有内容。Equation/Align 没有 Paragraph 宿主，其根流始终保留数学混合内容。
 
 ### 可复用的 split/merge
 

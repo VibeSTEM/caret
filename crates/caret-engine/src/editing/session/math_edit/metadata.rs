@@ -244,7 +244,7 @@ fn align_row_source_ranges(cells: &[Vec<std::ops::Range<usize>>]) -> Vec<std::op
         .collect()
 }
 
-fn map_unchanged_range(
+pub(super) fn map_unchanged_range(
     range: &std::ops::Range<usize>,
     prefix_end: usize,
     previous_tail: usize,
@@ -408,10 +408,28 @@ fn preserve_math_flow_metadata(
     {
         metadata_preserved = false;
     }
+    metadata_preserved
+        && preserve_math_content_list_metadata(
+            &previous.content,
+            &mut updated.content,
+            prefix_end,
+            previous_tail,
+            updated_tail,
+        )
+}
+
+fn preserve_math_content_list_metadata(
+    previous: &[MathContent],
+    updated: &mut [MathContent],
+    prefix_end: usize,
+    previous_tail: usize,
+    updated_tail: usize,
+) -> bool {
+    let mut metadata_preserved = true;
     let mut matched_previous = HashSet::new();
     let mut previous_by_mapped_range = HashMap::<(usize, usize), VecDeque<usize>>::new();
     let mut previous_containing_edit = Vec::new();
-    for (index, candidate) in previous.content.iter().enumerate() {
+    for (index, candidate) in previous.iter().enumerate() {
         if let Some((start, end)) =
             mapped_content_range(candidate, prefix_end, previous_tail, updated_tail)
         {
@@ -426,16 +444,15 @@ fn preserve_math_flow_metadata(
             previous_containing_edit.push(index);
         }
     }
-    for child in &mut updated.content {
+    for child in updated {
         let mapped_match = content_source_range(child).and_then(|range| {
             let expected = (range.start as usize, range.end as usize);
             let candidates = previous_by_mapped_range.get_mut(&expected)?;
             let match_index = candidates.iter().position(|index| {
-                !matched_previous.contains(index)
-                    && content_kind_matches(&previous.content[*index], child)
+                !matched_previous.contains(index) && content_kind_matches(&previous[*index], child)
             })?;
             let index = candidates.remove(match_index)?;
-            Some((index, &previous.content[index]))
+            Some((index, &previous[index]))
         });
         let containing_match = content_source_range(child).and_then(|range| {
             let start = range.start as usize;
@@ -445,13 +462,13 @@ fn preserve_math_flow_metadata(
             }
             let mut candidates = previous_containing_edit.iter().filter(|index| {
                 !matched_previous.contains(*index)
-                    && content_kind_matches(&previous.content[**index], child)
+                    && content_kind_matches(&previous[**index], child)
             });
             let index = *candidates.next()?;
             candidates
                 .next()
                 .is_none()
-                .then_some((index, &previous.content[index]))
+                .then_some((index, &previous[index]))
         });
         if let Some((index, matched)) = mapped_match.or(containing_match) {
             matched_previous.insert(index);
@@ -464,7 +481,7 @@ fn preserve_math_flow_metadata(
             );
         }
     }
-    for (index, child) in previous.content.iter().enumerate() {
+    for (index, child) in previous.iter().enumerate() {
         if !matched_previous.contains(&index) && content_has_metadata(child) {
             metadata_preserved = false;
         }
@@ -593,20 +610,13 @@ fn preserve_math_content_metadata(
                 .as_ref()
                 .is_none_or(|range| range.extra.is_empty())
                 || updated.source_range.is_some())
-                && previous.children.len() == updated.children.len()
-                && previous
-                    .children
-                    .iter()
-                    .zip(&mut updated.children)
-                    .all(|(old, new)| {
-                        preserve_math_content_metadata(
-                            old,
-                            new,
-                            prefix_end,
-                            previous_tail,
-                            updated_tail,
-                        )
-                    })
+                && preserve_math_content_list_metadata(
+                    &previous.children,
+                    &mut updated.children,
+                    prefix_end,
+                    previous_tail,
+                    updated_tail,
+                )
         }
         (MathContent::SoftBreak(previous), MathContent::SoftBreak(updated)) => {
             updated.extra.clone_from(&previous.extra);
