@@ -14,7 +14,6 @@ use navigation::{
     previous_grapheme_start, previous_math_caret_stop,
 };
 
-mod align_source;
 mod demotion;
 pub(super) mod inline_root_split;
 mod metadata;
@@ -170,8 +169,12 @@ pub(super) fn restore_math_edit(
         MathEditBranch::Text { path, anchor } => {
             let tree = math_tree_for_target(document, &position.target, path.align_cell())?;
             let text = path.resolve(tree)?;
-            if host_source_range_for_path(document, &position.target, path)?
-                != path.host_source_range()
+            if host_source_range_for_path(
+                document,
+                &position.target,
+                path,
+                &position.source_projection,
+            )? != path.host_source_range()
             {
                 return None;
             }
@@ -204,6 +207,7 @@ fn host_source_range_for_path(
     document: &caret_doc::Document,
     target: &MathEditTarget,
     path: &MathTextFlowPath,
+    source: &caret_math::MathSourceMap<'_>,
 ) -> Option<(usize, usize)> {
     let (start, end) = path.source_range();
     let base = match (target, path.align_cell()) {
@@ -219,11 +223,9 @@ fn host_source_range_for_path(
             let Block::Align(align) = find_block_by_id(&document.body, block_id)? else {
                 return None;
             };
-            align_source::cell_source_ranges(align)?
-                .get(row)?
-                .get(cell)?
-                .start
-                .checked_sub(align_source::align_body_range(&align.source)?.start)?
+            align.rows.get(row)?.cells.get(cell)?;
+            let range = source.align()?.cell_range(row, cell)?;
+            range.start.checked_sub(source.edit_range().start)?
         }
         _ => return None,
     };
@@ -1053,23 +1055,23 @@ impl Session {
             let Block::Align(align) = find_block_by_id(&self.document.body, block_id)? else {
                 return None;
             };
-            let body_start = align_source::align_body_range(&align.source)?.start;
-            let cell_ranges = align_source::cell_source_ranges(align)?;
-            let (row, cell, cell_range) =
-                cell_ranges.iter().enumerate().find_map(|(row, cells)| {
-                    cells.iter().enumerate().find_map(|(cell, range)| {
-                        let local_start = range.start.checked_sub(body_start)?;
-                        let local_end = range.end.checked_sub(body_start)?;
-                        (local_start <= source_offset && source_offset <= local_end)
-                            .then_some((row, cell, range))
-                    })
-                })?;
+            let edit_source = &edit.source_projection;
+            let body_start = edit_source.edit_range().start;
+            let cell_ranges = edit_source.align()?.cell_navigation_ranges();
+            let (row, cell) = cell_ranges.iter().enumerate().find_map(|(row, cells)| {
+                cells.iter().enumerate().find_map(|(cell, range)| {
+                    let local_start = range.start.checked_sub(body_start)?;
+                    let local_end = range.end.checked_sub(body_start)?;
+                    (local_start <= source_offset && source_offset <= local_end)
+                        .then_some((row, cell))
+                })
+            })?;
             let tree = align.rows.get(row)?.cells.get(cell)?;
-            let cell_start = cell_range.start.checked_sub(body_start)?;
-            let cell_offset = source_offset.checked_sub(cell_start)?;
-            if cell_offset > tree.source.len() {
-                return None;
-            }
+            let semantic_range = edit_source.align()?.cell_range(row, cell)?;
+            let cell_start = semantic_range.start.checked_sub(body_start)?;
+            let cell_offset = source_offset
+                .saturating_sub(cell_start)
+                .min(tree.source.len());
             let path =
                 path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
             return path.with_host_source_base(cell_start);
@@ -2155,6 +2157,8 @@ impl Session {
                         &mut block,
                         &old_edit,
                         &new_edit,
+                        &edit.source_projection,
+                        &next_edit.source_projection,
                     );
                     if !metadata_preserved {
                         return Err(EditError::InvalidMath(

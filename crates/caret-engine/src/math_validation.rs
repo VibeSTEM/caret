@@ -500,6 +500,23 @@ mod tests {
     }
 
     #[test]
+    fn align_edit_projection_keeps_full_source_with_outer_trivia() {
+        let source = " % before\n\\begin {aligned}a&b\\end {aligned} % after\n";
+        let caret_math::ParsedMath::Align(align) = caret_math::parse(source, MathInputKind::Align)
+            .unwrap_or_else(|error| panic!("valid Align source should parse: {error}"))
+        else {
+            panic!("Align input should parse to an Align tree");
+        };
+
+        let (source_map, projected) = project_align_for_edit(&align)
+            .unwrap_or_else(|error| panic!("matching Align source should project: {error}"));
+
+        assert_eq!(align.source, source);
+        assert_eq!(source_map.source(), source);
+        assert_eq!(projected.source, source);
+    }
+
+    #[test]
     fn formula_text_metadata_and_run_splits_do_not_change_source_semantics() {
         let mut tree = parse_inline(r"\text{ab}");
         let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {

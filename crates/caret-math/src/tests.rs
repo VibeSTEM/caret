@@ -455,7 +455,7 @@ fn align_projection_keeps_exact_environment_and_cell_ranges() {
     let ParsedMath::Align(restored) = projection.into_legacy_parsed() else {
         panic!("projected Align should restore to an Align DTO");
     };
-    assert_eq!(restored.source, source[environment].to_owned());
+    assert_eq!(restored.source, source);
     assert_eq!(restored.rows[0].cells[1].source, "= b+1");
 }
 

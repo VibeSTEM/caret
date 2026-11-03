@@ -327,8 +327,7 @@ impl<'a> MathProjection<'a> {
             }
             ProjectedMath::Align(align) => {
                 if let Some(align_map) = &self.source_map.align {
-                    align.source =
-                        self.source_map.source[align_map.environment_range.clone()].to_owned();
+                    align.source = self.source_map.source().to_owned();
                     for (row, ranges) in align.rows.iter_mut().zip(&align_map.cell_ranges) {
                         for (cell, range) in row.cells.iter_mut().zip(ranges) {
                             cell.source = self.source_map.source[range.clone()].to_owned();
@@ -353,7 +352,7 @@ impl<'a> MathProjection<'a> {
             }
             ProjectedMath::Align(mut align) => {
                 if let Some(align_map) = source_map.align {
-                    align.source = source_map.source[align_map.environment_range].to_owned();
+                    align.source = source_map.source.as_ref().to_owned();
                     for (row, ranges) in align.rows.iter_mut().zip(align_map.cell_ranges) {
                         for (cell, range) in row.cells.iter_mut().zip(ranges) {
                             cell.source = source_map.source[range].to_owned();

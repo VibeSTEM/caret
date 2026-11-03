@@ -13,11 +13,40 @@ fn projected_align_cell_at(source: &str, cursor: usize) -> Option<(usize, usize,
 }
 
 fn aligned_body_offset(align: &Align) -> usize {
-    align
-        .source
-        .find("\\begin{aligned}")
-        .unwrap_or_else(|| panic!("aligned test source must have an opening environment"))
-        + "\\begin{aligned}".len()
+    let Ok(projection) =
+        caret_math::parse_projection(&align.source, caret_math::MathInputKind::Align)
+    else {
+        panic!("Align source should produce an edit projection");
+    };
+    projection.source_map().edit_range().start
+}
+
+fn preserve_align_metadata_for_test(
+    previous: &Align,
+    updated: &mut Align,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
+) -> bool {
+    let previous_source = previous.source.clone();
+    let updated_source = updated.source.clone();
+    let Ok(previous_projection) =
+        caret_math::parse_projection(&previous_source, caret_math::MathInputKind::Align)
+    else {
+        return false;
+    };
+    let Ok(updated_projection) =
+        caret_math::parse_projection(&updated_source, caret_math::MathInputKind::Align)
+    else {
+        return false;
+    };
+    preserve_align_metadata(
+        previous,
+        updated,
+        old_edit,
+        new_edit,
+        previous_projection.source_map(),
+        updated_projection.source_map(),
+    )
 }
 
 fn assert_math_document_is_not_yet_saveable(document: &caret_doc::Document) {
@@ -3509,7 +3538,7 @@ fn splitting_a_metadata_bearing_align_row_is_rejected() -> Result<(), EditError>
     };
     let old_offset = aligned_body_offset(&previous);
     let new_offset = aligned_body_offset(&updated);
-    let metadata_preserved = preserve_align_metadata(
+    let metadata_preserved = preserve_align_metadata_for_test(
         &previous,
         &mut updated,
         &(old_offset + 3..old_offset + 4),
@@ -3525,40 +3554,125 @@ fn splitting_a_metadata_bearing_align_row_is_rejected() -> Result<(), EditError>
 
 #[test]
 fn editing_align_cell_preserves_tree_and_node_metadata() -> Result<(), EditError> {
-    let Block::Align(mut previous) = display_math_block(true, "a+b&b")? else {
+    let Block::Align(mut previous) = display_math_block(true, "a&b+c")? else {
         panic!("expected Align block");
     };
-    previous.source = r"\begin {aligned}a+b&b\end {aligned}".to_owned();
+    previous.source = r"\begin {aligned}a&b+c\end {aligned}".to_owned();
     let row_id = previous.rows[0].id.clone();
-    let tree_id = previous.rows[0].cells[0].root.id.clone();
+    let first_cell_id = previous.rows[0].cells[0].root.id.clone();
+    let edited_cell_id = previous.rows[0].cells[1].root.id.clone();
     previous.rows[0].cells[0]
         .extra
-        .insert("futureTreeValue".to_owned(), serde_json::json!("kept"));
+        .insert("futureTreeValue".to_owned(), serde_json::json!("unchanged"));
     previous.rows[0].cells[0]
         .root
         .extra
-        .insert("futureNodeValue".to_owned(), serde_json::json!("kept"));
-    let Block::Align(mut updated) = display_math_block_with_id(true, "a+x&b", previous.id.clone())?
+        .insert("futureNodeValue".to_owned(), serde_json::json!("unchanged"));
+    previous.rows[0].cells[1]
+        .root
+        .extra
+        .insert("editedCellNodeValue".to_owned(), serde_json::json!("kept"));
+    let Block::Align(mut updated) = display_math_block_with_id(true, "a&b+x", previous.id.clone())?
     else {
         panic!("expected parsed Align block");
     };
-    let old_offset =
-        align_source::align_body_range(&previous.source).map_or(0, |range| range.start);
-    let new_offset = align_source::align_body_range(&updated.source).map_or(0, |range| range.start);
-    preserve_align_metadata(
+    let old_offset = aligned_body_offset(&previous);
+    let new_offset = aligned_body_offset(&updated);
+    preserve_align_metadata_for_test(
         &previous,
         &mut updated,
-        &(old_offset + 2..old_offset + 3),
-        &(new_offset + 2..new_offset + 3),
+        &(old_offset + 4..old_offset + 5),
+        &(new_offset + 4..new_offset + 5),
     );
 
     assert_eq!(updated.rows[0].id, row_id);
-    assert_eq!(updated.rows[0].cells[0].extra["futureTreeValue"], "kept");
-    assert_eq!(updated.rows[0].cells[0].root.id, tree_id);
+    assert_eq!(
+        updated.rows[0].cells[0].extra["futureTreeValue"],
+        "unchanged"
+    );
+    assert_eq!(updated.rows[0].cells[0].root.id, first_cell_id);
     assert_eq!(
         updated.rows[0].cells[0].root.extra["futureNodeValue"],
+        "unchanged"
+    );
+    assert_eq!(updated.rows[0].cells[1].root.id, edited_cell_id);
+    assert_eq!(
+        updated.rows[0].cells[1].root.extra["editedCellNodeValue"],
         "kept"
     );
+    Ok(())
+}
+
+#[test]
+fn align_source_with_outer_trivia_keeps_focus_through_edit_undo_and_redo()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "% before\n\\begin {aligned}a&b\\end{aligned} % after\n";
+    let caret_math::ParsedMath::Align(mut align) =
+        caret_math::parse(source, caret_math::MathInputKind::Align)?
+    else {
+        panic!("Align input should parse to an Align tree");
+    };
+    let untouched_cell_id = align.rows[0].cells[1].root.id.clone();
+    align.rows[0].cells[1]
+        .extra
+        .insert("futureCellValue".to_owned(), serde_json::json!("preserve"));
+
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+
+    let initial_edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(initial_edit.source_projection.source(), source);
+    session.run(Command::InsertText("x".to_owned()))?;
+    let edited_source = session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .source_projection
+        .source()
+        .to_owned();
+    assert_ne!(edited_source, source);
+    let Block::Align(edited_align) = session
+        .document()
+        .body
+        .get(1)
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    assert_eq!(edited_align.source, edited_source);
+    assert_eq!(edited_align.rows[0].cells[1].root.id, untouched_cell_id);
+    assert_eq!(
+        edited_align.rows[0].cells[1].extra["futureCellValue"],
+        "preserve"
+    );
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("a&b"));
+    assert_eq!(
+        session
+            .math_edit()
+            .map(|edit| edit.source_projection.source()),
+        Some(source)
+    );
+    let Block::Align(undone_align) = session
+        .document()
+        .body
+        .get(1)
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    assert_eq!(undone_align.source, source);
+
+    session.run(Command::Redo)?;
+    assert_eq!(
+        session
+            .math_edit()
+            .map(|edit| edit.source_projection.source()),
+        Some(edited_source.as_str())
+    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("xa&b"));
     Ok(())
 }
 
@@ -3583,7 +3697,7 @@ fn appending_duplicate_align_cell_keeps_old_metadata_at_source_positions() -> Re
     };
     let old_offset = aligned_body_offset(&previous);
     let new_offset = aligned_body_offset(&updated);
-    preserve_align_metadata(
+    preserve_align_metadata_for_test(
         &previous,
         &mut updated,
         &(old_offset + 3..old_offset + 3),
@@ -3611,7 +3725,7 @@ fn inserting_duplicate_align_cell_before_existing_cells_keeps_their_identity()
     };
     let old_offset = aligned_body_offset(&previous);
     let new_offset = aligned_body_offset(&updated);
-    preserve_align_metadata(
+    preserve_align_metadata_for_test(
         &previous,
         &mut updated,
         &(old_offset..old_offset),
@@ -3640,7 +3754,7 @@ fn filling_an_empty_align_cell_preserves_its_identity_and_unknown_fields() -> Re
     };
     let old_offset = aligned_body_offset(&previous);
     let new_offset = aligned_body_offset(&updated);
-    preserve_align_metadata(
+    preserve_align_metadata_for_test(
         &previous,
         &mut updated,
         &(old_offset + 2..old_offset + 2),

@@ -35,8 +35,12 @@ pub(super) fn align_cell_at(
             if cursor < start || cursor > end {
                 return None;
             }
-            let cell_source_start = super::align_source::skip_trivia_bounded(source, start, cursor);
-            Some((row, cell, cursor.saturating_sub(cell_source_start)))
+            let semantic_start = projection
+                .align()?
+                .cell_range(row, cell)?
+                .start
+                .checked_sub(base)?;
+            Some((row, cell, cursor.saturating_sub(semantic_start)))
         })
     })
 }
