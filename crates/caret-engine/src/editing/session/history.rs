@@ -6,13 +6,13 @@
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
 use super::super::{PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
-use super::math_edit::{MathEditBranch, MathEditTarget};
+use super::math_edit::{MathEdit, MathEditBranch, MathEditTarget};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget,
     DocumentSettings, Equation, MathNode, MathTree, NodeId, PageGeometry, Paragraph,
 };
 use caret_layout::VisualAffinity;
-use std::mem::size_of;
+use std::{mem::size_of, sync::Arc};
 use undo::{Edit, History, Merged};
 
 const HISTORY_ACTION_LIMIT: usize = 256;
@@ -180,23 +180,30 @@ pub(super) struct MathEditPosition {
     pub(super) target: MathEditTarget,
     pub(super) cursor: usize,
     pub(super) branch: MathEditBranch,
+    pub(super) source_projection: Arc<caret_math::MathSourceMap<'static>>,
 }
 
 impl MathEditPosition {
-    pub(super) fn with_branch(
-        target: MathEditTarget,
-        cursor: usize,
-        branch: MathEditBranch,
-    ) -> Self {
+    pub(super) fn from_edit(edit: &MathEdit) -> Self {
+        Self::with_edit_state(edit, edit.cursor, edit.branch.clone())
+    }
+
+    pub(super) fn with_edit_state(edit: &MathEdit, cursor: usize, branch: MathEditBranch) -> Self {
         Self {
-            target,
+            target: edit.target.clone(),
             cursor,
             branch,
+            source_projection: Arc::clone(&edit.source_projection),
         }
     }
 
-    fn estimated_bytes(&self) -> usize {
+    fn estimated_bytes(&self, seen_projections: &mut std::collections::HashSet<usize>) -> usize {
         size_of::<Self>()
+            + if seen_projections.insert(Arc::as_ptr(&self.source_projection) as usize) {
+                self.source_projection.estimated_bytes()
+            } else {
+                0
+            }
             + match &self.branch {
                 MathEditBranch::Source => 0,
                 MathEditBranch::Text { path, .. } => path.estimated_bytes(),
@@ -258,6 +265,13 @@ impl SessionHistoryEdit {
     }
 
     pub(super) fn estimated_bytes(&self) -> usize {
+        self.estimated_bytes_with_seen(&mut std::collections::HashSet::new())
+    }
+
+    fn estimated_bytes_with_seen(
+        &self,
+        seen_projections: &mut std::collections::HashSet<usize>,
+    ) -> usize {
         size_of::<Self>()
             + self.patch.estimated_bytes()
             + selection_id_bytes(&self.before.selection)
@@ -266,12 +280,12 @@ impl SessionHistoryEdit {
                 .before
                 .math_edit
                 .as_ref()
-                .map_or(0, MathEditPosition::estimated_bytes)
+                .map_or(0, |position| position.estimated_bytes(seen_projections))
             + self
                 .after
                 .math_edit
                 .as_ref()
-                .map_or(0, MathEditPosition::estimated_bytes)
+                .map_or(0, |position| position.estimated_bytes(seen_projections))
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -1355,16 +1369,17 @@ pub(super) fn history_memory_limit() -> usize {
 }
 
 pub(super) fn estimated_history_bytes(history: &History<SessionHistoryEdit>) -> usize {
+    let mut seen_projections = std::collections::HashSet::new();
     let current_entries = history
         .entries()
-        .map(estimated_entry_bytes)
+        .map(|entry| estimated_entry_bytes(entry, &mut seen_projections))
         .fold(0usize, usize::saturating_add);
     let branch_bytes = history
         .branches()
         .map(|(_, branch)| {
             branch
                 .entries()
-                .map(estimated_entry_bytes)
+                .map(|entry| estimated_entry_bytes(entry, &mut seen_projections))
                 .fold(ESTIMATED_BRANCH_OVERHEAD_BYTES, usize::saturating_add)
         })
         .fold(0usize, usize::saturating_add);
@@ -1375,8 +1390,12 @@ pub(super) fn estimated_history_bytes(history: &History<SessionHistoryEdit>) -> 
         .saturating_mul(2)
 }
 
-fn estimated_entry_bytes(entry: &undo::Entry<SessionHistoryEdit>) -> usize {
-    size_of::<undo::Entry<SessionHistoryEdit>>().saturating_add(entry.as_ref().estimated_bytes())
+fn estimated_entry_bytes(
+    entry: &undo::Entry<SessionHistoryEdit>,
+    seen_projections: &mut std::collections::HashSet<usize>,
+) -> usize {
+    size_of::<undo::Entry<SessionHistoryEdit>>()
+        .saturating_add(entry.as_ref().estimated_bytes_with_seen(seen_projections))
 }
 
 pub(super) fn paragraph_states_for_ids(
@@ -1597,5 +1616,31 @@ mod tests {
         };
         flow.source_map = Vec::new();
         assert!(math_tree_estimated_bytes(&mapped) > math_tree_estimated_bytes(&unmapped));
+    }
+
+    #[test]
+    fn shared_math_projection_is_counted_once_per_history_estimate() {
+        let projection = Arc::new(
+            caret_math::parse_projection(&"x".repeat(4096), MathInputKind::Inline)
+                .unwrap_or_else(|error| panic!("test source should parse: {error}"))
+                .into_parts()
+                .1,
+        );
+        let position = MathEditPosition {
+            target: MathEditTarget::Inline {
+                paragraph_id: NodeId::generate(),
+                math_id: NodeId::generate(),
+            },
+            cursor: 0,
+            branch: MathEditBranch::Source,
+            source_projection: Arc::clone(&projection),
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        let first = position.estimated_bytes(&mut seen);
+        let second = position.clone().estimated_bytes(&mut seen);
+
+        assert!(first >= projection.estimated_bytes());
+        assert!(first - second >= projection.estimated_bytes());
     }
 }

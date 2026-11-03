@@ -12,11 +12,21 @@ pub(crate) fn project_tree_for_edit(
     tree: &MathTree,
     kind: MathInputKind,
 ) -> Result<(caret_math::MathSourceMap<'static>, MathTree), String> {
-    let source = caret_math::serialize_tree(tree);
+    let canonical_source = caret_math::serialize_tree(tree);
+    let existing_projection = (!tree.source.is_empty())
+        .then(|| caret_math::parse_projection(&tree.source, kind).ok())
+        .flatten()
+        .filter(|projection| {
+            matches!(projection.content(), caret_math::ProjectedMath::Tree(parsed)
+                if caret_math::serialize_tree(parsed) == canonical_source)
+        });
+    let projection = match existing_projection {
+        Some(projection) => projection,
+        None => caret_math::parse_projection(&canonical_source, kind)
+            .map_err(|error| format!("could not project formula tree to TeX: {error}"))?,
+    };
     let (caret_math::ProjectedMath::Tree(mut projected), source_map) =
-        caret_math::parse_projection(&source, kind)
-            .map_err(|error| format!("could not project formula tree to TeX: {error}"))?
-            .into_parts_with_legacy_fields()
+        projection.into_parts_with_legacy_fields()
     else {
         return Err("formula tree projected to a different formula kind".to_owned());
     };
@@ -30,11 +40,21 @@ pub(crate) fn project_tree_for_edit(
 pub(crate) fn project_align_for_edit(
     align: &Align,
 ) -> Result<(caret_math::MathSourceMap<'static>, Align), String> {
-    let source = caret_math::serialize_align(align);
+    let canonical_source = caret_math::serialize_align(align);
+    let existing_projection = (!align.source.is_empty())
+        .then(|| caret_math::parse_projection(&align.source, MathInputKind::Align).ok())
+        .flatten()
+        .filter(|projection| {
+            matches!(projection.content(), caret_math::ProjectedMath::Align(parsed)
+                if caret_math::serialize_align(parsed) == canonical_source)
+        });
+    let projection = match existing_projection {
+        Some(projection) => projection,
+        None => caret_math::parse_projection(&canonical_source, MathInputKind::Align)
+            .map_err(|error| format!("could not project align tree to TeX: {error}"))?,
+    };
     let (caret_math::ProjectedMath::Align(mut projected), source_map) =
-        caret_math::parse_projection(&source, MathInputKind::Align)
-            .map_err(|error| format!("could not project align tree to TeX: {error}"))?
-            .into_parts_with_legacy_fields()
+        projection.into_parts_with_legacy_fields()
     else {
         return Err("align tree projected to a different formula kind".to_owned());
     };
@@ -460,6 +480,23 @@ mod tests {
 
         assert_eq!(validate_document_math_sources(&document), Ok(()));
         assert!(crate::Session::new(document).is_ok());
+    }
+
+    #[test]
+    fn edit_projection_preserves_matching_noncanonical_source() {
+        let source = r"\frac {x}{\text{t}}";
+        let mut tree = parse_inline(source);
+        tree.source = source.to_owned();
+
+        let (source_map, projected) = project_tree_for_edit(&tree, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("matching noncanonical source should project: {error}"));
+
+        assert_eq!(source_map.source(), source);
+        assert_eq!(projected.source, source);
+        assert_eq!(
+            caret_math::serialize_tree(&projected),
+            caret_math::serialize_tree(&tree)
+        );
     }
 
     #[test]

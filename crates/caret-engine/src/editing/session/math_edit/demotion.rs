@@ -123,8 +123,7 @@ impl Session {
             &self.paragraph_index,
             [paragraph_id.clone()],
         );
-        let before_math =
-            MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone());
+        let before_math = MathEditPosition::from_edit(&edit);
         let end = start + OBJECT_REPLACEMENT.len_utf8();
         self.replace_paragraph(&position, paragraph)?;
         self.text_map_cache.clear();

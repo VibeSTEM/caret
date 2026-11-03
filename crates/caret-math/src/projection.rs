@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, mem::size_of, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
@@ -68,6 +68,23 @@ impl MathSourceMap<'_> {
     /// 返回 Align 的环境和单元格源码范围；其他公式类型没有行列范围。
     pub fn align(&self) -> Option<&AlignSourceMap> {
         self.align.as_ref()
+    }
+
+    /// 估算该映射保留的内存，包括映射本身及拥有的源码、范围缓冲区。
+    pub fn estimated_bytes(&self) -> usize {
+        let source_bytes = match &self.source {
+            Cow::Borrowed(_) => 0,
+            Cow::Owned(source) => source.capacity(),
+        };
+        let align_bytes = self.align.as_ref().map_or(0, |align| {
+            align.cell_ranges.capacity() * size_of::<Vec<Range<usize>>>()
+                + align
+                    .cell_ranges
+                    .iter()
+                    .map(|ranges| ranges.capacity() * size_of::<Range<usize>>())
+                    .sum::<usize>()
+        });
+        size_of::<Self>() + source_bytes + align_bytes
     }
 }
 

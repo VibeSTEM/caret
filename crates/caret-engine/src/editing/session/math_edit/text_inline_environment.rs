@@ -122,8 +122,8 @@ impl Session {
         let before_math = super::history_position(edit);
         self.pending_inline_style.set(kind, enabled)?;
         self.advance_history_merge_epoch();
-        let after_math = MathEditPosition::with_branch(
-            edit.target.clone(),
+        let after_math = MathEditPosition::with_edit_state(
+            edit,
             edit.cursor,
             MathEditBranch::Text {
                 path: path.clone(),

@@ -702,8 +702,24 @@ impl Session {
             document_changed,
             math_edit_position,
         ) = history::restore_history_transition(transition);
-        let restored_math_edit = math_edit_position
-            .and_then(|position| math_edit::restore_math_edit(&self.document, position));
+        let restored_math_edit = match math_edit_position {
+            Some(position) => match math_edit::restore_math_edit(&self.document, position) {
+                Some(edit) => Some(edit),
+                None => {
+                    let reverted = if redo {
+                        self.edit_history.undo(&mut self.document)
+                    } else {
+                        self.edit_history.redo(&mut self.document)
+                    };
+                    debug_assert!(
+                        reverted.is_some(),
+                        "failed history restore must be reversible"
+                    );
+                    return Err(EditError::InvalidPosition);
+                }
+            },
+            None => None,
+        };
         let selection_changed =
             self.selection != selection || previous_math_edit != restored_math_edit;
         self.selection = selection;

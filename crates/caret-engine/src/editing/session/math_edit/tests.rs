@@ -3116,8 +3116,11 @@ fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dy
 {
     let mut session = session_with_text("")?;
     accept(&mut session, "math")?;
-    session.run(Command::InsertText("x".to_owned()))?;
-    session.run(Command::InsertText("y".to_owned()))?;
+    let before_edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    session.run(Command::InsertText("xy".to_owned()))?;
     let after_edit = session
         .math_edit()
         .cloned()
@@ -3130,6 +3133,10 @@ fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dy
     assert_eq!(after_undo.target, after_edit.target);
     assert_eq!(after_undo.source(), "");
     assert_eq!(after_undo.cursor, 0);
+    assert!(Arc::ptr_eq(
+        &after_undo.source_projection,
+        &before_edit.source_projection
+    ));
     assert_eq!(inline_source(&session).as_deref(), Some(""));
 
     session.run(Command::Redo)?;
@@ -3137,7 +3144,150 @@ fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dy
     assert_eq!(after_redo.target, after_edit.target);
     assert_eq!(after_redo.source(), "xy");
     assert_eq!(after_redo.cursor, 2);
+    assert!(Arc::ptr_eq(
+        &after_redo.source_projection,
+        &after_edit.source_projection
+    ));
     assert_eq!(inline_source(&session).as_deref(), Some("xy"));
+    Ok(())
+}
+
+#[test]
+fn restore_math_edit_reuses_matching_projection_and_rejects_stale_source()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath("x".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let position = history_position(&edit);
+
+    let restored = restore_math_edit(session.document(), position.clone())
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(Arc::ptr_eq(
+        &restored.source_projection,
+        &edit.source_projection
+    ));
+
+    let mut stale_position = position;
+    stale_position.source_projection = Arc::new(
+        caret_math::parse_projection("other", caret_math::MathInputKind::Inline)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            .into_parts()
+            .1,
+    );
+    assert!(restore_math_edit(session.document(), stale_position).is_none());
+    Ok(())
+}
+
+#[test]
+fn reentering_formula_preserves_noncanonical_projection_for_pending_style_undo()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r"\frac {x}{\text{t}}";
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath(source.to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(source));
+
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let tree = session.math_tree_for_edit(&edit, None)?;
+    let text = tree
+        .root
+        .content
+        .iter()
+        .find_map(first_math_content_text)
+        .ok_or(EditError::InvalidPosition)?;
+    let start = text
+        .source_range
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?
+        .start as usize;
+    let path =
+        path::path_at_source_boundary(tree, start, true, None).ok_or(EditError::InvalidPosition)?;
+    session.enter_math_text_branch(path, 0);
+    session.run(Command::ToggleRunUnderline)?;
+
+    session.exit_math_edit(Direction::Forward, true)?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(source));
+
+    let before_failed_undo = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    {
+        let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        let Some(ParagraphContent::Math(math)) = paragraph.inlines.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        math.math_tree.source = "stale".to_owned();
+    }
+    assert!(matches!(
+        session.run(Command::Undo),
+        Err(EditError::InvalidPosition)
+    ));
+    assert_eq!(session.math_edit(), Some(&before_failed_undo));
+    {
+        let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        let Some(ParagraphContent::Math(math)) = paragraph.inlines.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        math.math_tree.source = source.to_owned();
+    }
+
+    session.run(Command::Undo)?;
+    let restored = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(restored.source(), source);
+    assert!(matches!(restored.branch, MathEditBranch::Text { .. }));
+    assert!(
+        session
+            .pending_inline_style
+            .active_run_properties()
+            .next()
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_math_history_restore_rolls_back_document_patch_and_keeps_history_position()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath("x".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(""));
+    {
+        let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        let Some(ParagraphContent::Math(math)) = paragraph.inlines.first_mut() else {
+            return Err(EditError::InvalidPosition.into());
+        };
+        math.math_tree.source = "stale".to_owned();
+    }
+    session.run(Command::Delete(Direction::Backward))?;
+    assert!(session.math_edit().is_none());
+    let document_before_failed_undo = session.document().clone();
+    let selection_before_failed_undo = session.selection().clone();
+
+    assert!(matches!(
+        session.run(Command::Undo),
+        Err(EditError::InvalidPosition)
+    ));
+    assert_eq!(session.document(), &document_before_failed_undo);
+    assert_eq!(session.selection(), &selection_before_failed_undo);
+    assert!(session.math_edit().is_none());
+    assert!(session.edit_history.can_undo());
     Ok(())
 }
 
@@ -3148,7 +3298,7 @@ fn reopening_a_canonical_projection_does_not_break_formula_creation_undo()
     session.run(Command::InsertInlineMath("a + b".to_owned()))?;
     assert!(session.math_edit().is_none());
     session.run(Command::EnterMath(Direction::Backward))?;
-    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("a+b"));
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("a + b"));
 
     session.run(Command::Undo)?;
     assert!(session.math_edit().is_none());
@@ -3168,6 +3318,10 @@ fn undo_and_redo_restore_equation_and_align_edit_targets() -> Result<(), Box<dyn
     for (query, align) in [("equation", false), ("align", true)] {
         let mut session = session_with_text("")?;
         accept(&mut session, query)?;
+        let before_edit = session
+            .math_edit()
+            .cloned()
+            .ok_or(EditError::InvalidPosition)?;
         session.run(Command::InsertText("x".to_owned()))?;
         let after_edit = session
             .math_edit()
@@ -3182,12 +3336,20 @@ fn undo_and_redo_restore_equation_and_align_edit_targets() -> Result<(), Box<dyn
         let after_undo = session.math_edit().ok_or(EditError::InvalidPosition)?;
         assert_eq!(after_undo.target, after_edit.target);
         assert_eq!(after_undo.cursor, 0);
+        assert!(Arc::ptr_eq(
+            &after_undo.source_projection,
+            &before_edit.source_projection
+        ));
 
         session.run(Command::Redo)?;
         let after_redo = session.math_edit().ok_or(EditError::InvalidPosition)?;
         assert_eq!(after_redo.target, after_edit.target);
         assert_eq!(after_redo.source(), "x");
         assert_eq!(after_redo.cursor, 1);
+        assert!(Arc::ptr_eq(
+            &after_redo.source_projection,
+            &after_edit.source_projection
+        ));
     }
     Ok(())
 }
@@ -3256,16 +3418,16 @@ fn entering_fenced_inline_math_edits_inside_the_fences_from_both_sides()
         focus: left,
     })))?;
     from_left.run(Command::EnterMath(Direction::Forward))?;
-    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(0));
+    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(1));
     from_left.run(Command::InsertText("y".to_owned()))?;
-    assert_eq!(inline_source(&from_left).as_deref(), Some("yx"));
+    assert_eq!(inline_source(&from_left).as_deref(), Some("$yx$"));
 
     let mut from_right = session_with_text("")?;
     from_right.run(Command::InsertInlineMath(r"\(x\)".to_owned()))?;
     from_right.run(Command::EnterMath(Direction::Backward))?;
-    assert_eq!(from_right.math_edit().map(|edit| edit.cursor), Some(1));
+    assert_eq!(from_right.math_edit().map(|edit| edit.cursor), Some(3));
     from_right.run(Command::InsertText("y".to_owned()))?;
-    assert_eq!(inline_source(&from_right).as_deref(), Some("xy"));
+    assert_eq!(inline_source(&from_right).as_deref(), Some(r"\(xy\)"));
     from_right.run(Command::MoveCaret(Direction::Forward))?;
     assert!(from_right.math_edit().is_none());
 
@@ -3283,7 +3445,7 @@ fn entering_fenced_inline_math_edits_inside_the_fences_from_both_sides()
         focus: left,
     })))?;
     from_left.run(Command::EnterMath(Direction::Forward))?;
-    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(0));
+    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(2));
     from_left.run(Command::MoveCaret(Direction::Backward))?;
     assert!(from_left.math_edit().is_none());
     Ok(())

@@ -112,31 +112,34 @@ pub(super) fn restore_math_edit(
     document: &caret_doc::Document,
     position: MathEditPosition,
 ) -> Option<MathEdit> {
-    let source = match &position.target {
+    let (source, kind) = match &position.target {
         MathEditTarget::Inline {
             paragraph_id,
             math_id,
-        } => find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?
-            .math_tree
-            .source
-            .clone(),
+        } => (
+            find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?
+                .math_tree
+                .source
+                .as_str(),
+            caret_math::MathInputKind::Inline,
+        ),
         MathEditTarget::Block { block_id, align } => {
             match (find_block_by_id(&document.body, block_id)?, align) {
-                (Block::Equation(equation), false) => equation.math_tree.source.clone(),
-                (Block::Align(value), true) => value.source.clone(),
+                (Block::Equation(equation), false) => (
+                    equation.math_tree.source.as_str(),
+                    caret_math::MathInputKind::Equation,
+                ),
+                (Block::Align(value), true) => {
+                    (value.source.as_str(), caret_math::MathInputKind::Align)
+                }
                 _ => return None,
             }
         }
     };
-    let kind = match &position.target {
-        MathEditTarget::Inline { .. } => caret_math::MathInputKind::Inline,
-        MathEditTarget::Block { align: true, .. } => caret_math::MathInputKind::Align,
-        MathEditTarget::Block { align: false, .. } => caret_math::MathInputKind::Equation,
-    };
-    let source_projection = caret_math::parse_projection(&source, kind)
-        .ok()?
-        .into_parts()
-        .1;
+    let source_projection = &position.source_projection;
+    if source_projection.kind() != kind || source_projection.source() != source {
+        return None;
+    }
     match &position.branch {
         MathEditBranch::Source => {
             let edit_source = source_projection.edit_source();
@@ -171,7 +174,7 @@ pub(super) fn restore_math_edit(
     }
     Some(MathEdit {
         target: position.target,
-        source_projection: Arc::new(source_projection),
+        source_projection: position.source_projection,
         cursor: position.cursor,
         branch: position.branch,
     })
@@ -237,7 +240,7 @@ fn math_tree_for_target<'a>(
 }
 
 pub(super) fn history_position(edit: &MathEdit) -> MathEditPosition {
-    MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone())
+    MathEditPosition::from_edit(edit)
 }
 
 fn find_inline_math_in_blocks<'a>(
@@ -1296,8 +1299,7 @@ impl Session {
         let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
-        let before_math_position =
-            MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone());
+        let before_math_position = MathEditPosition::from_edit(&edit);
         match edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
@@ -1824,7 +1826,12 @@ impl Session {
                         }
                     };
                     let after_math_position = after_math.map(|target| {
-                        MathEditPosition::with_branch(target, next_cursor, next_branch.clone())
+                        debug_assert_eq!(target, next_edit.target);
+                        MathEditPosition::with_edit_state(
+                            &next_edit,
+                            next_cursor,
+                            next_branch.clone(),
+                        )
                     });
                     let after_visual_affinity = match affinity {
                         Affinity::Upstream => VisualAffinity::Upstream,
@@ -1865,11 +1872,7 @@ impl Session {
                         patch,
                         (before_selection, before_visual_affinity),
                         (after_selection, self.selection_visual_affinity),
-                        Some(MathEditPosition::with_branch(
-                            edit.target.clone(),
-                            edit.cursor,
-                            edit.branch.clone(),
-                        )),
+                        Some(MathEditPosition::from_edit(&edit)),
                         after_math_position.clone(),
                         self.pending_inline_style.clone(),
                     );
@@ -1904,13 +1907,9 @@ impl Session {
                     patch,
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
-                        edit.cursor,
-                        edit.branch.clone(),
-                    )),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
+                    Some(MathEditPosition::from_edit(&edit)),
+                    Some(MathEditPosition::with_edit_state(
+                        &next_edit,
                         next_cursor,
                         next_branch.clone(),
                     )),
@@ -2147,13 +2146,9 @@ impl Session {
                     },
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
-                        edit.cursor,
-                        edit.branch.clone(),
-                    )),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
+                    Some(MathEditPosition::from_edit(&edit)),
+                    Some(MathEditPosition::with_edit_state(
+                        &next_edit,
                         next_cursor,
                         next_branch.clone(),
                     )),
