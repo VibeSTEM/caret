@@ -12,7 +12,9 @@ use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
 use caret_doc::InlineEnvironmentKind;
 
+mod format_tree_edit;
 mod source_map_edit;
+pub(super) use format_tree_edit::apply_math_text_format_tree_edit;
 pub(super) use source_map_edit::{EncodedMathTextPiece, apply_math_text_tree_edit};
 use std::ops::Range;
 

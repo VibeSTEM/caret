@@ -58,6 +58,11 @@ impl Session {
 
         let local_source_range =
             text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?;
+        let text_source_start = text
+            .source_range
+            .as_ref()
+            .map(|range| range.start as usize)
+            .ok_or(EditError::InvalidPosition)?;
         let host_source_range = path
             .host_offset(local_source_range.start)
             .and_then(|start| {
@@ -76,7 +81,11 @@ impl Session {
         let format = MathTextFormat {
             kind,
             enabled,
-            selected_source_start: local_source_range.start + prefix.len(),
+            selected_source_start: local_source_range
+                .start
+                .checked_sub(text_source_start)
+                .and_then(|start| start.checked_add(prefix.len()))
+                .ok_or(EditError::InvalidPosition)?,
             selected_source_len: local_source_range.len(),
             selected_text: display
                 .get(range.clone())

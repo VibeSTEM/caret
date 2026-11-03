@@ -93,6 +93,56 @@ fn first_math_content_text_mut(content: &mut MathContent) -> Option<&mut caret_d
     }
 }
 
+fn find_math_text_by_source_map_key<'a>(
+    flow: &'a MathFlow,
+    key: &str,
+) -> Option<&'a caret_doc::TextFlow> {
+    flow.content.iter().find_map(|content| match content {
+        MathContent::Text(text)
+            if text
+                .source_map
+                .iter()
+                .any(|entry| entry.extra.contains_key(key)) =>
+        {
+            Some(text)
+        }
+        MathContent::Environment(environment) => environment
+            .children
+            .iter()
+            .find_map(|child| find_math_content_text_by_source_map_key(child, key)),
+        MathContent::Math(node) => node
+            .children
+            .iter()
+            .find_map(|child| find_math_text_by_source_map_key(child, key)),
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
+    })
+}
+
+fn find_math_content_text_by_source_map_key<'a>(
+    content: &'a MathContent,
+    key: &str,
+) -> Option<&'a caret_doc::TextFlow> {
+    match content {
+        MathContent::Text(text)
+            if text
+                .source_map
+                .iter()
+                .any(|entry| entry.extra.contains_key(key)) =>
+        {
+            Some(text)
+        }
+        MathContent::Environment(environment) => environment
+            .children
+            .iter()
+            .find_map(|child| find_math_content_text_by_source_map_key(child, key)),
+        MathContent::Math(node) => node
+            .children
+            .iter()
+            .find_map(|child| find_math_text_by_source_map_key(child, key)),
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
+    }
+}
+
 fn first_math_environment_mut(
     flow: &mut MathFlow,
 ) -> Option<&mut caret_doc::InlineEnvironment<MathContent>> {
@@ -2081,6 +2131,259 @@ fn text_edit_rebases_enclosing_inline_environment_source_range() -> Result<(), E
 }
 
 #[test]
+fn math_text_formatting_keeps_selection_inside_nested_text_environment() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut session, r"\text{\textbf{abc}}")?;
+    move_into_math_text(&mut session)?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 2,
+    })?;
+
+    session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+
+    let MathEditBranch::Text { path, anchor: 0 } = &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+    assert_eq!(
+        path.resolve(
+            session
+                .math_tree_for_edit(session.math_edit().ok_or(EditError::InvalidPosition)?, None,)?
+        )
+        .map(|text| text
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>()),
+        Some("b".to_owned())
+    );
+    assert!(inline_source(&session).is_some_and(|source| source.contains(r"\textmd{b}")));
+
+    session.run(Command::Undo)?;
+    assert!(inline_source(&session).is_some_and(|source| source.contains(r"\textbf{abc}")));
+    session.run(Command::Redo)?;
+    assert!(inline_source(&session).is_some_and(|source| source.contains(r"\textmd{b}")));
+    Ok(())
+}
+
+#[test]
+fn math_text_formatting_preserves_and_rebases_zero_width_source_map_entries()
+-> Result<(), EditError> {
+    let mut full_selection = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut full_selection, r"\text{abc}")?;
+    move_into_math_text(&mut full_selection)?;
+    let old_source_start = active_math_text_flow(&full_selection)?
+        .source_range
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?
+        .start as usize;
+    add_math_text_source_map_anchor(&mut full_selection, 0, "startAnchor")?;
+    add_math_text_source_map_anchor(&mut full_selection, 3, "endAnchor")?;
+    full_selection.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 3,
+    })?;
+    full_selection.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+
+    let selected = active_math_text_flow(&full_selection)?;
+    let prefix_len = r"\textbf{".len();
+    for (display_offset, key, source_offset) in [
+        (0, "startAnchor", old_source_start + prefix_len),
+        (3, "endAnchor", old_source_start + prefix_len + 3),
+    ] {
+        let entry = selected
+            .source_map
+            .iter()
+            .find(|entry| entry.extra.contains_key(key))
+            .ok_or(EditError::InvalidPosition)?;
+        assert_eq!(entry.text_start as usize, display_offset);
+        assert_eq!(entry.text_end as usize, display_offset);
+        assert_eq!(entry.source_range.start as usize, source_offset);
+        assert_eq!(entry.source_range.end as usize, source_offset);
+    }
+
+    let mut right_anchor = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut right_anchor, r"\text{abc}")?;
+    move_into_math_text(&mut right_anchor)?;
+    add_math_text_source_map_anchor(&mut right_anchor, 2, "rightAnchor")?;
+    right_anchor.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 1,
+    })?;
+    right_anchor.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+
+    let edit = right_anchor.math_edit().ok_or(EditError::InvalidPosition)?;
+    let tree = right_anchor.math_tree_for_edit(edit, None)?;
+    let right = find_math_text_by_source_map_key(&tree.root, "rightAnchor")
+        .ok_or(EditError::InvalidPosition)?;
+    let entry = right
+        .source_map
+        .iter()
+        .find(|entry| entry.extra.contains_key("rightAnchor"))
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(entry.text_start, 1);
+    assert_eq!(entry.text_end, 1);
+    assert_eq!(entry.source_range.start, 17);
+    assert_eq!(entry.source_range.end, 17);
+    Ok(())
+}
+
+fn add_math_text_source_map_anchor(
+    session: &mut Session,
+    display_offset: u32,
+    key: &str,
+) -> Result<(), EditError> {
+    let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let text = equation
+        .math_tree
+        .root
+        .content
+        .iter_mut()
+        .find_map(first_math_content_text_mut)
+        .ok_or(EditError::InvalidPosition)?;
+    let source_offset = text
+        .source_map
+        .iter()
+        .find_map(|entry| {
+            let start = entry.text_start as usize;
+            let end = entry.text_end as usize;
+            let source_start = entry.source_range.start as usize;
+            let source_end = entry.source_range.end as usize;
+            (start <= display_offset as usize
+                && display_offset as usize <= end
+                && end - start == source_end - source_start)
+                .then(|| source_start + display_offset as usize - start)
+        })
+        .ok_or(EditError::InvalidPosition)?;
+    let offset = u32::try_from(source_offset).map_err(|_| EditError::InvalidPosition)?;
+    text.source_map.push(caret_doc::TextFlowSourceMapEntry {
+        text_start: display_offset,
+        text_end: display_offset,
+        source_range: caret_doc::MathSourceRange {
+            start: offset,
+            end: offset,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::from([(key.to_owned(), serde_json::Value::Bool(true))]),
+    });
+    Ok(())
+}
+
+#[test]
+fn math_text_formatting_rejects_unsafe_metadata_splits_atomically() -> Result<(), EditError> {
+    for metadata_kind in ["flow", "run", "sourceMap"] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        insert_equation_text(&mut session, r"\text{abc}")?;
+        move_into_math_text(&mut session)?;
+        mutate_active_math_text_flow(&mut session, |text| {
+            match metadata_kind {
+                "flow" => {
+                    text.extra.insert(
+                        "futureFlowValue".to_owned(),
+                        serde_json::json!(metadata_kind),
+                    );
+                }
+                "run" => {
+                    text.runs[0].extra.insert(
+                        "futureRunValue".to_owned(),
+                        serde_json::json!(metadata_kind),
+                    );
+                }
+                "sourceMap" => {
+                    text.source_map[0].extra.insert(
+                        "futureMapValue".to_owned(),
+                        serde_json::json!(metadata_kind),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            Ok(())
+        })?;
+        session.run(Command::SetMathTextSelection {
+            anchor: 1,
+            focus: 2,
+        })?;
+        let document_before = session.document().clone();
+        let edit_before = session.math_edit().cloned();
+        let generation_before = session.document_generation();
+        let selection_before = session.selection().clone();
+
+        assert!(matches!(
+            session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold)),
+            Err(EditError::UnsupportedOpaqueContent)
+        ));
+        assert_eq!(session.document(), &document_before);
+        assert_eq!(session.math_edit(), edit_before.as_ref());
+        assert_eq!(session.document_generation(), generation_before);
+        assert_eq!(session.selection(), &selection_before);
+    }
+
+    let mut full_selection = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut full_selection, r"\text{abc}")?;
+    move_into_math_text(&mut full_selection)?;
+    mutate_active_math_text_flow(&mut full_selection, |text| {
+        text.extra
+            .insert("futureFlowValue".to_owned(), serde_json::json!(1));
+        text.runs[0]
+            .extra
+            .insert("futureRunValue".to_owned(), serde_json::json!(2));
+        text.source_map[0]
+            .extra
+            .insert("futureMapValue".to_owned(), serde_json::json!(3));
+        text.source_range
+            .as_mut()
+            .ok_or(EditError::InvalidPosition)?
+            .extra
+            .insert("futureRangeValue".to_owned(), serde_json::json!(4));
+        Ok(())
+    })?;
+    full_selection.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 3,
+    })?;
+    full_selection.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    let selected = active_math_text_flow(&full_selection)?;
+    assert_eq!(selected.extra["futureFlowValue"], 1);
+    assert_eq!(selected.runs[0].extra["futureRunValue"], 2);
+    assert_eq!(selected.source_map[0].extra["futureMapValue"], 3);
+    assert_eq!(
+        selected
+            .source_range
+            .as_ref()
+            .ok_or(EditError::InvalidPosition)?
+            .extra["futureRangeValue"],
+        4
+    );
+    Ok(())
+}
+
+fn mutate_active_math_text_flow(
+    session: &mut Session,
+    mutate: impl FnOnce(&mut caret_doc::TextFlow) -> Result<(), EditError>,
+) -> Result<(), EditError> {
+    let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
+        panic!("test should use an equation block");
+    };
+    let Some(text) = equation
+        .math_tree
+        .root
+        .content
+        .iter_mut()
+        .find_map(first_math_content_text_mut)
+    else {
+        panic!("test formula should contain a TextFlow");
+    };
+    mutate(text)
+}
+
+#[test]
 fn text_input_rejects_exceeding_math_source_budget_atomically() -> Result<(), EditError> {
     let prefix = r"\text{";
     let suffix = "}";
@@ -2147,6 +2450,25 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
     assert!(active_math_text_flow(&equation)?.runs.iter().any(|run| {
         run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
     }));
+    equation.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert!(matches!(
+        equation.document().body.first(),
+        Some(Block::Equation(value)) if value.math_tree.source.contains(r"\textbf{bc}")
+    ));
+    assert!(matches!(
+        equation.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    equation.run(Command::Undo)?;
+    assert!(matches!(
+        equation.document().body.first(),
+        Some(Block::Equation(value)) if !value.math_tree.source.contains(r"\textbf{bc}")
+    ));
+    equation.run(Command::Redo)?;
+    assert!(matches!(
+        equation.document().body.first(),
+        Some(Block::Equation(value)) if value.math_tree.source.contains(r"\textbf{bc}")
+    ));
 
     let mut align = session_with_text("")?;
     accept(&mut align, "align")?;
@@ -2185,6 +2507,15 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
     assert!(active_math_text_flow(&align)?.runs.iter().any(|run| {
         run.text == "bc" && run.props.get("underline") == Some(&serde_json::Value::Bool(true))
     }));
+    align.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert!(matches!(
+        align.document().body.first(),
+        Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\textbf{bc}")
+    ));
+    assert!(matches!(
+        align.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { path, .. }) if path.align_cell() == Some((0, 0))
+    ));
     Ok(())
 }
 

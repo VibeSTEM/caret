@@ -210,7 +210,7 @@ fn display_range_follows(range: &Range<usize>, edit: &Range<usize>) -> bool {
     range.start >= edit.end
 }
 
-fn rebase_text_map_entry(
+pub(super) fn rebase_text_map_entry(
     entry: &TextFlowSourceMapEntry,
     text_delta: isize,
     source_delta: isize,
@@ -297,7 +297,7 @@ fn append_text_map_piece(
     Ok(())
 }
 
-fn update_math_flow_ranges(
+pub(super) fn update_math_flow_ranges(
     flow: &mut MathFlow,
     flow_path: &[crate::editing::session::math_edit::MathTextFlowPathStep],
     target_path: &[crate::editing::session::math_edit::MathTextFlowPathStep],
