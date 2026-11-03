@@ -82,16 +82,21 @@ impl MathTextFlowPath {
     }
 
     pub(super) fn resolve<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
-        let flow = resolve_content_path(&tree.root, &self.steps)?;
-        let MathContent::Text(text) = flow else {
-            return None;
-        };
+        let text = self.resolve_structurally(tree)?;
         (text
             .source_range
             .as_ref()
             .map(|range| (range.start, range.end))
             == Some(self.source_range))
         .then_some(text)
+    }
+
+    /// 按类型化树路径解析 TextFlow，不要求临时源码范围仍与旧投影一致。
+    pub(super) fn resolve_structurally<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
+        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
+            return None;
+        };
+        Some(text)
     }
 
     pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {

@@ -33,7 +33,6 @@ pub use layout_view::{
     LayoutLineView, PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
     ParagraphLayoutView, StoryView,
 };
-pub use math_validation::validate_document_math_sources;
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
     PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,

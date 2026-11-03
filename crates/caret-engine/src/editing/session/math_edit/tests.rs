@@ -806,29 +806,33 @@ fn mod_backspace_accepts_font_properties_reconstructed_from_math_source() -> Res
         let math =
             find_inline_math(&paragraph.inlines, math_id).ok_or(EditError::InvalidPosition)?;
         assert!(math_tree_has_font_environment(&math.math_tree.root));
+        let canonical = caret_math::serialize_tree(&math.math_tree);
         session.run(Command::EditorKey(EditorKey::ModBackspace))?;
-        assert_eq!(first_paragraph_text(&session), source);
+        assert_eq!(first_paragraph_text(&session), canonical);
         assert!(session.math_edit().is_none());
     }
     Ok(())
 }
 
 #[test]
-fn mod_backspace_rejects_multiline_math_source_atomically() -> Result<(), EditError> {
+fn mod_backspace_downgrades_multiline_math_to_canonical_single_line_text() -> Result<(), EditError>
+{
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     session.run(Command::InsertInlineMath("x\ny".to_owned()))?;
     session.run(Command::EnterMath(Direction::Backward))?;
 
-    let before_document = session.document().clone();
-    let before_edit = session.math_edit().cloned();
-    let before_generation = session.document_generation();
-    assert_eq!(
-        session.run(Command::EditorKey(EditorKey::ModBackspace)),
-        Err(EditError::UnsupportedNewline)
-    );
-    assert_eq!(session.document(), &before_document);
-    assert_eq!(session.math_edit(), before_edit.as_ref());
-    assert_eq!(session.document_generation(), before_generation);
+    let canonical = {
+        let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+            return Err(EditError::InvalidPosition);
+        };
+        let [ParagraphContent::Math(math)] = paragraph.inlines.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        caret_math::serialize_tree(&math.math_tree)
+    };
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert_eq!(first_paragraph_text(&session), canonical);
+    assert!(session.math_edit().is_none());
     Ok(())
 }
 
@@ -844,6 +848,22 @@ fn mod_backspace_keeps_source_caret_in_place_and_typing_continues_there() -> Res
     assert_eq!(session.selection().focus.offset, 2);
     session.run(Command::InsertText("!".to_owned()))?;
     assert_eq!(first_paragraph_text(&session), "ab!c");
+    Ok(())
+}
+
+#[test]
+fn mod_backspace_maps_a_noncanonical_source_caret_to_canonical_text() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath("x".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::InsertText(" ".to_owned()))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(2));
+
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert_eq!(first_paragraph_text(&session), "x");
+    assert_eq!(session.selection().focus.offset, 1);
+    session.run(Command::InsertText("!".to_owned()))?;
+    assert_eq!(first_paragraph_text(&session), "x!");
     Ok(())
 }
 
@@ -2857,7 +2877,10 @@ fn reparsing_unranged_math_nodes_never_reuses_an_identity_twice() -> Result<(), 
     session.document().validate().map_err(|error| {
         EditError::InvalidDocument(format!("math node IDs should remain unique: {error}"))
     })?;
-    crate::validate_document_math_sources(session.document()).map_err(EditError::InvalidDocument)
+    session
+        .document()
+        .validate()
+        .map_err(|error| EditError::InvalidDocument(error.to_string()))
 }
 
 #[test]
@@ -3122,6 +3145,30 @@ fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dy
 }
 
 #[test]
+fn reopening_a_canonical_projection_does_not_break_formula_creation_undo()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath("a + b".to_owned()))?;
+    assert!(session.math_edit().is_none());
+    session.run(Command::EnterMath(Direction::Backward))?;
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source.as_str()),
+        Some("a+b")
+    );
+
+    session.run(Command::Undo)?;
+    assert!(session.math_edit().is_none());
+    assert!(session.document().body.iter().all(|block| {
+        !matches!(block, Block::Paragraph(paragraph) if paragraph.inlines.iter().any(|node| matches!(node, ParagraphContent::Math(_))))
+    }));
+    session.run(Command::Redo)?;
+    assert!(session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.inlines.iter().any(|node| matches!(node, ParagraphContent::Math(_))))
+    }));
+    Ok(())
+}
+
+#[test]
 fn undo_and_redo_restore_equation_and_align_edit_targets() -> Result<(), Box<dyn std::error::Error>>
 {
     for (query, align) in [("equation", false), ("align", true)] {
@@ -3189,16 +3236,16 @@ fn entering_fenced_inline_math_edits_inside_the_fences_from_both_sides()
         focus: left,
     })))?;
     from_left.run(Command::EnterMath(Direction::Forward))?;
-    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(1));
+    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(0));
     from_left.run(Command::InsertText("y".to_owned()))?;
-    assert_eq!(inline_source(&from_left).as_deref(), Some("$yx$"));
+    assert_eq!(inline_source(&from_left).as_deref(), Some("yx"));
 
     let mut from_right = session_with_text("")?;
     from_right.run(Command::InsertInlineMath(r"\(x\)".to_owned()))?;
     from_right.run(Command::EnterMath(Direction::Backward))?;
-    assert_eq!(from_right.math_edit().map(|edit| edit.cursor), Some(3));
+    assert_eq!(from_right.math_edit().map(|edit| edit.cursor), Some(1));
     from_right.run(Command::InsertText("y".to_owned()))?;
-    assert_eq!(inline_source(&from_right).as_deref(), Some(r"\(xy\)"));
+    assert_eq!(inline_source(&from_right).as_deref(), Some("xy"));
     from_right.run(Command::MoveCaret(Direction::Forward))?;
     assert!(from_right.math_edit().is_none());
 
@@ -3216,7 +3263,7 @@ fn entering_fenced_inline_math_edits_inside_the_fences_from_both_sides()
         focus: left,
     })))?;
     from_left.run(Command::EnterMath(Direction::Forward))?;
-    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(2));
+    assert_eq!(from_left.math_edit().map(|edit| edit.cursor), Some(0));
     from_left.run(Command::MoveCaret(Direction::Backward))?;
     assert!(from_left.math_edit().is_none());
     Ok(())

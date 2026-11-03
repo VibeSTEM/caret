@@ -1,7 +1,10 @@
 //! 验证文档文件格式、往返和兼容边界。
 
 use super::{CdocFile, DocumentError, OpenedDocument, PreviewReason, open};
-use crate::{Block, Document, ParagraphContent, Run, TextFlow};
+use crate::{
+    Block, Document, MathContent, MathSourceRange, ParagraphContent, Run, TextFlow,
+    TextFlowSourceMapEntry,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -11,73 +14,192 @@ fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn math_nodes_open_as_read_only_preview_until_layout_support_is_available()
--> Result<(), Box<dyn std::error::Error>> {
+fn math_tree_round_trip_does_not_persist_tex_projections() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([
         {
-            "type": "paragraph",
-            "id": "paragraph",
-            "inlines": [{
-                "type": "inlineMath", "id": "inline", "mathTree": {
-                    "schemaVersion": 1, "source": "x^2",
-                    "root": {"id": "inline-root", "kind": "row", "children": [
-                        {"id": "inline-x", "kind": "symbol", "text": "x", "sourceRange": {"start": 0, "end": 1, "vendorRangeHint": 42}},
-                        {"id": "inline-power", "kind": "superscript", "children": [
-                            {"id": "inline-base", "kind": "symbol", "text": "x"},
-                            {"id": "inline-2", "kind": "symbol", "text": "2", "sourceRange": {"start": 2, "end": 3}}
-                        ]}
-                    ]}
-                }
-            }]
-        },
-        {
             "type": "equation", "id": "equation", "mathTree": {
-                "schemaVersion": 1, "source": "a+b",
-                "root": {"id": "equation-root", "kind": "row", "children": []}
+                "schemaVersion": 3,
+                "root": {"id": "root", "content": [
+                    {"type": "text", "runs": [{"text": "x"}]}
+                ]}
             }
-        },
-        {
-            "type": "align", "id": "align", "source": "a=b",
-            "rows": [{
-                "id": "align-row", "cells": [{
-                    "schemaVersion": 1, "source": "a=b",
-                    "root": {"id": "align-cell-root", "kind": "row", "children": []}
-                }]
-            }]
         }
     ]);
     envelope["requiredFeatures"] = json!([
-        "caret.math.align",
+        "caret.math.content-flow.v2",
         "caret.math.equation",
-        "caret.math.inline",
+        "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
 
-    let opened = open(envelope.to_string().as_bytes())?;
-    let OpenedDocument::SafePreview(preview) = opened else {
-        panic!("formula nodes must remain read-only until layout support is integrated");
+    let mut document: crate::Document = serde_json::from_value(envelope["document"].clone())?;
+    let Block::Equation(equation) = &mut document.body[0] else {
+        panic!("expected equation");
     };
-    assert!(!preview.can_save());
-    let preserved = preview.to_json_value()?;
+    equation.math_tree.source = r"\text{x}".to_owned();
+    equation.math_tree.root.source_range = Some(MathSourceRange {
+        start: 0,
+        end: 8,
+        extra: BTreeMap::new(),
+    });
+    let MathContent::Text(text) = &mut equation.math_tree.root.content[0] else {
+        panic!("expected text flow");
+    };
+    text.source_range = Some(MathSourceRange {
+        start: 6,
+        end: 7,
+        extra: BTreeMap::new(),
+    });
+    text.source_map.push(TextFlowSourceMapEntry {
+        text_start: 0,
+        text_end: 1,
+        source_range: MathSourceRange {
+            start: 6,
+            end: 7,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    });
+    let saved = serde_json::to_value(&document)?;
+    assert!(saved["body"][0]["mathTree"].get("source").is_none());
+    assert!(
+        saved["body"][0]["mathTree"]["root"]
+            .get("sourceRange")
+            .is_none()
+    );
+    assert!(
+        saved["body"][0]["mathTree"]["root"]["content"][0]
+            .get("sourceRange")
+            .is_none()
+    );
+    assert!(
+        saved["body"][0]["mathTree"]["root"]["content"][0]
+            .get("sourceMap")
+            .is_none()
+    );
+    envelope["document"] = saved.clone();
+    envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
+    let OpenedDocument::SafePreview(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("math remains read-only until layout support is enabled");
+    };
+    assert_eq!(opened.to_json_value()?["document"], saved);
+    Ok(())
+}
+
+#[test]
+fn retired_math_source_fields_and_schema_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (
+            json!({"type":"equation","id":"eq","mathTree":{"schemaVersion":2,"source":"x","root":{"id":"root","content":[]}}}),
+            "schema",
+        ),
+        (
+            json!({"type":"equation","id":"eq","mathTree":{"schemaVersion":3,"source":"x","root":{"id":"root","content":[]}}}),
+            "mathTree.source",
+        ),
+        (
+            json!({"type":"equation","id":"eq","mathTree":{"schemaVersion":3,"root":{"id":"root","sourceRange":{"start":0,"end":1},"content":[]}}}),
+            "MathFlow.sourceRange",
+        ),
+        (
+            json!({"type":"equation","id":"eq","mathTree":{"schemaVersion":3,"root":{"id":"root","content":[{"type":"text","runs":[],"sourceMap":[]}]}}}),
+            "TextFlow.sourceMap",
+        ),
+        (
+            json!({"type":"equation","id":"eq","mathTree":{"schemaVersion":3,"root":{"id":"root","content":[{"type":"math","id":"x","kind":"symbol","text":"x","sourceRange":{"start":0,"end":1}}]}}}),
+            "MathNode.sourceRange",
+        ),
+        (
+            json!({"type":"align","id":"align","source":"x","rows":[{"id":"row","cells":[{"schemaVersion":3,"root":{"id":"root","content":[]}}]}]}),
+            "align.source",
+        ),
+    ];
+    for (node, expected_error) in cases {
+        let mut envelope = blank_envelope()?;
+        envelope["document"]["body"] = json!([node.clone()]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.align",
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.syntax.v1",
+            "caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let Err(DocumentError::InvalidDocument(reason)) = open(envelope.to_string().as_bytes())
+        else {
+            panic!("retired math encoding should be rejected: {node:?}");
+        };
+        assert!(
+            reason.contains(expected_error),
+            "unexpected error: {reason}"
+        );
+    }
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{"type":"futureBlock","source":"vendor payload"}]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes())?,
+        OpenedDocument::SafePreview(_)
+    ));
+
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type":"paragraph", "id":"p", "inlines":[{
+            "type":"environment", "scope":"inline", "kind":"vendor",
+            "sourceRange":{"start":0,"end":1}, "children":[{
+                "type":"text", "runs":[], "sourceMap":["vendor"]
+            }]
+        }]
+    }]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes())?,
+        OpenedDocument::SafePreview(_)
+    ));
+    Ok(())
+}
+
+#[test]
+fn ordinary_text_extensions_with_math_projection_names_round_trip()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type":"paragraph", "id":"p", "inlines":[{
+            "type":"text", "runs":[],
+            "sourceRange":{"vendor":"preserve"},
+            "sourceMap":{"vendor":"preserve"}
+        }, {
+            "type":"environment", "scope":"inline", "kind":"bold", "id":"bold",
+            "sourceRange":{"vendor":"preserve"}, "children":[]
+        }]
+    }]);
+    let OpenedDocument::Editable(file) = open(envelope.to_string().as_bytes())? else {
+        panic!("plain text extension fields should remain ordinary unknown metadata");
+    };
+    let saved = serde_json::to_value(file.document())?;
     assert_eq!(
-        preserved["document"]["body"][0]["inlines"][0]["mathTree"]["source"],
-        "x^2"
+        saved["body"][0]["inlines"][0]["sourceRange"]["vendor"],
+        "preserve"
     );
     assert_eq!(
-        preserved["document"]["body"][1]["mathTree"]["source"],
-        "a+b"
+        saved["body"][0]["inlines"][0]["sourceMap"]["vendor"],
+        "preserve"
     );
     assert_eq!(
-        preserved["document"]["body"][2]["rows"][0]["cells"][0]["source"],
-        "a=b"
+        saved["body"][0]["inlines"][1]["sourceRange"]["vendor"],
+        "preserve"
     );
-    assert!(preview.reasons.iter().any(|reason| matches!(
-        reason,
-        PreviewReason::UnsupportedRequiredFeature(feature)
-            if feature.starts_with("caret.math.")
-    )));
     Ok(())
 }
 
@@ -90,14 +212,10 @@ fn unpublished_inline_and_math_text_formats_are_not_migrated()
         "id": "paragraph",
         "inlines": [{"type": "run", "id": "old-run", "text": "legacy"}]
     }]);
-    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("the unpublished inline representation must not be converted");
-    };
-    assert!(!preview.can_save());
-    assert_eq!(
-        preview.to_json_value()?["document"]["body"][0]["inlines"][0]["type"],
-        "run"
-    );
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
 
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([{
@@ -108,23 +226,21 @@ fn unpublished_inline_and_math_text_formats_are_not_migrated()
             "id": "inline",
             "mathTree": {
                 "schemaVersion": 2,
-                "source": "x",
                 "root": {"id": "root", "content": [{
                     "type": "math", "id": "text-node", "kind": "text_content", "text": "x"
                 }]}
             }
         }]
     }]);
-    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("the old string text node must not enter the editable MathFlow schema");
-    };
-    assert!(!preview.can_save());
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
     Ok(())
 }
 
 #[test]
-fn text_nodes_without_runs_open_as_read_only_and_preserve_the_payload()
--> Result<(), Box<dyn std::error::Error>> {
+fn legacy_string_text_nodes_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([{
         "type": "paragraph",
@@ -132,19 +248,10 @@ fn text_nodes_without_runs_open_as_read_only_and_preserve_the_payload()
         "inlines": [{"type": "text", "text": "hello"}]
     }]);
 
-    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("a text node without the current-schema runs field must not be editable");
-    };
-    assert!(!preview.can_save());
-    assert_eq!(
-        preview.to_json_value()?["document"]["body"][0]["inlines"][0],
-        json!({"type": "text", "text": "hello"})
-    );
-    assert!(
-        preview
-            .reasons
-            .contains(&PreviewReason::UnsupportedNodeKind)
-    );
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
 
     let mut envelope = blank_envelope()?;
     envelope["document"]["body"] = json!([{
@@ -152,13 +259,55 @@ fn text_nodes_without_runs_open_as_read_only_and_preserve_the_payload()
         "id": "paragraph",
         "inlines": [{"type": "text", "runs": [], "text": "hello"}]
     }]);
+    assert!(matches!(
+        open(envelope.to_string().as_bytes()),
+        Err(DocumentError::InvalidDocument(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn unknown_math_projection_names_remain_on_unrelated_nodes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["body"] = json!([{
+        "type": "equation", "id": "equation", "mathTree": {
+            "schemaVersion": 3,
+            "sourceRange": {"vendor": "tree"},
+            "root": {"id": "root-flow", "source": "flow", "content": [
+                {"type": "text", "runs": [{"text": "x"}], "source": "text"},
+                {"type": "math", "id": "symbol", "kind": "symbol", "text": "y",
+                 "sourceMap": {"vendor": "node"}}
+            ]}
+        }
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.equation",
+        "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
     let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("the unpublished string text field must not be editable with an empty runs list");
+        panic!("math is held in safe preview until layout support is enabled");
     };
-    assert!(!preview.can_save());
+    let saved = preview.to_json_value()?;
     assert_eq!(
-        preview.to_json_value()?["document"]["body"][0]["inlines"][0],
-        json!({"type": "text", "runs": [], "text": "hello"})
+        saved["document"]["body"][0]["mathTree"]["sourceRange"]["vendor"],
+        "tree"
+    );
+    assert_eq!(
+        saved["document"]["body"][0]["mathTree"]["root"]["source"],
+        "flow"
+    );
+    assert_eq!(
+        saved["document"]["body"][0]["mathTree"]["root"]["content"][0]["source"],
+        "text"
+    );
+    assert_eq!(
+        saved["document"]["body"][0]["mathTree"]["root"]["content"][1]["sourceMap"]["vendor"],
+        "node"
     );
     Ok(())
 }
@@ -170,7 +319,7 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
             json!({
                 "type": "paragraph", "id": "paragraph", "inlines": [{
                     "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 2, "source": "x",
+                        "schemaVersion": 3,
                         "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                     }
                 }]
@@ -180,7 +329,7 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
         (
             json!({
                 "type": "equation", "id": "equation", "mathTree": {
-                    "schemaVersion": 2, "source": "x",
+                    "schemaVersion": 3,
                     "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                 }
             }),
@@ -188,30 +337,63 @@ fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::err
         ),
         (
             json!({
-                "type": "align", "id": "align", "source": "x", "rows": [{
+                "type": "align", "id": "align", "rows": [{
                     "id": "row", "cells": [{
-                        "schemaVersion": 2, "source": "x",
+                        "schemaVersion": 3,
                         "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
                     }]
                 }]
             }),
             "caret.math.align",
         ),
+        (
+            json!({
+                "type": "equation", "id": "equation", "mathTree": {
+                    "schemaVersion": 3,
+                    "root": {"id": "root-flow", "content": [{"type": "math", "id": "root", "kind": "symbol", "text": "x"}]}
+                }
+            }),
+            "caret.math.content-flow.v2",
+        ),
+        (
+            json!({
+                "type": "equation", "id": "equation", "mathTree": {
+                    "schemaVersion": 3,
+                    "root": {"id": "root-flow", "content": [{"type": "math", "id": "fraction", "kind": "fraction", "attributes": {"style": "frac"}, "children": [
+                        {"id": "numerator", "content": [{"type": "math", "id": "x", "kind": "symbol", "text": "x"}]},
+                        {"id": "denominator", "content": [{"type": "math", "id": "y", "kind": "symbol", "text": "y"}]}
+                    ]}]}
+                }
+            }),
+            "caret.math.syntax.v1",
+        ),
     ];
     for (node, missing_feature) in cases {
         let mut envelope = blank_envelope()?;
         envelope["document"]["body"] = json!([node]);
+        envelope["requiredFeatures"] = json!([
+            "caret.math.align",
+            "caret.math.content-flow.v2",
+            "caret.math.equation",
+            "caret.math.inline",
+            "caret.math.syntax.v1",
+            "caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings",
+            "caret.text.default-font-size"
+        ]);
+        let features = envelope["requiredFeatures"]
+            .as_array_mut()
+            .ok_or("requiredFeatures should be an array")?;
+        features.retain(|feature| feature.as_str() != Some(missing_feature));
+        features.sort_by_key(|feature| feature.as_str().unwrap_or_default().to_owned());
         let bytes = envelope.to_string();
-        let opened = open(bytes.as_bytes())?;
-        let OpenedDocument::SafePreview(preview) = opened else {
-            panic!("math data without its required feature must be read-only");
+        let result = open(bytes.as_bytes());
+        let Err(DocumentError::InvalidDocument(reason)) = result else {
+            panic!("missing math feature should be rejected: {missing_feature}; got {result:?}");
         };
         assert!(
-            preview
-                .reasons
-                .contains(&PreviewReason::MissingRequiredFeature(
-                    missing_feature.to_owned()
-                ))
+            reason.contains(missing_feature),
+            "unexpected error: {reason}"
         );
     }
     Ok(())
@@ -243,7 +425,7 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
             json!({
                 "type": "paragraph", "id": "paragraph", "inlines": [{
                     "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 2, "source": "future",
+                        "schemaVersion": 4,
                         "root": {"id": "root", "kind": "row", "children": []}
                     }
                 }]
@@ -253,7 +435,7 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
         (
             json!({
                 "type": "equation", "id": "equation", "mathTree": {
-                    "schemaVersion": 2, "source": "future",
+                    "schemaVersion": 4,
                     "root": {"id": "root", "kind": "row", "children": []}
                 }
             }),
@@ -261,10 +443,21 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
         ),
         (
             json!({
-                "type": "align", "id": "align", "source": "future", "rows": [{
+                "type": "align", "id": "align", "rows": [{
                     "id": "row", "cells": [{
-                        "schemaVersion": 2, "source": "future",
+                        "schemaVersion": 4,
                         "root": {"id": "root", "kind": "row", "children": []}
+                    }]
+                }]
+            }),
+            "caret.math.align",
+        ),
+        (
+            json!({
+                "type": "align", "id": "align", "source": "future source", "rows": [{
+                    "id": "row", "cells": [{
+                        "schemaVersion": 4,
+                        "root": {"id": "root", "content": []}
                     }]
                 }]
             }),
@@ -274,7 +467,7 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
             json!({
                 "type": "paragraph", "id": "paragraph", "inlines": [{
                     "type": "inlineMath", "id": "inline", "mathTree": {
-                        "schemaVersion": 1, "source": "future",
+                        "schemaVersion": 4,
                         "root": {"id": "root", "kind": "future_kind", "children": []}
                     }
                 }]
@@ -283,6 +476,8 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
         ),
     ];
     for (node, feature) in cases {
+        let expected_align_source = node.get("source").and_then(Value::as_str);
+        let expected_node = node.clone();
         let mut envelope = blank_envelope()?;
         envelope["document"]["body"] = json!([node]);
         envelope["requiredFeatures"] = json!([
@@ -295,7 +490,12 @@ fn future_math_schema_opens_as_read_only_opaque_preview() -> Result<(), Box<dyn 
             panic!("future or unknown math data must remain opaque and read-only");
         };
         assert!(!preview.can_save());
-        assert!(preview.to_json_value()?["document"]["body"][0].is_object());
+        let preserved = preview.to_json_value()?;
+        assert!(preserved["document"]["body"][0].is_object());
+        if let Some(source) = expected_align_source {
+            assert_eq!(preserved["document"]["body"][0], expected_node);
+            assert_eq!(preserved["document"]["body"][0]["source"], source);
+        }
     }
     Ok(())
 }
@@ -307,14 +507,19 @@ fn unknown_math_attribute_value_opens_as_read_only_preview()
     envelope["document"]["body"] = json!([{
         "type": "paragraph", "id": "paragraph", "inlines": [{
             "type": "inlineMath", "id": "inline", "mathTree": {
-                "schemaVersion": 1, "source": "\\frac{a}{b}",
-                "root": {"id": "root", "kind": "fraction", "attributes": {"style": "future_fraction"}, "children": []}
+                "schemaVersion": 3,
+                "root": {"id": "root-flow", "content": [{
+                    "type": "math", "id": "root", "kind": "symbol", "text": "x",
+                    "attributes": {"atomClass": "future_atom"}
+                }]}
             }
         }]
     }]);
     envelope["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
         "caret.math.inline",
         "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
@@ -323,6 +528,17 @@ fn unknown_math_attribute_value_opens_as_read_only_preview()
         panic!("unknown math attribute values must not be editable");
     };
     assert!(!preview.can_save());
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::UnsupportedNodeKind)
+    );
+    let preserved = preview.to_json_value()?;
+    assert_eq!(
+        preserved["document"]["body"][0]["inlines"][0]["mathTree"]["root"]["content"][0]["attributes"]
+            ["atomClass"],
+        "future_atom"
+    );
     Ok(())
 }
 
@@ -340,7 +556,7 @@ fn incomplete_or_malformed_math_nodes_open_as_read_only_preview()
         envelope["document"]["body"] = json!([{
             "type": "paragraph", "id": "paragraph", "inlines": [{
                 "type": "inlineMath", "id": "inline", "mathTree": {
-                    "schemaVersion": 1, "source": "x", "root": root
+                    "schemaVersion": 3, "root": root
                 }
             }]
         }]);

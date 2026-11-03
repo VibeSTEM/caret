@@ -81,7 +81,6 @@ impl Session {
         document
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
-        crate::validate_document_math_sources(&document).map_err(EditError::InvalidDocument)?;
         let (paragraph, story) = first_paragraph(&document.body)
             .ok_or_else(|| EditError::InvalidDocument("document has no paragraph".to_owned()))?;
         let pos = Pos {

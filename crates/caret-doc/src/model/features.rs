@@ -121,12 +121,12 @@ fn collect_block_features(block: &Block, features: &mut std::collections::BTreeS
         }
         Block::Equation(equation) => {
             features.insert("caret.math.equation".to_owned());
-            features.insert("caret.math.content-flow.v1".to_owned());
+            features.insert("caret.math.content-flow.v2".to_owned());
             collect_math_flow_features(&equation.math_tree.root, features);
         }
         Block::Align(align) => {
             features.insert("caret.math.align".to_owned());
-            features.insert("caret.math.content-flow.v1".to_owned());
+            features.insert("caret.math.content-flow.v2".to_owned());
             for tree in align.rows.iter().flat_map(|row| &row.cells) {
                 collect_math_flow_features(&tree.root, features);
             }
@@ -166,7 +166,7 @@ fn collect_paragraph_content_features(
         ParagraphContent::Text(text) => collect_text_flow_features(text, features),
         ParagraphContent::Math(math) => {
             features.insert("caret.math.inline".to_owned());
-            features.insert("caret.math.content-flow.v1".to_owned());
+            features.insert("caret.math.content-flow.v2".to_owned());
             collect_math_flow_features(&math.math_tree.root, features);
         }
         ParagraphContent::Environment(environment) => {
@@ -184,12 +184,7 @@ fn collect_math_content_features(
     features: &mut std::collections::BTreeSet<String>,
 ) {
     match content {
-        MathContent::Text(text) => {
-            if !text.source_map.is_empty() {
-                features.insert("caret.math.text-flow-source-map.v1".to_owned());
-            }
-            collect_text_flow_features(text, features);
-        }
+        MathContent::Text(text) => collect_text_flow_features(text, features),
         MathContent::Math(node) => {
             if !node.attributes.is_empty()
                 || matches!(

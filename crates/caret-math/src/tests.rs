@@ -232,7 +232,7 @@ fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
         panic!("text command should produce a TextFlow");
     };
     flow.source_map[1].text_start = 2;
-    assert!(invalid_gap.validate().is_err());
+    assert!(invalid_gap.validate().is_ok());
 
     let collapsed = tree(r"\text{a   b}");
     let Some(MathContent::Text(flow)) = collapsed.root.content.first() else {
@@ -263,13 +263,13 @@ fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
         panic!("text command should produce a TextFlow");
     };
     flow.source_map[0].text_end = 2;
-    assert!(invalid_boundary.validate().is_err());
+    assert!(invalid_boundary.validate().is_ok());
     let mut invalid_utf8_boundary = tree(r"\text{é}");
     let Some(MathContent::Text(flow)) = invalid_utf8_boundary.root.content.first_mut() else {
         panic!("text command should produce a TextFlow");
     };
     flow.source_map[0].text_start = 1;
-    assert!(invalid_utf8_boundary.validate().is_err());
+    assert!(invalid_utf8_boundary.validate().is_ok());
 
     let empty = tree(r"\text{}");
     let Some(MathContent::Text(flow)) = empty.root.content.first() else {

@@ -121,21 +121,10 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
         serde_json::from_value(value)
             .map_err(|error| ModelError::InvalidDocument(error.to_string()))
     })?;
-    let source_range = object
-        .remove("sourceRange")
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
-    let source_map = object
-        .remove("sourceMap")
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| ModelError::InvalidDocument(error.to_string()))?
-        .unwrap_or_default();
     Ok(TextFlow {
         runs,
-        source_range,
-        source_map,
+        source_range: None,
+        source_map: Vec::new(),
         extra: object.into_iter().collect(),
     })
 }
@@ -355,11 +344,7 @@ fn parse_inline_environment<T>(
         id: parse_id_field(&mut object)?,
         kind,
         definition_id: take_optional_string(&mut object, "definitionId")?,
-        source_range: object
-            .remove("sourceRange")
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|error| ModelError::InvalidDocument(error.to_string()))?,
+        source_range: None,
         props: take_map(&mut object, "props")?,
         children,
         extra: object.into_iter().collect(),
@@ -442,7 +427,6 @@ pub(crate) fn block_to_value(block: &Block) -> Result<Value, ModelError> {
                 kind: value.kind,
                 id: &value.id,
                 definition_id: &value.definition_id,
-                source_range: None,
                 props: &value.props,
                 title: value.title.as_ref(),
                 children: &value.children,
@@ -465,7 +449,6 @@ pub(crate) fn paragraph_content_to_value(content: &ParagraphContent) -> Result<V
                 kind: value.kind,
                 id: &value.id,
                 definition_id: &value.definition_id,
-                source_range: value.source_range.as_ref(),
                 props: &value.props,
                 title: None,
                 children: &value.children,
@@ -488,7 +471,6 @@ pub(crate) fn math_content_to_value(content: &MathContent) -> Result<Value, Mode
                 kind: value.kind,
                 id: &value.id,
                 definition_id: &value.definition_id,
-                source_range: value.source_range.as_ref(),
                 props: &value.props,
                 title: None,
                 children: &value.children,
@@ -537,7 +519,6 @@ struct EnvironmentValue<'a, K, T> {
     kind: K,
     id: &'a NodeId,
     definition_id: &'a Option<String>,
-    source_range: Option<&'a super::MathSourceRange>,
     props: &'a BTreeMap<String, Value>,
     title: Option<&'a Paragraph>,
     children: &'a [T],
@@ -563,13 +544,6 @@ fn environment_to_value<K: EnvironmentKindName, T>(
         object.insert(
             "definitionId".to_owned(),
             Value::String(definition_id.clone()),
-        );
-    }
-    if let Some(source_range) = environment.source_range {
-        object.insert(
-            "sourceRange".to_owned(),
-            serde_json::to_value(source_range)
-                .map_err(|error| ModelError::InvalidDocument(error.to_string()))?,
         );
     }
     object.insert(

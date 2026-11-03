@@ -534,7 +534,7 @@ impl Session {
         {
             return Ok(Effect::default());
         }
-        let paragraph = self.paragraph_for(&focus)?.clone();
+        let mut paragraph = self.paragraph_for(&focus)?.clone();
         let object_len = OBJECT_REPLACEMENT.len_utf8();
         let slot = inline_math_slots(&paragraph)?
             .into_iter()
@@ -543,9 +543,15 @@ impl Session {
                 Direction::Backward => start + object_len == focus.offset,
             });
         if let Some((start, math_id)) = slot {
-            let source = find_inline_math(&paragraph.inlines, &math_id)
-                .map(|math| math.math_tree.source.clone())
+            let math = find_inline_math_mut(&mut paragraph.inlines, &math_id)
                 .ok_or(EditError::InvalidPosition)?;
+            let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
+                &math.math_tree,
+                caret_math::MathInputKind::Inline,
+            )
+            .map_err(EditError::InvalidMath)?;
+            math.math_tree = projected_tree;
+            self.replace_paragraph(&focus, paragraph.clone())?;
             let body = caret_math::input_body_range(&source, caret_math::MathInputKind::Inline)
                 .map_err(|error| EditError::InvalidMath(error.to_string()))?;
             let cursor = match direction {
@@ -604,15 +610,31 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(Effect::default());
         };
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
-        let (block_id, align, source) = match siblings.get(neighbour) {
-            Some(Block::Equation(equation)) => (
-                equation.id.clone(),
-                false,
-                equation.math_tree.source.clone(),
-            ),
-            Some(Block::Align(value)) => (value.id.clone(), true, align_body(&value.source)),
-            _ => return Ok(Effect::default()),
+        let (block_id, align, source) = {
+            let block = block_list(&mut self.document.body, &parent_ids)?
+                .get_mut(neighbour)
+                .ok_or(EditError::InvalidPosition)?;
+            match block {
+                Block::Equation(equation) => {
+                    let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
+                        &equation.math_tree,
+                        caret_math::MathInputKind::Equation,
+                    )
+                    .map_err(EditError::InvalidMath)?;
+                    equation.math_tree = projected_tree;
+                    (equation.id.clone(), false, source)
+                }
+                Block::Align(value) => {
+                    let (full_source, mut projected_align) =
+                        crate::math_validation::project_align_for_edit(value)
+                            .map_err(EditError::InvalidMath)?;
+                    projected_align.source = full_source;
+                    let source = align_body(&projected_align.source);
+                    *value = projected_align;
+                    (value.id.clone(), true, source)
+                }
+                _ => return Ok(Effect::default()),
+            }
         };
         let body = if align {
             0..source.len()
@@ -1172,30 +1194,42 @@ impl Session {
 
     /// 连续显示公式之间按块顺序移动公式焦点，不经过旧正文选区。
     fn math_edit_beside_block(
-        &self,
+        &mut self,
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<MathEdit>, EditError> {
         let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
             return Err(EditError::InvalidPosition);
         };
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
         let neighbour = match direction {
             Direction::Forward => index.checked_add(1),
             Direction::Backward => index.checked_sub(1),
         };
-        let Some(block) = neighbour.and_then(|index| siblings.get(index)) else {
+        let Some(neighbour) = neighbour else {
             return Ok(None);
         };
-        let (block_id, align, source) = match block {
-            Block::Equation(equation) => (
-                equation.id.clone(),
-                false,
-                equation.math_tree.source.clone(),
-            ),
-            Block::Align(align) => (align.id.clone(), true, align_body(&align.source)),
-            _ => return Ok(None),
-        };
+        let (block_id, align, source) =
+            match block_list(&mut self.document.body, &parent_ids)?.get_mut(neighbour) {
+                Some(Block::Equation(equation)) => {
+                    let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
+                        &equation.math_tree,
+                        caret_math::MathInputKind::Equation,
+                    )
+                    .map_err(EditError::InvalidMath)?;
+                    equation.math_tree = projected_tree;
+                    (equation.id.clone(), false, source)
+                }
+                Some(Block::Align(value)) => {
+                    let (full_source, mut projected_align) =
+                        crate::math_validation::project_align_for_edit(value)
+                            .map_err(EditError::InvalidMath)?;
+                    projected_align.source = full_source;
+                    let source = align_body(&projected_align.source);
+                    *value = projected_align;
+                    (value.id.clone(), true, source)
+                }
+                _ => return Ok(None),
+            };
         let body = if align {
             0..source.len()
         } else {

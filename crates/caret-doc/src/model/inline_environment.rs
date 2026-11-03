@@ -63,7 +63,6 @@ pub struct InlineEnvironment<Child> {
     pub id: NodeId,
     pub kind: InlineEnvironmentKind,
     pub definition_id: Option<String>,
-    /// 公式文本中的源码范围；正文 InlineEnvironment 不使用此字段。
     pub source_range: Option<super::MathSourceRange>,
     pub props: BTreeMap<String, Value>,
     pub children: Vec<Child>,

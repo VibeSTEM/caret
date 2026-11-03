@@ -1,6 +1,6 @@
 # 文档位置与限制
 
-更新日期：2026-11-02。本文定义运行时位置、位置映射及模型深度/尺寸上限；持久化节点语义见[文档树与结构](document-structure.md)，`.cdoc` 格式见[文档存储](document-storage.md)。
+更新日期：2026-11-02。本文定义目标运行时位置、位置映射及模型深度/尺寸契约；当前实现进度与未完成项见[043 公式模型与编辑](../../../task/043-math-model-and-editing.md)。持久化节点语义见[文档树与结构](document-structure.md)，`.cdoc` 格式见[文档存储](document-storage.md)。
 
 ## 位置
 
@@ -15,9 +15,9 @@
 | `p2 / Downstream`（环境外） | Left | 环境末个字素簇之前的边界，`Downstream`（环境内） | 向后跨过末个字素簇；若环境只有一个字素簇，该位置就是 `p1 / Downstream` |
 | `p1 / Downstream`（环境内） | Left | `p1 / Upstream`（环境外） | 偏移不变；退出环境并更新高亮/格式状态 |
 
-Paragraph 连续文本中的 Run 与 InlineEnvironment 边界不打断 Unicode 字素分段；但可编辑结构原子（当前为 `InlineMath`）和显式 `SoftBreak` 两侧设置强制停靠点。即使拼接后的 Unicode 文本会把原子占位符/换行与邻接字符组成扩展字素，caret 仍可停在这些结构项两边，原子和换行可独立选择/删除。Opaque 节点不提供编辑位置。MathFlow 跨相邻 TextFlow 的字素连续性尚未接入，不能由本规则推断。其他简单 LTR 移动按相邻字素边界进行。鼠标命中按布局给出的相邻字素簇边缘选择亲和性；若点击精确落在无法区分两侧的边界，确定性地选择逻辑 `Downstream`。工具栏格式命令保留原光标亲和性；选区命令保留锚点和焦点的完整 Pos，并在事务改写后通过位置映射恢复两侧。对于 bidi 或换行处视觉位置不同的同逻辑 Pos，方向键按视觉布局直接移动到相邻视觉 caret 候选，并以目标候选的字素边缘确定逻辑 affinity；不先执行上表的同位置状态转换。混合方向文本不能按屏幕左/右推断逻辑 upstream/downstream。鼠标命中测试和结构命令也必须明确提交逻辑侧。选区锚点和焦点各自携带完整 `Pos`，因此选区方向及两端的边界语义都能保留。
+Paragraph 与 MathFlow 的连续 TextFlow 均按拼接后的 Unicode 文本计算字素边界，Run、InlineEnvironment 与相邻 TextFlow 边界不打断字素分段；可编辑结构原子（Paragraph 中的 `InlineMath`、MathFlow 中的 MathNode）和显式 `SoftBreak` 两侧设置强制停靠点。即使拼接后的文本会把结构占位符/换行与邻接字符组成扩展字素，caret 仍可停在这些结构项两边，结构项和换行可独立选择/删除。Opaque 节点不提供编辑位置。其他简单 LTR 移动按相邻字素边界进行。鼠标命中按布局给出的相邻字素簇边缘选择亲和性；若点击精确落在无法区分两侧的边界，确定性地选择逻辑 `Downstream`。工具栏格式命令保留原光标亲和性；选区命令保留锚点和焦点的完整 Pos，并在事务改写后通过位置映射恢复两侧。对于 bidi 或换行处视觉位置不同的同逻辑 Pos，方向键按视觉布局直接移动到相邻视觉 caret 候选，并以目标候选的字素边缘确定逻辑 affinity；不先执行上表的同位置状态转换。混合方向文本不能按屏幕左/右推断逻辑 upstream/downstream。鼠标命中测试和结构命令也必须明确提交逻辑侧。选区锚点和焦点各自携带完整 `Pos`，因此选区方向及两端的边界语义都能保留。
 
-选区记住锚点和焦点。公式编辑会话记录宿主、活动分支和分支内位置；源码模式位置是 UTF-8 字节偏移，TextFlow 模式使用共享文本位置，二者都不直接等同于宿主段落 `Pos`。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，行内公式使用 `ParagraphContent::Math` 并在 `TextMap` 中占 U+FFFC 原子位置；Equation/Align 还带公式块及 Align 行列定位。实际调用链见[内容节点代码链路](content-code-path.md)。MathEdit 的源码分支已接入；TextFlow 分支与段落位置之间的完整位置映射仍属于 043 待完成项。事务失败时保留原文档和有效焦点。
+选区记住锚点和焦点。公式编辑会话记录宿主、活动分支和分支内位置；显式源码草稿的位置是 UTF-8 字节偏移，TextFlow 模式使用共享文本位置，二者都不直接等同于宿主段落 `Pos`。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，行内公式使用 `ParagraphContent::Math` 并在 `TextMap` 中占 U+FFFC 原子位置；Equation/Align 还带公式块及 Align 行列定位。实际目标调用链见[内容节点代码链路](content-code-path.md)。MathFlow 与 Paragraph 的 TextFlow 事务共用文本位置原语，并通过各自宿主路径映射回文档位置；事务失败时保留原文档和有效焦点。
 
 ## 上限
 

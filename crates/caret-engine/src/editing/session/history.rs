@@ -1022,10 +1022,24 @@ fn apply_block_range(
     let Some(end) = sibling_index.checked_add(current.len()) else {
         return;
     };
-    if blocks.get(sibling_index..end) != Some(current) {
+    if !blocks
+        .get(sibling_index..end)
+        .is_some_and(|actual| persisted_blocks_equal(actual, current))
+    {
         return;
     }
     blocks.splice(sibling_index..end, replacement.iter().cloned());
+}
+
+fn persisted_blocks_equal(left: &[Block], right: &[Block]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left == right
+                || match (serde_json::to_value(left), serde_json::to_value(right)) {
+                    (Ok(left), Ok(right)) => left == right,
+                    _ => false,
+                }
+        })
 }
 
 fn apply_environment_boundary_paragraphs(

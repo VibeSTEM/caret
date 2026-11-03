@@ -29,9 +29,9 @@ pub use inline::{
 };
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
-    Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_SOURCE_BYTES,
-    MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow,
-    MathNode, MathNodeKind, MathSourceRange, MathTree,
+    Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow, MathNode,
+    MathNodeKind, MathSourceRange, MathTree,
 };
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;

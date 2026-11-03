@@ -3,15 +3,190 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{
-    Align, Block, Document, FlowContent, MathContent, MathFlow, MathNode, MathTree,
-    ParagraphContent,
-};
+use caret_doc::{Align, InlineEnvironment, MathContent, MathFlow, MathNode, MathTree, TextFlow};
+#[cfg(test)]
+use caret_doc::{Block, Document, FlowContent, ParagraphContent};
 use caret_math::MathInputKind;
+
+pub(crate) fn project_tree_for_edit(
+    tree: &MathTree,
+    kind: MathInputKind,
+) -> Result<(String, MathTree), String> {
+    let source = caret_math::serialize_tree(tree);
+    let caret_math::ParsedMath::Tree(mut projected) = caret_math::parse(&source, kind)
+        .map_err(|error| format!("could not project formula tree to TeX: {error}"))?
+    else {
+        return Err("formula tree projected to a different formula kind".to_owned());
+    };
+    if !transfer_tree_metadata(tree, &mut projected) {
+        return Err("formula tree cannot be projected without losing structure".to_owned());
+    }
+    projected.validate().map_err(|error| error.to_string())?;
+    Ok((source, projected))
+}
+
+pub(crate) fn project_align_for_edit(align: &Align) -> Result<(String, Align), String> {
+    let source = caret_math::serialize_align(align);
+    let caret_math::ParsedMath::Align(mut projected) =
+        caret_math::parse(&source, MathInputKind::Align)
+            .map_err(|error| format!("could not project align tree to TeX: {error}"))?
+    else {
+        return Err("align tree projected to a different formula kind".to_owned());
+    };
+    if align.rows.len() != projected.rows.len() {
+        return Err("align projection changed its row structure".to_owned());
+    }
+    projected.id.clone_from(&align.id);
+    projected.extra.clone_from(&align.extra);
+    for (previous_row, projected_row) in align.rows.iter().zip(&mut projected.rows) {
+        if previous_row.cells.len() != projected_row.cells.len() {
+            return Err("align projection changed its cell structure".to_owned());
+        }
+        projected_row.id.clone_from(&previous_row.id);
+        projected_row.extra.clone_from(&previous_row.extra);
+        for (previous_cell, projected_cell) in
+            previous_row.cells.iter().zip(&mut projected_row.cells)
+        {
+            if !transfer_tree_metadata(previous_cell, projected_cell) {
+                return Err("align cell cannot be projected without losing structure".to_owned());
+            }
+        }
+    }
+    projected.validate().map_err(|error| error.to_string())?;
+    Ok((source, projected))
+}
+
+fn transfer_tree_metadata(previous: &MathTree, projected: &mut MathTree) -> bool {
+    if previous.schema_version != projected.schema_version {
+        return false;
+    }
+    projected.extra.clone_from(&previous.extra);
+    transfer_flow_metadata(&previous.root, &mut projected.root)
+}
+
+fn transfer_flow_metadata(previous: &MathFlow, projected: &mut MathFlow) -> bool {
+    if previous.content.len() != projected.content.len() {
+        return false;
+    }
+    projected.id.clone_from(&previous.id);
+    projected.extra.clone_from(&previous.extra);
+    for (previous, projected) in previous.content.iter().zip(&mut projected.content) {
+        if !transfer_content_metadata(previous, projected) {
+            return false;
+        }
+    }
+    true
+}
+
+fn transfer_content_metadata(previous: &MathContent, projected: &mut MathContent) -> bool {
+    match (previous, projected) {
+        (MathContent::Text(previous), MathContent::Text(projected)) => {
+            if !same_display_text(previous, projected) {
+                return false;
+            }
+            if let (Some(previous), Some(projected)) =
+                (&previous.source_range, &mut projected.source_range)
+            {
+                projected.extra.clone_from(&previous.extra);
+            }
+            if previous.source_map.len() != projected.source_map.len()
+                && previous
+                    .source_map
+                    .iter()
+                    .any(|entry| !entry.extra.is_empty() || !entry.source_range.extra.is_empty())
+            {
+                return false;
+            }
+            for (previous, projected) in previous.source_map.iter().zip(&mut projected.source_map) {
+                if (previous.text_start, previous.text_end)
+                    != (projected.text_start, projected.text_end)
+                {
+                    if !previous.extra.is_empty() || !previous.source_range.extra.is_empty() {
+                        return false;
+                    }
+                    continue;
+                }
+                projected.extra.clone_from(&previous.extra);
+                projected
+                    .source_range
+                    .extra
+                    .clone_from(&previous.source_range.extra);
+            }
+            projected.runs.clone_from(&previous.runs);
+            projected.extra.clone_from(&previous.extra);
+            true
+        }
+        (MathContent::Math(previous), MathContent::Math(projected)) => {
+            transfer_node_metadata(previous, projected)
+        }
+        (MathContent::Environment(previous), MathContent::Environment(projected)) => {
+            transfer_environment_metadata(previous, projected)
+        }
+        (MathContent::SoftBreak(previous), MathContent::SoftBreak(projected)) => {
+            projected.extra.clone_from(&previous.extra);
+            true
+        }
+        (MathContent::Opaque(previous), MathContent::Opaque(projected)) => {
+            previous.raw == projected.raw
+        }
+        _ => false,
+    }
+}
+
+fn transfer_node_metadata(previous: &MathNode, projected: &mut MathNode) -> bool {
+    if previous.kind != projected.kind
+        || previous.text != projected.text
+        || previous.attributes != projected.attributes
+        || previous.children.len() != projected.children.len()
+    {
+        return false;
+    }
+    projected.id.clone_from(&previous.id);
+    projected.extra.clone_from(&previous.extra);
+    for (previous, projected) in previous.children.iter().zip(&mut projected.children) {
+        if !transfer_flow_metadata(previous, projected) {
+            return false;
+        }
+    }
+    true
+}
+
+fn transfer_environment_metadata(
+    previous: &InlineEnvironment<MathContent>,
+    projected: &mut InlineEnvironment<MathContent>,
+) -> bool {
+    if previous.kind != projected.kind || previous.children.len() != projected.children.len() {
+        return false;
+    }
+    projected.id.clone_from(&previous.id);
+    projected.definition_id.clone_from(&previous.definition_id);
+    projected.props.clone_from(&previous.props);
+    projected.extra.clone_from(&previous.extra);
+    for (previous, projected) in previous.children.iter().zip(&mut projected.children) {
+        if !transfer_content_metadata(previous, projected) {
+            return false;
+        }
+    }
+    true
+}
+
+fn same_display_text(previous: &TextFlow, projected: &TextFlow) -> bool {
+    previous
+        .runs
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<String>()
+        == projected
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>()
+}
 
 /// 验证文档中每棵数学树都与其 LaTeX 源码表达相同语义。
 /// `caret-doc` 只校验稳定 schema；这里依赖解析器，因此不反向依赖 `caret-math`。
-pub fn validate_document_math_sources(document: &Document) -> Result<(), String> {
+#[cfg(test)]
+fn validate_document_math_sources(document: &Document) -> Result<(), String> {
     fn validate_inlines(nodes: &[ParagraphContent]) -> Result<(), String> {
         for node in nodes {
             match node {
@@ -50,6 +225,7 @@ pub fn validate_document_math_sources(document: &Document) -> Result<(), String>
     validate_blocks(&document.body)
 }
 
+#[cfg(test)]
 fn validate_tree(tree: &MathTree, kind: MathInputKind, id: &str) -> Result<(), String> {
     let parsed = caret_math::parse(&tree.source, kind)
         .map_err(|error| format!("math {id} source does not parse: {error}"))?;
@@ -76,6 +252,7 @@ pub(crate) fn parse_tree_with_same_semantics(
     same_flow_semantics(&tree.root, &parsed.root).then_some(parsed)
 }
 
+#[cfg(test)]
 fn validate_align(align: &Align) -> Result<(), String> {
     let parsed = caret_math::parse(&align.source, MathInputKind::Align)
         .map_err(|error| format!("align {} source does not parse: {error}", align.id))?;
@@ -108,6 +285,7 @@ fn validate_align(align: &Align) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn is_empty_align_placeholder(tree: &MathTree) -> bool {
     tree.source.is_empty() && tree.root.content.is_empty()
 }
@@ -242,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_math_source_and_tree_cannot_enter_an_edit_session() {
+    fn stale_temporary_source_does_not_invalidate_the_persistent_tree() {
         let mut tree = parse_inline("x");
         tree.source = "y".to_owned();
         let paragraph = match Document::blank().body.into_iter().next() {
@@ -259,11 +437,8 @@ mod tests {
         let mut document = Document::blank();
         document.body = vec![Block::Paragraph(paragraph)];
 
-        let Err(error) = validate_document_math_sources(&document) else {
-            panic!("mismatched source and tree must be rejected");
-        };
-        assert!(error.contains("source and tree disagree"));
-        assert!(crate::Session::new(document).is_err());
+        assert!(document.validate().is_ok());
+        assert!(crate::Session::new(document).is_ok());
     }
 
     #[test]
@@ -357,7 +532,7 @@ mod tests {
             math_tree: tree,
             extra: Default::default(),
         })];
-        assert!(crate::Session::new(document).is_err());
+        assert!(crate::Session::new(document).is_ok());
     }
 
     #[test]
@@ -413,7 +588,7 @@ mod tests {
             math_tree: tree,
             extra: Default::default(),
         })];
-        assert!(crate::Session::new(document).is_err());
+        assert!(crate::Session::new(document).is_ok());
     }
 
     #[test]

@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use caret_doc::{
-    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION,
-    MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MathAlignRow, MathContent,
-    MathFlow, MathSourceRange, MathTree, NodeId, Run, TextFlow,
+    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_NODES, MathAlignRow, MathContent, MathFlow, MathSourceRange, MathTree, NodeId,
+    Run, TextFlow,
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ use crate::symbols::{
     NAMED_COLORS, accent_attribute, encode_delimiter, literal_class, named_symbol,
     text_operator_limits,
 };
-use crate::{MathInputKind, MathInputStatus, MathParseError, ParsedMath};
+use crate::{MAX_MATH_SOURCE_BYTES, MathInputKind, MathInputStatus, MathParseError, ParsedMath};
 
 type ParseResult<T> = Result<T, MathParseError>;
 
