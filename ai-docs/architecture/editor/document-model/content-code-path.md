@@ -1,6 +1,6 @@
 # Block、正文与公式内容的代码链路
 
-更新日期：2026-11-02。本文记录当前模型和代码的实际调用路径；持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
+更新日期：2026-11-03。本文定义内容模型的目标职责链路；实现进度与验证证据以对应任务为准。持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
 
 ## 文档模型与消费者
 
@@ -49,43 +49,45 @@ flowchart TB
     EQ --> MATHEDIT["MathEdit transaction"]
     ALIGN --> MATHEDIT
     IM --> MATHEDIT
-    MATHEDIT --> PARSER["caret-math parse / serialize"]
-    PARSER --> MT
+    MT --> DRAFT["session TeX draft + revision-bound map"]
+    DRAFT --> PARSER["TeX import/export converter"]
+    PARSER --> CANDIDATE["candidate MathTree"]
+    CANDIDATE --> MATHEDIT
+    MTF --> FLOWMAP
+    FLOWMAP --> TEXTEDIT["shared TextFlow editing"]
+    TEXTEDIT --> MATHEDIT
+    MATHEDIT --> MT
     MT --> BACKEND["private backend projection"]
     BACKEND --> ML["caret-math layout"]
-    ML -. "044 页面接入待完成" .-> PAGE
+    ML --> PAGE
 ```
 
 `ParagraphContent` 与 `MathContent` 是两个由宿主约束的强类型流。二者只共用 `TextFlow` 和泛型 `InlineEnvironment<Child>` 包装；段落公式、块公式、对齐单元仍保留各自的宿主身份、位置和事务边界。MathNode 的每个固定操作数槽位独立存放一个 MathFlow，不能因编辑文本流而改变槽位个数或次序。
 
 ## 编辑与排版边界
 
-| 内容 | 共用的路径 | 宿主专属路径 | 实际入口 |
+| 内容 | 共用职责 | 宿主职责 | 模块边界 |
 | --- | --- | --- | --- |
 | `ParagraphContent::Text(TextFlow)` | Run、Run 属性、字素位置、正文 IME 与段落 shaping | 段落位置和正文事务 | `caret-engine/src/editing/text_map.rs`、`session/inline_content.rs`、`caret-layout/src/shaping.rs` |
 | `ParagraphContent::Environment` | 递归内容流、格式语义和环境范围 | InlineEnvironment ID 与包装树操作 | `editing/environment/inline_adapter/inline_environment.rs`、`session/formatting/inline_tree.rs` |
 | Run 属性环境 | 与 TextFlow 共享文本位置和字形几何 | 更新所属 Run 属性，不创建包装节点 | `editing/environment/inline_adapter/inline_run_property.rs`、`editing/text_map.rs` |
 | `ParagraphContent::Math(InlineMath)` | 段落原子位置、选区和行内对象布局 | MathEdit 源码模式、MathTree 和公式验证 | `editing/environment/inline_adapter/inline_math.rs`、`session/math_edit.rs`、`math_validation.rs` |
-| MathFlow 中的 `TextFlow` | 与正文共用 Run、Run 属性和字素位置表示 | 操作数槽位内的 `MathTextFlowPath`、sourceMap 与 MathEdit 事务 | `caret-doc/src/model/inline.rs`、`model/math.rs`、`session/math_edit/path.rs`、`text_branch.rs` |
+| MathFlow 中的 `TextFlow` | 与正文共用 Run、Run 属性、字素位置和范围编辑 | MathFlow 宿主路径与 MathEdit 历史事务 | `caret-engine/src/editing/flow_edit.rs`、`session/math_edit/path.rs`、`text_branch.rs` |
 | `Equation` / `Align` | 与 InlineMath 共用 MathTree、解析器和公式编辑事务 | 块级宿主、Align cell 边界 | `caret-doc/src/model/math.rs`、`editing/environment/block_adapter/block_math.rs` |
 | BlockEnvironment | 标题 Paragraph 复用正文模型和布局；子项递归 Block | 块父链、结构范围和块级编辑 | `caret-structure/src/index.rs`、`editing/environment/block_adapter/block_environment.rs` |
 
-`flow_map.rs` 的 `build_flow_map_with_spans` 只依赖泛型 `FlowContent<T>`、Run 与 InlineEnvironment；宿主提供 Math 原子的标记投影和 span 适配器。它一次拼接逻辑文本并生成 Run/原子范围、环境范围和字素边界，物理路径按宿主选项生成。字素分段遵循[文档位置规范](document-position.md#位置)：Run 与 InlineEnvironment 透明，公式原子和 SoftBreak 两侧设置结构停靠点。正文 `TextMap::new` 直接把正文 span 写入该映射的唯一 span Vec，再由正文适配器补充 Run 属性范围。公式目前尚未消费 FlowMap；MathFlow 的固定操作数槽位仍由 MathEdit 单独选择宿主后逐个处理。
+`FlowMap` 依赖泛型 `FlowContent<T>`、Run 与 InlineEnvironment；宿主提供 Math 原子的标记投影和 span 适配器。它生成 Run/原子范围、环境范围、字素边界和宿主物理路径。字素分段遵循[文档位置规范](document-position.md#位置)：Run 与 InlineEnvironment 透明，公式原子和 SoftBreak 两侧设置结构停靠点。Paragraph 与 MathFlow 适配器消费同一映射原语，并各自负责宿主路径解析、元数据校验和事务提交。MathFlow 固定操作数槽位仍由 MathEdit 以宿主路径标识，不能跨槽位展平。
 
-FlowMap 用 `FlowPathOptions` 选择输出路径：物理路径引用 ParagraphContent/Environment 子向量及 TextFlow 内 Run；`legacy_edit_path` 引用展平的 `EditNode` 临时树。两者不能互换。TextMap 目前为混合段落同时生成两种路径：物理路径支持 TextFlow 范围写入与环境邻域归一化；legacy 路径供尚未迁移的原子插入和格式树事务使用。共享低层 TextFlow 范围替换位于 `editing/flow_edit.rs`，不负责宿主索引、元数据或历史事务。MathFlow 尚未消费通用 FlowMap；其宿主路径按公式身份和编辑状态解析，提交仍由 MathEdit 管理。双路径投影会为 Run 产生路径数据，成本尚无基准测量，不作性能收益主张。
+`FlowMap` 以宿主物理路径表示 ParagraphContent/Environment 子向量和 TextFlow 内 Run；适配器用宿主路径解析目标节点。临时扁平视图只允许作为宿主适配器内部实现细节，不能成为另一份权威模型。共享低层 TextFlow 范围替换不负责宿主索引、元数据或历史事务；Paragraph 与 MathFlow 适配器分别解析自身宿主路径并管理提交。
 
-正文与公式文本共用 `editing/grapheme.rs` 的字素边界、移动和吸附算法以及 `editing/flow_edit.rs` 的 Run 范围替换。正文直接输入沿 FlowPath 修改 TextFlow 并归一化受影响邻域；删除按 TextFlow 范围修改并移除选中原子；Math TextFlow 在候选 MathTree 上做同一范围替换，再由宿主适配器同步源码、sourceMap、位置和历史事务。正文原子插入与格式树编辑仍通过 `text_map.rs` 的 EditNode 事务视图复制被编辑段落内容，成功后提交，失败时丢弃。Math 文本岛执行 `InsertInlineMath` 时按 sourceMap 映射位置，在原 `\text{...}` 中插入 `$...$`；公式解析器生成中间 MathNode 和前后 TextFlow，宿主事务保留格式包装与可无损迁移的 Run/sourceMap 元数据。共享原语减少了重复范围编辑实现，但性能成本尚无基准，不宣称提升。
+正文与公式文本共用字素边界、移动、吸附、Run 范围替换和 InlineEnvironment 格式操作。TextFlow 编辑适配器处理普通文字、Run 属性和格式范围；Paragraph 与 MathFlow 宿主适配器只负责路径、元数据校验和历史提交。公式 TextFlow 中的 `\math` 通过共享流操作切分前后文本并插入 Math 分支，不经 TeX 字符串往返。TeX 源码模式是 MathTree 的临时投影，由独立转换边界提供草稿和仅在编辑会话有效的位置映射。共享编辑语义不负责宿主事务，也不单独证明性能收益。
 
-MathEdit 的 Text 分支沿 `MathTextFlowPath` 解析出 MathFlow 中的 TextFlow，并使用 `sourceMap` 将 UTF-8/grapheme 范围换算为源码范围。普通输入与删除先在候选 Run 序列中编辑，再解析公式源码、迁移稳定 ID/未知元数据、校验并以单次 history patch 提交；解析、映射或元数据归属失败时保留原文档和焦点。InlineMath/Equation 的源范围直接相对公式源码；Align cell 路径同时保存 cell 局部范围与 Align 宿主源码范围，范围扫描由 `math_edit/align_source.rs` 供路径和元数据迁移共用。TextFlow 字素边界可跨 Run 及 InlineEnvironment 导航；到达文本岛端点时，光标会在同一 MathFlow 固定槽位内进入相邻 TextFlow，环境包装透明，MathNode、SoftBreak 和 Opaque 是停靠边界，空 TextFlow 仍是可到达的位置。Align 邻接导航保留 cell 宿主源码基址；过期源路径或目标路径无法解析时，在修改活动分支前拒绝操作。宿主基址的 checked 算术若失败会被视为没有相邻岛，调用方沿普通源码边界逻辑处理；合法文档的长度上限使该情况不可达。数学侧目前以 MathTextFlowPath 扫描该相邻关系，尚未消费通用 FlowMap；跨相邻 TextFlow 的组合字素仍未合并。邻接查找只在文本岛边界执行，但会扫描所在槽位并临时收集候选路径；该成本尚未基准测量。该分支目前未复用正文完整的选区、IME 和格式编辑事务；这些仍是 043 的未完成项。输入时对 MathTree 做解析和候选 Run 序列分配的成本尚未测量。
+MathEdit 的 Text 分支沿 `MathTextFlowPath` 定位 MathFlow 中的 TextFlow，并直接复用 TextFlow 编辑器；普通输入、删除和格式操作对目标流执行一次宿主事务，不经过 TeX 序列化和重解析。Paragraph 与 MathFlow 的差异限制在宿主路径与历史提交边界；相同文本操作不维护第二份格式算法。Align cell 通过行列身份和局部宿主路径定位。源码模式从 MathTree 生成临时 TeX 草稿；草稿位置通过会话级映射定位树节点。候选解析、映射或元数据归属失败时保留原文档、焦点和撤销状态。InlineMath 根层提升按结构流顺序拆分；提升递归保留单个 InlineEnvironment 包装和 ID，不穿过 MathNode 固定操作数槽位。
 
-公式后端视图位于 `caret-math/src/backend.rs`，只在单次序列化或布局调用期间建立，不进入文档存储、编辑状态或兼容读取。旧的临时数学字符串节点格式没有迁移转换器；旧 schema 不被当作当前 MathTree 读取。
-
-## 边界与尚未接入项
-
-- `TextFlow` 是正文和公式文本岛共用的唯一文本载体；`TextContent` 不作为新持久化树的文本表示。
-- Math TextFlow 内执行 `\math` 时的 MathNode/TextFlow 切分已实现；普通正文根流提升及带格式包装的宿主转换仍待 043 实现，规则见[数学公式](../math.md#宿主边界与拆分)。
-- 044 的公式 layout 结果尚未接入 Caret 页面布局、命中测试和公式光标几何。`caret-math` 单独布局成功不能替代这些用户可观察路径的验证。
-- Qt/QML 消费 `caret-app` 快照；Run、InlineEnvironment、MathTree 和 Block 的语义由 Rust 模型、编辑器与布局模块持有。
+- `TextFlow` 是正文与公式文本岛共用的文本载体；TextContent 不作为数学文本叶片。
+- InlineMath 根流中的文本在创建和源码提交时提升为 Paragraph TextFlow；MathNode 的固定操作数槽位不提升。固定槽位内的 `\math` 切分只影响所属 MathFlow。
+- TextFlow 编辑直接修改 MathTree 中的共享文本流；TeX 导入/导出与临时源码编辑草稿由独立转换边界负责。失败不修改文档和焦点。
+- 数学布局必须进入 Caret 页面布局、命中测试和公式光标几何；Qt/QML 只消费 Rust 快照，不重建文本或数学语义。
 
 ## 代码入口
 

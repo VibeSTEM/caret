@@ -371,10 +371,9 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
             }
         }
         MathNodeKind::TextStyle
-            if node
-                .attributes
-                .get("style")
-                .is_some_and(|style| matches!(style.as_str(), "bf" | "it" | "sf" | "tt")) =>
+            if node.attributes.get("style").is_some_and(|style| {
+                matches!(style.as_str(), "bf" | "it" | "md" | "up" | "sf" | "tt")
+            }) =>
         {
             let style = node
                 .attributes
@@ -384,6 +383,14 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
             let (kind, props) = match style {
                 "bf" => (InlineEnvironmentKind::Bold, BTreeMap::new()),
                 "it" => (InlineEnvironmentKind::Italic, BTreeMap::new()),
+                "md" => (
+                    InlineEnvironmentKind::Bold,
+                    BTreeMap::from([("enabled".to_owned(), Value::Bool(false))]),
+                ),
+                "up" => (
+                    InlineEnvironmentKind::Italic,
+                    BTreeMap::from([("enabled".to_owned(), Value::Bool(false))]),
+                ),
                 "sf" => (
                     InlineEnvironmentKind::Font,
                     BTreeMap::from([(
@@ -1587,7 +1594,9 @@ impl<'s> Parser<'s> {
                     };
                     let (math, _) = self.parse_list(stops)?;
                     let range = start..self.pos;
-                    let node = if math.len() == 1 {
+                    let node = if math.is_empty() {
+                        self.node(K::Placeholder, None, &[], Some(range), Vec::new())
+                    } else if math.len() == 1 {
                         math.into_iter()
                             .next()
                             .unwrap_or_else(|| self.placeholder())
@@ -1615,7 +1624,8 @@ impl<'s> Parser<'s> {
                             );
                             items.push(node);
                         }
-                        "textrm" | "textbf" | "textit" | "textsf" | "texttt" => {
+                        "textrm" | "textbf" | "textit" | "textmd" | "textup" | "textsf"
+                        | "texttt" => {
                             let children = self.parse_text_argument()?;
                             let node = self.node(
                                 K::TextStyle,

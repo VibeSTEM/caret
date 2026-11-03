@@ -173,6 +173,14 @@ fn parses_text_mode() {
 }
 
 #[test]
+fn preserves_an_empty_inline_math_anchor_inside_text_mode() {
+    assert_eq!(
+        root_shape(r"\text{a$$b}"),
+        r#"Text("a"), Placeholder, Text("b")"#
+    );
+}
+
+#[test]
 fn preserves_empty_text_flows_as_editable_tree_content() {
     for source in [r"\text{}", r"\text{\textbf{}}"] {
         let original = tree(source);
@@ -434,6 +442,8 @@ const ROUND_TRIP_CASES: &[&str] = &[
     r"\hspace{0.25em}",
     r"\hspace{3mu}",
     r"\text{a \% b\ c~d \textbf{e}}",
+    r"\text{a\textbf{b\textmd{c}}}",
+    r"\text{a\textit{b\textup{c}}}",
     r"\text{a\textchar{20}\textchar{20}b\textchar{5C}\textchar{7E}\textchar{5E}}",
     r"\mathbf{x}+\mathbb{R}+\boldsymbol{\alpha}",
     r"\textcolor{blue}{x}",
@@ -474,6 +484,26 @@ fn math_font_commands_remain_math_nodes() {
     let bold = tree(r"\mathbf{x}");
     assert_ne!(shape(&plain.root), shape(&bold.root));
     assert_eq!(serialize_tree(&bold), r"\mathbf{x}");
+}
+
+#[test]
+fn serializes_combined_text_run_styles_as_parseable_tex() {
+    let mut math_tree = self::tree(r"\text{x}");
+    let Some(MathContent::Text(text)) = math_tree.root.content.first_mut() else {
+        panic!("text command should produce a TextFlow");
+    };
+    let Some(run) = text.runs.first_mut() else {
+        panic!("text command should produce a Run");
+    };
+    run.props
+        .insert("bold".to_owned(), serde_json::Value::Bool(true));
+    run.props
+        .insert("italic".to_owned(), serde_json::Value::Bool(true));
+
+    let serialized = serialize_tree(&math_tree);
+    assert_eq!(serialized, r"\text{\textbf{\textit{x}}}");
+    let reparsed = self::tree(&serialized);
+    assert_eq!(serialize_tree(&reparsed), serialized);
 }
 
 #[test]

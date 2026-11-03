@@ -53,6 +53,17 @@ fn glyphs(layout: &MathLayout) -> Vec<(f64, f64, f64)> {
         .collect()
 }
 
+fn glyph_ids(layout: &MathLayout) -> Vec<u16> {
+    layout
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MathItem::Glyph { glyph, .. } => Some(*glyph),
+            _ => None,
+        })
+        .collect()
+}
+
 fn finite(layout: &MathLayout) -> bool {
     let mut values = vec![layout.width, layout.ascent, layout.descent];
     for item in &layout.items {
@@ -136,6 +147,36 @@ fn corpus_lays_out_without_diagnostics() {
             assert!(!layout.items.is_empty(), "{source}");
         }
     }
+}
+
+#[test]
+fn text_style_resets_preserve_other_emphasis() {
+    let cases = [
+        (r"\text{\textbf{\textup{x}}}", r"\text{\textbf{x}}"),
+        (r"\text{\textit{\textmd{x}}}", r"\text{\textit{x}}"),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(glyph_ids(&inline(source)), glyph_ids(&inline(expected)));
+    }
+}
+
+#[test]
+fn run_bold_and_italic_compose_in_math_text() {
+    let mut flow = root(r"\text{x}");
+    let Some(caret_doc::MathContent::Text(text)) = flow.content.first_mut() else {
+        panic!("text command should produce a TextFlow");
+    };
+    let Some(run) = text.runs.first_mut() else {
+        panic!("text command should produce a Run");
+    };
+    run.props
+        .insert("bold".to_owned(), serde_json::Value::Bool(true));
+    run.props
+        .insert("italic".to_owned(), serde_json::Value::Bool(true));
+    let styled = layout_math(font(), &flow, SIZE, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let expected = inline(r"\text{\textbf{\textit{x}}}");
+    assert_eq!(glyph_ids(&styled), glyph_ids(&expected));
 }
 
 #[test]

@@ -772,6 +772,28 @@ impl Converter<'_> {
         fragment
     }
 
+    fn text_variant(base: Variant, emphasis: &str) -> Variant {
+        let (bold, italic) = match base {
+            Variant::Bold => (true, false),
+            Variant::Italic => (false, true),
+            Variant::BoldItalic => (true, true),
+            _ => (false, false),
+        };
+        let (bold, italic) = match emphasis {
+            "bf" => (true, italic),
+            "it" => (bold, true),
+            "md" => (false, italic),
+            "up" => (bold, false),
+            _ => return base,
+        };
+        match (bold, italic) {
+            (true, true) => Variant::BoldItalic,
+            (true, false) => Variant::Bold,
+            (false, true) => Variant::Italic,
+            (false, false) => Variant::Roman,
+        }
+    }
+
     /// 文本模式中的一项；数学子项恢复数学模式。
     fn text_item(&mut self, node: &MathNode, style: Style) -> Fragment {
         let em = self.ctx.font_size(style);
@@ -793,8 +815,10 @@ impl Converter<'_> {
             K::TextSpace => Fragment::new(Frame::new(0.25 * em, 0.0, 0.0), AtomClass::Ord),
             K::TextStyle => {
                 let variant = match Self::attribute(node, "style") {
-                    "bf" => Variant::Bold,
-                    "it" => Variant::Italic,
+                    "bf" | "it" | "md" | "up" => {
+                        Self::text_variant(style.variant, Self::attribute(node, "style"))
+                    }
+                    "bi" => Variant::BoldItalic,
                     "sf" => Variant::SansSerif,
                     "tt" => Variant::Monospace,
                     _ => Variant::Roman,

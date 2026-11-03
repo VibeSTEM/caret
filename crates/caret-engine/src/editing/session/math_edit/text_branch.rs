@@ -10,6 +10,7 @@ use super::super::{Affinity, Direction, EditError, Effect};
 use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
+use caret_doc::InlineEnvironmentKind;
 use std::ops::Range;
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,18 @@ pub(super) struct MathTextEdit {
     pub(super) snap_forward: bool,
     pub(super) removes_entire_flow: bool,
     pub(super) split_math_entry: bool,
+    pub(super) format: Option<MathTextFormat>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MathTextFormat {
+    pub(super) kind: InlineEnvironmentKind,
+    pub(super) enabled: bool,
+    pub(super) selected_source_start: usize,
+    pub(super) selected_source_len: usize,
+    pub(super) selected_text: String,
+    pub(super) display_range: Range<usize>,
+    pub(super) selection_reversed: bool,
 }
 
 pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
@@ -49,7 +62,10 @@ pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) ->
     })
 }
 
-fn text_source_range(text: &caret_doc::TextFlow, range: Range<usize>) -> Option<Range<usize>> {
+pub(super) fn text_source_range(
+    text: &caret_doc::TextFlow,
+    range: Range<usize>,
+) -> Option<Range<usize>> {
     if range.start >= range.end {
         return None;
     }
@@ -213,6 +229,7 @@ impl Session {
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: true,
+                format: None,
             }),
         )
     }
@@ -282,6 +299,7 @@ impl Session {
                 snap_forward: true,
                 removes_entire_flow,
                 split_math_entry: false,
+                format: None,
             }),
         )
     }
@@ -343,6 +361,7 @@ impl Session {
                 snap_forward: false,
                 removes_entire_flow: range.start == 0 && range.end == display.len(),
                 split_math_entry: false,
+                format: None,
             }),
         )
     }

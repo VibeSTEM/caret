@@ -17,7 +17,7 @@
 
 ## 范围与非目标
 
-实现三种公式载体的 Caret 持久化模型，以及公式插入、源码编辑、位置与键盘行为。MathEdit 标识目标公式、活动编辑分支和分支内位置；源码模式使用 UTF-8 字节偏移，文本岛模式复用正文 TextFlow 位置语义。Paragraph 行内树、公式文本分支和两者的编辑适配遵循[数学公式架构](../architecture/editor/math.md)，不嵌套 Paragraph block 或复制正文编辑逻辑。首版无自动编号、无 `\label` / `\ref`；支持的分隔符、行分隔和失败保留规则以 011 为准。保留 `defaultMathFontFamily`，统一默认标记 `<default>` 解析为内置 STIX Two Math，首版只支持该字体。
+实现三种公式载体的 Caret 持久化模型，以及公式插入、结构化文本编辑、源码编辑、位置与键盘行为。MathEdit 标识目标公式、活动编辑分支和分支内位置；源码模式使用 UTF-8 字节偏移，文本岛模式复用正文 TextFlow 位置语义。Paragraph 行内树、公式文本分支和两者的编辑适配遵循[数学公式架构](../architecture/editor/math.md)，不嵌套 Paragraph block 或复制正文编辑逻辑。首版无自动编号、无 `\label` / `\ref`；支持的分隔符、行分隔和失败保留规则以 011 为准。保留 `defaultMathFontFamily`，统一默认标记 `<default>` 解析为内置 STIX Two Math，首版只支持该字体。
 
 本任务不实现 Qt 绘制和大范围布局优化，不写入第三方 AST，不实现表格行列编辑。
 
@@ -29,22 +29,23 @@
 
 1. 校验 042 提供的三种公式节点、稳定 ID、源内容与深度/长度限制；确认模型由 Caret schema 持有。
 2. 实现 `\math`、`\equation`、`\align` 插入，源码更新、分组/命令停靠点、空槽编辑、Align 行分隔和公式进出；正文格式命令与公式输入分流。
-3. 将 `Paragraph.inlines` 统一为 `Vec<ParagraphContent>`；043 接入 Text、Math 和 InlineEnvironment 分支，Code 仅保留后续扩展位置。MathFlow 与 Paragraph 共用 TextFlow 载体，固定数学槽位各自保留 MathFlow。抽取现有段落文本存储/操作边界；InlineEnvironment 子项使用同一混合序列，Bold、Italic、Font 与 Math 通过通用 split/merge 操作维护范围，underline 仍由 Run 属性适配器处理。Font `fontFamily` 的文本族映射、字体资源与 fallback 归入[065](065-math-text-font-environments.md)，043 仍负责其行内树编辑事务。普通正文根流中的公式 TextFlow 必须提升为 Paragraph 文本项；经过格式包装时递归转换子项但保留单个包装节点。嵌套分数等固定槽位内的切分不得越过槽边界。文本岛适配器沿树路径复用正文输入法和编辑事务，不构造内容副本。
+3. 将 `Paragraph.inlines` 统一为 `Vec<ParagraphContent>`；043 接入 Text、Math 和 InlineEnvironment 分支，Code 仅保留后续扩展位置。MathFlow 与 Paragraph 共用 TextFlow 载体，固定数学槽位各自保留 MathFlow。抽取现有段落文本存储/操作边界；数学 TextFlow 输入、删除和格式操作直接编辑 MathTree，不通过 TeX 字符串回环；InlineEnvironment 子项使用同一混合序列，Bold、Italic、Font 与 Math 通过宿主适配器维护范围，underline 仍由 Run 属性适配器处理；目标是复用强类型 split/merge 策略，当前正文切分与数学根层提升仍是独立实现，共享 Run 范围和字素基础原语。Font `fontFamily` 的文本族映射、字体资源与 fallback 归入[065](065-math-text-font-environments.md)，043 仍负责其行内树编辑事务。InlineMath 根流 TextFlow 在创建和源码编辑事务提交时提升到 Paragraph；保留单个 InlineEnvironment 包装与身份，不穿透 MathNode 固定操作数槽位；数学范围只在源码编辑会话的临时映射中定位，不写入文档 TextFlow。焦点通过版本绑定的临时映射定位所属输出片段；Text 后紧邻 Math 的源码起点优先映射到前一正文 TextFlow 末端；跨片段选区无法无损映射时拒绝事务。该提升复用 Paragraph TextFlow 载体与编辑入口，不构造持久化内容副本。
 4. 将每次公式和文本岛编辑作为原子事务接入撤销/重做。解析、范围、兼容性或输入法替换失败时保留原文档与有效焦点状态。
 5. 覆盖插入点拆分、粘贴、文本岛输入法替换、稳定 ID/未知字段、错误恢复、边界导航及保存往返。
-6. 按[数学公式架构](../architecture/editor/math.md)定稿 ParagraphContent/MathFlow 节点、宿主参数化的 InlineEnvironment、TextFlow 持久化字段与 sourceMap、MathTree schema 版本及 `caret.paragraph.content-flow.v1`、`caret.math.content-flow.v1`、`caret.math.text-flow-source-map.v1` 能力。未发布的临时 inline/TextContent 格式不兼容、不迁移。编辑尽量局限于所属树分支；性能结论须基于代表性公式的节点数、分配、扫描、内存和序列化测量，不因共享实现直接推断性能提升。
+6. 按[数学公式架构](../architecture/editor/math.md)定稿 ParagraphContent/MathFlow 节点、宿主参数化的 InlineEnvironment、TextFlow 与 MathTree 的 AST-only 持久化 schema；`.cdoc` 不保存 LaTeX source、sourceRange 或 sourceMap。源码模式的规范 TeX、解析范围和节点映射只存在于绑定 MathTree revision 的编辑会话。能力只声明 `caret.paragraph.content-flow.v1` 与 `caret.math.content-flow.v1`；数学持久 schema 不提供 source-map 能力。未发布的临时 inline/TextContent 与双表示 MathTree 格式不兼容、不迁移；旧源码字段必须在存储入口拒绝，不能作为 `extra` 回写。编辑尽量局限于所属树分支；性能结论须基于代表性公式的节点数、分配、扫描、内存和序列化测量，不因共享实现直接推断性能提升。
 7. 更新 011 与架构文档中的职责和数据契约，独立评审后复验。
 
 ## 预计改动
 
-公式节点和文档验证在 042 已由 `crates/caret-doc` 提供；本任务集中于 `crates/caret-engine` 的公式命令、编辑状态、事务/历史与位置行为。`caret-app` 只在命令或快照边界确有需要时调整，不在 Qt/QML 重复数学编辑规则。
+本任务需同步调整 `crates/caret-doc` 数学 DTO/编解码/能力校验、`crates/caret-math` TeX 导入导出与临时位置投影、`crates/caret-engine` 公式命令/共享 TextFlow 编辑/事务历史/位置行为。移除持久源码字段时，必须处理 `extra` 对旧同名字段的吸收，确保存储入口明确拒绝旧双表示 schema。`caret-app` 只在命令或快照边界确有需要时调整，不在 Qt/QML 重复数学编辑规则。
 
 ## 验收标准
 
-- [ ] 三种公式类型使用 Caret 自有 `.cdoc` schema、稳定 ID 与未知字段保留；ParagraphContent 和 MathFlow 使用定稿 schema，并按文档存储规则声明相应必需能力（paragraph content-flow、math content-flow、math text-flow source-map）。未发布临时格式不提供迁移路径。
-- [ ] 目标 MathFlow 与 042 当前数学树布局不同，需完成模型/序列化/能力 schema 定稿及其往返验证；不提出紧凑表示或性能收益主张。任何性能优化需先记录代表性基线。
+- [ ] 三种公式类型使用 Caret 自有 `.cdoc` schema、稳定 ID 与未知字段保留；ParagraphContent 和 MathFlow 使用定稿 schema，并按文档存储规则声明相应必需能力（paragraph content-flow、math content-flow）。未发布临时格式不提供迁移路径。
+- [ ] MathTree/Align 仅持久化结构化节点、行列和格式元数据，不复制 LaTeX source 或源码映射；完成 AST-only schema 与 `.cdoc` 往返验证。编辑期 TeX 投影绑定文档 revision；解析失败、不完整草稿失焦/保存/关闭、草稿内撤销修复不完整 TeX、本地草稿历史耗尽后禁止错误跨入文档历史，过期 revision 拒绝提交并提供显式放弃入口（树保持不变），均保留有效树、焦点和草稿。任何性能结论都需代表性基线。
 - [x] 首版编号环境、自动编号、`\label` 与 `\ref` 明确不作为无编号公式接受；不支持语法由解析器拒绝且不改动现有文档。
-- [ ] 持久化 schema、页面绘制/光标投影及块布局接入后，命令可插入三种公式；在这些调用链完成前，桌面候选保持不可执行。数学源码与文本岛是平级编辑模式；文本岛共用 TextFlow、Run 属性和字素位置，Run 属性 underline 已适配 InlineMath、Equation、Align 的选区与待输入操作；InlineEnvironment 格式事务和 IME 仍待完成。
+- [ ] 持久化 schema、页面绘制/光标投影及块布局接入后，命令可插入三种公式；在这些调用链完成前，桌面候选保持不可执行。数学源码与文本岛是平级编辑模式；文本岛共用 TextFlow、Run 属性和字素位置，Run 属性 underline 已适配 InlineMath、Equation、Align 的选区与待输入操作；Math TextFlow 的 Bold/Italic 单流格式事务也已接入。Font 环境、跨 TextFlow 格式范围和 IME 仍待完成。
+- [ ] InlineMath 根层 TextFlow 已提升为 Paragraph 的 `ParagraphContent::Text`，Math/Text 项顺序、InlineEnvironment 单包装及 Run 属性均保留；正文结果不携带公式宿主 `sourceRange`/`sourceMap`。回归覆盖根层混合内容、空文本、格式包装保留、固定操作数槽位不提升、源码编辑再次拆分、片段焦点映射、跨片段选区拒绝、未知字段失败原子性、稳定 ID、Unicode/转义文本与临时源码位置映射、Equation/Align 根流不提升及撤销重做；完整验证结果记在下方验证表。
 - [ ] 源码解析、无效范围和替换失败保持文档、编辑目标与 generation 不变；插入点拆分、粘贴、格式合并、文本岛切换和公式对象身份有回归测试。
 - [x] 公式的绘制、版面命中、正文 shaping 与页面几何归 044；单元格模型/交互归 045，单元格画布集成归 046。
 - [ ] caret-engine 直接消费者验证、格式与 lint 通过；分领域审查及独立最终评审通过。需复验模型/布局直接消费者；Rust 与 native C++ 覆盖率门槛、本任务性能基线及桌面 IME/命中黑盒行为目前未验证，其中绘制/命中归 044。
@@ -80,6 +81,7 @@
 | 2026-11-02 | `cargo coverage`、`cargo coverage native` | Rust/native coverage 与原生行为门槛 | Rust coverage 全局 gate 通过：函数 2475/2854（86.72%），行 30196/33960（88.92%）。native coverage 未能生成报告：CTest 8/9 通过，既有 `Qml.ShellLoad::documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation` 因 `default_url.isLocalFile()` 失败；该测试在本分支前已有相同失败记录，本分支没有 native/QML 改动。native C++ coverage 阈值仍待可通过 CTest 的环境验证；性能基线未测。
 | 2026-11-02 | Terra/medium 数学编辑与模型评审、Sol/medium 独立完整 diff final review | 公式降级事务、元数据无损检查、统一快捷键路由和文档一致性 | 空源码、sourceMap 正反选区、grapheme 边界、全树语义校验、命令行 no-op 与数学降级路由均无剩余 P0–P2；已修复评审发现的问题并复验。Review 未运行构建或测试，验证结果以本表所列命令为准。
 | 2026-11-02 | `cargo fmt --all -- --check`、`git diff HEAD --check`、Terra/medium 语义审查、Sol/medium 完整 diff final review | 数学源码语义属性校验与 065 字体任务拆分一致 | Bold/Italic 未由源码表达的 `enabled: false` 由 engine 文档入口拒绝；未知属性和非对应环境类型同名字段仍按扩展元数据保留。043 保留 Font 行内树编辑事务；065 负责 `\textsf` / `\texttt` 字体选择、资源与 fallback；044 验收范围和 011 依赖已同步。格式/差异检查通过，Sol final review 无 P0–P3。本轮未运行 Rust 测试或 coverage；`caret-math` 公开布局/序列化入口诊断仍由 044/065 跟进 |
+| 2026-11-03 | `cargo test --offline --locked -p caret-engine`（343 项）、`cargo test --offline --locked -p caret-app`（196 项）、`cargo test --offline --locked -p caret-math`（42 项）、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo clippy --offline --locked -p caret-math --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff HEAD --check` | InlineMath 根流拆分边界、数学文本格式组合与 TeX 往返通过 | 空公式占位符紧邻 MathNode 时以等长 `{}` 规范化并保持树/源码一致；`\textmd` / `\textup` 组合保留另一 emphasis，Run bold+italic 组合成 BoldItalic，并导出为可重解析的嵌套命令。engine/app/math 测试、两 crate clippy、格式和差异检查通过。Rust/native coverage gate 与性能基线未运行。当前 tree-only `.cdoc` 和普通 TextFlow 直接树编辑仍待实现 |
 | 2026-11-02 | `cargo test --offline --locked -p caret-engine formula_text_environment_semantics_match_source_and_keep_extensions`、`cargo check --offline --locked --workspace --all-targets`、`cargo clippy --offline --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | PR #87 合并后 CI 暴露的测试借用冲突修复 | 将测试中的可变树借用限制在独立作用域；定向测试、workspace 全目标检查、engine 全目标 Clippy、格式和差异检查均通过。对应 GitHub Actions run 41412107383 的 `cargo check and build` 与 `cargo lint (clippy)` 均由此 E0502 失败；其他失败项无。覆盖率、性能基线未运行 |
 
 ## 风险与回退
@@ -88,6 +90,7 @@
 
 ## 决策与工作记录
 
+- 2026-11-03：取代 2026-11-01 的 sourceMap 持久设计：`.cdoc` 数学内容以 MathTree/Align 结构为唯一持久权威；去掉持久化 LaTeX source、节点 sourceRange 和 TextFlow sourceMap。LaTeX 只用于导入、导出与显式源码编辑草稿；临时映射绑定树 revision。导出时 MathFlow 文本转为 `\text{...}` 及对应 TeX 格式命令，段落普通文本保留为 TeX 正文；不承诺原始空白、注释、命令拼写或定界符逐字往返。
 - 2026-10-29：从 011 拆出文档模型、编辑和导航任务；以 020/011 的产品语义为准。
 - 2026-11-01：明确 043 的焦点为 `MathEdit` 源码字节位置；页面几何留给 044，表格模型与集成分别由 045/046 验收。
 - 2026-11-01：数学源码和数学命令查询禁用 IME；TextFlow 活动分支接入后再启用正文输入法事务。命令查询只接收命令行白名单，公式源码模式拒绝正文格式命令，避免误改宿主段落。显示公式之间可按方向切换，显式退出跳过连续公式并恢复到可用正文边界；无目标时保留焦点。撤销分组合并在数学焦点迁移时切断。
@@ -102,4 +105,4 @@
 
 ## 完成摘要
 
-当前分支已将 `Paragraph.inlines` 和 MathTree 改为共享 TextFlow 的强类型混合流，加入 Paragraph/MathFlow 能力声明，并让解析、序列化、数学验证、历史估算和段落位置映射消费新模型。旧的临时 inline/TextContent 格式没有转换器；旧 MathTree schema 只读预览，不进入新编辑树。公式源码模式和命令查询禁用 IME；Math TextFlow 已接入类型化路径、sourceMap 光标定位、直接 Run 编辑、同一 TextFlow 内 anchor/focus 选区编辑、Run 属性 underline 适配、解析验证、元数据迁移和单次历史事务，覆盖 InlineMath、Equation 与 Align cell。同一 MathFlow 槽位内相邻 TextFlow 可连续导航，InlineEnvironment 不阻断，MathNode/SoftBreak 是边界，空文本岛可定位。从 TextFlow 分支执行 `\math` 会按 sourceMap 边界在现有 `\text{...}` 内插入 `$...$`，解析为前后 TextFlow 与中间 MathNode，切换到公式源码分支；后续输入解析为同一 MathFlow 槽位中的 MathNode 兄弟项，撤销可恢复文本焦点及原树。Paragraph 与单个数学 TextFlow 共用 GraphemeMap 和 Run 范围替换原语；正文插入/删除现在按物理 `FlowPath` 直接修改宿主 TextFlow，不再为这些操作重建临时 EditNode 树。Paragraph 与 Math 各自保留宿主位置映射、未知元数据策略和事务提交；Run 属性语义由共享描述符提供，TextFlow 与宿主历史分别由对应适配器负责；InlineEnvironment 格式事务仍待实现。通用 FlowMap 可输出物理树路径，但 MathFlow 尚未消费该映射；跨相邻 TextFlow 的组合字素及选区仍未合并。删除整个 Math TextFlow 后暂回源码分支，后续输入仍按数学源码语义处理。数学文本岛仍未复用正文完整的跨流选区、IME 和统一事务入口；文本编辑仍复制宿主并完整重解析公式。正文根流提升、包装环境转换及数学文本岛自定义字体覆盖尚未完成。桌面公式绘制/光标投影尚未接入，公式命令候选保持不可执行。性能成本尚无代表性基准，不宣称共享载体已带来性能收益。044 负责公式页面布局，表格集成归 045/046。
+当前分支已将 `Paragraph.inlines` 和 MathTree 改为共享 TextFlow 的强类型混合流，并让解析、序列化、数学验证、历史估算和段落位置映射消费新模型。AST-only `.cdoc` 方案已定为目标架构；当前实现仍在 MathTree/Align 中保存 LaTeX source 与源码范围、在数学 TextFlow 中保存 sourceMap，这些是本任务的 schema 重构项。旧的临时 inline/TextContent 格式没有转换器；旧的双表示 MathTree schema 不兼容且不提供读取、预览或转换路径；目标存储边界必须拒绝旧 source/sourceRange/sourceMap 字段，避免 `extra` 将其再次写回；当前代码尚未完成这项校验。公式源码模式和命令查询禁用 IME；Math TextFlow 已接入类型化路径、MathFlow 路径光标定位、Run 范围编辑（经源码重解析）、同一 TextFlow 内 anchor/focus 选区编辑、Run 属性 underline 与 Bold/Italic 单流格式适配、解析验证、元数据迁移和单次历史事务，覆盖 InlineMath、Equation 与 Align cell。同一 MathFlow 槽位内相邻 TextFlow 可连续导航，InlineEnvironment 不阻断，MathNode/SoftBreak 是边界，空文本岛可定位。目标设计要求从 TextFlow 分支执行 `\math` 时，通过共享流操作将宿主内容切为前后 TextFlow 与 Math 分支；该操作不应序列化/重解析 TeX。当前实现尚通过持久源码映射和 TeX 重解析完成该切分，待迁移后再补直接树编辑和原子撤销验证。InlineMath 根层 TextFlow 现在在创建和源码编辑提交时归一化提升为 Paragraph TextFlow；文本岛外不会错误抢占相邻 Math 片段焦点，命令包装边界按最近输出片段边界定位；Text 后紧邻 Math 的源码起点优先映射到前一 TextFlow 末端，跨输出项选区拒绝而不缩小。Paragraph 与单个数学 TextFlow 共用 GraphemeMap 和 Run 范围替换原语；正文插入/删除现在按物理 `FlowPath` 直接修改宿主 TextFlow，不再为这些操作重建临时 EditNode 树。Paragraph 与 Math 各自保留宿主位置映射、未知元数据策略和事务提交；Run 属性语义由共享描述符提供，TextFlow 与宿主历史分别由对应适配器负责。Math TextFlow 的 Bold/Italic 格式目前由独立源码适配器处理，不复制正文 Paragraph 树操作；Font 环境、跨相邻 TextFlow 的格式与选区、IME 仍未接入。通用 FlowMap 可输出物理树路径，但 MathFlow 尚未消费该映射；跨相邻 TextFlow 的组合字素及选区仍未合并。删除整个 Math TextFlow 后暂回源码分支，后续输入仍按数学源码语义处理。数学 TextFlow 的普通编辑与格式事务仍经 LaTeX 源码重建并解析整树；这与目标的共享 TextFlow 直接树编辑不符，属于本任务未完成的架构迁移。桌面公式绘制/光标投影尚未接入，公式命令候选保持不可执行。该拆分的完整性能成本尚无代表性基准，不宣称共享载体已带来性能收益。044 负责公式页面布局，表格集成归 045/046。

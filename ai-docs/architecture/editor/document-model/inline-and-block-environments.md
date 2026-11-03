@@ -2,7 +2,7 @@
 
 更新日期：2026-11-01。本文定义环境适配器先按宿主层级分为 Inline 与 Block，再映射各自的文档载体、焦点、操作和几何。节点字段见[文档树与结构](document-structure.md)；格式解析见[文字格式语义](../text-formatting.md)；普通块环境的标题、编号、模板和解除语义见[块环境模型](document-environments.md)。
 
-本文是 043/044 的目标适配架构权威，相关实现随这两个任务落地。当前代码调用图见[内容节点代码链路](content-code-path.md)，其中区分已实现路径与目标接入。`.cdoc` 尚未稳定发布，不要求兼容早期分支的临时格式。本文定义语义适配边界；`ParagraphContent`、`TextFlow` 与数学持久化结构由[文档树与结构](document-structure.md)及[数学公式](../math.md)定义。
+本文定义目标适配架构；实现进度、验证和未完成项只记录在对应任务。适配职责链路见[内容节点代码链路](content-code-path.md)。`.cdoc` 不为早期临时格式提供兼容。本文定义语义适配边界；`ParagraphContent`、`TextFlow` 与数学持久化结构由[文档树与结构](document-structure.md)及[数学公式](../math.md)定义。
 
 ## 分层结构
 
@@ -13,11 +13,11 @@
 | Inline | `InlineEnvironment` | 有稳定 ID、可嵌套的格式包装节点 | 当前 `Pos` 与环境节点范围 | 环境树事务；Bold、Italic、Font |
 | Inline | `Run.props.underline` | Run 字符直接属性 | `Pos` 与连续 underlined Run 形成的逻辑范围 | Run 属性事务 |
 | Inline | `ParagraphContent::Math` | 有稳定 ID 和独立 MathTree 的原子行内内容项 | 当前公式编辑目标 `MathEdit.target` | 数学编辑事务；宿主 Paragraph 仍将其视作原子对象 |
-| Inline | Math 内容流的 `Text(TextFlow)` 项 | MathTree 中的普通文本片段 | `MathEdit` 的 Text 模式与文本岛位置 | 复用 `ParagraphContent::Text(TextFlow)` 的文本、Run 属性和 InlineEnvironment 适配器 |
+| Inline | Math 内容流的 `Text(TextFlow)` 项 | MathTree 中的普通文本片段 | `MathEdit` 的 Text 模式与文本岛位置 | 委托 `ParagraphContent::Text(TextFlow)` 的文本、Run 属性和 InlineEnvironment 操作；MathEdit 宿主事务负责同步公式源码、sourceMap、元数据和历史，见[数学公式架构](../math.md#公式中的普通文本) |
 | Block | 普通块环境 | `BlockEnvironment`，例如 Section、Custom | StructureIndex 中的稳定块节点与范围 | 块环境事务；标题、子树、解除等规则见块环境模型 |
 | Block | 数学块 | Equation、Align 等有稳定 ID 的公式块 | `MathEdit.target` 与公式块范围 | 数学编辑事务；宿主块流中保持原子性 |
 
-这里的“环境视图”是查询与交互边界，不意味着这些载体具有相同的树形、可编辑性或撤销操作。`ParagraphContent::Math` 不属于格式环境：它是内容项，不包裹普通文本流；`InlineEnvironment<Child>` 是 ParagraphContent 或 MathContent 序列中的独立包装分支，不嵌在 TextFlow 中，因此可包住同宿主流的公式子项而不吸收或替代公式节点身份。数学内容流的 `Text(TextFlow)` 是公式中的文本编辑目标，不是另一种数学文本叶片；进入后委托普通行内内容编辑器，退出后恢复 Math 模式。MathFlow 根流提升、固定槽位隔离及格式包装的递归切分规则见[数学公式架构](../math.md#宿主边界与拆分)。
+这里的“环境视图”是查询与交互边界，不意味着这些载体具有相同的树形、可编辑性或撤销操作。`ParagraphContent::Math` 不属于格式环境：它是内容项，不包裹普通文本流；`InlineEnvironment<Child>` 是 ParagraphContent 或 MathContent 序列中的独立包装分支，不嵌在 TextFlow 中，因此可包住同宿主流的公式子项而不吸收或替代公式节点身份。数学内容流的 `Text(TextFlow)` 是公式中的文本编辑目标，不是另一种数学文本叶片；目标是进入后复用普通行内内容编辑器并在退出后恢复 Math 模式。Math 文本岛复用 TextFlow、Run 属性和 InlineEnvironment 的编辑语义；MathEdit 宿主适配器维护公式源码、sourceMap、固定槽位位置与历史。根流提升及固定槽位隔离按[数学公式架构](../math.md#宿主边界与拆分)执行。
 
 ## 统一处理链路
 
@@ -103,7 +103,7 @@ Underline 是 glyph 装饰直接属性，不拥有子树，也不参与主题环
 
 ### 数学文本项
 
-Math 与 TextFlow 是同一内容序列中的分支。公式 Text 模式直接复用正文 TextFlow 编辑操作；输入 `\math` 时，共享 split/merge 操作在当前父序列中结束文本片段并插入 Math 分支，再按来源映射恢复位置。Bold、Italic、Font 等包装语义由同一树范围操作保留，不各自实现数学切分。Underline 仍作为 TextFlow Run 的直接属性，由独立 Run 属性适配器负责。宿主提升、固定数学槽位与环境包装规则见[数学公式架构](../math.md#宿主边界与拆分)；内容树和存储结构见[文档树与结构](document-structure.md)。
+Math 与 TextFlow 是同一内容序列中的分支。数学文本岛共用 Run 范围与字素基础原语，仍由 MathEdit 负责宿主源码、映射、元数据和历史事务。Math TextFlow 的 Bold、Italic、Font、Run 属性与输入法操作均委托给同宿主 Inline 适配器；MathEdit 事务同步 MathTree source 与 sourceMap。格式环境在各自宿主内生效：Paragraph 环境可影响其包含的 Math 原子呈现，但不得改写 MathTree；固定数学槽位中的文本样式由该 MathTree 内的环境决定。Math 内输入 `\math` 时，只在当前 MathFlow 槽位结束文本片段并插入 Math 分支，再按来源映射恢复位置。InlineMath 根层提升穿过 MathFlow 根流的格式包装并保留单个包装，但不穿过 MathNode 的操作数边界。Underline 始终是 TextFlow Run 的直接属性，由独立 Run 属性适配器负责。宿主提升和固定数学槽位规则见[数学公式架构](../math.md#宿主边界与拆分)；内容树和存储结构见[文档树与结构](document-structure.md)。
 
 ## Block 适配
 
@@ -113,7 +113,7 @@ Section、Custom 等普通块环境通过块节点、结构索引和块环境编
 
 ### 数学块
 
-Equation、Align 是公式内容块，在文档结构中拥有稳定 ID；宿主块流将它们视为原子范围，公式编辑器仍可进入内部。当前编辑目标同样通过 `MathEdit.target` 指向公式节点。块公式的高亮几何来自同代公式布局快照；不得把数学树塞进 Section/Custom 的块环境子树，也不得将公式内部可编辑性误写成宿主结构可拆分。
+Equation、Align 是公式内容块，在文档结构中拥有稳定 ID；宿主块流将它们视为原子范围，公式编辑器仍可进入内部。活动公式目标由 `MathEdit.target` 指向公式节点。块公式的高亮几何来自同代公式布局快照；不得把数学树塞进 Section/Custom 的块环境子树，也不得将公式内部可编辑性误写成宿主结构可拆分。
 
 ## 查询与几何组合
 

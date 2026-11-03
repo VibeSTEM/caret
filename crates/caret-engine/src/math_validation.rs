@@ -361,6 +361,41 @@ mod tests {
     }
 
     #[test]
+    fn formula_text_source_can_reset_bold_and_italic_semantics() {
+        let bold_reset = parse_inline(r"\text{a\textbf{b\textmd{c}}}");
+        let italic_reset = parse_inline(r"\text{a\textit{b\textup{c}}}");
+        for tree in [&bold_reset, &italic_reset] {
+            assert_eq!(validate_tree(tree, MathInputKind::Inline, "text"), Ok(()));
+        }
+
+        let Some(MathContent::Environment(outer_bold)) = bold_reset.root.content.get(1) else {
+            panic!("bold text style should produce an inline environment");
+        };
+        assert_eq!(outer_bold.kind, caret_doc::InlineEnvironmentKind::Bold);
+        let Some(MathContent::Environment(reset_bold)) = outer_bold.children.get(1) else {
+            panic!("medium text style should produce a nested inline environment");
+        };
+        assert_eq!(reset_bold.kind, caret_doc::InlineEnvironmentKind::Bold);
+        assert_eq!(
+            reset_bold.props.get("enabled"),
+            Some(&serde_json::json!(false))
+        );
+
+        let Some(MathContent::Environment(outer_italic)) = italic_reset.root.content.get(1) else {
+            panic!("italic text style should produce an inline environment");
+        };
+        assert_eq!(outer_italic.kind, caret_doc::InlineEnvironmentKind::Italic);
+        let Some(MathContent::Environment(reset_italic)) = outer_italic.children.get(1) else {
+            panic!("upright text style should produce a nested inline environment");
+        };
+        assert_eq!(reset_italic.kind, caret_doc::InlineEnvironmentKind::Italic);
+        assert_eq!(
+            reset_italic.props.get("enabled"),
+            Some(&serde_json::json!(false))
+        );
+    }
+
+    #[test]
     fn source_font_command_must_match_the_persisted_text_flow() {
         let mut tree = parse_inline(r"\text{\textsf{x}}");
         tree.source = r"\text{\texttt{x}}".to_owned();

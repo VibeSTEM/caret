@@ -574,10 +574,19 @@ impl Writer {
                 }
                 MathNodeKind::TextStyle => {
                     let style = Self::attribute(child, "style");
-                    self.command(&format!("text{style}"));
-                    self.raw("{");
-                    self.text_children(&child.children);
-                    self.raw("}");
+                    if style == "bi" {
+                        self.command("textbf");
+                        self.raw("{");
+                        self.command("textit");
+                        self.raw("{");
+                        self.text_children(&child.children);
+                        self.raw("}}");
+                    } else {
+                        self.command(&format!("text{style}"));
+                        self.raw("{");
+                        self.text_children(&child.children);
+                        self.raw("}");
+                    }
                 }
                 _ => {
                     self.raw("$");
