@@ -4,13 +4,10 @@
 // 署名：Yuki Lu
 
 use super::super::super::EditError;
-use super::super::{
-    MathTextFlowPath, MathTextFlowPathStep, text_split_metadata::split_text_flow_runs_for_format,
-};
+use super::super::path::content_slot_mut;
+use super::super::{MathTextFlowPath, text_run_split::split_text_flow_runs_for_format};
 use super::source_map_edit::{rebase_text_map_entry, update_math_flow_ranges};
-use caret_doc::{
-    InlineEnvironment, MathContent, MathFlow, MathSourceRange, NodeId, TextFlowSourceMapEntry,
-};
+use caret_doc::{InlineEnvironment, MathContent, MathSourceRange, NodeId, TextFlowSourceMapEntry};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -330,59 +327,4 @@ fn text_flow_fragment(
         text.extra.clear();
     }
     Ok(text)
-}
-
-fn content_slot_mut<'a>(
-    flow: &'a mut MathFlow,
-    steps: &[MathTextFlowPathStep],
-) -> Option<(&'a mut Vec<MathContent>, usize)> {
-    let MathTextFlowPathStep::Content(index) = steps.first()? else {
-        return None;
-    };
-    if steps.len() == 1 {
-        return Some((&mut flow.content, *index));
-    }
-    let content = flow.content.get_mut(*index)?;
-    match content {
-        MathContent::Environment(environment) => {
-            let MathTextFlowPathStep::EnvironmentChild(child_index) = &steps[1] else {
-                return None;
-            };
-            if steps.len() == 2 {
-                return Some((&mut environment.children, *child_index));
-            }
-            content_slot_mut_content(environment.children.get_mut(*child_index)?, &steps[2..])
-        }
-        MathContent::Math(node) => {
-            let MathTextFlowPathStep::Operand(operand) = &steps[1] else {
-                return None;
-            };
-            content_slot_mut(node.children.get_mut(*operand)?, &steps[2..])
-        }
-        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
-    }
-}
-
-fn content_slot_mut_content<'a>(
-    content: &'a mut MathContent,
-    steps: &[MathTextFlowPathStep],
-) -> Option<(&'a mut Vec<MathContent>, usize)> {
-    match content {
-        MathContent::Environment(environment) => {
-            let MathTextFlowPathStep::EnvironmentChild(index) = steps.first()? else {
-                return None;
-            };
-            if steps.len() == 1 {
-                return Some((&mut environment.children, *index));
-            }
-            content_slot_mut_content(environment.children.get_mut(*index)?, &steps[1..])
-        }
-        MathContent::Math(node) => {
-            let MathTextFlowPathStep::Operand(index) = steps.first()? else {
-                return None;
-            };
-            content_slot_mut(node.children.get_mut(*index)?, &steps[1..])
-        }
-        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
-    }
 }

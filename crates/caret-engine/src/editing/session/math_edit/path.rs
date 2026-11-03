@@ -417,5 +417,43 @@ fn resolve_content_path_mut<'a>(
     }
 }
 
+/// 返回路径末端内容所在的宿主列表与槽位，用于以同级节点替换该内容。
+pub(super) fn content_slot_mut<'a>(
+    flow: &'a mut MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<(&'a mut Vec<MathContent>, usize)> {
+    let MathTextFlowPathStep::Content(index) = steps.first()? else {
+        return None;
+    };
+    if steps.len() == 1 {
+        return Some((&mut flow.content, *index));
+    }
+    content_slot_mut_content(flow.content.get_mut(*index)?, &steps[1..])
+}
+
+fn content_slot_mut_content<'a>(
+    content: &'a mut MathContent,
+    steps: &[MathTextFlowPathStep],
+) -> Option<(&'a mut Vec<MathContent>, usize)> {
+    match content {
+        MathContent::Environment(environment) => {
+            let MathTextFlowPathStep::EnvironmentChild(index) = steps.first()? else {
+                return None;
+            };
+            if steps.len() == 1 {
+                return Some((&mut environment.children, *index));
+            }
+            content_slot_mut_content(environment.children.get_mut(*index)?, &steps[1..])
+        }
+        MathContent::Math(node) => {
+            let MathTextFlowPathStep::Operand(index) = steps.first()? else {
+                return None;
+            };
+            content_slot_mut(node.children.get_mut(*index)?, &steps[1..])
+        }
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;

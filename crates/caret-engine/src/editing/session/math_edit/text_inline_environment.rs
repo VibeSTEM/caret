@@ -110,6 +110,7 @@ impl Session {
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: false,
+                split_math_contents: None,
                 format: Some(format),
             }),
         )

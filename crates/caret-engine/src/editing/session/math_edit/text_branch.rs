@@ -10,12 +10,14 @@ use super::super::{Affinity, Direction, EditError, Effect};
 use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
-use caret_doc::InlineEnvironmentKind;
+use caret_doc::{InlineEnvironmentKind, MathContent};
 
 mod format_tree_edit;
 mod source_map_edit;
+mod split_tree_edit;
 pub(super) use format_tree_edit::apply_math_text_format_tree_edit;
 pub(super) use source_map_edit::{EncodedMathTextPiece, apply_math_text_tree_edit};
+pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,7 @@ pub(super) struct MathTextEdit {
     pub(super) snap_forward: bool,
     pub(super) removes_entire_flow: bool,
     pub(super) split_math_entry: bool,
+    pub(super) split_math_contents: Option<Vec<MathContent>>,
     pub(super) format: Option<MathTextFormat>,
 }
 
@@ -175,8 +178,13 @@ impl Session {
         let body = caret_math::input_body_range(initial_source, caret_math::MathInputKind::Inline)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         let initial_source = initial_source.get(body).ok_or(EditError::InvalidPosition)?;
-        caret_math::parse(initial_source, caret_math::MathInputKind::Inline)
-            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let split_math_contents =
+            match caret_math::parse(initial_source, caret_math::MathInputKind::Inline)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            {
+                caret_math::ParsedMath::Tree(tree) => tree.root.content,
+                caret_math::ParsedMath::Align(_) => return Err(EditError::InvalidPosition),
+            };
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let MathEditBranch::Text { path, anchor } = &edit.branch else {
             return Err(EditError::InvalidPosition);
@@ -236,6 +244,7 @@ impl Session {
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: true,
+                split_math_contents: Some(split_math_contents),
                 format: None,
             }),
         )
@@ -324,6 +333,7 @@ impl Session {
                 snap_forward: true,
                 removes_entire_flow,
                 split_math_entry: false,
+                split_math_contents: None,
                 format: None,
             }),
         )
@@ -387,6 +397,7 @@ impl Session {
                 snap_forward: false,
                 removes_entire_flow: range.start == 0 && range.end == display.len(),
                 split_math_entry: false,
+                split_math_contents: None,
                 format: None,
             }),
         )
