@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use super::super::paragraph_ops::build_paragraph_index;
 #[cfg(test)]
@@ -47,7 +47,6 @@ use caret_doc::{
 };
 use inline_root_split::{InlineRootFocus, replace_inline_math_with_split, split_inline_math_root};
 pub use path::{MathTextFlowPath, MathTextFlowPathStep};
-use std::sync::Arc;
 use text_branch::{
     MathTextEdit, is_grapheme_boundary, snap_text_cursor, text_source_boundary,
     validate_text_flow_edit,
@@ -82,17 +81,22 @@ pub enum MathEditBranch {
     },
 }
 
-/// 公式编辑状态：源码树、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
+/// 公式编辑状态：目标、源码投影、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathEdit {
     pub target: MathEditTarget,
-    pub source: String,
+    pub source_projection: Arc<caret_math::MathSourceMap<'static>>,
     pub cursor: usize,
     /// 光标所属的数学树分支；源码和 TextFlow 分别使用各自的字节坐标。
     pub branch: MathEditBranch,
 }
 
 impl MathEdit {
+    /// 当前编辑分支对应的源码视图；Align 不包含环境包围命令。
+    pub fn source(&self) -> &str {
+        self.source_projection.edit_source()
+    }
+
     /// 对齐公式中光标所在的行、单元格及单元格内偏移；单元格源码已去掉首尾空白。
     pub fn align_cell_at_cursor(&self) -> Option<(usize, usize, usize)> {
         if !matches!(self.target, MathEditTarget::Block { align: true, .. })
@@ -100,7 +104,7 @@ impl MathEdit {
         {
             return None;
         }
-        align_cell_at(&self.source, self.cursor)
+        align_cell_at(self.source(), self.cursor)
     }
 }
 
@@ -119,14 +123,25 @@ pub(super) fn restore_math_edit(
         MathEditTarget::Block { block_id, align } => {
             match (find_block_by_id(&document.body, block_id)?, align) {
                 (Block::Equation(equation), false) => equation.math_tree.source.clone(),
-                (Block::Align(value), true) => align_body(&value.source),
+                (Block::Align(value), true) => value.source.clone(),
                 _ => return None,
             }
         }
     };
+    let kind = match &position.target {
+        MathEditTarget::Inline { .. } => caret_math::MathInputKind::Inline,
+        MathEditTarget::Block { align: true, .. } => caret_math::MathInputKind::Align,
+        MathEditTarget::Block { align: false, .. } => caret_math::MathInputKind::Equation,
+    };
+    let source_projection = caret_math::parse_projection(&source, kind)
+        .ok()?
+        .into_parts()
+        .1;
     match &position.branch {
         MathEditBranch::Source => {
-            if position.cursor > source.len() || !source.is_char_boundary(position.cursor) {
+            let edit_source = source_projection.edit_source();
+            if position.cursor > edit_source.len() || !edit_source.is_char_boundary(position.cursor)
+            {
                 return None;
             }
         }
@@ -156,7 +171,7 @@ pub(super) fn restore_math_edit(
     }
     Some(MathEdit {
         target: position.target,
-        source,
+        source_projection: Arc::new(source_projection),
         cursor: position.cursor,
         branch: position.branch,
     })
@@ -456,7 +471,7 @@ impl Session {
         let paragraph_map = TextMap::new(&paragraph)?;
         paragraph_map.validate_pos(&focus)?;
         let paragraph_empty = paragraph_map.text.is_empty();
-        let block = display_math_block(align, "")?;
+        let (block, source_projection) = display_math_block_projection(align, "")?;
         let block_id = block_id(&block)
             .cloned()
             .ok_or(EditError::InvalidPosition)?;
@@ -497,7 +512,7 @@ impl Session {
         };
         self.math_edit = Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
-            source: String::new(),
+            source_projection: Arc::new(source_projection),
             cursor: 0,
             branch: MathEditBranch::Source,
         });
@@ -545,15 +560,15 @@ impl Session {
         if let Some((start, math_id)) = slot {
             let math = find_inline_math_mut(&mut paragraph.inlines, &math_id)
                 .ok_or(EditError::InvalidPosition)?;
-            let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
-                &math.math_tree,
-                caret_math::MathInputKind::Inline,
-            )
-            .map_err(EditError::InvalidMath)?;
+            let (source_projection, projected_tree) =
+                crate::math_validation::project_tree_for_edit(
+                    &math.math_tree,
+                    caret_math::MathInputKind::Inline,
+                )
+                .map_err(EditError::InvalidMath)?;
             math.math_tree = projected_tree;
             self.replace_paragraph(&focus, paragraph.clone())?;
-            let body = caret_math::input_body_range(&source, caret_math::MathInputKind::Inline)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+            let body = source_projection.body_range();
             let cursor = match direction {
                 Direction::Forward => body.start,
                 Direction::Backward => body.end,
@@ -574,7 +589,7 @@ impl Session {
                     paragraph_id: paragraph.id.clone(),
                     math_id,
                 },
-                source,
+                source_projection: Arc::new(source_projection),
                 cursor,
                 branch: MathEditBranch::Source,
             });
@@ -610,37 +625,35 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(Effect::default());
         };
-        let (block_id, align, source) = {
+        let (block_id, align, source_projection) = {
             let block = block_list(&mut self.document.body, &parent_ids)?
                 .get_mut(neighbour)
                 .ok_or(EditError::InvalidPosition)?;
             match block {
                 Block::Equation(equation) => {
-                    let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
-                        &equation.math_tree,
-                        caret_math::MathInputKind::Equation,
-                    )
-                    .map_err(EditError::InvalidMath)?;
+                    let (source_map, projected_tree) =
+                        crate::math_validation::project_tree_for_edit(
+                            &equation.math_tree,
+                            caret_math::MathInputKind::Equation,
+                        )
+                        .map_err(EditError::InvalidMath)?;
                     equation.math_tree = projected_tree;
-                    (equation.id.clone(), false, source)
+                    (equation.id.clone(), false, source_map)
                 }
                 Block::Align(value) => {
-                    let (full_source, mut projected_align) =
+                    let (source_map, projected_align) =
                         crate::math_validation::project_align_for_edit(value)
                             .map_err(EditError::InvalidMath)?;
-                    projected_align.source = full_source;
-                    let source = align_body(&projected_align.source);
                     *value = projected_align;
-                    (value.id.clone(), true, source)
+                    (value.id.clone(), true, source_map)
                 }
                 _ => return Ok(Effect::default()),
             }
         };
         let body = if align {
-            0..source.len()
+            0..source_projection.edit_source().len()
         } else {
-            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            source_projection.body_range()
         };
         let cursor = match direction {
             Direction::Forward => body.start,
@@ -648,7 +661,7 @@ impl Session {
         };
         self.math_edit = Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
-            source,
+            source_projection: Arc::new(source_projection),
             cursor,
             branch: MathEditBranch::Source,
         });
@@ -670,7 +683,7 @@ impl Session {
     fn math_insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         let source_edit = edit.cursor..edit.cursor;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         let mut cursor = edit.cursor;
         for character in text.chars() {
             match character {
@@ -703,7 +716,7 @@ impl Session {
 
     fn math_insert_raw(&mut self, text: &str, cursor_in_text: usize) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         let source_edit = edit.cursor..edit.cursor;
         source.insert_str(source_edit.start, text);
         let cursor = source_edit.start + cursor_in_text;
@@ -714,13 +727,13 @@ impl Session {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let body_source = edit
-            .source
+            .source()
             .get(body.clone())
             .ok_or(EditError::InvalidPosition)?;
         if body_source.trim().is_empty() {
             return self.delete_math_object();
         }
-        let source = edit.source.as_str();
+        let source = edit.source();
         let Some(cursor) = edit.cursor.checked_sub(body.start) else {
             return Err(EditError::InvalidPosition);
         };
@@ -749,7 +762,7 @@ impl Session {
     fn math_delete_forward(&mut self) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
-        let source = edit.source.as_str();
+        let source = edit.source();
         let cursor = edit
             .cursor
             .checked_sub(body.start)
@@ -845,8 +858,8 @@ impl Session {
                 let (start, end) = path.host_source_range();
                 let exit_cursor = if display_text.is_empty() {
                     let Some(exit_cursor) = (match direction {
-                        Direction::Backward => previous_math_caret_stop(&edit.source, start),
-                        Direction::Forward => next_math_caret_stop(&edit.source, end),
+                        Direction::Backward => previous_math_caret_stop(edit.source(), start),
+                        Direction::Forward => next_math_caret_stop(edit.source(), end),
                     }) else {
                         // 空文本岛若紧贴公式边缘且同向没有源码停靠点，继续退出公式以避免边界重入陷阱。
                         return self.exit_math_edit(direction, false);
@@ -871,7 +884,7 @@ impl Session {
         }
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let source = edit
-            .source
+            .source()
             .get(body.clone())
             .ok_or(EditError::InvalidPosition)?;
         let cursor = edit
@@ -1208,33 +1221,31 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(None);
         };
-        let (block_id, align, source) =
+        let (block_id, align, source_projection) =
             match block_list(&mut self.document.body, &parent_ids)?.get_mut(neighbour) {
                 Some(Block::Equation(equation)) => {
-                    let (source, projected_tree) = crate::math_validation::project_tree_for_edit(
-                        &equation.math_tree,
-                        caret_math::MathInputKind::Equation,
-                    )
-                    .map_err(EditError::InvalidMath)?;
+                    let (source_map, projected_tree) =
+                        crate::math_validation::project_tree_for_edit(
+                            &equation.math_tree,
+                            caret_math::MathInputKind::Equation,
+                        )
+                        .map_err(EditError::InvalidMath)?;
                     equation.math_tree = projected_tree;
-                    (equation.id.clone(), false, source)
+                    (equation.id.clone(), false, source_map)
                 }
                 Some(Block::Align(value)) => {
-                    let (full_source, mut projected_align) =
+                    let (source_map, projected_align) =
                         crate::math_validation::project_align_for_edit(value)
                             .map_err(EditError::InvalidMath)?;
-                    projected_align.source = full_source;
-                    let source = align_body(&projected_align.source);
                     *value = projected_align;
-                    (value.id.clone(), true, source)
+                    (value.id.clone(), true, source_map)
                 }
                 _ => return Ok(None),
             };
         let body = if align {
-            0..source.len()
+            0..source_projection.edit_source().len()
         } else {
-            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            source_projection.body_range()
         };
         let cursor = match direction {
             Direction::Forward => body.start,
@@ -1242,7 +1253,7 @@ impl Session {
         };
         Ok(Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
-            source,
+            source_projection: Arc::new(source_projection),
             cursor,
             branch: MathEditBranch::Source,
         }))
@@ -1480,20 +1491,20 @@ impl Session {
         text_edit: Option<MathTextEdit>,
     ) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        if source == edit.source && text_edit.is_none() {
+        if source == edit.source() && text_edit.is_none() {
             self.set_math_cursor(cursor);
             return Ok(Effect::default());
         }
         if old_edit.start > old_edit.end
-            || old_edit.end > edit.source.len()
-            || !edit.source.is_char_boundary(old_edit.start)
-            || !edit.source.is_char_boundary(old_edit.end)
+            || old_edit.end > edit.source().len()
+            || !edit.source().is_char_boundary(old_edit.start)
+            || !edit.source().is_char_boundary(old_edit.end)
         {
             return Err(EditError::InvalidPosition);
         }
         let inserted_len = source
             .len()
-            .checked_sub(edit.source.len() - old_edit.len())
+            .checked_sub(edit.source().len() - old_edit.len())
             .ok_or(EditError::InvalidPosition)?;
         let new_edit = old_edit.start..old_edit.start + inserted_len;
         let path_old_edit = text_edit
@@ -1511,7 +1522,7 @@ impl Session {
         let mut next_cursor = cursor;
         let mut next_edit = MathEdit {
             target: edit.target.clone(),
-            source: source.clone(),
+            source_projection: edit.source_projection.clone(),
             cursor,
             branch: MathEditBranch::Source,
         };
@@ -1528,12 +1539,14 @@ impl Session {
                 paragraph_id,
                 math_id,
             } => {
-                let caret_math::ParsedMath::Tree(mut math_tree) =
-                    caret_math::parse(&source, caret_math::MathInputKind::Inline)
-                        .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                else {
+                let projection =
+                    caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
+                        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+                let (content, source_projection) = projection.into_parts_with_legacy_fields();
+                let caret_math::ProjectedMath::Tree(mut math_tree) = content else {
                     return Err(EditError::InvalidMath("expected inline math".to_owned()));
                 };
+                next_edit.source_projection = Arc::new(source_projection);
                 let story = self
                     .story_for_paragraph(paragraph_id)
                     .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
@@ -1782,7 +1795,15 @@ impl Session {
                             };
                             next_edit = MathEdit {
                                 target: target.clone(),
-                                source,
+                                source_projection: Arc::new(
+                                    caret_math::parse_projection(
+                                        &source,
+                                        caret_math::MathInputKind::Inline,
+                                    )
+                                    .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                                    .into_parts()
+                                    .1,
+                                ),
                                 cursor,
                                 branch: MathEditBranch::Source,
                             };
@@ -1896,7 +1917,9 @@ impl Session {
                 );
             }
             MathEditTarget::Block { block_id, align } => {
-                let mut block = display_math_block_with_id(*align, &source, block_id.clone())?;
+                let (mut block, source_projection) =
+                    display_math_block_with_projection(*align, &source, block_id.clone())?;
+                next_edit.source_projection = Arc::new(source_projection);
                 if let Some((path, text_cursor)) = &text_branch {
                     let tree = match (&block, path.align_cell()) {
                         (Block::Equation(equation), None) => &equation.math_tree,
@@ -2137,7 +2160,6 @@ impl Session {
                 );
             }
         }
-        next_edit.source = source;
         next_edit.cursor = next_cursor;
         next_edit.branch = next_branch;
         self.math_edit = Some(next_edit);
@@ -2387,39 +2409,50 @@ fn block_list_ref<'a>(
     block_list_ref(&environment.children, rest)
 }
 
+#[cfg(test)]
 fn display_math_block(align: bool, source: &str) -> Result<Block, EditError> {
-    display_math_block_with_id(align, source, NodeId::generate())
+    display_math_block_projection(align, source).map(|(block, _)| block)
 }
 
+fn display_math_block_projection(
+    align: bool,
+    source: &str,
+) -> Result<(Block, caret_math::MathSourceMap<'static>), EditError> {
+    display_math_block_with_projection(align, source, NodeId::generate())
+}
+
+#[cfg(test)]
 fn display_math_block_with_id(align: bool, source: &str, id: NodeId) -> Result<Block, EditError> {
+    display_math_block_with_projection(align, source, id).map(|(block, _)| block)
+}
+
+fn display_math_block_with_projection(
+    align: bool,
+    source: &str,
+    id: NodeId,
+) -> Result<(Block, caret_math::MathSourceMap<'static>), EditError> {
     if align {
         let full = format!("{ALIGN_BEGIN}{source}{ALIGN_END}");
-        let caret_math::ParsedMath::Align(parsed) =
-            caret_math::parse(&full, caret_math::MathInputKind::Align)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
-        else {
+        let projection = caret_math::parse_projection(&full, caret_math::MathInputKind::Align)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let (content, source_projection) = projection.into_parts_with_legacy_fields();
+        let caret_math::ProjectedMath::Align(parsed) = content else {
             return Err(EditError::InvalidMath("expected aligned math".to_owned()));
         };
-        return Ok(Block::Align(Align { id, ..parsed }));
+        return Ok((Block::Align(Align { id, ..parsed }), source_projection));
     }
-    let caret_math::ParsedMath::Tree(math_tree) =
-        caret_math::parse(source, caret_math::MathInputKind::Equation)
-            .map_err(|error| EditError::InvalidMath(error.to_string()))?
-    else {
+    let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Equation)
+        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+    let (content, source_projection) = projection.into_parts_with_legacy_fields();
+    let caret_math::ProjectedMath::Tree(math_tree) = content else {
         return Err(EditError::InvalidMath("expected equation".to_owned()));
     };
-    Ok(Block::Equation(Equation {
+    let block = Block::Equation(Equation {
         id,
         math_tree,
         extra: Default::default(),
-    }))
-}
-
-/// 对齐公式完整源码中 `aligned` 环境的内部；不是该形式时整体返回。
-fn align_body(source: &str) -> String {
-    align_source::align_body_range(source)
-        .map(|range| source[range].to_owned())
-        .unwrap_or_else(|| source.trim().to_owned())
+    });
+    Ok((block, source_projection))
 }
 
 #[cfg(test)]

@@ -396,6 +396,7 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
         Err(error) => panic!("valid text formula should project: {error}"),
     };
     assert_eq!(projection.source_map().source(), source);
+    assert_eq!(projection.source_map().edit_source(), source);
     assert_eq!(projection.source_map().kind(), MathInputKind::Inline);
     assert_eq!(projection.source_map().body_range(), 0..source.len());
     let ProjectedMath::Tree(tree) = projection.content() else {
@@ -441,6 +442,10 @@ fn align_projection_keeps_exact_environment_and_cell_ranges() {
     assert_eq!(
         &source[environment.clone()],
         r"\begin{aligned} a &= b+1 \\ c &= d\end{aligned}"
+    );
+    assert_eq!(
+        projection.source_map().edit_source(),
+        r" a &= b+1 \\ c &= d"
     );
     assert!(align.source.is_empty());
     let Some(cell) = align_map.cell_range(0, 1) else {
@@ -516,6 +521,24 @@ fn align_projection_keeps_duplicate_unicode_cells_and_noncanonical_source_ranges
     assert_eq!(&source[first.clone()], "= 同文 % & comment");
     assert_eq!(&source[second.clone()], "= 同文");
     assert_ne!(first, second);
+}
+
+#[test]
+fn align_projection_retains_trailing_whitespace_and_comments_in_edit_view() {
+    for (source, expected) in [
+        (r"\begin{aligned} \end{aligned}", " "),
+        (r"\begin{aligned}x\\  \end{aligned}", r"x\\  "),
+        (
+            "\\[\\begin{aligned}x  % trailing comment\n\\end{aligned}\\]",
+            "x  % trailing comment\n",
+        ),
+    ] {
+        let projection = match crate::parse_projection(source, MathInputKind::Align) {
+            Ok(projection) => projection,
+            Err(error) => panic!("valid Align trivia should project: {error}"),
+        };
+        assert_eq!(projection.source_map().edit_source(), expected);
+    }
 }
 
 #[test]

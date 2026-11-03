@@ -10,9 +10,10 @@ use caret_doc::{Align, MathTree};
 use crate::{MathInputKind, ParsedMath};
 
 /// 对齐环境及其各单元格在完整输入中的原始字节范围。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlignSourceMap {
     environment_range: Range<usize>,
+    content_range: Range<usize>,
     cell_ranges: Vec<Vec<Range<usize>>>,
 }
 
@@ -22,18 +23,24 @@ impl AlignSourceMap {
         self.environment_range.clone()
     }
 
+    /// 返回对齐环境内容（不含 `\begin` / `\end` 命令）的原始字节范围。
+    pub fn content_range(&self) -> Range<usize> {
+        self.content_range.clone()
+    }
+
     /// 返回指定行列单元格在完整输入中的范围。
     pub fn cell_range(&self, row: usize, cell: usize) -> Option<Range<usize>> {
         self.cell_ranges.get(row)?.get(cell).cloned()
     }
 }
 
-/// 将原始源码位置与一棵公式树绑定的映射 sidecar。
-#[derive(Debug, Clone, PartialEq)]
+/// 持有公式源码及同次解析生成的范围映射。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathSourceMap<'a> {
     source: Cow<'a, str>,
     kind: MathInputKind,
     body_range: Range<usize>,
+    edit_range: Range<usize>,
     align: Option<AlignSourceMap>,
 }
 
@@ -51,6 +58,11 @@ impl MathSourceMap<'_> {
     /// 返回剥除可选外层定界符后的源码范围。
     pub fn body_range(&self) -> Range<usize> {
         self.body_range.clone()
+    }
+
+    /// 返回当前编辑分支对应的源码视图。Align 使用环境内部，其余类型使用完整输入。
+    pub fn edit_source(&self) -> &str {
+        &self.source[self.edit_range.clone()]
     }
 
     /// 返回 Align 的环境和单元格源码范围；其他公式类型没有行列范围。
@@ -79,12 +91,14 @@ impl<'a> MathProjection<'a> {
         body_range: Range<usize>,
         tree: MathTree,
     ) -> Self {
+        let edit_range = 0..source.len();
         Self {
             content: ProjectedMath::Tree(tree),
             source_map: MathSourceMap {
                 source,
                 kind,
                 body_range,
+                edit_range,
                 align: None,
             },
         }
@@ -95,6 +109,7 @@ impl<'a> MathProjection<'a> {
         body_range: Range<usize>,
         tree: Align,
         environment_range: Range<usize>,
+        content_range: Range<usize>,
         cell_ranges: Vec<Vec<Range<usize>>>,
     ) -> Self {
         Self {
@@ -103,8 +118,10 @@ impl<'a> MathProjection<'a> {
                 source,
                 kind: MathInputKind::Align,
                 body_range,
+                edit_range: content_range.clone(),
                 align: Some(AlignSourceMap {
                     environment_range,
+                    content_range,
                     cell_ranges,
                 }),
             },
@@ -123,6 +140,27 @@ impl<'a> MathProjection<'a> {
 
     /// 将树与源码映射分别移动给编辑会话持有，避免复制整棵树。
     pub fn into_parts(self) -> (ProjectedMath, MathSourceMap<'a>) {
+        (self.content, self.source_map)
+    }
+
+    /// 移动拆分树与映射，同时回填迁移期 DTO 的临时源码字段。
+    pub fn into_parts_with_legacy_fields(mut self) -> (ProjectedMath, MathSourceMap<'a>) {
+        match &mut self.content {
+            ProjectedMath::Tree(tree) => {
+                tree.source = self.source_map.source().to_owned();
+            }
+            ProjectedMath::Align(align) => {
+                if let Some(align_map) = &self.source_map.align {
+                    align.source =
+                        self.source_map.source[align_map.environment_range.clone()].to_owned();
+                    for (row, ranges) in align.rows.iter_mut().zip(&align_map.cell_ranges) {
+                        for (cell, range) in row.cells.iter_mut().zip(ranges) {
+                            cell.source = self.source_map.source[range.clone()].to_owned();
+                        }
+                    }
+                }
+            }
+        }
         (self.content, self.source_map)
     }
 

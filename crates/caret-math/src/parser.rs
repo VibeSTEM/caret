@@ -263,8 +263,10 @@ fn parse_align<'source>(
     }
     parser.read_command();
     parser.read_raw_group()?;
+    let environment_content_start = parser.pos;
     let parsed_rows = parser.parse_matrix_rows("aligned")?;
     let environment_end_start = parsed_rows.environment_end_start;
+    let environment_content_end = parsed_rows.environment_content_end;
     let environment_end = parsed_rows.environment_end;
     let mut rows = parsed_rows.rows;
     parser.skip_space();
@@ -323,6 +325,7 @@ fn parse_align<'source>(
         body,
         align,
         env_start..environment_end,
+        environment_content_start..environment_content_end,
         cell_ranges,
     ))
 }
@@ -616,6 +619,7 @@ enum MatrixRow {
 struct MatrixRows {
     rows: Vec<MatrixRow>,
     environment_end_start: usize,
+    environment_content_end: usize,
     environment_end: usize,
 }
 
@@ -1736,6 +1740,7 @@ impl<'s> Parser<'s> {
                     return Ok(MatrixRows {
                         rows,
                         environment_end_start,
+                        environment_content_end: row_start,
                         environment_end: self.pos,
                     });
                 }

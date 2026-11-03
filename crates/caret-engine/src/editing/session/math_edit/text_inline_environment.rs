@@ -67,11 +67,11 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         let prefix = environment_command(kind, enabled)?;
         let selected_source = edit
-            .source
+            .source()
             .get(host_source_range.clone())
             .ok_or(EditError::InvalidPosition)?;
         let replacement = format!("{prefix}{selected_source}}}");
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         source.replace_range(host_source_range.clone(), &replacement);
         let format = MathTextFormat {
             kind,

@@ -212,7 +212,7 @@ impl Session {
             .start
             .checked_add(1 + initial_source.len())
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         source.replace_range(source_edit.clone(), &replacement);
         self.write_math_source_with_metadata(
             source,
@@ -280,7 +280,7 @@ impl Session {
                     .map(|end| start..end)
             })
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         let encoded = encode_math_text(inserted);
         source.replace_range(source_range.clone(), &encoded);
         let next_cursor = range.start + inserted.len();
@@ -341,7 +341,7 @@ impl Session {
                     .map(|end| start..end)
             })
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         source.replace_range(source_range.clone(), "");
         self.write_math_source_with_metadata(
             source,

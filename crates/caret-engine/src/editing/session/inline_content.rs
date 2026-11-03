@@ -331,7 +331,15 @@ impl Session {
                         paragraph_id: paragraph_id.clone(),
                         math_id,
                     },
-                    source: math_source,
+                    source_projection: std::sync::Arc::new(
+                        caret_math::parse_projection(
+                            &math_source,
+                            caret_math::MathInputKind::Inline,
+                        )
+                        .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                        .into_parts()
+                        .1,
+                    ),
                     cursor,
                     branch: super::math_edit::MathEditBranch::Source,
                 });
@@ -353,7 +361,12 @@ impl Session {
                             paragraph_id: paragraph_id.clone(),
                             math_id,
                         },
-                        source: source.to_owned(),
+                        source_projection: std::sync::Arc::new(
+                            caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
+                                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                                .into_parts()
+                                .1,
+                        ),
                         cursor: body.start,
                         branch: super::math_edit::MathEditBranch::Source,
                     });

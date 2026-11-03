@@ -54,7 +54,7 @@ impl Session {
                 let cursor = map_source_position(
                     current_tree,
                     &projected_tree,
-                    &edit.source,
+                    edit.source(),
                     &source,
                     edit.cursor,
                 )

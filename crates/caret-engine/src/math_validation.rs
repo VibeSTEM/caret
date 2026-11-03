@@ -11,10 +11,12 @@ use caret_math::MathInputKind;
 pub(crate) fn project_tree_for_edit(
     tree: &MathTree,
     kind: MathInputKind,
-) -> Result<(String, MathTree), String> {
+) -> Result<(caret_math::MathSourceMap<'static>, MathTree), String> {
     let source = caret_math::serialize_tree(tree);
-    let caret_math::ParsedMath::Tree(mut projected) = caret_math::parse(&source, kind)
-        .map_err(|error| format!("could not project formula tree to TeX: {error}"))?
+    let (caret_math::ProjectedMath::Tree(mut projected), source_map) =
+        caret_math::parse_projection(&source, kind)
+            .map_err(|error| format!("could not project formula tree to TeX: {error}"))?
+            .into_parts_with_legacy_fields()
     else {
         return Err("formula tree projected to a different formula kind".to_owned());
     };
@@ -22,14 +24,17 @@ pub(crate) fn project_tree_for_edit(
         return Err("formula tree cannot be projected without losing structure".to_owned());
     }
     projected.validate().map_err(|error| error.to_string())?;
-    Ok((source, projected))
+    Ok((source_map, projected))
 }
 
-pub(crate) fn project_align_for_edit(align: &Align) -> Result<(String, Align), String> {
+pub(crate) fn project_align_for_edit(
+    align: &Align,
+) -> Result<(caret_math::MathSourceMap<'static>, Align), String> {
     let source = caret_math::serialize_align(align);
-    let caret_math::ParsedMath::Align(mut projected) =
-        caret_math::parse(&source, MathInputKind::Align)
+    let (caret_math::ProjectedMath::Align(mut projected), source_map) =
+        caret_math::parse_projection(&source, MathInputKind::Align)
             .map_err(|error| format!("could not project align tree to TeX: {error}"))?
+            .into_parts_with_legacy_fields()
     else {
         return Err("align tree projected to a different formula kind".to_owned());
     };
@@ -53,7 +58,7 @@ pub(crate) fn project_align_for_edit(align: &Align) -> Result<(String, Align), S
         }
     }
     projected.validate().map_err(|error| error.to_string())?;
-    Ok((source, projected))
+    Ok((source_map, projected))
 }
 
 fn transfer_tree_metadata(previous: &MathTree, projected: &mut MathTree) -> bool {

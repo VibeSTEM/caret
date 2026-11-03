@@ -9,15 +9,12 @@ use super::super::super::grapheme::GraphemeMap;
 use super::{MathEdit, MathEditTarget};
 
 pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
-    let kind = match &edit.target {
-        MathEditTarget::Inline { .. } => Some(caret_math::MathInputKind::Inline),
-        MathEditTarget::Block { align: false, .. } => Some(caret_math::MathInputKind::Equation),
-        MathEditTarget::Block { align: true, .. } => None,
-    };
-    kind.map_or_else(
-        || Some(0..edit.source.len()),
-        |kind| caret_math::input_body_range(&edit.source, kind).ok(),
-    )
+    match &edit.target {
+        MathEditTarget::Block { align: true, .. } => Some(0..edit.source().len()),
+        MathEditTarget::Inline { .. } | MathEditTarget::Block { align: false, .. } => {
+            Some(edit.source_projection.body_range())
+        }
+    }
 }
 
 /// 对齐源码中顶层的 `\\` 与 `&` 切分出单元格，返回光标所在 (行, 单元格, 去首空白后的单元格内偏移)。

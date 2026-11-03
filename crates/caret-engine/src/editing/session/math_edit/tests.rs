@@ -1046,11 +1046,14 @@ fn math_text_run_property_splits_range_and_undoes_without_reparsing_source() -> 
         anchor: 1,
         focus: 3,
     })?;
-    let source = session.math_edit().map(|edit| edit.source.clone());
+    let source = session.math_edit().map(|edit| edit.source().to_owned());
 
     let effect = session.run(Command::ToggleRunUnderline)?;
     assert!(effect.document_changed);
-    assert_eq!(session.math_edit().map(|edit| edit.source.clone()), source);
+    assert_eq!(
+        session.math_edit().map(|edit| edit.source().to_owned()),
+        source
+    );
     assert!(matches!(
         active_math_text_flow(&session)?.runs.as_slice(),
         [before, selected, after]
@@ -1070,7 +1073,7 @@ fn math_text_run_property_splits_range_and_undoes_without_reparsing_source() -> 
         "abcd"
     );
     assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
+        session.math_edit().map(|edit| edit.source()),
         source.as_deref()
     );
     session.run(Command::Redo)?;
@@ -3098,18 +3101,12 @@ fn undo_and_redo_from_math_command_query_restore_formula_editing() -> Result<(),
 
     session.run(Command::Undo)?;
     assert!(session.command_line().is_none());
-    assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
-        Some("")
-    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some(""));
     assert_eq!(inline_source(&session).as_deref(), Some(""));
 
     session.run(Command::Redo)?;
     assert!(session.command_line().is_none());
-    assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
-        Some("x")
-    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("x"));
     assert_eq!(inline_source(&session).as_deref(), Some("x"));
     Ok(())
 }
@@ -3125,20 +3122,20 @@ fn undo_and_redo_restore_formula_target_and_source_cursor() -> Result<(), Box<dy
         .math_edit()
         .cloned()
         .ok_or(EditError::InvalidPosition)?;
-    assert_eq!(after_edit.source, "xy");
+    assert_eq!(after_edit.source(), "xy");
     assert_eq!(after_edit.cursor, 2);
 
     session.run(Command::Undo)?;
     let after_undo = session.math_edit().ok_or(EditError::InvalidPosition)?;
     assert_eq!(after_undo.target, after_edit.target);
-    assert_eq!(after_undo.source, "");
+    assert_eq!(after_undo.source(), "");
     assert_eq!(after_undo.cursor, 0);
     assert_eq!(inline_source(&session).as_deref(), Some(""));
 
     session.run(Command::Redo)?;
     let after_redo = session.math_edit().ok_or(EditError::InvalidPosition)?;
     assert_eq!(after_redo.target, after_edit.target);
-    assert_eq!(after_redo.source, "xy");
+    assert_eq!(after_redo.source(), "xy");
     assert_eq!(after_redo.cursor, 2);
     assert_eq!(inline_source(&session).as_deref(), Some("xy"));
     Ok(())
@@ -3151,10 +3148,7 @@ fn reopening_a_canonical_projection_does_not_break_formula_creation_undo()
     session.run(Command::InsertInlineMath("a + b".to_owned()))?;
     assert!(session.math_edit().is_none());
     session.run(Command::EnterMath(Direction::Backward))?;
-    assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
-        Some("a+b")
-    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("a+b"));
 
     session.run(Command::Undo)?;
     assert!(session.math_edit().is_none());
@@ -3192,9 +3186,35 @@ fn undo_and_redo_restore_equation_and_align_edit_targets() -> Result<(), Box<dyn
         session.run(Command::Redo)?;
         let after_redo = session.math_edit().ok_or(EditError::InvalidPosition)?;
         assert_eq!(after_redo.target, after_edit.target);
-        assert_eq!(after_redo.source, "x");
+        assert_eq!(after_redo.source(), "x");
         assert_eq!(after_redo.cursor, 1);
     }
+    Ok(())
+}
+
+#[test]
+fn undo_and_redo_restore_align_cursor_in_unicode_content_coordinates()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    let source = "αabcdefghijklmn";
+    session.run(Command::InsertText(source.to_owned()))?;
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some(source));
+    assert_eq!(
+        session.math_edit().map(|edit| edit.cursor),
+        Some(source.len())
+    );
+
+    session.run(Command::Undo)?;
+    let after_undo = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(after_undo.source(), "");
+    assert_eq!(after_undo.cursor, 0);
+
+    session.run(Command::Redo)?;
+    let after_redo = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert_eq!(after_redo.source(), source);
+    assert_eq!(after_redo.cursor, source.len());
+    assert!(after_redo.source_projection.align().is_some());
     Ok(())
 }
 
@@ -3213,7 +3233,7 @@ fn redo_formula_creation_reopens_the_same_edit_target() -> Result<(), Box<dyn st
         session.run(Command::Redo)?;
         let restored = session.math_edit().ok_or(EditError::InvalidPosition)?;
         assert_eq!(restored.target, created.target);
-        assert_eq!(restored.source, created.source);
+        assert_eq!(restored.source(), created.source());
         assert_eq!(restored.cursor, created.cursor);
     }
     Ok(())
@@ -3549,6 +3569,47 @@ fn align_enter_inserts_row_break() -> Result<(), Box<dyn std::error::Error>> {
         session.math_edit().and_then(MathEdit::align_cell_at_cursor),
         Some((1, 1, 2))
     );
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let source_map = edit
+        .source_projection
+        .align()
+        .ok_or(EditError::InvalidPosition)?;
+    let content_range = source_map.content_range();
+    assert_eq!(
+        &edit.source_projection.source()[content_range],
+        edit.source()
+    );
+    assert_eq!(edit.source(), "a&=b \\\\ c&=d");
+    Ok(())
+}
+
+#[test]
+fn align_keeps_trailing_space_as_editable_content_for_the_next_input()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (first, next, expected) in [
+        ("x ", "y", "x y"),
+        (" ", "y", " y"),
+        (r"x\\ ", "y", r"x\\ y"),
+    ] {
+        let mut session = session_with_text("")?;
+        accept(&mut session, "align")?;
+        session.run(Command::InsertText(first.to_owned()))?;
+        assert_eq!(session.math_edit().map(|edit| edit.source()), Some(first));
+        assert_eq!(
+            session.math_edit().map(|edit| edit.cursor),
+            Some(first.len())
+        );
+
+        session.run(Command::InsertText(next.to_owned()))?;
+        assert_eq!(
+            session.math_edit().map(|edit| edit.source()),
+            Some(expected)
+        );
+        assert_eq!(
+            session.math_edit().map(|edit| edit.cursor),
+            Some(expected.len())
+        );
+    }
     Ok(())
 }
 
@@ -3767,10 +3828,7 @@ fn leaving_and_reentering_inline_math_splits_typing_undo_groups()
     session.run(Command::Undo)?;
 
     assert_eq!(inline_source(&session).as_deref(), Some("x"));
-    assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
-        Some("x")
-    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some("x"));
     Ok(())
 }
 
@@ -3789,10 +3847,7 @@ fn deleting_empty_align_after_a_formula_chain_is_undoable() -> Result<(), Box<dy
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::Delete(Direction::Backward))?;
-    assert_eq!(
-        session.math_edit().map(|edit| edit.source.as_str()),
-        Some("")
-    );
+    assert_eq!(session.math_edit().map(|edit| edit.source()), Some(""));
     assert!(matches!(
         session.math_edit().map(|edit| &edit.target),
         Some(MathEditTarget::Block { align: true, .. })
