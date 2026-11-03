@@ -93,6 +93,7 @@
 | 2026-11-03 | Terra/medium 公式 revision、公开 Session 入口和组字候选状态评审；Sol/medium 独立完整 diff final review | 检查过期投影绕过、失败原子性、选区失败后的状态及候选来源校验 | 修复两步 Escape、结构选区/数学命令候选绕过、组字候选旧状态覆盖，以及无效 SetSelection 清理结构选区的问题。选区预校验后仍经过原统一命令尾处理。Terra 与 Sol 复核均无剩余 P0–P2；Sol 未运行命令，验证结果以本表所列命令为准。异步解析/独立草稿提交尚未接入，未来须在实际提交点校验目标树 revision |
 
 | 2026-11-03 | `cargo test --locked -p caret-math -p caret-engine -p caret-app`、`cargo clippy --locked -p caret-math -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff HEAD --check` | 数学文本格式与 `\\math` 根层拆分的树事务、宿主映射和历史通过 | caret-math 50、caret-engine 374、caret-app 196 项测试通过；Clippy、格式和差异检查通过。新增 Equation 折叠中点/非空选区/空尾锚点/未知元数据回滚，InlineMath 嵌套 `\\frac` 范围与撤销重做，Align 第二 cell（前置 Unicode）范围与撤销重做；覆盖左右 TextFlow 拆分后继续编辑。Terra 分领域复核与 Sol 独立 final review 均无 P0–P3。未运行 Rust/native coverage gate、Qt Quick/IME 黑盒及性能基线；本轮无 Qt、FFI、翻译变更。
+| 2026-11-03 | `cargo test --locked -p caret-engine -p caret-math -p caret-doc`、`cargo clippy --locked -p caret-math -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff HEAD --check` | Align 光标行列定位复用解析器投影范围 | caret-doc 58、caret-engine 374、caret-math 51 项测试通过；Clippy、格式和差异检查通过。Align 投影分开提供语义 cell 范围与导航范围；后者保留首尾 trivia，并随源码编辑一起 rebase。MathEdit 直接映射投影范围，不重复扫描顶层分隔符。覆盖嵌套环境、首尾空白、分隔符前位置、各 cell/row 前置注释、空环境 trivia 和范围编辑后重定位。Terra 分领域复核、Sol 独立最终复核均无剩余 P0–P3。Rust/native coverage gate、Qt Quick/IME 黑盒与性能基线未运行；本轮无 Qt、FFI、翻译变更。
 
 ## 风险与回退
 

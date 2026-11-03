@@ -14,7 +14,10 @@ use crate::{MAX_MATH_SOURCE_BYTES, MathInputKind, ParsedMath};
 pub struct AlignSourceMap {
     environment_range: Range<usize>,
     content_range: Range<usize>,
+    /// 每个 cell 的语义源码范围，不含分隔符和尾随空白。
     cell_ranges: Vec<Vec<Range<usize>>>,
+    /// 每个 cell 的导航范围，包含语义范围裁掉的前后 trivia。
+    cell_navigation_ranges: Vec<Vec<Range<usize>>>,
 }
 
 impl AlignSourceMap {
@@ -31,6 +34,11 @@ impl AlignSourceMap {
     /// 返回指定行列单元格在完整输入中的范围。
     pub fn cell_range(&self, row: usize, cell: usize) -> Option<Range<usize>> {
         self.cell_ranges.get(row)?.get(cell).cloned()
+    }
+
+    /// 返回导航用范围；它保留 cell 内容边界附近的注释与空白。
+    pub fn cell_navigation_ranges(&self) -> &[Vec<Range<usize>>] {
+        &self.cell_navigation_ranges
     }
 }
 
@@ -132,10 +140,27 @@ impl<'a> MathSourceMap<'a> {
                             .collect::<Option<Vec<_>>>()
                     })
                     .collect::<Option<Vec<_>>>()?;
+                let cell_navigation_ranges = align
+                    .cell_navigation_ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(row_index, row)| {
+                        row.iter()
+                            .enumerate()
+                            .map(|(cell_index, cell_range)| {
+                                rebase(
+                                    cell_range,
+                                    row_index == edited_row && cell_index == edited_cell_index,
+                                )
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .collect::<Option<Vec<_>>>()?;
                 Some(AlignSourceMap {
                     environment_range,
                     content_range,
                     cell_ranges,
+                    cell_navigation_ranges,
                 })
             }
             None => None,
@@ -174,6 +199,12 @@ impl<'a> MathSourceMap<'a> {
             align.cell_ranges.capacity() * size_of::<Vec<Range<usize>>>()
                 + align
                     .cell_ranges
+                    .iter()
+                    .map(|ranges| ranges.capacity() * size_of::<Range<usize>>())
+                    .sum::<usize>()
+                + align.cell_navigation_ranges.capacity() * size_of::<Vec<Range<usize>>>()
+                + align
+                    .cell_navigation_ranges
                     .iter()
                     .map(|ranges| ranges.capacity() * size_of::<Range<usize>>())
                     .sum::<usize>()
@@ -254,6 +285,7 @@ impl<'a> MathProjection<'a> {
         environment_range: Range<usize>,
         content_range: Range<usize>,
         cell_ranges: Vec<Vec<Range<usize>>>,
+        cell_navigation_ranges: Vec<Vec<Range<usize>>>,
     ) -> Self {
         Self {
             content: ProjectedMath::Align(tree),
@@ -266,6 +298,7 @@ impl<'a> MathProjection<'a> {
                     environment_range,
                     content_range,
                     cell_ranges,
+                    cell_navigation_ranges,
                 }),
             },
         }

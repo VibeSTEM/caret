@@ -278,12 +278,17 @@ fn parse_align<'source>(
     if rows.is_empty() {
         let placeholder = parser.placeholder();
         rows.push(MatrixRow::Cells {
-            cells: vec![(placeholder, environment_end_start..environment_end_start)],
+            cells: vec![(
+                placeholder,
+                environment_end_start..environment_end_start,
+                environment_content_start..environment_end_start,
+            )],
             range: environment_end_start..environment_end_start,
         });
     }
     let mut align_rows = Vec::new();
     let mut cell_ranges = Vec::new();
+    let mut cell_navigation_ranges = Vec::new();
     for row in rows {
         let MatrixRow::Cells { cells, .. } = row else {
             return Err(parser.error_at(
@@ -293,7 +298,8 @@ fn parse_align<'source>(
         };
         let mut trees = Vec::new();
         let mut row_ranges = Vec::new();
-        for (mut node, span) in cells {
+        let mut row_navigation_ranges = Vec::new();
+        for (mut node, span, navigation_range) in cells {
             rebase(&mut node, span.start);
             check_depth(&node)?;
             let tree = MathTree {
@@ -305,8 +311,10 @@ fn parse_align<'source>(
             tree.validate().map_err(invalid_tree)?;
             trees.push(tree);
             row_ranges.push(span);
+            row_navigation_ranges.push(navigation_range);
         }
         cell_ranges.push(row_ranges);
+        cell_navigation_ranges.push(row_navigation_ranges);
         align_rows.push(MathAlignRow {
             id: NodeId::generate(),
             cells: trees,
@@ -327,6 +335,7 @@ fn parse_align<'source>(
         env_start..environment_end,
         environment_content_start..environment_content_end,
         cell_ranges,
+        cell_navigation_ranges,
     ))
 }
 
@@ -609,7 +618,7 @@ impl Stops {
 /// 矩阵环境的一行。
 enum MatrixRow {
     Cells {
-        cells: Vec<(MathNode, Range<usize>)>,
+        cells: Vec<(MathNode, Range<usize>, Range<usize>)>,
         range: Range<usize>,
     },
     Hline(Range<usize>),
@@ -1317,7 +1326,7 @@ impl<'s> Parser<'s> {
                 for row in rows {
                     children.push(match row {
                         MatrixRow::Cells { cells, range } => {
-                            let cells = cells.into_iter().map(|(cell, _)| cell).collect();
+                            let cells = cells.into_iter().map(|(cell, _, _)| cell).collect();
                             self.node(K::Row, None, &[], Some(range), cells)
                         }
                         MatrixRow::Hline(range) => {
@@ -1727,6 +1736,7 @@ impl<'s> Parser<'s> {
         let mut rows = Vec::new();
         loop {
             self.check_budget()?;
+            let navigation_row_start = self.pos;
             self.skip_space();
             let row_start = self.pos;
             match self.peek_command() {
@@ -1774,16 +1784,18 @@ impl<'s> Parser<'s> {
             };
             let mut cells = Vec::new();
             let mut row_end;
+            let mut navigation_cell_start = navigation_row_start;
             loop {
                 self.skip_space();
                 let cell_start = self.pos;
                 let (items, ended) = self.parse_list(stops)?;
-                let cell_end = match ended {
+                let navigation_cell_end = match ended {
                     Ended::Ampersand => self.pos - 1,
                     Ended::RowBreak => self.pos - 2,
                     _ => self.pos,
                 };
-                let cell_end = cell_start + self.src[cell_start..cell_end].trim_end().len();
+                let cell_end =
+                    cell_start + self.src[cell_start..navigation_cell_end].trim_end().len();
                 row_end = cell_end;
                 let cell = if items.len() == 1 {
                     items
@@ -1793,10 +1805,15 @@ impl<'s> Parser<'s> {
                 } else {
                     self.row(items, Some(cell_start..cell_end))
                 };
-                cells.push((cell, cell_start..cell_end));
+                cells.push((
+                    cell,
+                    cell_start..cell_end,
+                    navigation_cell_start..navigation_cell_end,
+                ));
                 if ended != Ended::Ampersand {
                     break;
                 }
+                navigation_cell_start = self.pos;
             }
             rows.push(MatrixRow::Cells {
                 cells,

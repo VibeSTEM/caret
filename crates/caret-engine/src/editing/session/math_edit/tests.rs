@@ -5,6 +5,13 @@
 
 use super::*;
 
+fn projected_align_cell_at(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
+    let wrapped = format!("\\begin{{aligned}}{source}\\end{{aligned}}");
+    let projection =
+        caret_math::parse_projection(&wrapped, caret_math::MathInputKind::Align).ok()?;
+    align_cell_at(projection.source_map(), cursor)
+}
+
 fn aligned_body_offset(align: &Align) -> usize {
     align
         .source
@@ -3120,8 +3127,21 @@ fn math_source_mode_rejects_ime_without_changing_focus_or_document()
 
 #[test]
 fn align_cell_mapping_counts_rows_and_cells() {
-    assert_eq!(align_cell_at("a&=b \\\\ c& =d", 12), Some((1, 1, 1)));
-    assert_eq!(align_cell_at("a&=b", 1), Some((0, 0, 1)));
+    assert_eq!(
+        projected_align_cell_at("a&=b \\\\ c& =d", 12),
+        Some((1, 1, 1))
+    );
+    assert_eq!(projected_align_cell_at("a&=b", 1), Some((0, 0, 1)));
+    assert_eq!(projected_align_cell_at("a  &b", 2), Some((0, 0, 2)));
+    assert_eq!(projected_align_cell_at("a  &b", 3), Some((0, 0, 3)));
+    assert_eq!(projected_align_cell_at("a  ", 3), Some((0, 0, 3)));
+    assert_eq!(projected_align_cell_at("a  \\\\  b", 3), Some((0, 0, 3)));
+    assert_eq!(projected_align_cell_at("   ", 0), Some((0, 0, 0)));
+    assert_eq!(projected_align_cell_at("   ", 1), Some((0, 0, 0)));
+    assert_eq!(
+        projected_align_cell_at("% empty align\n", 4),
+        Some((0, 0, 0))
+    );
 }
 
 #[test]
@@ -3132,7 +3152,7 @@ fn align_cell_mapping_ignores_nested_environment_separators() {
         .unwrap_or_else(|| panic!("missing nested cell"))
         + 2;
     assert_eq!(
-        align_cell_at(source, nested_cell),
+        projected_align_cell_at(source, nested_cell),
         Some((0, 0, nested_cell))
     );
 
@@ -3140,7 +3160,7 @@ fn align_cell_mapping_ignores_nested_environment_separators() {
         .rfind('&')
         .unwrap_or_else(|| panic!("missing outer separator"))
         + 1;
-    assert_eq!(align_cell_at(source, outer_cell), Some((0, 1, 0)));
+    assert_eq!(projected_align_cell_at(source, outer_cell), Some((0, 1, 0)));
 
     let commented_begin =
         "\\begin % environment name follows the comment\n{matrix}a&b\\end{matrix}&=z";
@@ -3149,7 +3169,7 @@ fn align_cell_mapping_ignores_nested_environment_separators() {
         .unwrap_or_else(|| panic!("missing commented nested matrix"))
         + 2;
     assert_eq!(
-        align_cell_at(commented_begin, nested_separator),
+        projected_align_cell_at(commented_begin, nested_separator),
         Some((0, 0, nested_separator))
     );
 }
@@ -3161,23 +3181,44 @@ fn align_cell_mapping_ignores_separators_in_comments() {
         .find("ignored")
         .unwrap_or_else(|| panic!("missing comment"))
         + 3;
-    assert_eq!(align_cell_at(source, in_comment), Some((0, 0, in_comment)));
+    assert_eq!(
+        projected_align_cell_at(source, in_comment),
+        Some((0, 0, in_comment))
+    );
     let after_outer_separator = source
         .rfind('&')
         .unwrap_or_else(|| panic!("missing separator"))
         + 2;
     assert_eq!(
-        align_cell_at(source, after_outer_separator),
+        projected_align_cell_at(source, after_outer_separator),
         Some((0, 1, 1))
     );
 
     assert_eq!(
-        align_cell_at("% leading cell comment\nx", 24),
+        projected_align_cell_at("% leading cell comment\nx", 24),
         Some((0, 0, 1))
     );
     assert_eq!(
-        align_cell_at("% leading cell comment\nx", 4),
+        projected_align_cell_at("% leading cell comment\nx", 4),
         Some((0, 0, 0))
+    );
+    let later_cell_comment = "a&% comment\nb";
+    let comment_cursor = later_cell_comment
+        .find("comment")
+        .unwrap_or_else(|| panic!("missing cell comment"))
+        + 3;
+    assert_eq!(
+        projected_align_cell_at(later_cell_comment, comment_cursor),
+        Some((0, 1, 0))
+    );
+    let later_row_comment = "a \\\\% comment\nb";
+    let row_comment_cursor = later_row_comment
+        .find("comment")
+        .unwrap_or_else(|| panic!("missing row comment"))
+        + 3;
+    assert_eq!(
+        projected_align_cell_at(later_row_comment, row_comment_cursor),
+        Some((1, 0, 0))
     );
 }
 

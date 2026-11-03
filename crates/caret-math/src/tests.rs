@@ -460,6 +460,24 @@ fn align_projection_keeps_exact_environment_and_cell_ranges() {
 }
 
 #[test]
+fn align_projection_keeps_navigation_trivia_separate_from_cell_content() {
+    let source = "\\begin{aligned}a  &b  \\\\  % row comment\nc\\end{aligned}";
+    let Ok(projection) = crate::parse_projection(source, MathInputKind::Align) else {
+        panic!("trivia around Align cells should parse");
+    };
+    let Some(align) = projection.source_map().align() else {
+        panic!("Align projection should expose cell ranges");
+    };
+    assert_eq!(&source[align.cell_range(0, 0).unwrap_or_default()], "a");
+    assert_eq!(&source[align.cell_navigation_ranges()[0][0].clone()], "a  ");
+    assert_eq!(&source[align.cell_navigation_ranges()[0][1].clone()], "b  ");
+    assert_eq!(
+        &source[align.cell_navigation_ranges()[1][0].clone()],
+        "  % row comment\nc"
+    );
+}
+
+#[test]
 fn source_map_rebases_inline_and_align_ranges_for_a_text_edit() {
     let inline_source = r"\text{x}";
     let inline = match crate::parse_projection(inline_source, MathInputKind::Inline) {
@@ -522,6 +540,8 @@ fn source_map_rebases_inline_and_align_ranges_for_a_text_edit() {
     };
     assert_eq!(&updated_align.source()[edited_cell], "=XYZb");
     assert_eq!(&updated_align.source()[following_cell.clone()], "=d");
+    let navigation_cell = updated_map.cell_navigation_ranges()[0][1].clone();
+    assert!(updated_align.source()[navigation_cell].contains("=XYZb"));
     assert!(
         align
             .source_map()

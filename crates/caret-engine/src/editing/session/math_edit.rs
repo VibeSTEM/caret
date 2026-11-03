@@ -122,7 +122,7 @@ impl MathEdit {
         {
             return None;
         }
-        align_cell_at(self.source(), self.cursor)
+        align_cell_at(&self.source_projection, self.cursor)
     }
 }
 
