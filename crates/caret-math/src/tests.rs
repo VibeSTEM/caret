@@ -6,7 +6,7 @@
 use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K};
 
 use crate::{
-    MathInputKind, MathInputStatus, MathParseError, ParsedMath, classify_input,
+    MathInputKind, MathInputStatus, MathParseError, ParsedMath, ProjectedMath, classify_input,
     is_incomplete_input_prefix, parse, serialize_align, serialize_tree,
 };
 
@@ -386,6 +386,160 @@ fn splits_align_cells_with_rebased_ranges() {
             assert_eq!(shape(&a.root), shape(&b.root));
         }
     }
+}
+
+#[test]
+fn parse_projection_owns_source_and_keeps_tree_projection_free() {
+    let source = r"\text{a\%b}";
+    let projection = match crate::parse_projection(source, MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid text formula should project: {error}"),
+    };
+    assert_eq!(projection.source_map().source(), source);
+    assert_eq!(projection.source_map().kind(), MathInputKind::Inline);
+    assert_eq!(projection.source_map().body_range(), 0..source.len());
+    let ProjectedMath::Tree(tree) = projection.content() else {
+        panic!("inline math should have a tree projection");
+    };
+    assert!(tree.source.is_empty());
+    let (content, source_map) = projection.clone().into_parts();
+    let ProjectedMath::Tree(projected_tree) = content else {
+        panic!("inline projection should split into its tree and map");
+    };
+    assert_eq!(projected_tree.root.content.len(), tree.root.content.len());
+    assert_eq!(source_map.source(), source);
+    assert_eq!(source_map.body_range(), 0..source.len());
+    let ParsedMath::Tree(restored) = projection.into_legacy_parsed() else {
+        panic!("inline projection should restore to a tree");
+    };
+    let parsed = match parse(source, MathInputKind::Inline) {
+        Ok(parsed) => parsed,
+        Err(error) => panic!("valid inline source should parse: {error}"),
+    };
+    let ParsedMath::Tree(parsed) = parsed else {
+        panic!("inline input should parse to a tree");
+    };
+    assert_eq!(restored.source, source);
+    assert_eq!(shape(&restored.root), shape(&parsed.root));
+}
+
+#[test]
+fn align_projection_keeps_exact_environment_and_cell_ranges() {
+    let source = r"\[\begin{aligned} a &= b+1 \\ c &= d\end{aligned}\]";
+    let projection = match crate::parse_projection(source, MathInputKind::Align) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid aligned formula should project: {error}"),
+    };
+    assert_eq!(projection.source_map().source(), source);
+    let ProjectedMath::Align(align) = projection.content() else {
+        panic!("Align input should have an Align projection");
+    };
+    let Some(align_map) = projection.source_map().align() else {
+        panic!("Align projection should expose its source map");
+    };
+    let environment = align_map.environment_range();
+    assert_eq!(
+        &source[environment.clone()],
+        r"\begin{aligned} a &= b+1 \\ c &= d\end{aligned}"
+    );
+    assert!(align.source.is_empty());
+    let Some(cell) = align_map.cell_range(0, 1) else {
+        panic!("second first-row cell range should exist");
+    };
+    assert_eq!(&source[cell], "= b+1");
+    let ParsedMath::Align(restored) = projection.into_legacy_parsed() else {
+        panic!("projected Align should restore to an Align DTO");
+    };
+    assert_eq!(restored.source, source[environment].to_owned());
+    assert_eq!(restored.rows[0].cells[1].source, "= b+1");
+}
+
+#[test]
+fn align_projection_maps_empty_cells_before_delimiters() {
+    for source in [
+        r"\begin{aligned}\end{aligned}",
+        r"\[\begin{aligned}&\\&\end{aligned}\]",
+    ] {
+        let projection = match crate::parse_projection(source, MathInputKind::Align) {
+            Ok(projection) => projection,
+            Err(error) => panic!("empty Align input should project: {error}"),
+        };
+        let ProjectedMath::Align(align) = projection.content() else {
+            panic!("empty Align input should have an Align tree");
+        };
+        let Some(align_map) = projection.source_map().align() else {
+            panic!("Align projection should expose its source map");
+        };
+        let environment = align_map.environment_range();
+        let end_marker = source[environment.clone()]
+            .find(r"\end")
+            .map(|offset| environment.start + offset)
+            .unwrap_or_else(|| panic!("Align end marker should be in environment range"));
+        assert!(!align.rows.is_empty());
+        for row in 0..align.rows.len() {
+            for cell in 0..align.rows[row].cells.len() {
+                let range = align_map
+                    .cell_range(row, cell)
+                    .unwrap_or_else(|| panic!("cell range should exist"));
+                assert!(range.start <= range.end);
+                assert!(range.start >= environment.start);
+                assert!(range.end <= end_marker);
+                assert_eq!(source[range.clone()].trim(), "");
+            }
+        }
+        if !source.contains('&') {
+            assert_eq!(
+                align_map.cell_range(0, 0).map(|range| range.start),
+                Some(end_marker)
+            );
+        }
+    }
+}
+
+#[test]
+fn align_projection_keeps_duplicate_unicode_cells_and_noncanonical_source_ranges() {
+    let source =
+        "\\[\\begin { aligned } α &= 同文 % & comment\n \\\\ β &= 同文 \\end {aligned }\\]";
+    let projection = match crate::parse_projection(source, MathInputKind::Align) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid Unicode Align source should project: {error}"),
+    };
+    let Some(align_map) = projection.source_map().align() else {
+        panic!("Align projection should expose its source map");
+    };
+    let first = align_map
+        .cell_range(0, 1)
+        .unwrap_or_else(|| panic!("first duplicate cell should have a range"));
+    let second = align_map
+        .cell_range(1, 1)
+        .unwrap_or_else(|| panic!("second duplicate cell should have a range"));
+    assert_eq!(&source[first.clone()], "= 同文 % & comment");
+    assert_eq!(&source[second.clone()], "= 同文");
+    assert_ne!(first, second);
+}
+
+#[test]
+fn parse_projection_preserves_parser_errors() {
+    let expected = match parse("x}", MathInputKind::Inline) {
+        Ok(_) => panic!("unmatched closing brace should fail"),
+        Err(error) => error,
+    };
+    let actual = match crate::parse_projection("x}", MathInputKind::Inline) {
+        Ok(_) => panic!("unmatched closing brace should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(actual, expected);
+
+    let oversized = "x".repeat(crate::MAX_MATH_SOURCE_BYTES + 1);
+    let expected = match parse(&oversized, MathInputKind::Inline) {
+        Ok(_) => panic!("oversized source should fail"),
+        Err(error) => error,
+    };
+    let actual = match crate::parse_projection(&oversized, MathInputKind::Inline) {
+        Ok(_) => panic!("oversized projected source should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(actual, expected);
 }
 
 #[test]
