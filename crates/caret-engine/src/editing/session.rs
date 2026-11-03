@@ -6,6 +6,7 @@
 mod clipboard;
 mod command_line;
 mod composition;
+pub use composition::CompositionUpdateCandidate;
 mod current_environment;
 mod formatting;
 mod history;
@@ -133,6 +134,31 @@ impl Session {
         self.document_generation
     }
 
+    fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {
+        math_edit::MathEditRevision {
+            session_id: self.session_id.clone(),
+            document_generation: self.document_generation,
+        }
+    }
+
+    pub(super) fn ensure_math_edit_revision_current(&self) -> Result<(), EditError> {
+        if self
+            .math_edit
+            .as_ref()
+            .is_some_and(|edit| edit.revision != self.current_math_edit_revision())
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        Ok(())
+    }
+
+    fn sync_math_edit_revision(&mut self) {
+        let revision = self.current_math_edit_revision();
+        if let Some(edit) = &mut self.math_edit {
+            edit.revision = revision;
+        }
+    }
+
     pub fn selection(&self) -> &Selection {
         &self.selection
     }
@@ -197,6 +223,7 @@ impl Session {
         &mut self,
         environment_id: NodeId,
     ) -> Result<Effect, EditError> {
+        self.ensure_math_edit_revision_current()?;
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -252,10 +279,45 @@ impl Session {
         command: Command,
         focus_inserted_inline_math: bool,
     ) -> Result<Effect, EditError> {
+        let stale_math_edit = self.ensure_math_edit_revision_current().is_err();
+        if stale_math_edit {
+            if self.command_line.is_some()
+                && matches!(
+                    &command,
+                    Command::CancelCommandLine | Command::EditorKey(super::EditorKey::Escape)
+                )
+            {
+                let had_preedit = self
+                    .command_line
+                    .as_ref()
+                    .is_some_and(|line| !line.preedit.is_empty());
+                self.command_line = None;
+                return Ok(Effect {
+                    composition_changed: had_preedit,
+                    ..Effect::default()
+                });
+            }
+            if self.command_line.is_none()
+                && matches!(&command, Command::EditorKey(super::EditorKey::Escape))
+            {
+                // 仅显式放弃过期的交互投影；已提交数学树和当前宿主选区保持权威。
+                self.math_edit = None;
+                self.pending_inline_style.clear();
+                self.advance_history_merge_epoch();
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            return Err(EditError::InvalidPosition);
+        }
         let previous_math_edit = self.math_edit.clone();
         let result = self.run_inner(command, focus_inserted_inline_math);
         if result.is_err() && self.math_edit.is_none() {
             self.math_edit = previous_math_edit;
+        }
+        if result.is_ok() {
+            self.sync_math_edit_revision();
         }
         result
     }
@@ -278,6 +340,13 @@ impl Session {
         }
         if let Command::EnterMath(direction) = command {
             return self.enter_math(direction);
+        }
+        if let Command::SetSelection(selection) = &command {
+            let next = selection.clone().unwrap_or_else(|| Selection {
+                anchor: self.selection.focus.clone(),
+                focus: self.selection.focus.clone(),
+            });
+            self.validate_selection(&next)?;
         }
         let inserted_text = match &command {
             Command::InsertText(text) | Command::PasteText(text) => Some(text.as_str()),
@@ -329,9 +398,11 @@ impl Session {
                 _ => {}
             }
         }
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        if !matches!(&command, Command::SetSelection(_)) {
+            self.selected_block_environment = None;
+            self.selected_block_environments.clear();
+            self.structure_selection = None;
+        }
         if self.command_line.is_some() && matches!(&command, Command::Delete(Direction::Backward)) {
             return self.run_command_line(Command::BackspaceCommandLine);
         }
@@ -656,6 +727,7 @@ impl Session {
             self.session_id = NodeId::generate();
             self.document_generation = 0;
         }
+        self.sync_math_edit_revision();
     }
 
     fn advance_history_merge_epoch(&mut self) {
@@ -703,7 +775,11 @@ impl Session {
             math_edit_position,
         ) = history::restore_history_transition(transition);
         let restored_math_edit = match math_edit_position {
-            Some(position) => match math_edit::restore_math_edit(&self.document, position) {
+            Some(position) => match math_edit::restore_math_edit(
+                &self.document,
+                position,
+                self.current_math_edit_revision(),
+            ) {
                 Some(edit) => Some(edit),
                 None => {
                     let reverted = if redo {
@@ -741,6 +817,7 @@ impl Session {
                 self.document_generation = 0;
             }
         }
+        self.sync_math_edit_revision();
         Ok(Effect {
             document_changed,
             selection_changed,

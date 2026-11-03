@@ -81,15 +81,36 @@ pub enum MathEditBranch {
     },
 }
 
-/// 公式编辑状态：目标、源码投影、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
+/// 标识源码投影对应的会话与文档 generation。
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MathEditRevision {
+    pub(super) session_id: NodeId,
+    pub(super) document_generation: u64,
+}
+
+/// 公式编辑状态：目标、源码投影、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
+#[derive(Debug, Clone)]
 pub struct MathEdit {
     pub target: MathEditTarget,
     pub source_projection: Arc<caret_math::MathSourceMap<'static>>,
+    /// 绑定投影的会话与文档 generation；不一致时拒绝向该投影应用编辑。
+    pub(super) revision: MathEditRevision,
     pub cursor: usize,
     /// 光标所属的数学树分支；源码和 TextFlow 分别使用各自的字节坐标。
     pub branch: MathEditBranch,
 }
+
+impl PartialEq for MathEdit {
+    // Revision 用于拒绝过期编辑，不属于用户可见的公式编辑状态。
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.source_projection == other.source_projection
+            && self.cursor == other.cursor
+            && self.branch == other.branch
+    }
+}
+
+impl Eq for MathEdit {}
 
 impl MathEdit {
     /// 当前编辑分支对应的源码视图；Align 不包含环境包围命令。
@@ -111,6 +132,7 @@ impl MathEdit {
 pub(super) fn restore_math_edit(
     document: &caret_doc::Document,
     position: MathEditPosition,
+    revision: MathEditRevision,
 ) -> Option<MathEdit> {
     let (source, kind) = match &position.target {
         MathEditTarget::Inline {
@@ -175,6 +197,7 @@ pub(super) fn restore_math_edit(
     Some(MathEdit {
         target: position.target,
         source_projection: position.source_projection,
+        revision,
         cursor: position.cursor,
         branch: position.branch,
     })
@@ -516,6 +539,7 @@ impl Session {
         self.math_edit = Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
             source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor: 0,
             branch: MathEditBranch::Source,
         });
@@ -593,6 +617,7 @@ impl Session {
                     math_id,
                 },
                 source_projection: Arc::new(source_projection),
+                revision: self.current_math_edit_revision(),
                 cursor,
                 branch: MathEditBranch::Source,
             });
@@ -665,6 +690,7 @@ impl Session {
         self.math_edit = Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
             source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor,
             branch: MathEditBranch::Source,
         });
@@ -1257,6 +1283,7 @@ impl Session {
         Ok(Some(MathEdit {
             target: MathEditTarget::Block { block_id, align },
             source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor,
             branch: MathEditBranch::Source,
         }))
@@ -1525,6 +1552,7 @@ impl Session {
         let mut next_edit = MathEdit {
             target: edit.target.clone(),
             source_projection: edit.source_projection.clone(),
+            revision: edit.revision.clone(),
             cursor,
             branch: MathEditBranch::Source,
         };
@@ -1806,6 +1834,7 @@ impl Session {
                                     .into_parts()
                                     .1,
                                 ),
+                                revision: edit.revision.clone(),
                                 cursor,
                                 branch: MathEditBranch::Source,
                             };
@@ -2158,6 +2187,7 @@ impl Session {
         next_edit.cursor = next_cursor;
         next_edit.branch = next_branch;
         self.math_edit = Some(next_edit);
+        self.sync_math_edit_revision();
         let changed_paragraph_id = match &edit.target {
             MathEditTarget::Inline { paragraph_id, .. } => Some(paragraph_id.clone()),
             MathEditTarget::Block { .. } => None,

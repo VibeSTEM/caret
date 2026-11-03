@@ -17,9 +17,9 @@ pub use caret_structure::{
 
 pub use editing::{
     Affinity, Capabilities, Command, CommandCandidate, CommandLine, CommandLineMode,
-    CurrentEnvironmentView, Direction, EditError, EditorKey, Effect, EnvironmentEntry,
-    EnvironmentKind, EnvironmentLevel, EnvironmentSource, InlineEnvironmentRange, InlineSpan,
-    InputComposition, MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath,
+    CompositionUpdateCandidate, CurrentEnvironmentView, Direction, EditError, EditorKey, Effect,
+    EnvironmentEntry, EnvironmentKind, EnvironmentLevel, EnvironmentSource, InlineEnvironmentRange,
+    InlineSpan, InputComposition, MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath,
     MathTextFlowPathStep, Pos, PositionMap, Selection, Session, StoryId, utf8_offset_to_utf16,
     utf16_offset_to_utf8,
 };

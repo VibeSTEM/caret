@@ -9,8 +9,64 @@ use super::super::{
     Affinity, Command, EditError, Effect, InputComposition, Pos, PositionMap, Selection,
 };
 use super::Session;
+use super::StructureSelection;
+use super::formatting::PendingInlineStyle;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use std::mem;
+
+/// 供布局验证后安装的公式外组字候选。
+#[derive(Debug, Clone)]
+pub struct CompositionUpdateCandidate {
+    candidate: Session,
+    base: CompositionCandidateBase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompositionCandidateBase {
+    session_id: caret_doc::NodeId,
+    document_generation: u64,
+    selection: Selection,
+    selection_visual_affinity: caret_layout::VisualAffinity,
+    composition: Option<InputComposition>,
+    pending_inline_style: PendingInlineStyle,
+    command_line: Option<super::super::CommandLine>,
+    math_edit: Option<super::math_edit::MathEdit>,
+    block_environment_exit: Option<(caret_doc::NodeId, super::super::Direction)>,
+    selected_block_environment: Option<caret_doc::NodeId>,
+    selected_block_environments: Vec<caret_doc::NodeId>,
+    structure_selection: Option<StructureSelection>,
+    last_committed_composition: Option<u64>,
+    history_state_id: u64,
+    next_history_state_id: u64,
+    history_merge_epoch: u64,
+}
+
+impl CompositionCandidateBase {
+    fn from_session(session: &Session) -> Self {
+        Self {
+            session_id: session.session_id.clone(),
+            document_generation: session.document_generation,
+            selection: session.selection.clone(),
+            selection_visual_affinity: session.selection_visual_affinity,
+            composition: session.composition.clone(),
+            pending_inline_style: session.pending_inline_style.clone(),
+            command_line: session.command_line.clone(),
+            math_edit: session.math_edit.clone(),
+            block_environment_exit: session.block_environment_exit.clone(),
+            selected_block_environment: session.selected_block_environment.clone(),
+            selected_block_environments: session.selected_block_environments.clone(),
+            structure_selection: session.structure_selection.clone(),
+            last_committed_composition: session.last_committed_composition,
+            history_state_id: session.history_state_id,
+            next_history_state_id: session.next_history_state_id,
+            history_merge_epoch: session.history_merge_epoch,
+        }
+    }
+
+    fn matches(&self, session: &Session) -> bool {
+        self == &Self::from_session(session)
+    }
+}
 
 impl Session {
     /// 按 Qt UTF-16 相对范围原子提交输入法替换，支持先取消已有预编辑再应用新范围。
@@ -140,24 +196,38 @@ impl Session {
         preedit: String,
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
-    ) -> Result<(Self, Self, Selection), EditError> {
+    ) -> Result<(CompositionUpdateCandidate, Self, Selection), EditError> {
         if self.math_edit.is_some() {
             return Err(EditError::CompositionPending);
         }
+        let base = CompositionCandidateBase::from_session(self);
         let mut candidate = self.transaction_clone();
         if let Some((replacement_start, replacement_length)) = replacement_range {
             candidate.set_composition_replacement_range(replacement_start, replacement_length)?;
         }
         candidate.run(Command::UpdateComposition { id, preedit })?;
         let (preview, range) = candidate.composition_preview_with_range(cursor_position_utf16)?;
-        Ok((candidate, preview, range))
+        Ok((
+            CompositionUpdateCandidate { candidate, base },
+            preview,
+            range,
+        ))
     }
 
-    /// 布局验证成功后安装候选，并移动原会话历史，避免失败时丢失撤销分支。
-    pub fn install_composition_candidate(&mut self, mut candidate: Self) {
+    /// 布局验证成功后安装仍对应当前交互状态的候选，并保留原会话历史。
+    /// 候选生成后会话或编辑状态改变时返回 InvalidPosition，且不修改会话。
+    pub fn install_composition_candidate(
+        &mut self,
+        candidate: CompositionUpdateCandidate,
+    ) -> Result<(), EditError> {
+        if !candidate.base.matches(self) {
+            return Err(EditError::InvalidPosition);
+        }
+        let mut candidate = candidate.candidate;
         candidate.edit_history = mem::replace(&mut self.edit_history, history::history());
         candidate.history_estimated_bytes = self.history_estimated_bytes;
         *self = candidate;
+        Ok(())
     }
 
     fn transaction_clone(&self) -> Self {

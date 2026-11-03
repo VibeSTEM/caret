@@ -28,7 +28,8 @@ pub use environment::{
 pub use error::EditError;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
 pub use session::{
-    MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath, MathTextFlowPathStep, Session,
+    CompositionUpdateCandidate, MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath,
+    MathTextFlowPathStep, Session,
 };
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 pub use types::{Effect, InputComposition};

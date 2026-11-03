@@ -235,6 +235,7 @@ impl Session {
         mut selection: Selection,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        self.ensure_math_edit_revision_current()?;
         let was_collapsed = selection.anchor == selection.focus;
         if self.range_requires_block_environment_selection(&selection.anchor, &selection.focus) {
             return self.select_block_environments_from_range(
@@ -273,10 +274,7 @@ impl Session {
         if was_collapsed {
             selection.anchor = selection.focus.clone();
         }
-        self.block_environment_exit = None;
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.validate_selection(&selection)?;
         self.set_selection_with_visual_affinity(Some(selection), visual_affinity)
     }
 
@@ -341,6 +339,7 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        self.ensure_math_edit_revision_current()?;
         if self.composition.is_some()
             || self
                 .command_line
@@ -401,20 +400,16 @@ impl Session {
         &mut self,
         selection: Option<Selection>,
     ) -> Result<Effect, EditError> {
-        if self.composition.is_some() {
-            return Err(EditError::CompositionPending);
-        }
         let next = selection.unwrap_or_else(|| Selection {
             anchor: self.selection.focus.clone(),
             focus: self.selection.focus.clone(),
         });
-        if next.anchor.story != next.focus.story {
-            return Err(EditError::CrossParagraphSelection);
-        }
-        self.text_map_for(&next.anchor)?
-            .validate_pos(&next.anchor)?;
-        self.text_map_for(&next.focus)?.validate_pos(&next.focus)?;
-        let changed = self.selection != next;
+        self.validate_selection(&next)?;
+        let changed = self.selection != next
+            || self.block_environment_exit.is_some()
+            || self.selected_block_environment.is_some()
+            || !self.selected_block_environments.is_empty()
+            || self.structure_selection.is_some();
         self.block_environment_exit = None;
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
@@ -424,5 +419,18 @@ impl Session {
             selection_changed: changed,
             ..Effect::default()
         })
+    }
+
+    pub(super) fn validate_selection(&mut self, next: &Selection) -> Result<(), EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        if next.anchor.story != next.focus.story {
+            return Err(EditError::CrossParagraphSelection);
+        }
+        self.text_map_for(&next.anchor)?
+            .validate_pos(&next.anchor)?;
+        self.text_map_for(&next.focus)?.validate_pos(&next.focus)?;
+        Ok(())
     }
 }

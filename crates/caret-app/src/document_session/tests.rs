@@ -78,7 +78,10 @@ fn math_feature_stays_read_only_until_formula_layout_is_supported() -> Result<()
         service.session_generation() + 1,
     );
 
-    assert!(matches!(result, Err(ref error) if error == "cdoc.safe_preview_read_only"));
+    assert!(matches!(
+        result,
+        Err(ref error) if error == "cdoc.invalid_document: retired math tree schema is not supported"
+    ));
     assert_eq!(service.document_generation(), before.document_generation);
     assert_eq!(service.save_snapshot()?, before);
     Ok(())
