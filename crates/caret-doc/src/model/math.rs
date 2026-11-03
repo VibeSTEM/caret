@@ -9,9 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// 当前 Caret 数学树 schema 版本。
-pub const MATH_TREE_SCHEMA_VERSION: u16 = 2;
-/// `.cdoc` 中单个公式源码的最大 UTF-8 字节数。
-pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
+pub const MATH_TREE_SCHEMA_VERSION: u16 = 3;
 /// 数学树允许的最大根到叶深度。
 pub const MAX_MATH_TREE_DEPTH: usize = 32;
 /// 单棵公式树允许的最大节点数。
@@ -24,9 +22,6 @@ pub const MAX_MATH_TREE_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct MathTree {
     pub schema_version: u16,
-    /// 与 `root` 对应的 LaTeX 源码。导入时为原文；树被编辑后由 `caret-math` 序列化器
-    /// 重新生成，因此始终描述当前树，而不是历史输入。`sourceRange` 相对该字符串。
-    pub source: String,
     pub root: MathFlow,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -38,7 +33,7 @@ pub struct MathTree {
 pub struct MathFlow {
     pub id: NodeId,
     pub content: Vec<super::MathContent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub source_range: Option<MathSourceRange>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -54,7 +49,7 @@ pub struct MathNode {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attributes: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub source_range: Option<MathSourceRange>,
     #[serde(default)]
     pub children: Vec<MathFlow>,
@@ -420,7 +415,7 @@ fn valid_css_color(value: &str) -> bool {
     })
 }
 
-/// 相对 `MathTree::source` 的半开 UTF-8 字节范围。
+/// 源码编辑期间使用的 UTF-8 字节范围；只存在于解析投影，不写入 `.cdoc`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MathSourceRange {
@@ -455,9 +450,6 @@ pub struct Equation {
 #[serde(rename_all = "camelCase")]
 pub struct Align {
     pub id: NodeId,
-    /// 完整 `aligned` 环境的 LaTeX 源码，包含行与单元格分隔符。导入时为原文；
-    /// 编辑任一单元格后由序列化器按当前行与单元格重新生成。
-    pub source: String,
     pub rows: Vec<MathAlignRow>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,

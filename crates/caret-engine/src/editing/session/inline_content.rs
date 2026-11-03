@@ -6,6 +6,10 @@
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::Session;
+use super::math_edit::find_inline_math;
+use super::math_edit::inline_root_split::{
+    InlineRootFocus, replace_inline_math_with_split, split_inline_math_root,
+};
 
 impl Session {
     pub(super) fn insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
@@ -252,31 +256,145 @@ impl Session {
         let math_id = math.id.clone();
         let node = caret_doc::ParagraphContent::Math(math);
         TextMap::new(&paragraph)?.insert_atomic(&mut paragraph, offset, affinity, node)?;
+        let root_cursor = edit_body.as_ref().map_or_else(
+            || {
+                caret_math::input_body_range(source, caret_math::MathInputKind::Inline)
+                    .map(|body| body.end)
+                    .unwrap_or(source.len())
+            },
+            |body| body.start,
+        );
+        let math =
+            find_inline_math(&paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
+        let root_split = split_inline_math_root(math, root_cursor, root_cursor, source)?;
+        if let Some(split) = &root_split
+            && !replace_inline_math_with_split(
+                &mut paragraph.inlines,
+                &math_id,
+                split.contents.clone(),
+            )
+        {
+            return Err(EditError::InvalidPosition);
+        }
         let paragraph_id = anchor.paragraph_id.clone();
+        let result_map = TextMap::new(&paragraph)?;
+        let result_boundaries = result_map.grapheme_boundaries.clone();
+        let inserted_len = root_split
+            .as_ref()
+            .map_or(OBJECT_REPLACEMENT.len_utf8(), |split| split.inserted_len);
+        let has_root_split = root_split.is_some();
+        let mut next_selection;
+        let mut next_math_edit = self.math_edit.clone();
+        let mut next_visual_affinity = self.selection_visual_affinity;
+        match root_split.map(|split| split.focus) {
+            Some(InlineRootFocus::Text {
+                anchor_offset,
+                cursor_offset,
+            }) => {
+                let anchor_pos = Pos {
+                    offset: offset + anchor_offset,
+                    affinity: Affinity::Downstream,
+                    ..anchor.clone()
+                };
+                let cursor_pos = Pos {
+                    offset: offset + cursor_offset,
+                    affinity: Affinity::Downstream,
+                    ..anchor.clone()
+                };
+                result_map.validate_pos(&anchor_pos)?;
+                result_map.validate_pos(&cursor_pos)?;
+                next_selection = Selection {
+                    anchor: anchor_pos,
+                    focus: cursor_pos,
+                };
+                next_math_edit = None;
+                next_visual_affinity = crate::VisualAffinity::Downstream;
+            }
+            Some(InlineRootFocus::Math {
+                math_id,
+                source: math_source,
+                cursor,
+                paragraph_offset,
+            }) => {
+                let pos = Pos {
+                    offset: offset + paragraph_offset + OBJECT_REPLACEMENT.len_utf8(),
+                    affinity: Affinity::Upstream,
+                    ..anchor.clone()
+                };
+                result_map.validate_pos(&pos)?;
+                next_selection = Selection {
+                    anchor: pos.clone(),
+                    focus: pos,
+                };
+                next_math_edit = Some(super::math_edit::MathEdit {
+                    target: super::math_edit::MathEditTarget::Inline {
+                        paragraph_id: paragraph_id.clone(),
+                        math_id,
+                    },
+                    source_projection: std::sync::Arc::new(
+                        caret_math::parse_projection(
+                            &math_source,
+                            caret_math::MathInputKind::Inline,
+                        )
+                        .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                        .into_parts()
+                        .1,
+                    ),
+                    revision: self.current_math_edit_revision(),
+                    cursor,
+                    branch: super::math_edit::MathEditBranch::Source,
+                });
+                next_visual_affinity = crate::VisualAffinity::Upstream;
+            }
+            None => {
+                let pos = Pos {
+                    offset: offset + inserted_len,
+                    affinity: Affinity::Upstream,
+                    ..anchor.clone()
+                };
+                next_selection = Selection {
+                    anchor: pos.clone(),
+                    focus: pos,
+                };
+                if let Some(body) = edit_body {
+                    next_math_edit = Some(super::math_edit::MathEdit {
+                        target: super::math_edit::MathEditTarget::Inline {
+                            paragraph_id: paragraph_id.clone(),
+                            math_id,
+                        },
+                        source_projection: std::sync::Arc::new(
+                            caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
+                                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                                .into_parts()
+                                .1,
+                        ),
+                        revision: self.current_math_edit_revision(),
+                        cursor: body.start,
+                        branch: super::math_edit::MathEditBranch::Source,
+                    });
+                }
+            }
+        }
+        if !enter_edit && has_root_split {
+            let pos = Pos {
+                offset: offset + inserted_len,
+                affinity: Affinity::Upstream,
+                ..anchor.clone()
+            };
+            result_map.validate_pos(&pos)?;
+            next_selection = Selection {
+                anchor: pos.clone(),
+                focus: pos,
+            };
+            next_math_edit = None;
+            next_visual_affinity = crate::VisualAffinity::Upstream;
+        }
         self.replace_paragraph(&anchor, paragraph)?;
         self.text_map_cache.clear();
-        let inserted_len = OBJECT_REPLACEMENT.len_utf8();
-        let result_boundaries = TextMap::new(self.paragraph_for(&anchor)?)?.grapheme_boundaries;
-        let pos = Pos {
-            offset: offset + inserted_len,
-            affinity: Affinity::Upstream,
-            ..anchor
-        };
-        self.selection = Selection {
-            anchor: pos.clone(),
-            focus: pos,
-        };
-        if let Some(body) = edit_body {
-            self.math_edit = Some(super::math_edit::MathEdit {
-                target: super::math_edit::MathEditTarget::Inline {
-                    paragraph_id: paragraph_id.clone(),
-                    math_id,
-                },
-                source: source.to_owned(),
-                cursor: body.start,
-                branch: super::math_edit::MathEditBranch::Source,
-            });
-        }
+        self.selection = next_selection;
+        self.math_edit = next_math_edit;
+        self.sync_math_edit_revision();
+        self.selection_visual_affinity = next_visual_affinity;
         Ok(Effect {
             document_changed: true,
             selection_changed: true,

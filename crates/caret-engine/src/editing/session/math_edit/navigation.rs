@@ -9,31 +9,38 @@ use super::super::super::grapheme::GraphemeMap;
 use super::{MathEdit, MathEditTarget};
 
 pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
-    let kind = match &edit.target {
-        MathEditTarget::Inline { .. } => Some(caret_math::MathInputKind::Inline),
-        MathEditTarget::Block { align: false, .. } => Some(caret_math::MathInputKind::Equation),
-        MathEditTarget::Block { align: true, .. } => None,
-    };
-    kind.map_or_else(
-        || Some(0..edit.source.len()),
-        |kind| caret_math::input_body_range(&edit.source, kind).ok(),
-    )
+    match &edit.target {
+        MathEditTarget::Block { align: true, .. } => Some(0..edit.source().len()),
+        MathEditTarget::Inline { .. } | MathEditTarget::Block { align: false, .. } => {
+            Some(edit.source_projection.body_range())
+        }
+    }
 }
 
-/// 对齐源码中顶层的 `\\` 与 `&` 切分出单元格，返回光标所在 (行, 单元格, 去首空白后的单元格内偏移)。
-pub(super) fn align_cell_at(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
+/// 使用解析器生成的导航范围映射 Align 光标到行列及 cell 内偏移。
+pub(super) fn align_cell_at(
+    projection: &caret_math::MathSourceMap<'_>,
+    cursor: usize,
+) -> Option<(usize, usize, usize)> {
+    let source = projection.edit_source();
     if cursor > source.len() || !source.is_char_boundary(cursor) {
         return None;
     }
-    let rows = super::align_source::split_cell_ranges(source, 0..source.len())?;
+    let base = projection.edit_range().start;
+    let rows = projection.align()?.cell_navigation_ranges();
     rows.iter().enumerate().find_map(|(row, cells)| {
         cells.iter().enumerate().find_map(|(cell, range)| {
-            if cursor < range.start || cursor > range.end {
+            let start = range.start.checked_sub(base)?;
+            let end = range.end.checked_sub(base)?;
+            if cursor < start || cursor > end {
                 return None;
             }
-            let cell_source_start =
-                super::align_source::skip_trivia_bounded(source, range.start, cursor);
-            Some((row, cell, cursor.saturating_sub(cell_source_start)))
+            let semantic_start = projection
+                .align()?
+                .cell_range(row, cell)?
+                .start
+                .checked_sub(base)?;
+            Some((row, cell, cursor.saturating_sub(semantic_start)))
         })
     })
 }

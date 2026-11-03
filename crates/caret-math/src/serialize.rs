@@ -36,11 +36,13 @@ pub fn serialize_align(align: &Align) -> String {
             writer.raw(" \\\\");
         }
         for (cell_index, cell) in row.cells.iter().enumerate() {
-            writer.raw(if cell_index == 0 { " " } else { " & " });
+            if cell_index > 0 {
+                writer.raw(" & ");
+            }
             writer.children(&flow_nodes(&cell.root));
         }
     }
-    writer.raw(" \\end{aligned}");
+    writer.raw("\\end{aligned}");
     writer.output
 }
 
@@ -574,10 +576,19 @@ impl Writer {
                 }
                 MathNodeKind::TextStyle => {
                     let style = Self::attribute(child, "style");
-                    self.command(&format!("text{style}"));
-                    self.raw("{");
-                    self.text_children(&child.children);
-                    self.raw("}");
+                    if style == "bi" {
+                        self.command("textbf");
+                        self.raw("{");
+                        self.command("textit");
+                        self.raw("{");
+                        self.text_children(&child.children);
+                        self.raw("}}");
+                    } else {
+                        self.command(&format!("text{style}"));
+                        self.raw("{");
+                        self.text_children(&child.children);
+                        self.raw("}");
+                    }
                 }
                 _ => {
                     self.raw("$");

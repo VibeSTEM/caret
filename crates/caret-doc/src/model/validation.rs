@@ -220,11 +220,7 @@ fn validate_align<'a>(
     node_count: &mut usize,
 ) -> Result<(), ModelError> {
     insert_id(ids, &align.id)?;
-    if align.source.len() > MAX_MATH_SOURCE_BYTES {
-        return Err(ModelError::InvalidDocument(
-            "math source exceeds byte limit".to_owned(),
-        ));
-    }
+    reject_retired_math_fields(&align.extra, &["source"])?;
     for row in &align.rows {
         validate_depth(depth + 1, node_count)?;
         insert_id(ids, &row.id)?;
@@ -280,12 +276,7 @@ fn validate_paragraph_content<'a>(
     validate_depth(depth, node_count)?;
     match content {
         ParagraphContent::Text(text) => {
-            if text.source_range.is_some() || !text.source_map.is_empty() {
-                return Err(ModelError::InvalidDocument(
-                    "TextFlow source mapping is only valid inside a math tree".to_owned(),
-                ));
-            }
-            validate_text_flow(text, None)?;
+            validate_text_flow(text)?;
             for _ in &text.runs {
                 count_document_node(node_count)?;
             }
@@ -296,11 +287,6 @@ fn validate_paragraph_content<'a>(
             validate_math_tree(&math.math_tree, ids, node_count)
         }
         ParagraphContent::Environment(environment) => {
-            if environment.source_range.is_some() {
-                return Err(ModelError::InvalidDocument(
-                    "sourceRange is only valid inside a math tree".to_owned(),
-                ));
-            }
             insert_id(ids, &environment.id)?;
             if environment.kind.supports_enabled()
                 && environment
@@ -342,131 +328,22 @@ fn validate_math_tree<'a>(
             tree.schema_version
         )));
     }
-    if tree.source.len() > MAX_MATH_SOURCE_BYTES {
-        return Err(ModelError::InvalidDocument(
-            "math source exceeds byte limit".to_owned(),
-        ));
-    }
+    reject_retired_math_fields(&tree.extra, &["source"])?;
     let mut budget = MathValidationBudget::default();
     add_math_extra_bytes(&tree.extra, &mut budget.payload_bytes)?;
-    validate_math_flow(
-        &tree.root,
-        &tree.source,
-        0,
-        None,
-        ids,
-        node_count,
-        &mut budget,
-    )
+    validate_math_flow(&tree.root, 0, None, ids, node_count, &mut budget)
 }
 
-fn validate_text_flow(text: &TextFlow, source: Option<&str>) -> Result<(), ModelError> {
-    if let (Some(source), Some(range)) = (source, text.source_range.as_ref()) {
-        validate_math_range(range, source)?;
-    }
-    let text_length = text.runs.iter().try_fold(0usize, |length, run| {
-        length
-            .checked_add(run.text.len())
-            .ok_or(ModelError::InvalidDocument(
-                "text flow length exceeds addressable size".to_owned(),
-            ))
-    })?;
-    let mut previous_text_end = 0usize;
-    let mut previous_source_end = None;
-    if !text.source_map.is_empty() && text.source_range.is_none() {
-        return Err(ModelError::InvalidDocument(
-            "TextFlow sourceMap requires a sourceRange".to_owned(),
-        ));
-    }
-    if text.source_map.len() > MAX_MATH_TREE_NODES {
-        return Err(ModelError::InvalidDocument(
-            "TextFlow sourceMap exceeds node limit".to_owned(),
-        ));
-    }
-    // 映射按显示字节递增；游标只向前扫描，避免每个边界都从首个 Run 重新遍历。
-    let mut run_index = 0usize;
-    let mut run_start = 0usize;
-    for entry in &text.source_map {
-        let (text_start, text_end) = (entry.text_start as usize, entry.text_end as usize);
-        if text_start > text_end
-            || text_end > text_length
-            || text_start < previous_text_end
-            || !text_flow_char_boundary(&text.runs, text_start, &mut run_index, &mut run_start)
-            || !text_flow_char_boundary(&text.runs, text_end, &mut run_index, &mut run_start)
-            || text_start != previous_text_end
-            || source.is_none()
-        {
-            return Err(ModelError::InvalidDocument(
-                "invalid TextFlow source map range".to_owned(),
-            ));
-        }
-        let Some(source) = source else {
-            return Err(ModelError::InvalidDocument(
-                "TextFlow sourceMap is only valid inside a math tree".to_owned(),
-            ));
-        };
-        validate_math_range(&entry.source_range, source)?;
-        if text.source_range.as_ref().is_some_and(|flow_range| {
-            entry.source_range.start < flow_range.start || entry.source_range.end > flow_range.end
-        }) {
-            return Err(ModelError::InvalidDocument(
-                "TextFlow sourceMap must stay inside its sourceRange".to_owned(),
-            ));
-        }
-        if previous_source_end.is_some_and(|end| entry.source_range.start < end) {
-            return Err(ModelError::InvalidDocument(
-                "TextFlow source map ranges must follow source order".to_owned(),
-            ));
-        }
-        previous_text_end = text_end;
-        previous_source_end = Some(entry.source_range.end);
-    }
-    if !text.source_map.is_empty()
-        && previous_text_end != text_length
-        && !(text_length == 0 && text.source_map.len() == 1)
-    {
-        return Err(ModelError::InvalidDocument(
-            "TextFlow sourceMap must cover all display text".to_owned(),
-        ));
-    }
+fn validate_text_flow(text: &TextFlow) -> Result<(), ModelError> {
     for run in &text.runs {
         validate_run(run)?;
     }
     Ok(())
 }
 
-fn text_flow_char_boundary(
-    runs: &[Run],
-    offset: usize,
-    run_index: &mut usize,
-    run_start: &mut usize,
-) -> bool {
-    while let Some(run) = runs.get(*run_index) {
-        let Some(run_end) = run_start.checked_add(run.text.len()) else {
-            return false;
-        };
-        if offset <= run_end {
-            return run.text.is_char_boundary(offset.saturating_sub(*run_start));
-        }
-        *run_start = run_end;
-        *run_index += 1;
-    }
-    offset == *run_start
-}
-
-fn count_text_flow_source_map(
-    text: &TextFlow,
-    budget: &mut MathValidationBudget,
-) -> Result<(), ModelError> {
-    for entry in &text.source_map {
-        count_math_node(budget)?;
-        budget.payload_bytes = budget
-            .payload_bytes
-            .saturating_add(std::mem::size_of::<TextFlowSourceMapEntry>());
-        add_math_extra_bytes(&entry.source_range.extra, &mut budget.payload_bytes)?;
-        add_math_extra_bytes(&entry.extra, &mut budget.payload_bytes)?;
-    }
-    Ok(())
+fn validate_math_text_flow(text: &TextFlow) -> Result<(), ModelError> {
+    reject_retired_math_fields(&text.extra, &["sourceRange", "sourceMap"])?;
+    validate_text_flow(text)
 }
 
 fn validate_run(run: &Run) -> Result<(), ModelError> {
@@ -488,12 +365,10 @@ fn validate_run(run: &Run) -> Result<(), ModelError> {
 struct MathValidationBudget {
     node_count: usize,
     payload_bytes: usize,
-    content_bytes: usize,
 }
 
 fn validate_math_flow<'a>(
     flow: &'a MathFlow,
-    source: &str,
     depth: usize,
     parent: Option<MathNodeKind>,
     ids: &mut HashSet<&'a str>,
@@ -505,13 +380,10 @@ fn validate_math_flow<'a>(
     }
     budget.node_count = budget.node_count.saturating_add(1);
     budget.payload_bytes = budget.payload_bytes.saturating_add(flow.id.0.len());
+    reject_retired_math_fields(&flow.extra, &["sourceRange"])?;
     add_math_extra_bytes(&flow.extra, &mut budget.payload_bytes)?;
     validate_depth(depth, node_count)?;
     insert_id(ids, &flow.id)?;
-    if let Some(range) = flow.source_range.as_ref() {
-        add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
-        validate_math_range(range, source)?;
-    }
     if budget.node_count > MAX_MATH_TREE_NODES || budget.payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES
     {
         return Err(ModelError::InvalidDocument(
@@ -520,43 +392,17 @@ fn validate_math_flow<'a>(
     }
     for content in &flow.content {
         match content {
-            MathContent::Text(text) => {
-                validate_depth(depth + 1, node_count)?;
-                count_math_node(budget)?;
-                add_math_extra_bytes(&text.extra, &mut budget.payload_bytes)?;
-                if let Some(range) = &text.source_range {
-                    add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
-                }
-                count_text_flow_source_map(text, budget)?;
-                validate_text_flow(text, Some(source))?;
-                for run in &text.runs {
-                    count_document_node(node_count)?;
-                    count_math_node(budget)?;
-                    budget.payload_bytes = budget
-                        .payload_bytes
-                        .saturating_add(run.text.len())
-                        .saturating_add(run.language.as_ref().map_or(0, String::len));
-                    add_math_extra_bytes(&run.props, &mut budget.payload_bytes)?;
-                    add_math_extra_bytes(&run.extra, &mut budget.payload_bytes)?;
-                    budget.content_bytes = budget.content_bytes.saturating_add(run.text.len());
-                }
-            }
             MathContent::Math(node) => {
-                validate_math_node(node, source, depth + 1, parent, ids, node_count, budget)?
+                validate_math_node(node, depth + 1, parent, ids, node_count, budget)?
             }
-            MathContent::Environment(_) => {
-                validate_math_content(content, source, depth + 1, ids, node_count, budget)?;
+            MathContent::Text(_)
+            | MathContent::Environment(_)
+            | MathContent::SoftBreak(_)
+            | MathContent::Opaque(_) => {
+                validate_math_content(content, depth + 1, ids, node_count, budget)?;
             }
-            MathContent::SoftBreak(value) => {
-                validate_depth(depth + 1, node_count)?;
-                count_math_node(budget)?;
-                add_math_extra_bytes(&value.extra, &mut budget.payload_bytes)?;
-            }
-            MathContent::Opaque(_) => count_math_node(budget)?,
         }
-        if budget.content_bytes > MAX_MATH_SOURCE_BYTES
-            || budget.payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES
-        {
+        if budget.payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES {
             return Err(ModelError::InvalidDocument(
                 "math tree exceeds resource limits".to_owned(),
             ));
@@ -567,7 +413,6 @@ fn validate_math_flow<'a>(
 
 fn validate_math_content<'a>(
     content: &'a MathContent,
-    source: &str,
     depth: usize,
     ids: &mut HashSet<&'a str>,
     node_count: &mut usize,
@@ -578,17 +423,11 @@ fn validate_math_content<'a>(
     }
     validate_depth(depth, node_count)?;
     match content {
-        MathContent::Math(node) => {
-            validate_math_node(node, source, depth, None, ids, node_count, budget)
-        }
+        MathContent::Math(node) => validate_math_node(node, depth, None, ids, node_count, budget),
         MathContent::Text(text) => {
             count_math_node(budget)?;
+            validate_math_text_flow(text)?;
             add_math_extra_bytes(&text.extra, &mut budget.payload_bytes)?;
-            if let Some(range) = &text.source_range {
-                add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
-            }
-            count_text_flow_source_map(text, budget)?;
-            validate_text_flow(text, Some(source))?;
             for run in &text.runs {
                 count_document_node(node_count)?;
                 count_math_node(budget)?;
@@ -596,14 +435,8 @@ fn validate_math_content<'a>(
                     .payload_bytes
                     .saturating_add(run.text.len())
                     .saturating_add(run.language.as_ref().map_or(0, String::len));
-                budget.content_bytes = budget.content_bytes.saturating_add(run.text.len());
                 add_math_extra_bytes(&run.props, &mut budget.payload_bytes)?;
                 add_math_extra_bytes(&run.extra, &mut budget.payload_bytes)?;
-            }
-            if budget.content_bytes > MAX_MATH_SOURCE_BYTES {
-                return Err(ModelError::InvalidDocument(
-                    "math tree content exceeds byte limit".to_owned(),
-                ));
             }
             Ok(())
         }
@@ -614,34 +447,12 @@ fn validate_math_content<'a>(
                 .payload_bytes
                 .saturating_add(environment.id.0.len())
                 .saturating_add(environment.definition_id.as_ref().map_or(0, String::len));
-            if let Some(range) = &environment.source_range {
-                add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
-                validate_math_range(range, source)?;
-            }
+            reject_retired_math_fields(&environment.extra, &["sourceRange"])?;
             add_math_extra_bytes(&environment.extra, &mut budget.payload_bytes)?;
             add_math_extra_bytes(&environment.props, &mut budget.payload_bytes)?;
-            if environment.kind.supports_enabled()
-                && environment
-                    .props
-                    .get("enabled")
-                    .is_some_and(|value| !value.is_boolean())
-            {
-                return Err(ModelError::InvalidDocument(
-                    "Bold/Italic enabled must be boolean".to_owned(),
-                ));
-            }
-            if environment.kind.supports_font_family()
-                && environment
-                    .props
-                    .get("fontFamily")
-                    .is_some_and(|value| !value.is_string())
-            {
-                return Err(ModelError::InvalidDocument(
-                    "Font fontFamily must be a string".to_owned(),
-                ));
-            }
+            validate_environment_props(environment.kind, &environment.props)?;
             for child in &environment.children {
-                validate_math_content(child, source, depth + 1, ids, node_count, budget)?;
+                validate_math_content(child, depth + 1, ids, node_count, budget)?;
             }
             Ok(())
         }
@@ -654,9 +465,33 @@ fn validate_math_content<'a>(
     }
 }
 
+fn validate_environment_props(
+    kind: InlineEnvironmentKind,
+    props: &BTreeMap<String, Value>,
+) -> Result<(), ModelError> {
+    if kind.supports_enabled()
+        && props
+            .get("enabled")
+            .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(ModelError::InvalidDocument(
+            "Bold/Italic enabled must be boolean".to_owned(),
+        ));
+    }
+    if kind.supports_font_family()
+        && props
+            .get("fontFamily")
+            .is_some_and(|value| !value.is_string())
+    {
+        return Err(ModelError::InvalidDocument(
+            "Font fontFamily must be a string".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_math_node<'a>(
     node: &'a MathNode,
-    source: &str,
     depth: usize,
     parent: Option<MathNodeKind>,
     ids: &mut HashSet<&'a str>,
@@ -674,14 +509,7 @@ fn validate_math_node<'a>(
         .saturating_add(node.attributes.iter().fold(0usize, |bytes, (key, value)| {
             bytes.saturating_add(key.len()).saturating_add(value.len())
         }));
-    budget.content_bytes = budget
-        .content_bytes
-        .saturating_add(node.text.as_ref().map_or(0, String::len));
-    if budget.content_bytes > MAX_MATH_SOURCE_BYTES {
-        return Err(ModelError::InvalidDocument(
-            "math tree content exceeds byte limit".to_owned(),
-        ));
-    }
+    reject_retired_math_fields(&node.extra, &["sourceRange"])?;
     add_math_extra_bytes(&node.extra, &mut budget.payload_bytes)?;
     if budget.payload_bytes > MAX_MATH_TREE_PAYLOAD_BYTES {
         return Err(ModelError::InvalidDocument(
@@ -721,30 +549,20 @@ fn validate_math_node<'a>(
         ));
     }
     insert_id(ids, &node.id)?;
-    if let Some(range) = node.source_range.as_ref() {
-        add_math_extra_bytes(&range.extra, &mut budget.payload_bytes)?;
-        let start = range.start as usize;
-        let end = range.end as usize;
-        if start > end
-            || end > source.len()
-            || !source.is_char_boundary(start)
-            || !source.is_char_boundary(end)
-        {
-            return Err(ModelError::InvalidDocument(
-                "invalid math source byte range".to_owned(),
-            ));
-        }
-    }
     for child in &node.children {
-        validate_math_flow(
-            child,
-            source,
-            depth,
-            Some(node.kind),
-            ids,
-            node_count,
-            budget,
-        )?;
+        validate_math_flow(child, depth, Some(node.kind), ids, node_count, budget)?;
+    }
+    Ok(())
+}
+
+fn reject_retired_math_fields(
+    extra: &std::collections::BTreeMap<String, Value>,
+    fields: &[&str],
+) -> Result<(), ModelError> {
+    if extra.keys().any(|key| fields.contains(&key.as_str())) {
+        return Err(ModelError::InvalidDocument(
+            "retired math source fields are not valid in the current schema".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -754,21 +572,6 @@ fn count_math_node(budget: &mut MathValidationBudget) -> Result<(), ModelError> 
     if budget.node_count > MAX_MATH_TREE_NODES {
         return Err(ModelError::InvalidDocument(
             "math tree exceeds node limit".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_math_range(range: &MathSourceRange, source: &str) -> Result<(), ModelError> {
-    let start = range.start as usize;
-    let end = range.end as usize;
-    if start > end
-        || end > source.len()
-        || !source.is_char_boundary(start)
-        || !source.is_char_boundary(end)
-    {
-        return Err(ModelError::InvalidDocument(
-            "invalid math source byte range".to_owned(),
         ));
     }
     Ok(())

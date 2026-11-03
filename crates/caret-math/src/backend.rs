@@ -171,8 +171,30 @@ fn content_nodes(content: &MathContent) -> Vec<Node> {
         FlowContent::Environment(environment) => {
             let children = contents_nodes(&environment.children);
             let style = match environment.kind {
-                InlineEnvironmentKind::Bold => Some("bf"),
-                InlineEnvironmentKind::Italic => Some("it"),
+                InlineEnvironmentKind::Bold => Some(
+                    if environment
+                        .props
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(false)
+                    {
+                        "md"
+                    } else {
+                        "bf"
+                    },
+                ),
+                InlineEnvironmentKind::Italic => Some(
+                    if environment
+                        .props
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(false)
+                    {
+                        "up"
+                    } else {
+                        "it"
+                    },
+                ),
                 InlineEnvironmentKind::Font => match environment
                     .props
                     .get("fontFamily")
@@ -221,13 +243,14 @@ fn append_run(output: &mut Vec<Node>, run: &Run, id: NodeId) {
         MathNodeKind::TextContent,
         Some(run.text.clone()),
     );
-    let mut style = None;
-    if run.props.get("bold").and_then(serde_json::Value::as_bool) == Some(true) {
-        style = Some("bf");
-    }
-    if run.props.get("italic").and_then(serde_json::Value::as_bool) == Some(true) {
-        style = Some("it");
-    }
+    let bold = run.props.get("bold").and_then(serde_json::Value::as_bool) == Some(true);
+    let italic = run.props.get("italic").and_then(serde_json::Value::as_bool) == Some(true);
+    let style = match (bold, italic) {
+        (true, true) => Some("bi"),
+        (true, false) => Some("bf"),
+        (false, true) => Some("it"),
+        (false, false) => None,
+    };
     output.push(if let Some(style) = style {
         Node {
             id,

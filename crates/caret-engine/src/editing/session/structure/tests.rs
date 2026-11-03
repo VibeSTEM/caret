@@ -455,6 +455,58 @@ fn backspace_on_selected_section_deletes_nested_subtree_and_undo_redo_restore_it
 }
 
 #[test]
+fn failed_navigation_selection_preserves_the_current_structure_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let inside = paragraph_with_text("inside");
+    let inside_id = inside.id.clone();
+    let environment = environment(BlockEnvironmentKind::Custom, vec![Block::Paragraph(inside)]);
+    let environment_id = match &environment {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), environment];
+    let mut session = Session::new(document)?;
+    session.select_block_environment(environment_id.clone())?;
+    let selection_before = session.selection().clone();
+    let selected_environments_before = session.selected_block_environments().to_vec();
+    let structure_selection_before = session
+        .structure_selection()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+    let invalid_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: inside_id,
+        offset: "inside".len() + 1,
+        affinity: Affinity::Downstream,
+    };
+
+    assert!(matches!(
+        session.set_navigation_selection(
+            Selection {
+                anchor: invalid_position.clone(),
+                focus: invalid_position,
+            },
+            VisualAffinity::Downstream,
+        ),
+        Err(EditError::InvalidPosition)
+    ));
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(
+        session.selected_block_environments(),
+        selected_environments_before
+    );
+    assert_eq!(
+        session.structure_selection(),
+        structure_selection_before
+            .as_ref()
+            .map(|(anchor, focus)| (anchor, focus))
+    );
+    assert_eq!(session.selected_block_environment(), Some(&environment_id));
+    Ok(())
+}
+
+#[test]
 fn deleting_nested_environments_with_identical_paragraph_ranges_is_atomic()
 -> Result<(), Box<dyn std::error::Error>> {
     let leaf = paragraph_with_text("nested content");

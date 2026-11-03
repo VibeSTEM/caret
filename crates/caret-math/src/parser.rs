@@ -7,13 +7,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
 use caret_doc::{
-    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION,
-    MAX_MATH_SOURCE_BYTES, MAX_MATH_TREE_DEPTH, MAX_MATH_TREE_NODES, MathAlignRow, MathContent,
-    MathFlow, MathSourceRange, MathTree, NodeId, Run, TextFlow,
+    Align, InlineEnvironment, InlineEnvironmentKind, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
+    MAX_MATH_TREE_NODES, MathAlignRow, MathContent, MathFlow, MathSourceRange, MathTree, NodeId,
+    Run, TextFlow,
 };
 use serde_json::Value;
 
@@ -22,7 +23,10 @@ use crate::symbols::{
     NAMED_COLORS, accent_attribute, encode_delimiter, literal_class, named_symbol,
     text_operator_limits,
 };
-use crate::{MathInputKind, MathInputStatus, MathParseError, ParsedMath};
+use crate::{
+    MAX_MATH_SOURCE_BYTES, MathInputKind, MathInputStatus, MathParseError, MathProjection,
+    ParsedMath,
+};
 
 type ParseResult<T> = Result<T, MathParseError>;
 
@@ -66,6 +70,26 @@ const MATRIX_ENVIRONMENTS: &[&str] = &[
 
 /// 把输入解析为目标对象类型的文档数学树。
 pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
+    parse_projection_with_source(source, kind, Cow::Borrowed(source))
+        .map(MathProjection::into_parsed)
+}
+
+/// 解析源码并把它与树及原始字节映射一起返回，不在树 DTO 中保留源码副本。
+pub fn parse_projection(source: &str, kind: MathInputKind) -> ParseResult<MathProjection<'static>> {
+    if source.len() > MAX_MATH_SOURCE_BYTES {
+        return Err(MathParseError::InputTooLong {
+            len: source.len(),
+            max: MAX_MATH_SOURCE_BYTES,
+        });
+    }
+    parse_projection_with_source(source, kind, Cow::Owned(source.to_owned()))
+}
+
+fn parse_projection_with_source<'source>(
+    source: &str,
+    kind: MathInputKind,
+    projection_source: Cow<'source, str>,
+) -> ParseResult<MathProjection<'source>> {
     if source.len() > MAX_MATH_SOURCE_BYTES {
         return Err(MathParseError::InputTooLong {
             len: source.len(),
@@ -90,14 +114,13 @@ pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
             check_depth(&root)?;
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
-                source: source.to_owned(),
                 root: parser_root_to_flow(root),
                 extra: BTreeMap::new(),
             };
             tree.validate().map_err(invalid_tree)?;
-            Ok(ParsedMath::Tree(tree))
+            Ok(MathProjection::tree(projection_source, kind, body, tree))
         }
-        MathInputKind::Align => parse_align(&mut parser, source, body),
+        MathInputKind::Align => parse_align(&mut parser, projection_source, body),
     }
 }
 
@@ -216,11 +239,11 @@ pub(super) fn input_body_range(source: &str, kind: MathInputKind) -> ParseResult
     strip_fences(source, kind)
 }
 
-fn parse_align(
+fn parse_align<'source>(
     parser: &mut Parser<'_>,
-    source: &str,
+    source: Cow<'source, str>,
     body: Range<usize>,
-) -> ParseResult<ParsedMath> {
+) -> ParseResult<MathProjection<'source>> {
     parser.skip_space();
     let env_start = parser.pos;
     let is_aligned = parser.peek_command() == Some("begin") && {
@@ -239,8 +262,12 @@ fn parse_align(
     }
     parser.read_command();
     parser.read_raw_group()?;
-    let mut rows = parser.parse_matrix_rows("aligned")?;
-    let env_end = parser.pos;
+    let environment_content_start = parser.pos;
+    let parsed_rows = parser.parse_matrix_rows("aligned")?;
+    let environment_end_start = parsed_rows.environment_end_start;
+    let environment_content_end = parsed_rows.environment_content_end;
+    let environment_end = parsed_rows.environment_end;
+    let mut rows = parsed_rows.rows;
     parser.skip_space();
     if parser.pos < body.end {
         return Err(MathParseError::InputKindMismatch {
@@ -250,11 +277,17 @@ fn parse_align(
     if rows.is_empty() {
         let placeholder = parser.placeholder();
         rows.push(MatrixRow::Cells {
-            cells: vec![(placeholder, env_end..env_end)],
-            range: env_end..env_end,
+            cells: vec![(
+                placeholder,
+                environment_end_start..environment_end_start,
+                environment_content_start..environment_end_start,
+            )],
+            range: environment_end_start..environment_end_start,
         });
     }
     let mut align_rows = Vec::new();
+    let mut cell_ranges = Vec::new();
+    let mut cell_navigation_ranges = Vec::new();
     for row in rows {
         let MatrixRow::Cells { cells, .. } = row else {
             return Err(parser.error_at(
@@ -263,18 +296,23 @@ fn parse_align(
             ));
         };
         let mut trees = Vec::new();
-        for (mut node, span) in cells {
+        let mut row_ranges = Vec::new();
+        let mut row_navigation_ranges = Vec::new();
+        for (mut node, span, navigation_range) in cells {
             rebase(&mut node, span.start);
             check_depth(&node)?;
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
-                source: source[span].to_owned(),
                 root: parser_root_to_flow(node),
                 extra: BTreeMap::new(),
             };
             tree.validate().map_err(invalid_tree)?;
             trees.push(tree);
+            row_ranges.push(span);
+            row_navigation_ranges.push(navigation_range);
         }
+        cell_ranges.push(row_ranges);
+        cell_navigation_ranges.push(row_navigation_ranges);
         align_rows.push(MathAlignRow {
             id: NodeId::generate(),
             cells: trees,
@@ -283,12 +321,19 @@ fn parse_align(
     }
     let align = Align {
         id: NodeId::generate(),
-        source: source[env_start..env_end].to_owned(),
         rows: align_rows,
         extra: BTreeMap::new(),
     };
     align.validate().map_err(invalid_tree)?;
-    Ok(ParsedMath::Align(align))
+    Ok(MathProjection::align(
+        source,
+        body,
+        align,
+        env_start..environment_end,
+        environment_content_start..environment_content_end,
+        cell_ranges,
+        cell_navigation_ranges,
+    ))
 }
 
 fn parser_root_to_flow(root: MathNode) -> MathFlow {
@@ -371,10 +416,9 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
             }
         }
         MathNodeKind::TextStyle
-            if node
-                .attributes
-                .get("style")
-                .is_some_and(|style| matches!(style.as_str(), "bf" | "it" | "sf" | "tt")) =>
+            if node.attributes.get("style").is_some_and(|style| {
+                matches!(style.as_str(), "bf" | "it" | "md" | "up" | "sf" | "tt")
+            }) =>
         {
             let style = node
                 .attributes
@@ -384,6 +428,14 @@ fn append_parser_node(content: &mut Vec<MathContent>, node: MathNode) {
             let (kind, props) = match style {
                 "bf" => (InlineEnvironmentKind::Bold, BTreeMap::new()),
                 "it" => (InlineEnvironmentKind::Italic, BTreeMap::new()),
+                "md" => (
+                    InlineEnvironmentKind::Bold,
+                    BTreeMap::from([("enabled".to_owned(), Value::Bool(false))]),
+                ),
+                "up" => (
+                    InlineEnvironmentKind::Italic,
+                    BTreeMap::from([("enabled".to_owned(), Value::Bool(false))]),
+                ),
                 "sf" => (
                     InlineEnvironmentKind::Font,
                     BTreeMap::from([(
@@ -563,11 +615,18 @@ impl Stops {
 /// 矩阵环境的一行。
 enum MatrixRow {
     Cells {
-        cells: Vec<(MathNode, Range<usize>)>,
+        cells: Vec<(MathNode, Range<usize>, Range<usize>)>,
         range: Range<usize>,
     },
     Hline(Range<usize>),
     Intertext(MathNode, Range<usize>),
+}
+
+struct MatrixRows {
+    rows: Vec<MatrixRow>,
+    environment_end_start: usize,
+    environment_content_end: usize,
+    environment_end: usize,
 }
 
 struct Parser<'s> {
@@ -1259,12 +1318,12 @@ impl<'s> Parser<'s> {
                 } else {
                     String::new()
                 };
-                let rows = self.parse_matrix_rows(style)?;
+                let rows = self.parse_matrix_rows(style)?.rows;
                 let mut children = Vec::new();
                 for row in rows {
                     children.push(match row {
                         MatrixRow::Cells { cells, range } => {
-                            let cells = cells.into_iter().map(|(cell, _)| cell).collect();
+                            let cells = cells.into_iter().map(|(cell, _, _)| cell).collect();
                             self.node(K::Row, None, &[], Some(range), cells)
                         }
                         MatrixRow::Hline(range) => {
@@ -1587,7 +1646,9 @@ impl<'s> Parser<'s> {
                     };
                     let (math, _) = self.parse_list(stops)?;
                     let range = start..self.pos;
-                    let node = if math.len() == 1 {
+                    let node = if math.is_empty() {
+                        self.node(K::Placeholder, None, &[], Some(range), Vec::new())
+                    } else if math.len() == 1 {
                         math.into_iter()
                             .next()
                             .unwrap_or_else(|| self.placeholder())
@@ -1615,7 +1676,8 @@ impl<'s> Parser<'s> {
                             );
                             items.push(node);
                         }
-                        "textrm" | "textbf" | "textit" | "textsf" | "texttt" => {
+                        "textrm" | "textbf" | "textit" | "textmd" | "textup" | "textsf"
+                        | "texttt" => {
                             let children = self.parse_text_argument()?;
                             let node = self.node(
                                 K::TextStyle,
@@ -1667,20 +1729,27 @@ impl<'s> Parser<'s> {
     }
 
     /// 解析矩阵环境的行，直到与 `name` 配对的 `\end`。
-    fn parse_matrix_rows(&mut self, name: &str) -> ParseResult<Vec<MatrixRow>> {
+    fn parse_matrix_rows(&mut self, name: &str) -> ParseResult<MatrixRows> {
         let mut rows = Vec::new();
         loop {
             self.check_budget()?;
+            let navigation_row_start = self.pos;
             self.skip_space();
             let row_start = self.pos;
             match self.peek_command() {
                 Some("end") => {
+                    let environment_end_start = row_start;
                     self.read_command();
                     let end_name = self.read_raw_group()?;
                     if end_name != name {
                         return Err(self.error_at(row_start, "mismatched \\end"));
                     }
-                    return Ok(rows);
+                    return Ok(MatrixRows {
+                        rows,
+                        environment_end_start,
+                        environment_content_end: row_start,
+                        environment_end: self.pos,
+                    });
                 }
                 Some("hline") => {
                     self.read_command();
@@ -1712,16 +1781,18 @@ impl<'s> Parser<'s> {
             };
             let mut cells = Vec::new();
             let mut row_end;
+            let mut navigation_cell_start = navigation_row_start;
             loop {
                 self.skip_space();
                 let cell_start = self.pos;
                 let (items, ended) = self.parse_list(stops)?;
-                let cell_end = match ended {
+                let navigation_cell_end = match ended {
                     Ended::Ampersand => self.pos - 1,
                     Ended::RowBreak => self.pos - 2,
                     _ => self.pos,
                 };
-                let cell_end = cell_start + self.src[cell_start..cell_end].trim_end().len();
+                let cell_end =
+                    cell_start + self.src[cell_start..navigation_cell_end].trim_end().len();
                 row_end = cell_end;
                 let cell = if items.len() == 1 {
                     items
@@ -1731,10 +1802,15 @@ impl<'s> Parser<'s> {
                 } else {
                     self.row(items, Some(cell_start..cell_end))
                 };
-                cells.push((cell, cell_start..cell_end));
+                cells.push((
+                    cell,
+                    cell_start..cell_end,
+                    navigation_cell_start..navigation_cell_end,
+                ));
                 if ended != Ended::Ampersand {
                     break;
                 }
+                navigation_cell_start = self.pos;
             }
             rows.push(MatrixRow::Cells {
                 cells,

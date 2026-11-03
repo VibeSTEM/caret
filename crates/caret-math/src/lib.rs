@@ -11,6 +11,7 @@ mod backend;
 mod fonts;
 pub mod layout;
 mod parser;
+mod projection;
 mod serialize;
 pub mod symbols;
 
@@ -19,8 +20,12 @@ use std::{fmt, ops::Range};
 use caret_doc::{Align, MathTree};
 
 pub use fonts::BUILTIN_FONT_FAMILY;
-pub use parser::{classify_input, is_incomplete_input_prefix, parse};
+pub use parser::{classify_input, is_incomplete_input_prefix, parse, parse_projection};
+pub use projection::{AlignSourceMap, MathProjection, MathSourceMap, ProjectedMath};
 pub use serialize::{serialize_align, serialize_node, serialize_tree};
+
+/// LaTeX 导入和临时源码草稿的最大字节数；不限制持久数学树大小。
+pub const MAX_MATH_SOURCE_BYTES: usize = 1024 * 1024;
 
 /// 公式输入所属的文档对象。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

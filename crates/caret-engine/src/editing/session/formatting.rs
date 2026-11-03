@@ -41,7 +41,7 @@ impl PendingInlineStyle {
         self.font_family = None;
     }
 
-    fn get(&self, kind: InlineEnvironmentKind) -> Option<bool> {
+    pub(super) fn get(&self, kind: InlineEnvironmentKind) -> Option<bool> {
         match kind {
             InlineEnvironmentKind::Bold => self.bold,
             InlineEnvironmentKind::Italic => self.italic,
@@ -49,7 +49,11 @@ impl PendingInlineStyle {
         }
     }
 
-    fn set(&mut self, kind: InlineEnvironmentKind, value: bool) -> Result<(), EditError> {
+    pub(super) fn set(
+        &mut self,
+        kind: InlineEnvironmentKind,
+        value: bool,
+    ) -> Result<(), EditError> {
         match kind {
             InlineEnvironmentKind::Bold => self.bold = Some(value),
             InlineEnvironmentKind::Italic => self.italic = Some(value),

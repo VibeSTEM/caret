@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use super::super::paragraph_ops::build_paragraph_index;
 #[cfg(test)]
@@ -13,16 +13,16 @@ use navigation::{
     align_cell_at, math_input_body_range, next_grapheme_end, next_math_caret_stop,
     previous_grapheme_start, previous_math_caret_stop,
 };
-use text_split_metadata::{prepare_math_text_split_metadata, restore_math_text_split_metadata};
 
-mod align_source;
 mod demotion;
+pub(super) mod inline_root_split;
 mod metadata;
 mod navigation;
 mod path;
 mod text_branch;
+mod text_inline_environment;
 mod text_run_property;
-mod text_split_metadata;
+mod text_run_split;
 use super::super::flow_edit::replace_text_flow_range;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
@@ -40,9 +40,13 @@ use caret_doc::{
     Align, Block, Equation, InlineMath, MathContent, MathFlow, MathNode, NodeId, Paragraph,
     ParagraphContent,
 };
+use inline_root_split::{InlineRootFocus, replace_inline_math_with_split, split_inline_math_root};
 pub use path::{MathTextFlowPath, MathTextFlowPathStep};
-use std::sync::Arc;
-use text_branch::{MathTextEdit, is_grapheme_boundary, snap_text_cursor, validate_text_flow_edit};
+use text_branch::{
+    MathTextEdit, apply_math_text_format_tree_edit, apply_math_text_split_tree_edit,
+    apply_math_text_tree_edit, is_grapheme_boundary, snap_text_cursor, text_source_boundary,
+    validate_text_flow_edit,
+};
 
 pub(super) const ALIGN_BEGIN: &str = "\\begin{aligned}";
 const ALIGN_END: &str = "\\end{aligned}";
@@ -73,17 +77,43 @@ pub enum MathEditBranch {
     },
 }
 
-/// 公式编辑状态：源码树、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
+/// 标识源码投影对应的会话与文档 generation。
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MathEditRevision {
+    pub(super) session_id: NodeId,
+    pub(super) document_generation: u64,
+}
+
+/// 公式编辑状态：目标、源码投影、当前编辑载体和载体内 UTF-8 光标。不属于文档修订。
+#[derive(Debug, Clone)]
 pub struct MathEdit {
     pub target: MathEditTarget,
-    pub source: String,
+    pub source_projection: Arc<caret_math::MathSourceMap<'static>>,
+    /// 绑定投影的会话与文档 generation；不一致时拒绝向该投影应用编辑。
+    pub(super) revision: MathEditRevision,
     pub cursor: usize,
     /// 光标所属的数学树分支；源码和 TextFlow 分别使用各自的字节坐标。
     pub branch: MathEditBranch,
 }
 
+impl PartialEq for MathEdit {
+    // Revision 用于拒绝过期编辑，不属于用户可见的公式编辑状态。
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.source_projection == other.source_projection
+            && self.cursor == other.cursor
+            && self.branch == other.branch
+    }
+}
+
+impl Eq for MathEdit {}
+
 impl MathEdit {
+    /// 当前编辑分支对应的源码视图；Align 不包含环境包围命令。
+    pub fn source(&self) -> &str {
+        self.source_projection.edit_source()
+    }
+
     /// 对齐公式中光标所在的行、单元格及单元格内偏移；单元格源码已去掉首尾空白。
     pub fn align_cell_at_cursor(&self) -> Option<(usize, usize, usize)> {
         if !matches!(self.target, MathEditTarget::Block { align: true, .. })
@@ -91,40 +121,106 @@ impl MathEdit {
         {
             return None;
         }
-        align_cell_at(&self.source, self.cursor)
+        align_cell_at(&self.source_projection, self.cursor)
     }
 }
 
 pub(super) fn restore_math_edit(
-    document: &caret_doc::Document,
+    document: &mut caret_doc::Document,
     position: MathEditPosition,
+    revision: MathEditRevision,
 ) -> Option<MathEdit> {
-    let source = match &position.target {
+    let source_branch = matches!(&position.branch, MathEditBranch::Source);
+    let (kind, projected_target) = match &position.target {
         MathEditTarget::Inline {
             paragraph_id,
             math_id,
-        } => find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?
-            .math_tree
-            .source
-            .clone(),
+        } => {
+            let tree =
+                &find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?.math_tree;
+            let project = if source_branch {
+                crate::math_validation::tree_for_source_history_projection
+            } else {
+                crate::math_validation::tree_for_history_projection
+            };
+            (
+                caret_math::MathInputKind::Inline,
+                HistoryProjectionTarget::Tree(project(
+                    tree,
+                    position.source_projection.source(),
+                    caret_math::MathInputKind::Inline,
+                )?),
+            )
+        }
         MathEditTarget::Block { block_id, align } => {
             match (find_block_by_id(&document.body, block_id)?, align) {
-                (Block::Equation(equation), false) => equation.math_tree.source.clone(),
-                (Block::Align(value), true) => align_body(&value.source),
+                (Block::Equation(equation), false) => {
+                    let project = if source_branch {
+                        crate::math_validation::tree_for_source_history_projection
+                    } else {
+                        crate::math_validation::tree_for_history_projection
+                    };
+                    (
+                        caret_math::MathInputKind::Equation,
+                        HistoryProjectionTarget::Tree(project(
+                            &equation.math_tree,
+                            position.source_projection.source(),
+                            caret_math::MathInputKind::Equation,
+                        )?),
+                    )
+                }
+                (Block::Align(value), true) => (
+                    caret_math::MathInputKind::Align,
+                    HistoryProjectionTarget::Align(if source_branch {
+                        crate::math_validation::align_for_source_history_projection(
+                            value,
+                            position.source_projection.source(),
+                        )?
+                    } else {
+                        crate::math_validation::align_for_history_projection(
+                            value,
+                            position.source_projection.source(),
+                        )?
+                    }),
+                ),
                 _ => return None,
             }
         }
     };
-    match &position.branch {
+    let source_projection = &position.source_projection;
+    if source_projection.kind() != kind
+        || position.projection_identity != Arc::as_ptr(source_projection) as usize
+    {
+        return None;
+    }
+    let branch = match &position.branch {
         MathEditBranch::Source => {
-            if position.cursor > source.len() || !source.is_char_boundary(position.cursor) {
+            let edit_source = source_projection.edit_source();
+            if position.cursor > edit_source.len() || !edit_source.is_char_boundary(position.cursor)
+            {
                 return None;
             }
+            MathEditBranch::Source
         }
         MathEditBranch::Text { path, anchor } => {
-            let tree = math_tree_for_target(document, &position.target, path.align_cell())?;
+            let tree = match (&projected_target, path.align_cell()) {
+                (HistoryProjectionTarget::Tree(tree), None) => tree,
+                (HistoryProjectionTarget::Align(align), Some((row, cell))) => {
+                    align.rows.get(row)?.cells.get(cell)?
+                }
+                _ => return None,
+            };
+            let host_base = match path.align_cell() {
+                Some((row, cell)) => source_projection
+                    .align()?
+                    .cell_range(row, cell)?
+                    .start
+                    .checked_sub(source_projection.edit_range().start)?,
+                None => 0,
+            };
+            let path = path.rebind_ranges(tree, host_base)?;
             let text = path.resolve(tree)?;
-            if host_source_range_for_path(document, &position.target, path)?
+            if host_source_range_for_path(document, &position.target, &path, source_projection)?
                 != path.host_source_range()
             {
                 return None;
@@ -143,20 +239,78 @@ pub(super) fn restore_math_edit(
             {
                 return None;
             }
+            MathEditBranch::Text {
+                path,
+                anchor: *anchor,
+            }
         }
-    }
+    };
+    install_history_projection(document, &position.target, projected_target)?;
     Some(MathEdit {
         target: position.target,
-        source,
+        source_projection: position.source_projection,
+        revision,
         cursor: position.cursor,
-        branch: position.branch,
+        branch,
     })
+}
+
+enum HistoryProjectionTarget {
+    Tree(caret_doc::MathTree),
+    Align(Align),
+}
+
+fn install_history_projection(
+    document: &mut caret_doc::Document,
+    target: &MathEditTarget,
+    projection: HistoryProjectionTarget,
+) -> Option<()> {
+    match (target, projection) {
+        (
+            MathEditTarget::Inline {
+                paragraph_id,
+                math_id,
+            },
+            HistoryProjectionTarget::Tree(tree),
+        ) => {
+            find_inline_math_mut_in_blocks(&mut document.body, paragraph_id, math_id)?.math_tree =
+                tree;
+        }
+        (
+            MathEditTarget::Block {
+                block_id,
+                align: false,
+            },
+            HistoryProjectionTarget::Tree(tree),
+        ) => {
+            let Block::Equation(equation) = find_block_by_id_mut(&mut document.body, block_id)?
+            else {
+                return None;
+            };
+            equation.math_tree = tree;
+        }
+        (
+            MathEditTarget::Block {
+                block_id,
+                align: true,
+            },
+            HistoryProjectionTarget::Align(align),
+        ) => {
+            let Block::Align(current) = find_block_by_id_mut(&mut document.body, block_id)? else {
+                return None;
+            };
+            *current = align;
+        }
+        _ => return None,
+    }
+    Some(())
 }
 
 fn host_source_range_for_path(
     document: &caret_doc::Document,
     target: &MathEditTarget,
     path: &MathTextFlowPath,
+    source: &caret_math::MathSourceMap<'_>,
 ) -> Option<(usize, usize)> {
     let (start, end) = path.source_range();
     let base = match (target, path.align_cell()) {
@@ -172,15 +326,29 @@ fn host_source_range_for_path(
             let Block::Align(align) = find_block_by_id(&document.body, block_id)? else {
                 return None;
             };
-            align_source::cell_source_ranges(align)?
-                .get(row)?
-                .get(cell)?
-                .start
-                .checked_sub(align_source::align_body_range(&align.source)?.start)?
+            align.rows.get(row)?.cells.get(cell)?;
+            let range = source.align()?.cell_range(row, cell)?;
+            range.start.checked_sub(source.edit_range().start)?
         }
         _ => return None,
     };
     Some((base + start as usize, base + end as usize))
+}
+
+fn source_for_text_edit<'a>(
+    edit: &'a MathEdit,
+    path: &MathTextFlowPath,
+    local_range: std::ops::Range<usize>,
+) -> Result<&'a str, EditError> {
+    let start = path
+        .host_offset(local_range.start)
+        .ok_or(EditError::InvalidPosition)?;
+    let end = path
+        .host_offset(local_range.end)
+        .ok_or(EditError::InvalidPosition)?;
+    edit.source()
+        .get(start..end)
+        .ok_or(EditError::InvalidPosition)
 }
 
 fn math_tree_for_target<'a>(
@@ -213,7 +381,7 @@ fn math_tree_for_target<'a>(
 }
 
 pub(super) fn history_position(edit: &MathEdit) -> MathEditPosition {
-    MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone())
+    MathEditPosition::from_edit(edit)
 }
 
 fn find_inline_math_in_blocks<'a>(
@@ -235,9 +403,54 @@ fn find_inline_math_in_blocks<'a>(
     })
 }
 
+fn find_inline_math_mut_in_blocks<'a>(
+    blocks: &'a mut [Block],
+    paragraph_id: &NodeId,
+    math_id: &NodeId,
+) -> Option<&'a mut InlineMath> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) if &paragraph.id == paragraph_id => {
+                return find_inline_math_mut(&mut paragraph.inlines, math_id);
+            }
+            Block::Environment(environment) => {
+                if let Some(title) = environment
+                    .title
+                    .as_mut()
+                    .filter(|title| &title.id == paragraph_id)
+                    && let Some(math) = find_inline_math_mut(&mut title.inlines, math_id)
+                {
+                    return Some(math);
+                }
+                if let Some(math) =
+                    find_inline_math_mut_in_blocks(&mut environment.children, paragraph_id, math_id)
+                {
+                    return Some(math);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
     let (parents, index) = find_block_path(blocks, id)?;
     block_list_ref(blocks, &parents).ok()?.get(index)
+}
+
+fn find_block_by_id_mut<'a>(blocks: &'a mut [Block], id: &NodeId) -> Option<&'a mut Block> {
+    for block in blocks {
+        if block_id(block) == Some(id) {
+            return Some(block);
+        }
+        if let Block::Environment(environment) = block
+            && let Some(found) = find_block_by_id_mut(&mut environment.children, id)
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 impl Session {
@@ -335,6 +548,9 @@ impl Session {
             Command::EnterMath(_) => Effect::default(),
             Command::ToggleRunUnderline if self.math_edit_is_text_branch() => {
                 self.toggle_math_text_run_property(crate::editing::EnvironmentKind::Underline)?
+            }
+            Command::ToggleInlineFormat(kind) if self.math_edit_is_text_branch() => {
+                self.toggle_math_text_inline_environment(*kind)?
             }
             Command::ToggleInlineFormat(_)
             | Command::ToggleRunUnderline
@@ -444,7 +660,7 @@ impl Session {
         let paragraph_map = TextMap::new(&paragraph)?;
         paragraph_map.validate_pos(&focus)?;
         let paragraph_empty = paragraph_map.text.is_empty();
-        let block = display_math_block(align, "")?;
+        let (block, source_projection) = display_math_block_projection(align, "")?;
         let block_id = block_id(&block)
             .cloned()
             .ok_or(EditError::InvalidPosition)?;
@@ -479,13 +695,15 @@ impl Session {
         let before_state_id = self.history_state_id;
         let blocks = block_list(&mut self.document.body, &parent_ids)?;
         blocks.splice(sibling_index..=sibling_index, after.iter().cloned());
+        let target = MathEditTarget::Block { block_id, align };
         self.selection = Selection {
             anchor: next_position.clone(),
             focus: next_position,
         };
         self.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
-            source: String::new(),
+            target: target.clone(),
+            source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor: 0,
             branch: MathEditBranch::Source,
         });
@@ -522,7 +740,7 @@ impl Session {
         {
             return Ok(Effect::default());
         }
-        let paragraph = self.paragraph_for(&focus)?.clone();
+        let mut paragraph = self.paragraph_for(&focus)?.clone();
         let object_len = OBJECT_REPLACEMENT.len_utf8();
         let slot = inline_math_slots(&paragraph)?
             .into_iter()
@@ -531,11 +749,17 @@ impl Session {
                 Direction::Backward => start + object_len == focus.offset,
             });
         if let Some((start, math_id)) = slot {
-            let source = find_inline_math(&paragraph.inlines, &math_id)
-                .map(|math| math.math_tree.source.clone())
+            let math = find_inline_math_mut(&mut paragraph.inlines, &math_id)
                 .ok_or(EditError::InvalidPosition)?;
-            let body = caret_math::input_body_range(&source, caret_math::MathInputKind::Inline)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+            let (source_projection, projected_tree) =
+                crate::math_validation::project_tree_for_edit(
+                    &math.math_tree,
+                    caret_math::MathInputKind::Inline,
+                )
+                .map_err(EditError::InvalidMath)?;
+            math.math_tree = projected_tree;
+            self.replace_paragraph(&focus, paragraph.clone())?;
+            let body = source_projection.body_range();
             let cursor = match direction {
                 Direction::Forward => body.start,
                 Direction::Backward => body.end,
@@ -551,12 +775,14 @@ impl Session {
                 focus: position,
             };
             self.selection_visual_affinity = VisualAffinity::Upstream;
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph.id.clone(),
+                math_id,
+            };
             self.math_edit = Some(MathEdit {
-                target: MathEditTarget::Inline {
-                    paragraph_id: paragraph.id.clone(),
-                    math_id,
-                },
-                source,
+                target: target.clone(),
+                source_projection: Arc::new(source_projection),
+                revision: self.current_math_edit_revision(),
                 cursor,
                 branch: MathEditBranch::Source,
             });
@@ -592,29 +818,45 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(Effect::default());
         };
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
-        let (block_id, align, source) = match siblings.get(neighbour) {
-            Some(Block::Equation(equation)) => (
-                equation.id.clone(),
-                false,
-                equation.math_tree.source.clone(),
-            ),
-            Some(Block::Align(value)) => (value.id.clone(), true, align_body(&value.source)),
-            _ => return Ok(Effect::default()),
+        let (block_id, align, source_projection) = {
+            let block = block_list(&mut self.document.body, &parent_ids)?
+                .get_mut(neighbour)
+                .ok_or(EditError::InvalidPosition)?;
+            match block {
+                Block::Equation(equation) => {
+                    let (source_map, projected_tree) =
+                        crate::math_validation::project_tree_for_edit(
+                            &equation.math_tree,
+                            caret_math::MathInputKind::Equation,
+                        )
+                        .map_err(EditError::InvalidMath)?;
+                    equation.math_tree = projected_tree;
+                    (equation.id.clone(), false, source_map)
+                }
+                Block::Align(value) => {
+                    let (source_map, projected_align) =
+                        crate::math_validation::project_align_for_edit(value)
+                            .map_err(EditError::InvalidMath)?;
+                    *value = projected_align;
+                    (value.id.clone(), true, source_map)
+                }
+                _ => return Ok(Effect::default()),
+            }
         };
         let body = if align {
-            0..source.len()
+            0..source_projection.edit_source().len()
         } else {
-            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            source_projection.body_range()
         };
         let cursor = match direction {
             Direction::Forward => body.start,
             Direction::Backward => body.end,
         };
+        let target = MathEditTarget::Block { block_id, align };
         self.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
-            source,
+            target: target.clone(),
+            source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor,
             branch: MathEditBranch::Source,
         });
@@ -636,7 +878,7 @@ impl Session {
     fn math_insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         let source_edit = edit.cursor..edit.cursor;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         let mut cursor = edit.cursor;
         for character in text.chars() {
             match character {
@@ -669,7 +911,7 @@ impl Session {
 
     fn math_insert_raw(&mut self, text: &str, cursor_in_text: usize) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         let source_edit = edit.cursor..edit.cursor;
         source.insert_str(source_edit.start, text);
         let cursor = source_edit.start + cursor_in_text;
@@ -680,13 +922,13 @@ impl Session {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let body_source = edit
-            .source
+            .source()
             .get(body.clone())
             .ok_or(EditError::InvalidPosition)?;
         if body_source.trim().is_empty() {
             return self.delete_math_object();
         }
-        let source = edit.source.as_str();
+        let source = edit.source();
         let Some(cursor) = edit.cursor.checked_sub(body.start) else {
             return Err(EditError::InvalidPosition);
         };
@@ -715,7 +957,7 @@ impl Session {
     fn math_delete_forward(&mut self) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
-        let source = edit.source.as_str();
+        let source = edit.source();
         let cursor = edit
             .cursor
             .checked_sub(body.start)
@@ -811,8 +1053,8 @@ impl Session {
                 let (start, end) = path.host_source_range();
                 let exit_cursor = if display_text.is_empty() {
                     let Some(exit_cursor) = (match direction {
-                        Direction::Backward => previous_math_caret_stop(&edit.source, start),
-                        Direction::Forward => next_math_caret_stop(&edit.source, end),
+                        Direction::Backward => previous_math_caret_stop(edit.source(), start),
+                        Direction::Forward => next_math_caret_stop(edit.source(), end),
                     }) else {
                         // 空文本岛若紧贴公式边缘且同向没有源码停靠点，继续退出公式以避免边界重入陷阱。
                         return self.exit_math_edit(direction, false);
@@ -837,7 +1079,7 @@ impl Session {
         }
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let source = edit
-            .source
+            .source()
             .get(body.clone())
             .ok_or(EditError::InvalidPosition)?;
         let cursor = edit
@@ -980,23 +1222,23 @@ impl Session {
             let Block::Align(align) = find_block_by_id(&self.document.body, block_id)? else {
                 return None;
             };
-            let body_start = align_source::align_body_range(&align.source)?.start;
-            let cell_ranges = align_source::cell_source_ranges(align)?;
-            let (row, cell, cell_range) =
-                cell_ranges.iter().enumerate().find_map(|(row, cells)| {
-                    cells.iter().enumerate().find_map(|(cell, range)| {
-                        let local_start = range.start.checked_sub(body_start)?;
-                        let local_end = range.end.checked_sub(body_start)?;
-                        (local_start <= source_offset && source_offset <= local_end)
-                            .then_some((row, cell, range))
-                    })
-                })?;
+            let edit_source = &edit.source_projection;
+            let body_start = edit_source.edit_range().start;
+            let cell_ranges = edit_source.align()?.cell_navigation_ranges();
+            let (row, cell) = cell_ranges.iter().enumerate().find_map(|(row, cells)| {
+                cells.iter().enumerate().find_map(|(cell, range)| {
+                    let local_start = range.start.checked_sub(body_start)?;
+                    let local_end = range.end.checked_sub(body_start)?;
+                    (local_start <= source_offset && source_offset <= local_end)
+                        .then_some((row, cell))
+                })
+            })?;
             let tree = align.rows.get(row)?.cells.get(cell)?;
-            let cell_start = cell_range.start.checked_sub(body_start)?;
-            let cell_offset = source_offset.checked_sub(cell_start)?;
-            if cell_offset > tree.source.len() {
-                return None;
-            }
+            let semantic_range = edit_source.align()?.cell_range(row, cell)?;
+            let cell_start = semantic_range.start.checked_sub(body_start)?;
+            let cell_offset = source_offset
+                .saturating_sub(cell_start)
+                .min(semantic_range.len());
             let path =
                 path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
             return path.with_host_source_base(cell_start);
@@ -1160,43 +1402,55 @@ impl Session {
 
     /// 连续显示公式之间按块顺序移动公式焦点，不经过旧正文选区。
     fn math_edit_beside_block(
-        &self,
+        &mut self,
         block_id: &NodeId,
         direction: Direction,
     ) -> Result<Option<MathEdit>, EditError> {
         let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
             return Err(EditError::InvalidPosition);
         };
-        let siblings = block_list_ref(&self.document.body, &parent_ids)?;
         let neighbour = match direction {
             Direction::Forward => index.checked_add(1),
             Direction::Backward => index.checked_sub(1),
         };
-        let Some(block) = neighbour.and_then(|index| siblings.get(index)) else {
+        let Some(neighbour) = neighbour else {
             return Ok(None);
         };
-        let (block_id, align, source) = match block {
-            Block::Equation(equation) => (
-                equation.id.clone(),
-                false,
-                equation.math_tree.source.clone(),
-            ),
-            Block::Align(align) => (align.id.clone(), true, align_body(&align.source)),
-            _ => return Ok(None),
-        };
+        let (block_id, align, source_projection) =
+            match block_list(&mut self.document.body, &parent_ids)?.get_mut(neighbour) {
+                Some(Block::Equation(equation)) => {
+                    let (source_map, projected_tree) =
+                        crate::math_validation::project_tree_for_edit(
+                            &equation.math_tree,
+                            caret_math::MathInputKind::Equation,
+                        )
+                        .map_err(EditError::InvalidMath)?;
+                    equation.math_tree = projected_tree;
+                    (equation.id.clone(), false, source_map)
+                }
+                Some(Block::Align(value)) => {
+                    let (source_map, projected_align) =
+                        crate::math_validation::project_align_for_edit(value)
+                            .map_err(EditError::InvalidMath)?;
+                    *value = projected_align;
+                    (value.id.clone(), true, source_map)
+                }
+                _ => return Ok(None),
+            };
         let body = if align {
-            0..source.len()
+            0..source_projection.edit_source().len()
         } else {
-            caret_math::input_body_range(&source, caret_math::MathInputKind::Equation)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            source_projection.body_range()
         };
         let cursor = match direction {
             Direction::Forward => body.start,
             Direction::Backward => body.end,
         };
+        let target = MathEditTarget::Block { block_id, align };
         Ok(Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
-            source,
+            target: target.clone(),
+            source_projection: Arc::new(source_projection),
+            revision: self.current_math_edit_revision(),
             cursor,
             branch: MathEditBranch::Source,
         }))
@@ -1239,8 +1493,7 @@ impl Session {
         let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
-        let before_math_position =
-            MathEditPosition::with_branch(edit.target.clone(), edit.cursor, edit.branch.clone());
+        let before_math_position = MathEditPosition::from_edit(&edit);
         match edit.target {
             MathEditTarget::Inline {
                 paragraph_id,
@@ -1434,20 +1687,21 @@ impl Session {
         text_edit: Option<MathTextEdit>,
     ) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        if source == edit.source && text_edit.is_none() {
+        if source == edit.source() && text_edit.is_none() {
             self.set_math_cursor(cursor);
             return Ok(Effect::default());
         }
         if old_edit.start > old_edit.end
-            || old_edit.end > edit.source.len()
-            || !edit.source.is_char_boundary(old_edit.start)
-            || !edit.source.is_char_boundary(old_edit.end)
+            || old_edit.end > edit.source().len()
+            || !edit.source().is_char_boundary(old_edit.start)
+            || !edit.source().is_char_boundary(old_edit.end)
         {
             return Err(EditError::InvalidPosition);
         }
+        let before_math_position = MathEditPosition::from_edit(&edit);
         let inserted_len = source
             .len()
-            .checked_sub(edit.source.len() - old_edit.len())
+            .checked_sub(edit.source().len() - old_edit.len())
             .ok_or(EditError::InvalidPosition)?;
         let new_edit = old_edit.start..old_edit.start + inserted_len;
         let path_old_edit = text_edit
@@ -1463,6 +1717,17 @@ impl Session {
         );
         let mut next_branch = MathEditBranch::Source;
         let mut next_cursor = cursor;
+        let mut next_edit = MathEdit {
+            target: edit.target.clone(),
+            source_projection: edit.source_projection.clone(),
+            revision: edit.revision.clone(),
+            cursor,
+            branch: MathEditBranch::Source,
+        };
+        let before_selection = self.selection.clone();
+        let before_visual_affinity = self.selection_visual_affinity;
+        let mut position_map = None;
+        let mut selection_changed = false;
         let pending_run_properties = self
             .pending_inline_style
             .active_run_properties()
@@ -1472,12 +1737,6 @@ impl Session {
                 paragraph_id,
                 math_id,
             } => {
-                let caret_math::ParsedMath::Tree(mut math_tree) =
-                    caret_math::parse(&source, caret_math::MathInputKind::Inline)
-                        .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                else {
-                    return Err(EditError::InvalidMath("expected inline math".to_owned()));
-                };
                 let story = self
                     .story_for_paragraph(paragraph_id)
                     .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
@@ -1493,18 +1752,103 @@ impl Session {
                 let split_math_text = text_edit
                     .as_ref()
                     .is_some_and(|text_edit| text_edit.split_math_entry);
-                let metadata_source = if split_math_text {
+                let direct_text_edit = text_edit.as_ref().is_some_and(|text_edit| {
+                    !text_edit.split_math_entry && text_edit.format.is_none()
+                });
+                let direct_format_text = text_edit
+                    .as_ref()
+                    .is_some_and(|text_edit| text_edit.format.is_some());
+                let direct_split_text = split_math_text;
+                let (mut math_tree, source_projection) = if direct_text_edit {
                     let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-                    let mut sanitized = math.math_tree.clone();
-                    if !prepare_math_text_split_metadata(&mut sanitized, &text_edit.path) {
-                        return Err(EditError::InvalidMath(
-                            "text flow metadata cannot be split safely".to_owned(),
-                        ));
-                    }
-                    Some(sanitized)
+                    let replacement = source
+                        .get(old_edit.start..new_edit.end)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let source_projection = edit
+                        .source_projection
+                        .replace_edit_source_range(old_edit.clone(), replacement, None)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let mut math_tree = math.math_tree.clone();
+                    apply_math_text_tree_edit(
+                        &mut math_tree,
+                        &text_edit.path,
+                        text_edit.range.clone(),
+                        &text_edit.inserted,
+                        text_edit.source_edit.clone(),
+                        replacement,
+                        &text_edit.encoded_pieces,
+                    )?;
+                    (math_tree, source_projection)
+                } else if direct_format_text {
+                    let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
+                    let format = text_edit
+                        .format
+                        .as_ref()
+                        .ok_or(EditError::InvalidPosition)?;
+                    let replacement = source
+                        .get(old_edit.start..new_edit.end)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let source_projection = edit
+                        .source_projection
+                        .replace_edit_source_range(old_edit.clone(), replacement, None)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let mut math_tree = math.math_tree.clone();
+                    let previous_source = source_for_text_edit(
+                        &edit,
+                        &text_edit.path,
+                        text_edit.source_edit.clone(),
+                    )?;
+                    apply_math_text_format_tree_edit(
+                        &mut math_tree,
+                        &text_edit.path,
+                        format,
+                        text_edit.source_edit.clone(),
+                        replacement,
+                        previous_source,
+                    )?;
+                    (math_tree, source_projection)
+                } else if direct_split_text {
+                    let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
+                    let replacement = source
+                        .get(old_edit.start..new_edit.end)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let contents = text_edit
+                        .split_math_contents
+                        .as_deref()
+                        .ok_or(EditError::InvalidPosition)?;
+                    let source_projection = edit
+                        .source_projection
+                        .replace_edit_source_range(old_edit.clone(), replacement, None)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let mut math_tree = math.math_tree.clone();
+                    apply_math_text_split_tree_edit(
+                        &mut math_tree,
+                        &text_edit.path,
+                        text_edit.range.clone(),
+                        text_edit.source_edit.clone(),
+                        replacement,
+                        contents,
+                    )?;
+                    (math_tree, source_projection)
+                } else {
+                    let projection =
+                        caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
+                            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+                    let (content, source_projection) = projection.into_parts();
+                    let caret_math::ProjectedMath::Tree(math_tree) = content else {
+                        return Err(EditError::InvalidMath("expected inline math".to_owned()));
+                    };
+                    (math_tree, source_projection)
+                };
+                next_edit.source_projection = Arc::new(source_projection);
+                let metadata_source = if direct_text_edit || direct_format_text || direct_split_text
+                {
+                    None
                 } else {
                     let mut candidate = math.math_tree.clone();
-                    if let Some(text_edit) = &text_edit {
+                    if let Some(text_edit) = &text_edit
+                        && text_edit.format.is_none()
+                    {
                         let text = text_edit
                             .path
                             .resolve_mut(&mut candidate)
@@ -1522,62 +1866,70 @@ impl Session {
                     }
                     text_edit.as_ref().map(|_| candidate)
                 };
-                let mut metadata_preserved = preserve_math_tree_metadata_for_edit(
-                    metadata_source.as_ref().unwrap_or(&math.math_tree),
-                    &mut math_tree,
-                    &old_edit,
-                    &new_edit,
-                );
-                if metadata_preserved && split_math_text {
-                    let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-                    metadata_preserved = restore_math_text_split_metadata(
-                        &math.math_tree,
-                        &mut math_tree,
-                        &text_edit.path,
-                        &text_edit.range,
-                        &text_edit.source_edit,
-                        &path_new_edit,
-                    );
-                }
+                let metadata_preserved =
+                    if direct_text_edit || direct_format_text || direct_split_text {
+                        true
+                    } else {
+                        preserve_math_tree_metadata_for_edit(
+                            metadata_source.as_ref().unwrap_or(&math.math_tree),
+                            &mut math_tree,
+                            &old_edit,
+                            &new_edit,
+                        )
+                    };
                 if !metadata_preserved {
                     return Err(EditError::InvalidMath(
                         "editing would discard unmapped math metadata".to_owned(),
                     ));
                 }
                 if let Some((path, text_cursor)) = &text_branch {
-                    match path.rebase(
-                        &math_tree,
-                        path_old_edit.clone(),
-                        path_new_edit.clone(),
-                        old_edit.clone(),
-                        new_edit.clone(),
-                    ) {
-                        Some(rebased) => {
-                            let display = rebased
-                                .resolve(&math_tree)
-                                .ok_or(EditError::InvalidPosition)?
-                                .runs
-                                .iter()
-                                .map(|run| run.text.as_str())
-                                .collect::<String>();
-                            let snap_forward = text_edit
+                    if let Some(format) = text_edit
+                        .as_ref()
+                        .and_then(|text_edit| text_edit.format.as_ref())
+                    {
+                        let (path, anchor, cursor) =
+                            text_inline_environment::formatted_text_selection(
+                                &math_tree, path, format,
+                            )
+                            .ok_or(EditError::InvalidPosition)?;
+                        next_cursor = cursor;
+                        next_branch = MathEditBranch::Text { path, anchor };
+                    } else {
+                        match path.rebase(
+                            &math_tree,
+                            path_old_edit.clone(),
+                            path_new_edit.clone(),
+                            old_edit.clone(),
+                            new_edit.clone(),
+                        ) {
+                            Some(rebased) => {
+                                let display = rebased
+                                    .resolve(&math_tree)
+                                    .ok_or(EditError::InvalidPosition)?
+                                    .runs
+                                    .iter()
+                                    .map(|run| run.text.as_str())
+                                    .collect::<String>();
+                                let snap_forward = text_edit
+                                    .as_ref()
+                                    .is_none_or(|text_edit| text_edit.snap_forward);
+                                next_cursor =
+                                    snap_text_cursor(&display, *text_cursor, snap_forward)
+                                        .ok_or(EditError::InvalidPosition)?;
+                                next_branch = MathEditBranch::Text {
+                                    path: rebased,
+                                    anchor: next_cursor,
+                                };
+                            }
+                            None if text_edit
                                 .as_ref()
-                                .is_none_or(|text_edit| text_edit.snap_forward);
-                            next_cursor = snap_text_cursor(&display, *text_cursor, snap_forward)
-                                .ok_or(EditError::InvalidPosition)?;
-                            next_branch = MathEditBranch::Text {
-                                path: rebased,
-                                anchor: next_cursor,
-                            };
+                                .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
+                            {
+                                // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
+                                next_cursor = old_edit.start;
+                            }
+                            None => return Err(EditError::InvalidPosition),
                         }
-                        None if text_edit
-                            .as_ref()
-                            .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
-                        {
-                            // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
-                            next_cursor = old_edit.start;
-                        }
-                        None => return Err(EditError::InvalidPosition),
                     }
                 }
                 if let (Some(text_edit), MathEditBranch::Text { path, .. }) =
@@ -1594,7 +1946,188 @@ impl Session {
                         &pending_run_properties,
                     )?;
                 }
+                let (source_anchor, source_cursor) = match &next_branch {
+                    MathEditBranch::Source => (next_cursor, next_cursor),
+                    MathEditBranch::Text { path, anchor } => {
+                        let text = path.resolve(&math_tree).ok_or(EditError::InvalidPosition)?;
+                        let source_anchor = text_source_boundary(text, *anchor)
+                            .and_then(|offset| path.host_offset(offset))
+                            .ok_or(EditError::InvalidPosition)?;
+                        let source_cursor = text_source_boundary(text, next_cursor)
+                            .and_then(|offset| path.host_offset(offset))
+                            .ok_or(EditError::InvalidPosition)?;
+                        (source_anchor, source_cursor)
+                    }
+                };
                 math.math_tree = math_tree;
+                let split =
+                    split_inline_math_root(math, source_anchor, source_cursor, next_edit.source())?;
+                if let Some(split) = split {
+                    let inline_start = inline_math_slots(&paragraph)?
+                        .into_iter()
+                        .find(|(_, id)| id == math_id)
+                        .map(|(start, _)| start)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let split_focus = split.focus.clone();
+                    let split_len = split.inserted_len;
+                    let replacement = split.contents;
+                    if !replace_inline_math_with_split(&mut paragraph.inlines, math_id, replacement)
+                    {
+                        return Err(EditError::InvalidPosition);
+                    }
+                    let map = TextMap::new(&paragraph)?;
+                    let (after_selection, affinity, after_math) = match split_focus {
+                        InlineRootFocus::Text {
+                            anchor_offset,
+                            cursor_offset,
+                        } => {
+                            let anchor_offset = inline_start
+                                .checked_add(anchor_offset)
+                                .ok_or(EditError::InvalidPosition)?;
+                            let cursor_offset = inline_start
+                                .checked_add(cursor_offset)
+                                .ok_or(EditError::InvalidPosition)?;
+                            let anchor_affinity = if anchor_offset == cursor_offset {
+                                Affinity::Downstream
+                            } else if anchor_offset < cursor_offset {
+                                Affinity::Upstream
+                            } else {
+                                Affinity::Downstream
+                            };
+                            let cursor_affinity = if anchor_offset <= cursor_offset {
+                                Affinity::Downstream
+                            } else {
+                                Affinity::Upstream
+                            };
+                            let anchor = Pos {
+                                offset: anchor_offset,
+                                affinity: anchor_affinity,
+                                ..position.clone()
+                            };
+                            let cursor = Pos {
+                                offset: cursor_offset,
+                                affinity: cursor_affinity,
+                                ..position.clone()
+                            };
+                            map.validate_pos(&anchor)?;
+                            map.validate_pos(&cursor)?;
+                            (
+                                Selection {
+                                    anchor,
+                                    focus: cursor,
+                                },
+                                cursor_affinity,
+                                None,
+                            )
+                        }
+                        InlineRootFocus::Math {
+                            math_id,
+                            source,
+                            cursor,
+                            paragraph_offset,
+                        } => {
+                            let offset = inline_start
+                                .checked_add(paragraph_offset)
+                                .and_then(|start| start.checked_add(OBJECT_REPLACEMENT.len_utf8()))
+                                .ok_or(EditError::InvalidPosition)?;
+                            next_cursor = cursor;
+                            next_branch = MathEditBranch::Source;
+                            let target = MathEditTarget::Inline {
+                                paragraph_id: paragraph_id.clone(),
+                                math_id,
+                            };
+                            next_edit = MathEdit {
+                                target: target.clone(),
+                                source_projection: Arc::new(
+                                    caret_math::parse_projection(
+                                        &source,
+                                        caret_math::MathInputKind::Inline,
+                                    )
+                                    .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                                    .into_parts()
+                                    .1,
+                                ),
+                                revision: edit.revision.clone(),
+                                cursor,
+                                branch: MathEditBranch::Source,
+                            };
+                            let position = Pos {
+                                offset,
+                                affinity: Affinity::Upstream,
+                                ..position.clone()
+                            };
+                            map.validate_pos(&position)?;
+                            (
+                                Selection {
+                                    anchor: position.clone(),
+                                    focus: position,
+                                },
+                                Affinity::Upstream,
+                                Some(target),
+                            )
+                        }
+                    };
+                    let after_visual_affinity = match affinity {
+                        Affinity::Upstream => VisualAffinity::Upstream,
+                        Affinity::Downstream => VisualAffinity::Downstream,
+                    };
+                    selection_changed = after_selection != before_selection
+                        || after_visual_affinity != before_visual_affinity;
+                    position_map = Some(PositionMap::TextEdit {
+                        paragraph_id: paragraph_id.clone(),
+                        start: inline_start,
+                        end: inline_start + OBJECT_REPLACEMENT.len_utf8(),
+                        inserted_len: split_len,
+                        snap_graphemes: true,
+                        result_boundaries: map.grapheme_boundaries.clone(),
+                    });
+                    let before_states = history::paragraph_states_for_ids(
+                        &self.document,
+                        &self.paragraph_index,
+                        [paragraph_id.clone()],
+                    );
+                    self.replace_paragraph(&position, paragraph)?;
+                    self.text_map_cache.clear();
+                    let after_math_position = after_math.map(|target| {
+                        debug_assert_eq!(target, next_edit.target);
+                        MathEditPosition::with_edit_state(
+                            &next_edit,
+                            next_cursor,
+                            next_branch.clone(),
+                        )
+                    });
+                    self.selection = after_selection.clone();
+                    self.selection_visual_affinity = after_visual_affinity;
+                    let after_states = history::paragraph_states_for_ids(
+                        &self.document,
+                        &self.paragraph_index,
+                        [paragraph_id.clone()],
+                    );
+                    self.advance_history_merge_epoch();
+                    let patch = DocumentPatch::Paragraphs {
+                        before: before_states,
+                        after: after_states,
+                        merge_group: None,
+                        merge_epoch: self.history_merge_epoch,
+                    };
+                    self.record_math_history_with_pending_style(
+                        patch,
+                        (before_selection, before_visual_affinity),
+                        (after_selection, self.selection_visual_affinity),
+                        Some(before_math_position.clone()),
+                        after_math_position.clone(),
+                        self.pending_inline_style.clone(),
+                    );
+                    self.math_edit = after_math_position.map(|_| next_edit.clone());
+                    self.sync_math_edit_revision();
+                    return Ok(Effect {
+                        document_changed: true,
+                        selection_changed,
+                        changed_paragraph_id: Some(paragraph_id.clone()),
+                        position_map,
+                        ..Effect::default()
+                    });
+                }
                 let before_states = history::paragraph_states_for_ids(
                     &self.document,
                     &self.paragraph_index,
@@ -1617,20 +2150,95 @@ impl Session {
                     patch,
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
-                        edit.cursor,
-                        edit.branch.clone(),
-                    )),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
+                    Some(before_math_position.clone()),
+                    Some(MathEditPosition::with_edit_state(
+                        &next_edit,
                         next_cursor,
                         next_branch.clone(),
                     )),
                 );
             }
             MathEditTarget::Block { block_id, align } => {
-                let mut block = display_math_block_with_id(*align, &source, block_id.clone())?;
+                let original = find_block_path(&self.document.body, block_id).and_then(
+                    |(parent_ids, index)| {
+                        block_list_ref(&self.document.body, &parent_ids)
+                            .ok()?
+                            .get(index)
+                            .cloned()
+                    },
+                );
+                let direct_text_edit = text_edit.as_ref().is_some_and(|text_edit| {
+                    !text_edit.split_math_entry && text_edit.format.is_none()
+                });
+                let direct_format_text = text_edit
+                    .as_ref()
+                    .is_some_and(|text_edit| text_edit.format.is_some());
+                let direct_split_text = text_edit
+                    .as_ref()
+                    .is_some_and(|text_edit| text_edit.split_math_entry);
+                let (mut block, source_projection) =
+                    if direct_text_edit || direct_format_text || direct_split_text {
+                        let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
+                        let replacement = source
+                            .get(old_edit.start..new_edit.end)
+                            .ok_or(EditError::InvalidPosition)?;
+                        let source_projection = edit
+                            .source_projection
+                            .replace_edit_source_range(
+                                old_edit.clone(),
+                                replacement,
+                                text_edit.path.align_cell(),
+                            )
+                            .ok_or(EditError::InvalidPosition)?;
+                        let mut block = original.clone().ok_or(EditError::InvalidPosition)?;
+                        let tree = text_run_property::block_math_tree_mut(
+                            &mut block,
+                            text_edit.path.align_cell(),
+                        )
+                        .ok_or(EditError::InvalidPosition)?;
+                        if direct_split_text {
+                            let contents = text_edit
+                                .split_math_contents
+                                .as_deref()
+                                .ok_or(EditError::InvalidPosition)?;
+                            apply_math_text_split_tree_edit(
+                                tree,
+                                &text_edit.path,
+                                text_edit.range.clone(),
+                                text_edit.source_edit.clone(),
+                                replacement,
+                                contents,
+                            )?;
+                        } else if let Some(format) = &text_edit.format {
+                            let previous_source = source_for_text_edit(
+                                &edit,
+                                &text_edit.path,
+                                text_edit.source_edit.clone(),
+                            )?;
+                            apply_math_text_format_tree_edit(
+                                tree,
+                                &text_edit.path,
+                                format,
+                                text_edit.source_edit.clone(),
+                                replacement,
+                                previous_source,
+                            )?;
+                        } else {
+                            apply_math_text_tree_edit(
+                                tree,
+                                &text_edit.path,
+                                text_edit.range.clone(),
+                                &text_edit.inserted,
+                                text_edit.source_edit.clone(),
+                                replacement,
+                                &text_edit.encoded_pieces,
+                            )?;
+                        }
+                        (block, source_projection)
+                    } else {
+                        display_math_block_with_projection(*align, &source, block_id.clone())?
+                    };
+                next_edit.source_projection = Arc::new(source_projection);
                 if let Some((path, text_cursor)) = &text_branch {
                     let tree = match (&block, path.align_cell()) {
                         (Block::Equation(equation), None) => &equation.math_tree,
@@ -1641,57 +2249,62 @@ impl Session {
                             .ok_or(EditError::InvalidPosition)?,
                         _ => return Err(EditError::InvalidPosition),
                     };
-                    match path.rebase(
-                        tree,
-                        path_old_edit.clone(),
-                        path_new_edit.clone(),
-                        old_edit.clone(),
-                        new_edit.clone(),
-                    ) {
-                        Some(rebased) => {
-                            let display = rebased
-                                .resolve(tree)
-                                .ok_or(EditError::InvalidPosition)?
-                                .runs
-                                .iter()
-                                .map(|run| run.text.as_str())
-                                .collect::<String>();
-                            let text_cursor = snap_text_cursor(
-                                &display,
-                                *text_cursor,
-                                text_edit
-                                    .as_ref()
-                                    .is_none_or(|text_edit| text_edit.snap_forward),
-                            )
-                            .ok_or(EditError::InvalidPosition)?;
-                            next_branch = MathEditBranch::Text {
-                                path: rebased,
-                                anchor: text_cursor,
-                            };
-                            next_cursor = text_cursor;
+                    if let Some(format) = text_edit
+                        .as_ref()
+                        .and_then(|text_edit| text_edit.format.as_ref())
+                    {
+                        let (path, anchor, cursor) =
+                            text_inline_environment::formatted_text_selection(tree, path, format)
+                                .ok_or(EditError::InvalidPosition)?;
+                        next_cursor = cursor;
+                        next_branch = MathEditBranch::Text { path, anchor };
+                    } else {
+                        match path.rebase(
+                            tree,
+                            path_old_edit.clone(),
+                            path_new_edit.clone(),
+                            old_edit.clone(),
+                            new_edit.clone(),
+                        ) {
+                            Some(rebased) => {
+                                let display = rebased
+                                    .resolve(tree)
+                                    .ok_or(EditError::InvalidPosition)?
+                                    .runs
+                                    .iter()
+                                    .map(|run| run.text.as_str())
+                                    .collect::<String>();
+                                let text_cursor = snap_text_cursor(
+                                    &display,
+                                    *text_cursor,
+                                    text_edit
+                                        .as_ref()
+                                        .is_none_or(|text_edit| text_edit.snap_forward),
+                                )
+                                .ok_or(EditError::InvalidPosition)?;
+                                next_branch = MathEditBranch::Text {
+                                    path: rebased,
+                                    anchor: text_cursor,
+                                };
+                                next_cursor = text_cursor;
+                            }
+                            None if text_edit
+                                .as_ref()
+                                .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
+                            {
+                                // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
+                                next_cursor = old_edit.start;
+                            }
+                            None => return Err(EditError::InvalidPosition),
                         }
-                        None if text_edit
-                            .as_ref()
-                            .is_some_and(|text_edit| text_edit.removes_entire_flow) =>
-                        {
-                            // 分组边界可能让相邻 TextFlow 合并；退回确定的源码删除点，不猜新节点索引。
-                            next_cursor = old_edit.start;
-                        }
-                        None => return Err(EditError::InvalidPosition),
                     }
                 }
-                let original = find_block_path(&self.document.body, block_id).and_then(
-                    |(parent_ids, index)| {
-                        block_list_ref(&self.document.body, &parent_ids)
-                            .ok()?
-                            .get(index)
-                    },
-                );
-                if let Some(original) = original {
+                if !direct_text_edit
+                    && !direct_format_text
+                    && !direct_split_text
+                    && let Some(original) = original.as_ref()
+                {
                     let mut metadata_block = original.clone();
-                    let split_math_text = text_edit
-                        .as_ref()
-                        .is_some_and(|text_edit| text_edit.split_math_entry);
                     if let Some(text_edit) = &text_edit {
                         let tree = match (&mut metadata_block, text_edit.path.align_cell()) {
                             (Block::Equation(equation), None) => &mut equation.math_tree,
@@ -1704,68 +2317,29 @@ impl Session {
                                 .ok_or(EditError::InvalidPosition)?,
                             _ => return Err(EditError::InvalidPosition),
                         };
-                        if split_math_text {
-                            if !prepare_math_text_split_metadata(tree, &text_edit.path) {
-                                return Err(EditError::InvalidMath(
-                                    "text flow metadata cannot be split safely".to_owned(),
-                                ));
-                            }
-                        } else {
-                            let text = text_edit
-                                .path
-                                .resolve_mut(tree)
-                                .ok_or(EditError::InvalidPosition)?;
-                            validate_text_flow_edit(
-                                text,
-                                text_edit.range.clone(),
-                                !text_edit.inserted.is_empty(),
-                            )?;
-                            replace_text_flow_range(
-                                text,
-                                text_edit.range.clone(),
-                                &text_edit.inserted,
-                            )?;
-                        }
+                        let text = text_edit
+                            .path
+                            .resolve_mut(tree)
+                            .ok_or(EditError::InvalidPosition)?;
+                        validate_text_flow_edit(
+                            text,
+                            text_edit.range.clone(),
+                            !text_edit.inserted.is_empty(),
+                        )?;
+                        replace_text_flow_range(
+                            text,
+                            text_edit.range.clone(),
+                            &text_edit.inserted,
+                        )?;
                     }
-                    let mut metadata_preserved = preserve_display_math_metadata(
+                    let metadata_preserved = preserve_display_math_metadata(
                         &metadata_block,
                         &mut block,
                         &old_edit,
                         &new_edit,
+                        &edit.source_projection,
+                        &next_edit.source_projection,
                     );
-                    if metadata_preserved && split_math_text {
-                        let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
-                        let previous_tree = match (original, text_edit.path.align_cell()) {
-                            (Block::Equation(equation), None) => &equation.math_tree,
-                            (Block::Align(align), Some((row, cell))) => align
-                                .rows
-                                .get(row)
-                                .ok_or(EditError::InvalidPosition)?
-                                .cells
-                                .get(cell)
-                                .ok_or(EditError::InvalidPosition)?,
-                            _ => return Err(EditError::InvalidPosition),
-                        };
-                        let updated_tree = match (&mut block, text_edit.path.align_cell()) {
-                            (Block::Equation(equation), None) => &mut equation.math_tree,
-                            (Block::Align(align), Some((row, cell))) => &mut align
-                                .rows
-                                .get_mut(row)
-                                .ok_or(EditError::InvalidPosition)?
-                                .cells
-                                .get_mut(cell)
-                                .ok_or(EditError::InvalidPosition)?,
-                            _ => return Err(EditError::InvalidPosition),
-                        };
-                        metadata_preserved = restore_math_text_split_metadata(
-                            previous_tree,
-                            updated_tree,
-                            &text_edit.path,
-                            &text_edit.range,
-                            &text_edit.source_edit,
-                            &path_new_edit,
-                        );
-                    }
                     if !metadata_preserved {
                         return Err(EditError::InvalidMath(
                             "editing would discard unmapped math metadata".to_owned(),
@@ -1803,31 +2377,28 @@ impl Session {
                     },
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
-                        edit.cursor,
-                        edit.branch.clone(),
-                    )),
-                    Some(MathEditPosition::with_branch(
-                        edit.target.clone(),
+                    Some(before_math_position),
+                    Some(MathEditPosition::with_edit_state(
+                        &next_edit,
                         next_cursor,
                         next_branch.clone(),
                     )),
                 );
             }
         }
-        if let Some(current) = &mut self.math_edit {
-            current.source = source;
-            current.cursor = next_cursor;
-            current.branch = next_branch;
-        }
+        next_edit.cursor = next_cursor;
+        next_edit.branch = next_branch;
+        self.math_edit = Some(next_edit);
+        self.sync_math_edit_revision();
         let changed_paragraph_id = match &edit.target {
             MathEditTarget::Inline { paragraph_id, .. } => Some(paragraph_id.clone()),
             MathEditTarget::Block { .. } => None,
         };
         Ok(Effect {
             document_changed: true,
+            selection_changed,
             changed_paragraph_id,
+            position_map,
             ..Effect::default()
         })
     }
@@ -1981,7 +2552,10 @@ pub(crate) fn inline_math_slots(paragraph: &Paragraph) -> Result<Vec<(usize, Nod
     Ok(output)
 }
 
-fn find_inline_math<'a>(nodes: &'a [ParagraphContent], id: &NodeId) -> Option<&'a InlineMath> {
+pub(super) fn find_inline_math<'a>(
+    nodes: &'a [ParagraphContent],
+    id: &NodeId,
+) -> Option<&'a InlineMath> {
     nodes.iter().find_map(|node| match node {
         ParagraphContent::Math(math) if &math.id == id => Some(math),
         ParagraphContent::Environment(environment) => find_inline_math(&environment.children, id),
@@ -2062,39 +2636,50 @@ fn block_list_ref<'a>(
     block_list_ref(&environment.children, rest)
 }
 
+#[cfg(test)]
 fn display_math_block(align: bool, source: &str) -> Result<Block, EditError> {
-    display_math_block_with_id(align, source, NodeId::generate())
+    display_math_block_projection(align, source).map(|(block, _)| block)
 }
 
+fn display_math_block_projection(
+    align: bool,
+    source: &str,
+) -> Result<(Block, caret_math::MathSourceMap<'static>), EditError> {
+    display_math_block_with_projection(align, source, NodeId::generate())
+}
+
+#[cfg(test)]
 fn display_math_block_with_id(align: bool, source: &str, id: NodeId) -> Result<Block, EditError> {
+    display_math_block_with_projection(align, source, id).map(|(block, _)| block)
+}
+
+fn display_math_block_with_projection(
+    align: bool,
+    source: &str,
+    id: NodeId,
+) -> Result<(Block, caret_math::MathSourceMap<'static>), EditError> {
     if align {
         let full = format!("{ALIGN_BEGIN}{source}{ALIGN_END}");
-        let caret_math::ParsedMath::Align(parsed) =
-            caret_math::parse(&full, caret_math::MathInputKind::Align)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
-        else {
+        let projection = caret_math::parse_projection(&full, caret_math::MathInputKind::Align)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let (content, source_projection) = projection.into_parts();
+        let caret_math::ProjectedMath::Align(parsed) = content else {
             return Err(EditError::InvalidMath("expected aligned math".to_owned()));
         };
-        return Ok(Block::Align(Align { id, ..parsed }));
+        return Ok((Block::Align(Align { id, ..parsed }), source_projection));
     }
-    let caret_math::ParsedMath::Tree(math_tree) =
-        caret_math::parse(source, caret_math::MathInputKind::Equation)
-            .map_err(|error| EditError::InvalidMath(error.to_string()))?
-    else {
+    let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Equation)
+        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+    let (content, source_projection) = projection.into_parts();
+    let caret_math::ProjectedMath::Tree(math_tree) = content else {
         return Err(EditError::InvalidMath("expected equation".to_owned()));
     };
-    Ok(Block::Equation(Equation {
+    let block = Block::Equation(Equation {
         id,
         math_tree,
         extra: Default::default(),
-    }))
-}
-
-/// 对齐公式完整源码中 `aligned` 环境的内部；不是该形式时整体返回。
-fn align_body(source: &str) -> String {
-    align_source::align_body_range(source)
-        .map(|range| source[range].to_owned())
-        .unwrap_or_else(|| source.trim().to_owned())
+    });
+    Ok((block, source_projection))
 }
 
 #[cfg(test)]

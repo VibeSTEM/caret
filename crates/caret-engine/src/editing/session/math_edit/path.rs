@@ -82,10 +82,7 @@ impl MathTextFlowPath {
     }
 
     pub(super) fn resolve<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
-        let flow = resolve_content_path(&tree.root, &self.steps)?;
-        let MathContent::Text(text) = flow else {
-            return None;
-        };
+        let text = self.resolve_structurally(tree)?;
         (text
             .source_range
             .as_ref()
@@ -94,17 +91,51 @@ impl MathTextFlowPath {
         .then_some(text)
     }
 
-    pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {
-        let content = resolve_content_path_mut(&mut tree.root, &self.steps)?;
-        let MathContent::Text(text) = content else {
+    /// 按类型化树路径解析 TextFlow，不要求临时源码范围仍与旧投影一致。
+    pub(super) fn resolve_structurally<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
+        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
             return None;
         };
+        Some(text)
+    }
+
+    /// 更新解析器重建临时范围后的映射，同时保留稳定的结构路径和宿主偏移基址。
+    pub(super) fn rebind_ranges(&self, tree: &MathTree, host_base: usize) -> Option<Self> {
+        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
+            return None;
+        };
+        let range = text.source_range.as_ref()?;
+        let host_start = host_base.checked_add(range.start as usize)?;
+        let host_end = host_base.checked_add(range.end as usize)?;
+        Some(
+            Self::new(
+                self.steps.clone(),
+                (range.start, range.end),
+                self.align_cell,
+            )
+            .with_host_source_range((host_start, host_end)),
+        )
+    }
+
+    pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {
+        let text = self.resolve_structurally_mut(tree)?;
         (text
             .source_range
             .as_ref()
             .map(|range| (range.start, range.end))
             == Some(self.source_range))
         .then_some(text)
+    }
+
+    pub(super) fn resolve_structurally_mut<'a>(
+        &self,
+        tree: &'a mut MathTree,
+    ) -> Option<&'a mut TextFlow> {
+        let content = resolve_content_path_mut(&mut tree.root, &self.steps)?;
+        let MathContent::Text(text) = content else {
+            return None;
+        };
+        Some(text)
     }
 
     /// 依照同一结构路径取得新解析树中的对应文本流及其新源码范围。
@@ -401,6 +432,44 @@ fn resolve_content_path_mut<'a>(
     match target {
         PathTargetMut::Content(content) => Some(content),
         PathTargetMut::Flow(_) => None,
+    }
+}
+
+/// 返回路径末端内容所在的宿主列表与槽位，用于以同级节点替换该内容。
+pub(super) fn content_slot_mut<'a>(
+    flow: &'a mut MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<(&'a mut Vec<MathContent>, usize)> {
+    let MathTextFlowPathStep::Content(index) = steps.first()? else {
+        return None;
+    };
+    if steps.len() == 1 {
+        return Some((&mut flow.content, *index));
+    }
+    content_slot_mut_content(flow.content.get_mut(*index)?, &steps[1..])
+}
+
+fn content_slot_mut_content<'a>(
+    content: &'a mut MathContent,
+    steps: &[MathTextFlowPathStep],
+) -> Option<(&'a mut Vec<MathContent>, usize)> {
+    match content {
+        MathContent::Environment(environment) => {
+            let MathTextFlowPathStep::EnvironmentChild(index) = steps.first()? else {
+                return None;
+            };
+            if steps.len() == 1 {
+                return Some((&mut environment.children, *index));
+            }
+            content_slot_mut_content(environment.children.get_mut(*index)?, &steps[1..])
+        }
+        MathContent::Math(node) => {
+            let MathTextFlowPathStep::Operand(index) = steps.first()? else {
+                return None;
+            };
+            content_slot_mut(node.children.get_mut(*index)?, &steps[1..])
+        }
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
     }
 }
 

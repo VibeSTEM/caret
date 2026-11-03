@@ -26,7 +26,7 @@
 | --- | --- |
 | 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
 | 行内载体、语义适配层与块环境视图 | [行内载体与环境视图](document-model/inline-and-block-environments.md) |
-| Block 到 Paragraph 行内节点的当前代码链路 | [内容节点代码链路](document-model/content-code-path.md) |
+| Block、ParagraphContent、InlineEnvironment 与 TextFlow 的目标职责链路 | [内容节点代码链路](document-model/content-code-path.md) |
 | 块环境标题、编号与结构编辑 | [环境模型](document-model/document-environments.md) |
 | 位置与模型上限 | [文档位置](document-model/document-position.md) |
 | `.cdoc` 文件格式与存储边界 | [文档存储](document-model/document-storage.md) |

@@ -10,6 +10,14 @@ use super::super::{Affinity, Direction, EditError, Effect};
 use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
+use caret_doc::{InlineEnvironmentKind, MathContent};
+
+mod format_tree_edit;
+mod source_map_edit;
+mod split_tree_edit;
+pub(super) use format_tree_edit::apply_math_text_format_tree_edit;
+pub(super) use source_map_edit::{EncodedMathTextPiece, apply_math_text_tree_edit};
+pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
 
 #[derive(Debug, Clone)]
@@ -19,44 +27,72 @@ pub(super) struct MathTextEdit {
     pub(super) inserted: String,
     pub(super) source_edit: Range<usize>,
     pub(super) source_replacement_len: usize,
+    pub(super) encoded_pieces: Vec<EncodedMathTextPiece>,
     pub(super) snap_forward: bool,
     pub(super) removes_entire_flow: bool,
     pub(super) split_math_entry: bool,
+    pub(super) split_math_contents: Option<Vec<MathContent>>,
+    pub(super) format: Option<MathTextFormat>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MathTextFormat {
+    pub(super) kind: InlineEnvironmentKind,
+    pub(super) enabled: bool,
+    pub(super) selected_source_start: usize,
+    pub(super) selected_source_len: usize,
+    pub(super) selected_text: String,
+    pub(super) display_range: Range<usize>,
+    pub(super) selection_reversed: bool,
 }
 
 pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
+    text_source_boundary_with_affinity(text, offset, Affinity::Downstream)
+}
+
+fn text_source_boundary_with_affinity(
+    text: &caret_doc::TextFlow,
+    offset: usize,
+    affinity: Affinity,
+) -> Option<usize> {
     let text_len = text.runs.iter().map(|run| run.text.len()).sum::<usize>();
     if offset > text_len {
         return None;
     }
-    text.source_map.iter().find_map(|entry| {
+    let mut upstream = None;
+    let mut downstream = None;
+    for entry in &text.source_map {
         let text_start = entry.text_start as usize;
         let text_end = entry.text_end as usize;
         let source_start = entry.source_range.start as usize;
         let source_end = entry.source_range.end as usize;
         if offset == text_start {
-            Some(source_start)
-        } else if offset == text_end {
-            Some(source_end)
+            downstream = Some(source_start);
+        }
+        if offset == text_end {
+            upstream = Some(source_end);
         } else if text_start < offset
             && offset < text_end
             && text_end - text_start == source_end - source_start
         {
-            Some(source_start + offset - text_start)
-        } else {
-            None
+            return Some(source_start + offset - text_start);
         }
-    })
+    }
+    match affinity {
+        Affinity::Upstream => upstream.or(downstream),
+        Affinity::Downstream => downstream.or(upstream),
+    }
 }
 
-fn text_source_range(text: &caret_doc::TextFlow, range: Range<usize>) -> Option<Range<usize>> {
+pub(super) fn text_source_range(
+    text: &caret_doc::TextFlow,
+    range: Range<usize>,
+) -> Option<Range<usize>> {
     if range.start >= range.end {
         return None;
     }
-    let source_start = text_source_boundary(text, range.start)?;
-    let source_end = text_source_boundary(text, range.end)?;
     let mut mapped = range.start;
-    let mut previous_source_end = None;
+    let mut source_range = None;
     for entry in &text.source_map {
         let text_start = entry.text_start as usize;
         let text_end = entry.text_end as usize;
@@ -79,23 +115,26 @@ fn text_source_range(text: &caret_doc::TextFlow, range: Range<usize>) -> Option<
         } else {
             source_start
         };
-        if previous_source_end.is_some_and(|end| end != mapped_source_start) {
+        if source_range
+            .as_ref()
+            .is_some_and(|previous: &Range<usize>| previous.end != mapped_source_start)
+        {
             return None;
         }
-        previous_source_end = Some(if linear {
+        let mapped_source_end = if linear {
             source_start + overlap_end - text_start
         } else {
             source_end
-        });
+        };
+        match &mut source_range {
+            Some(current) => current.end = mapped_source_end,
+            None => source_range = Some(mapped_source_start..mapped_source_end),
+        }
         mapped = overlap_end;
     }
-    let exact_source_start = text_source_boundary(text, range.start)?;
-    let exact_source_end = text_source_boundary(text, range.end)?;
-    (mapped == range.end
-        && source_start == exact_source_start
-        && source_end == exact_source_end
-        && exact_source_start < exact_source_end)
-        .then_some(exact_source_start..exact_source_end)
+    (mapped == range.end)
+        .then_some(source_range?)
+        .filter(|source_range| source_range.start < source_range.end)
 }
 
 pub(super) fn is_grapheme_boundary(text: &str, offset: usize) -> bool {
@@ -153,8 +192,13 @@ impl Session {
         let body = caret_math::input_body_range(initial_source, caret_math::MathInputKind::Inline)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         let initial_source = initial_source.get(body).ok_or(EditError::InvalidPosition)?;
-        caret_math::parse(initial_source, caret_math::MathInputKind::Inline)
-            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let split_math_contents =
+            match caret_math::parse(initial_source, caret_math::MathInputKind::Inline)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            {
+                caret_math::ParsedMath::Tree(tree) => tree.root.content,
+                caret_math::ParsedMath::Align(_) => return Err(EditError::InvalidPosition),
+            };
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let MathEditBranch::Text { path, anchor } = &edit.branch else {
             return Err(EditError::InvalidPosition);
@@ -196,7 +240,7 @@ impl Session {
             .start
             .checked_add(1 + initial_source.len())
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         source.replace_range(source_edit.clone(), &replacement);
         self.write_math_source_with_metadata(
             source,
@@ -210,9 +254,12 @@ impl Session {
                 inserted: String::new(),
                 source_edit: local_source_edit,
                 source_replacement_len: replacement.len(),
+                encoded_pieces: Vec::new(),
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: true,
+                split_math_contents: Some(split_math_contents),
+                format: None,
             }),
         )
     }
@@ -263,8 +310,25 @@ impl Session {
                     .map(|end| start..end)
             })
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
-        let encoded = encode_math_text(inserted);
+        let encoded_len = encoded_math_text_len(inserted);
+        let projected_len = edit
+            .source_projection
+            .source()
+            .len()
+            .checked_sub(source_range.len())
+            .and_then(|len| len.checked_add(encoded_len))
+            .ok_or(EditError::InvalidPosition)?;
+        if projected_len > caret_math::MAX_MATH_SOURCE_BYTES {
+            return Err(EditError::InvalidMath(
+                caret_math::MathParseError::InputTooLong {
+                    len: projected_len,
+                    max: caret_math::MAX_MATH_SOURCE_BYTES,
+                }
+                .to_string(),
+            ));
+        }
+        let mut source = edit.source().to_owned();
+        let (encoded, encoded_pieces) = encode_math_text_with_pieces(inserted);
         source.replace_range(source_range.clone(), &encoded);
         let next_cursor = range.start + inserted.len();
         self.write_math_source_with_metadata(
@@ -279,9 +343,12 @@ impl Session {
                 inserted: inserted.to_owned(),
                 source_edit: local_source_range,
                 source_replacement_len: encoded.len(),
+                encoded_pieces,
                 snap_forward: true,
                 removes_entire_flow,
                 split_math_entry: false,
+                split_math_contents: None,
+                format: None,
             }),
         )
     }
@@ -323,7 +390,7 @@ impl Session {
                     .map(|end| start..end)
             })
             .ok_or(EditError::InvalidPosition)?;
-        let mut source = edit.source.clone();
+        let mut source = edit.source().to_owned();
         source.replace_range(source_range.clone(), "");
         self.write_math_source_with_metadata(
             source,
@@ -340,17 +407,23 @@ impl Session {
                 inserted: String::new(),
                 source_edit: local_source_range,
                 source_replacement_len: 0,
+                encoded_pieces: Vec::new(),
                 snap_forward: false,
                 removes_entire_flow: range.start == 0 && range.end == display.len(),
                 split_math_entry: false,
+                split_math_contents: None,
+                format: None,
             }),
         )
     }
 }
 
-fn encode_math_text(text: &str) -> String {
+fn encode_math_text_with_pieces(text: &str) -> (String, Vec<EncodedMathTextPiece>) {
     let mut encoded = String::with_capacity(text.len());
+    let mut pieces = Vec::with_capacity(text.chars().count());
+    let mut display_offset = 0;
     for character in text.chars() {
+        let source_start = encoded.len();
         match character {
             '\\' => encoded.push_str(r"\textchar{5C}"),
             '~' => encoded.push_str(r"\textchar{7E}"),
@@ -365,6 +438,33 @@ fn encode_math_text(text: &str) -> String {
             }
             _ => encoded.push(character),
         }
+        let display_end = display_offset + character.len_utf8();
+        pieces.push(EncodedMathTextPiece {
+            display_range: display_offset..display_end,
+            source_range: source_start..encoded.len(),
+        });
+        display_offset = display_end;
     }
-    encoded
+    (encoded, pieces)
+}
+
+fn encoded_math_text_len(text: &str) -> usize {
+    text.chars()
+        .map(|character| match character {
+            '\\' => r"\textchar{5C}".len(),
+            '~' => r"\textchar{7E}".len(),
+            '^' => r"\textchar{5E}".len(),
+            character if character.is_whitespace() => {
+                let mut digits = 1;
+                let mut codepoint = character as u32;
+                while codepoint >= 16 {
+                    codepoint /= 16;
+                    digits += 1;
+                }
+                r"\textchar{".len() + digits + 1
+            }
+            '{' | '}' | '%' | '#' | '$' | '&' | '_' => 2,
+            character => character.len_utf8(),
+        })
+        .sum()
 }

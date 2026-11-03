@@ -27,6 +27,9 @@ impl Session {
         font_families: Vec<String>,
         font_targets: Vec<(String, caret_doc::DocumentFontTarget)>,
     ) -> Result<Effect, EditError> {
+        if self.ensure_math_edit_revision_current().is_err() {
+            return self.run(command);
+        }
         let accepts_candidate = command == Command::AcceptCommandLine
             || matches!(&command, Command::TypeCommandLine(text) if text == "\\");
         let opens_font_picker = self.command_line.as_ref().is_some_and(|line| {
@@ -65,7 +68,7 @@ impl Session {
             return Ok(Effect::default());
         }
 
-        self.run_command_line(command)
+        self.run(command)
     }
 
     /// 将输入法预编辑和提交文本路由到字体族查询，不触碰正文会话内容。

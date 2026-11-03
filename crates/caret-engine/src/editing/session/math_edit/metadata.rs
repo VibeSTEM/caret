@@ -6,12 +6,15 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use caret_doc::{Align, Block, MathContent, MathFlow, MathNode, MathTree};
+use caret_math::MathSourceMap;
 
 pub(super) fn preserve_display_math_metadata(
     original: &Block,
     updated: &mut Block,
     old_edit: &std::ops::Range<usize>,
     new_edit: &std::ops::Range<usize>,
+    previous_source: &MathSourceMap<'_>,
+    updated_source: &MathSourceMap<'_>,
 ) -> bool {
     match (original, updated) {
         (Block::Equation(original), Block::Equation(updated)) => {
@@ -24,17 +27,20 @@ pub(super) fn preserve_display_math_metadata(
             )
         }
         (Block::Align(original), Block::Align(updated)) => {
-            let Some(old_body) = super::align_source::align_body_range(&original.source) else {
+            let Some(old_full_edit) = edit_range_in_source(previous_source, old_edit) else {
                 return false;
             };
-            let Some(new_body) = super::align_source::align_body_range(&updated.source) else {
+            let Some(new_full_edit) = edit_range_in_source(updated_source, new_edit) else {
                 return false;
             };
-            let old_body_start = old_body.start;
-            let new_body_start = new_body.start;
-            let old_full_edit = old_edit.start + old_body_start..old_edit.end + old_body_start;
-            let new_full_edit = new_edit.start + new_body_start..new_edit.end + new_body_start;
-            preserve_align_metadata(original, updated, &old_full_edit, &new_full_edit)
+            preserve_align_metadata(
+                original,
+                updated,
+                &old_full_edit,
+                &new_full_edit,
+                previous_source,
+                updated_source,
+            )
         }
         _ => false,
     }
@@ -46,37 +52,28 @@ pub(super) fn preserve_align_metadata(
     updated: &mut Align,
     old_edit: &std::ops::Range<usize>,
     new_edit: &std::ops::Range<usize>,
+    previous_source: &MathSourceMap<'_>,
+    updated_source: &MathSourceMap<'_>,
 ) -> bool {
     updated.extra.clone_from(&previous.extra);
-    let Some(mut previous_cells) = align_cell_source_ranges(previous) else {
+    let Some(mut previous_cells) = align_cell_source_ranges(previous, previous_source) else {
         return false;
     };
-    let Some(mut updated_cells) = align_cell_source_ranges(updated) else {
+    let Some(mut updated_cells) = align_cell_source_ranges(updated, updated_source) else {
         return false;
     };
-    let Some(previous_body_start) =
-        super::align_source::align_body_range(&previous.source).map(|range| range.start)
-    else {
+    let previous_base = previous_source.edit_range().start;
+    let updated_base = updated_source.edit_range().start;
+    if !shift_cell_ranges(&mut previous_cells, previous_base)
+        || !shift_cell_ranges(&mut updated_cells, updated_base)
+    {
         return false;
-    };
-    let Some(updated_body_start) =
-        super::align_source::align_body_range(&updated.source).map(|range| range.start)
-    else {
-        return false;
-    };
-    for range in previous_cells.iter_mut().flatten() {
-        range.start -= previous_body_start;
-        range.end -= previous_body_start;
-    }
-    for range in updated_cells.iter_mut().flatten() {
-        range.start -= updated_body_start;
-        range.end -= updated_body_start;
     }
     let (Some(old_start), Some(old_end), Some(new_start), Some(new_end)) = (
-        old_edit.start.checked_sub(previous_body_start),
-        old_edit.end.checked_sub(previous_body_start),
-        new_edit.start.checked_sub(updated_body_start),
-        new_edit.end.checked_sub(updated_body_start),
+        old_edit.start.checked_sub(previous_base),
+        old_edit.end.checked_sub(previous_base),
+        new_edit.start.checked_sub(updated_base),
+        new_edit.end.checked_sub(updated_base),
     ) else {
         return false;
     };
@@ -171,12 +168,20 @@ pub(super) fn preserve_align_metadata(
                 continue;
             };
             while let Some((old_row, old_cell)) = candidates.pop_front() {
-                if previous.rows[old_row].cells[old_cell].source == cell.source
+                let old_source = previous_source
+                    .edit_source()
+                    .get(previous_cells[old_row][old_cell].clone());
+                let new_source = updated_source
+                    .edit_source()
+                    .get(updated_cells[row_index][cell_index].clone());
+                if old_source.is_some()
+                    && old_source == new_source
                     && matched_cells.insert((old_row, old_cell))
                 {
                     let old_cell_range = &previous_cells[old_row][old_cell];
                     let old_local_edit = old_cell_range.end..old_cell_range.end;
-                    let new_local_edit = cell.source.len()..cell.source.len();
+                    let new_local_edit = updated_cells[row_index][cell_index].len()
+                        ..updated_cells[row_index][cell_index].len();
                     metadata_preserved &= preserve_math_tree_metadata_for_edit(
                         &previous.rows[old_row].cells[old_cell],
                         cell,
@@ -197,16 +202,8 @@ pub(super) fn preserve_align_metadata(
         if !matched_cells.contains(&(old_row, old_cell)) {
             let old_cell_range = &previous_cells[old_row][old_cell];
             let new_cell_range = &updated_cells[new_row][new_cell];
-            let old_local_edit = local_edit_range(
-                &old_edit,
-                old_cell_range,
-                previous.rows[old_row].cells[old_cell].source.len(),
-            );
-            let new_local_edit = local_edit_range(
-                &new_edit,
-                new_cell_range,
-                updated.rows[new_row].cells[new_cell].source.len(),
-            );
+            let old_local_edit = local_edit_range(&old_edit, old_cell_range, old_cell_range.len());
+            let new_local_edit = local_edit_range(&new_edit, new_cell_range, new_cell_range.len());
             let preserved = preserve_math_tree_metadata_for_edit(
                 &previous.rows[old_row].cells[old_cell],
                 &mut updated.rows[new_row].cells[new_cell],
@@ -230,8 +227,52 @@ pub(super) fn preserve_align_metadata(
 }
 
 /// 按树内单元格源码的文档顺序，在 Align 原始源码中定位其字节范围。
-pub(super) fn align_cell_source_ranges(align: &Align) -> Option<Vec<Vec<std::ops::Range<usize>>>> {
-    super::align_source::cell_source_ranges(align)
+pub(super) fn align_cell_source_ranges(
+    align: &Align,
+    source: &MathSourceMap<'_>,
+) -> Option<Vec<Vec<std::ops::Range<usize>>>> {
+    let source_map = source.align()?;
+    if align.rows.len() != source_map.cell_navigation_ranges().len() {
+        return None;
+    }
+    align
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            if row.cells.len() != source_map.cell_navigation_ranges()[row_index].len() {
+                return None;
+            }
+            (0..row.cells.len())
+                .map(|cell_index| source_map.cell_range(row_index, cell_index))
+                .collect()
+        })
+        .collect()
+}
+
+fn shift_cell_ranges(cells: &mut [Vec<std::ops::Range<usize>>], base: usize) -> bool {
+    cells.iter_mut().flatten().all(|range| {
+        let (Some(start), Some(end)) = (range.start.checked_sub(base), range.end.checked_sub(base))
+        else {
+            return false;
+        };
+        range.start = start;
+        range.end = end;
+        true
+    })
+}
+
+fn edit_range_in_source(
+    source: &MathSourceMap<'_>,
+    edit: &std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    if edit.start > edit.end || edit.end > source.edit_source().len() {
+        return None;
+    }
+    Some(
+        source.edit_range().start.checked_add(edit.start)?
+            ..source.edit_range().start.checked_add(edit.end)?,
+    )
 }
 
 fn align_row_source_ranges(cells: &[Vec<std::ops::Range<usize>>]) -> Vec<std::ops::Range<usize>> {
@@ -344,8 +385,10 @@ fn map_changed_rows(
 /// 通过源码范围匹配并恢复节点元数据；存在未匹配的未知字段时返回 `false`。
 #[cfg(test)]
 pub(super) fn preserve_math_tree_metadata(previous: &MathTree, updated: &mut MathTree) -> bool {
+    let previous_source = caret_math::serialize_tree(previous);
+    let updated_source = caret_math::serialize_tree(updated);
     let (prefix_end, previous_tail, updated_tail) =
-        unchanged_source_boundaries(&previous.source, &updated.source);
+        unchanged_source_boundaries(&previous_source, &updated_source);
     preserve_math_tree_metadata_for_edit(
         previous,
         updated,

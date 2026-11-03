@@ -14,7 +14,7 @@ pub const CURRENT_THEME_FORMAT_VERSION: u32 = 1;
 const MAX_MEDIA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_MEDIA_BASE64_BYTES: usize = MAX_MEDIA_BYTES.div_ceil(3) * 4;
 
-// 公式 schema 可解码为安全预览；完整正文布局与绘制路径由 044 接入前保持只读。
+// 数学内容的可编辑性由必需能力声明和对应布局能力共同决定。
 const KNOWN_FEATURES: &[&str] = &[
     "caret.env.bold",
     "caret.env.explicit-format-state",
@@ -26,7 +26,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.font.family-preferences",
     "caret.paragraph.layout-settings",
     "caret.paragraph.content-flow.v1",
-    "caret.math.text-flow-source-map.v1",
+    "caret.math.content-flow.v2",
     "caret.text.default-font-size",
     "caret.text.language-tags",
     "caret.text.underline",
@@ -42,7 +42,7 @@ fn requires_explicit_feature_declaration(feature: &str) -> bool {
             | "caret.math.equation"
             | "caret.math.align"
             | "caret.math.syntax.v1"
-            | "caret.math.text-flow-source-map.v1"
+            | "caret.math.content-flow.v2"
     )
 }
 
@@ -316,6 +316,17 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         return Err(DocumentError::UnsupportedDocumentVersion(version));
     }
     let features = parse_features(object.get("requiredFeatures"))?;
+    validate_current_math_encoding(&raw)?;
+    if features.iter().any(|feature| {
+        matches!(
+            feature.as_str(),
+            "caret.math.content-flow.v1" | "caret.math.text-flow-source-map.v1"
+        )
+    }) {
+        return Err(DocumentError::InvalidDocument(
+            "retired math storage capability is not supported".to_owned(),
+        ));
+    }
     let mut file: CdocFile = serde_json::from_value(raw)
         .map_err(|error| DocumentError::InvalidDocument(error.to_string()))?;
     if file.format != "caret" {
@@ -336,6 +347,11 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
         if requires_explicit_feature_declaration(&feature)
             && !declared_features.contains(feature.as_str())
         {
+            if feature.starts_with("caret.math.") {
+                return Err(DocumentError::InvalidDocument(format!(
+                    "required math capability is missing: {feature}"
+                )));
+            }
             reasons.push(PreviewReason::MissingRequiredFeature(feature.clone()));
         } else if !KNOWN_FEATURES.contains(&feature.as_str())
             && !declared_features.contains(feature.as_str())
@@ -365,6 +381,230 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
             reasons,
         }))
     }
+}
+
+fn validate_current_math_encoding(raw: &Value) -> Result<(), DocumentError> {
+    let Some(document) = raw.get("document").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    if let Some(body) = document.get("body").and_then(Value::as_array) {
+        for block in body {
+            inspect_block_math_encoding(block)?;
+        }
+    }
+    Ok(())
+}
+
+fn inspect_block_math_encoding(block: &Value) -> Result<(), DocumentError> {
+    let Some(object) = block.as_object() else {
+        return Ok(());
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("equation") => inspect_math_tree_encoding(object.get("mathTree")),
+        Some("align") => {
+            let contains_future_math_schema = object
+                .get("rows")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row.get("cells").and_then(Value::as_array))
+                .flatten()
+                .any(|cell| {
+                    cell.get("schemaVersion")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|version| {
+                            version > crate::model::MATH_TREE_SCHEMA_VERSION as u64
+                        })
+                });
+            if object.contains_key("source") && !contains_future_math_schema {
+                return Err(retired_math_field("align.source"));
+            }
+            if let Some(rows) = object.get("rows").and_then(Value::as_array) {
+                for cell in rows
+                    .iter()
+                    .filter_map(|row| row.get("cells").and_then(Value::as_array))
+                    .flatten()
+                {
+                    inspect_math_tree_encoding(Some(cell))?;
+                }
+            }
+            Ok(())
+        }
+        Some("paragraph") => inspect_paragraph_items(object.get("inlines")),
+        Some("environment")
+            if object.get("scope").and_then(Value::as_str) == Some("block")
+                && matches!(
+                    object.get("kind").and_then(Value::as_str),
+                    Some("section" | "custom")
+                ) =>
+        {
+            if let Some(children) = object.get("children").and_then(Value::as_array) {
+                for child in children {
+                    inspect_block_math_encoding(child)?;
+                }
+            }
+            if let Some(title) = object.get("title") {
+                inspect_paragraph_items(title.get("inlines"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn inspect_paragraph_items(items: Option<&Value>) -> Result<(), DocumentError> {
+    let Some(items) = items.and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        match object.get("type").and_then(Value::as_str) {
+            Some("inlineMath") => inspect_math_tree_encoding(object.get("mathTree"))?,
+            Some("text") => reject_legacy_text_node(object)?,
+            Some("run") => return Err(retired_math_field("legacy inline run node")),
+            Some("environment") if is_known_inline_environment(object) => {
+                inspect_paragraph_items(object.get("children"))?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn inspect_math_tree_encoding(value: Option<&Value>) -> Result<(), DocumentError> {
+    let Some(tree) = value.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let version = tree.get("schemaVersion").and_then(Value::as_u64);
+    if version.is_some_and(|version| version < crate::model::MATH_TREE_SCHEMA_VERSION as u64) {
+        return Err(DocumentError::InvalidDocument(
+            "retired math tree schema is not supported".to_owned(),
+        ));
+    }
+    if version.is_none_or(|version| version <= crate::model::MATH_TREE_SCHEMA_VERSION as u64)
+        && tree.contains_key("source")
+    {
+        return Err(retired_math_field("mathTree.source"));
+    }
+    if version.is_some_and(|version| version > crate::model::MATH_TREE_SCHEMA_VERSION as u64) {
+        return Ok(());
+    }
+    inspect_math_flow_encoding(tree.get("root"))
+}
+
+fn inspect_math_flow_encoding(value: Option<&Value>) -> Result<(), DocumentError> {
+    let Some(flow) = value.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    if flow.contains_key("sourceRange") {
+        return Err(retired_math_field("MathFlow.sourceRange"));
+    }
+    if let Some(items) = flow.get("content").and_then(Value::as_array) {
+        for item in items {
+            let Some(object) = item.as_object() else {
+                continue;
+            };
+            match object.get("type").and_then(Value::as_str) {
+                Some("math") => {
+                    if object.contains_key("sourceRange") {
+                        return Err(retired_math_field("MathNode.sourceRange"));
+                    }
+                    if let Some(children) = object.get("children").and_then(Value::as_array) {
+                        for child in children {
+                            inspect_math_flow_encoding(Some(child))?;
+                        }
+                    }
+                }
+                Some("text") => {
+                    reject_legacy_text_node(object)?;
+                    inspect_text_flow_encoding(object)?;
+                }
+                Some("run") => return Err(retired_math_field("legacy inline run node")),
+                Some("environment") if is_known_inline_environment(object) => {
+                    if object.contains_key("sourceRange") {
+                        return Err(retired_math_field("inline environment sourceRange"));
+                    }
+                    if let Some(children) = object.get("children").and_then(Value::as_array) {
+                        for child in children {
+                            inspect_math_content_encoding(child)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("math") => {
+            if object.contains_key("sourceRange") {
+                return Err(retired_math_field("MathNode.sourceRange"));
+            }
+            if let Some(children) = object.get("children").and_then(Value::as_array) {
+                for child in children {
+                    inspect_math_flow_encoding(Some(child))?;
+                }
+            }
+            Ok(())
+        }
+        Some("text") => {
+            reject_legacy_text_node(object)?;
+            inspect_text_flow_encoding(object)
+        }
+        Some("run") => Err(retired_math_field("legacy inline run node")),
+        Some("environment") if is_known_inline_environment(object) => {
+            if object.contains_key("sourceRange") {
+                return Err(retired_math_field("inline environment sourceRange"));
+            }
+            if let Some(children) = object.get("children").and_then(Value::as_array) {
+                for child in children {
+                    inspect_math_content_encoding(child)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn is_known_inline_environment(object: &serde_json::Map<String, Value>) -> bool {
+    object.get("scope").and_then(Value::as_str) == Some("inline")
+        && object
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(crate::model::InlineEnvironmentKind::from_storage_name)
+            .is_some()
+}
+
+fn inspect_text_flow_encoding(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), DocumentError> {
+    if object.contains_key("sourceRange") {
+        return Err(retired_math_field("TextFlow.sourceRange"));
+    }
+    if object.contains_key("sourceMap") {
+        return Err(retired_math_field("TextFlow.sourceMap"));
+    }
+    Ok(())
+}
+
+fn reject_legacy_text_node(object: &serde_json::Map<String, Value>) -> Result<(), DocumentError> {
+    if object.contains_key("text") {
+        return Err(retired_math_field("legacy string TextContent"));
+    }
+    Ok(())
+}
+
+fn retired_math_field(name: &str) -> DocumentError {
+    DocumentError::InvalidDocument(format!("retired math field is not supported: {name}"))
 }
 
 fn parse_features(raw: Option<&Value>) -> Result<Vec<String>, DocumentError> {
