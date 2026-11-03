@@ -47,28 +47,41 @@ pub(super) struct MathTextFormat {
 }
 
 pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
+    text_source_boundary_with_affinity(text, offset, Affinity::Downstream)
+}
+
+fn text_source_boundary_with_affinity(
+    text: &caret_doc::TextFlow,
+    offset: usize,
+    affinity: Affinity,
+) -> Option<usize> {
     let text_len = text.runs.iter().map(|run| run.text.len()).sum::<usize>();
     if offset > text_len {
         return None;
     }
-    text.source_map.iter().find_map(|entry| {
+    let mut upstream = None;
+    let mut downstream = None;
+    for entry in &text.source_map {
         let text_start = entry.text_start as usize;
         let text_end = entry.text_end as usize;
         let source_start = entry.source_range.start as usize;
         let source_end = entry.source_range.end as usize;
         if offset == text_start {
-            Some(source_start)
-        } else if offset == text_end {
-            Some(source_end)
+            downstream = Some(source_start);
+        }
+        if offset == text_end {
+            upstream = Some(source_end);
         } else if text_start < offset
             && offset < text_end
             && text_end - text_start == source_end - source_start
         {
-            Some(source_start + offset - text_start)
-        } else {
-            None
+            return Some(source_start + offset - text_start);
         }
-    })
+    }
+    match affinity {
+        Affinity::Upstream => upstream.or(downstream),
+        Affinity::Downstream => downstream.or(upstream),
+    }
 }
 
 pub(super) fn text_source_range(
@@ -78,10 +91,8 @@ pub(super) fn text_source_range(
     if range.start >= range.end {
         return None;
     }
-    let source_start = text_source_boundary(text, range.start)?;
-    let source_end = text_source_boundary(text, range.end)?;
     let mut mapped = range.start;
-    let mut previous_source_end = None;
+    let mut source_range = None;
     for entry in &text.source_map {
         let text_start = entry.text_start as usize;
         let text_end = entry.text_end as usize;
@@ -104,23 +115,26 @@ pub(super) fn text_source_range(
         } else {
             source_start
         };
-        if previous_source_end.is_some_and(|end| end != mapped_source_start) {
+        if source_range
+            .as_ref()
+            .is_some_and(|previous: &Range<usize>| previous.end != mapped_source_start)
+        {
             return None;
         }
-        previous_source_end = Some(if linear {
+        let mapped_source_end = if linear {
             source_start + overlap_end - text_start
         } else {
             source_end
-        });
+        };
+        match &mut source_range {
+            Some(current) => current.end = mapped_source_end,
+            None => source_range = Some(mapped_source_start..mapped_source_end),
+        }
         mapped = overlap_end;
     }
-    let exact_source_start = text_source_boundary(text, range.start)?;
-    let exact_source_end = text_source_boundary(text, range.end)?;
-    (mapped == range.end
-        && source_start == exact_source_start
-        && source_end == exact_source_end
-        && exact_source_start < exact_source_end)
-        .then_some(exact_source_start..exact_source_end)
+    (mapped == range.end)
+        .then_some(source_range?)
+        .filter(|source_range| source_range.start < source_range.end)
 }
 
 pub(super) fn is_grapheme_boundary(text: &str, offset: usize) -> bool {

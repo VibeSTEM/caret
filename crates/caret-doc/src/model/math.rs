@@ -22,9 +22,6 @@ pub const MAX_MATH_TREE_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct MathTree {
     pub schema_version: u16,
-    /// 源码编辑期间的临时投影，不参与 `.cdoc` 编码。
-    #[serde(skip)]
-    pub source: String,
     pub root: MathFlow,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -453,9 +450,6 @@ pub struct Equation {
 #[serde(rename_all = "camelCase")]
 pub struct Align {
     pub id: NodeId,
-    /// 源码编辑期间的临时投影，不参与 `.cdoc` 编码。
-    #[serde(skip)]
-    pub source: String,
     pub rows: Vec<MathAlignRow>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,

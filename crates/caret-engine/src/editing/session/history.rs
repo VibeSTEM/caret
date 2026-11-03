@@ -178,6 +178,7 @@ pub(super) struct SessionHistoryState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MathEditPosition {
     pub(super) target: MathEditTarget,
+    pub(super) projection_identity: usize,
     pub(super) cursor: usize,
     pub(super) branch: MathEditBranch,
     pub(super) source_projection: Arc<caret_math::MathSourceMap<'static>>,
@@ -185,12 +186,19 @@ pub(super) struct MathEditPosition {
 
 impl MathEditPosition {
     pub(super) fn from_edit(edit: &MathEdit) -> Self {
-        Self::with_edit_state(edit, edit.cursor, edit.branch.clone())
+        Self {
+            target: edit.target.clone(),
+            projection_identity: Arc::as_ptr(&edit.source_projection) as usize,
+            cursor: edit.cursor,
+            branch: edit.branch.clone(),
+            source_projection: Arc::clone(&edit.source_projection),
+        }
     }
 
     pub(super) fn with_edit_state(edit: &MathEdit, cursor: usize, branch: MathEditBranch) -> Self {
         Self {
             target: edit.target.clone(),
+            projection_identity: Arc::as_ptr(&edit.source_projection) as usize,
             cursor,
             branch,
             source_projection: Arc::clone(&edit.source_projection),
@@ -1262,7 +1270,6 @@ fn equation_estimated_bytes(equation: &Equation) -> usize {
 fn align_estimated_bytes(align: &Align) -> usize {
     size_of_val(align)
         + node_id_bytes(&align.id)
-        + align.source.capacity()
         + align.rows.capacity() * size_of::<caret_doc::MathAlignRow>()
         + align
             .rows
@@ -1284,7 +1291,6 @@ fn align_estimated_bytes(align: &Align) -> usize {
 
 fn math_tree_estimated_bytes(tree: &MathTree) -> usize {
     size_of::<MathTree>()
-        + tree.source.capacity()
         + math_flow_estimated_bytes(&tree.root)
         + string_value_map_bytes(&tree.extra)
 }
@@ -1631,6 +1637,7 @@ mod tests {
                 paragraph_id: NodeId::generate(),
                 math_id: NodeId::generate(),
             },
+            projection_identity: Arc::as_ptr(&projection) as usize,
             cursor: 0,
             branch: MathEditBranch::Source,
             source_projection: Arc::clone(&projection),

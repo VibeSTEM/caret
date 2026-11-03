@@ -99,6 +99,23 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_split_tree_edit(
         shift_content_source_ranges(&mut content, inserted_source_start)?;
         contents.push(content);
     }
+    if inserted_contents.is_empty() && replacement == "$$" {
+        let mut placeholder = MathContent::Math(MathNode {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Placeholder,
+            text: None,
+            attributes: Default::default(),
+            source_range: Some(MathSourceRange {
+                start: 0,
+                end: 0,
+                extra: Default::default(),
+            }),
+            children: Vec::new(),
+            extra: Default::default(),
+        });
+        shift_content_source_ranges(&mut placeholder, inserted_source_start)?;
+        contents.push(placeholder);
+    }
     if has_right {
         contents.push(MathContent::Text(text_flow_fragment(
             &original,
@@ -118,7 +135,6 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_split_tree_edit(
     let (parent, index) =
         content_slot_mut(&mut tree.root, path.steps()).ok_or(EditError::InvalidPosition)?;
     parent.splice(index..index + 1, contents);
-    tree.source.replace_range(source_edit, replacement);
     Ok(())
 }
 

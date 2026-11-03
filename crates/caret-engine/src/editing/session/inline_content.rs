@@ -266,7 +266,7 @@ impl Session {
         );
         let math =
             find_inline_math(&paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
-        let root_split = split_inline_math_root(math, root_cursor, root_cursor)?;
+        let root_split = split_inline_math_root(math, root_cursor, root_cursor, source)?;
         if let Some(split) = &root_split
             && !replace_inline_math_with_split(
                 &mut paragraph.inlines,
@@ -393,6 +393,7 @@ impl Session {
         self.text_map_cache.clear();
         self.selection = next_selection;
         self.math_edit = next_math_edit;
+        self.sync_math_edit_revision();
         self.selection_visual_affinity = next_visual_affinity;
         Ok(Effect {
             document_changed: true,

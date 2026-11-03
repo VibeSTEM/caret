@@ -142,20 +142,21 @@ impl Session {
     }
 
     pub(super) fn ensure_math_edit_revision_current(&self) -> Result<(), EditError> {
-        if self
-            .math_edit
-            .as_ref()
-            .is_some_and(|edit| edit.revision != self.current_math_edit_revision())
-        {
+        if self.math_edit.as_ref().is_some_and(|edit| {
+            edit.revision.session_id != self.session_id
+                || edit.revision.document_generation != self.document_generation
+        }) {
             return Err(EditError::InvalidPosition);
         }
         Ok(())
     }
 
     fn sync_math_edit_revision(&mut self) {
-        let revision = self.current_math_edit_revision();
         if let Some(edit) = &mut self.math_edit {
-            edit.revision = revision;
+            edit.revision = math_edit::MathEditRevision {
+                session_id: self.session_id.clone(),
+                document_generation: self.document_generation,
+            };
         }
     }
 
@@ -775,25 +776,24 @@ impl Session {
             math_edit_position,
         ) = history::restore_history_transition(transition);
         let restored_math_edit = match math_edit_position {
-            Some(position) => match math_edit::restore_math_edit(
-                &self.document,
-                position,
-                self.current_math_edit_revision(),
-            ) {
-                Some(edit) => Some(edit),
-                None => {
-                    let reverted = if redo {
-                        self.edit_history.undo(&mut self.document)
-                    } else {
-                        self.edit_history.redo(&mut self.document)
-                    };
-                    debug_assert!(
-                        reverted.is_some(),
-                        "failed history restore must be reversible"
-                    );
-                    return Err(EditError::InvalidPosition);
+            Some(position) => {
+                let revision = self.current_math_edit_revision();
+                match math_edit::restore_math_edit(&mut self.document, position, revision) {
+                    Some(edit) => Some(edit),
+                    None => {
+                        let reverted = if redo {
+                            self.edit_history.undo(&mut self.document)
+                        } else {
+                            self.edit_history.redo(&mut self.document)
+                        };
+                        debug_assert!(
+                            reverted.is_some(),
+                            "failed history restore must be reversible"
+                        );
+                        return Err(EditError::InvalidPosition);
+                    }
                 }
-            },
+            }
             None => None,
         };
         let selection_changed =

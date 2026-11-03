@@ -126,55 +126,102 @@ impl MathEdit {
 }
 
 pub(super) fn restore_math_edit(
-    document: &caret_doc::Document,
+    document: &mut caret_doc::Document,
     position: MathEditPosition,
     revision: MathEditRevision,
 ) -> Option<MathEdit> {
-    let (source, kind) = match &position.target {
+    let source_branch = matches!(&position.branch, MathEditBranch::Source);
+    let (kind, projected_target) = match &position.target {
         MathEditTarget::Inline {
             paragraph_id,
             math_id,
-        } => (
-            find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?
-                .math_tree
-                .source
-                .as_str(),
-            caret_math::MathInputKind::Inline,
-        ),
+        } => {
+            let tree =
+                &find_inline_math_in_blocks(&document.body, paragraph_id, math_id)?.math_tree;
+            let project = if source_branch {
+                crate::math_validation::tree_for_source_history_projection
+            } else {
+                crate::math_validation::tree_for_history_projection
+            };
+            (
+                caret_math::MathInputKind::Inline,
+                HistoryProjectionTarget::Tree(project(
+                    tree,
+                    position.source_projection.source(),
+                    caret_math::MathInputKind::Inline,
+                )?),
+            )
+        }
         MathEditTarget::Block { block_id, align } => {
             match (find_block_by_id(&document.body, block_id)?, align) {
-                (Block::Equation(equation), false) => (
-                    equation.math_tree.source.as_str(),
-                    caret_math::MathInputKind::Equation,
-                ),
-                (Block::Align(value), true) => {
-                    (value.source.as_str(), caret_math::MathInputKind::Align)
+                (Block::Equation(equation), false) => {
+                    let project = if source_branch {
+                        crate::math_validation::tree_for_source_history_projection
+                    } else {
+                        crate::math_validation::tree_for_history_projection
+                    };
+                    (
+                        caret_math::MathInputKind::Equation,
+                        HistoryProjectionTarget::Tree(project(
+                            &equation.math_tree,
+                            position.source_projection.source(),
+                            caret_math::MathInputKind::Equation,
+                        )?),
+                    )
                 }
+                (Block::Align(value), true) => (
+                    caret_math::MathInputKind::Align,
+                    HistoryProjectionTarget::Align(if source_branch {
+                        crate::math_validation::align_for_source_history_projection(
+                            value,
+                            position.source_projection.source(),
+                        )?
+                    } else {
+                        crate::math_validation::align_for_history_projection(
+                            value,
+                            position.source_projection.source(),
+                        )?
+                    }),
+                ),
                 _ => return None,
             }
         }
     };
     let source_projection = &position.source_projection;
-    if source_projection.kind() != kind || source_projection.source() != source {
+    if source_projection.kind() != kind
+        || position.projection_identity != Arc::as_ptr(source_projection) as usize
+    {
         return None;
     }
-    match &position.branch {
+    let branch = match &position.branch {
         MathEditBranch::Source => {
             let edit_source = source_projection.edit_source();
             if position.cursor > edit_source.len() || !edit_source.is_char_boundary(position.cursor)
             {
                 return None;
             }
+            MathEditBranch::Source
         }
         MathEditBranch::Text { path, anchor } => {
-            let tree = math_tree_for_target(document, &position.target, path.align_cell())?;
+            let tree = match (&projected_target, path.align_cell()) {
+                (HistoryProjectionTarget::Tree(tree), None) => tree,
+                (HistoryProjectionTarget::Align(align), Some((row, cell))) => {
+                    align.rows.get(row)?.cells.get(cell)?
+                }
+                _ => return None,
+            };
+            let host_base = match path.align_cell() {
+                Some((row, cell)) => source_projection
+                    .align()?
+                    .cell_range(row, cell)?
+                    .start
+                    .checked_sub(source_projection.edit_range().start)?,
+                None => 0,
+            };
+            let path = path.rebind_ranges(tree, host_base)?;
             let text = path.resolve(tree)?;
-            if host_source_range_for_path(
-                document,
-                &position.target,
-                path,
-                &position.source_projection,
-            )? != path.host_source_range()
+            if host_source_range_for_path(document, &position.target, &path, source_projection)?
+                != path.host_source_range()
             {
                 return None;
             }
@@ -192,15 +239,71 @@ pub(super) fn restore_math_edit(
             {
                 return None;
             }
+            MathEditBranch::Text {
+                path,
+                anchor: *anchor,
+            }
         }
-    }
+    };
+    install_history_projection(document, &position.target, projected_target)?;
     Some(MathEdit {
         target: position.target,
         source_projection: position.source_projection,
         revision,
         cursor: position.cursor,
-        branch: position.branch,
+        branch,
     })
+}
+
+enum HistoryProjectionTarget {
+    Tree(caret_doc::MathTree),
+    Align(Align),
+}
+
+fn install_history_projection(
+    document: &mut caret_doc::Document,
+    target: &MathEditTarget,
+    projection: HistoryProjectionTarget,
+) -> Option<()> {
+    match (target, projection) {
+        (
+            MathEditTarget::Inline {
+                paragraph_id,
+                math_id,
+            },
+            HistoryProjectionTarget::Tree(tree),
+        ) => {
+            find_inline_math_mut_in_blocks(&mut document.body, paragraph_id, math_id)?.math_tree =
+                tree;
+        }
+        (
+            MathEditTarget::Block {
+                block_id,
+                align: false,
+            },
+            HistoryProjectionTarget::Tree(tree),
+        ) => {
+            let Block::Equation(equation) = find_block_by_id_mut(&mut document.body, block_id)?
+            else {
+                return None;
+            };
+            equation.math_tree = tree;
+        }
+        (
+            MathEditTarget::Block {
+                block_id,
+                align: true,
+            },
+            HistoryProjectionTarget::Align(align),
+        ) => {
+            let Block::Align(current) = find_block_by_id_mut(&mut document.body, block_id)? else {
+                return None;
+            };
+            *current = align;
+        }
+        _ => return None,
+    }
+    Some(())
 }
 
 fn host_source_range_for_path(
@@ -230,6 +333,22 @@ fn host_source_range_for_path(
         _ => return None,
     };
     Some((base + start as usize, base + end as usize))
+}
+
+fn source_for_text_edit<'a>(
+    edit: &'a MathEdit,
+    path: &MathTextFlowPath,
+    local_range: std::ops::Range<usize>,
+) -> Result<&'a str, EditError> {
+    let start = path
+        .host_offset(local_range.start)
+        .ok_or(EditError::InvalidPosition)?;
+    let end = path
+        .host_offset(local_range.end)
+        .ok_or(EditError::InvalidPosition)?;
+    edit.source()
+        .get(start..end)
+        .ok_or(EditError::InvalidPosition)
 }
 
 fn math_tree_for_target<'a>(
@@ -284,9 +403,54 @@ fn find_inline_math_in_blocks<'a>(
     })
 }
 
+fn find_inline_math_mut_in_blocks<'a>(
+    blocks: &'a mut [Block],
+    paragraph_id: &NodeId,
+    math_id: &NodeId,
+) -> Option<&'a mut InlineMath> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) if &paragraph.id == paragraph_id => {
+                return find_inline_math_mut(&mut paragraph.inlines, math_id);
+            }
+            Block::Environment(environment) => {
+                if let Some(title) = environment
+                    .title
+                    .as_mut()
+                    .filter(|title| &title.id == paragraph_id)
+                    && let Some(math) = find_inline_math_mut(&mut title.inlines, math_id)
+                {
+                    return Some(math);
+                }
+                if let Some(math) =
+                    find_inline_math_mut_in_blocks(&mut environment.children, paragraph_id, math_id)
+                {
+                    return Some(math);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
     let (parents, index) = find_block_path(blocks, id)?;
     block_list_ref(blocks, &parents).ok()?.get(index)
+}
+
+fn find_block_by_id_mut<'a>(blocks: &'a mut [Block], id: &NodeId) -> Option<&'a mut Block> {
+    for block in blocks {
+        if block_id(block) == Some(id) {
+            return Some(block);
+        }
+        if let Block::Environment(environment) = block
+            && let Some(found) = find_block_by_id_mut(&mut environment.children, id)
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 impl Session {
@@ -531,12 +695,13 @@ impl Session {
         let before_state_id = self.history_state_id;
         let blocks = block_list(&mut self.document.body, &parent_ids)?;
         blocks.splice(sibling_index..=sibling_index, after.iter().cloned());
+        let target = MathEditTarget::Block { block_id, align };
         self.selection = Selection {
             anchor: next_position.clone(),
             focus: next_position,
         };
         self.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
+            target: target.clone(),
             source_projection: Arc::new(source_projection),
             revision: self.current_math_edit_revision(),
             cursor: 0,
@@ -610,11 +775,12 @@ impl Session {
                 focus: position,
             };
             self.selection_visual_affinity = VisualAffinity::Upstream;
+            let target = MathEditTarget::Inline {
+                paragraph_id: paragraph.id.clone(),
+                math_id,
+            };
             self.math_edit = Some(MathEdit {
-                target: MathEditTarget::Inline {
-                    paragraph_id: paragraph.id.clone(),
-                    math_id,
-                },
+                target: target.clone(),
                 source_projection: Arc::new(source_projection),
                 revision: self.current_math_edit_revision(),
                 cursor,
@@ -686,8 +852,9 @@ impl Session {
             Direction::Forward => body.start,
             Direction::Backward => body.end,
         };
+        let target = MathEditTarget::Block { block_id, align };
         self.math_edit = Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
+            target: target.clone(),
             source_projection: Arc::new(source_projection),
             revision: self.current_math_edit_revision(),
             cursor,
@@ -1071,7 +1238,7 @@ impl Session {
             let cell_start = semantic_range.start.checked_sub(body_start)?;
             let cell_offset = source_offset
                 .saturating_sub(cell_start)
-                .min(tree.source.len());
+                .min(semantic_range.len());
             let path =
                 path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
             return path.with_host_source_base(cell_start);
@@ -1279,8 +1446,9 @@ impl Session {
             Direction::Forward => body.start,
             Direction::Backward => body.end,
         };
+        let target = MathEditTarget::Block { block_id, align };
         Ok(Some(MathEdit {
-            target: MathEditTarget::Block { block_id, align },
+            target: target.clone(),
             source_projection: Arc::new(source_projection),
             revision: self.current_math_edit_revision(),
             cursor,
@@ -1530,6 +1698,7 @@ impl Session {
         {
             return Err(EditError::InvalidPosition);
         }
+        let before_math_position = MathEditPosition::from_edit(&edit);
         let inserted_len = source
             .len()
             .checked_sub(edit.source().len() - old_edit.len())
@@ -1624,12 +1793,18 @@ impl Session {
                         .replace_edit_source_range(old_edit.clone(), replacement, None)
                         .ok_or(EditError::InvalidPosition)?;
                     let mut math_tree = math.math_tree.clone();
+                    let previous_source = source_for_text_edit(
+                        &edit,
+                        &text_edit.path,
+                        text_edit.source_edit.clone(),
+                    )?;
                     apply_math_text_format_tree_edit(
                         &mut math_tree,
                         &text_edit.path,
                         format,
                         text_edit.source_edit.clone(),
                         replacement,
+                        previous_source,
                     )?;
                     (math_tree, source_projection)
                 } else if direct_split_text {
@@ -1659,7 +1834,7 @@ impl Session {
                     let projection =
                         caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
                             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
-                    let (content, source_projection) = projection.into_parts_with_legacy_fields();
+                    let (content, source_projection) = projection.into_parts();
                     let caret_math::ProjectedMath::Tree(math_tree) = content else {
                         return Err(EditError::InvalidMath("expected inline math".to_owned()));
                     };
@@ -1785,7 +1960,8 @@ impl Session {
                     }
                 };
                 math.math_tree = math_tree;
-                let split = split_inline_math_root(math, source_anchor, source_cursor)?;
+                let split =
+                    split_inline_math_root(math, source_anchor, source_cursor, next_edit.source())?;
                 if let Some(split) = split {
                     let inline_start = inline_math_slots(&paragraph)?
                         .into_iter()
@@ -1891,14 +2067,6 @@ impl Session {
                             )
                         }
                     };
-                    let after_math_position = after_math.map(|target| {
-                        debug_assert_eq!(target, next_edit.target);
-                        MathEditPosition::with_edit_state(
-                            &next_edit,
-                            next_cursor,
-                            next_branch.clone(),
-                        )
-                    });
                     let after_visual_affinity = match affinity {
                         Affinity::Upstream => VisualAffinity::Upstream,
                         Affinity::Downstream => VisualAffinity::Downstream,
@@ -1920,6 +2088,14 @@ impl Session {
                     );
                     self.replace_paragraph(&position, paragraph)?;
                     self.text_map_cache.clear();
+                    let after_math_position = after_math.map(|target| {
+                        debug_assert_eq!(target, next_edit.target);
+                        MathEditPosition::with_edit_state(
+                            &next_edit,
+                            next_cursor,
+                            next_branch.clone(),
+                        )
+                    });
                     self.selection = after_selection.clone();
                     self.selection_visual_affinity = after_visual_affinity;
                     let after_states = history::paragraph_states_for_ids(
@@ -1938,11 +2114,12 @@ impl Session {
                         patch,
                         (before_selection, before_visual_affinity),
                         (after_selection, self.selection_visual_affinity),
-                        Some(MathEditPosition::from_edit(&edit)),
+                        Some(before_math_position.clone()),
                         after_math_position.clone(),
                         self.pending_inline_style.clone(),
                     );
                     self.math_edit = after_math_position.map(|_| next_edit.clone());
+                    self.sync_math_edit_revision();
                     return Ok(Effect {
                         document_changed: true,
                         selection_changed,
@@ -1973,7 +2150,7 @@ impl Session {
                     patch,
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::from_edit(&edit)),
+                    Some(before_math_position.clone()),
                     Some(MathEditPosition::with_edit_state(
                         &next_edit,
                         next_cursor,
@@ -2033,12 +2210,18 @@ impl Session {
                                 contents,
                             )?;
                         } else if let Some(format) = &text_edit.format {
+                            let previous_source = source_for_text_edit(
+                                &edit,
+                                &text_edit.path,
+                                text_edit.source_edit.clone(),
+                            )?;
                             apply_math_text_format_tree_edit(
                                 tree,
                                 &text_edit.path,
                                 format,
                                 text_edit.source_edit.clone(),
                                 replacement,
+                                previous_source,
                             )?;
                         } else {
                             apply_math_text_tree_edit(
@@ -2050,9 +2233,6 @@ impl Session {
                                 replacement,
                                 &text_edit.encoded_pieces,
                             )?;
-                        }
-                        if let Block::Align(align_block) = &mut block {
-                            align_block.source = source_projection.source().to_owned();
                         }
                         (block, source_projection)
                     } else {
@@ -2197,7 +2377,7 @@ impl Session {
                     },
                     (self.selection.clone(), self.selection_visual_affinity),
                     (self.selection.clone(), self.selection_visual_affinity),
-                    Some(MathEditPosition::from_edit(&edit)),
+                    Some(before_math_position),
                     Some(MathEditPosition::with_edit_state(
                         &next_edit,
                         next_cursor,
@@ -2482,7 +2662,7 @@ fn display_math_block_with_projection(
         let full = format!("{ALIGN_BEGIN}{source}{ALIGN_END}");
         let projection = caret_math::parse_projection(&full, caret_math::MathInputKind::Align)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
-        let (content, source_projection) = projection.into_parts_with_legacy_fields();
+        let (content, source_projection) = projection.into_parts();
         let caret_math::ProjectedMath::Align(parsed) = content else {
             return Err(EditError::InvalidMath("expected aligned math".to_owned()));
         };
@@ -2490,7 +2670,7 @@ fn display_math_block_with_projection(
     }
     let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Equation)
         .map_err(|error| EditError::InvalidMath(error.to_string()))?;
-    let (content, source_projection) = projection.into_parts_with_legacy_fields();
+    let (content, source_projection) = projection.into_parts();
     let caret_math::ProjectedMath::Tree(math_tree) = content else {
         return Err(EditError::InvalidMath("expected equation".to_owned()));
     };

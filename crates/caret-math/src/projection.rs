@@ -319,48 +319,11 @@ impl<'a> MathProjection<'a> {
         (self.content, self.source_map)
     }
 
-    /// 移动拆分树与映射，同时回填迁移期 DTO 的临时源码字段。
-    pub fn into_parts_with_legacy_fields(mut self) -> (ProjectedMath, MathSourceMap<'a>) {
-        match &mut self.content {
-            ProjectedMath::Tree(tree) => {
-                tree.source = self.source_map.source().to_owned();
-            }
-            ProjectedMath::Align(align) => {
-                if let Some(align_map) = &self.source_map.align {
-                    align.source = self.source_map.source().to_owned();
-                    for (row, ranges) in align.rows.iter_mut().zip(&align_map.cell_ranges) {
-                        for (cell, range) in row.cells.iter_mut().zip(ranges) {
-                            cell.source = self.source_map.source[range.clone()].to_owned();
-                        }
-                    }
-                }
-            }
-        }
-        (self.content, self.source_map)
-    }
-
-    /// 消费投影并恢复旧的 DTO 临时源码字段，供迁移期旧调用点使用。
-    pub fn into_legacy_parsed(self) -> ParsedMath {
-        let MathProjection {
-            content,
-            source_map,
-        } = self;
-        match content {
-            ProjectedMath::Tree(mut tree) => {
-                tree.source = source_map.source.into_owned();
-                ParsedMath::Tree(tree)
-            }
-            ProjectedMath::Align(mut align) => {
-                if let Some(align_map) = source_map.align {
-                    align.source = source_map.source.as_ref().to_owned();
-                    for (row, ranges) in align.rows.iter_mut().zip(align_map.cell_ranges) {
-                        for (cell, range) in row.cells.iter_mut().zip(ranges) {
-                            cell.source = source_map.source[range].to_owned();
-                        }
-                    }
-                }
-                ParsedMath::Align(align)
-            }
+    /// 消费投影并返回 Caret 文档节点；源码与范围继续由映射 sidecar 持有。
+    pub fn into_parsed(self) -> ParsedMath {
+        match self.content {
+            ProjectedMath::Tree(tree) => ParsedMath::Tree(tree),
+            ProjectedMath::Align(align) => ParsedMath::Align(align),
         }
     }
 }

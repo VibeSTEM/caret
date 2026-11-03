@@ -71,7 +71,7 @@ const MATRIX_ENVIRONMENTS: &[&str] = &[
 /// 把输入解析为目标对象类型的文档数学树。
 pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
     parse_projection_with_source(source, kind, Cow::Borrowed(source))
-        .map(MathProjection::into_legacy_parsed)
+        .map(MathProjection::into_parsed)
 }
 
 /// 解析源码并把它与树及原始字节映射一起返回，不在树 DTO 中保留源码副本。
@@ -114,7 +114,6 @@ fn parse_projection_with_source<'source>(
             check_depth(&root)?;
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
-                source: String::new(),
                 root: parser_root_to_flow(root),
                 extra: BTreeMap::new(),
             };
@@ -304,7 +303,6 @@ fn parse_align<'source>(
             check_depth(&node)?;
             let tree = MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
-                source: String::new(),
                 root: parser_root_to_flow(node),
                 extra: BTreeMap::new(),
             };
@@ -323,7 +321,6 @@ fn parse_align<'source>(
     }
     let align = Align {
         id: NodeId::generate(),
-        source: String::new(),
         rows: align_rows,
         extra: BTreeMap::new(),
     };

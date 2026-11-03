@@ -99,6 +99,24 @@ impl MathTextFlowPath {
         Some(text)
     }
 
+    /// 更新解析器重建临时范围后的映射，同时保留稳定的结构路径和宿主偏移基址。
+    pub(super) fn rebind_ranges(&self, tree: &MathTree, host_base: usize) -> Option<Self> {
+        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
+            return None;
+        };
+        let range = text.source_range.as_ref()?;
+        let host_start = host_base.checked_add(range.start as usize)?;
+        let host_end = host_base.checked_add(range.end as usize)?;
+        Some(
+            Self::new(
+                self.steps.clone(),
+                (range.start, range.end),
+                self.align_cell,
+            )
+            .with_host_source_range((host_start, host_end)),
+        )
+    }
+
     pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {
         let text = self.resolve_structurally_mut(tree)?;
         (text

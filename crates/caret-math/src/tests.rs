@@ -284,7 +284,8 @@ fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
 
 #[test]
 fn records_source_ranges() {
-    let tree = tree(r"\frac{a}{bc}");
+    let source = r"\frac{a}{bc}";
+    let tree = tree(source);
     let Some(MathContent::Math(fraction)) = tree.root.content.first() else {
         panic!("expected fraction node");
     };
@@ -292,7 +293,7 @@ fn records_source_ranges() {
         .source_range
         .as_ref()
         .unwrap_or_else(|| panic!("缺少源范围"));
-    assert_eq!(&tree.source[range.start as usize..range.end as usize], "bc");
+    assert_eq!(&source[range.start as usize..range.end as usize], "bc");
 }
 
 #[test]
@@ -353,13 +354,25 @@ fn classifies_partial_input() {
 #[test]
 fn splits_align_cells_with_rebased_ranges() {
     let source = r"\[\begin{aligned} a &= b+1 \\ c &= \frac{d}{e} \end{aligned}\]";
-    let Ok(ParsedMath::Align(align)) = parse(source, MathInputKind::Align) else {
+    let Ok(projection) = crate::parse_projection(source, MathInputKind::Align) else {
         panic!("应解析为对齐公式");
     };
+    let ProjectedMath::Align(align) = projection.content() else {
+        panic!("应解析为对齐公式");
+    };
+    let Some(align_map) = projection.source_map().align() else {
+        panic!("Align projection should expose cell ranges");
+    };
     assert_eq!(align.rows.len(), 2);
-    assert_eq!(align.rows[0].cells[1].source, "= b+1");
+    let Some(first_cell) = align_map.cell_range(0, 1) else {
+        panic!("first Align cell should have a source range");
+    };
+    assert_eq!(&source[first_cell], "= b+1");
+    let Some(second_cell) = align_map.cell_range(1, 1) else {
+        panic!("second Align cell should have a source range");
+    };
+    assert_eq!(&source[second_cell.clone()], r"= \frac{d}{e}");
     let cell = &align.rows[1].cells[1];
-    assert_eq!(cell.source, r"= \frac{d}{e}");
     let fraction = cell
         .root
         .content
@@ -373,11 +386,12 @@ fn splits_align_cells_with_rebased_ranges() {
         .source_range
         .as_ref()
         .unwrap_or_else(|| panic!("缺少源范围"));
+    let cell_source = &source[second_cell.clone()];
     assert_eq!(
-        &cell.source[range.start as usize..range.end as usize],
+        &cell_source[range.start as usize..range.end as usize],
         r"\frac{d}{e}"
     );
-    let regenerated = serialize_align(&align);
+    let regenerated = serialize_align(align);
     let Ok(ParsedMath::Align(again)) = parse(&regenerated, MathInputKind::Align) else {
         panic!("序列化结果应可解析：{regenerated}");
     };
@@ -402,7 +416,6 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
     let ProjectedMath::Tree(tree) = projection.content() else {
         panic!("inline math should have a tree projection");
     };
-    assert!(tree.source.is_empty());
     let (content, source_map) = projection.clone().into_parts();
     let ProjectedMath::Tree(projected_tree) = content else {
         panic!("inline projection should split into its tree and map");
@@ -410,7 +423,7 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
     assert_eq!(projected_tree.root.content.len(), tree.root.content.len());
     assert_eq!(source_map.source(), source);
     assert_eq!(source_map.body_range(), 0..source.len());
-    let ParsedMath::Tree(restored) = projection.into_legacy_parsed() else {
+    let ParsedMath::Tree(restored) = projection.into_parsed() else {
         panic!("inline projection should restore to a tree");
     };
     let parsed = match parse(source, MathInputKind::Inline) {
@@ -420,7 +433,6 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
     let ParsedMath::Tree(parsed) = parsed else {
         panic!("inline input should parse to a tree");
     };
-    assert_eq!(restored.source, source);
     assert_eq!(shape(&restored.root), shape(&parsed.root));
 }
 
@@ -447,16 +459,18 @@ fn align_projection_keeps_exact_environment_and_cell_ranges() {
         projection.source_map().edit_source(),
         r" a &= b+1 \\ c &= d"
     );
-    assert!(align.source.is_empty());
+    let second_cell_content_len = align.rows[0].cells[1].root.content.len();
     let Some(cell) = align_map.cell_range(0, 1) else {
         panic!("second first-row cell range should exist");
     };
     assert_eq!(&source[cell], "= b+1");
-    let ParsedMath::Align(restored) = projection.into_legacy_parsed() else {
+    let ParsedMath::Align(restored) = projection.into_parsed() else {
         panic!("projected Align should restore to an Align DTO");
     };
-    assert_eq!(restored.source, source);
-    assert_eq!(restored.rows[0].cells[1].source, "= b+1");
+    assert_eq!(
+        restored.rows[0].cells[1].root.content.len(),
+        second_cell_content_len
+    );
 }
 
 #[test]
@@ -717,7 +731,6 @@ fn empty_align_keeps_an_editable_placeholder_cell() {
     };
     assert_eq!(align.rows.len(), 1);
     assert_eq!(align.rows[0].cells.len(), 1);
-    assert_eq!(align.rows[0].cells[0].source, "");
     assert!(
         matches!(align.rows[0].cells[0].root.content.as_slice(), [MathContent::Math(node)] if node.kind == K::Placeholder)
     );

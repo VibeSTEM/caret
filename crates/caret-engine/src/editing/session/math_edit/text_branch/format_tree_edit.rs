@@ -25,6 +25,7 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_format_tree_edit(
     format: &super::MathTextFormat,
     source_edit: Range<usize>,
     replacement: &str,
+    previous_source: &str,
 ) -> Result<(), EditError> {
     let original = path
         .resolve(tree)
@@ -53,9 +54,7 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_format_tree_edit(
     let selected_end_in_replacement = prefix_len
         .checked_add(format.selected_source_len)
         .ok_or(EditError::InvalidPosition)?;
-    if replacement.get(prefix_len..selected_end_in_replacement)
-        != tree.source.get(source_edit.clone())
-    {
+    if replacement.get(prefix_len..selected_end_in_replacement) != Some(previous_source) {
         return Err(EditError::InvalidPosition);
     }
     let selected_source = source_edit
@@ -179,7 +178,6 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_format_tree_edit(
     let (contents, index) =
         content_slot_mut(&mut tree.root, path.steps()).ok_or(EditError::InvalidPosition)?;
     contents.splice(index..index + 1, replacement_contents);
-    tree.source.replace_range(source_edit, replacement);
     Ok(())
 }
 

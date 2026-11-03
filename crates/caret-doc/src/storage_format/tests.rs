@@ -40,7 +40,6 @@ fn math_tree_round_trip_does_not_persist_tex_projections() -> Result<(), Box<dyn
     let Block::Equation(equation) = &mut document.body[0] else {
         panic!("expected equation");
     };
-    equation.math_tree.source = r"\text{x}".to_owned();
     equation.math_tree.root.source_range = Some(MathSourceRange {
         start: 0,
         end: 8,

@@ -168,12 +168,20 @@ pub(super) fn preserve_align_metadata(
                 continue;
             };
             while let Some((old_row, old_cell)) = candidates.pop_front() {
-                if previous.rows[old_row].cells[old_cell].source == cell.source
+                let old_source = previous_source
+                    .edit_source()
+                    .get(previous_cells[old_row][old_cell].clone());
+                let new_source = updated_source
+                    .edit_source()
+                    .get(updated_cells[row_index][cell_index].clone());
+                if old_source.is_some()
+                    && old_source == new_source
                     && matched_cells.insert((old_row, old_cell))
                 {
                     let old_cell_range = &previous_cells[old_row][old_cell];
                     let old_local_edit = old_cell_range.end..old_cell_range.end;
-                    let new_local_edit = cell.source.len()..cell.source.len();
+                    let new_local_edit = updated_cells[row_index][cell_index].len()
+                        ..updated_cells[row_index][cell_index].len();
                     metadata_preserved &= preserve_math_tree_metadata_for_edit(
                         &previous.rows[old_row].cells[old_cell],
                         cell,
@@ -194,16 +202,8 @@ pub(super) fn preserve_align_metadata(
         if !matched_cells.contains(&(old_row, old_cell)) {
             let old_cell_range = &previous_cells[old_row][old_cell];
             let new_cell_range = &updated_cells[new_row][new_cell];
-            let old_local_edit = local_edit_range(
-                &old_edit,
-                old_cell_range,
-                previous.rows[old_row].cells[old_cell].source.len(),
-            );
-            let new_local_edit = local_edit_range(
-                &new_edit,
-                new_cell_range,
-                updated.rows[new_row].cells[new_cell].source.len(),
-            );
+            let old_local_edit = local_edit_range(&old_edit, old_cell_range, old_cell_range.len());
+            let new_local_edit = local_edit_range(&new_edit, new_cell_range, new_cell_range.len());
             let preserved = preserve_math_tree_metadata_for_edit(
                 &previous.rows[old_row].cells[old_cell],
                 &mut updated.rows[new_row].cells[new_cell],
@@ -385,8 +385,10 @@ fn map_changed_rows(
 /// 通过源码范围匹配并恢复节点元数据；存在未匹配的未知字段时返回 `false`。
 #[cfg(test)]
 pub(super) fn preserve_math_tree_metadata(previous: &MathTree, updated: &mut MathTree) -> bool {
+    let previous_source = caret_math::serialize_tree(previous);
+    let updated_source = caret_math::serialize_tree(updated);
     let (prefix_end, previous_tail, updated_tail) =
-        unchanged_source_boundaries(&previous.source, &updated.source);
+        unchanged_source_boundaries(&previous_source, &updated_source);
     preserve_math_tree_metadata_for_edit(
         previous,
         updated,

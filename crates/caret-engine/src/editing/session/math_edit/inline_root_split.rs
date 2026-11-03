@@ -38,6 +38,7 @@ pub(in crate::editing::session) fn split_inline_math_root(
     math: &InlineMath,
     source_anchor: usize,
     source_cursor: usize,
+    source: &str,
 ) -> Result<Option<InlineRootSplit>, EditError> {
     if !has_promotable_text(&math.math_tree.root.content) {
         return Ok(None);
@@ -54,16 +55,16 @@ pub(in crate::editing::session) fn split_inline_math_root(
     {
         return Err(EditError::UnsupportedOpaqueContent);
     }
-    if source_anchor > math.math_tree.source.len()
-        || !math.math_tree.source.is_char_boundary(source_anchor)
-        || source_cursor > math.math_tree.source.len()
-        || !math.math_tree.source.is_char_boundary(source_cursor)
+    if source_anchor > source.len()
+        || !source.is_char_boundary(source_anchor)
+        || source_cursor > source.len()
+        || !source.is_char_boundary(source_cursor)
     {
         return Err(EditError::InvalidPosition);
     }
 
     let mut context = SplitContext {
-        source: &math.math_tree.source,
+        source,
         source_anchor,
         source_cursor,
         first_math_id: Some(math.id.clone()),
@@ -340,7 +341,7 @@ impl SplitContext<'_> {
             .first_math_id
             .take()
             .unwrap_or_else(caret_doc::NodeId::generate);
-        let tree_source = parsed.source.clone();
+        let tree_source = source.to_owned();
         self.focus_tokens.push(FocusToken {
             source_start: start,
             source_end: end,
@@ -583,8 +584,8 @@ mod tests {
         }
     }
 
-    fn split(math: &InlineMath, anchor: usize, cursor: usize) -> InlineRootSplit {
-        match split_inline_math_root(math, anchor, cursor) {
+    fn split(math: &InlineMath, source: &str, anchor: usize, cursor: usize) -> InlineRootSplit {
+        match split_inline_math_root(math, anchor, cursor, source) {
             Ok(Some(split)) => split,
             Ok(None) => panic!("root text should split"),
             Err(error) => panic!("root split should succeed: {error}"),
@@ -639,7 +640,7 @@ mod tests {
         let [ParagraphContent::Math(math)] = context.contents.as_slice() else {
             panic!("the math run should remain one InlineMath item");
         };
-        assert_eq!(math.math_tree.source, "{}x");
+        assert_eq!(caret_math::serialize_tree(&math.math_tree), "{}x");
         assert!(matches!(
             math.math_tree.root.content.as_slice(),
             [
@@ -653,7 +654,7 @@ mod tests {
     #[test]
     fn root_focus_stays_in_math_when_source_cursor_precedes_text_island() {
         let math = inline_math(r"a\text{x}b");
-        let split = split(&math, 0, 0);
+        let split = split(&math, r"a\text{x}b", 0, 0);
         assert!(matches!(
             split.focus,
             InlineRootFocus::Math {
@@ -672,7 +673,7 @@ mod tests {
             .find('y')
             .unwrap_or_else(|| panic!("second text island"))
             + 1;
-        let split = split(&math, cursor, cursor);
+        let split = split(&math, source, cursor, cursor);
         assert_eq!(
             split.focus,
             InlineRootFocus::Text {
@@ -685,7 +686,7 @@ mod tests {
     #[test]
     fn root_focus_maps_removed_text_command_prefix_to_its_start() {
         let math = inline_math(r"\text{x}");
-        let split = split(&math, 0, 0);
+        let split = split(&math, r"\text{x}", 0, 0);
         assert!(matches!(
             split.focus,
             InlineRootFocus::Text {
@@ -701,7 +702,12 @@ mod tests {
         let math = inline_math(source);
         let cursor = source.find('x').unwrap_or_else(|| panic!("text island")) + 1;
         assert_eq!(
-            split_inline_math_root(&math, 0, cursor),
+            split_inline_math_root(
+                &math,
+                0,
+                cursor,
+                &caret_math::serialize_tree(&math.math_tree)
+            ),
             Err(EditError::InvalidPosition)
         );
     }
@@ -730,7 +736,7 @@ mod tests {
             }));
 
         let cursor = source.find('x').unwrap_or_else(|| panic!("text island")) + 1;
-        let split = split(&math, cursor, cursor);
+        let split = split(&math, source, cursor, cursor);
         let [ParagraphContent::Environment(environment)] = split.contents.as_slice() else {
             panic!("split should preserve a single wrapper");
         };
@@ -768,7 +774,7 @@ mod tests {
             .find("5F")
             .unwrap_or_else(|| panic!("escaped text character"))
             + 1;
-        let split = split(&math, cursor, cursor);
+        let split = split(&math, source, cursor, cursor);
         let Some(ParagraphContent::Text(text)) = split.contents.get(1) else {
             panic!("expected promoted text flow");
         };
@@ -802,7 +808,12 @@ mod tests {
             .unwrap_or_else(|| panic!("combined grapheme"))
             + 1;
         assert_eq!(
-            split_inline_math_root(&math, cursor, cursor),
+            split_inline_math_root(
+                &math,
+                cursor,
+                cursor,
+                &caret_math::serialize_tree(&math.math_tree)
+            ),
             Err(EditError::InvalidPosition)
         );
     }

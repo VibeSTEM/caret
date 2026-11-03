@@ -49,7 +49,6 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_tree_edit(
         &source_edit,
         &(source_edit.start..source_edit_end),
     )?;
-    tree.source.replace_range(source_edit, encoded);
     Ok(())
 }
 

@@ -556,7 +556,6 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
     fn tree(root_id: NodeId) -> MathTree {
         MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
-            source: "x".into(),
             root: as_flow(MathNode {
                 id: root_id,
                 kind: MathNodeKind::Symbol,
@@ -573,7 +572,6 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
     let shared_id = NodeId::generate();
     let mut align = Align {
         id: NodeId::generate(),
-        source: "x&x".into(),
         rows: vec![MathAlignRow {
             id: NodeId::generate(),
             cells: vec![tree(shared_id.clone()), tree(shared_id)],
@@ -623,7 +621,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
         }
         MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
-            source: String::new(),
             root: as_flow(root),
             extra: BTreeMap::new(),
         }
@@ -647,7 +644,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
 
     let too_long = MathTree {
         schema_version: MATH_TREE_SCHEMA_VERSION,
-        source: String::new(),
         root: MathFlow {
             id: NodeId::generate(),
             content: vec![MathContent::Text(TextFlow {
@@ -671,7 +667,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
     let mut oversized_columns = Document::blank();
     let tree = MathTree {
         schema_version: MATH_TREE_SCHEMA_VERSION,
-        source: String::new(),
         root: as_flow(MathNode {
             id: NodeId::generate(),
             kind: MathNodeKind::Matrix,
@@ -732,7 +727,6 @@ fn math_inline_environments_obey_math_depth_limit() {
         }
         let tree = MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
-            source: "x".to_owned(),
             root: MathFlow {
                 id: NodeId::generate(),
                 content: vec![content],
@@ -803,7 +797,6 @@ fn math_inline_environments_obey_math_depth_limit() {
             id: NodeId::generate(),
             math_tree: MathTree {
                 schema_version: MATH_TREE_SCHEMA_VERSION,
-                source: String::new(),
                 root: deepest_flow,
                 extra: BTreeMap::new(),
             },
@@ -817,7 +810,6 @@ fn math_inline_environments_obey_math_depth_limit() {
 fn math_text_runs_count_toward_the_tree_node_limit() {
     let tree = MathTree {
         schema_version: MATH_TREE_SCHEMA_VERSION,
-        source: String::new(),
         root: MathFlow {
             id: NodeId::generate(),
             content: vec![MathContent::Text(TextFlow {
@@ -982,7 +974,6 @@ fn retired_math_source_fields_are_rejected_but_plain_text_extensions_are_preserv
         id: NodeId::generate(),
         math_tree: MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
-            source: String::new(),
             root: MathFlow {
                 id: NodeId::generate(),
                 content: vec![MathContent::Text(TextFlow {
@@ -1012,7 +1003,6 @@ fn math_unknown_fields_are_rejected_only_on_their_retired_schema_node() {
         id: NodeId::generate(),
         math_tree: MathTree {
             schema_version: MATH_TREE_SCHEMA_VERSION,
-            source: String::new(),
             root: MathFlow {
                 id: NodeId::generate(),
                 content: vec![
