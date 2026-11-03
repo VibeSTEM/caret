@@ -7,7 +7,7 @@ use std::{borrow::Cow, mem::size_of, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
-use crate::{MathInputKind, ParsedMath};
+use crate::{MAX_MATH_SOURCE_BYTES, MathInputKind, ParsedMath};
 
 /// 对齐环境及其各单元格在完整输入中的原始字节范围。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub struct MathSourceMap<'a> {
     align: Option<AlignSourceMap>,
 }
 
-impl MathSourceMap<'_> {
+impl<'a> MathSourceMap<'a> {
     /// 返回这次解析所绑定的完整源码草稿。
     pub fn source(&self) -> &str {
         &self.source
@@ -65,9 +65,103 @@ impl MathSourceMap<'_> {
         &self.source[self.edit_range.clone()]
     }
 
+    /// 返回编辑视图在完整源码中的字节范围。
+    pub fn edit_range(&self) -> Range<usize> {
+        self.edit_range.clone()
+    }
+
     /// 返回 Align 的环境和单元格源码范围；其他公式类型没有行列范围。
     pub fn align(&self) -> Option<&AlignSourceMap> {
         self.align.as_ref()
+    }
+
+    /// 按已有投影替换源码区间，并重定位公式体、编辑视图与 Align 单元格范围。
+    /// `align_cell` 标识发生编辑的 cell，范围端点相接时据此区分所属单元格。
+    pub fn replace_source_range(
+        &self,
+        range: Range<usize>,
+        replacement: &str,
+        align_cell: Option<(usize, usize)>,
+    ) -> Option<MathSourceMap<'static>> {
+        if range.start > range.end
+            || range.end > self.source.len()
+            || !self.source.is_char_boundary(range.start)
+            || !self.source.is_char_boundary(range.end)
+            || align_cell.is_some() != self.align.is_some()
+        {
+            return None;
+        }
+        let new_len = self
+            .source
+            .len()
+            .checked_sub(range.len())?
+            .checked_add(replacement.len())?;
+        if new_len > MAX_MATH_SOURCE_BYTES {
+            return None;
+        }
+        let mut source = self.source.to_string();
+        source.replace_range(range.clone(), replacement);
+        let delta = replacement.len() as isize - range.len() as isize;
+        let rebase = |current: &Range<usize>, contains_edit: bool| {
+            rebase_source_range(current, &range, delta, contains_edit)
+        };
+        let body_range = rebase(&self.body_range, true)?;
+        let edit_range = rebase(&self.edit_range, true)?;
+        let align = match &self.align {
+            Some(align) => {
+                let (edited_row, edited_cell_index) = align_cell?;
+                let edited_cell = align.cell_range(edited_row, edited_cell_index)?;
+                if range.start < edited_cell.start || range.end > edited_cell.end {
+                    return None;
+                }
+                let environment_range = rebase(&align.environment_range, true)?;
+                let content_range = rebase(&align.content_range, true)?;
+                let cell_ranges = align
+                    .cell_ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(row_index, row)| {
+                        row.iter()
+                            .enumerate()
+                            .map(|(cell_index, cell_range)| {
+                                rebase(
+                                    cell_range,
+                                    row_index == edited_row && cell_index == edited_cell_index,
+                                )
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(AlignSourceMap {
+                    environment_range,
+                    content_range,
+                    cell_ranges,
+                })
+            }
+            None => None,
+        };
+        Some(MathSourceMap {
+            source: Cow::Owned(source),
+            kind: self.kind,
+            body_range,
+            edit_range,
+            align,
+        })
+    }
+
+    /// 按编辑视图内的字节范围替换源码，并保留完整投影的其他范围。
+    pub fn replace_edit_source_range(
+        &self,
+        range: Range<usize>,
+        replacement: &str,
+        align_cell: Option<(usize, usize)>,
+    ) -> Option<MathSourceMap<'static>> {
+        if range.end > self.edit_range.len() {
+            return None;
+        }
+        let start = self.edit_range.start.checked_add(range.start)?;
+        let end = self.edit_range.start.checked_add(range.end)?;
+        self.replace_source_range(start..end, replacement, align_cell)
     }
 
     /// 估算该映射保留的内存，包括映射本身及拥有的源码、范围缓冲区。
@@ -85,6 +179,38 @@ impl MathSourceMap<'_> {
                     .sum::<usize>()
         });
         size_of::<Self>() + source_bytes + align_bytes
+    }
+}
+
+fn rebase_source_range(
+    current: &Range<usize>,
+    edit: &Range<usize>,
+    delta: isize,
+    contains_edit: bool,
+) -> Option<Range<usize>> {
+    if contains_edit {
+        if current.start > edit.start || current.end < edit.end {
+            return None;
+        }
+        return Some(current.start..current.end.checked_add_signed(delta)?);
+    }
+    if edit.is_empty() {
+        if current.start >= edit.start {
+            return Some(
+                current.start.checked_add_signed(delta)?..current.end.checked_add_signed(delta)?,
+            );
+        }
+        if current.end <= edit.start {
+            return Some(current.clone());
+        }
+        return Some(current.start..current.end.checked_add_signed(delta)?);
+    }
+    if current.end <= edit.start {
+        Some(current.clone())
+    } else if current.start >= edit.end {
+        Some(current.start.checked_add_signed(delta)?..current.end.checked_add_signed(delta)?)
+    } else {
+        None
     }
 }
 

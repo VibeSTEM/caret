@@ -100,16 +100,24 @@ impl MathTextFlowPath {
     }
 
     pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {
-        let content = resolve_content_path_mut(&mut tree.root, &self.steps)?;
-        let MathContent::Text(text) = content else {
-            return None;
-        };
+        let text = self.resolve_structurally_mut(tree)?;
         (text
             .source_range
             .as_ref()
             .map(|range| (range.start, range.end))
             == Some(self.source_range))
         .then_some(text)
+    }
+
+    pub(super) fn resolve_structurally_mut<'a>(
+        &self,
+        tree: &'a mut MathTree,
+    ) -> Option<&'a mut TextFlow> {
+        let content = resolve_content_path_mut(&mut tree.root, &self.steps)?;
+        let MathContent::Text(text) = content else {
+            return None;
+        };
+        Some(text)
     }
 
     /// 依照同一结构路径取得新解析树中的对应文本流及其新源码范围。

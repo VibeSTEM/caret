@@ -1925,8 +1925,8 @@ fn nested_empty_text_island_has_symmetric_one_delimiter_navigation() -> Result<(
     Ok(())
 }
 #[test]
-fn deleting_last_character_of_a_grouped_textflow_falls_back_to_source_caret()
--> Result<(), EditError> {
+fn deleting_last_character_of_a_grouped_textflow_keeps_the_empty_textflow() -> Result<(), EditError>
+{
     let source = r"\text{a{b}}";
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     insert_equation_text(&mut session, source)?;
@@ -1953,9 +1953,11 @@ fn deleting_last_character_of_a_grouped_textflow_falls_back_to_source_caret()
 
     assert!(matches!(
         session.math_edit().map(|edit| &edit.branch),
-        Some(MathEditBranch::Source)
+        Some(MathEditBranch::Text { .. })
     ));
     assert!(inline_source(&session).is_some_and(|source| !source.contains('a')));
+    session.run(Command::InsertText("z".to_owned()))?;
+    assert!(inline_source(&session).is_some_and(|source| source.contains('z')));
     Ok(())
 }
 #[test]
@@ -1989,6 +1991,15 @@ fn text_island_escapes_literal_tex_characters_and_keeps_atomic_history()
             .collect::<String>(),
         "abc%  \t\u{00a0}"
     );
+    assert!(
+        text.source_map
+            .windows(2)
+            .all(|entries| entries[0].text_end <= entries[1].text_start)
+    );
+    assert_eq!(
+        text_source_boundary(text, "abc%  \t\u{00a0}".len()),
+        text.source_range.as_ref().map(|range| range.end as usize)
+    );
     assert_eq!(
         session.math_edit().map(|edit| edit.cursor),
         Some("abc%  \t\u{00a0}".len())
@@ -2007,6 +2018,95 @@ fn text_island_escapes_literal_tex_characters_and_keeps_atomic_history()
     );
     Ok(())
 }
+
+#[test]
+fn text_edit_rebases_enclosing_inline_environment_source_range() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut session, r"\text{\textbf{abc}}")?;
+    move_into_math_text(&mut session)?;
+    let before = match &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    {
+        MathEditBranch::Text { path, .. } => {
+            let tree = session.math_tree_for_edit(
+                session.math_edit().ok_or(EditError::InvalidPosition)?,
+                path.align_cell(),
+            )?;
+            let Some(MathContent::Environment(environment)) = tree.root.content.first() else {
+                return Err(EditError::InvalidPosition);
+            };
+            environment
+                .source_range
+                .as_ref()
+                .map(|range| range.start as usize..range.end as usize)
+                .ok_or(EditError::InvalidPosition)?
+        }
+        MathEditBranch::Source => return Err(EditError::InvalidPosition),
+    };
+
+    session.run(Command::InsertText("Xé".to_owned()))?;
+
+    let MathEditBranch::Text { path, .. } = &session
+        .math_edit()
+        .ok_or(EditError::InvalidPosition)?
+        .branch
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let tree = session.math_tree_for_edit(
+        session.math_edit().ok_or(EditError::InvalidPosition)?,
+        path.align_cell(),
+    )?;
+    let Some(MathContent::Environment(environment)) = tree.root.content.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(
+        environment
+            .source_range
+            .as_ref()
+            .map(|range| range.start as usize..range.end as usize),
+        Some(before.start..before.end + "Xé".len())
+    );
+    assert_eq!(
+        path.resolve(tree).map(|text| text
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>()),
+        Some("abcXé".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn text_input_rejects_exceeding_math_source_budget_atomically() -> Result<(), EditError> {
+    let prefix = r"\text{";
+    let suffix = "}";
+    let content_len = caret_math::MAX_MATH_SOURCE_BYTES - prefix.len() - suffix.len() - 1;
+    let source = format!("{prefix}{}{suffix}", "a".repeat(content_len));
+    assert_eq!(source.len(), caret_math::MAX_MATH_SOURCE_BYTES - 1);
+
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut session, &source)?;
+    move_into_math_text(&mut session)?;
+    let document_before = session.document().clone();
+    let edit_before = session.math_edit().cloned();
+    let generation_before = session.document_generation();
+    let selection_before = session.selection().clone();
+
+    assert!(matches!(
+        session.run(Command::InsertText("%".to_owned())),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.math_edit(), edit_before.as_ref());
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.selection(), &selection_before);
+    Ok(())
+}
+
 #[test]
 fn equation_and_align_text_islands_share_the_same_edit_branch()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -2018,10 +2118,15 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         equation.math_edit().map(|edit| &edit.branch),
         Some(MathEditBranch::Text { .. })
     ));
-    equation.run(Command::InsertText("X".to_owned()))?;
+    equation.run(Command::InsertText("Xé%".to_owned()))?;
     assert!(matches!(
         equation.document().body.first(),
-        Some(Block::Equation(value)) if value.math_tree.source == r"\text{abcX}"
+        Some(Block::Equation(value)) if value.math_tree.source == r"\text{abcXé\%}"
+    ));
+    equation.run(Command::InsertText("Z".to_owned()))?;
+    assert!(matches!(
+        equation.document().body.first(),
+        Some(Block::Equation(value)) if value.math_tree.source == r"\text{abcXé\%Z}"
     ));
     equation.run(Command::SetMathTextSelection {
         anchor: 1,
@@ -2051,10 +2156,15 @@ fn equation_and_align_text_islands_share_the_same_edit_branch()
         align.math_edit().map(|edit| &edit.branch),
         Some(MathEditBranch::Text { path, .. }) if path.align_cell() == Some((0, 0))
     ));
-    align.run(Command::InsertText("X".to_owned()))?;
+    align.run(Command::InsertText("Xé%".to_owned()))?;
     assert!(matches!(
         align.document().body.first(),
-        Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcX}")
+        Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcXé\%}")
+    ));
+    align.run(Command::InsertText("Z".to_owned()))?;
+    assert!(matches!(
+        align.document().body.first(),
+        Some(Block::Align(value)) if value.rows[0].cells[0].source.contains(r"\text{abcXé\%Z}")
     ));
     align.run(Command::SetMathTextSelection {
         anchor: 1,
@@ -2693,7 +2803,7 @@ fn deleting_mapped_math_text_with_mapping_metadata_is_atomic() -> Result<(), Edi
 
     assert!(matches!(
         session.run(Command::Delete(Direction::Backward)),
-        Err(EditError::InvalidMath(_))
+        Err(EditError::UnsupportedOpaqueContent)
     ));
     assert_eq!(session.document(), &document_before);
     assert_eq!(session.math_edit(), edit_before.as_ref());

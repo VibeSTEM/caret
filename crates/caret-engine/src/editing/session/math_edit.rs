@@ -48,8 +48,8 @@ use caret_doc::{
 use inline_root_split::{InlineRootFocus, replace_inline_math_with_split, split_inline_math_root};
 pub use path::{MathTextFlowPath, MathTextFlowPathStep};
 use text_branch::{
-    MathTextEdit, is_grapheme_boundary, snap_text_cursor, text_source_boundary,
-    validate_text_flow_edit,
+    MathTextEdit, apply_math_text_tree_edit, is_grapheme_boundary, snap_text_cursor,
+    text_source_boundary, validate_text_flow_edit,
 };
 
 pub(super) const ALIGN_BEGIN: &str = "\\begin{aligned}";
@@ -1569,14 +1569,6 @@ impl Session {
                 paragraph_id,
                 math_id,
             } => {
-                let projection =
-                    caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
-                        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
-                let (content, source_projection) = projection.into_parts_with_legacy_fields();
-                let caret_math::ProjectedMath::Tree(mut math_tree) = content else {
-                    return Err(EditError::InvalidMath("expected inline math".to_owned()));
-                };
-                next_edit.source_projection = Arc::new(source_projection);
                 let story = self
                     .story_for_paragraph(paragraph_id)
                     .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
@@ -1595,7 +1587,43 @@ impl Session {
                 let format_math_text = text_edit
                     .as_ref()
                     .is_some_and(|text_edit| text_edit.format.is_some());
-                let metadata_source = if split_math_text {
+                let direct_text_edit = text_edit.as_ref().is_some_and(|text_edit| {
+                    !text_edit.split_math_entry && text_edit.format.is_none()
+                });
+                let (mut math_tree, source_projection) = if direct_text_edit {
+                    let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
+                    let replacement = source
+                        .get(old_edit.start..new_edit.end)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let source_projection = edit
+                        .source_projection
+                        .replace_edit_source_range(old_edit.clone(), replacement, None)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let mut math_tree = math.math_tree.clone();
+                    apply_math_text_tree_edit(
+                        &mut math_tree,
+                        &text_edit.path,
+                        text_edit.range.clone(),
+                        &text_edit.inserted,
+                        text_edit.source_edit.clone(),
+                        replacement,
+                        &text_edit.encoded_pieces,
+                    )?;
+                    (math_tree, source_projection)
+                } else {
+                    let projection =
+                        caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
+                            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+                    let (content, source_projection) = projection.into_parts_with_legacy_fields();
+                    let caret_math::ProjectedMath::Tree(math_tree) = content else {
+                        return Err(EditError::InvalidMath("expected inline math".to_owned()));
+                    };
+                    (math_tree, source_projection)
+                };
+                next_edit.source_projection = Arc::new(source_projection);
+                let metadata_source = if direct_text_edit {
+                    None
+                } else if split_math_text {
                     let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
                     let mut sanitized = math.math_tree.clone();
                     if !prepare_math_text_split_metadata(&mut sanitized, &text_edit.path) {
@@ -1633,12 +1661,16 @@ impl Session {
                     }
                     text_edit.as_ref().map(|_| candidate)
                 };
-                let mut metadata_preserved = preserve_math_tree_metadata_for_edit(
-                    metadata_source.as_ref().unwrap_or(&math.math_tree),
-                    &mut math_tree,
-                    &old_edit,
-                    &new_edit,
-                );
+                let mut metadata_preserved = if direct_text_edit {
+                    true
+                } else {
+                    preserve_math_tree_metadata_for_edit(
+                        metadata_source.as_ref().unwrap_or(&math.math_tree),
+                        &mut math_tree,
+                        &old_edit,
+                        &new_edit,
+                    )
+                };
                 if metadata_preserved && split_math_text {
                     let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
                     metadata_preserved = restore_math_text_split_metadata(
@@ -1945,8 +1977,52 @@ impl Session {
                 );
             }
             MathEditTarget::Block { block_id, align } => {
-                let (mut block, source_projection) =
-                    display_math_block_with_projection(*align, &source, block_id.clone())?;
+                let original = find_block_path(&self.document.body, block_id).and_then(
+                    |(parent_ids, index)| {
+                        block_list_ref(&self.document.body, &parent_ids)
+                            .ok()?
+                            .get(index)
+                            .cloned()
+                    },
+                );
+                let direct_text_edit = text_edit.as_ref().is_some_and(|text_edit| {
+                    !text_edit.split_math_entry && text_edit.format.is_none()
+                });
+                let (mut block, source_projection) = if direct_text_edit {
+                    let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
+                    let replacement = source
+                        .get(old_edit.start..new_edit.end)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let source_projection = edit
+                        .source_projection
+                        .replace_edit_source_range(
+                            old_edit.clone(),
+                            replacement,
+                            text_edit.path.align_cell(),
+                        )
+                        .ok_or(EditError::InvalidPosition)?;
+                    let mut block = original.clone().ok_or(EditError::InvalidPosition)?;
+                    let tree = text_run_property::block_math_tree_mut(
+                        &mut block,
+                        text_edit.path.align_cell(),
+                    )
+                    .ok_or(EditError::InvalidPosition)?;
+                    apply_math_text_tree_edit(
+                        tree,
+                        &text_edit.path,
+                        text_edit.range.clone(),
+                        &text_edit.inserted,
+                        text_edit.source_edit.clone(),
+                        replacement,
+                        &text_edit.encoded_pieces,
+                    )?;
+                    if let Block::Align(align_block) = &mut block {
+                        align_block.source = source_projection.source().to_owned();
+                    }
+                    (block, source_projection)
+                } else {
+                    display_math_block_with_projection(*align, &source, block_id.clone())?
+                };
                 next_edit.source_projection = Arc::new(source_projection);
                 if let Some((path, text_cursor)) = &text_branch {
                     let tree = match (&block, path.align_cell()) {
@@ -2008,14 +2084,7 @@ impl Session {
                         }
                     }
                 }
-                let original = find_block_path(&self.document.body, block_id).and_then(
-                    |(parent_ids, index)| {
-                        block_list_ref(&self.document.body, &parent_ids)
-                            .ok()?
-                            .get(index)
-                    },
-                );
-                if let Some(original) = original {
+                if !direct_text_edit && let Some(original) = original.as_ref() {
                     let mut metadata_block = original.clone();
                     let split_math_text = text_edit
                         .as_ref()

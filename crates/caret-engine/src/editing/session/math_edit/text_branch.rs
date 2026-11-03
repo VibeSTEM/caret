@@ -11,6 +11,9 @@ use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{MathEditBranch, MathTextFlowPath};
 use caret_doc::InlineEnvironmentKind;
+
+mod source_map_edit;
+pub(super) use source_map_edit::{EncodedMathTextPiece, apply_math_text_tree_edit};
 use std::ops::Range;
 
 #[derive(Debug, Clone)]
@@ -20,6 +23,7 @@ pub(super) struct MathTextEdit {
     pub(super) inserted: String,
     pub(super) source_edit: Range<usize>,
     pub(super) source_replacement_len: usize,
+    pub(super) encoded_pieces: Vec<EncodedMathTextPiece>,
     pub(super) snap_forward: bool,
     pub(super) removes_entire_flow: bool,
     pub(super) split_math_entry: bool,
@@ -226,6 +230,7 @@ impl Session {
                 inserted: String::new(),
                 source_edit: local_source_edit,
                 source_replacement_len: replacement.len(),
+                encoded_pieces: Vec::new(),
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: true,
@@ -280,8 +285,25 @@ impl Session {
                     .map(|end| start..end)
             })
             .ok_or(EditError::InvalidPosition)?;
+        let encoded_len = encoded_math_text_len(inserted);
+        let projected_len = edit
+            .source_projection
+            .source()
+            .len()
+            .checked_sub(source_range.len())
+            .and_then(|len| len.checked_add(encoded_len))
+            .ok_or(EditError::InvalidPosition)?;
+        if projected_len > caret_math::MAX_MATH_SOURCE_BYTES {
+            return Err(EditError::InvalidMath(
+                caret_math::MathParseError::InputTooLong {
+                    len: projected_len,
+                    max: caret_math::MAX_MATH_SOURCE_BYTES,
+                }
+                .to_string(),
+            ));
+        }
         let mut source = edit.source().to_owned();
-        let encoded = encode_math_text(inserted);
+        let (encoded, encoded_pieces) = encode_math_text_with_pieces(inserted);
         source.replace_range(source_range.clone(), &encoded);
         let next_cursor = range.start + inserted.len();
         self.write_math_source_with_metadata(
@@ -296,6 +318,7 @@ impl Session {
                 inserted: inserted.to_owned(),
                 source_edit: local_source_range,
                 source_replacement_len: encoded.len(),
+                encoded_pieces,
                 snap_forward: true,
                 removes_entire_flow,
                 split_math_entry: false,
@@ -358,6 +381,7 @@ impl Session {
                 inserted: String::new(),
                 source_edit: local_source_range,
                 source_replacement_len: 0,
+                encoded_pieces: Vec::new(),
                 snap_forward: false,
                 removes_entire_flow: range.start == 0 && range.end == display.len(),
                 split_math_entry: false,
@@ -367,9 +391,12 @@ impl Session {
     }
 }
 
-fn encode_math_text(text: &str) -> String {
+fn encode_math_text_with_pieces(text: &str) -> (String, Vec<EncodedMathTextPiece>) {
     let mut encoded = String::with_capacity(text.len());
+    let mut pieces = Vec::with_capacity(text.chars().count());
+    let mut display_offset = 0;
     for character in text.chars() {
+        let source_start = encoded.len();
         match character {
             '\\' => encoded.push_str(r"\textchar{5C}"),
             '~' => encoded.push_str(r"\textchar{7E}"),
@@ -384,6 +411,33 @@ fn encode_math_text(text: &str) -> String {
             }
             _ => encoded.push(character),
         }
+        let display_end = display_offset + character.len_utf8();
+        pieces.push(EncodedMathTextPiece {
+            display_range: display_offset..display_end,
+            source_range: source_start..encoded.len(),
+        });
+        display_offset = display_end;
     }
-    encoded
+    (encoded, pieces)
+}
+
+fn encoded_math_text_len(text: &str) -> usize {
+    text.chars()
+        .map(|character| match character {
+            '\\' => r"\textchar{5C}".len(),
+            '~' => r"\textchar{7E}".len(),
+            '^' => r"\textchar{5E}".len(),
+            character if character.is_whitespace() => {
+                let mut digits = 1;
+                let mut codepoint = character as u32;
+                while codepoint >= 16 {
+                    codepoint /= 16;
+                    digits += 1;
+                }
+                r"\textchar{".len() + digits + 1
+            }
+            '{' | '}' | '%' | '#' | '$' | '&' | '_' => 2,
+            character => character.len_utf8(),
+        })
+        .sum()
 }

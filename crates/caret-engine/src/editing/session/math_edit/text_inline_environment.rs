@@ -97,6 +97,7 @@ impl Session {
                 inserted: String::new(),
                 source_edit: local_source_range,
                 source_replacement_len: replacement.len(),
+                encoded_pieces: Vec::new(),
                 snap_forward: false,
                 removes_entire_flow: false,
                 split_math_entry: false,
