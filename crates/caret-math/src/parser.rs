@@ -239,6 +239,34 @@ pub(super) fn input_body_range(source: &str, kind: MathInputKind) -> ParseResult
     strip_fences(source, kind)
 }
 
+pub(super) fn input_body_range_for_edit(
+    source: &str,
+    kind: MathInputKind,
+) -> ParseResult<Range<usize>> {
+    match strip_fences(source, kind) {
+        Ok(range) => Ok(range),
+        Err(MathParseError::Parse {
+            incomplete: true, ..
+        }) => {
+            let leading = source.len() - source.trim_start().len();
+            let trimmed = &source[leading..];
+            let opener = ["$$", "\\[", "\\(", "$"]
+                .into_iter()
+                .find(|opener| trimmed.starts_with(opener));
+            let Some(opener) = opener else {
+                return Ok(0..source.len());
+            };
+            let is_display = matches!(opener, "$$" | "\\[");
+            if is_display != !matches!(kind, MathInputKind::Inline) {
+                return Err(MathParseError::InputKindMismatch { expected: kind });
+            }
+            // 源码在定界符未闭合时暂时按原始文本编辑，允许光标和删除键修复开头。
+            Ok(0..source.len())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn parse_align<'source>(
     parser: &mut Parser<'_>,
     source: Cow<'source, str>,

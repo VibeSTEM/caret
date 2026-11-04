@@ -340,6 +340,7 @@ impl Session {
                         .into_parts()
                         .1,
                     ),
+                    source_draft: None,
                     revision: self.current_math_edit_revision(),
                     cursor,
                     branch: super::math_edit::MathEditBranch::Source,
@@ -368,6 +369,7 @@ impl Session {
                                 .into_parts()
                                 .1,
                         ),
+                        source_draft: None,
                         revision: self.current_math_edit_revision(),
                         cursor: body.start,
                         branch: super::math_edit::MathEditBranch::Source,

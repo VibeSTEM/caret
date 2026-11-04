@@ -153,6 +153,9 @@ impl Session {
 
     fn sync_math_edit_revision(&mut self) {
         if let Some(edit) = &mut self.math_edit {
+            if edit.source_draft_is_pending() {
+                return;
+            }
             edit.revision = math_edit::MathEditRevision {
                 session_id: self.session_id.clone(),
                 document_generation: self.document_generation,
@@ -224,6 +227,12 @@ impl Session {
         &mut self,
         environment_id: NodeId,
     ) -> Result<Effect, EditError> {
+        if self.has_uncommitted_math_source_draft() {
+            return Err(EditError::InvalidMath(
+                "resolve or cancel the incomplete math source draft before changing selection"
+                    .to_owned(),
+            ));
+        }
         self.ensure_math_edit_revision_current()?;
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
@@ -257,17 +266,42 @@ impl Session {
         self.history_state_id
     }
 
+    /// 当前是否有尚未解析提交的公式源码；保存和离开文档必须先处理该草稿。
+    pub fn has_uncommitted_math_source_draft(&self) -> bool {
+        self.math_edit
+            .as_ref()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    }
+
     pub fn can_undo(&self) -> bool {
-        self.edit_history.can_undo()
+        self.math_edit.as_ref().map_or_else(
+            || self.edit_history.can_undo(),
+            |edit| {
+                edit.source_draft_can_undo()
+                    || (!edit.source_draft_is_pending() && self.edit_history.can_undo())
+            },
+        )
     }
 
     pub fn can_redo(&self) -> bool {
-        self.edit_history.can_redo()
+        self.math_edit.as_ref().map_or_else(
+            || self.edit_history.can_redo(),
+            |edit| {
+                edit.source_draft_can_redo()
+                    || (!edit.source_draft_is_pending() && self.edit_history.can_redo())
+            },
+        )
     }
 
     /// 在异步保存捕获修订前切断输入合并，保留可精确返回的保存位置。
-    pub fn begin_save_checkpoint(&mut self) {
+    pub fn begin_save_checkpoint(&mut self) -> Result<(), EditError> {
+        if self.has_uncommitted_math_source_draft() {
+            return Err(EditError::InvalidMath(
+                "resolve or cancel the incomplete math source draft before saving".to_owned(),
+            ));
+        }
         self.advance_history_merge_epoch();
+        Ok(())
     }
 
     /// 执行唯一命令入口；可恢复校验在替换文档数据前完成。
@@ -312,7 +346,12 @@ impl Session {
             }
             return Err(EditError::InvalidPosition);
         }
-        let previous_math_edit = self.math_edit.clone();
+        // 未完成草稿的失败命令不会清除编辑状态，避免逐键复制其局部撤销历史。
+        let previous_math_edit = self
+            .math_edit
+            .as_ref()
+            .filter(|edit| !edit.source_draft_is_pending())
+            .cloned();
         let result = self.run_inner(command, focus_inserted_inline_math);
         if result.is_err() && self.math_edit.is_none() {
             self.math_edit = previous_math_edit;
@@ -332,6 +371,27 @@ impl Session {
             && self.command_line.is_none()
             && matches!(command, Command::Undo | Command::Redo)
         {
+            let redo = command == Command::Redo;
+            if let Some(edit) = &mut self.math_edit {
+                let changed = if redo {
+                    edit.redo_source_draft()?
+                } else {
+                    edit.undo_source_draft()?
+                };
+                if changed {
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                if edit.source_draft_is_pending() {
+                    return Err(EditError::InvalidMath(
+                        "incomplete math source draft has no local undo step".to_owned(),
+                    ));
+                }
+                // 到达有效基线后转入文档历史，丢弃不再适用的草稿重做分支。
+                edit.source_draft = None;
+            }
             let effect = self.restore_history(command == Command::Redo)?;
             self.command_line = None;
             return Ok(effect);

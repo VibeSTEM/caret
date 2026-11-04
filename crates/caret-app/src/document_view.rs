@@ -5,8 +5,8 @@
 
 use caret_doc::Document;
 use caret_engine::{
-    DocumentLayoutRuntime, DocumentLayoutSnapshot, PageGlyphRasterizer, Selection, Session,
-    VisualAffinity,
+    DocumentLayoutRuntime, DocumentLayoutSnapshot, EditError, PageGlyphRasterizer, Selection,
+    Session, VisualAffinity,
 };
 
 mod composition;
@@ -75,6 +75,11 @@ impl DocumentViewRuntime {
         self.session.history_state_id()
     }
 
+    #[cfg(test)]
+    pub(crate) fn session_mut_for_test(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
     pub fn can_undo(&self) -> bool {
         self.session.composition().is_none() && self.session.can_undo()
     }
@@ -84,8 +89,12 @@ impl DocumentViewRuntime {
     }
 
     /// 保存快照前切断连续输入合并，不推进文档 revision 或保存状态。
-    pub fn begin_save_checkpoint(&mut self) {
-        self.session.begin_save_checkpoint();
+    pub fn begin_save_checkpoint(&mut self) -> Result<(), EditError> {
+        self.session.begin_save_checkpoint()
+    }
+
+    pub fn has_uncommitted_math_source_draft(&self) -> bool {
+        self.session.has_uncommitted_math_source_draft()
     }
 
     /// 当前文档树的只读视图，供应用服务捕获保存快照。
