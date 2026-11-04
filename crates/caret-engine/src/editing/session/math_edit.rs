@@ -1386,15 +1386,32 @@ impl Session {
             let tree = align.rows.get(row)?.cells.get(cell)?;
             let semantic_range = edit_source.align()?.cell_range(row, cell)?;
             let cell_start = semantic_range.start.checked_sub(body_start)?;
-            let cell_offset = source_offset
-                .saturating_sub(cell_start)
-                .min(semantic_range.len());
-            let path =
-                path::path_at_source_boundary(tree, cell_offset, forward, Some((row, cell)))?;
+            let source_offset = body_start
+                .checked_add(source_offset)?
+                .clamp(semantic_range.start, semantic_range.end);
+            let source_map = edit_source.align()?.cell_tree(row, cell)?;
+            let path = path::path_at_source_boundary(
+                source_map,
+                source_offset,
+                forward,
+                Some((row, cell)),
+                semantic_range.start,
+            )?;
+            path.resolve(tree)?;
             return path.with_host_source_base(cell_start);
         }
         let tree = self.math_tree_for_edit(edit, None).ok()?;
-        path::path_at_source_boundary(tree, source_offset, forward, None)
+        let body_start = edit.source_projection.edit_range().start;
+        let source_map = edit.source_projection.tree()?;
+        let path = path::path_at_source_boundary(
+            source_map,
+            body_start.checked_add(source_offset)?,
+            forward,
+            None,
+            body_start,
+        )?;
+        path.resolve(tree)?;
+        Some(path)
     }
 
     fn enter_math_text_branch(&mut self, path: MathTextFlowPath, cursor: usize) {
@@ -1981,7 +1998,7 @@ impl Session {
                     .as_ref()
                     .is_some_and(|text_edit| text_edit.format.is_some());
                 let direct_split_text = split_math_text;
-                let (mut math_tree, source_projection) = if direct_text_edit {
+                let (mut math_tree, mut source_projection) = if direct_text_edit {
                     let text_edit = text_edit.as_ref().ok_or(EditError::InvalidPosition)?;
                     let replacement = source
                         .get(old_edit.start..new_edit.end)
@@ -2062,7 +2079,6 @@ impl Session {
                     };
                     (math_tree, source_projection)
                 };
-                next_edit.source_projection = Arc::new(source_projection);
                 let metadata_source = if direct_text_edit || direct_format_text || direct_split_text
                 {
                     None
@@ -2115,6 +2131,11 @@ impl Session {
                         "editing would discard unmapped math metadata".to_owned(),
                     ));
                 }
+                if !source_projection.bind_tree_after_validated_edit(&math_tree) {
+                    return Err(EditError::InvalidMath(
+                        "edited formula cannot be rebound to its source map".to_owned(),
+                    ));
+                }
                 if let Some((path, text_cursor)) = &text_branch {
                     if let Some(format) = text_edit
                         .as_ref()
@@ -2122,7 +2143,10 @@ impl Session {
                     {
                         let (path, anchor, cursor) =
                             text_inline_environment::formatted_text_selection(
-                                &math_tree, path, format,
+                                &math_tree,
+                                &source_projection,
+                                path,
+                                format,
                             )
                             .ok_or(EditError::InvalidPosition)?;
                         next_cursor = cursor;
@@ -2179,6 +2203,11 @@ impl Session {
                         &pending_run_properties,
                     )?;
                 }
+                if !source_projection.bind_tree_after_validated_edit(&math_tree) {
+                    return Err(EditError::InvalidMath(
+                        "edited formula cannot be rebound to its source map".to_owned(),
+                    ));
+                }
                 let (source_anchor, source_cursor) = match &next_branch {
                     MathEditBranch::Source => (next_cursor, next_cursor),
                     MathEditBranch::Text { path, anchor } => {
@@ -2193,8 +2222,13 @@ impl Session {
                     }
                 };
                 math.math_tree = math_tree;
-                let split =
-                    split_inline_math_root(math, source_anchor, source_cursor, next_edit.source())?;
+                let split = split_inline_math_root(
+                    math,
+                    source_anchor,
+                    source_cursor,
+                    source_projection.source(),
+                )?;
+                next_edit.source_projection = Arc::new(source_projection);
                 if let Some(split) = split {
                     let inline_start = inline_math_slots(&paragraph)?
                         .into_iter()
@@ -2267,19 +2301,25 @@ impl Session {
                             next_branch = MathEditBranch::Source;
                             let target = MathEditTarget::Inline {
                                 paragraph_id: paragraph_id.clone(),
-                                math_id,
+                                math_id: math_id.clone(),
                             };
+                            let projection = caret_math::parse_projection(
+                                &source,
+                                caret_math::MathInputKind::Inline,
+                            )
+                            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+                            let (_, mut source_projection) = projection.into_parts();
+                            let split_tree = find_inline_math(&paragraph.inlines, &math_id)
+                                .map(|inline| &inline.math_tree)
+                                .ok_or(EditError::InvalidPosition)?;
+                            if !source_projection.bind_tree_after_validated_edit(split_tree) {
+                                return Err(EditError::InvalidMath(
+                                    "split formula cannot be bound to its source map".to_owned(),
+                                ));
+                            }
                             next_edit = MathEdit {
                                 target: target.clone(),
-                                source_projection: Arc::new(
-                                    caret_math::parse_projection(
-                                        &source,
-                                        caret_math::MathInputKind::Inline,
-                                    )
-                                    .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                                    .into_parts()
-                                    .1,
-                                ),
+                                source_projection: Arc::new(source_projection),
                                 source_draft: None,
                                 revision: edit.revision.clone(),
                                 cursor,
@@ -2410,7 +2450,7 @@ impl Session {
                 let direct_split_text = text_edit
                     .as_ref()
                     .is_some_and(|text_edit| text_edit.split_math_entry);
-                let (mut block, source_projection) = if direct_text_edit
+                let (mut block, mut source_projection) = if direct_text_edit
                     || direct_format_text
                     || direct_split_text
                 {
@@ -2492,7 +2532,20 @@ impl Session {
                     };
                     (block, source_projection)
                 };
-                next_edit.source_projection = Arc::new(source_projection);
+                let rebound = match (&block, align) {
+                    (Block::Equation(equation), false) => {
+                        source_projection.bind_tree_after_validated_edit(&equation.math_tree)
+                    }
+                    (Block::Align(align), true) => {
+                        source_projection.bind_align_after_validated_edit(align)
+                    }
+                    _ => false,
+                };
+                if !rebound {
+                    return Err(EditError::InvalidMath(
+                        "edited formula cannot be rebound to its source map".to_owned(),
+                    ));
+                }
                 if let Some((path, text_cursor)) = &text_branch {
                     let tree = match (&block, path.align_cell()) {
                         (Block::Equation(equation), None) => &equation.math_tree,
@@ -2508,8 +2561,13 @@ impl Session {
                         .and_then(|text_edit| text_edit.format.as_ref())
                     {
                         let (path, anchor, cursor) =
-                            text_inline_environment::formatted_text_selection(tree, path, format)
-                                .ok_or(EditError::InvalidPosition)?;
+                            text_inline_environment::formatted_text_selection(
+                                tree,
+                                &source_projection,
+                                path,
+                                format,
+                            )
+                            .ok_or(EditError::InvalidPosition)?;
                         next_cursor = cursor;
                         next_branch = MathEditBranch::Text { path, anchor };
                     } else {
@@ -2592,7 +2650,7 @@ impl Session {
                         &transaction_old_edit,
                         &new_edit,
                         &edit.source_projection,
-                        &next_edit.source_projection,
+                        &source_projection,
                     );
                     if !metadata_preserved {
                         if text_edit.is_none() && matches!(edit.branch, MathEditBranch::Source) {
@@ -2626,6 +2684,21 @@ impl Session {
                         &pending_run_properties,
                     )?;
                 }
+                let rebound = match (&block, align) {
+                    (Block::Equation(equation), false) => {
+                        source_projection.bind_tree_after_validated_edit(&equation.math_tree)
+                    }
+                    (Block::Align(align), true) => {
+                        source_projection.bind_align_after_validated_edit(align)
+                    }
+                    _ => false,
+                };
+                if !rebound {
+                    return Err(EditError::InvalidMath(
+                        "edited formula cannot be rebound to its source map".to_owned(),
+                    ));
+                }
+                next_edit.source_projection = Arc::new(source_projection);
                 let (parent_ids, index) = find_block_path(&self.document.body, block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let blocks = block_list(&mut self.document.body, &parent_ids)?;

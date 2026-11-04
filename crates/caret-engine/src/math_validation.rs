@@ -17,12 +17,16 @@ pub(crate) fn project_tree_for_edit(
     let canonical_source = caret_math::serialize_tree(tree);
     let projection = caret_math::parse_projection(&canonical_source, kind)
         .map_err(|error| format!("could not project formula tree to TeX: {error}"))?;
-    let (caret_math::ProjectedMath::Tree(projected), source_map) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Tree(projected), mut source_map) = projection.into_parts()
+    else {
         return Err("formula tree projected to a different formula kind".to_owned());
     };
     let mut updated = tree.clone();
     if !refresh_tree_ranges(&mut updated, &projected) {
         return Err("formula tree cannot be projected without losing structure".to_owned());
+    }
+    if !source_map.bind_tree_after_validated_edit(&updated) {
+        return Err("formula tree ranges cannot be bound to its source map".to_owned());
     }
     updated.validate().map_err(|error| error.to_string())?;
     Ok((source_map, updated))
@@ -34,12 +38,16 @@ pub(crate) fn project_align_for_edit(
     let canonical_source = caret_math::serialize_align(align);
     let projection = caret_math::parse_projection(&canonical_source, MathInputKind::Align)
         .map_err(|error| format!("could not project align tree to TeX: {error}"))?;
-    let (caret_math::ProjectedMath::Align(projected), source_map) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Align(projected), mut source_map) = projection.into_parts()
+    else {
         return Err("align tree projected to a different formula kind".to_owned());
     };
     let mut updated = align.clone();
     if !refresh_align_ranges(&mut updated, &projected) {
         return Err("align projection changed its structure".to_owned());
+    }
+    if !source_map.bind_align_after_validated_edit(&updated) {
+        return Err("align ranges cannot be bound to their source map".to_owned());
     }
     updated.validate().map_err(|error| error.to_string())?;
     Ok((source_map, updated))

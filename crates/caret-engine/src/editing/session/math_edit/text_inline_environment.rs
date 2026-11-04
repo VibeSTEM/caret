@@ -166,18 +166,44 @@ impl Session {
 
 pub(super) fn formatted_text_selection(
     tree: &MathTree,
+    source_projection: &caret_math::MathSourceMap<'_>,
     previous_path: &MathTextFlowPath,
     format: &MathTextFormat,
 ) -> Option<(MathTextFlowPath, usize, usize)> {
-    let source_start =
-        (previous_path.source_range().0 as usize).checked_add(format.selected_source_start)?;
-    let mut path =
-        super::path::path_at_source_boundary(tree, source_start, true, previous_path.align_cell())?;
-    if previous_path.align_cell().is_some() {
-        let host_base = previous_path
-            .host_source_range()
-            .0
-            .checked_sub(previous_path.source_range().0 as usize)?;
+    let edit_range = source_projection.edit_range();
+    let (source_map, source_offset, source_base, host_base) =
+        if let Some((row, cell)) = previous_path.align_cell() {
+            let align_map = source_projection.align()?;
+            let range = align_map.cell_range(row, cell)?;
+            let local_start = range.start.checked_sub(edit_range.start)?;
+            let source_offset = edit_range
+                .start
+                .checked_add(previous_path.host_source_range().0)?
+                .checked_add(format.selected_source_start)?;
+            (
+                align_map.cell_tree(row, cell)?,
+                source_offset,
+                range.start,
+                Some(local_start),
+            )
+        } else {
+            let source_start = (previous_path.source_range().0 as usize)
+                .checked_add(format.selected_source_start)?;
+            (
+                source_projection.tree()?,
+                edit_range.start.checked_add(source_start)?,
+                edit_range.start,
+                None,
+            )
+        };
+    let mut path = super::path::path_at_source_boundary(
+        source_map,
+        source_offset,
+        true,
+        previous_path.align_cell(),
+        source_base,
+    )?;
+    if let Some(host_base) = host_base {
         path = path.with_host_source_base(host_base)?;
     }
     let text = path.resolve(tree)?;

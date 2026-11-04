@@ -15,6 +15,17 @@ fn parsed_tree(source: &str) -> MathTree {
     }
 }
 
+fn projected_tree_map(source: &str) -> caret_math::MathTreeSourceMap {
+    match caret_math::parse_projection(source, caret_math::MathInputKind::Inline) {
+        Ok(projection) => projection
+            .source_map()
+            .tree()
+            .cloned()
+            .unwrap_or_else(|| panic!("test formula should have a source map")),
+        Err(error) => panic!("test formula should project: {error}"),
+    }
+}
+
 #[test]
 fn text_flow_path_resolves_through_math_operand_and_environment() {
     let mut tree = parsed_tree(r"\frac{\text{a\textbf{b}}}{y}");
@@ -54,7 +65,8 @@ fn text_flow_path_rejects_stale_ranges_and_wrong_container_steps() {
 #[test]
 fn adjacent_text_paths_are_limited_to_their_flow_and_keep_align_host_offsets() {
     let tree = parsed_tree(r"\text{a}\text{b}");
-    let second = path_at_source_boundary(&tree, 15, false, Some((0, 1)))
+    let source_map = projected_tree_map(r"\text{a}\text{b}");
+    let second = path_at_source_boundary(&source_map, 15, false, Some((0, 1)), 0)
         .unwrap_or_else(|| panic!("second text flow should have a source boundary"));
     let first = adjacent_text_flow_path(&tree, &second, false)
         .unwrap_or_else(|| panic!("first text flow should be adjacent"));
@@ -73,32 +85,35 @@ fn adjacent_text_paths_are_limited_to_their_flow_and_keep_align_host_offsets() {
 #[test]
 fn adjacent_text_navigation_stops_at_breaks_opaque_nodes_and_math_slots() {
     let mut with_break = parsed_tree(r"\text{a}\text{b}");
+    let source_map = projected_tree_map(r"\text{a}\text{b}");
     with_break
         .root
         .content
         .insert(1, MathContent::SoftBreak(SoftBreak::default()));
-    let second = path_at_source_boundary(&with_break, 15, false, None)
+    let second = path_at_source_boundary(&source_map, 15, false, None, 0)
         .unwrap_or_else(|| panic!("second text flow should have a source boundary"));
     assert!(adjacent_text_flow_path(&with_break, &second, false).is_none());
 
     let mut with_opaque = parsed_tree(r"\text{a}\text{b}");
+    let source_map = projected_tree_map(r"\text{a}\text{b}");
     with_opaque.root.content.insert(
         1,
         MathContent::Opaque(OpaqueNode {
             raw: serde_json::json!({"type": "future"}),
         }),
     );
-    let second = path_at_source_boundary(&with_opaque, 15, false, None)
+    let second = path_at_source_boundary(&source_map, 15, false, None, 0)
         .unwrap_or_else(|| panic!("second text flow should have a source boundary"));
     assert!(adjacent_text_flow_path(&with_opaque, &second, false).is_none());
 
     let fraction_source = r"\frac{\text{a}}{\text{b}}";
     let fraction = parsed_tree(fraction_source);
+    let source_map = projected_tree_map(fraction_source);
     let denominator_end = fraction_source
         .rfind('b')
         .map(|offset| offset + 1)
         .unwrap_or_else(|| panic!("denominator text should exist"));
-    let second = path_at_source_boundary(&fraction, denominator_end, false, None)
+    let second = path_at_source_boundary(&source_map, denominator_end, false, None, 0)
         .unwrap_or_else(|| panic!("denominator text flow should have a source boundary"));
     assert!(adjacent_text_flow_path(&fraction, &second, false).is_none());
 }

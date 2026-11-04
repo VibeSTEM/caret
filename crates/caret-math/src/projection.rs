@@ -9,6 +9,12 @@ use caret_doc::{Align, MathTree};
 
 use crate::{MAX_MATH_SOURCE_BYTES, MathInputKind, ParsedMath};
 
+mod source_map;
+pub use source_map::{
+    MathContentSourceMap, MathFlowSourceMap, MathRangeSourceMap, MathTextSourceMap,
+    MathTextSourceSegment, MathTreeSourceMap,
+};
+
 /// 对齐环境及其各单元格在完整输入中的原始字节范围。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlignSourceMap {
@@ -18,6 +24,15 @@ pub struct AlignSourceMap {
     cell_ranges: Vec<Vec<Range<usize>>>,
     /// 每个 cell 的导航范围，包含语义范围裁掉的前后 trivia。
     cell_navigation_ranges: Vec<Vec<Range<usize>>>,
+    /// Align cell 的树映射，范围坐标已转换到完整公式源码。
+    cell_trees: Vec<Vec<MathTreeSourceMap>>,
+}
+
+pub(crate) struct AlignSourceRanges {
+    pub(crate) environment: Range<usize>,
+    pub(crate) content: Range<usize>,
+    pub(crate) cells: Vec<Vec<Range<usize>>>,
+    pub(crate) navigation: Vec<Vec<Range<usize>>>,
 }
 
 impl AlignSourceMap {
@@ -40,6 +55,11 @@ impl AlignSourceMap {
     pub fn cell_navigation_ranges(&self) -> &[Vec<Range<usize>>] {
         &self.cell_navigation_ranges
     }
+
+    /// 返回单元格数学树对应的源码映射。
+    pub fn cell_tree(&self, row: usize, cell: usize) -> Option<&MathTreeSourceMap> {
+        self.cell_trees.get(row)?.get(cell)
+    }
 }
 
 /// 持有公式源码及同次解析生成的范围映射。
@@ -50,6 +70,7 @@ pub struct MathSourceMap<'a> {
     body_range: Range<usize>,
     edit_range: Range<usize>,
     align: Option<AlignSourceMap>,
+    tree: Option<MathTreeSourceMap>,
 }
 
 impl<'a> MathSourceMap<'a> {
@@ -83,8 +104,89 @@ impl<'a> MathSourceMap<'a> {
         self.align.as_ref()
     }
 
+    /// 返回普通公式树与当前源码对应的位置映射；Align 通过各 cell 的映射访问。
+    pub fn tree(&self) -> Option<&MathTreeSourceMap> {
+        self.tree.as_ref()
+    }
+
+    /// 在调用方完成结构/语义校验后重建树映射；失败时保留原有效映射。
+    ///
+    /// 新源码编辑必须与其目标树在同一事务中校验后调用。该函数只验证并采集范围，
+    /// 不负责证明任意目标树与 LaTeX 源码语义相同。
+    pub fn bind_tree_after_validated_edit(&mut self, tree: &MathTree) -> bool {
+        if self.kind == MathInputKind::Align {
+            return false;
+        }
+        let previous_signature = self
+            .tree
+            .as_ref()
+            .and_then(MathTreeSourceMap::semantic_signature);
+        let Some(mapped) =
+            MathTreeSourceMap::capture(tree, &self.source, 0, None, previous_signature.is_some())
+        else {
+            return false;
+        };
+        if previous_signature.is_some_and(|previous| mapped.semantic_signature() != Some(previous))
+        {
+            return false;
+        }
+        self.tree = Some(mapped);
+        true
+    }
+
+    /// 在调用方完成结构/语义校验后重建 Align 单元格映射。
+    ///
+    /// 新源码编辑必须与其目标树在同一事务中校验后调用。该函数仅采集范围，
+    /// 不负责证明任意单元格树与 LaTeX 源码语义相同。
+    pub fn bind_align_after_validated_edit(&mut self, align: &Align) -> bool {
+        let Some(source_map) = &mut self.align else {
+            return false;
+        };
+        if align.rows.len() != source_map.cell_ranges.len()
+            || align
+                .rows
+                .iter()
+                .zip(&source_map.cell_ranges)
+                .any(|(row, ranges)| row.cells.len() != ranges.len())
+        {
+            return false;
+        }
+        let mut rows = Vec::with_capacity(align.rows.len());
+        for (row_index, (row, ranges)) in align.rows.iter().zip(&source_map.cell_ranges).enumerate()
+        {
+            let mut cells = Vec::with_capacity(row.cells.len());
+            for (cell_index, (tree, range)) in row.cells.iter().zip(ranges).enumerate() {
+                let Some(mapped) = MathTreeSourceMap::capture(
+                    tree,
+                    &self.source,
+                    range.start,
+                    Some(range),
+                    source_map
+                        .cell_tree(row_index, cell_index)
+                        .and_then(MathTreeSourceMap::semantic_signature)
+                        .is_some(),
+                ) else {
+                    return false;
+                };
+                if source_map
+                    .cell_tree(row_index, cell_index)
+                    .and_then(MathTreeSourceMap::semantic_signature)
+                    .is_some_and(|previous| mapped.semantic_signature() != Some(previous))
+                {
+                    return false;
+                }
+                cells.push(mapped);
+            }
+            rows.push(cells);
+        }
+        source_map.cell_trees = rows;
+        true
+    }
+
     /// 按已有投影替换源码区间，并重定位公式体、编辑视图与 Align 单元格范围。
     /// `align_cell` 标识发生编辑的 cell，范围端点相接时据此区分所属单元格。
+    /// 返回值的树映射在事务携带并验证候选树前不可用；调用方必须先完成树编辑，
+    /// 再调用对应的 `bind_*_after_validated_edit`，之后才能把投影提交给会话或历史。
     pub fn replace_source_range(
         &self,
         range: Range<usize>,
@@ -161,6 +263,7 @@ impl<'a> MathSourceMap<'a> {
                     content_range,
                     cell_ranges,
                     cell_navigation_ranges,
+                    cell_trees: Vec::new(),
                 })
             }
             None => None,
@@ -170,7 +273,11 @@ impl<'a> MathSourceMap<'a> {
             kind: self.kind,
             body_range,
             edit_range,
-            align,
+            align: align.map(|mut align| {
+                align.cell_trees.clear();
+                align
+            }),
+            tree: None,
         })
     }
 
@@ -208,8 +315,20 @@ impl<'a> MathSourceMap<'a> {
                     .iter()
                     .map(|ranges| ranges.capacity() * size_of::<Range<usize>>())
                     .sum::<usize>()
+                + align
+                    .cell_trees
+                    .iter()
+                    .flatten()
+                    .map(MathTreeSourceMap::estimated_bytes)
+                    .sum::<usize>()
         });
-        size_of::<Self>() + source_bytes + align_bytes
+        size_of::<Self>()
+            + source_bytes
+            + align_bytes
+            + self
+                .tree
+                .as_ref()
+                .map_or(0, MathTreeSourceMap::estimated_bytes)
     }
 }
 
@@ -264,9 +383,15 @@ impl<'a> MathProjection<'a> {
         kind: MathInputKind,
         body_range: Range<usize>,
         tree: MathTree,
-    ) -> Self {
+        capture_source_map: bool,
+    ) -> Option<Self> {
         let edit_range = 0..source.len();
-        Self {
+        let mapped_tree = if capture_source_map {
+            Some(MathTreeSourceMap::capture(&tree, &source, 0, None, true)?)
+        } else {
+            None
+        };
+        Some(Self {
             content: ProjectedMath::Tree(tree),
             source_map: MathSourceMap {
                 source,
@@ -274,34 +399,59 @@ impl<'a> MathProjection<'a> {
                 body_range,
                 edit_range,
                 align: None,
+                tree: mapped_tree,
             },
-        }
+        })
     }
 
     pub(crate) fn align(
         source: Cow<'a, str>,
         body_range: Range<usize>,
         tree: Align,
-        environment_range: Range<usize>,
-        content_range: Range<usize>,
-        cell_ranges: Vec<Vec<Range<usize>>>,
-        cell_navigation_ranges: Vec<Vec<Range<usize>>>,
-    ) -> Self {
-        Self {
+        ranges: AlignSourceRanges,
+        capture_source_map: bool,
+    ) -> Option<Self> {
+        if tree.rows.len() != ranges.cells.len() || tree.rows.len() != ranges.navigation.len() {
+            return None;
+        }
+        let mut cell_trees = Vec::with_capacity(tree.rows.len());
+        for ((row, ranges), navigation_ranges) in
+            tree.rows.iter().zip(&ranges.cells).zip(&ranges.navigation)
+        {
+            if row.cells.len() != ranges.len() || row.cells.len() != navigation_ranges.len() {
+                return None;
+            }
+            let mut maps = Vec::with_capacity(row.cells.len());
+            for (cell, range) in row.cells.iter().zip(ranges) {
+                if capture_source_map {
+                    maps.push(MathTreeSourceMap::capture(
+                        cell,
+                        &source,
+                        range.start,
+                        Some(range),
+                        true,
+                    )?);
+                }
+            }
+            cell_trees.push(maps);
+        }
+        Some(Self {
             content: ProjectedMath::Align(tree),
             source_map: MathSourceMap {
                 source,
                 kind: MathInputKind::Align,
                 body_range,
-                edit_range: content_range.clone(),
+                edit_range: ranges.content.clone(),
                 align: Some(AlignSourceMap {
-                    environment_range,
-                    content_range,
-                    cell_ranges,
-                    cell_navigation_ranges,
+                    environment_range: ranges.environment,
+                    content_range: ranges.content,
+                    cell_ranges: ranges.cells,
+                    cell_navigation_ranges: ranges.navigation,
+                    cell_trees,
                 }),
+                tree: None,
             },
-        }
+        })
     }
 
     /// 返回解析后的公式树，不包含独立持有的完整源码。

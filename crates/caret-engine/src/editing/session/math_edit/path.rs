@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
+use caret_math::{MathContentSourceMap, MathTreeSourceMap};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -199,18 +200,20 @@ fn rebase_span(
 }
 
 pub(super) fn path_at_source_boundary(
-    tree: &MathTree,
+    source_map: &MathTreeSourceMap,
     source_offset: usize,
     forward: bool,
     align_cell: Option<(usize, usize)>,
+    source_base: usize,
 ) -> Option<MathTextFlowPath> {
     fn visit(
-        contents: &[MathContent],
+        contents: &[MathContentSourceMap],
         environment_children: bool,
         path: &mut Vec<MathTextFlowPathStep>,
         source_offset: usize,
         forward: bool,
         align_cell: Option<(usize, usize)>,
+        source_base: usize,
     ) -> Option<MathTextFlowPath> {
         for (index, content) in contents.iter().enumerate() {
             path.push(if environment_children {
@@ -219,23 +222,27 @@ pub(super) fn path_at_source_boundary(
                 MathTextFlowPathStep::Content(index)
             });
             let found = match content {
-                MathContent::Text(text) => text.source_range.as_ref().and_then(|range| {
+                MathContentSourceMap::Text(text) => text.range().and_then(|range| {
                     let boundary = if forward { range.start } else { range.end };
-                    (boundary as usize == source_offset).then(|| {
-                        MathTextFlowPath::new(path.clone(), (range.start, range.end), align_cell)
-                    })
+                    let start = range.start.checked_sub(source_base)?;
+                    let end = range.end.checked_sub(source_base)?;
+                    let start = u32::try_from(start).ok()?;
+                    let end = u32::try_from(end).ok()?;
+                    (boundary == source_offset)
+                        .then(|| MathTextFlowPath::new(path.clone(), (start, end), align_cell))
                 }),
-                MathContent::Math(node) => {
+                MathContentSourceMap::Math { operands, .. } => {
                     let mut found = None;
-                    for (operand, flow) in node.children.iter().enumerate() {
+                    for (operand, flow) in operands.iter().enumerate() {
                         path.push(MathTextFlowPathStep::Operand(operand));
                         found = visit(
-                            &flow.content,
+                            flow.content(),
                             false,
                             path,
                             source_offset,
                             forward,
                             align_cell,
+                            source_base,
                         );
                         path.pop();
                         if found.is_some() {
@@ -244,15 +251,16 @@ pub(super) fn path_at_source_boundary(
                     }
                     found
                 }
-                MathContent::Environment(environment) => visit(
-                    &environment.children,
+                MathContentSourceMap::Environment { children, .. } => visit(
+                    children,
                     true,
                     path,
                     source_offset,
                     forward,
                     align_cell,
+                    source_base,
                 ),
-                MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
+                MathContentSourceMap::Other => None,
             };
             path.pop();
             if found.is_some() {
@@ -263,12 +271,13 @@ pub(super) fn path_at_source_boundary(
     }
 
     visit(
-        &tree.root.content,
+        source_map.root().content(),
         false,
         &mut Vec::new(),
         source_offset,
         forward,
         align_cell,
+        source_base,
     )
 }
 
