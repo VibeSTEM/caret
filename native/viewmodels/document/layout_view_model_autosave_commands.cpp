@@ -110,6 +110,7 @@ void LayoutViewModel::runAutoSaveDeadline() {
     }
     const quint64 session_generation = snapshot.session_generation;
     const quint64 document_generation = snapshot.document_generation;
+    const quint64 recovery_binding_generation = snapshot.recovery_binding_generation;
     const quint64 history_state_id = snapshot.history_state_id;
     const QString content_digest = QString::fromUtf8(
         snapshot.content_digest.data(), static_cast<qsizetype>(snapshot.content_digest.size()));
@@ -125,8 +126,10 @@ void LayoutViewModel::runAutoSaveDeadline() {
             QString::fromUtf8(snapshot.recovery_baseline_digest.data(),
                               static_cast<qsizetype>(snapshot.recovery_baseline_digest.size()));
         if (recovery_id.isEmpty() || original_path.isEmpty()) {
-            (void)ffi::recovery_update_write_finished(*runtime, session_generation,
-                                                      document_generation, false);
+            (void)ffi::recovery_update_write_finished(
+                *runtime, session_generation, document_generation,
+                layout_view_model_support::to_rust_string(recovery_id), recovery_binding_generation,
+                false);
             refreshAutoSaveDeadline();
             return;
         }
@@ -135,7 +138,8 @@ void LayoutViewModel::runAutoSaveDeadline() {
         emit documentFileChanged();
         auto* watcher = new QFutureWatcher<QString>(this);
         connect(watcher, &QFutureWatcher<QString>::finished, this,
-                [this, watcher, session_generation, document_generation] {
+                [this, watcher, session_generation, document_generation, recovery_id,
+                 recovery_binding_generation] {
                     const QString error = watcher->result();
                     watcher->deleteLater();
                     --m_pending_file_operations;
@@ -144,11 +148,20 @@ void LayoutViewModel::runAutoSaveDeadline() {
                     if (!layout_view_model_support::current_session(active_runtime,
                                                                     session_generation)) {
                         refreshAutoSaveDeadline();
+                        emit documentFileActivityFinished();
                         return;
                     }
-                    (void)ffi::recovery_update_write_finished(*active_runtime, session_generation,
-                                                              document_generation, error.isEmpty());
+                    const rust::String completion = ffi::recovery_update_write_finished(
+                        *active_runtime, session_generation, document_generation,
+                        layout_view_model_support::to_rust_string(recovery_id),
+                        recovery_binding_generation, error.isEmpty());
+                    const QByteArray completion_bytes =
+                        layout_view_model_support::response_bytes(completion);
                     refreshAutoSaveDeadline();
+                    if (completion_bytes.startsWith("error:document.stale_recovery_completion")) {
+                        emit documentFileActivityFinished();
+                        return;
+                    }
                     if (!error.isEmpty()) {
                         qWarning().noquote() << QStringLiteral("recovery.update_failed:") << error;
                         emit documentFileOperationFinished(false, error);
@@ -156,20 +169,22 @@ void LayoutViewModel::runAutoSaveDeadline() {
                         emit documentFileOperationFinished(true, QString{});
                     }
                 });
-        watcher->setFuture(QtConcurrent::run(&m_document_io_pool, [recovery_id, original_path,
-                                                                   recovery_baseline,
-                                                                   bytes = std::move(bytes)] {
-            rust::Vec<std::uint8_t> payload;
-            payload.reserve(static_cast<std::size_t>(bytes.size()));
-            for (const char byte : bytes) {
-                payload.push_back(static_cast<std::uint8_t>(byte));
-            }
-            const rust::String result = ffi::update_recovery_document(
-                layout_view_model_support::to_rust_string(recovery_id),
-                layout_view_model_support::to_rust_string(original_path),
-                layout_view_model_support::to_rust_string(recovery_baseline), std::move(payload));
-            return QString::fromUtf8(result.data(), static_cast<qsizetype>(result.size()));
-        }));
+        watcher->setFuture(QtConcurrent::run(
+            &m_document_io_pool, [recovery_id, original_path, recovery_baseline,
+                                  recovery_binding_generation, document_generation,
+                                  bytes = std::move(bytes)] {
+                rust::Vec<std::uint8_t> payload;
+                payload.reserve(static_cast<std::size_t>(bytes.size()));
+                for (const char byte : bytes) {
+                    payload.push_back(static_cast<std::uint8_t>(byte));
+                }
+                const rust::String result = ffi::update_recovery_document(
+                    layout_view_model_support::to_rust_string(recovery_id),
+                    layout_view_model_support::to_rust_string(original_path),
+                    layout_view_model_support::to_rust_string(recovery_baseline),
+                    recovery_binding_generation, document_generation, std::move(payload));
+                return QString::fromUtf8(result.data(), static_cast<qsizetype>(result.size()));
+            }));
         return;
     }
     if (m_document_path.isEmpty()) {
@@ -199,8 +214,8 @@ void LayoutViewModel::runAutoSaveDeadline() {
         watcher,
         &QFutureWatcher<std::shared_ptr<layout_view_model_support::DocumentWriteResult>>::finished,
         this,
-        [this, watcher, path, session_generation, document_generation, history_state_id,
-         content_digest, baseline_digest] {
+        [this, watcher, path, session_generation, document_generation, recovery_binding_generation,
+         history_state_id, content_digest, baseline_digest] {
             const auto result = watcher->result();
             QString error = result->error;
             watcher->deleteLater();
@@ -213,6 +228,7 @@ void LayoutViewModel::runAutoSaveDeadline() {
             setDocumentFileBusy(m_pending_file_operations != 0);
             ffi::DocumentRuntime* active_runtime = document_runtime();
             if (!layout_view_model_support::current_session(active_runtime, session_generation)) {
+                emit documentFileActivityFinished();
                 return;
             }
             QString binding_error;
@@ -224,7 +240,8 @@ void LayoutViewModel::runAutoSaveDeadline() {
                     emit documentFileChanged();
                     if (!result->recovery_id.isEmpty()) {
                         const rust::String binding = ffi::set_document_recovery_id(
-                            *active_runtime, session_generation,
+                            *active_runtime, session_generation, document_generation,
+                            recovery_binding_generation,
                             layout_view_model_support::to_rust_string(result->recovery_id),
                             layout_view_model_support::to_rust_string(path),
                             layout_view_model_support::to_rust_string(baseline_digest));
@@ -252,7 +269,9 @@ void LayoutViewModel::runAutoSaveDeadline() {
         });
     watcher->setFuture(
         QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes), baseline_digest,
-                                                queued_digest, recovery_id] {
+                                                queued_digest, recovery_id,
+                                                recovery_binding_generation,
+                                                document_generation] {
             rust::Vec<std::uint8_t> payload;
             payload.reserve(static_cast<std::size_t>(bytes.size()));
             for (const char byte : bytes) {
@@ -262,7 +281,8 @@ void LayoutViewModel::runAutoSaveDeadline() {
                 layout_view_model_support::to_rust_string(path), std::move(payload),
                 layout_view_model_support::to_rust_string(baseline_digest),
                 layout_view_model_support::to_rust_string(queued_digest),
-                layout_view_model_support::to_rust_string(recovery_id)));
+                layout_view_model_support::to_rust_string(recovery_id),
+                recovery_binding_generation, document_generation));
         }));
 #endif
 }

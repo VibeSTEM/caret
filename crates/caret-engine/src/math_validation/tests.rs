@@ -340,13 +340,128 @@ fn source_history_rejects_uncommitted_placeholder_shape() {
 }
 
 #[test]
-fn source_history_rejects_semantic_equivalence_with_stale_text_ranges() {
+fn source_history_rebinds_text_ranges_across_canonical_text_flow_merge() -> Result<(), String> {
     let tree = parse_inline(r"\text{a}\text{b}");
     assert_eq!(caret_math::serialize_tree(&tree), r"\text{ab}");
 
-    assert!(
-        tree_for_source_history_projection(&tree, r"\text{ab}", MathInputKind::Inline).is_none()
+    let (updated, source_map) =
+        tree_for_source_history_projection_with_map(&tree, r"\text{ab}", MathInputKind::Inline)
+            .ok_or_else(|| {
+                "canonical source should preserve text-flow identity and ranges".to_owned()
+            })?;
+    assert_eq!(caret_math::serialize_tree(&updated), r"\text{ab}");
+    assert_eq!(
+        text_flow_range_signature(&tree.root).len(),
+        text_flow_range_signature(&updated.root).len()
     );
+    let (caret_math::ProjectedMath::Tree(_), mut canonical_source_map) =
+        caret_math::parse_projection(r"\text{ab}", MathInputKind::Inline)
+            .map_err(|error| error.to_string())?
+            .into_parts()
+    else {
+        return Err("canonical inline source should project to a MathTree".to_owned());
+    };
+    assert!(canonical_source_map.bind_tree_after_validated_edit(&updated));
+    let canonical_tree_map = canonical_source_map
+        .tree()
+        .ok_or_else(|| "bound canonical source should expose its tree map".to_owned())?;
+    assert!(source_map.same_locations(canonical_tree_map));
+    Ok(())
+}
+
+#[test]
+fn source_history_rebinds_text_ranges_inside_inline_environment() -> Result<(), String> {
+    let source = r"\text{\textbf{ab}}";
+    let mut tree = parse_inline(source);
+    let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
+        return Err("formatted formula should start with an inline environment".to_owned());
+    };
+    let Some(MathContent::Text(text)) = environment.children.first() else {
+        return Err("formatted environment should contain a text flow".to_owned());
+    };
+    let mut first = text.clone();
+    let mut second = text.clone();
+    let Some(run) = first.runs.first_mut() else {
+        return Err("text flow should contain a run".to_owned());
+    };
+    run.text = "a".to_owned();
+    let Some(run) = second.runs.first_mut() else {
+        return Err("text flow should contain a run".to_owned());
+    };
+    run.text = "b".to_owned();
+    environment.children = vec![MathContent::Text(first), MathContent::Text(second)];
+
+    let (updated, source_map) =
+        tree_for_source_history_projection_with_map(&tree, source, MathInputKind::Inline)
+            .ok_or_else(|| "nested canonical projection should refresh text ranges".to_owned())?;
+    let Some(MathContent::Environment(environment)) = updated.root.content.first() else {
+        return Err("updated formula should preserve its inline environment".to_owned());
+    };
+    if environment.children.len() != 2 {
+        return Err("history projection should preserve both text-flow identities".to_owned());
+    }
+    let (caret_math::ProjectedMath::Tree(_), mut canonical_source_map) =
+        caret_math::parse_projection(source, MathInputKind::Inline)
+            .map_err(|error| error.to_string())?
+            .into_parts()
+    else {
+        return Err("canonical inline source should project to a MathTree".to_owned());
+    };
+    if !canonical_source_map.bind_tree_after_validated_edit(&updated) {
+        return Err("updated nested tree should bind to its source projection".to_owned());
+    }
+    let canonical_tree_map = canonical_source_map
+        .tree()
+        .ok_or_else(|| "bound canonical source should expose its tree map".to_owned())?;
+    if !source_map.same_locations(canonical_tree_map) {
+        return Err("nested range refresh should match canonical source locations".to_owned());
+    }
+    Ok(())
+}
+
+#[test]
+fn canonical_text_flow_merge_keeps_model_only_run_properties_opaque_to_source_shape() {
+    let mut tree = parse_inline(r"\text{a}\text{b}");
+    let Some(MathContent::Text(second)) = tree.root.content.get_mut(1) else {
+        panic!("second text flow should remain separately addressable before projection");
+    };
+    let Some(run) = second.runs.first_mut() else {
+        panic!("second text flow should contain a run");
+    };
+    run.props
+        .insert("underline".to_owned(), serde_json::json!(true));
+
+    assert!(parse_tree_with_same_semantics(&tree, MathInputKind::Inline).is_some());
+}
+
+#[test]
+fn canonical_text_flow_split_rejects_unmappable_range_extensions() {
+    let mut projection_tree = parse_inline(r"\text{ab}");
+    let Some(MathContent::Text(projected)) = projection_tree.root.content.first_mut() else {
+        panic!("text formula should start with a text flow");
+    };
+    let Some(range) = projected.source_range.as_mut() else {
+        panic!("projected text flow should have a source range");
+    };
+    range
+        .extra
+        .insert("vendorRange".to_owned(), serde_json::json!("whole-flow"));
+
+    let tree = ["a", "b"]
+        .map(|text| {
+            MathContent::Text(caret_doc::TextFlow {
+                runs: vec![caret_doc::Run {
+                    text: text.to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                ..Default::default()
+            })
+        })
+        .to_vec();
+
+    assert!(collect_tree_text_sequence(&tree, 0, projected).is_none());
 }
 
 #[test]

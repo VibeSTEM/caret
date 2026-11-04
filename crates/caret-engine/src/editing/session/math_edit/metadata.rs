@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use caret_doc::{Align, Block, MathContent, MathFlow, MathNode, MathTree};
+use caret_doc::{Align, Block, MathContent, MathFlow, MathNode, MathTree, TextFlow};
 use caret_math::MathSourceMap;
 
 pub(super) fn preserve_display_math_metadata(
@@ -805,30 +805,68 @@ fn flow_source_is_textual(flow: &MathFlow, parsed: &MathFlow) -> bool {
             .source_range
             .as_ref()
             .is_none_or(|range| range.extra.is_empty())
-        && flow.content.len() == parsed.content.len()
-        && flow
-            .content
+        && content_sequence_source_is_textual(&flow.content, &parsed.content)
+}
+
+fn content_sequence_source_is_textual(contents: &[MathContent], parsed: &[MathContent]) -> bool {
+    let (mut content_index, mut parsed_index) = (0, 0);
+    while content_index < contents.len() && parsed_index < parsed.len() {
+        if matches!(contents[content_index], MathContent::Text(_))
+            && matches!(parsed[parsed_index], MathContent::Text(_))
+        {
+            let content_end = text_sequence_end(contents, content_index);
+            let parsed_end = text_sequence_end(parsed, parsed_index);
+            let content_sequence = &contents[content_index..content_end];
+            let parsed_sequence = &parsed[parsed_index..parsed_end];
+            if !content_sequence.iter().all(|content| match content {
+                MathContent::Text(text) => text_flow_is_plain(text),
+                _ => false,
+            }) || !parsed_sequence.iter().all(|content| match content {
+                MathContent::Text(text) => text_flow_is_plain(text),
+                _ => false,
+            }) || text_sequence(content_sequence) != text_sequence(parsed_sequence)
+            {
+                return false;
+            }
+            content_index = content_end;
+            parsed_index = parsed_end;
+            continue;
+        }
+        if !content_source_is_textual(&contents[content_index], &parsed[parsed_index]) {
+            return false;
+        }
+        content_index += 1;
+        parsed_index += 1;
+    }
+    content_index == contents.len() && parsed_index == parsed.len()
+}
+
+fn text_sequence_end(contents: &[MathContent], start: usize) -> usize {
+    start
+        + contents[start..]
             .iter()
-            .zip(&parsed.content)
-            .all(|(content, parsed)| content_source_is_textual(content, parsed))
+            .take_while(|content| matches!(content, MathContent::Text(_)))
+            .count()
+}
+
+fn text_sequence(contents: &[MathContent]) -> String {
+    contents
+        .iter()
+        .filter_map(|content| match content {
+            MathContent::Text(text) => Some(
+                text.runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect()
 }
 
 fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> bool {
     match (content, parsed) {
-        (MathContent::Text(text), MathContent::Text(_)) => {
-            text.extra.is_empty()
-                && text
-                    .source_range
-                    .as_ref()
-                    .is_none_or(|range| range.extra.is_empty())
-                && text.runs.iter().all(|run| {
-                    run.language.is_none() && run.props.is_empty() && run.extra.is_empty()
-                })
-                && text
-                    .source_map
-                    .iter()
-                    .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
-        }
+        (MathContent::Text(text), MathContent::Text(_)) => text_flow_is_plain(text),
         (MathContent::Math(node), MathContent::Math(parsed_node)) => {
             node.extra.is_empty()
                 && node
@@ -850,17 +888,31 @@ fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> boo
                     .source_range
                     .as_ref()
                     .is_none_or(|range| range.extra.is_empty())
-                && environment.children.len() == parsed_environment.children.len()
-                && environment
-                    .children
-                    .iter()
-                    .zip(&parsed_environment.children)
-                    .all(|(child, parsed)| content_source_is_textual(child, parsed))
+                && content_sequence_source_is_textual(
+                    &environment.children,
+                    &parsed_environment.children,
+                )
         }
         (MathContent::SoftBreak(value), MathContent::SoftBreak(_)) => value.extra.is_empty(),
         (MathContent::Opaque(_), _) | (_, MathContent::Opaque(_)) => false,
         _ => false,
     }
+}
+
+fn text_flow_is_plain(text: &TextFlow) -> bool {
+    text.extra.is_empty()
+        && text
+            .source_range
+            .as_ref()
+            .is_none_or(|range| range.extra.is_empty())
+        && text
+            .runs
+            .iter()
+            .all(|run| run.language.is_none() && run.props.is_empty() && run.extra.is_empty())
+        && text
+            .source_map
+            .iter()
+            .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
 }
 
 fn row_has_metadata(row: &caret_doc::MathAlignRow) -> bool {

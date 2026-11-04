@@ -96,13 +96,16 @@ pub(crate) fn recovery_update_write_finished(
     runtime: &mut DocumentRuntime,
     session_generation: u64,
     revision: u64,
+    recovery_id: String,
+    recovery_binding_generation: u64,
     succeeded: bool,
 ) -> String {
-    if !runtime
-        .runtime
-        .as_ref()
-        .is_ok_and(|session| session.session_generation() == session_generation)
-    {
+    let is_current_binding = runtime.runtime.as_ref().is_ok_and(|session| {
+        session.session_generation() == session_generation
+            && session.recovery_id() == Some(recovery_id.as_str())
+    }) && runtime.recovery_binding_generation
+        == recovery_binding_generation;
+    if !is_current_binding {
         return "error:document.stale_recovery_completion".to_owned();
     }
     let now = runtime.monotonic_origin.elapsed();

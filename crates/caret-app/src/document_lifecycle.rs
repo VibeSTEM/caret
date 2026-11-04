@@ -50,6 +50,7 @@ impl DocumentLifecycleDeadline {
 pub struct DocumentLifecycleService {
     auto_save: AutoSavePolicy,
     recovery_update: AutoSavePolicy,
+    math_source_draft_pending: bool,
 }
 
 impl DocumentLifecycleService {
@@ -58,6 +59,7 @@ impl DocumentLifecycleService {
         Self {
             auto_save: AutoSavePolicy::new(session_generation),
             recovery_update: AutoSavePolicy::new(session_generation),
+            math_source_draft_pending: false,
         }
     }
 
@@ -67,6 +69,7 @@ impl DocumentLifecycleService {
         self.recovery_update
             .set_session_generation(session_generation);
         self.recovery_update.set_enabled(has_recovery);
+        self.math_source_draft_pending = false;
     }
 
     /// 切换用户自动保存设置，并在需要时安排当前 dirty revision。
@@ -93,8 +96,25 @@ impl DocumentLifecycleService {
         }
     }
 
+    /// 草稿期间隐藏 deadline 并使旧 timer 身份失效；底层排期保留到草稿结束。
+    pub fn set_math_source_draft_pending(&mut self, pending: bool, document_dirty: bool) {
+        if self.math_source_draft_pending == pending {
+            return;
+        }
+        self.math_source_draft_pending = pending;
+        self.auto_save.invalidate_deadline_callbacks();
+        self.recovery_update.invalidate_deadline_callbacks();
+        if !pending && !document_dirty {
+            self.auto_save.cancel_deadline();
+        }
+        // 即使撤销回保存点，恢复副本仍可能需要写入该修订。
+    }
+
     /// 选择最早的唤醒；时间相同则优先保存用户文件。
     pub fn next_deadline(&self, now: Duration) -> Option<DocumentLifecycleDeadline> {
+        if self.math_source_draft_pending {
+            return None;
+        }
         match (
             self.auto_save.deadline(now),
             self.recovery_update.deadline(now),
@@ -115,6 +135,9 @@ impl DocumentLifecycleService {
         generation: u64,
         now: Duration,
     ) -> Option<u64> {
+        if self.math_source_draft_pending {
+            return None;
+        }
         self.auto_save
             .deadline_fired(session_generation, generation, now)
     }
@@ -126,6 +149,9 @@ impl DocumentLifecycleService {
         generation: u64,
         now: Duration,
     ) -> Option<u64> {
+        if self.math_source_draft_pending {
+            return None;
+        }
         self.recovery_update
             .deadline_fired(session_generation, generation, now)
     }
@@ -160,6 +186,11 @@ impl DocumentLifecycleService {
     /// 同步当前恢复绑定状态，避免无恢复项时继续刷新恢复文件。
     pub fn set_recovery_enabled(&mut self, enabled: bool) {
         self.recovery_update.set_enabled(enabled);
+    }
+
+    /// 恢复项身份变化时，使旧 ID 的在途完成不能消费新 ID 的排期。
+    pub fn recovery_binding_changed(&mut self) {
+        self.recovery_update.reset_pending_work();
     }
 }
 

@@ -25,6 +25,7 @@ pub(super) struct PreparedDocument {
     pub(super) recovery_source:
         Option<(String, caret_app::document_recovery::RecoverySessionLease)>,
     pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
+    pub(super) recovery_binding_generation: u64,
 }
 
 pub(super) fn prepared_documents() -> &'static Mutex<HashMap<u64, PreparedDocument>> {
@@ -42,6 +43,7 @@ pub struct DocumentRuntime {
     pub(super) runtime: Result<DocumentSessionService, String>,
     pub(super) lifecycle: caret_app::document_lifecycle::DocumentLifecycleService,
     pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
+    pub(super) recovery_binding_generation: u64,
     pub(super) monotonic_origin: Instant,
 }
 
@@ -51,6 +53,7 @@ pub(crate) fn new_blank_document_runtime() -> Box<DocumentRuntime> {
         runtime: DocumentSessionService::new_blank(),
         lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(1),
         recovery_lease: None,
+        recovery_binding_generation: 0,
         monotonic_origin: Instant::now(),
     })
 }
@@ -80,6 +83,7 @@ pub(crate) fn prepare_document_file(
             expected_document_generation,
             recovery_source: None,
             recovery_lease: None,
+            recovery_binding_generation: 0,
         };
         prepared_documents()
             .lock()
@@ -145,6 +149,7 @@ pub(crate) fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u
         let _ = storage.remove_leased(&source_lease);
     }
     runtime.recovery_lease = prepared.recovery_lease.take();
+    runtime.recovery_binding_generation = prepared.recovery_binding_generation;
     if let Ok(installed) = &runtime.runtime {
         runtime.lifecycle.set_session(
             installed.session_generation(),
@@ -166,13 +171,15 @@ pub(crate) fn write_document_file(path: String, bytes: Vec<u8>) -> String {
 pub(crate) fn document_save_snapshot(
     runtime: &mut DocumentRuntime,
 ) -> bridge::DocumentSaveSnapshot {
-    match &mut runtime.runtime {
+    let mut snapshot = match &mut runtime.runtime {
         Ok(runtime) => match runtime.save_snapshot() {
             Ok(snapshot) => to_bridge_snapshot(snapshot),
             Err(error) => empty_save_snapshot(error),
         },
         Err(error) => empty_save_snapshot(error.clone()),
-    }
+    };
+    snapshot.recovery_binding_generation = runtime.recovery_binding_generation;
+    snapshot
 }
 
 /// 轻量读取活动会话代际，供 Qt 拒绝过期 worker 回调。
@@ -190,6 +197,7 @@ fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSna
         stale_deadline: false,
         session_generation: snapshot.session_generation,
         document_generation: snapshot.document_generation,
+        recovery_binding_generation: 0,
         history_state_id: snapshot.history_state_id,
         bytes: snapshot.bytes,
         content_digest: snapshot.content_digest,
@@ -206,6 +214,7 @@ pub(super) fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot
         stale_deadline: false,
         session_generation: 0,
         document_generation: 0,
+        recovery_binding_generation: 0,
         history_state_id: 0,
         bytes: Vec::new(),
         content_digest: String::new(),
@@ -390,13 +399,16 @@ fn json_response(
         .as_ref()
         .ok()
         .map(|value| value.document_generation());
+    let before_math_source_draft_pending = runtime
+        .runtime
+        .as_ref()
+        .ok()
+        .is_some_and(DocumentSessionService::has_uncommitted_math_source_draft);
     let result = match &mut runtime.runtime {
         Ok(runtime) => operation(runtime.view_mut()),
         Err(error) => Err(error.clone()),
     };
-    if result.is_ok()
-        && let (Some(before), Ok(session)) = (before_generation, runtime.runtime.as_ref())
-    {
+    if let (Some(before), Ok(session)) = (before_generation, runtime.runtime.as_ref()) {
         let after = session.document_generation();
         if after > before {
             let now = runtime.monotonic_origin.elapsed();
@@ -405,6 +417,14 @@ fn json_response(
                 .as_ref()
                 .is_ok_and(|session| session.recovery_id().is_some());
             runtime.lifecycle.edited(after, has_recovery, now);
+        }
+    }
+    if let Ok(session) = &runtime.runtime {
+        let pending = session.has_uncommitted_math_source_draft();
+        if pending != before_math_source_draft_pending {
+            runtime
+                .lifecycle
+                .set_math_source_draft_pending(pending, session.is_dirty());
         }
     }
     result.unwrap_or_else(|error| format!("error:{error}"))
@@ -522,11 +542,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn committed_revision_schedules_saving_even_when_response_generation_fails() {
+        let mut runtime = new_blank_document_runtime();
+        set_document_auto_save_enabled(&mut runtime, true);
+
+        let response = json_response(&mut runtime, |view| {
+            view.insert_text_delta_json("committed edit".to_owned())?;
+            Err("layout.test_failure".to_owned())
+        });
+
+        assert_eq!(response, "error:layout.test_failure");
+        assert!(auto_save_deadline_json(&runtime).contains("\"delayMs\":"));
+    }
+
+    #[test]
     fn initialization_failure_is_reported_by_document_commands_and_binary_results() {
         let mut runtime = DocumentRuntime {
             runtime: Err("document.initialization_failed".to_owned()),
             lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(0),
             recovery_lease: None,
+            recovery_binding_generation: 0,
             monotonic_origin: Instant::now(),
         };
         let expected = "error:document.initialization_failed";

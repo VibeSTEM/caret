@@ -43,11 +43,10 @@ impl Session {
             return Err(EditError::UnsupportedNewline);
         }
         let current_tree = self.math_tree_for_edit(&edit, None)?;
-        let (projected_content, projected_source_map) =
-            caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
+        let caret_math::ParsedMath::Tree(projected_tree) =
+            caret_math::parse(&source, caret_math::MathInputKind::Inline)
                 .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                .into_parts();
-        let caret_math::ProjectedMath::Tree(projected_tree) = projected_content else {
+        else {
             return Err(EditError::InvalidPosition);
         };
         let (source_anchor, source_cursor) = match &edit.branch {
@@ -66,35 +65,51 @@ impl Session {
                 if !trees_correspond_for_position_mapping(current_tree, &projected_tree) {
                     return Err(EditError::UnsupportedOpaqueContent);
                 }
-                path.resolve_in_projection(current_tree, &edit.source_projection)
-                    .ok_or(EditError::InvalidPosition)?;
-                let text = path
-                    .resolve_structurally(&projected_tree)
-                    .ok_or(EditError::UnsupportedOpaqueContent)?;
-                let text_map = path
-                    .text_source_map_in_projection(&projected_source_map)
-                    .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let Some((text, text_map)) =
+                    path.resolve_in_projection(current_tree, &edit.source_projection)
+                else {
+                    return Err(EditError::InvalidPosition);
+                };
                 let MathEditBranch::Text { anchor, .. } = &edit.branch else {
                     unreachable!()
                 };
-                let source_base = projected_source_map.edit_range().start;
-                let anchor = text_source_boundary_from_map(
+                let source_base = edit.source_projection.edit_range().start;
+                let Some(source_anchor) = text_source_boundary_from_map(
                     text,
                     text_map,
                     source_base,
                     *anchor,
                     Affinity::Downstream,
-                )
-                .ok_or(EditError::UnsupportedOpaqueContent)?;
-                let local = text_source_boundary_from_map(
+                ) else {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                };
+                let Some(source_cursor) = text_source_boundary_from_map(
                     text,
                     text_map,
                     source_base,
                     edit.cursor,
                     Affinity::Downstream,
+                ) else {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                };
+                let mapped_anchor = map_source_position(
+                    current_tree,
+                    &projected_tree,
+                    edit.source(),
+                    &source,
+                    source_anchor,
+                );
+                let mapped_cursor = map_source_position(
+                    current_tree,
+                    &projected_tree,
+                    edit.source(),
+                    &source,
+                    source_cursor,
+                );
+                (
+                    mapped_anchor.ok_or(EditError::UnsupportedOpaqueContent)?,
+                    mapped_cursor.ok_or(EditError::UnsupportedOpaqueContent)?,
                 )
-                .ok_or(EditError::UnsupportedOpaqueContent)?;
-                (anchor, local)
             }
         };
         if source_anchor > source.len()
@@ -268,6 +283,9 @@ fn map_source_position(
     if !trees_correspond_for_position_mapping(previous, projected) {
         return None;
     }
+    if let Some(mapped) = map_text_source_position(previous, projected, position) {
+        return Some(mapped);
+    }
     let mut anchors = Vec::new();
     collect_flow_anchors(&previous.root, &projected.root, &mut anchors);
     let mut matches = anchors
@@ -286,14 +304,299 @@ fn trees_correspond_for_position_mapping(previous: &MathTree, projected: &MathTr
 
 fn flows_correspond_for_position_mapping(previous: &MathFlow, projected: &MathFlow) -> bool {
     previous.extra == projected.extra
-        && previous.content.len() == projected.content.len()
-        && previous
-            .content
+        && content_sequences_correspond_for_position_mapping(&previous.content, &projected.content)
+}
+
+fn content_sequences_correspond_for_position_mapping(
+    previous: &[MathContent],
+    projected: &[MathContent],
+) -> bool {
+    let mut previous_index = 0;
+    let mut projected_index = 0;
+    while previous_index < previous.len() && projected_index < projected.len() {
+        if matches!(previous[previous_index], MathContent::Text(_))
+            && matches!(projected[projected_index], MathContent::Text(_))
+        {
+            let previous_end = text_group_end(previous, previous_index);
+            let projected_end = text_group_end(projected, projected_index);
+            if !text_groups_correspond(
+                &previous[previous_index..previous_end],
+                &projected[projected_index..projected_end],
+            ) {
+                return false;
+            }
+            previous_index = previous_end;
+            projected_index = projected_end;
+            continue;
+        }
+        if !contents_correspond_for_position_mapping(
+            &previous[previous_index],
+            &projected[projected_index],
+        ) {
+            return false;
+        }
+        previous_index += 1;
+        projected_index += 1;
+    }
+    previous_index == previous.len() && projected_index == projected.len()
+}
+
+fn text_group_end(contents: &[MathContent], start: usize) -> usize {
+    start
+        + contents[start..]
             .iter()
-            .zip(&projected.content)
-            .all(|(previous, projected)| {
-                contents_correspond_for_position_mapping(previous, projected)
-            })
+            .take_while(|content| matches!(content, MathContent::Text(_)))
+            .count()
+}
+
+fn text_groups_correspond(previous: &[MathContent], projected: &[MathContent]) -> bool {
+    if previous.len() == 1 && projected.len() == 1 {
+        return contents_correspond_for_position_mapping(&previous[0], &projected[0]);
+    }
+    normalized_text_group_runs(previous).is_some_and(|previous_runs| {
+        normalized_text_group_runs(projected).is_some_and(|projected_runs| {
+            previous_runs == projected_runs
+                && text_group_extra(previous) == text_group_extra(projected)
+        })
+    })
+}
+
+fn normalized_text_group_runs(contents: &[MathContent]) -> Option<Vec<Run>> {
+    let mut runs: Vec<Run> = Vec::new();
+    for content in contents {
+        let MathContent::Text(flow) = content else {
+            return None;
+        };
+        for run in &flow.runs {
+            if let Some(previous) = runs.last_mut()
+                && previous.language == run.language
+                && previous.props == run.props
+                && previous.extra == run.extra
+            {
+                previous.text.push_str(&run.text);
+            } else {
+                runs.push(run.clone());
+            }
+        }
+    }
+    Some(runs)
+}
+
+fn text_group_extra(contents: &[MathContent]) -> Option<&BTreeMap<String, serde_json::Value>> {
+    let mut extra = None;
+    for content in contents {
+        let MathContent::Text(flow) = content else {
+            return None;
+        };
+        if extra.is_some_and(|previous| previous != &flow.extra) {
+            return None;
+        }
+        extra = Some(&flow.extra);
+    }
+    extra
+}
+
+fn map_text_source_position(
+    previous: &MathTree,
+    projected: &MathTree,
+    source_position: usize,
+) -> Option<usize> {
+    map_text_position_in_flow(&previous.root, &projected.root, source_position)
+}
+
+fn map_text_position_in_flow(
+    previous: &MathFlow,
+    projected: &MathFlow,
+    source_position: usize,
+) -> Option<usize> {
+    let mut previous_index = 0;
+    let mut projected_index = 0;
+    while previous_index < previous.content.len() && projected_index < projected.content.len() {
+        let previous_content = &previous.content[previous_index];
+        let projected_content = &projected.content[projected_index];
+        if matches!(previous_content, MathContent::Text(_))
+            && matches!(projected_content, MathContent::Text(_))
+        {
+            let previous_end = text_group_end(&previous.content, previous_index);
+            let projected_end = text_group_end(&projected.content, projected_index);
+            let previous_group = &previous.content[previous_index..previous_end];
+            let projected_group = &projected.content[projected_index..projected_end];
+            if let Some(display_position) =
+                text_group_source_to_display(previous_group, source_position)
+            {
+                return text_group_display_to_source(projected_group, display_position);
+            }
+            previous_index = previous_end;
+            projected_index = projected_end;
+            continue;
+        }
+        let mapped = match (previous_content, projected_content) {
+            (MathContent::Math(previous), MathContent::Math(projected)) => {
+                previous.children.iter().zip(&projected.children).find_map(
+                    |(previous, projected)| {
+                        map_text_position_in_flow(previous, projected, source_position)
+                    },
+                )
+            }
+            (MathContent::Environment(previous), MathContent::Environment(projected)) => {
+                map_text_position_in_contents(
+                    &previous.children,
+                    &projected.children,
+                    source_position,
+                )
+            }
+            _ => None,
+        };
+        if mapped.is_some() {
+            return mapped;
+        }
+        previous_index += 1;
+        projected_index += 1;
+    }
+    None
+}
+
+fn map_text_position_in_contents(
+    previous: &[MathContent],
+    projected: &[MathContent],
+    source_position: usize,
+) -> Option<usize> {
+    let mut previous_index = 0;
+    let mut projected_index = 0;
+    while previous_index < previous.len() && projected_index < projected.len() {
+        if matches!(previous[previous_index], MathContent::Text(_))
+            && matches!(projected[projected_index], MathContent::Text(_))
+        {
+            let previous_end = text_group_end(previous, previous_index);
+            let projected_end = text_group_end(projected, projected_index);
+            if let Some(display_position) = text_group_source_to_display(
+                &previous[previous_index..previous_end],
+                source_position,
+            ) {
+                return text_group_display_to_source(
+                    &projected[projected_index..projected_end],
+                    display_position,
+                );
+            }
+            previous_index = previous_end;
+            projected_index = projected_end;
+            continue;
+        }
+        let mapped = match (&previous[previous_index], &projected[projected_index]) {
+            (MathContent::Math(previous), MathContent::Math(projected)) => {
+                previous.children.iter().zip(&projected.children).find_map(
+                    |(previous, projected)| {
+                        map_text_position_in_flow(previous, projected, source_position)
+                    },
+                )
+            }
+            (MathContent::Environment(previous), MathContent::Environment(projected)) => {
+                map_text_position_in_contents(
+                    &previous.children,
+                    &projected.children,
+                    source_position,
+                )
+            }
+            _ => None,
+        };
+        if mapped.is_some() {
+            return mapped;
+        }
+        previous_index += 1;
+        projected_index += 1;
+    }
+    None
+}
+
+fn text_group_source_to_display(contents: &[MathContent], source_position: usize) -> Option<usize> {
+    let mut display_base = 0usize;
+    let mut candidates = Vec::new();
+    for content in contents {
+        let MathContent::Text(flow) = content else {
+            return None;
+        };
+        let text_len = flow
+            .runs
+            .iter()
+            .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
+        if let Some(range) = &flow.source_range {
+            if source_position == range.start as usize {
+                candidates.push(display_base);
+            }
+            if source_position == range.end as usize {
+                candidates.push(display_base.checked_add(text_len)?);
+            }
+        }
+        for segment in &flow.source_map {
+            let display_start = display_base.checked_add(segment.text_start as usize)?;
+            let display_end = display_base.checked_add(segment.text_end as usize)?;
+            let source_start = segment.source_range.start as usize;
+            let source_end = segment.source_range.end as usize;
+            if source_position == source_start {
+                candidates.push(display_start);
+            } else if source_position == source_end {
+                candidates.push(display_end);
+            } else if display_end - display_start == source_end - source_start
+                && source_start < source_position
+                && source_position < source_end
+            {
+                candidates.push(display_start.checked_add(source_position - source_start)?);
+            }
+        }
+        display_base = display_base.checked_add(text_len)?;
+    }
+    unique_position(candidates)
+}
+
+fn text_group_display_to_source(
+    contents: &[MathContent],
+    display_position: usize,
+) -> Option<usize> {
+    let mut display_base = 0usize;
+    let mut candidates = Vec::new();
+    for content in contents {
+        let MathContent::Text(flow) = content else {
+            return None;
+        };
+        let text_len = flow
+            .runs
+            .iter()
+            .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
+        let group_display_end = display_base.checked_add(text_len)?;
+        if let Some(range) = &flow.source_range {
+            if display_position == display_base {
+                candidates.push(range.start as usize);
+            }
+            if display_position == group_display_end {
+                candidates.push(range.end as usize);
+            }
+        }
+        for segment in &flow.source_map {
+            let segment_display_start = display_base.checked_add(segment.text_start as usize)?;
+            let segment_display_end = display_base.checked_add(segment.text_end as usize)?;
+            let source_start = segment.source_range.start as usize;
+            let source_end = segment.source_range.end as usize;
+            if display_position == segment_display_start {
+                candidates.push(source_start);
+            } else if display_position == segment_display_end {
+                candidates.push(source_end);
+            } else if segment_display_end - segment_display_start == source_end - source_start
+                && segment_display_start < display_position
+                && display_position < segment_display_end
+            {
+                candidates
+                    .push(source_start.checked_add(display_position - segment_display_start)?);
+            }
+        }
+        display_base = group_display_end;
+    }
+    unique_position(candidates)
+}
+
+fn unique_position(mut candidates: Vec<usize>) -> Option<usize> {
+    candidates.sort_unstable();
+    candidates.dedup();
+    (candidates.len() == 1).then(|| candidates[0])
 }
 
 fn contents_correspond_for_position_mapping(
@@ -323,14 +626,10 @@ fn contents_correspond_for_position_mapping(
                 && previous.definition_id == projected.definition_id
                 && previous.props == projected.props
                 && previous.extra == projected.extra
-                && previous.children.len() == projected.children.len()
-                && previous
-                    .children
-                    .iter()
-                    .zip(&projected.children)
-                    .all(|(previous, projected)| {
-                        contents_correspond_for_position_mapping(previous, projected)
-                    })
+                && content_sequences_correspond_for_position_mapping(
+                    &previous.children,
+                    &projected.children,
+                )
         }
         (MathContent::SoftBreak(previous), MathContent::SoftBreak(projected)) => {
             previous.extra == projected.extra
@@ -350,17 +649,32 @@ fn collect_flow_anchors(
         projected.source_range.as_ref(),
         output,
     );
-    for (previous, projected) in previous.content.iter().zip(&projected.content) {
-        match (previous, projected) {
-            (MathContent::Text(previous), MathContent::Text(projected)) => {
-                for (previous, projected) in previous.source_map.iter().zip(&projected.source_map) {
-                    push_range_anchors(
-                        Some(&previous.source_range),
-                        Some(&projected.source_range),
-                        output,
-                    );
-                }
-            }
+    collect_content_anchors(&previous.content, &projected.content, output);
+}
+
+fn collect_content_anchors(
+    previous: &[MathContent],
+    projected: &[MathContent],
+    output: &mut Vec<(usize, usize)>,
+) {
+    let mut previous_index = 0;
+    let mut projected_index = 0;
+    while previous_index < previous.len() && projected_index < projected.len() {
+        if matches!(previous[previous_index], MathContent::Text(_))
+            && matches!(projected[projected_index], MathContent::Text(_))
+        {
+            let previous_end = text_group_end(previous, previous_index);
+            let projected_end = text_group_end(projected, projected_index);
+            push_text_group_range_anchors(
+                &previous[previous_index..previous_end],
+                &projected[projected_index..projected_end],
+                output,
+            );
+            previous_index = previous_end;
+            projected_index = projected_end;
+            continue;
+        }
+        match (&previous[previous_index], &projected[projected_index]) {
             (MathContent::Math(previous), MathContent::Math(projected)) => {
                 push_range_anchors(
                     previous.source_range.as_ref(),
@@ -377,51 +691,39 @@ fn collect_flow_anchors(
                     projected.source_range.as_ref(),
                     output,
                 );
-                for (previous, projected) in previous.children.iter().zip(&projected.children) {
-                    collect_content_anchors(previous, projected, output);
-                }
+                collect_content_anchors(&previous.children, &projected.children, output);
             }
             _ => {}
         }
+        previous_index += 1;
+        projected_index += 1;
     }
 }
 
-fn collect_content_anchors(
-    previous: &MathContent,
-    projected: &MathContent,
+fn push_text_group_range_anchors(
+    previous: &[MathContent],
+    projected: &[MathContent],
     output: &mut Vec<(usize, usize)>,
 ) {
-    match (previous, projected) {
-        (MathContent::Text(previous), MathContent::Text(projected)) => {
-            for (previous, projected) in previous.source_map.iter().zip(&projected.source_map) {
-                push_range_anchors(
-                    Some(&previous.source_range),
-                    Some(&projected.source_range),
-                    output,
-                );
-            }
-        }
-        (MathContent::Math(previous), MathContent::Math(projected)) => {
-            push_range_anchors(
-                previous.source_range.as_ref(),
-                projected.source_range.as_ref(),
-                output,
-            );
-            for (previous, projected) in previous.children.iter().zip(&projected.children) {
-                collect_flow_anchors(previous, projected, output);
-            }
-        }
-        (MathContent::Environment(previous), MathContent::Environment(projected)) => {
-            push_range_anchors(
-                previous.source_range.as_ref(),
-                projected.source_range.as_ref(),
-                output,
-            );
-            for (previous, projected) in previous.children.iter().zip(&projected.children) {
-                collect_content_anchors(previous, projected, output);
-            }
-        }
-        _ => {}
+    let previous_ranges = previous
+        .iter()
+        .filter_map(|content| match content {
+            MathContent::Text(flow) => flow.source_range.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let projected_ranges = projected
+        .iter()
+        .filter_map(|content| match content {
+            MathContent::Text(flow) => flow.source_range.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let (Some(previous), Some(projected)) = (previous_ranges.first(), projected_ranges.first()) {
+        output.push((previous.start as usize, projected.start as usize));
+    }
+    if let (Some(previous), Some(projected)) = (previous_ranges.last(), projected_ranges.last()) {
+        output.push((previous.end as usize, projected.end as usize));
     }
 }
 
@@ -528,21 +830,106 @@ mod tests {
     }
 
     #[test]
-    fn position_mapping_rejects_text_flows_merged_by_canonical_serialization()
+    fn position_mapping_preserves_text_and_math_boundaries_when_flows_merge()
     -> Result<(), Box<dyn std::error::Error>> {
         let source = r"\text{a}\text{b}\alpha\text{d}\text{e}";
         let original = parse_tree(source)?;
         let canonical = serialize_tree(&original);
         let projected = parse_tree(&canonical)?;
         assert_ne!(canonical, source);
+        assert!(trees_correspond_for_position_mapping(&original, &projected));
+        let alpha_start = source.find("\\alpha").ok_or("missing middle atom")?;
+        let canonical_alpha_start = canonical
+            .find("\\alpha")
+            .ok_or("missing canonical middle atom")?;
+        let alpha_end = alpha_start + "\\alpha".len();
+        let canonical_alpha_end = canonical_alpha_start + "\\alpha".len();
+        for (source_position, expected) in [
+            (
+                source.find("{a}").ok_or("missing first text")? + 1,
+                canonical.find("{ab}").ok_or("missing merged text")? + 1,
+            ),
+            (
+                source.find("{a}").ok_or("missing first text")? + 2,
+                canonical.find("{ab}").ok_or("missing merged text")? + 2,
+            ),
+            (
+                source.find("{b}").ok_or("missing second text")? + 1,
+                canonical.find("{ab}").ok_or("missing merged text")? + 2,
+            ),
+            (alpha_start, canonical_alpha_start),
+            (alpha_end, canonical_alpha_end),
+            (
+                source.find("{d}").ok_or("missing third text")? + 1,
+                canonical
+                    .rfind("{de}")
+                    .ok_or("missing merged trailing text")?
+                    + 1,
+            ),
+            (
+                source.find("{e}").ok_or("missing fourth text")? + 1,
+                canonical
+                    .rfind("{de}")
+                    .ok_or("missing merged trailing text")?
+                    + 2,
+            ),
+        ] {
+            assert_eq!(
+                map_source_position(&original, &projected, source, &canonical, source_position,),
+                Some(expected),
+                "failed to map source byte {source_position} in {source:?}"
+            );
+        }
+
+        let source = r"\text{\%é}\text{界}\alpha";
+        let original = parse_tree(source)?;
+        let canonical = serialize_tree(&original);
+        let projected = parse_tree(&canonical)?;
+        let escaped_start = source.find(r"\%").ok_or("missing escaped percent")?;
+        let canonical_escaped_start = canonical
+            .find(r"\%")
+            .ok_or("missing canonical escaped percent")?;
+        for (source_position, expected) in [
+            (escaped_start, canonical_escaped_start),
+            (escaped_start + 2, canonical_escaped_start + 2),
+            (
+                source.find("é").ok_or("missing non-ASCII text")?,
+                canonical
+                    .find("é")
+                    .ok_or("missing canonical non-ASCII text")?,
+            ),
+            (
+                source.find("界").ok_or("missing CJK text")?,
+                canonical.find("界").ok_or("missing canonical CJK text")?,
+            ),
+        ] {
+            assert_eq!(
+                map_source_position(&original, &projected, source, &canonical, source_position,),
+                Some(expected),
+                "failed to map source byte {source_position} in {source:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn position_mapping_rejects_merging_text_with_different_run_semantics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut original = parse_tree(r"\text{a}\text{b}")?;
+        let Some(caret_doc::MathContent::Text(first)) = original.root.content.first_mut() else {
+            return Err("first text flow should be present".into());
+        };
+        let Some(run) = first.runs.first_mut() else {
+            return Err("first text flow should have a Run".into());
+        };
+        run.props
+            .insert("underline".to_owned(), serde_json::json!(true));
+        let canonical = serialize_tree(&original);
+        let projected = parse_tree(&canonical)?;
+
         assert!(!trees_correspond_for_position_mapping(
             &original, &projected
         ));
-        let position = source.find("\\alpha").ok_or("missing middle atom")?;
-        assert_eq!(
-            map_source_position(&original, &projected, source, &canonical, position),
-            None
-        );
         Ok(())
     }
 }

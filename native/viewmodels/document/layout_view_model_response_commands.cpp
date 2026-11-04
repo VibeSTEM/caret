@@ -26,6 +26,8 @@ QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_byte
                 {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
     }
     if (response_bytes.startsWith("error:")) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"),
                  QString::fromUtf8(response_bytes.constData(), response_bytes.size())}};
@@ -33,6 +35,8 @@ QVariantMap LayoutViewModel::installEditResponse(const QByteArray& response_byte
     QJsonParseError parse_error;
     const QJsonDocument snapshot_document = QJsonDocument::fromJson(response_bytes, &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !snapshot_document.isObject()) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.invalid_snapshot")}};
     }
@@ -53,16 +57,22 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     }
     if (!installSnapshot(snapshot_document)) {
         if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
+            refreshDocumentFileStatus();
+            refreshAutoSaveDeadline();
             return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
         }
         const rust::String full_snapshot = ffi::layout_snapshot_json(*runtime);
         const QByteArray full_snapshot_bytes(full_snapshot.data(),
                                              static_cast<qsizetype>(full_snapshot.size()));
         if (full_snapshot_bytes.startsWith("error:")) {
+            refreshDocumentFileStatus();
+            refreshAutoSaveDeadline();
             return {{QStringLiteral("valid"), false},
                     {QStringLiteral("error"), QString::fromUtf8(full_snapshot_bytes)}};
         }
         if (!installSnapshot(QString::fromUtf8(full_snapshot_bytes))) {
+            refreshDocumentFileStatus();
+            refreshAutoSaveDeadline();
             return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
         }
     }
@@ -70,6 +80,8 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     const QByteArray caret_bytes(caret_response.data(),
                                  static_cast<qsizetype>(caret_response.size()));
     if (caret_bytes.startsWith("error:")) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"),
                  QString::fromUtf8(caret_bytes.constData(), caret_bytes.size())}};
@@ -77,6 +89,8 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
     QJsonParseError parse_error;
     const QJsonDocument caret_document = QJsonDocument::fromJson(caret_bytes, &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.invalid_caret_geometry")}};
     }
@@ -97,6 +111,8 @@ QVariantMap LayoutViewModel::installEditResponse(const QJsonDocument& snapshot_d
 QVariantMap LayoutViewModel::installInteractionResponse(const QByteArray& response_bytes) {
 #ifdef CARET_ENABLE_APP
     if (response_bytes.startsWith("error:")) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"),
                  QString::fromUtf8(response_bytes.constData(), response_bytes.size())}};
@@ -104,6 +120,8 @@ QVariantMap LayoutViewModel::installInteractionResponse(const QByteArray& respon
     QJsonParseError parse_error;
     const QJsonDocument document = QJsonDocument::fromJson(response_bytes, &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.invalid_interaction")}};
     }
@@ -111,9 +129,12 @@ QVariantMap LayoutViewModel::installInteractionResponse(const QByteArray& respon
         return installEditResponse(document);
     }
     if (!installInteraction(document.object())) {
+        refreshDocumentFileStatus();
+        refreshAutoSaveDeadline();
         return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), m_error}};
     }
     refreshDocumentFileStatus();
+    refreshAutoSaveDeadline();
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("compositionCancelled"),
              document.object().value(QStringLiteral("compositionCancelled")).toBool()}};

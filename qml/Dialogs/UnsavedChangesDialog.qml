@@ -12,6 +12,7 @@ DialogWindow {
     id: dialog
 
     objectName: "closeDocumentConfirmation"
+    property bool mathSourceDraftPending: false
     signal saveRequested
     signal discardRequested
 
@@ -43,7 +44,7 @@ DialogWindow {
                 id: promptLabel
                 objectName: "closePrompt"
                 Layout.fillWidth: true
-                text: qsTr("Save your changes before closing this document?")
+                text: dialog.mathSourceDraftPending ? qsTr("This document contains an incomplete formula edit that cannot be saved. Discard all changes and close?") : qsTr("Save your changes before closing this document?")
                 textSize: Theme.fontBody
                 wrapMode: Text.Wrap
             }
@@ -55,6 +56,7 @@ DialogWindow {
 
                 ThemedButton {
                     objectName: "closeSaveButton"
+                    visible: !dialog.mathSourceDraftPending
                     text: qsTr("Save")
                     primaryAction: true
                     onClicked: {

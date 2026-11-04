@@ -284,9 +284,18 @@ fn incomplete_math_source_makes_document_dirty_and_blocks_save() -> Result<(), S
     let status: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
     assert_eq!(status["dirty"], true);
+    assert_eq!(status["mathSourceDraftPending"], true);
     assert!(service.view_mut().has_uncommitted_math_source_draft());
-    assert!(service.save_snapshot().is_err());
+    assert_eq!(
+        service.save_snapshot().err().as_deref(),
+        Some("document.save_incomplete_math_source_draft")
+    );
+    assert!(service.view_mut().has_uncommitted_math_source_draft());
     assert_eq!(status["historyStateId"], saved_history_state_id.to_string());
+    service.view_mut().handle_editor_key_json("escape")?;
+    let resolved_status: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(resolved_status["mathSourceDraftPending"], false);
     Ok(())
 }
 
@@ -376,6 +385,16 @@ fn recovery_session_stays_dirty_and_retains_its_original_recovery_binding() -> R
     )?;
     assert!(service.is_dirty());
     assert_eq!(service.recovery_id(), Some("recovery-id"));
+    assert!(service.recovery_binding_matches(
+        "recovery-id",
+        "/documents/old.cdoc",
+        Some("baseline")
+    ));
+    assert!(!service.recovery_binding_matches(
+        "recovery-id",
+        "/documents/new.cdoc",
+        Some("baseline")
+    ));
     assert!(service.status_json().contains("\"path\":\"\""));
 
     service.view_mut().insert_text_json("new edit".to_owned())?;

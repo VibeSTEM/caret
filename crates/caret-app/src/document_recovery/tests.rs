@@ -3,7 +3,7 @@
 use super::{DocumentRecoveryStorage, RecoveryKind};
 use crate::document_session::DocumentSessionService;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -112,6 +112,101 @@ fn stores_local_snapshot_and_external_binary_in_one_atomic_envelope()
     assert_eq!(updated.created_unix_seconds, envelope.created_unix_seconds);
     assert!(updated.updated_unix_seconds >= updated.created_unix_seconds);
     assert_eq!(latest, b"latest cdoc");
+    Ok(())
+}
+
+#[test]
+fn recovery_refresh_rejects_a_snapshot_from_an_old_binding_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = RecoveryFixture::new()?;
+    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let source = PathBuf::from("/documents/current.cdoc");
+    let id = storage.store(
+        RecoveryKind::LocalDocument,
+        &source,
+        Some("base-a".to_owned()),
+        b"current snapshot",
+    )?;
+
+    assert!(
+        storage
+            .update_if_identity_matches(
+                &id,
+                RecoveryKind::LocalDocument,
+                super::RecoverySnapshotIdentity::new(&source, Some("base-a"), 0, 0),
+                b"refreshed snapshot",
+            )
+            .is_ok()
+    );
+    assert!(matches!(
+        storage.update_if_identity_matches(
+            &id,
+            RecoveryKind::LocalDocument,
+            super::RecoverySnapshotIdentity::new(
+                Path::new("/documents/old.cdoc"),
+                Some("base-a"),
+                0,
+                0,
+            ),
+            b"stale snapshot",
+        ),
+        Err(super::RecoveryError::StaleIdentity)
+    ));
+    assert!(matches!(
+        storage.update_if_identity_matches(
+            &id,
+            RecoveryKind::LocalDocument,
+            super::RecoverySnapshotIdentity::new(&source, Some("base-old"), 0, 0),
+            b"stale snapshot",
+        ),
+        Err(super::RecoveryError::StaleIdentity)
+    ));
+    assert_eq!(storage.load(&id)?.1, b"refreshed snapshot");
+    Ok(())
+}
+
+#[test]
+fn late_recovery_write_cannot_overwrite_a_newer_binding_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = RecoveryFixture::new()?;
+    let storage = DocumentRecoveryStorage::new(fixture.0.join("recovery"));
+    let source = PathBuf::from("/documents/current.cdoc");
+    let id = storage.store(
+        RecoveryKind::LocalDocument,
+        &source,
+        Some("baseline".to_owned()),
+        b"initial",
+    )?;
+    let old_generation = storage.bind_session(&id, &source, Some("baseline".to_owned()), 1)?;
+    let new_generation = storage.bind_session(&id, &source, Some("baseline".to_owned()), 2)?;
+    assert!(new_generation > old_generation);
+
+    storage.update_if_identity_matches(
+        &id,
+        RecoveryKind::LocalDocument,
+        super::RecoverySnapshotIdentity::new(&source, Some("baseline"), new_generation, 2),
+        b"new snapshot",
+    )?;
+    assert!(matches!(
+        storage.update_if_identity_matches(
+            &id,
+            RecoveryKind::LocalDocument,
+            super::RecoverySnapshotIdentity::new(&source, Some("baseline"), new_generation, 1),
+            b"older revision",
+        ),
+        Err(super::RecoveryError::StaleSnapshot)
+    ));
+    assert!(matches!(
+        storage.update_if_identity_matches(
+            &id,
+            RecoveryKind::LocalDocument,
+            super::RecoverySnapshotIdentity::new(&source, Some("baseline"), old_generation, 2),
+            b"late old snapshot",
+        ),
+        Err(super::RecoveryError::StaleIdentity)
+    ));
+    assert_eq!(storage.load(&id)?.1, b"new snapshot");
+    assert_eq!(storage.load(&id)?.0.document_revision, 2);
     Ok(())
 }
 

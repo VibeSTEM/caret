@@ -100,6 +100,28 @@ impl AutoSavePolicy {
         self.current_deadline(now)
     }
 
+    /// 使宿主持有的旧 timer 身份失效，同时保留其排期和在途写入。
+    pub fn invalidate_deadline_callbacks(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+    }
+
+    /// 取消未触发的写入排期，但保留已捕获快照的在途写入。
+    pub fn cancel_deadline(&mut self) {
+        if self.deadline.take().is_some() {
+            self.generation = self.generation.saturating_add(1);
+        }
+        self.first_edit = None;
+    }
+
+    /// 恢复项身份变更时使旧排期与在途写入失效，但保留策略开关和会话身份。
+    pub fn reset_pending_work(&mut self) {
+        self.first_edit = None;
+        self.deadline = None;
+        self.latest_revision = 0;
+        self.in_flight_revision = None;
+        self.generation = self.generation.saturating_add(1);
+    }
+
     /// 验证 timer 回调；有效时返回应捕获的最新 revision。
     pub fn deadline_fired(
         &mut self,

@@ -192,3 +192,38 @@ fn manual_save_invalidates_a_pending_automatic_write() -> Result<(), Box<dyn std
     assert_eq!(policy.deadline(Duration::from_secs(2)), None);
     Ok(())
 }
+
+#[test]
+fn replacing_recovery_binding_invalidates_its_in_flight_revision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut policy = AutoSavePolicy::new(4);
+    policy.set_enabled(true);
+    let first = policy
+        .edited(1, Duration::ZERO)
+        .ok_or_else(|| std::io::Error::other("initial deadline missing"))?;
+    assert_eq!(
+        policy.deadline_fired(4, first.generation, QUIET_PERIOD),
+        Some(1)
+    );
+
+    policy.reset_pending_work();
+    let second = policy
+        .edited(2, Duration::from_secs(2))
+        .ok_or_else(|| std::io::Error::other("replacement deadline missing"))?;
+    assert!(
+        policy
+            .save_finished(1, true, Duration::from_secs(3))
+            .is_some()
+    );
+    assert_eq!(
+        Some(second.generation),
+        policy
+            .deadline(Duration::from_secs(2))
+            .map(|d| d.generation)
+    );
+    assert_eq!(
+        policy.deadline_fired(4, second.generation, Duration::from_secs(3)),
+        Some(2)
+    );
+    Ok(())
+}

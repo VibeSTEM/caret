@@ -110,12 +110,29 @@ impl DocumentSessionService {
     pub fn is_dirty(&self) -> bool {
         !self.has_save_point
             || self.view.history_state_id() != self.saved_history_state_id
-            || self.view.has_uncommitted_math_source_draft()
+            || self.has_uncommitted_math_source_draft()
+    }
+
+    /// 指示当前会话是否含有尚未提交的数学源码草稿。
+    pub fn has_uncommitted_math_source_draft(&self) -> bool {
+        self.view.has_uncommitted_math_source_draft()
     }
 
     /// 当前临时恢复会话绑定的恢复项标识。
     pub fn recovery_id(&self) -> Option<&str> {
         self.recovery_id.as_deref()
+    }
+
+    /// 比较恢复绑定的完整身份，避免同一条目更换路径或基线后沿用旧异步工作。
+    pub fn recovery_binding_matches(
+        &self,
+        id: &str,
+        original_path: &str,
+        baseline_digest: Option<&str>,
+    ) -> bool {
+        self.recovery_id.as_deref() == Some(id)
+            && self.recovery_original_path.as_deref() == Some(original_path)
+            && self.recovery_baseline_digest.as_deref() == baseline_digest
     }
 
     /// 恢复文档成功保存到用户路径后清除其恢复项绑定。
@@ -270,6 +287,9 @@ impl DocumentSessionService {
 
     /// 捕获当前文档修订用于后台写入，不改变当前会话或保存点。
     pub fn save_snapshot(&mut self) -> Result<DocumentSaveSnapshot, String> {
+        if self.view.has_uncommitted_math_source_draft() {
+            return Err("document.save_incomplete_math_source_draft".to_owned());
+        }
         self.view
             .begin_save_checkpoint()
             .map_err(|error| error.to_string())?;
@@ -332,6 +352,7 @@ impl DocumentSessionService {
             "documentGeneration": self.view.document_generation().to_string(),
             "savedGeneration": self.saved_generation.to_string(),
             "dirty": self.is_dirty(),
+            "mathSourceDraftPending": self.view.has_uncommitted_math_source_draft(),
             "historyStateId": self.view.history_state_id().to_string(),
             "canUndo": self.view.can_undo(),
             "canRedo": self.view.can_redo(),

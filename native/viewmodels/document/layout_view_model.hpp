@@ -62,6 +62,8 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QString documentPath READ documentPath NOTIFY documentFileChanged)
     Q_PROPERTY(QString documentFileName READ documentFileName NOTIFY documentFileChanged)
     Q_PROPERTY(bool documentEdited READ documentEdited NOTIFY documentFileChanged)
+    Q_PROPERTY(bool documentMathSourceDraftPending READ documentMathSourceDraftPending NOTIFY
+                   documentFileChanged)
     Q_PROPERTY(bool documentFileBusy READ documentFileBusy NOTIFY documentFileChanged)
     Q_PROPERTY(bool documentOpening READ documentOpening NOTIFY documentFileChanged)
     Q_PROPERTY(QString documentSaveStatus READ documentSaveStatus NOTIFY documentFileChanged)
@@ -107,6 +109,9 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] const QString& documentPath() const { return m_document_path; }
     [[nodiscard]] const QString& documentFileName() const { return m_document_file_name; }
     [[nodiscard]] bool documentEdited() const { return m_document_edited; }
+    [[nodiscard]] bool documentMathSourceDraftPending() const {
+        return m_document_math_source_draft_pending;
+    }
     [[nodiscard]] bool documentFileBusy() const { return m_document_file_busy; }
     [[nodiscard]] bool documentOpening() const { return m_document_opening; }
     [[nodiscard]] QString documentSaveStatus() const {
@@ -202,6 +207,7 @@ class LayoutViewModel final : public QObject {
     bool installInteraction(const QString& interaction_json);
     bool installInteraction(const QJsonObject& interaction_object);
     void installCaretGeometry(const QVariantMap& geometry);
+    bool installDocumentFileStatus(const QJsonObject& status);
     void clearEnvironmentHighlightRects();
     void refreshDocumentFileStatus();
     void clearSaveConflict();
@@ -217,6 +223,10 @@ class LayoutViewModel final : public QObject {
     void documentFileOperationFinished(bool succeeded, const QString& error, bool conflict = false,
                                        bool recovery_write_failed = false,
                                        const QString& recovery_error = {});
+    /// 保存命令完成；与恢复副本等其他文件活动区分，供窗口关闭事务校验。
+    void documentSaveFinished(bool succeeded);
+    /// 异步文件活动结束但不产生用户操作结果时，通知等待中的窗口关闭流程。
+    void documentFileActivityFinished();
 
   private:
     QVariantList m_page_sizes_pt;
@@ -239,6 +249,7 @@ class LayoutViewModel final : public QObject {
     QString m_document_path;
     QString m_document_file_name = QStringLiteral("Untitled");
     bool m_document_edited = false;
+    bool m_document_math_source_draft_pending = false;
     bool m_can_undo = false;
     bool m_can_redo = false;
     bool m_document_file_busy = false;

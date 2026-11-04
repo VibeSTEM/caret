@@ -36,6 +36,7 @@ Window {
     property bool allowClose: false
     property bool waitForCloseAfterFileOperation: false
     property bool closeAfterSaveRequested: false
+    property bool closeAfterSaveSucceeded: false
     property bool closeAfterAutoSaveFlush: false
     property bool pendingAutoSaveEnable: false
     property bool pendingRecoveryRestore: false
@@ -49,8 +50,13 @@ Window {
             waitForCloseAfterFileOperation = true;
             return;
         }
+        if (LayoutViewModel.documentMathSourceDraftPending) {
+            closeConfirmation.open();
+            return;
+        }
         if (PreferencesViewModel.autoSaveEnabled && LayoutViewModel.documentPath.length > 0 && LayoutViewModel.documentEdited) {
             closeAfterSaveRequested = true;
+            closeAfterSaveSucceeded = false;
             closeAfterAutoSaveFlush = true;
             Qt.callLater(window.saveDocument);
             return;
@@ -237,11 +243,13 @@ Window {
             const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
             if (!result.valid && !result.needsSaveAs) {
                 window.closeAfterSaveRequested = false;
+                window.closeAfterSaveSucceeded = false;
                 documentOperationError.showError(result.error);
             }
         }
         onRejected: {
             window.closeAfterSaveRequested = false;
+            window.closeAfterSaveSucceeded = false;
             if (window.pendingAutoSaveEnable)
                 window.cancelAutoSaveEnable();
         }
@@ -250,8 +258,10 @@ Window {
     UnsavedChangesDialog {
         id: closeConfirmation
         ownerWindow: window
+        mathSourceDraftPending: LayoutViewModel.documentMathSourceDraftPending
         onSaveRequested: {
             window.closeAfterSaveRequested = true;
+            window.closeAfterSaveSucceeded = false;
             Qt.callLater(window.saveDocument);
         }
         onDiscardRequested: {
@@ -278,6 +288,7 @@ Window {
         onCancelRequested: {
             if (window.closeAfterSaveRequested) {
                 window.closeAfterSaveRequested = false;
+                window.closeAfterSaveSucceeded = false;
                 window.closeAfterAutoSaveFlush = false;
                 closeConfirmation.open();
             }
@@ -319,6 +330,16 @@ Window {
         text: operationError
 
         function showError(error) {
+            if (error === "document.save_incomplete_math_source_draft") {
+                operationError = qsTr("Finish or cancel the incomplete formula edit before saving this document.");
+                open();
+                return;
+            }
+            if (error === "document.math_incomplete_source_draft") {
+                operationError = qsTr("Finish or cancel the incomplete formula edit before replacing this document.");
+                open();
+                return;
+            }
             operationError = error || qsTr("An unknown error occurred.");
             open();
         }
@@ -326,6 +347,15 @@ Window {
 
     Connections {
         target: LayoutViewModel
+
+        function onDocumentFileActivityFinished() {
+            window.resumeCloseAfterFileOperation();
+        }
+
+        function onDocumentSaveFinished(succeeded) {
+            if (window.closeAfterSaveRequested)
+                window.closeAfterSaveSucceeded = succeeded;
+        }
 
         function onDocumentFileOperationFinished(succeeded, error, conflict, recoveryWriteFailed, recoveryError) {
             if (window.pendingRecoveryScan) {
@@ -378,6 +408,7 @@ Window {
                     window.cancelAutoSaveEnable();
                 if (window.closeAfterAutoSaveFlush) {
                     window.closeAfterSaveRequested = false;
+                    window.closeAfterSaveSucceeded = false;
                     window.closeAfterAutoSaveFlush = false;
                     closeConfirmation.open();
                     return;
@@ -389,16 +420,9 @@ Window {
                     return;
                 }
                 window.closeAfterSaveRequested = false;
+                window.closeAfterSaveSucceeded = false;
                 documentOperationError.showError(error);
                 return;
-            }
-            if (window.closeAfterSaveRequested && !LayoutViewModel.documentFileBusy) {
-                window.closeAfterSaveRequested = false;
-                window.closeAfterAutoSaveFlush = false;
-                if (!LayoutViewModel.documentEdited)
-                    window.closeWindow();
-                else
-                    closeConfirmation.open();
             }
             if (window.pendingAutoSaveEnable && !LayoutViewModel.documentFileBusy)
                 window.commitAutoSaveEnable();
@@ -454,6 +478,7 @@ Window {
         }
         if (!result.valid) {
             closeAfterSaveRequested = false;
+            closeAfterSaveSucceeded = false;
             documentOperationError.showError(result.error);
         }
     }
@@ -509,6 +534,7 @@ Window {
         suggestedSaveFileUrl = LayoutViewModel.documentPath.length > 0 ? DocumentPathAdapter.localFileUrl(LayoutViewModel.documentPath) : DocumentPathAdapter.defaultSaveFileUrl();
         if (suggestedSaveFileUrl.toString().length === 0) {
             closeAfterSaveRequested = false;
+            closeAfterSaveSucceeded = false;
             if (pendingAutoSaveEnable)
                 cancelAutoSaveEnable();
             documentOperationError.showError(qsTr("The document folder is unavailable."));
@@ -549,10 +575,25 @@ Window {
     }
 
     function resumeCloseAfterFileOperation() {
-        if (!waitForCloseAfterFileOperation || LayoutViewModel.documentFileBusy)
+        if (LayoutViewModel.documentFileBusy)
+            return;
+        if (closeAfterSaveRequested) {
+            if (!closeAfterSaveSucceeded)
+                return;
+            closeAfterSaveRequested = false;
+            closeAfterSaveSucceeded = false;
+            closeAfterAutoSaveFlush = false;
+            waitForCloseAfterFileOperation = false;
+            if (!LayoutViewModel.documentEdited && !LayoutViewModel.documentMathSourceDraftPending)
+                closeWindow();
+            else
+                closeConfirmation.open();
+            return;
+        }
+        if (!waitForCloseAfterFileOperation)
             return;
         waitForCloseAfterFileOperation = false;
-        if (LayoutViewModel.documentEdited)
+        if (LayoutViewModel.documentEdited || LayoutViewModel.documentMathSourceDraftPending)
             closeConfirmation.open();
         else
             closeWindow();
