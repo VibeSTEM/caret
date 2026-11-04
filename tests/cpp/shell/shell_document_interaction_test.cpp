@@ -72,6 +72,10 @@ struct LayoutViewModelTestProbe final {
     static bool installSnapshot(LayoutViewModel& view_model, const QJsonObject& snapshot) {
         return view_model.installSnapshot(QJsonDocument(snapshot));
     }
+    static bool installSnapshotJson(LayoutViewModel& view_model, const QString& snapshot_json,
+                                    bool replace_document) {
+        return view_model.installSnapshot(snapshot_json, replace_document);
+    }
 };
 } // namespace caret
 
@@ -105,6 +109,31 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QCOMPARE(
         inline_view_model.environmentHighlightRects().first().toMap().value(QStringLiteral("x0Pt")),
         3.0);
+
+    const QString serialized_snapshot =
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    QVERIFY(caret::LayoutViewModelTestProbe::installSnapshotJson(inline_view_model,
+                                                                 serialized_snapshot, true));
+    const QVariantList highlight_before_invalid_json =
+        inline_view_model.environmentHighlightRects();
+    const QVariantList snapshot_before_invalid_json = inline_view_model.pageLayouts();
+    const QVariantMap input_context_before_invalid_json = inline_view_model.inputMethodContext();
+    QCOMPARE(highlight_before_invalid_json.size(), 1);
+    QVERIFY(!snapshot_before_invalid_json.isEmpty());
+    QVERIFY(input_context_before_invalid_json.contains(QStringLiteral("enabled")));
+    QCOMPARE(input_context_before_invalid_json.value(QStringLiteral("enabled")).toBool(), true);
+    QSignalSpy invalid_snapshot_layout_changed(&inline_view_model,
+                                               &caret::LayoutViewModel::layoutChanged);
+    QSignalSpy invalid_snapshot_interaction_changed(&inline_view_model,
+                                                    &caret::LayoutViewModel::interactionChanged);
+    QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshotJson(inline_view_model,
+                                                                  QStringLiteral("{"), true));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), highlight_before_invalid_json);
+    QCOMPARE(inline_view_model.pageLayouts(), snapshot_before_invalid_json);
+    QCOMPARE(inline_view_model.inputMethodContext(), input_context_before_invalid_json);
+    QCOMPARE(invalid_snapshot_layout_changed.size(), 0);
+    QCOMPARE(invalid_snapshot_interaction_changed.size(), 0);
+    QCOMPARE(inline_view_model.error(), QStringLiteral("layout.invalid_snapshot"));
 
     const QVariantList visible_environment_rects = inline_view_model.environmentHighlightRects();
     const QVariantList visible_pages = inline_view_model.pageLayouts();

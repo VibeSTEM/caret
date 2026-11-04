@@ -34,7 +34,8 @@
 - [ ] 清理 DTO 临时范围桥接，并让映射仅由与目标树状态绑定的 MathEdit sidecar 持有。
 - [ ] 完成并测试源码草稿的失焦/保存/关闭决策与过期 revision 状态迁移；当前保存和打开会保留文档并拒绝，Escape 可取消，公式 UI 仍等待 044 接线。
 - [ ] 完成跨 TextFlow 选区/IME、Font 数学环境及 044 依赖后的公式命令调用链。
-- [ ] 按验证规范完成 Rust/native C++ coverage gate、最终全分支审查和尚未覆盖的黑盒检查。性能结论需另有可复现基线；当前不宣称性能提升。
+- [x] Rust/native C++ coverage gate：全局函数与行覆盖率均超过 85% 门槛；实测结果见下方验证记录。
+- [ ] 按验证规范完成最终全分支审查及尚未覆盖的黑盒检查。性能结论需另有可复现基线；当前不宣称性能提升。
 
 ## 当前验证与评审
 
@@ -52,7 +53,8 @@
 | 2026-11-04 | 数学编辑期间 IME 门控：Rust 快照 → Qt `ImEnabled` → Canvas 输入事件；`cargo test --locked -p caret-app --no-fail-fast -- --quiet`、native 聚合测试 | caret-app 199 项通过；native 9/9 CTest 通过。当前所有 MathEdit 分支（含数学命令查询）暂时禁用 IME：Qt 取消已有预编辑并通知平台更新 `ImEnabled`，忽略迟到事件；Rust 边界拒绝非空迟到输入且保留文档、generation、MathEdit 与命令行；离开公式后恢复启用。完整快照必须带 `inputMethodContext`，两条快照路径都要求布尔 `enabled`；缺字段或错类型整笔拒绝。失败原子测试覆盖有效高亮下无效交互与缺少 context 的快照，确认高亮、IME context、页面布局和通知保持不变。独立测试覆盖 Rust 失败原子性、Qt Canvas 查询/事件副作用及无效状态拒绝；没有直接 mock 平台 `QInputMethod` 验证系统级更新回调。TextFlow 分支复用正文 IME 的组字事务与 surrounding-text 映射尚未实现，不能据此标为 IME 验收完成。 |
 | 2026-11-04 | `cargo test --locked -p caret-math -p caret-engine -p caret-app --no-fail-fast -- --quiet`、三 crate Clippy、`cargo fmt --all -- --check`、native 9/9、include lint、diff check；Terra/medium MathEdit history sidecar review；Sol/medium 完整 diff final review | caret-math 60、caret-engine 392、caret-app 199 项通过；Clippy、格式、native CTest、include lint 与 diff check 通过。历史恢复以解析重建的 Tree/Align sidecar 对照历史 sidecar，覆盖结构路径、范围与 TextFlow 分段映射；restore helper 的 Tree/Align 错配用例含同源码正向基线，确认拒绝时文档不变。Session `Undo` stale-sidecar 用例验证失败后文档、选区、MathEdit、generation、history state 与 undo/redo 可用性均保持原状。TextFlow 输入、删除、选择映射、Run 属性格式、行内环境格式与数学降级的路径/位置读取已改为先验证并消费 `MathSourceMap`；Align cell 的完整源码偏移在映射边界转换。树变换本身仍通过 DTO 瞬时字段更新映射，迁移未完成。审查未确认生产回归。跨相邻 TextFlow IME/选区和性能基线仍未完成。 |
 | 2026-11-04 | 修复历史 sidecar 分段归一化后的继续编辑；`cargo test --locked -p caret-math -p caret-engine -p caret-app --no-fail-fast -- --quiet`、三 crate Clippy、`cargo format --check`、`cargo lint includes --changed --check`、native 9/9；Terra/medium follow-up review | caret-math 60、caret-engine 396、caret-app 199 项通过；Clippy、格式、include lint、native CTest 与 diff check 通过。历史恢复仅在 sidecar 形状不同但结构位置一致时重绑映射；相邻连续线性段可规范比较，零宽锚点保留顺序并逐个校验。Session 用例覆盖 Equation 和 Align 非首 cell 的历史恢复后输入；锚点位置失配有拒绝用例。Terra 未发现新的生产问题，建议锚点用例加正向基线，已补充。完整 DTO 范围迁出、覆盖率门槛、性能基线和跨 TextFlow IME/选区仍未完成。 |
-| 待完成 | Rust/native C++ coverage gate、`caret-layout`/`caret-app` 直接消费者复验、Session 级 Undo/Redo 失败回滚及跨映射编辑黑盒、Qt Quick/IME、公式 UI 错误本地化、公式性能基线 | 尚未完成。Qt 绘制/命中由 [044](044-math-layout-and-rendering.md) 覆盖；当前阻止保存的草稿错误尚未接入本地化提示。没有测量证据，不宣称性能提升。 |
+| 2026-11-04 | `cargo coverage`、`cargo coverage native`；native CTest 9/9 | Rust 全局函数/行覆盖率 86.90%/88.63%，超过 85% 门槛；native 产品函数/行覆盖率 90.30%/85.17%，超过 85% 门槛。为了覆盖真实快照桥接失败恢复，新增有效/无效 JSON 快照安装后页面与 IME context 保持用例；补充命令行输入光标矩形属性经 Qt 查询返回的用例。 |
+| 待完成 | `caret-layout`/`caret-app` 完整用户路径复验、Session 级 Redo 失败回滚与跨映射编辑黑盒、Qt Quick/系统 IME、公式 UI 错误本地化、公式性能基线 | 尚未完成。Qt 绘制/命中由 [044](044-math-layout-and-rendering.md) 覆盖；当前阻止保存的草稿错误尚未接入本地化提示。没有测量证据，不宣称性能提升。 |
 
 ## 剩余风险与下一步
 

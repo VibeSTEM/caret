@@ -423,6 +423,13 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), composition_caret);
     canvas->cancelPreedit();
     QVERIFY(canvas->preeditText().isEmpty());
+    const QRectF document_caret = canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
+    const QRectF command_line_caret(40.0, 50.0, 1.0, 18.0);
+    canvas->setInputMethodCursorRectangle(command_line_caret);
+    QCOMPARE(canvas->inputMethodCursorRectangle(), command_line_caret);
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), command_line_caret);
+    canvas->setInputMethodCursorRectangle(QRectF{});
+    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), document_caret);
     invalid_caret.insert(QStringLiteral("pageIndex"),
                          QVariant::fromValue<qulonglong>(4294967296ULL));
     canvas->setCaretGeometry(invalid_caret);
