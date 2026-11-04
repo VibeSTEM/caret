@@ -19,10 +19,14 @@ DocumentPathAdapter::DocumentPathAdapter(QObject* parent) : QObject(parent) {}
 
 QUrl DocumentPathAdapter::defaultSaveFileUrl() const {
     const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    if (documents.isEmpty()) {
+    return defaultSaveFileUrlIn(documents);
+}
+
+QUrl DocumentPathAdapter::defaultSaveFileUrlIn(const QString& documents_directory) const {
+    if (documents_directory.isEmpty()) {
         return {};
     }
-    const QString directory = QDir(documents).filePath(QStringLiteral("caret"));
+    const QString directory = QDir(documents_directory).filePath(QStringLiteral("caret"));
     if (!QDir().mkpath(directory)) {
         return {};
     }

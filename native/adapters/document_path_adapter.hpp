@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QUrl>
 #include <QtQml/qqmlregistration.h>
 
@@ -22,6 +23,8 @@ class DocumentPathAdapter final : public QObject {
 
     /// 创建 Documents/caret 并返回首个未占用的 Untitled.cdoc 名称；目录不可用时返回空 URL。
     Q_INVOKABLE QUrl defaultSaveFileUrl() const;
+    /// 使用指定 Documents 目录生成默认路径，供无平台副作用的路径验证复用。
+    QUrl defaultSaveFileUrlIn(const QString& documents_directory) const;
     /// 将本地绝对路径转换为文件 URL，供 Save As 对话框定位到当前文档。
     Q_INVOKABLE QUrl localFileUrl(const QString& path) const;
     /// 从文件对话框返回的本地 URL 提取文件系统路径。

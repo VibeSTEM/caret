@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：010、042
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-11-03
+- 创建 / 更新：2026-10-29 / 2026-11-04
 
 ## 目标与边界
 
@@ -19,7 +19,7 @@
 - [x] InlineMath 根层 TextFlow 提升为 ParagraphContent，保留顺序、空文本、Run 属性及单层 InlineEnvironment 身份；固定 MathNode 操作数槽位不提升。
 - [x] 从持久化 DTO 删除冗余的 `MathTree.source` 与 `Align.source`；公式源码仅由 MathEdit 投影持有，历史重开时从树生成规范源码。
 - [ ] 将 serde 跳过的节点、环境和 TextFlow 源码范围字段迁出 DTO，让 `MathSourceMap` sidecar 成为唯一映射权威。当前 `.cdoc` 不持久化这些字段，但编辑器仍在 DTO 上桥接它们。
-- [ ] 将源码输入改为可暂存的不完整 TeX 草稿：解析失败时保留草稿、已提交树和焦点；失焦/保存/关闭先提交或显式取消；草稿 undo/redo 可修复输入；本地历史耗尽后，仅在有效草稿成功提交时访问文档历史，否则保留草稿并拒绝迁移；过期草稿拒绝提交并保留到显式放弃。当前逐次编辑解析失败会保留旧树和活动焦点，但不保留失败的源码输入。
+- [ ] 补齐源码草稿状态迁移：`MathSourceDraft` 已独立保存未完成源码与有界局部撤销历史；解析不完整或候选树元数据无法无损映射时，已提交树、焦点和文档 generation 保持原样，输入作为交互状态返回。局部撤销/重做优先于文档历史；草稿回到基线后才可进入文档历史。保存和异步打开拒绝丢弃未提交草稿，dirty 状态包含草稿；Escape 显式取消并恢复基线光标。仍需补齐失焦/关闭 UI 流程、过期 revision 生命周期及 Qt 黑盒行为验证。
 - [ ] 完成跨相邻 TextFlow 的选区/组合字素、数学文本 IME 与 Font 环境树编辑；桌面公式命令的可执行状态等待 044 的布局/命中链路。
 - [ ] 保证 TeX 可无损表达且未超过源码预算的 MathTree 都能建立规范编辑投影；结构归一化须能处理相邻 TextFlow 合并并保留可映射身份，对不支持 Font 语义或超过源码预算的树明确拒绝且不改动文档/焦点。
 
@@ -32,7 +32,7 @@
 - [x] 普通 TextFlow 编辑、数学单 TextFlow 输入/删除/Bold/Italic/underline、InlineMath 根层 Math/Text 焦点拆分/降级、Align 范围与 undo/redo 有命令级行为用例；失败不提交部分树、位置或历史状态。
 - [x] 清理持久化公式源码副本；MathEdit 历史投影以目标身份和历史源码恢复，规范源码不依赖 DTO 字段恢复。
 - [ ] 清理 DTO 临时范围桥接，并让映射仅由与目标树状态绑定的 MathEdit sidecar 持有。
-- [ ] 实现并测试不完整源码草稿的编辑历史与失焦、保存、关闭、过期 revision 状态迁移。
+- [ ] 完成并测试源码草稿的失焦/保存/关闭决策与过期 revision 状态迁移；当前保存和打开会保留文档并拒绝，Escape 可取消，公式 UI 仍等待 044 接线。
 - [ ] 完成跨 TextFlow 选区/IME、Font 数学环境及 044 依赖后的公式命令调用链。
 - [ ] 按验证规范完成 Rust/native C++ coverage gate、最终全分支审查和尚未覆盖的黑盒检查。性能结论需另有可复现基线；当前不宣称性能提升。
 
@@ -43,13 +43,16 @@
 | 2026-11-03 | `cargo test --locked -p caret-doc -p caret-math -p caret-engine --no-fail-fast -- --quiet` | caret-doc 58、caret-math 51、caret-engine 383 项通过；覆盖树形/范围错配拒绝、空数学锚点结构与 Session undo/redo、根层焦点拆分、失败原子性及元数据保留。 |
 | 2026-11-03 | 三 crate Clippy、`cargo fmt --all -- --check`、`git diff HEAD --check` | 全部通过。 |
 | 2026-11-03 | Terra/medium MathEdit 历史、源码映射评审；Sol/medium 完整 diff final review | 修复历史重投影覆盖持久树、未匹配元数据丢失、空数学锚点被 TextFlow 聚合吞掉及范围错配接受。历史 redo 后进入 TextFlow 编辑、插入/删除和 undo 由 Session 用例覆盖；非连续 sourceMap 的跨锚点选区目前仅有 helper 级拒绝测试。最终复核未发现其他 actionable finding。 |
-| 待完成 | Rust/native C++ coverage gate、`caret-layout`/`caret-app` 直接消费者复验、Session 级跨映射编辑黑盒、Qt Quick/IME、公式性能基线 | 尚未完成。Qt 绘制/命中由 [044](044-math-layout-and-rendering.md) 覆盖；没有测量证据，不宣称性能提升。 |
+| 2026-11-04 | `cargo test --locked -p caret-math --no-fail-fast`、`cargo test --locked -p caret-engine --no-fail-fast`、`cargo test --locked -p caret-app --no-fail-fast`；三 crate Clippy、`cargo format --check`、`git diff --check` | caret-math 52、caret-engine 390、caret-app 198 项通过。新增草稿保留/撤销/重做、未闭合定界符修复、自动配对大括号历史、元数据拒绝原子性、dirty/保存失败、异步打开保护及草稿期间设置命令拒绝。Terra/medium 草稿状态与模块边界 review 找到的问题已修复，包括未闭合定界符不可编辑、错误返回却改状态、草稿越界使用旧节点范围、显示公式基线范围错配及交互 dirty 未刷新。逐键快照已改为共享源码缓冲并省去撤销历史副本，但没有性能基线，耗时影响仍待验证。 |
+| 2026-11-04 | `cargo test --locked -p caret-tests --test native -- --test-threads=1`、`cargo format --check` | native 聚合构建通过，9/9 CTest 项通过。ShellLoad 的默认保存路径测试使用可写临时 Documents 根目录，验证适配器创建目录与重名选择；URL 转换另由独立用例覆盖，不依赖宿主 Documents 权限。Sol/medium 最终完整 diff review 与 native 覆盖率 gate 尚未执行。 |
+| 2026-11-04 | Terra/medium 草稿跨层与源码映射架构 review；设置命令回归测试；native 路径测试重构 | 修复草稿期间页面几何/文档字体设置会推进 generation、使草稿后续无法撤销或继续输入的问题：这些命令现在原子拒绝，修复草稿后仍可提交。路径适配器测试改用临时 Documents 根目录，验证适配器自身创建目录、重名选择和空目录拒绝；本地路径转换拆为独立用例，不再因 Documents 不可写而跳过。架构 review 指出源码范围 sidecar 仍未与树编辑事务、Align 单元格坐标和规范化树形绑定；未接入的范围树原型已移除，保留共享结构路径类型，sidecar 迁移仍是未完成项。 |
+| 待完成 | Rust/native C++ coverage gate、`caret-layout`/`caret-app` 直接消费者复验、Session 级跨映射编辑黑盒、Qt Quick/IME、公式 UI 错误本地化、公式性能基线 | 尚未完成。Qt 绘制/命中由 [044](044-math-layout-and-rendering.md) 覆盖；当前阻止保存的草稿错误尚未接入本地化提示。没有测量证据，不宣称性能提升。 |
 
 ## 剩余风险与下一步
 
 1. 迁出所有 `serde(skip)` 的数学源码与位置字段。保留现有树编辑行为，令同次解析产生的 `MathSourceMap`/树位置 sidecar 成为唯一范围权威；修改 DTO 后检查模型构造、校验、序列化、历史、根层提升和所有直接消费者，避免为删除字段而重解析整树。
 2. 让合法树可建立规范源码投影并保留可映射身份；覆盖相邻 TextFlow 合并、Font 语义和接近源码长度上限的转义文本。
-3. 实现不完整源码草稿及其本地撤销、提交/取消与失效状态迁移。
+3. 补齐不完整源码草稿的失焦/关闭决策、提交/取消与失效状态迁移，并在 UI 显示可操作的本地化提示。
 4. 补齐跨 TextFlow 选区、IME 与 Font 环境的宿主事务；不把策略移入 Qt/QML。
 5. 044 接通布局和命中后，再启用桌面公式命令，并执行相关 Qt Quick 黑盒验证。
 

@@ -30,7 +30,8 @@ class ShellLoadTest : public QObject {
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
     void preeditCancellationDoesNotReenterTheInputMethodHandler();
-    void documentPathAdapterReturnsLocalPathsAndDefaultSaveLocation();
+    void documentPathAdapterCreatesDefaultSaveLocation();
+    void documentPathAdapterConvertsLocalPaths();
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
     void settingsDialogDraftCancelAndFailure();
 #ifdef CARET_ENABLE_APP

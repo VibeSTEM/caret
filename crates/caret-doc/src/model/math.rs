@@ -39,6 +39,17 @@ pub struct MathFlow {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// 数学树内部的结构路径步骤；不包含源码偏移或宿主会话状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathPathStep {
+    /// 当前 MathFlow 的内容项。
+    Content(usize),
+    /// 当前行内环境的子项。
+    EnvironmentChild(usize),
+    /// 当前数学节点的操作数 MathFlow。
+    Operand(usize),
+}
+
 /// 有序数学语义节点。`text` 保存节点自身的原子内容，`children` 保存操作数。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -7,7 +7,7 @@ use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K};
 
 use crate::{
     MathInputKind, MathInputStatus, MathParseError, ParsedMath, ProjectedMath, classify_input,
-    is_incomplete_input_prefix, parse, serialize_align, serialize_tree,
+    input_body_range_for_edit, is_incomplete_input_prefix, parse, serialize_align, serialize_tree,
 };
 
 /// 去掉 ID 和源范围后的结构描述，用于比较往返结果。
@@ -310,6 +310,22 @@ fn strips_fences_and_rejects_mismatches() {
         parse("x", MathInputKind::Align),
         Err(MathParseError::InputKindMismatch { .. })
     ));
+}
+
+#[test]
+fn incomplete_fence_body_range_stays_editable_from_the_delimiter() {
+    assert_eq!(
+        input_body_range_for_edit("$", MathInputKind::Inline),
+        Ok(0..1)
+    );
+    assert_eq!(
+        input_body_range_for_edit(r"\(x", MathInputKind::Inline),
+        Ok(0..3)
+    );
+    assert_eq!(
+        input_body_range_for_edit("x\\frac{", MathInputKind::Inline),
+        Ok(0..7)
+    );
 }
 
 #[test]

@@ -108,7 +108,9 @@ impl DocumentSessionService {
 
     /// 当前文档内容是否偏离最近一次成功保存点。
     pub fn is_dirty(&self) -> bool {
-        !self.has_save_point || self.view.history_state_id() != self.saved_history_state_id
+        !self.has_save_point
+            || self.view.history_state_id() != self.saved_history_state_id
+            || self.view.has_uncommitted_math_source_draft()
     }
 
     /// 当前临时恢复会话绑定的恢复项标识。
@@ -227,6 +229,9 @@ impl DocumentSessionService {
         expected_session_generation: u64,
         expected_document_generation: u64,
     ) -> Result<(), String> {
+        if self.view.has_uncommitted_math_source_draft() {
+            return Err("document.math_incomplete_source_draft".to_owned());
+        }
         if self.session_generation != expected_session_generation
             || self.view.document_generation() != expected_document_generation
         {
@@ -265,7 +270,9 @@ impl DocumentSessionService {
 
     /// 捕获当前文档修订用于后台写入，不改变当前会话或保存点。
     pub fn save_snapshot(&mut self) -> Result<DocumentSaveSnapshot, String> {
-        self.view.begin_save_checkpoint();
+        self.view
+            .begin_save_checkpoint()
+            .map_err(|error| error.to_string())?;
         let file = CdocFile {
             format: self.file.format.clone(),
             version: self.file.version,

@@ -3666,24 +3666,25 @@ fn deleting_a_node_with_unmappable_metadata_keeps_document_and_math_focus() -> R
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::EnterMath(Direction::Backward))?;
 
-    let mut refused = false;
-    for _ in 0..5 {
+    let mut committed_document = session.document().clone();
+    for _ in 0..8 {
         let generation_before = session.document_generation();
-        let document_before = session.document().clone();
-        let edit_before = session.math_edit().cloned();
-        match session.run(Command::Delete(Direction::Backward)) {
-            Ok(_) => {}
-            Err(EditError::InvalidMath(_)) => {
-                assert_eq!(session.document(), &document_before);
-                assert_eq!(session.math_edit(), edit_before.as_ref());
-                assert_eq!(session.document_generation(), generation_before);
-                refused = true;
-                break;
-            }
-            Err(error) => return Err(error),
+        session.run(Command::Delete(Direction::Backward))?;
+        if session.has_uncommitted_math_source_draft() {
+            assert_eq!(session.document(), &committed_document);
+            assert_eq!(session.document_generation(), generation_before);
+            break;
         }
+        committed_document = session.document().clone();
     }
-    assert!(refused, "metadata-bearing node deletion should be rejected");
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(""));
+    let document_before = session.document().clone();
+    assert!(matches!(
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &document_before);
+    assert!(session.has_uncommitted_math_source_draft());
     Ok(())
 }
 
@@ -4513,7 +4514,7 @@ fn stale_composition_candidate_cannot_restore_an_old_save_checkpoint()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut session = session_with_text("ab")?;
     let (candidate, _, _) = session.composition_update_candidate(75, "X".to_owned(), None, 1)?;
-    session.begin_save_checkpoint();
+    session.begin_save_checkpoint()?;
     let checkpoint_epoch = session.history_merge_epoch;
 
     assert!(matches!(
@@ -5029,6 +5030,189 @@ fn rejecting_missing_block_selection_keeps_active_math_edit() -> Result<(), Edit
 }
 
 #[test]
+fn incomplete_math_source_is_retained_and_has_local_undo_redo() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math")?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    let committed_document = session.document().clone();
+    let committed_generation = session.document_generation();
+
+    session.run(Command::InsertText("\\".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x\\"));
+    assert_eq!(session.document(), &committed_document);
+    assert_eq!(session.document_generation(), committed_generation);
+    assert!(session.can_undo());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x"));
+    assert_eq!(session.document(), &committed_document);
+    assert_eq!(session.document_generation(), committed_generation);
+    assert!(session.can_redo());
+
+    session.run(Command::Redo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x\\"));
+    session.run(Command::InsertText("alpha".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(r"x\alpha"));
+    assert!(
+        session
+            .math_edit()
+            .is_some_and(|edit| !edit.source_draft_is_pending())
+    );
+    assert_ne!(session.document(), &committed_document);
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x"));
+    assert_eq!(session.document(), &committed_document);
+    Ok(())
+}
+
+#[test]
+fn incomplete_math_source_blocks_exit_until_repaired_or_cancelled() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math")?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    session.run(Command::InsertText("\\".to_owned()))?;
+    let document = session.document().clone();
+    let edit = session.math_edit().cloned();
+
+    assert!(matches!(
+        session.run(Command::EditorKey(EditorKey::Enter)),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert!(matches!(
+        session.run(Command::EditorKey(EditorKey::ModBackspace)),
+        Err(EditError::InvalidMath(_))
+    ));
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.math_edit(), edit.as_ref());
+
+    session.run(Command::EditorKey(EditorKey::Escape))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.document(), &document);
+    Ok(())
+}
+
+#[test]
+fn incomplete_math_draft_blocks_document_settings_without_invalidating_its_revision()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math")?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    session.run(Command::InsertText("\\".to_owned()))?;
+    let document = session.document().clone();
+    let generation = session.document_generation();
+    let source = session.math_edit().map(MathEdit::source).map(str::to_owned);
+
+    for command in [
+        Command::SetPageGeometry(caret_doc::PageGeometry {
+            paper_size: caret_doc::PaperSize::A3,
+            orientation: caret_doc::Orientation::Landscape,
+            margins: caret_doc::PageMargins {
+                top: 36.0,
+                right: 54.0,
+                bottom: 72.0,
+                left: 90.0,
+            },
+        }),
+        Command::SetDefaultFontFamily(Some("Noto Sans".to_owned())),
+        Command::SetDocumentFontFamily {
+            target: caret_doc::DocumentFontTarget::Script("Latn".to_owned()),
+            family: Some("Noto Sans".to_owned()),
+        },
+    ] {
+        assert!(matches!(
+            session.run(command),
+            Err(EditError::InvalidMath(_))
+        ));
+        assert_eq!(session.document(), &document);
+        assert_eq!(session.document_generation(), generation);
+        assert_eq!(session.math_edit().map(MathEdit::source), source.as_deref());
+    }
+
+    session.run(Command::InsertText("alpha".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(r"x\alpha"));
+    Ok(())
+}
+
+#[test]
+fn incomplete_math_fence_can_be_removed_with_backspace() -> Result<(), EditError> {
+    for fence in ["$", "\\("] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        accept(&mut session, "math")?;
+        session.run(Command::InsertText(fence.to_owned()))?;
+        assert_eq!(session.math_edit().map(MathEdit::source), Some(fence));
+        assert!(session.has_uncommitted_math_source_draft());
+
+        while session.has_uncommitted_math_source_draft() {
+            session.run(Command::Delete(Direction::Backward))?;
+        }
+        assert_eq!(session.math_edit().map(MathEdit::source), Some(""));
+    }
+    Ok(())
+}
+
+#[test]
+fn draft_undo_keeps_auto_paired_closing_braces() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math")?;
+    session.run(Command::InsertText("^".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("^{}"));
+
+    session.run(Command::InsertText("}\\".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("^{}\\"));
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("^{}"));
+    session.run(Command::Redo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("^{}\\"));
+    Ok(())
+}
+
+#[test]
+fn incomplete_equation_and_align_source_is_kept_separate_from_the_committed_tree()
+-> Result<(), EditError> {
+    for kind in ["equation", "align"] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        accept(&mut session, kind)?;
+        session.run(Command::InsertText("x".to_owned()))?;
+        let committed = session.document().clone();
+
+        session.run(Command::InsertText("\\".to_owned()))?;
+        assert_eq!(session.math_edit().map(MathEdit::source), Some("x\\"));
+        assert_eq!(session.document(), &committed);
+        assert!(session.has_uncommitted_math_source_draft());
+
+        session.run(Command::Undo)?;
+        assert_eq!(session.math_edit().map(MathEdit::source), Some("x"));
+        assert_eq!(session.document(), &committed);
+        session.run(Command::Redo)?;
+        assert_eq!(session.math_edit().map(MathEdit::source), Some("x\\"));
+    }
+    Ok(())
+}
+
+#[test]
+fn crossing_from_math_draft_history_to_document_history_discards_stale_redo()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    accept(&mut session, "math")?;
+    session.run(Command::InsertText("x".to_owned()))?;
+    session.run(Command::InsertText("\\".to_owned()))?;
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x"));
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some(""));
+    session.run(Command::Redo)?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x"));
+    assert!(
+        !session
+            .math_edit()
+            .is_some_and(|edit| edit.source_draft_is_pending())
+    );
+    Ok(())
+}
+
+#[test]
 fn backspace_removes_empty_construct_and_then_the_object() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut session = session_with_text("")?;
@@ -5213,14 +5397,16 @@ fn align_keeps_trailing_space_as_editable_content_for_the_next_input()
 }
 
 #[test]
-fn invalid_source_is_rejected_without_changes() -> Result<(), Box<dyn std::error::Error>> {
+fn incomplete_source_prefix_is_kept_out_of_the_committed_tree()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut session = session_with_text("")?;
     accept(&mut session, "math")?;
     session.run(Command::InsertText("x".to_owned()))?;
-    let result = session.run(Command::InsertText("\\".to_owned()));
-    assert!(matches!(result, Err(EditError::InvalidMath(_))));
-    assert_eq!(inline_source(&session).as_deref(), Some("x"));
-    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+    let committed = session.document().clone();
+    session.run(Command::InsertText("\\".to_owned()))?;
+    assert_eq!(session.math_edit().map(MathEdit::source), Some("x\\"));
+    assert_eq!(session.document(), &committed);
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(2));
     Ok(())
 }
 

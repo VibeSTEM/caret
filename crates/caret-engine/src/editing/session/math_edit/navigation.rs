@@ -12,7 +12,18 @@ pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
     match &edit.target {
         MathEditTarget::Block { align: true, .. } => Some(0..edit.source().len()),
         MathEditTarget::Inline { .. } | MathEditTarget::Block { align: false, .. } => {
-            Some(edit.source_projection.body_range())
+            if edit.source_draft_is_pending() {
+                let kind = match &edit.target {
+                    MathEditTarget::Inline { .. } => caret_math::MathInputKind::Inline,
+                    MathEditTarget::Block { align: false, .. } => {
+                        caret_math::MathInputKind::Equation
+                    }
+                    MathEditTarget::Block { align: true, .. } => unreachable!(),
+                };
+                caret_math::input_body_range_for_edit(edit.source(), kind).ok()
+            } else {
+                Some(edit.source_projection.body_range())
+            }
         }
     }
 }

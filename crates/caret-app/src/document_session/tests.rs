@@ -2,8 +2,33 @@
 
 use super::DocumentSessionService;
 use caret_doc::CdocFile;
+use caret_engine::{Command, Direction};
 use serde_json::Value;
 use serde_json::json;
+
+fn enter_inline_math(service: &mut DocumentSessionService) -> Result<(), String> {
+    let session = service.view_mut().session_mut_for_test();
+    session
+        .run(Command::InsertInlineMath("x".to_owned()))
+        .map_err(|error| error.to_string())?;
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn type_incomplete_math_source(service: &mut DocumentSessionService) -> Result<(), String> {
+    let session = service.view_mut().session_mut_for_test();
+    session
+        .run(Command::InsertText("\\".to_owned()))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn mark_current_history_saved_for_test(service: &mut DocumentSessionService) {
+    service.saved_history_state_id = service.view.history_state_id();
+    service.has_save_point = true;
+}
 
 #[test]
 fn document_session_can_be_moved_between_worker_and_gui_threads() {
@@ -245,6 +270,52 @@ fn pending_formatting_does_not_mark_saved_document_dirty() -> Result<(), String>
     let restored: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
     assert_eq!(restored["dirty"], false);
+    Ok(())
+}
+
+#[test]
+fn incomplete_math_source_makes_document_dirty_and_blocks_save() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    enter_inline_math(&mut service)?;
+    mark_current_history_saved_for_test(&mut service);
+    let saved_history_state_id = service.view.history_state_id();
+    type_incomplete_math_source(&mut service)?;
+
+    let status: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(status["dirty"], true);
+    assert!(service.view_mut().has_uncommitted_math_source_draft());
+    assert!(service.save_snapshot().is_err());
+    assert_eq!(status["historyStateId"], saved_history_state_id.to_string());
+    Ok(())
+}
+
+#[test]
+fn prepared_open_cannot_discard_a_math_source_draft() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    let saved = service.save_snapshot()?;
+    let (candidate, layout) = DocumentSessionService::prepare_open(
+        &saved.bytes,
+        std::path::Path::new("opened.cdoc"),
+        saved.session_generation + 1,
+    )?;
+    enter_inline_math(&mut service)?;
+    mark_current_history_saved_for_test(&mut service);
+    type_incomplete_math_source(&mut service)?;
+
+    let result = service.install_prepared(
+        candidate,
+        layout,
+        saved.session_generation,
+        service.document_generation(),
+    );
+    assert_eq!(
+        result.err().as_deref(),
+        Some("document.math_incomplete_source_draft")
+    );
+    assert!(service.is_dirty());
+    assert!(service.view_mut().handle_editor_key_json("escape").is_ok());
+    assert!(!service.is_dirty());
     Ok(())
 }
 

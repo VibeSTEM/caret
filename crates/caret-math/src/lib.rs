@@ -44,6 +44,14 @@ pub fn input_body_range(source: &str, kind: MathInputKind) -> Result<Range<usize
     parser::input_body_range(source, kind)
 }
 
+/// 返回编辑中公式源码的内容区；缺少预期结束定界符时仍覆盖可编辑的正文前缀。
+pub fn input_body_range_for_edit(
+    source: &str,
+    kind: MathInputKind,
+) -> Result<Range<usize>, MathParseError> {
+    parser::input_body_range_for_edit(source, kind)
+}
+
 /// 解析结果。行内与单行公式共用 [`MathTree`]，对齐公式按单元格拆分。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedMath {

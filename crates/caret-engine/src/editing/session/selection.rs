@@ -339,6 +339,12 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        if self.has_uncommitted_math_source_draft() {
+            return Err(EditError::InvalidMath(
+                "resolve or cancel the incomplete math source draft before changing selection"
+                    .to_owned(),
+            ));
+        }
         self.ensure_math_edit_revision_current()?;
         if self.composition.is_some()
             || self
