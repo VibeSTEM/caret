@@ -197,7 +197,7 @@ fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Op
 }
 
 /// 托管 LLVM 的符号器和 Windows ASan 运行库加入 PATH；所有问题默认阻断。
-/// Unix 显式开启泄漏检查；macOS 仅抑制 CI 已确认的系统框架进程级缓存。
+/// Unix 显式开启泄漏检查；macOS 系统缓存使用进程级抑制，Linux 由单项测试限定抑制。
 fn sanitizer_test_env(
     profile: SanitizerProfile,
 ) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, Box<dyn Error>> {
