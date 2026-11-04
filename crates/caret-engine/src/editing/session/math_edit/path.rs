@@ -7,16 +7,8 @@ use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
 use std::mem::size_of;
 use std::ops::Range;
 
-/// 数学树路径中的一步；每种索引只作用于当前选中的稳定容器。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MathTextFlowPathStep {
-    /// 当前 MathFlow 的内容索引。
-    Content(usize),
-    /// 当前行内环境的子项索引。
-    EnvironmentChild(usize),
-    /// 当前数学节点的操作数 MathFlow 索引。
-    Operand(usize),
-}
+/// 数学树结构路径步骤由文档模型统一定义，避免编辑器和源码 sidecar 各持一份。
+pub use caret_doc::MathPathStep as MathTextFlowPathStep;
 
 /// 定位公式树或 Align cell 内一个带源范围的 TextFlow。
 #[derive(Debug, Clone, PartialEq, Eq)]
