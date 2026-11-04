@@ -419,6 +419,33 @@ fn splits_align_cells_with_rebased_ranges() {
 }
 
 #[test]
+fn align_cell_sidecar_uses_full_formula_source_coordinates() {
+    let source = r"\[\begin{aligned} x &= \frac{y}{z} \end{aligned}\]";
+    let projection = match crate::parse_projection(source, MathInputKind::Align) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid aligned formula should project: {error}"),
+    };
+    let cell = projection
+        .source_map()
+        .align()
+        .and_then(|align| align.cell_tree(0, 1))
+        .unwrap_or_else(|| panic!("second align cell should have a tree sidecar"));
+    let fraction_range = cell
+        .root()
+        .content()
+        .iter()
+        .filter_map(|content| match content {
+            crate::MathContentSourceMap::Math { range, .. } => range.range(),
+            crate::MathContentSourceMap::Text(_)
+            | crate::MathContentSourceMap::Environment { .. }
+            | crate::MathContentSourceMap::Other => None,
+        })
+        .find(|range| &source[range.clone()] == r"\frac{y}{z}")
+        .unwrap_or_else(|| panic!("cell should contain a mapped fraction"));
+    assert_eq!(&source[fraction_range], r"\frac{y}{z}");
+}
+
+#[test]
 fn parse_projection_owns_source_and_keeps_tree_projection_free() {
     let source = r"\text{a\%b}";
     let projection = match crate::parse_projection(source, MathInputKind::Inline) {
@@ -450,6 +477,134 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
         panic!("inline input should parse to a tree");
     };
     assert_eq!(shape(&restored.root), shape(&parsed.root));
+}
+
+#[test]
+fn projection_sidecar_maps_escaped_text_by_utf8_display_segments() {
+    let source = r"\text{a\%中}";
+    let projection = match crate::parse_projection(source, MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid escaped text should project: {error}"),
+    };
+    let tree_map = projection
+        .source_map()
+        .tree()
+        .unwrap_or_else(|| panic!("tree projection should own its range sidecar"));
+    let content_map = tree_map
+        .content_at(&[caret_doc::MathPathStep::Content(0)])
+        .unwrap_or_else(|| panic!("first text path should resolve in the sidecar"));
+    let text_map = content_map
+        .text()
+        .unwrap_or_else(|| panic!("first content should map a text flow"));
+
+    let segments = text_map.segments();
+    assert_eq!(segments.len(), 3);
+    assert_eq!(segments[0].display(), 0..1);
+    assert_eq!(segments[1].display(), 1..2);
+    assert_eq!(segments[2].display(), 2..5);
+    let source_segments = segments
+        .iter()
+        .map(|segment| {
+            let range = segment
+                .source()
+                .unwrap_or_else(|| panic!("parsed text segments must have source ranges"));
+            &source[range]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(source_segments, ["a", r"\%", "中"]);
+}
+
+#[test]
+fn empty_textflow_keeps_a_zero_length_sidecar_anchor() {
+    let projection = match crate::parse_projection(r"\text{}", MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("empty text formula should project: {error}"),
+    };
+    let text_map = projection
+        .source_map()
+        .tree()
+        .and_then(|tree| tree.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(crate::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("empty textflow should keep its source anchor"));
+    let segment = text_map
+        .segments()
+        .first()
+        .unwrap_or_else(|| panic!("empty textflow should keep an empty mapping segment"));
+    assert_eq!(segment.display(), 0..0);
+    let source_range = segment
+        .source()
+        .unwrap_or_else(|| panic!("empty textflow anchor should retain a source range"));
+    assert_eq!(&projection.source_map().source()[source_range.clone()], "");
+    assert!(source_range.start > 0);
+}
+
+#[test]
+fn failed_sidecar_rebind_keeps_the_previous_valid_map() {
+    let projection = match crate::parse_projection(r"\text{x}", MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid formula should project: {error}"),
+    };
+    let (ProjectedMath::Tree(mut valid_tree), mut source_map) = projection.into_parts() else {
+        panic!("inline formula should have a tree");
+    };
+    let previous = source_map
+        .tree()
+        .cloned()
+        .unwrap_or_else(|| panic!("parsed tree should carry a sidecar"));
+    let Some(MathContent::Text(text)) = valid_tree.root.content.first_mut() else {
+        panic!("plain formula should project to text");
+    };
+    let Some(range) = &mut text.source_range else {
+        panic!("projected text should retain its transient source range");
+    };
+    range.end = source_map.source().len() as u32 + 1;
+
+    assert!(!source_map.bind_tree_after_validated_edit(&valid_tree));
+    assert_eq!(source_map.tree(), Some(&previous));
+}
+
+#[test]
+fn sidecar_rebind_rejects_semantically_different_tree_without_losing_map() {
+    let projection = match crate::parse_projection(r"\text{x}", MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid formula should project: {error}"),
+    };
+    let (ProjectedMath::Tree(mut changed_tree), mut source_map) = projection.into_parts() else {
+        panic!("inline formula should have a tree");
+    };
+    let previous = source_map
+        .tree()
+        .cloned()
+        .unwrap_or_else(|| panic!("parsed tree should carry a sidecar"));
+    let Some(MathContent::Text(text)) = changed_tree.root.content.first_mut() else {
+        panic!("text command should project to a TextFlow");
+    };
+    text.runs[0].text = "y".to_owned();
+
+    assert!(!source_map.bind_tree_after_validated_edit(&changed_tree));
+    assert_eq!(source_map.tree(), Some(&previous));
+}
+
+#[test]
+fn sidecar_rebind_rejects_text_without_a_source_range() {
+    let projection = match crate::parse_projection(r"\text{x}", MathInputKind::Inline) {
+        Ok(projection) => projection,
+        Err(error) => panic!("valid formula should project: {error}"),
+    };
+    let (ProjectedMath::Tree(mut changed_tree), mut source_map) = projection.into_parts() else {
+        panic!("inline formula should have a tree");
+    };
+    let previous = source_map
+        .tree()
+        .cloned()
+        .unwrap_or_else(|| panic!("parsed tree should carry a sidecar"));
+    let Some(MathContent::Text(text)) = changed_tree.root.content.first_mut() else {
+        panic!("text command should project to a TextFlow");
+    };
+    text.source_range = None;
+
+    assert!(!source_map.bind_tree_after_validated_edit(&changed_tree));
+    assert_eq!(source_map.tree(), Some(&previous));
 }
 
 #[test]

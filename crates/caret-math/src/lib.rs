@@ -21,7 +21,10 @@ use caret_doc::{Align, MathTree};
 
 pub use fonts::BUILTIN_FONT_FAMILY;
 pub use parser::{classify_input, is_incomplete_input_prefix, parse, parse_projection};
-pub use projection::{AlignSourceMap, MathProjection, MathSourceMap, ProjectedMath};
+pub use projection::{
+    AlignSourceMap, MathContentSourceMap, MathFlowSourceMap, MathProjection, MathRangeSourceMap,
+    MathSourceMap, MathTextSourceMap, MathTextSourceSegment, MathTreeSourceMap, ProjectedMath,
+};
 pub use serialize::{serialize_align, serialize_node, serialize_tree};
 
 /// LaTeX 导入和临时源码草稿的最大字节数；不限制持久数学树大小。
@@ -80,6 +83,8 @@ pub enum MathParseError {
     SyntaxTreeTooLarge {
         max: usize,
     },
+    /// 解析器生成的树范围无法绑定到完整源码或 Align cell。
+    InvalidSourceMap,
     /// 编号相关命令（`\label`、`\tag`、`align` 等）由文档编号系统负责，公式内不接受。
     UnsupportedNumbering {
         command: String,
@@ -105,6 +110,7 @@ impl fmt::Display for MathParseError {
             }
             Self::InputTooDeep { max } => write!(f, "math input nests deeper than {max}"),
             Self::SyntaxTreeTooLarge { max } => write!(f, "math input exceeds {max} nodes"),
+            Self::InvalidSourceMap => f.write_str("parser generated an invalid math source map"),
             Self::UnsupportedNumbering { command } => {
                 write!(
                     f,

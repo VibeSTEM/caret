@@ -2215,8 +2215,17 @@ fn nested_empty_text_island_has_symmetric_one_delimiter_navigation() -> Result<(
         .ok_or(EditError::InvalidPosition)?;
     let tree = session.math_tree_for_edit(&edit, None)?;
     let (start, end) = empty_text_range(&tree.root.content).ok_or(EditError::InvalidPosition)?;
-    let path = path::path_at_source_boundary(tree, end as usize, false, None)
-        .ok_or(EditError::InvalidPosition)?;
+    let source_base = edit.source_projection.edit_range().start;
+    let path = path::path_at_source_boundary(
+        edit.source_projection
+            .tree()
+            .ok_or(EditError::InvalidPosition)?,
+        source_base + end as usize,
+        false,
+        None,
+        source_base,
+    )
+    .ok_or(EditError::InvalidPosition)?;
     session.enter_math_text_branch(path, 0);
 
     session.run(Command::MoveCaret(Direction::Forward))?;
@@ -2257,8 +2266,17 @@ fn deleting_last_character_of_a_grouped_textflow_keeps_the_empty_textflow() -> R
             _ => None,
         })
         .ok_or(EditError::InvalidPosition)?;
-    let path = path::path_at_source_boundary(tree, first_text_end, false, None)
-        .ok_or(EditError::InvalidPosition)?;
+    let source_base = edit.source_projection.edit_range().start;
+    let path = path::path_at_source_boundary(
+        edit.source_projection
+            .tree()
+            .ok_or(EditError::InvalidPosition)?,
+        source_base + first_text_end,
+        false,
+        None,
+        source_base,
+    )
+    .ok_or(EditError::InvalidPosition)?;
     session.enter_math_text_branch(path, 1);
 
     session.run(Command::Delete(Direction::Backward))?;
@@ -2451,6 +2469,11 @@ fn math_text_formatting_preserves_and_rebases_zero_width_source_map_entries()
         focus: 3,
     })?;
     full_selection.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert!(
+        full_selection
+            .math_edit()
+            .is_some_and(|edit| edit.source_projection.tree().is_some())
+    );
 
     let selected = active_math_text_flow(&full_selection)?;
     let prefix_len = r"\textbf{".len();
@@ -3146,6 +3169,12 @@ fn align_text_island_uses_parser_cell_ranges_after_comments_and_rows()
             .math_edit()
             .is_some_and(|edit| edit.source().contains(r"\text{abcX}"))
     );
+    assert!(align.math_edit().is_some_and(|edit| {
+        edit.source_projection
+            .align()
+            .and_then(|map| map.cell_tree(1, 0))
+            .is_some()
+    }));
     Ok(())
 }
 
@@ -4599,8 +4628,17 @@ fn reentering_formula_rebases_text_path_for_pending_style_undo()
         .as_ref()
         .ok_or(EditError::InvalidPosition)?
         .start as usize;
-    let path =
-        path::path_at_source_boundary(tree, start, true, None).ok_or(EditError::InvalidPosition)?;
+    let source_base = edit.source_projection.edit_range().start;
+    let path = path::path_at_source_boundary(
+        edit.source_projection
+            .tree()
+            .ok_or(EditError::InvalidPosition)?,
+        source_base + start,
+        true,
+        None,
+        source_base,
+    )
+    .ok_or(EditError::InvalidPosition)?;
     session.enter_math_text_branch(path, 0);
     session.run(Command::ToggleRunUnderline)?;
 

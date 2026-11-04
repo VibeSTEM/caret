@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIODevice>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUrl>

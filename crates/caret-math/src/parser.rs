@@ -19,6 +19,7 @@ use caret_doc::{
 use serde_json::Value;
 
 use crate::backend::BackendNodeKind as MathNodeKind;
+use crate::projection::AlignSourceRanges;
 use crate::symbols::{
     NAMED_COLORS, accent_attribute, encode_delimiter, literal_class, named_symbol,
     text_operator_limits,
@@ -70,7 +71,7 @@ const MATRIX_ENVIRONMENTS: &[&str] = &[
 
 /// 把输入解析为目标对象类型的文档数学树。
 pub fn parse(source: &str, kind: MathInputKind) -> ParseResult<ParsedMath> {
-    parse_projection_with_source(source, kind, Cow::Borrowed(source))
+    parse_projection_with_source(source, kind, Cow::Borrowed(source), false)
         .map(MathProjection::into_parsed)
 }
 
@@ -82,13 +83,14 @@ pub fn parse_projection(source: &str, kind: MathInputKind) -> ParseResult<MathPr
             max: MAX_MATH_SOURCE_BYTES,
         });
     }
-    parse_projection_with_source(source, kind, Cow::Owned(source.to_owned()))
+    parse_projection_with_source(source, kind, Cow::Owned(source.to_owned()), true)
 }
 
 fn parse_projection_with_source<'source>(
     source: &str,
     kind: MathInputKind,
     projection_source: Cow<'source, str>,
+    capture_source_map: bool,
 ) -> ParseResult<MathProjection<'source>> {
     if source.len() > MAX_MATH_SOURCE_BYTES {
         return Err(MathParseError::InputTooLong {
@@ -118,9 +120,12 @@ fn parse_projection_with_source<'source>(
                 extra: BTreeMap::new(),
             };
             tree.validate().map_err(invalid_tree)?;
-            Ok(MathProjection::tree(projection_source, kind, body, tree))
+            MathProjection::tree(projection_source, kind, body, tree, capture_source_map)
+                .ok_or(MathParseError::InvalidSourceMap)
         }
-        MathInputKind::Align => parse_align(&mut parser, projection_source, body),
+        MathInputKind::Align => {
+            parse_align(&mut parser, projection_source, body, capture_source_map)
+        }
     }
 }
 
@@ -271,6 +276,7 @@ fn parse_align<'source>(
     parser: &mut Parser<'_>,
     source: Cow<'source, str>,
     body: Range<usize>,
+    capture_source_map: bool,
 ) -> ParseResult<MathProjection<'source>> {
     parser.skip_space();
     let env_start = parser.pos;
@@ -353,15 +359,19 @@ fn parse_align<'source>(
         extra: BTreeMap::new(),
     };
     align.validate().map_err(invalid_tree)?;
-    Ok(MathProjection::align(
+    MathProjection::align(
         source,
         body,
         align,
-        env_start..environment_end,
-        environment_content_start..environment_content_end,
-        cell_ranges,
-        cell_navigation_ranges,
-    ))
+        AlignSourceRanges {
+            environment: env_start..environment_end,
+            content: environment_content_start..environment_content_end,
+            cells: cell_ranges,
+            navigation: cell_navigation_ranges,
+        },
+        capture_source_map,
+    )
+    .ok_or(MathParseError::InvalidSourceMap)
 }
 
 fn parser_root_to_flow(root: MathNode) -> MathFlow {
