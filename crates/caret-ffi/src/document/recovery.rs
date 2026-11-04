@@ -65,7 +65,10 @@ pub(super) fn clear_recovery_after_saved(runtime: &mut DocumentRuntime) {
             })
             .is_some_and(|result| result.is_ok());
         if removed && let Ok(session) = &mut runtime.runtime {
-            session.clear_recovery_id();
+            if session.clear_recovery_id().is_some() {
+                runtime.recovery_binding_generation =
+                    runtime.recovery_binding_generation.saturating_add(1);
+            }
             runtime.recovery_lease = None;
         }
     }
@@ -185,8 +188,10 @@ pub(crate) fn discard_document_recovery(runtime: &mut DocumentRuntime) -> String
     if let Err(error) = result {
         return error.to_string();
     }
-    if let Ok(session) = &mut runtime.runtime {
-        session.clear_recovery_id();
+    if let Ok(session) = &mut runtime.runtime
+        && session.clear_recovery_id().is_some()
+    {
+        runtime.recovery_binding_generation = runtime.recovery_binding_generation.saturating_add(1);
     }
     runtime.recovery_lease = None;
     runtime.lifecycle.set_recovery_enabled(false);
@@ -198,6 +203,8 @@ pub(crate) fn update_recovery_document(
     id: String,
     original_path: String,
     baseline_digest: String,
+    binding_generation: u64,
+    document_generation: u64,
     bytes: Vec<u8>,
 ) -> String {
     let storage = match recovery_storage().lock() {
@@ -208,15 +215,15 @@ pub(crate) fn update_recovery_document(
         return "recovery.storage_unavailable".to_owned();
     };
     storage
-        .update(
+        .update_if_identity_matches(
             &id,
             caret_app::document_recovery::RecoveryKind::LocalDocument,
-            Path::new(&original_path),
-            if baseline_digest.is_empty() {
-                None
-            } else {
-                Some(baseline_digest)
-            },
+            caret_app::document_recovery::RecoverySnapshotIdentity::new(
+                Path::new(&original_path),
+                (!baseline_digest.is_empty()).then_some(baseline_digest.as_str()),
+                binding_generation,
+                document_generation,
+            ),
             &bytes,
         )
         .err()
@@ -247,7 +254,7 @@ pub(crate) fn prepare_recovery_document(
             .map_err(|error| error.to_string())?;
         let prepared_session = DocumentSessionService::prepare_recovery(
             &payload,
-            session_recovery_id,
+            session_recovery_id.clone(),
             envelope.original_path.clone(),
             envelope.baseline_digest.clone(),
             next_generation,
@@ -257,6 +264,18 @@ pub(crate) fn prepare_recovery_document(
             Err(error) => {
                 let _ = storage.remove_leased(&recovery_lease);
                 return Err(error);
+            }
+        };
+        let binding_generation = match storage.bind_session(
+            &session_recovery_id,
+            Path::new(&envelope.original_path),
+            envelope.baseline_digest.clone(),
+            session.document_generation(),
+        ) {
+            Ok(generation) => generation,
+            Err(error) => {
+                let _ = storage.remove_leased(&recovery_lease);
+                return Err(error.to_string());
             }
         };
         let ticket = next_prepared_document_ticket();
@@ -279,6 +298,7 @@ pub(crate) fn prepare_recovery_document(
                 expected_document_generation,
                 recovery_source: Some((id.clone(), source_lease)),
                 recovery_lease: Some(recovery_lease),
+                recovery_binding_generation: binding_generation,
             },
         );
         Ok((ticket, snapshot_json))
@@ -303,8 +323,11 @@ pub(crate) fn write_document_file_checked(
     baseline_digest: String,
     queued_digest: String,
     recovery_id: String,
+    binding_generation: u64,
+    document_generation: u64,
 ) -> bridge::DocumentWriteResult {
     let target = Path::new(&path);
+    let recovery_baseline_digest = (!baseline_digest.is_empty()).then_some(baseline_digest.clone());
     let result = |conflict, replace_allowed, recovery_id, recovery_created, error| {
         bridge::DocumentWriteResult {
             conflict,
@@ -340,7 +363,7 @@ pub(crate) fn write_document_file_checked(
                 .and_then(|storage| {
                     if recovery_id.is_empty() {
                         storage
-                            .store_for_session(target, Some(baseline_digest), &bytes)
+                            .store_for_session(target, recovery_baseline_digest.clone(), &bytes)
                             .and_then(|(id, lease)| match pending_recovery_leases().lock() {
                                 Ok(mut leases) => {
                                     leases.insert(id.clone(), lease);
@@ -353,11 +376,15 @@ pub(crate) fn write_document_file_checked(
                             })
                     } else {
                         storage
-                            .update(
+                            .update_if_identity_matches(
                                 &recovery_id,
                                 caret_app::document_recovery::RecoveryKind::LocalDocument,
-                                target,
-                                Some(baseline_digest),
+                                caret_app::document_recovery::RecoverySnapshotIdentity::new(
+                                    target,
+                                    recovery_baseline_digest.as_deref(),
+                                    binding_generation,
+                                    document_generation,
+                                ),
                                 &bytes,
                             )
                             .map(|()| recovery_id)
@@ -384,11 +411,24 @@ pub(crate) fn cancel_pending_recovery_lease(id: String) {
 pub(crate) fn set_document_recovery_id(
     runtime: &mut DocumentRuntime,
     session_generation: u64,
+    source_revision: u64,
+    expected_binding_generation: u64,
     id: String,
     original_path: String,
     baseline_digest: String,
 ) -> String {
     let baseline_digest = (!baseline_digest.is_empty()).then_some(baseline_digest);
+    let binding_unchanged = runtime.runtime.as_ref().is_ok_and(|session| {
+        session.recovery_binding_matches(&id, &original_path, baseline_digest.as_deref())
+    });
+    if !runtime
+        .runtime
+        .as_ref()
+        .is_ok_and(|session| session.session_generation() == session_generation)
+        || runtime.recovery_binding_generation != expected_binding_generation
+    {
+        return "error:document.stale_recovery_completion".to_owned();
+    }
     let lease = if runtime
         .recovery_lease
         .as_ref()
@@ -411,6 +451,23 @@ pub(crate) fn set_document_recovery_id(
             Err(error) => return error.to_string(),
         }
     };
+    let binding_generation = if binding_unchanged {
+        runtime.recovery_binding_generation
+    } else {
+        let storage = match recovery_storage_for_cleanup() {
+            Ok(storage) => storage,
+            Err(error) => return error,
+        };
+        match storage.bind_session(
+            &id,
+            Path::new(&original_path),
+            baseline_digest.clone(),
+            source_revision,
+        ) {
+            Ok(generation) => generation,
+            Err(error) => return error.to_string(),
+        }
+    };
     let session = match &mut runtime.runtime {
         Ok(session) => session,
         Err(error) => return format!("error:{error}"),
@@ -422,6 +479,18 @@ pub(crate) fn set_document_recovery_id(
         runtime.recovery_lease = Some(lease);
     }
     runtime.lifecycle.set_recovery_enabled(true);
+    if let Ok(session) = &runtime.runtime {
+        let current_revision = session.document_generation();
+        if !binding_unchanged {
+            runtime.recovery_binding_generation = binding_generation;
+            runtime.lifecycle.recovery_binding_changed();
+        }
+        if current_revision > source_revision {
+            runtime
+                .lifecycle
+                .edited(current_revision, true, runtime.monotonic_origin.elapsed());
+        }
+    }
     String::new()
 }
 
@@ -497,10 +566,14 @@ mod tests {
         prepare_recovery_document, recovery_entries_json, recovery_storage_for_cleanup,
         set_document_recovery_id, update_recovery_document, write_document_file_replace_external,
     };
-    use crate::document::{document_save_snapshot, new_blank_document_runtime};
+    use crate::document::{
+        auto_save_deadline_json, document_save_snapshot, new_blank_document_runtime,
+        recovery_update_deadline_fired, recovery_update_write_finished,
+    };
     use caret_app::document_recovery::{DocumentRecoveryStorage, RecoveryKind};
     use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn cancelling_an_unclaimed_lease_keeps_the_recovery_entry_available() {
@@ -595,7 +668,7 @@ mod tests {
         let recovery_result = storage.store(
             RecoveryKind::LocalDocument,
             &document_path,
-            Some(snapshot.baseline_digest.clone()),
+            (!snapshot.baseline_digest.is_empty()).then_some(snapshot.baseline_digest.clone()),
             &snapshot.bytes,
         );
         assert!(
@@ -610,28 +683,189 @@ mod tests {
                 recovery_id.clone(),
                 document_path.to_string_lossy().into_owned(),
                 snapshot.baseline_digest.clone(),
+                0,
+                snapshot.document_generation,
                 snapshot.bytes.clone(),
             )
             .is_empty()
         );
+        assert!(auto_save_deadline_json(&runtime).is_empty());
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&crate::document::insert_text_json(
+                &mut runtime,
+                "newer revision".to_owned(),
+            ))
+            .is_ok()
+        );
+        assert!(
+            set_document_recovery_id(
+                &mut runtime,
+                snapshot.session_generation.saturating_add(1),
+                snapshot.document_generation,
+                0,
+                recovery_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+            )
+            .starts_with("error:")
+        );
+        assert!(auto_save_deadline_json(&runtime).is_empty());
         assert!(
             set_document_recovery_id(
                 &mut runtime,
                 snapshot.session_generation,
+                snapshot.document_generation,
+                0,
                 recovery_id.clone(),
                 document_path.to_string_lossy().into_owned(),
                 snapshot.baseline_digest.clone(),
             )
             .is_empty()
         );
-
-        let saved = mark_document_saved_json(
+        let deadline = auto_save_deadline_json(&runtime);
+        assert!(deadline.contains("\"recovery\":true"), "{deadline}");
+        let deadline_result: Result<serde_json::Value, _> = serde_json::from_str(&deadline);
+        assert!(deadline_result.is_ok());
+        let deadline_value = deadline_result.unwrap_or_default();
+        let deadline_generation = deadline_value["generation"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok());
+        assert!(deadline_generation.is_some());
+        runtime.monotonic_origin = Instant::now() - Duration::from_secs(5);
+        let captured = recovery_update_deadline_fired(
             &mut runtime,
             snapshot.session_generation,
-            snapshot.document_generation,
-            snapshot.history_state_id,
+            deadline_generation.unwrap_or_default(),
+        );
+        assert!(captured.error.is_empty());
+        assert!(!captured.stale_deadline);
+        assert_eq!(captured.recovery_id, recovery_id);
+        assert_eq!(captured.document_generation, 1);
+
+        let storage_result = recovery_storage_for_cleanup();
+        assert!(storage_result.is_ok());
+        let Ok(storage) = storage_result else { return };
+        let replacement_result = storage.store(
+            RecoveryKind::LocalDocument,
+            &document_path,
+            (!snapshot.baseline_digest.is_empty()).then_some(snapshot.baseline_digest.clone()),
+            &snapshot.bytes,
+        );
+        assert!(replacement_result.is_ok());
+        let Ok(replacement_id) = replacement_result else {
+            return;
+        };
+        let replacement_expected_binding_generation = runtime.recovery_binding_generation;
+        assert!(
+            set_document_recovery_id(
+                &mut runtime,
+                snapshot.session_generation,
+                snapshot.document_generation,
+                replacement_expected_binding_generation,
+                replacement_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+            )
+            .is_empty()
+        );
+        assert!(
+            recovery_update_write_finished(
+                &mut runtime,
+                snapshot.session_generation,
+                captured.document_generation,
+                recovery_id.clone(),
+                captured.recovery_binding_generation,
+                true,
+            )
+            .starts_with("error:")
+        );
+        let replacement_deadline = auto_save_deadline_json(&runtime);
+        assert!(
+            replacement_deadline.contains("\"recovery\":true"),
+            "{replacement_deadline}"
+        );
+        let rebound_expected_binding_generation = runtime.recovery_binding_generation;
+        assert!(
+            set_document_recovery_id(
+                &mut runtime,
+                snapshot.session_generation,
+                snapshot.document_generation,
+                rebound_expected_binding_generation,
+                recovery_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+            )
+            .is_empty()
+        );
+        let rebound_deadline = auto_save_deadline_json(&runtime);
+        assert!(
+            rebound_deadline.contains("\"recovery\":true"),
+            "{rebound_deadline}"
+        );
+        let rebound_deadline_result: Result<serde_json::Value, _> =
+            serde_json::from_str(&rebound_deadline);
+        assert!(rebound_deadline_result.is_ok());
+        let rebound_generation = rebound_deadline_result.unwrap_or_default()["generation"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok());
+        assert!(rebound_generation.is_some());
+        runtime.monotonic_origin = Instant::now() - Duration::from_secs(10);
+        let rebound = recovery_update_deadline_fired(
+            &mut runtime,
+            snapshot.session_generation,
+            rebound_generation.unwrap_or_default(),
+        );
+        assert!(!rebound.stale_deadline);
+        assert_eq!(rebound.recovery_id, recovery_id);
+        assert_eq!(rebound.document_generation, captured.document_generation);
+        assert_ne!(
+            rebound.recovery_binding_generation,
+            captured.recovery_binding_generation
+        );
+        assert!(
+            recovery_update_write_finished(
+                &mut runtime,
+                snapshot.session_generation,
+                captured.document_generation,
+                recovery_id.clone(),
+                captured.recovery_binding_generation,
+                true,
+            )
+            .starts_with("error:")
+        );
+        let still_scheduled = auto_save_deadline_json(&runtime);
+        assert!(still_scheduled.is_empty());
+        assert!(
+            update_recovery_document(
+                recovery_id.clone(),
+                document_path.to_string_lossy().into_owned(),
+                snapshot.baseline_digest.clone(),
+                rebound.recovery_binding_generation,
+                rebound.document_generation,
+                rebound.bytes.clone(),
+            )
+            .is_empty()
+        );
+        assert!(
+            recovery_update_write_finished(
+                &mut runtime,
+                snapshot.session_generation,
+                rebound.document_generation,
+                recovery_id.clone(),
+                rebound.recovery_binding_generation,
+                true,
+            )
+            .is_empty()
+        );
+        let current_snapshot = document_save_snapshot(&mut runtime);
+        assert!(current_snapshot.error.is_empty());
+        let saved = mark_document_saved_json(
+            &mut runtime,
+            current_snapshot.session_generation,
+            current_snapshot.document_generation,
+            current_snapshot.history_state_id,
             document_path.to_string_lossy().into_owned(),
-            snapshot.content_digest,
+            current_snapshot.content_digest,
         );
         assert!(!saved.starts_with("error:"));
         let saved_status_result: Result<serde_json::Value, _> = serde_json::from_str(&saved);
@@ -642,6 +876,7 @@ mod tests {
             document_path.to_string_lossy().as_ref()
         );
         assert_eq!(saved_status["dirty"], false);
+        assert!(storage.remove(&replacement_id).is_ok());
         let remaining_result = storage.list();
         assert!(
             remaining_result.is_ok(),
@@ -649,6 +884,7 @@ mod tests {
         );
         let remaining = remaining_result.unwrap_or_default();
         assert!(!remaining.contains(&recovery_id));
+        assert!(!remaining.contains(&replacement_id));
 
         assert!(
             !prepare_recovery_document("missing-entry".to_owned(), 0, 0)

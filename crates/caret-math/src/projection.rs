@@ -60,6 +60,26 @@ impl AlignSourceMap {
     pub fn cell_tree(&self, row: usize, cell: usize) -> Option<&MathTreeSourceMap> {
         self.cell_trees.get(row)?.get(cell)
     }
+
+    /// 校验 Align 环境、导航范围、cell 范围与每棵 cell 树映射。
+    pub fn same_locations(&self, other: &Self) -> bool {
+        self.environment_range == other.environment_range
+            && self.content_range == other.content_range
+            && self.cell_ranges == other.cell_ranges
+            && self.cell_navigation_ranges == other.cell_navigation_ranges
+            && self.cell_trees.len() == other.cell_trees.len()
+            && self
+                .cell_trees
+                .iter()
+                .zip(&other.cell_trees)
+                .all(|(left_row, right_row)| {
+                    left_row.len() == right_row.len()
+                        && left_row
+                            .iter()
+                            .zip(right_row)
+                            .all(|(left, right)| left.same_locations(right))
+                })
+    }
 }
 
 /// 持有公式源码及同次解析生成的范围映射。

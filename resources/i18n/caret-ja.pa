@@ -60,6 +60,16 @@ message_011:
   tr: 文書フォルダーを利用できません。
   st: finished
 
+message_120:
+  src: Finish or cancel the incomplete formula edit before saving this document.
+  tr: この文書を保存する前に、未完了の数式編集を完了するかキャンセルしてください。
+  st: finished
+
+message_121:
+  src: Finish or cancel the incomplete formula edit before replacing this document.
+  tr: この文書を置き換える前に、未完了の数式編集を完了するかキャンセルしてください。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -346,6 +356,11 @@ message_065:
 message_066:
   src: Cancel
   tr: キャンセル
+  st: finished
+
+message_119:
+  src: This document contains an incomplete formula edit that cannot be saved. Discard all changes and close?
+  tr: この文書には未完了で保存できない数式編集があります。すべての変更を破棄して閉じますか？
   st: finished
 
 [WindowCommandBar]

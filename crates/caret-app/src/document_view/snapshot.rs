@@ -77,6 +77,10 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
         })
 }
 
+fn math_input_method_enabled(session: &caret_engine::Session) -> bool {
+    session.math_edit().is_none()
+}
+
 pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
     if session.block_environment_exit().is_some() {
         return Value::Array(Vec::new());
@@ -456,6 +460,7 @@ impl DocumentViewRuntime {
             "surroundingText": context.text.as_ref(),
             "cursorPosition": cursor_position,
             "anchorPosition": anchor_position,
+            "enabled": math_input_method_enabled(&self.session),
         });
         self.last_interaction_context =
             Some((snapshot.document_generation, context.id.clone(), false));
@@ -468,6 +473,7 @@ impl DocumentViewRuntime {
     /// 只序列化 caret、选区与 IME 上下文，供不改变正文布局的交互更新使用。
     pub fn interaction_state_json(&mut self) -> Result<String, String> {
         let selection = self.session.selection().clone();
+        let input_method_enabled = math_input_method_enabled(&self.session);
         let visual_affinity = self.session.selection_visual_affinity();
         let command_input_context = self.session.command_line();
         let context_key = (
@@ -546,6 +552,10 @@ impl DocumentViewRuntime {
         input_method_context.insert(
             "anchorPosition".to_owned(),
             serde_json::Value::from(anchor_position),
+        );
+        input_method_context.insert(
+            "enabled".to_owned(),
+            serde_json::Value::from(input_method_enabled),
         );
         if let Some((query, cursor_utf16)) = command_input_context {
             input_method_context.insert(

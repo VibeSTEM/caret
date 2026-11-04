@@ -230,13 +230,32 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
                                           QJsonArray{QStringLiteral("bad")});
     QVERIFY(reject(invalid_composition_rectangles));
 
+    QJsonObject missing_input_context = root;
+    missing_input_context.remove(QStringLiteral("inputMethodContext"));
+    QVERIFY(reject(missing_input_context));
     QJsonObject invalid_input_context = root;
     invalid_input_context.insert(
         QStringLiteral("inputMethodContext"),
         QJsonObject{{QStringLiteral("surroundingText"), QStringLiteral("a")},
                     {QStringLiteral("cursorPosition"), 2},
-                    {QStringLiteral("anchorPosition"), 0}});
+                    {QStringLiteral("anchorPosition"), 0},
+                    {QStringLiteral("enabled"), true}});
     QVERIFY(reject(invalid_input_context));
+    QJsonObject invalid_input_context_enabled = root;
+    invalid_input_context_enabled.insert(
+        QStringLiteral("inputMethodContext"),
+        QJsonObject{{QStringLiteral("surroundingText"), QStringLiteral("a")},
+                    {QStringLiteral("cursorPosition"), 0},
+                    {QStringLiteral("anchorPosition"), 0},
+                    {QStringLiteral("enabled"), QStringLiteral("true")}});
+    QVERIFY(reject(invalid_input_context_enabled));
+    QJsonObject missing_input_context_enabled = root;
+    missing_input_context_enabled.insert(
+        QStringLiteral("inputMethodContext"),
+        QJsonObject{{QStringLiteral("surroundingText"), QStringLiteral("a")},
+                    {QStringLiteral("cursorPosition"), 0},
+                    {QStringLiteral("anchorPosition"), 0}});
+    QVERIFY(reject(missing_input_context_enabled));
     const caret::LayoutViewModel after_rejections;
     QCOMPARE(after_rejections.pageLayouts(), published_pages);
     QCOMPARE(after_rejections.paragraphLayouts(), view_model.paragraphLayouts());

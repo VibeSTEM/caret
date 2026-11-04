@@ -265,6 +265,10 @@ fn criterion_benches_select_their_registered_cargo_packages() -> Result<(), Box<
             "caret-engine",
         ),
         (
+            "tests/performance/rust/cpu/math_edit_criterion.rs",
+            "caret-engine",
+        ),
+        (
             "tests/performance/rust/cpu/document_view_input_criterion.rs",
             "caret-app",
         ),

@@ -41,10 +41,16 @@ void DocumentCanvas::setInputMethodContext(const QVariantMap& context) {
     if (m_input_method_context == context) {
         return;
     }
+    const bool was_enabled = m_input_method_context.value(QStringLiteral("enabled")).toBool();
+    const bool is_enabled = context.value(QStringLiteral("enabled")).toBool();
     m_input_method_context = context;
     emit inputMethodContextChanged();
+    if (was_enabled && !is_enabled) {
+        cancelPreedit();
+    }
     if (QGuiApplication::inputMethod() != nullptr) {
-        QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+        QGuiApplication::inputMethod()->update(
+            was_enabled == is_enabled ? Qt::ImQueryInput : Qt::ImEnabled | Qt::ImQueryInput);
     }
 }
 
@@ -72,6 +78,10 @@ void DocumentCanvas::cancelPreedit() {
 }
 
 void DocumentCanvas::inputMethodEvent(QInputMethodEvent* event) {
+    if (!m_input_method_context.value(QStringLiteral("enabled")).toBool()) {
+        event->accept();
+        return;
+    }
     const QString next_preedit = event->preeditString();
     const int maximum_position =
         static_cast<int>(std::min<qsizetype>(next_preedit.size(), std::numeric_limits<int>::max()));
@@ -96,7 +106,7 @@ void DocumentCanvas::inputMethodEvent(QInputMethodEvent* event) {
 QVariant DocumentCanvas::inputMethodQuery(Qt::InputMethodQuery query) const {
     switch (query) {
     case Qt::ImEnabled:
-        return true;
+        return m_input_method_context.value(QStringLiteral("enabled")).toBool();
     case Qt::ImCursorRectangle:
         return m_input_method_cursor_rectangle.isEmpty() ? caretRect(m_caret_geometry)
                                                          : m_input_method_cursor_rectangle;

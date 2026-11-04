@@ -60,6 +60,16 @@ message_011:
   tr: The document folder is unavailable.
   st: finished
 
+message_120:
+  src: Finish or cancel the incomplete formula edit before saving this document.
+  tr: Finish or cancel the incomplete formula edit before saving this document.
+  st: finished
+
+message_121:
+  src: Finish or cancel the incomplete formula edit before replacing this document.
+  tr: Finish or cancel the incomplete formula edit before replacing this document.
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -346,6 +356,11 @@ message_065:
 message_066:
   src: Cancel
   tr: Cancel
+  st: finished
+
+message_119:
+  src: This document contains an incomplete formula edit that cannot be saved. Discard all changes and close?
+  tr: This document contains an incomplete formula edit that cannot be saved. Discard all changes and close?
   st: finished
 
 [WindowCommandBar]

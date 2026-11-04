@@ -450,6 +450,26 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
     QVERIFY(close_prompt != nullptr);
     QCOMPARE(close_prompt->property("text").toString(),
              QStringLiteral("Save your changes before closing this document?"));
+    QQuickItem* close_save_button =
+        close_dialog->findChild<QQuickItem*>(QStringLiteral("closeSaveButton"));
+    QVERIFY(close_save_button != nullptr);
+    QVERIFY(close_save_button->property("visible").toBool());
+    close_dialog->setProperty("mathSourceDraftPending", true);
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("This document contains an incomplete formula edit that cannot be "
+                            "saved. Discard all changes and close?"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before saving this document."),
+        QStringLiteral(
+            "Finish or cancel the incomplete formula edit before saving this document."));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before replacing this document."),
+        QStringLiteral(
+            "Finish or cancel the incomplete formula edit before replacing this document."));
+    QVERIFY(!close_save_button->property("visible").toBool());
+    const qreal draft_dialog_height = close_dialog->property("height").toReal();
 
     caret::SettingsViewModel settings;
     caret::ThemeViewModel theme_projection;
@@ -495,6 +515,19 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
     QCOMPARE(translation_probe->property("savingLabel").toString(), QStringLiteral("保存中"));
     QCOMPARE(translation_probe->property("editedLabel").toString(), QStringLiteral("編集済み"));
     QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("保存済み"));
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("この文書には未完了で保存できない数式編集があります。すべての変更を破棄"
+                            "して閉じますか？"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before saving this document."),
+        QStringLiteral(
+            "この文書を保存する前に、未完了の数式編集を完了するかキャンセルしてください。"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before replacing this document."),
+        QStringLiteral(
+            "この文書を置き換える前に、未完了の数式編集を完了するかキャンセルしてください。"));
     QVERIFY(!preferences.caretBlinkEnabled());
     QCOMPARE(theme_projection.activeTheme(), QStringLiteral("dark"));
     QVERIFY(theme_projection.tokens().value(QStringLiteral("colorPanel")) != initial_panel_color);
@@ -524,9 +557,33 @@ void ShellLoadTest::settingsSelectionUpdatesThemeLanguageAndPersistsAtomically()
     QCOMPARE(translation_probe->property("savingLabel").toString(), QStringLiteral("保存中"));
     QCOMPARE(translation_probe->property("editedLabel").toString(), QStringLiteral("已编辑"));
     QCOMPARE(translation_probe->property("savedLabel").toString(), QStringLiteral("已保存"));
-    QCOMPARE(close_prompt->property("text").toString(), QStringLiteral("关闭文档前要保存更改吗？"));
-    QVERIFY(close_dialog->property("height").toReal() < english_dialog_height);
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("此文档包含尚未完成且无法保存的公式编辑。要放弃所有更改并关闭吗？"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before saving this document."),
+        QStringLiteral("保存此文档前，请完成或取消尚未完成的公式编辑。"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before replacing this document."),
+        QStringLiteral("替换此文档前，请完成或取消尚未完成的公式编辑。"));
+    QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("zh-Hant"), false, true));
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("此文件包含尚未完成且無法儲存的公式編輯。要放棄所有變更並關閉嗎？"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before saving this document."),
+        QStringLiteral("儲存此文件前，請完成或取消尚未完成的公式編輯。"));
+    QCOMPARE(
+        QCoreApplication::translate(
+            "App", "Finish or cancel the incomplete formula edit before replacing this document."),
+        QStringLiteral("取代此文件前，請完成或取消尚未完成的公式編輯。"));
     QVERIFY(settings.applySettings(QStringLiteral("dark"), QStringLiteral("ja"), false, true));
+    close_dialog->setProperty("mathSourceDraftPending", false);
+    QCOMPARE(close_prompt->property("text").toString(),
+             QStringLiteral("この文書を閉じる前に変更を保存しますか？"));
+    QVERIFY(close_save_button->property("visible").toBool());
+    QVERIFY(draft_dialog_height > english_dialog_height);
 
     const qsizetype theme_change_count = theme_changes.count();
     controller.open();
@@ -895,13 +952,35 @@ void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
     const QString text = QString::fromUtf8(source.readAll());
     const qsizetype failure_start = text.indexOf(QStringLiteral(
         "if (!succeeded) {\n                window.waitForCloseAfterFileOperation = false;"));
-    const qsizetype success_start =
-        text.indexOf(QStringLiteral("if (window.closeAfterSaveRequested"), failure_start);
     QVERIFY(failure_start >= 0);
-    QVERIFY(success_start > failure_start);
-    const QString failure_branch = text.mid(failure_start, success_start - failure_start);
+    const qsizetype conflict_start = text.indexOf(QStringLiteral("if (conflict)"), failure_start);
+    QVERIFY(conflict_start > failure_start);
+    const QString failure_branch = text.mid(failure_start, conflict_start - failure_start);
     QVERIFY(failure_branch.contains(QStringLiteral("waitForCloseAfterFileOperation = false")));
     QVERIFY(!failure_branch.contains(QStringLiteral("resumeCloseAfterFileOperation()")));
+
+    const qsizetype activity_start =
+        text.indexOf(QStringLiteral("function onDocumentFileActivityFinished()"));
+    const qsizetype operation_start =
+        text.indexOf(QStringLiteral("function onDocumentFileOperationFinished"), activity_start);
+    QVERIFY(activity_start >= 0);
+    QVERIFY(operation_start > activity_start);
+    QVERIFY(text.mid(activity_start, operation_start - activity_start)
+                .contains(QStringLiteral("window.resumeCloseAfterFileOperation()")));
+    const qsizetype save_finished_start =
+        text.indexOf(QStringLiteral("function onDocumentSaveFinished(succeeded)"));
+    QVERIFY(save_finished_start >= 0);
+    QVERIFY(text.mid(save_finished_start)
+                .contains(QStringLiteral("closeAfterSaveSucceeded = succeeded")));
+    const qsizetype resume_start =
+        text.indexOf(QStringLiteral("function resumeCloseAfterFileOperation()"));
+    QVERIFY(resume_start >= 0);
+    const QString resume_body = text.mid(resume_start);
+    QVERIFY(resume_body.contains(QStringLiteral("closeAfterSaveRequested")));
+    QVERIFY(resume_body.contains(QStringLiteral("closeAfterSaveSucceeded")));
+    QVERIFY(resume_body.contains(QStringLiteral("waitForCloseAfterFileOperation")));
+    QVERIFY(resume_body.contains(QStringLiteral("if (LayoutViewModel.documentFileBusy)")));
+    QVERIFY(resume_body.contains(QStringLiteral("documentMathSourceDraftPending")));
 }
 
 void ShellLoadTest::documentUnitsConvertThroughIntegerCentipixels() {

@@ -46,36 +46,37 @@ pub(super) struct MathTextFormat {
     pub(super) selection_reversed: bool,
 }
 
-pub(super) fn text_source_boundary(text: &caret_doc::TextFlow, offset: usize) -> Option<usize> {
-    text_source_boundary_with_affinity(text, offset, Affinity::Downstream)
-}
-
-fn text_source_boundary_with_affinity(
+pub(super) fn text_source_boundary_from_map(
     text: &caret_doc::TextFlow,
+    source_map: &caret_math::MathTextSourceMap,
+    source_base: usize,
     offset: usize,
     affinity: Affinity,
 ) -> Option<usize> {
-    let text_len = text.runs.iter().map(|run| run.text.len()).sum::<usize>();
+    let text_len = text
+        .runs
+        .iter()
+        .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
     if offset > text_len {
         return None;
     }
     let mut upstream = None;
     let mut downstream = None;
-    for entry in &text.source_map {
-        let text_start = entry.text_start as usize;
-        let text_end = entry.text_end as usize;
-        let source_start = entry.source_range.start as usize;
-        let source_end = entry.source_range.end as usize;
-        if offset == text_start {
+    for segment in source_map.segments() {
+        let display = segment.display();
+        let host_source = segment.source()?;
+        let source_start = host_source.start.checked_sub(source_base)?;
+        let source_end = host_source.end.checked_sub(source_base)?;
+        if offset == display.start {
             downstream = Some(source_start);
         }
-        if offset == text_end {
+        if offset == display.end {
             upstream = Some(source_end);
-        } else if text_start < offset
-            && offset < text_end
-            && text_end - text_start == source_end - source_start
+        } else if display.start < offset
+            && offset < display.end
+            && display.len() == host_source.len()
         {
-            return Some(source_start + offset - text_start);
+            return source_start.checked_add(offset - display.start);
         }
     }
     match affinity {
@@ -84,8 +85,9 @@ fn text_source_boundary_with_affinity(
     }
 }
 
-pub(super) fn text_source_range(
-    text: &caret_doc::TextFlow,
+pub(super) fn text_source_range_from_map(
+    source_map: &caret_math::MathTextSourceMap,
+    source_base: usize,
     range: Range<usize>,
 ) -> Option<Range<usize>> {
     if range.start >= range.end {
@@ -93,25 +95,25 @@ pub(super) fn text_source_range(
     }
     let mut mapped = range.start;
     let mut source_range = None;
-    for entry in &text.source_map {
-        let text_start = entry.text_start as usize;
-        let text_end = entry.text_end as usize;
-        let overlap_start = range.start.max(text_start);
-        let overlap_end = range.end.min(text_end);
+    for segment in source_map.segments() {
+        let display = segment.display();
+        let overlap_start = range.start.max(display.start);
+        let overlap_end = range.end.min(display.end);
         if overlap_start >= overlap_end {
             continue;
         }
         if overlap_start != mapped {
             return None;
         }
-        let source_start = entry.source_range.start as usize;
-        let source_end = entry.source_range.end as usize;
-        let linear = text_end - text_start == source_end - source_start;
-        if !linear && (overlap_start != text_start || overlap_end != text_end) {
+        let host_source = segment.source()?;
+        let source_start = host_source.start.checked_sub(source_base)?;
+        let source_end = host_source.end.checked_sub(source_base)?;
+        let linear = display.len() == host_source.len();
+        if !linear && (overlap_start != display.start || overlap_end != display.end) {
             return None;
         }
         let mapped_source_start = if linear {
-            source_start + overlap_start - text_start
+            source_start.checked_add(overlap_start - display.start)?
         } else {
             source_start
         };
@@ -122,7 +124,7 @@ pub(super) fn text_source_range(
             return None;
         }
         let mapped_source_end = if linear {
-            source_start + overlap_end - text_start
+            source_start.checked_add(overlap_end - display.start)?
         } else {
             source_end
         };
@@ -204,11 +206,20 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let (text, text_map) = path
+            .resolve_in_projection(tree, &edit.source_projection)
+            .ok_or(EditError::InvalidPosition)?;
         let range = (*anchor).min(edit.cursor)..(*anchor).max(edit.cursor);
         let source_edit = if range.is_empty() {
-            let cursor =
-                text_source_boundary(text, range.start).ok_or(EditError::InvalidPosition)?;
+            let cursor = text_source_boundary_from_map(
+                text,
+                text_map,
+                edit.source_projection.edit_range().start,
+                range.start,
+                Affinity::Downstream,
+            )
+            .and_then(|offset| path.source_offset(offset))
+            .ok_or(EditError::InvalidPosition)?;
             cursor..cursor
         } else {
             let display = text
@@ -222,7 +233,15 @@ impl Session {
             {
                 return Err(EditError::InvalidPosition);
             }
-            text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?
+            text_source_range_from_map(
+                text_map,
+                edit.source_projection.edit_range().start,
+                range.clone(),
+            )
+            .and_then(|mapped| {
+                Some(path.source_offset(mapped.start)?..path.source_offset(mapped.end)?)
+            })
+            .ok_or(EditError::InvalidPosition)?
         };
         let local_source_edit = source_edit;
         let source_edit = path
@@ -280,11 +299,20 @@ impl Session {
             return Err(EditError::UnsupportedNewline);
         }
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let (text, text_map) = path
+            .resolve_in_projection(tree, &edit.source_projection)
+            .ok_or(EditError::InvalidPosition)?;
         let range = (*anchor).min(edit.cursor)..(*anchor).max(edit.cursor);
         let (local_source_range, removes_entire_flow) = if range.is_empty() {
-            let cursor =
-                text_source_boundary(text, range.start).ok_or(EditError::InvalidPosition)?;
+            let cursor = text_source_boundary_from_map(
+                text,
+                text_map,
+                edit.source_projection.edit_range().start,
+                range.start,
+                Affinity::Downstream,
+            )
+            .and_then(|offset| path.source_offset(offset))
+            .ok_or(EditError::InvalidPosition)?;
             (cursor..cursor, false)
         } else {
             let display = text
@@ -299,7 +327,15 @@ impl Session {
                 return Err(EditError::InvalidPosition);
             }
             (
-                text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?,
+                text_source_range_from_map(
+                    text_map,
+                    edit.source_projection.edit_range().start,
+                    range.clone(),
+                )
+                .and_then(|mapped| {
+                    Some(path.source_offset(mapped.start)?..path.source_offset(mapped.end)?)
+                })
+                .ok_or(EditError::InvalidPosition)?,
                 range.start == 0 && range.end == display.len() && inserted.is_empty(),
             )
         };
@@ -360,7 +396,9 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let (text, text_map) = path
+            .resolve_in_projection(tree, &edit.source_projection)
+            .ok_or(EditError::InvalidPosition)?;
         let display = text
             .runs
             .iter()
@@ -381,8 +419,13 @@ impl Session {
         let Some(range) = range else {
             return Ok(Effect::default());
         };
-        let local_source_range =
-            text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?;
+        let local_source_range = text_source_range_from_map(
+            text_map,
+            edit.source_projection.edit_range().start,
+            range.clone(),
+        )
+        .and_then(|mapped| Some(path.source_offset(mapped.start)?..path.source_offset(mapped.end)?))
+        .ok_or(EditError::InvalidPosition)?;
         let source_range = path
             .host_offset(local_source_range.start)
             .and_then(|start| {

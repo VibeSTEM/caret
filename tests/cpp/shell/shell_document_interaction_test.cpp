@@ -69,6 +69,30 @@ struct LayoutViewModelTestProbe final {
     static bool installInteraction(LayoutViewModel& view_model, const QJsonObject& interaction) {
         return view_model.installInteraction(interaction);
     }
+    static bool installSnapshot(LayoutViewModel& view_model, const QJsonObject& snapshot) {
+        return view_model.installSnapshot(QJsonDocument(snapshot));
+    }
+    static bool installSnapshotJson(LayoutViewModel& view_model, const QString& snapshot_json,
+                                    bool replace_document) {
+        return view_model.installSnapshot(snapshot_json, replace_document);
+    }
+    static bool installDocumentFileStatus(LayoutViewModel& view_model, const QJsonObject& status) {
+        return view_model.installDocumentFileStatus(status);
+    }
+    static QVariantMap installInteractionResponse(LayoutViewModel& view_model,
+                                                  const QByteArray& response) {
+        return view_model.installInteractionResponse(response);
+    }
+    static QVariantMap installEditResponse(LayoutViewModel& view_model,
+                                           const QByteArray& response) {
+        return view_model.installEditResponse(response);
+    }
+    static bool autoSaveTimerActive(const LayoutViewModel& view_model) {
+        return view_model.m_auto_save_timer.isActive();
+    }
+    static void stopAutoSaveTimer(LayoutViewModel& view_model) {
+        view_model.m_auto_save_timer.stop();
+    }
 };
 } // namespace caret
 
@@ -103,6 +127,31 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
         inline_view_model.environmentHighlightRects().first().toMap().value(QStringLiteral("x0Pt")),
         3.0);
 
+    const QString serialized_snapshot =
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    QVERIFY(caret::LayoutViewModelTestProbe::installSnapshotJson(inline_view_model,
+                                                                 serialized_snapshot, true));
+    const QVariantList highlight_before_invalid_json =
+        inline_view_model.environmentHighlightRects();
+    const QVariantList snapshot_before_invalid_json = inline_view_model.pageLayouts();
+    const QVariantMap input_context_before_invalid_json = inline_view_model.inputMethodContext();
+    QCOMPARE(highlight_before_invalid_json.size(), 1);
+    QVERIFY(!snapshot_before_invalid_json.isEmpty());
+    QVERIFY(input_context_before_invalid_json.contains(QStringLiteral("enabled")));
+    QCOMPARE(input_context_before_invalid_json.value(QStringLiteral("enabled")).toBool(), true);
+    QSignalSpy invalid_snapshot_layout_changed(&inline_view_model,
+                                               &caret::LayoutViewModel::layoutChanged);
+    QSignalSpy invalid_snapshot_interaction_changed(&inline_view_model,
+                                                    &caret::LayoutViewModel::interactionChanged);
+    QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshotJson(inline_view_model,
+                                                                  QStringLiteral("{"), true));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), highlight_before_invalid_json);
+    QCOMPARE(inline_view_model.pageLayouts(), snapshot_before_invalid_json);
+    QCOMPARE(inline_view_model.inputMethodContext(), input_context_before_invalid_json);
+    QCOMPARE(invalid_snapshot_layout_changed.size(), 0);
+    QCOMPARE(invalid_snapshot_interaction_changed.size(), 0);
+    QCOMPARE(inline_view_model.error(), QStringLiteral("layout.invalid_snapshot"));
+
     const QVariantList visible_environment_rects = inline_view_model.environmentHighlightRects();
     const QVariantList visible_pages = inline_view_model.pageLayouts();
     QSignalSpy interaction_changed(&inline_view_model, &caret::LayoutViewModel::interactionChanged);
@@ -115,6 +164,36 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
                                                                  stale_malformed_interaction));
     QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
+    QCOMPARE(interaction_changed.size(), 0);
+
+    const QVariantMap previous_input_method_context = inline_view_model.inputMethodContext();
+    const QJsonObject invalid_input_method_context{
+        {QStringLiteral("surroundingText"), QStringLiteral("")},
+        {QStringLiteral("cursorPosition"), 0},
+        {QStringLiteral("anchorPosition"), 0},
+        {QStringLiteral("enabled"), QStringLiteral("false")}};
+    const QJsonObject malformed_input_context_interaction{
+        {QStringLiteral("documentGeneration"), inline_view_model.documentGeneration()},
+        {QStringLiteral("fontGeneration"), inline_view_model.fontGeneration()},
+        {QStringLiteral("selectionRects"), QJsonArray{}},
+        {QStringLiteral("inputMethodContext"), invalid_input_method_context},
+        {QStringLiteral("caretGeometry"), QJsonObject{{QStringLiteral("pageIndex"), 0},
+                                                      {QStringLiteral("xPt"), 0.0},
+                                                      {QStringLiteral("y0Pt"), 0.0},
+                                                      {QStringLiteral("y1Pt"), 1.0}}}};
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
+        inline_view_model, malformed_input_context_interaction));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
+    QCOMPARE(interaction_changed.size(), 0);
+
+    QJsonObject missing_input_context_snapshot = root;
+    missing_input_context_snapshot.remove(QStringLiteral("inputMethodContext"));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshot(inline_view_model,
+                                                              missing_input_context_snapshot));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
     QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
     QCOMPARE(interaction_changed.size(), 0);
 
@@ -262,6 +341,7 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
 
 void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {
     caret::DocumentCanvas canvas;
+    canvas.setInputMethodContext({{QStringLiteral("enabled"), true}});
     QSignalSpy input_method_spy(&canvas, &caret::DocumentCanvas::inputMethodEventRequested);
     QVERIFY(input_method_spy.isValid());
 
@@ -311,11 +391,12 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QVERIFY(clipboard_commands.isValid());
     QVERIFY(structure_navigation.isValid());
     QCOMPARE(canvas->inputMethodContext(), QVariantMap{});
-    QVERIFY(canvas->inputMethodQuery(Qt::ImEnabled).toBool());
+    QVERIFY(!canvas->inputMethodQuery(Qt::ImEnabled).toBool());
     const QVariantMap input_method_context{
         {QStringLiteral("surroundingText"), QStringLiteral("caret")},
         {QStringLiteral("cursorPosition"), 5},
         {QStringLiteral("anchorPosition"), 0},
+        {QStringLiteral("enabled"), true},
     };
     canvas->setInputMethodContext(input_method_context);
     QCOMPARE(canvas->inputMethodContext(), input_method_context);
@@ -1250,5 +1331,103 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
                 .toString()
                 .endsWith(QStringLiteral("x你")));
     delete probe;
+}
+
+void ShellLoadTest::invalidDocumentFileStatusPreservesThePublishedProjection() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    caret::LayoutViewModel view_model;
+    QSignalSpy changes(&view_model, &caret::LayoutViewModel::documentFileChanged);
+    QVERIFY(changes.isValid());
+    const QJsonObject valid_status{{QStringLiteral("path"), QStringLiteral("/tmp/math.cdoc")},
+                                   {QStringLiteral("fileName"), QStringLiteral("math.cdoc")},
+                                   {QStringLiteral("dirty"), true},
+                                   {QStringLiteral("mathSourceDraftPending"), true},
+                                   {QStringLiteral("canUndo"), true},
+                                   {QStringLiteral("canRedo"), false}};
+    QVERIFY(caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, valid_status));
+    QVERIFY(view_model.documentMathSourceDraftPending());
+    QCOMPARE(view_model.documentPath(), QStringLiteral("/tmp/math.cdoc"));
+    QCOMPARE(changes.size(), 1);
+
+    QJsonObject malformed_status = valid_status;
+    malformed_status.insert(QStringLiteral("mathSourceDraftPending"), QStringLiteral("true"));
+    QVERIFY(
+        !caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, malformed_status));
+    QVERIFY(view_model.documentMathSourceDraftPending());
+    QCOMPARE(view_model.documentPath(), QStringLiteral("/tmp/math.cdoc"));
+    QCOMPARE(changes.size(), 1);
+
+    malformed_status = valid_status;
+    malformed_status.remove(QStringLiteral("mathSourceDraftPending"));
+    QVERIFY(
+        !caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, malformed_status));
+    QVERIFY(view_model.documentMathSourceDraftPending());
+    QCOMPARE(changes.size(), 1);
+
+    QJsonObject resolved_status = valid_status;
+    resolved_status.insert(QStringLiteral("mathSourceDraftPending"), false);
+    QVERIFY(
+        caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, resolved_status));
+    QVERIFY(!view_model.documentMathSourceDraftPending());
+    QVERIFY(view_model.documentEdited());
+    QCOMPARE(changes.size(), 2);
+    QVERIFY(
+        caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, resolved_status));
+    QCOMPARE(changes.size(), 2);
+
+    QVERIFY(caret::LayoutViewModelTestProbe::installDocumentFileStatus(view_model, valid_status));
+    QVERIFY(view_model.documentMathSourceDraftPending());
+    QVERIFY(view_model.documentEdited());
+    QCOMPARE(changes.size(), 3);
+
+    QSignalSpy operations(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(operations.isValid());
+    const QVariantMap save_result = view_model.saveDocument();
+    QVERIFY(!save_result.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!save_result.value(QStringLiteral("needsSaveAs")).toBool());
+    QCOMPARE(save_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("document.save_incomplete_math_source_draft"));
+    QCOMPARE(operations.size(), 1);
+    QCOMPARE(operations.first().at(0).toBool(), false);
+    QCOMPARE(operations.first().at(1).toString(),
+             QStringLiteral("document.save_incomplete_math_source_draft"));
+}
+
+void ShellLoadTest::interactionResponseErrorsRefreshAutoSaveDeadline() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+    caret::LayoutViewModel view_model;
+    QVERIFY(view_model.insertText(QStringLiteral("dirty document"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    view_model.setAutoSaveEnabled(true);
+    QVERIFY(caret::LayoutViewModelTestProbe::autoSaveTimerActive(view_model));
+
+    caret::LayoutViewModelTestProbe::stopAutoSaveTimer(view_model);
+    const rust::String interaction = caret::ffi::interaction_state_json(*caret::document_runtime());
+    QVERIFY(!std::string_view(interaction.data(), interaction.size()).starts_with("error:"));
+    const QByteArray interaction_bytes(interaction.data(),
+                                       static_cast<qsizetype>(interaction.size()));
+    const QVariantMap installed =
+        caret::LayoutViewModelTestProbe::installInteractionResponse(view_model, interaction_bytes);
+    QVERIFY(installed.value(QStringLiteral("valid")).toBool());
+    QVERIFY(caret::LayoutViewModelTestProbe::autoSaveTimerActive(view_model));
+
+    caret::LayoutViewModelTestProbe::stopAutoSaveTimer(view_model);
+    const QVariantMap failed = caret::LayoutViewModelTestProbe::installInteractionResponse(
+        view_model, QByteArrayLiteral("error:layout.test_failure"));
+    QVERIFY(!failed.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(failed.value(QStringLiteral("error")).toString(),
+             QStringLiteral("error:layout.test_failure"));
+    QVERIFY(caret::LayoutViewModelTestProbe::autoSaveTimerActive(view_model));
+
+    caret::LayoutViewModelTestProbe::stopAutoSaveTimer(view_model);
+    const QVariantMap invalid = caret::LayoutViewModelTestProbe::installEditResponse(
+        view_model, QByteArrayLiteral("error:layout.test_failure"));
+    QVERIFY(!invalid.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalid.value(QStringLiteral("error")).toString(),
+             QStringLiteral("error:layout.test_failure"));
+    QVERIFY(caret::LayoutViewModelTestProbe::autoSaveTimerActive(view_model));
 }
 #endif

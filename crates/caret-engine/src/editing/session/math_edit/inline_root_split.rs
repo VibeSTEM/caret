@@ -800,6 +800,78 @@ mod tests {
     }
 
     #[test]
+    fn root_split_preserves_metadata_in_unpromoted_math_text() {
+        fn mark_first_text(content: &mut [MathContent]) -> bool {
+            for item in content {
+                match item {
+                    MathContent::Text(text) => {
+                        let Some(run) = text.runs.first_mut() else {
+                            continue;
+                        };
+                        run.props
+                            .insert("underline".to_owned(), serde_json::Value::Bool(true));
+                        text.extra.insert(
+                            "vendorText".to_owned(),
+                            serde_json::Value::String("kept".to_owned()),
+                        );
+                        return true;
+                    }
+                    MathContent::Math(node) => {
+                        for child in &mut node.children {
+                            if mark_first_text(&mut child.content) {
+                                return true;
+                            }
+                        }
+                    }
+                    MathContent::Environment(environment) => {
+                        if mark_first_text(&mut environment.children) {
+                            return true;
+                        }
+                    }
+                    MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+                }
+            }
+            false
+        }
+
+        fn has_marked_text(content: &[MathContent]) -> bool {
+            content.iter().any(|item| match item {
+                MathContent::Text(text) => {
+                    text.runs.first().is_some_and(|run| {
+                        run.props.get("underline") == Some(&serde_json::Value::Bool(true))
+                    }) && text.extra.get("vendorText")
+                        == Some(&serde_json::Value::String("kept".to_owned()))
+                }
+                MathContent::Math(node) => node
+                    .children
+                    .iter()
+                    .any(|child| has_marked_text(&child.content)),
+                MathContent::Environment(environment) => has_marked_text(&environment.children),
+                MathContent::SoftBreak(_) | MathContent::Opaque(_) => false,
+            })
+        }
+
+        let source = r"\frac{\text{a}\text{b}}{x}\text{c}";
+        let mut math = inline_math(source);
+        assert!(mark_first_text(&mut math.math_tree.root.content));
+        let cursor = source
+            .find(r"\text{c}")
+            .unwrap_or_else(|| panic!("root text flow"))
+            + r"\text{".len()
+            + 1;
+
+        let split = split(&math, source, cursor, cursor);
+        let Some(ParagraphContent::Math(unpromoted_math)) = split.contents.first() else {
+            panic!("fraction should stay in the math tree");
+        };
+        assert!(has_marked_text(&unpromoted_math.math_tree.root.content));
+        assert!(matches!(
+            split.contents.get(1),
+            Some(ParagraphContent::Text(_))
+        ));
+    }
+
+    #[test]
     fn root_split_rejects_a_source_position_inside_a_promoted_grapheme() {
         let source = "a\\text{e\u{301}}b";
         let math = inline_math(source);

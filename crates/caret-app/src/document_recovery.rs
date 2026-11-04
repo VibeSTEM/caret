@@ -39,6 +39,10 @@ pub struct RecoveryEnvelope {
     pub created_unix_seconds: u64,
     #[serde(default)]
     pub updated_unix_seconds: u64,
+    #[serde(default)]
+    pub binding_generation: u64,
+    #[serde(default)]
+    pub document_revision: u64,
     pub payload_base64: String,
 }
 
@@ -51,6 +55,31 @@ pub struct RecoveryEntry {
     pub baseline_digest: Option<String>,
     pub created_unix_seconds: u64,
     pub updated_unix_seconds: u64,
+}
+
+/// 写入恢复快照时必须同时匹配的会话身份和内容修订号。
+pub struct RecoverySnapshotIdentity<'a> {
+    pub original_path: &'a Path,
+    pub baseline_digest: Option<&'a str>,
+    pub binding_generation: u64,
+    pub document_revision: u64,
+}
+
+impl<'a> RecoverySnapshotIdentity<'a> {
+    /// 创建不可变写入身份快照。
+    pub fn new(
+        original_path: &'a Path,
+        baseline_digest: Option<&'a str>,
+        binding_generation: u64,
+        document_revision: u64,
+    ) -> Self {
+        Self {
+            original_path,
+            baseline_digest,
+            binding_generation,
+            document_revision,
+        }
+    }
 }
 
 /// 进程级共享租约；持有期间其他实例不会清理恢复目录中的过期条目。
@@ -140,6 +169,9 @@ pub enum RecoveryError {
     Io(std::io::Error),
     Busy,
     InvalidEnvelope(String),
+    StaleIdentity,
+    StaleSnapshot,
+    GenerationExhausted,
     MissingParent,
     MissingFileName,
 }
@@ -150,6 +182,9 @@ impl Display for RecoveryError {
             Self::Io(error) => write!(formatter, "recovery.io_error: {error}"),
             Self::Busy => write!(formatter, "recovery.entry_busy"),
             Self::InvalidEnvelope(error) => write!(formatter, "recovery.invalid_envelope: {error}"),
+            Self::StaleIdentity => write!(formatter, "recovery.stale_identity"),
+            Self::StaleSnapshot => write!(formatter, "recovery.stale_snapshot"),
+            Self::GenerationExhausted => write!(formatter, "recovery.binding_generation_exhausted"),
             Self::MissingParent => write!(formatter, "recovery.missing_parent"),
             Self::MissingFileName => write!(formatter, "recovery.missing_filename"),
         }
@@ -226,6 +261,8 @@ impl DocumentRecoveryStorage {
             baseline_digest,
             created_unix_seconds: created,
             updated_unix_seconds: created,
+            binding_generation: 0,
+            document_revision: 0,
             payload_base64: STANDARD.encode(payload),
         };
         let bytes = serde_json::to_vec(&envelope)
@@ -513,6 +550,77 @@ impl DocumentRecoveryStorage {
         baseline_digest: Option<String>,
         payload: &[u8],
     ) -> Result<(), RecoveryError> {
+        self.update_inner(id, kind, original_path, baseline_digest, payload, None)
+    }
+
+    /// 更新恢复正文，但要求条目身份和修订号仍匹配快照。
+    pub fn update_if_identity_matches(
+        &self,
+        id: &str,
+        kind: RecoveryKind,
+        identity: RecoverySnapshotIdentity<'_>,
+        payload: &[u8],
+    ) -> Result<(), RecoveryError> {
+        let original_path = identity.original_path;
+        let expected_path = original_path.to_string_lossy().into_owned();
+        let baseline_digest = identity.baseline_digest.map(str::to_owned);
+        self.update_inner(
+            id,
+            kind,
+            original_path,
+            baseline_digest.clone(),
+            payload,
+            Some((
+                expected_path,
+                baseline_digest,
+                identity.binding_generation,
+                identity.document_revision,
+            )),
+        )
+    }
+
+    /// 绑定会话身份并持久化递增代际，使旧 worker 无法覆盖重新绑定后的快照。
+    pub fn bind_session(
+        &self,
+        id: &str,
+        original_path: &Path,
+        baseline_digest: Option<String>,
+        document_revision: u64,
+    ) -> Result<u64, RecoveryError> {
+        validate_id(id)?;
+        let _operation_lock = self.lock_operations()?;
+        let _entry_lease = self.lock_entry(id, true)?;
+        let file_path = self.directory.join(format!("{id}.json"));
+        let mut envelope: RecoveryEnvelope = serde_json::from_slice(&fs::read(&file_path)?)
+            .map_err(|error| RecoveryError::InvalidEnvelope(error.to_string()))?;
+        if envelope.schema != ENVELOPE_SCHEMA {
+            return Err(RecoveryError::InvalidEnvelope(
+                "unsupported schema".to_owned(),
+            ));
+        }
+        envelope.binding_generation = envelope
+            .binding_generation
+            .checked_add(1)
+            .ok_or(RecoveryError::GenerationExhausted)?;
+        envelope.original_path = original_path.to_string_lossy().into_owned();
+        envelope.baseline_digest = baseline_digest;
+        envelope.document_revision = document_revision;
+        let generation = envelope.binding_generation;
+        let bytes = serde_json::to_vec(&envelope)
+            .map_err(|error| RecoveryError::InvalidEnvelope(error.to_string()))?;
+        atomic_file::write(&file_path, &bytes)?;
+        Ok(generation)
+    }
+
+    fn update_inner(
+        &self,
+        id: &str,
+        kind: RecoveryKind,
+        original_path: &Path,
+        baseline_digest: Option<String>,
+        payload: &[u8],
+        expected_identity: Option<(String, Option<String>, u64, u64)>,
+    ) -> Result<(), RecoveryError> {
         validate_id(id)?;
         let _operation_lock = self.lock_operations()?;
         let _entry_lease = self.lock_entry(id, true)?;
@@ -524,9 +632,25 @@ impl DocumentRecoveryStorage {
                 "unsupported schema".to_owned(),
             ));
         }
+        if let Some((expected_path, expected_baseline, expected_generation, _)) =
+            expected_identity.as_ref()
+            && (envelope.original_path != expected_path.as_str()
+                || envelope.baseline_digest.as_ref() != expected_baseline.as_ref()
+                || envelope.binding_generation != *expected_generation)
+        {
+            return Err(RecoveryError::StaleIdentity);
+        }
+        if let Some((_, _, _, expected_revision)) = expected_identity.as_ref()
+            && *expected_revision < envelope.document_revision
+        {
+            return Err(RecoveryError::StaleSnapshot);
+        }
         envelope.kind = kind;
         envelope.original_path = original_path.to_string_lossy().into_owned();
         envelope.baseline_digest = baseline_digest;
+        if let Some((_, _, _, expected_revision)) = expected_identity.as_ref() {
+            envelope.document_revision = *expected_revision;
+        }
         envelope.updated_unix_seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

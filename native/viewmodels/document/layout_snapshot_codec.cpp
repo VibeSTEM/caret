@@ -647,26 +647,23 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.inline_environment_highlight_rects =
         std::move(parsed_inline_environment_highlight_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
-    if (!input_context_value.isUndefined()) {
-        if (!input_context_value.isObject()) {
-            error = QStringLiteral("layout.invalid_input_method_context");
-            return false;
-        }
-        const QJsonObject context = input_context_value.toObject();
-        const QString surrounding_text =
-            context.value(QStringLiteral("surroundingText")).toString();
-        qsizetype cursor_position = 0;
-        qsizetype anchor_position = 0;
-        if (!context.value(QStringLiteral("surroundingText")).isString() ||
-            !nonnegative_index(context.value(QStringLiteral("cursorPosition")), cursor_position) ||
-            !nonnegative_index(context.value(QStringLiteral("anchorPosition")), anchor_position) ||
-            cursor_position > surrounding_text.size() ||
-            anchor_position > surrounding_text.size()) {
-            error = QStringLiteral("layout.invalid_input_method_context");
-            return false;
-        }
-        parsed_snapshot.input_method_context = context.toVariantMap();
+    if (!input_context_value.isObject()) {
+        error = QStringLiteral("layout.invalid_input_method_context");
+        return false;
     }
+    const QJsonObject context = input_context_value.toObject();
+    const QString surrounding_text = context.value(QStringLiteral("surroundingText")).toString();
+    qsizetype cursor_position = 0;
+    qsizetype anchor_position = 0;
+    if (!context.value(QStringLiteral("surroundingText")).isString() ||
+        !context.value(QStringLiteral("enabled")).isBool() ||
+        !nonnegative_index(context.value(QStringLiteral("cursorPosition")), cursor_position) ||
+        !nonnegative_index(context.value(QStringLiteral("anchorPosition")), anchor_position) ||
+        cursor_position > surrounding_text.size() || anchor_position > surrounding_text.size()) {
+        error = QStringLiteral("layout.invalid_input_method_context");
+        return false;
+    }
+    parsed_snapshot.input_method_context = context.toVariantMap();
     parsed_snapshot.document_generation = parsed_document_generation;
     parsed_snapshot.font_generation = parsed_font_generation;
     parsed_snapshot.session_id = parsed_session_id;

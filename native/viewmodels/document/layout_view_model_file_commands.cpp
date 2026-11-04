@@ -167,17 +167,26 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
     ffi::DocumentRuntime* runtime = nullptr;
     if (auto error = layout_view_model_support::runtime_error(
             runtime, QStringLiteral("document.save_wrong_thread"))) {
+        emit documentSaveFinished(false);
         return *error;
     }
     if (m_document_opening) {
+        emit documentSaveFinished(false);
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.file_operation_busy")}};
+    }
+    if (m_document_math_source_draft_pending) {
+        const QString error = QStringLiteral("document.save_incomplete_math_source_draft");
+        emit documentSaveFinished(false);
+        emit documentFileOperationFinished(false, error);
+        return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), error}};
     }
     const QString path =
         requested_path.isEmpty()
             ? (m_pending_save_target.isEmpty() ? m_document_path : m_pending_save_target)
             : requested_path;
     if (path.isEmpty()) {
+        emit documentSaveFinished(false);
         return {{QStringLiteral("valid"), false}, {QStringLiteral("needsSaveAs"), true}};
     }
 
@@ -185,6 +194,7 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
     if (!snapshot.error.empty()) {
         const QString error =
             QString::fromUtf8(snapshot.error.data(), static_cast<qsizetype>(snapshot.error.size()));
+        emit documentSaveFinished(false);
         emit documentFileOperationFinished(false, error);
         return {{QStringLiteral("valid"), false}, {QStringLiteral("error"), error}};
     }
@@ -195,6 +205,7 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
     }
     const quint64 session_generation = snapshot.session_generation;
     const quint64 document_generation = snapshot.document_generation;
+    const quint64 recovery_binding_generation = snapshot.recovery_binding_generation;
     const quint64 history_state_id = snapshot.history_state_id;
     const QString content_digest = QString::fromUtf8(
         snapshot.content_digest.data(), static_cast<qsizetype>(snapshot.content_digest.size()));
@@ -224,7 +235,8 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
         &QFutureWatcher<std::shared_ptr<layout_view_model_support::DocumentWriteResult>>::finished,
         this,
         [this, watcher, path, session_generation, document_generation, history_state_id,
-         content_digest, saving_current_path, baseline_digest, queued_digest, recovery_id] {
+         recovery_binding_generation, content_digest, saving_current_path, baseline_digest,
+         queued_digest, recovery_id] {
             const auto result = watcher->result();
             QString error = result->error;
             watcher->deleteLater();
@@ -238,13 +250,16 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
             emit documentFileChanged();
             if (!layout_view_model_support::current_session(document_runtime(),
                                                             session_generation)) {
+                emit documentSaveFinished(false);
+                emit documentFileActivityFinished();
                 return;
             }
             if (result->conflict) {
                 QString binding_error;
                 if (!result->recovery_id.isEmpty()) {
                     const rust::String binding = ffi::set_document_recovery_id(
-                        *document_runtime(), session_generation,
+                        *document_runtime(), session_generation, document_generation,
+                        recovery_binding_generation,
                         layout_view_model_support::to_rust_string(result->recovery_id),
                         layout_view_model_support::to_rust_string(path),
                         layout_view_model_support::to_rust_string(baseline_digest));
@@ -255,16 +270,21 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
                 m_conflict_session_generation = session_generation;
                 m_conflict_can_replace = result->replace_allowed && binding_error.isEmpty();
                 emit documentFileChanged();
+                refreshDocumentFileStatus();
+                refreshAutoSaveDeadline();
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false, {}, true, !error.isEmpty(),
                                                    error.isEmpty() ? binding_error : error);
                 return;
             }
             if (!error.isEmpty()) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false, error);
                 return;
             }
             ffi::DocumentRuntime* active_runtime = document_runtime();
             if (active_runtime == nullptr) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false,
                                                    QStringLiteral("layout.runtime_unavailable"));
                 return;
@@ -275,17 +295,21 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
                 layout_view_model_support::to_rust_string(content_digest));
             const QByteArray status_bytes = layout_view_model_support::response_bytes(status);
             if (status_bytes.startsWith("error:")) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false,
                                                    QString::fromUtf8(status_bytes.sliced(6)));
                 return;
             }
             clearSaveConflict();
             refreshDocumentFileStatus();
+            emit documentSaveFinished(true);
             emit documentFileOperationFinished(true, QString{});
         });
     watcher->setFuture(QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes),
                                                                baseline_digest, queued_digest,
-                                                               saving_current_path, recovery_id] {
+                                                               saving_current_path, recovery_id,
+                                                               recovery_binding_generation,
+                                                               document_generation] {
         rust::Vec<std::uint8_t> payload;
         payload.reserve(static_cast<std::size_t>(bytes.size()));
         for (const char byte : bytes) {
@@ -296,7 +320,8 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
                 layout_view_model_support::to_rust_string(path), std::move(payload),
                 layout_view_model_support::to_rust_string(baseline_digest),
                 layout_view_model_support::to_rust_string(queued_digest),
-                layout_view_model_support::to_rust_string(recovery_id)));
+                layout_view_model_support::to_rust_string(recovery_id),
+                recovery_binding_generation, document_generation));
         }
         const rust::String error = ffi::write_document_file(
             layout_view_model_support::to_rust_string(path), std::move(payload));
@@ -336,23 +361,43 @@ void LayoutViewModel::refreshDocumentFileStatus() {
     if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
         return;
     }
-    const QJsonObject status = document.object();
-    const QString path = status.value(QStringLiteral("path")).toString();
-    const QString file_name = status.value(QStringLiteral("fileName")).toString();
-    const bool edited = status.value(QStringLiteral("dirty")).toBool();
-    const bool can_undo = status.value(QStringLiteral("canUndo")).toBool();
-    const bool can_redo = status.value(QStringLiteral("canRedo")).toBool();
+    installDocumentFileStatus(document.object());
+#endif
+}
+
+bool LayoutViewModel::installDocumentFileStatus(const QJsonObject& status) {
+    const QJsonValue path_value = status.value(QStringLiteral("path"));
+    const QJsonValue file_name_value = status.value(QStringLiteral("fileName"));
+    const QJsonValue edited_value = status.value(QStringLiteral("dirty"));
+    const QJsonValue math_source_draft_pending_value =
+        status.value(QStringLiteral("mathSourceDraftPending"));
+    const QJsonValue can_undo_value = status.value(QStringLiteral("canUndo"));
+    const QJsonValue can_redo_value = status.value(QStringLiteral("canRedo"));
+    if (!path_value.isString() || !file_name_value.isString() || !edited_value.isBool() ||
+        !math_source_draft_pending_value.isBool() || !can_undo_value.isBool() ||
+        !can_redo_value.isBool()) {
+        return false;
+    }
+    const QString path = path_value.toString();
+    const QString file_name = file_name_value.toString();
+    const bool edited = edited_value.toBool();
+    const bool math_source_draft_pending = math_source_draft_pending_value.toBool();
+    const bool can_undo = can_undo_value.toBool();
+    const bool can_redo = can_redo_value.toBool();
     if (m_document_path == path && m_document_file_name == file_name &&
-        m_document_edited == edited && m_can_undo == can_undo && m_can_redo == can_redo) {
-        return;
+        m_document_edited == edited &&
+        m_document_math_source_draft_pending == math_source_draft_pending &&
+        m_can_undo == can_undo && m_can_redo == can_redo) {
+        return true;
     }
     m_document_path = path;
     m_document_file_name = file_name.isEmpty() ? QStringLiteral("Untitled") : file_name;
     m_document_edited = edited;
+    m_document_math_source_draft_pending = math_source_draft_pending;
     m_can_undo = can_undo;
     m_can_redo = can_redo;
     emit documentFileChanged();
-#endif
+    return true;
 }
 
 void LayoutViewModel::setDocumentFileBusy(bool busy) {
@@ -368,15 +413,18 @@ QVariantMap LayoutViewModel::replaceExternalVersion() {
     ffi::DocumentRuntime* runtime = nullptr;
     if (auto error = layout_view_model_support::runtime_error(
             runtime, QStringLiteral("document.save_wrong_thread"))) {
+        emit documentSaveFinished(false);
         return *error;
     }
     if (m_conflict_path.isEmpty() || m_conflict_path != m_document_path ||
         !m_conflict_can_replace) {
+        emit documentSaveFinished(false);
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.no_pending_conflict")}};
     }
     ffi::DocumentSaveSnapshot snapshot = ffi::document_save_snapshot(*runtime);
     if (!snapshot.error.empty() || snapshot.session_generation != m_conflict_session_generation) {
+        emit documentSaveFinished(false);
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.stale_conflict")}};
     }
@@ -406,14 +454,18 @@ QVariantMap LayoutViewModel::replaceExternalVersion() {
             setDocumentFileBusy(m_pending_file_operations != 0);
             if (!layout_view_model_support::current_session(document_runtime(),
                                                             session_generation)) {
+                emit documentSaveFinished(false);
+                emit documentFileActivityFinished();
                 return;
             }
             if (!error.isEmpty()) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false, error);
                 return;
             }
             ffi::DocumentRuntime* active_runtime = document_runtime();
             if (active_runtime == nullptr) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false,
                                                    QStringLiteral("layout.runtime_unavailable"));
                 return;
@@ -424,12 +476,14 @@ QVariantMap LayoutViewModel::replaceExternalVersion() {
                 layout_view_model_support::to_rust_string(digest));
             const QByteArray status_bytes = layout_view_model_support::response_bytes(status);
             if (status_bytes.startsWith("error:")) {
+                emit documentSaveFinished(false);
                 emit documentFileOperationFinished(false,
                                                    QString::fromUtf8(status_bytes.sliced(6)));
                 return;
             }
             clearSaveConflict();
             refreshDocumentFileStatus();
+            emit documentSaveFinished(true);
             emit documentFileOperationFinished(true, QString{});
         });
     watcher->setFuture(QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes)] {

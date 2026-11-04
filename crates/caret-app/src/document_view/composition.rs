@@ -16,6 +16,13 @@ impl DocumentViewRuntime {
         replacement_length: i32,
         cursor_position_utf16: usize,
     ) -> Result<String, String> {
+        let has_input = !preedit.is_empty()
+            || !commit.is_empty()
+            || replacement_start != 0
+            || replacement_length != 0;
+        if has_input && self.session.math_edit().is_some() {
+            return Err("ime.disabled_math_edit".to_owned());
+        }
         if self.session.command_line().is_some() {
             self.session
                 .input_method_command_line(

@@ -60,6 +60,16 @@ message_011:
   tr: 文件資料夾無法使用。
   st: finished
 
+message_120:
+  src: Finish or cancel the incomplete formula edit before saving this document.
+  tr: 儲存此文件前，請完成或取消尚未完成的公式編輯。
+  st: finished
+
+message_121:
+  src: Finish or cancel the incomplete formula edit before replacing this document.
+  tr: 取代此文件前，請完成或取消尚未完成的公式編輯。
+  st: finished
+
 [DialogAction]
 message_012:
   src: OK
@@ -346,6 +356,11 @@ message_065:
 message_066:
   src: Cancel
   tr: 取消
+  st: finished
+
+message_119:
+  src: This document contains an incomplete formula edit that cannot be saved. Discard all changes and close?
+  tr: 此文件包含尚未完成且無法儲存的公式編輯。要放棄所有變更並關閉嗎？
   st: finished
 
 [WindowCommandBar]

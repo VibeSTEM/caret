@@ -115,6 +115,7 @@ mod generated {
             stale_deadline: bool,
             session_generation: u64,
             document_generation: u64,
+            recovery_binding_generation: u64,
             history_state_id: u64,
             bytes: Vec<u8>,
             content_digest: String,
@@ -169,6 +170,8 @@ mod generated {
                 baseline_digest: String,
                 queued_digest: String,
                 recovery_id: String,
+                binding_generation: u64,
+                document_generation: u64,
             ) -> DocumentWriteResult;
             /// 释放未领取的新恢复租约，保留恢复条目。
             fn cancel_pending_recovery_lease(id: String);
@@ -176,6 +179,8 @@ mod generated {
             fn set_document_recovery_id(
                 runtime: &mut DocumentRuntime,
                 session_generation: u64,
+                source_revision: u64,
+                expected_binding_generation: u64,
                 id: String,
                 original_path: String,
                 baseline_digest: String,
@@ -203,6 +208,8 @@ mod generated {
                 id: String,
                 original_path: String,
                 baseline_digest: String,
+                binding_generation: u64,
+                document_generation: u64,
                 bytes: Vec<u8>,
             ) -> String;
             /// 捕获恢复副本刷新 deadline 对应的最新文档快照。
@@ -216,6 +223,8 @@ mod generated {
                 runtime: &mut DocumentRuntime,
                 session_generation: u64,
                 revision: u64,
+                recovery_id: String,
+                recovery_binding_generation: u64,
                 succeeded: bool,
             ) -> String;
             /// 捕获不可变文档字节和会话/文档代际。

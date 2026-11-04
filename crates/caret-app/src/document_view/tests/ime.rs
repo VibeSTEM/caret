@@ -110,6 +110,73 @@ fn ime_preedit_is_transient_after_committing_its_utf16_replacement_range()
 }
 
 #[test]
+fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime
+        .session
+        .run(Command::InsertInlineMath("x".to_owned()))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(Command::EnterMath(caret_engine::Direction::Backward))
+        .map_err(|error| error.to_string())?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.branch),
+        Some(caret_engine::MathEditBranch::Source)
+    ));
+    let before_document = runtime.session.document().clone();
+    let before_generation = runtime.session.document_generation();
+    let before_edit = runtime.session.math_edit().cloned();
+
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(snapshot["inputMethodContext"]["enabled"], false);
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(interaction["inputMethodContext"]["enabled"], false);
+    assert!(
+        runtime
+            .input_method_event_json("に".to_owned(), String::new(), 0, 0, 1)
+            .is_err()
+    );
+    assert!(
+        runtime
+            .input_method_event_json(String::new(), "你好".to_owned(), 0, 0, 0)
+            .is_err()
+    );
+    assert_eq!(runtime.session.document(), &before_document);
+    assert_eq!(runtime.session.document_generation(), before_generation);
+    assert_eq!(runtime.session.math_edit().cloned(), before_edit);
+
+    runtime
+        .session
+        .run(Command::BeginCommandLine)
+        .map_err(|error| error.to_string())?;
+    let before_command_line = runtime.session.command_line().cloned();
+    let command_line_state: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(command_line_state["inputMethodContext"]["enabled"], false);
+    assert!(
+        runtime
+            .input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)
+            .is_err()
+    );
+    assert_eq!(runtime.session.command_line().cloned(), before_command_line);
+    runtime
+        .session
+        .run(Command::CancelCommandLine)
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(Command::EditorKey(caret_engine::EditorKey::Escape))
+        .map_err(|error| error.to_string())?;
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(snapshot["inputMethodContext"]["enabled"], true);
+    Ok(())
+}
+
+#[test]
 fn ime_commit_reuses_unchanged_paragraph_layouts() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.insert_text_json("first paragraph".to_owned())?;

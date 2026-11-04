@@ -41,6 +41,8 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     caret::LayoutViewModel view_model;
     QSignalSpy operation_spy(&view_model, &caret::LayoutViewModel::documentFileOperationFinished);
     QVERIFY(operation_spy.isValid());
+    QSignalSpy save_completion_spy(&view_model, &caret::LayoutViewModel::documentSaveFinished);
+    QVERIFY(save_completion_spy.isValid());
     QStringList observed_save_states;
     connect(&view_model, &caret::LayoutViewModel::documentFileChanged, &view_model,
             [&view_model, &observed_save_states] {
@@ -51,6 +53,8 @@ void ShellLoadTest::documentFileFlowPreservesSaveStateAndReopens() {
     const QVariantMap save_without_target = view_model.saveDocument();
     QVERIFY(!save_without_target.value(QStringLiteral("valid")).toBool());
     QVERIFY(save_without_target.value(QStringLiteral("needsSaveAs")).toBool());
+    QCOMPARE(save_completion_spy.size(), 1);
+    QVERIFY(!save_completion_spy.takeFirst().first().toBool());
     const QVariantMap open_without_path = view_model.openDocument(QString{});
     QVERIFY(!open_without_path.value(QStringLiteral("valid")).toBool());
     QCOMPARE(open_without_path.value(QStringLiteral("error")).toString(),

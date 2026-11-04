@@ -30,6 +30,7 @@ class ShellLoadTest : public QObject {
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
     void preeditCancellationDoesNotReenterTheInputMethodHandler();
+    void mathSourceDisablesInputMethodAndCancelsPreedit();
     void documentPathAdapterCreatesDefaultSaveLocation();
     void documentPathAdapterConvertsLocalPaths();
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();
@@ -55,6 +56,8 @@ class ShellLoadTest : public QObject {
     void saveConflictCannotReplaceAPreviousDocumentAfterSaveAs();
     void recoveryEntriesCanBeRestoredExportedAndDiscarded();
     void documentHistoryUndoRedoTracksRustSession();
+    void invalidDocumentFileStatusPreservesThePublishedProjection();
+    void interactionResponseErrorsRefreshAutoSaveDeadline();
     void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
     void documentCaretNavigationUpdatesObservablePosition();
     void confirmedConflictReplacementWritesCurrentDocument();

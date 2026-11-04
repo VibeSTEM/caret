@@ -81,9 +81,6 @@ bool LayoutViewModel::installSnapshot(const QString& snapshot_json, bool replace
             error = QStringLiteral("layout.invalid_snapshot");
         }
         m_error = std::move(error);
-        if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
-            clearEnvironmentHighlightRects();
-        }
         return false;
     }
     return installSnapshot(std::move(parsed_snapshot));
@@ -97,9 +94,6 @@ bool LayoutViewModel::installSnapshot(const QJsonDocument& snapshot_document,
         !replace_document && has_installed_snapshot() ? &installed_snapshot() : nullptr;
     if (!layout_snapshot::parse(snapshot_document, parsed_snapshot, error, previous_snapshot)) {
         m_error = std::move(error);
-        if (m_error != QStringLiteral("layout.stale_partial_snapshot")) {
-            clearEnvironmentHighlightRects();
-        }
         return false;
     }
     return installSnapshot(std::move(parsed_snapshot));
@@ -180,7 +174,12 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
     }
 
     const QVariantList selection_rectangles = rectangles_value.toArray().toVariantList();
-    QVariantMap input_context = input_context_value.toObject().toVariantMap();
+    const QJsonObject input_context_json = input_context_value.toObject();
+    if (!input_context_json.value(QStringLiteral("enabled")).isBool()) {
+        m_error = QStringLiteral("layout.invalid_input_method_context");
+        return false;
+    }
+    QVariantMap input_context = input_context_json.toVariantMap();
     if (!input_context.contains(QStringLiteral("surroundingText"))) {
         if (!m_input_method_context.contains(QStringLiteral("surroundingText"))) {
             m_error = QStringLiteral("layout.interaction_context_unavailable");
