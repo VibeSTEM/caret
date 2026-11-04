@@ -34,15 +34,21 @@ fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_tes
     ] {
         for profile in sanitizer_profiles(platform) {
             let options = sanitizer_runtime_options(*profile, platform, root);
-            for (name, value) in &options {
-                if name == "LSAN_OPTIONS" {
-                    assert!(
-                        value.to_string_lossy().ends_with(
-                            "tests/fixtures/sanitizers/macos-system-frameworks-lsan.supp"
-                        )
-                    );
-                }
-            }
+            let expected_lsan_options = match (platform, *profile) {
+                (SanitizerPlatform::MacOs, SanitizerProfile::AddressUndefined) => Some(format!(
+                    "suppressions={}",
+                    root.join("tests/fixtures/sanitizers/macos-system-frameworks-lsan.supp")
+                        .display()
+                )),
+                _ => None,
+            };
+            assert_eq!(
+                options
+                    .iter()
+                    .find(|(name, _)| name == "LSAN_OPTIONS")
+                    .map(|(_, value)| value.to_string_lossy().into_owned()),
+                expected_lsan_options
+            );
             if *profile == SanitizerProfile::Thread {
                 assert!(options.iter().any(|(name, value)| name == "TSAN_OPTIONS"
                     && value.to_string_lossy().starts_with("halt_on_error=1")));

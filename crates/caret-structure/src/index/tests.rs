@@ -160,17 +160,20 @@ fn equation_and_align_blocks_are_indexed_without_navigation_stops() {
     let after = paragraph("after", None);
     let blocks: Vec<Block> = serde_json::from_value(serde_json::json!([
         {"type": "equation", "id": "eq", "mathTree": {
-            "schemaVersion": 2, "source": "x",
+            "schemaVersion": caret_doc::MATH_TREE_SCHEMA_VERSION,
             "root": {"id": "eq-root", "content": [
                 {"type": "math", "id": "eq-x", "kind": "symbol", "text": "x"}
             ]}
         }},
-        {"type": "align", "id": "al", "source": "", "rows": []}
+        {"type": "align", "id": "al", "rows": []}
     ]))
     .unwrap_or_else(|error| panic!("math blocks should decode: {error}"));
     document.body = vec![Block::Paragraph(before.clone())];
     document.body.extend(blocks);
     document.body.push(Block::Paragraph(after.clone()));
+    document
+        .validate()
+        .unwrap_or_else(|error| panic!("fixture should satisfy document invariants: {error}"));
     let index = StructureIndex::build(&document);
 
     let equation = index
