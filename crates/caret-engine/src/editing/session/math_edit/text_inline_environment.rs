@@ -5,7 +5,7 @@
 
 use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
 use super::super::{EditError, Effect};
-use super::text_branch::{MathTextEdit, MathTextFormat, text_source_range};
+use super::text_branch::{MathTextEdit, MathTextFormat, text_source_range_from_map};
 use super::{
     MathContent, MathEdit, MathEditBranch, MathTextFlowPath, MathTextFlowPathStep, Session,
 };
@@ -32,7 +32,9 @@ impl Session {
             return Err(EditError::UnsupportedInlineFormat);
         };
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let text = path.resolve(tree).ok_or(EditError::InvalidPosition)?;
+        let (text, text_map) = path
+            .resolve_in_projection(tree, &edit.source_projection)
+            .ok_or(EditError::InvalidPosition)?;
         let display = text
             .runs
             .iter()
@@ -56,12 +58,18 @@ impl Session {
             return self.set_pending_math_environment(&edit, &path, kind, enabled);
         }
 
-        let local_source_range =
-            text_source_range(text, range.clone()).ok_or(EditError::InvalidPosition)?;
-        let text_source_start = text
-            .source_range
-            .as_ref()
-            .map(|range| range.start as usize)
+        let source_base = edit.source_projection.edit_range().start;
+        let local_source_range = text_source_range_from_map(text_map, source_base, range.clone())
+            .and_then(|mapped| {
+                Some(path.source_offset(mapped.start)?..path.source_offset(mapped.end)?)
+            })
+            .ok_or(EditError::InvalidPosition)?;
+        let text_source_start = text_map
+            .range()
+            .ok_or(EditError::InvalidPosition)?
+            .start
+            .checked_sub(source_base)
+            .and_then(|offset| path.source_offset(offset))
             .ok_or(EditError::InvalidPosition)?;
         let host_source_range = path
             .host_offset(local_source_range.start)
@@ -206,7 +214,7 @@ pub(super) fn formatted_text_selection(
     if let Some(host_base) = host_base {
         path = path.with_host_source_base(host_base)?;
     }
-    let text = path.resolve(tree)?;
+    let (text, _) = path.resolve_in_projection(tree, source_projection)?;
     let display = text
         .runs
         .iter()

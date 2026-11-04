@@ -30,6 +30,7 @@ class ShellLoadTest : public QObject {
     void documentUnitsConvertThroughIntegerCentipixels();
     void canvasPolicyPublishesDocumentedZoomLimits();
     void preeditCancellationDoesNotReenterTheInputMethodHandler();
+    void mathSourceDisablesInputMethodAndCancelsPreedit();
     void documentPathAdapterCreatesDefaultSaveLocation();
     void documentPathAdapterConvertsLocalPaths();
     void windowChromeMetricsTracksWindowLifecycleAndRefreshEvents();

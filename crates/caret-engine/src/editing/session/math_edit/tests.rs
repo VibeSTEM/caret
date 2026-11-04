@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::text_branch::{text_source_boundary, text_source_range};
+use super::text_branch::{text_source_boundary_from_map, text_source_range_from_map};
 use super::*;
 
 fn projected_align_cell_at(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
@@ -279,46 +279,203 @@ fn formula_cursor_uses_the_same_grapheme_boundaries_as_text() {
 
 #[test]
 fn discontinuous_text_source_map_never_deletes_the_gap_between_entries() {
-    let text = caret_doc::TextFlow {
-        runs: vec![Run {
-            text: "abcd".to_owned(),
-            language: None,
-            props: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        }],
-        source_range: Some(caret_doc::MathSourceRange {
-            start: 6,
-            end: 12,
-            extra: BTreeMap::new(),
-        }),
-        source_map: vec![
-            caret_doc::TextFlowSourceMapEntry {
-                text_start: 0,
-                text_end: 2,
-                source_range: caret_doc::MathSourceRange {
-                    start: 6,
-                    end: 8,
-                    extra: BTreeMap::new(),
-                },
-                extra: BTreeMap::new(),
-            },
-            caret_doc::TextFlowSourceMapEntry {
-                text_start: 2,
-                text_end: 4,
-                source_range: caret_doc::MathSourceRange {
-                    start: 10,
-                    end: 12,
-                    extra: BTreeMap::new(),
-                },
-                extra: BTreeMap::new(),
-            },
-        ],
-        extra: BTreeMap::new(),
+    let source = r"\text{abcdXX}";
+    let (content, mut source_projection) =
+        caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("text source should project: {error}"))
+            .into_parts();
+    let caret_math::ProjectedMath::Tree(mut tree) = content else {
+        panic!("inline text should project to a math tree");
     };
+    let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
+        panic!("source should project to a TextFlow");
+    };
+    text.source_map = vec![
+        caret_doc::TextFlowSourceMapEntry {
+            text_start: 0,
+            text_end: 2,
+            source_range: caret_doc::MathSourceRange {
+                start: 6,
+                end: 8,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        caret_doc::TextFlowSourceMapEntry {
+            text_start: 2,
+            text_end: 2,
+            source_range: caret_doc::MathSourceRange {
+                start: 8,
+                end: 8,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        caret_doc::TextFlowSourceMapEntry {
+            text_start: 2,
+            text_end: 4,
+            source_range: caret_doc::MathSourceRange {
+                start: 10,
+                end: 12,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+    ];
+    assert!(source_projection.bind_tree_after_validated_edit(&tree));
+    let Some(MathContent::Text(text)) = tree.root.content.first() else {
+        panic!("bound source should retain a TextFlow");
+    };
+    let text_map = source_projection
+        .tree()
+        .and_then(|map| map.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(caret_math::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("TextFlow should have a sidecar mapping"));
 
-    assert_eq!(text_source_boundary(&text, 2), Some(10));
-    assert_eq!(text_source_range(&text, 2..3), Some(10..11));
-    assert_eq!(text_source_range(&text, 1..3), None);
+    assert_eq!(
+        text_source_boundary_from_map(text, text_map, 0, 2, Affinity::Upstream),
+        Some(8)
+    );
+    assert_eq!(
+        text_source_boundary_from_map(text, text_map, 0, 2, Affinity::Downstream),
+        Some(10)
+    );
+    assert_eq!(text_source_range_from_map(text_map, 0, 2..3), Some(10..11));
+    assert_eq!(text_source_range_from_map(text_map, 0, 1..3), None);
+}
+
+#[test]
+fn sidecar_text_mapping_covers_escaped_utf8_and_empty_text() {
+    let projection =
+        caret_math::parse_projection(r"\text{a\%b}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("escaped text should project: {error}"));
+    let caret_math::ProjectedMath::Tree(tree) = projection.content() else {
+        panic!("inline text should project to a math tree");
+    };
+    let Some(MathContent::Text(text)) = tree.root.content.first() else {
+        panic!("escaped source should project to a TextFlow");
+    };
+    let text_map = projection
+        .source_map()
+        .tree()
+        .and_then(|map| map.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(caret_math::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("escaped TextFlow should have a sidecar mapping"));
+    assert_eq!(text_source_range_from_map(text_map, 0, 1..2), Some(7..9));
+    assert_eq!(
+        text_source_boundary_from_map(text, text_map, 0, 3, Affinity::Upstream),
+        Some(10)
+    );
+
+    let projection = caret_math::parse_projection(r"\text{}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("empty text should project: {error}"));
+    let caret_math::ProjectedMath::Tree(tree) = projection.content() else {
+        panic!("inline empty text should project to a math tree");
+    };
+    let Some(MathContent::Text(text)) = tree.root.content.first() else {
+        panic!("empty source should retain a TextFlow");
+    };
+    let text_map = projection
+        .source_map()
+        .tree()
+        .and_then(|map| map.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(caret_math::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("empty TextFlow should have a sidecar mapping"));
+    assert_eq!(
+        text_source_boundary_from_map(text, text_map, 0, 0, Affinity::Upstream),
+        Some(6)
+    );
+}
+
+#[test]
+fn text_path_rejects_segment_mismatch_against_the_bound_sidecar() {
+    let (content, source_projection) =
+        caret_math::parse_projection(r"\text{a\%b}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("escaped text should project: {error}"))
+            .into_parts();
+    let caret_math::ProjectedMath::Tree(mut tree) = content else {
+        panic!("inline source should project to a math tree");
+    };
+    let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
+        panic!("source should project to a TextFlow");
+    };
+    let Some(entry) = text.source_map.get_mut(1) else {
+        panic!("escaped percent should have a source mapping entry");
+    };
+    entry.source_range.start += 1;
+    let source_range = text
+        .source_range
+        .as_ref()
+        .map(|range| (range.start, range.end))
+        .unwrap_or_else(|| panic!("TextFlow should retain its enclosing range"));
+    let path = MathTextFlowPath::new(
+        vec![caret_doc::MathPathStep::Content(0)],
+        source_range,
+        None,
+    );
+
+    assert!(
+        path.resolve_in_projection(&tree, &source_projection)
+            .is_none()
+    );
+}
+
+#[test]
+fn text_path_rejects_moved_zero_width_source_anchor() {
+    let (content, mut source_projection) =
+        caret_math::parse_projection(r"\text{ab}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("text should project: {error}"))
+            .into_parts();
+    let caret_math::ProjectedMath::Tree(mut tree) = content else {
+        panic!("inline source should project to a math tree");
+    };
+    let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
+        panic!("source should project to a TextFlow");
+    };
+    let source_range = text
+        .source_range
+        .as_ref()
+        .map(|range| (range.start, range.end))
+        .unwrap_or_else(|| panic!("TextFlow should retain its enclosing range"));
+    let edge = text
+        .source_map
+        .last()
+        .map(|entry| entry.source_range.end)
+        .unwrap_or_else(|| panic!("text should have a source segment"));
+    text.source_map.push(caret_doc::TextFlowSourceMapEntry {
+        text_start: 2,
+        text_end: 2,
+        source_range: caret_doc::MathSourceRange {
+            start: edge,
+            end: edge,
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::from([("anchor".to_owned(), serde_json::Value::Bool(true))]),
+    });
+    assert!(source_projection.bind_tree_after_validated_edit(&tree));
+    let path = MathTextFlowPath::new(
+        vec![caret_doc::MathPathStep::Content(0)],
+        source_range,
+        None,
+    );
+    assert!(
+        path.resolve_in_projection(&tree, &source_projection)
+            .is_some()
+    );
+    let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
+        panic!("source should retain a TextFlow");
+    };
+    let anchor = text
+        .source_map
+        .last_mut()
+        .unwrap_or_else(|| panic!("anchor should be retained"));
+    anchor.source_range.start -= 1;
+    anchor.source_range.end -= 1;
+
+    assert!(
+        path.resolve_in_projection(&tree, &source_projection)
+            .is_none()
+    );
 }
 
 #[test]
@@ -2301,18 +2458,18 @@ fn text_island_escapes_literal_tex_characters_and_keeps_atomic_history()
         inline_source(&session).as_deref(),
         Some(r"\text{abc\%\textchar{20}\textchar{20}\textchar{9}\textchar{A0}}")
     );
-    let MathEditBranch::Text { path, .. } = &session
+    let edit = session
         .math_edit()
-        .ok_or(EditError::InvalidPosition)?
-        .branch
-    else {
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Text { path, .. } = &edit.branch else {
         return Err(EditError::InvalidPosition.into());
     };
     let Some(Block::Equation(equation)) = session.document().body.first() else {
         return Err(EditError::InvalidPosition.into());
     };
-    let text = path
-        .resolve(&equation.math_tree)
+    let (text, text_map) = path
+        .resolve_in_projection(&equation.math_tree, &edit.source_projection)
         .ok_or(EditError::InvalidPosition)?;
     assert_eq!(
         text.runs
@@ -2322,13 +2479,22 @@ fn text_island_escapes_literal_tex_characters_and_keeps_atomic_history()
         "abc%  \t\u{00a0}"
     );
     assert!(
-        text.source_map
+        text_map
+            .segments()
             .windows(2)
-            .all(|entries| entries[0].text_end <= entries[1].text_start)
+            .all(|entries| entries[0].display().end <= entries[1].display().start)
     );
     assert_eq!(
-        text_source_boundary(text, "abc%  \t\u{00a0}".len()),
-        text.source_range.as_ref().map(|range| range.end as usize)
+        text_source_boundary_from_map(
+            text,
+            text_map,
+            edit.source_projection.edit_range().start,
+            "abc%  \t\u{00a0}".len(),
+            Affinity::Downstream,
+        ),
+        text_map.range().and_then(|range| range
+            .end
+            .checked_sub(edit.source_projection.edit_range().start))
     );
     assert_eq!(
         session.math_edit().map(|edit| edit.cursor),
@@ -2523,41 +2689,45 @@ fn add_math_text_source_map_anchor(
     display_offset: u32,
     key: &str,
 ) -> Result<(), EditError> {
-    let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
-        return Err(EditError::InvalidPosition);
+    let tree = {
+        let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
+            return Err(EditError::InvalidPosition);
+        };
+        let text = equation
+            .math_tree
+            .root
+            .content
+            .iter_mut()
+            .find_map(first_math_content_text_mut)
+            .ok_or(EditError::InvalidPosition)?;
+        let source_offset = text
+            .source_map
+            .iter()
+            .find_map(|entry| {
+                let start = entry.text_start as usize;
+                let end = entry.text_end as usize;
+                let source_start = entry.source_range.start as usize;
+                let source_end = entry.source_range.end as usize;
+                (start <= display_offset as usize
+                    && display_offset as usize <= end
+                    && end - start == source_end - source_start)
+                    .then(|| source_start + display_offset as usize - start)
+            })
+            .ok_or(EditError::InvalidPosition)?;
+        let offset = u32::try_from(source_offset).map_err(|_| EditError::InvalidPosition)?;
+        text.source_map.push(caret_doc::TextFlowSourceMapEntry {
+            text_start: display_offset,
+            text_end: display_offset,
+            source_range: caret_doc::MathSourceRange {
+                start: offset,
+                end: offset,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::from([(key.to_owned(), serde_json::Value::Bool(true))]),
+        });
+        equation.math_tree.clone()
     };
-    let text = equation
-        .math_tree
-        .root
-        .content
-        .iter_mut()
-        .find_map(first_math_content_text_mut)
-        .ok_or(EditError::InvalidPosition)?;
-    let source_offset = text
-        .source_map
-        .iter()
-        .find_map(|entry| {
-            let start = entry.text_start as usize;
-            let end = entry.text_end as usize;
-            let source_start = entry.source_range.start as usize;
-            let source_end = entry.source_range.end as usize;
-            (start <= display_offset as usize
-                && display_offset as usize <= end
-                && end - start == source_end - source_start)
-                .then(|| source_start + display_offset as usize - start)
-        })
-        .ok_or(EditError::InvalidPosition)?;
-    let offset = u32::try_from(source_offset).map_err(|_| EditError::InvalidPosition)?;
-    text.source_map.push(caret_doc::TextFlowSourceMapEntry {
-        text_start: display_offset,
-        text_end: display_offset,
-        source_range: caret_doc::MathSourceRange {
-            start: offset,
-            end: offset,
-            extra: BTreeMap::new(),
-        },
-        extra: BTreeMap::from([(key.to_owned(), serde_json::Value::Bool(true))]),
-    });
+    rebind_active_math_projection(session, &tree)?;
     Ok(())
 }
 
@@ -2939,19 +3109,36 @@ fn mutate_active_math_text_flow(
     session: &mut Session,
     mutate: impl FnOnce(&mut caret_doc::TextFlow) -> Result<(), EditError>,
 ) -> Result<(), EditError> {
-    let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
-        panic!("test should use an equation block");
+    let tree = {
+        let Some(Block::Equation(equation)) = session.document.body.first_mut() else {
+            panic!("test should use an equation block");
+        };
+        let Some(text) = equation
+            .math_tree
+            .root
+            .content
+            .iter_mut()
+            .find_map(first_math_content_text_mut)
+        else {
+            panic!("test formula should contain a TextFlow");
+        };
+        mutate(text)?;
+        equation.math_tree.clone()
     };
-    let Some(text) = equation
-        .math_tree
-        .root
-        .content
-        .iter_mut()
-        .find_map(first_math_content_text_mut)
-    else {
-        panic!("test formula should contain a TextFlow");
-    };
-    mutate(text)
+    rebind_active_math_projection(session, &tree)
+}
+
+fn rebind_active_math_projection(session: &mut Session, tree: &MathTree) -> Result<(), EditError> {
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let mut projection = (*edit.source_projection).clone();
+    if !projection.bind_tree_after_validated_edit(tree) {
+        return Err(EditError::InvalidPosition);
+    }
+    edit.source_projection = Arc::new(projection);
+    Ok(())
 }
 
 #[test]
@@ -4589,6 +4776,189 @@ fn restore_math_edit_reuses_matching_projection_and_rejects_mismatched_kind()
 }
 
 #[test]
+fn restore_math_edit_rejects_mismatched_tree_and_align_locations_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (query, source, kind) in [
+        ("math", "x+y", caret_math::MathInputKind::Inline),
+        (
+            "align",
+            r"\begin{aligned}x+y\end{aligned}",
+            caret_math::MathInputKind::Align,
+        ),
+    ] {
+        let mut session = session_with_text("")?;
+        accept(&mut session, query)?;
+        session.run(Command::InsertText("x+y".to_owned()))?;
+        let edit = session
+            .math_edit()
+            .cloned()
+            .ok_or(EditError::InvalidPosition)?;
+        assert_eq!(edit.source_projection.source(), source);
+        let mut position = history_position(&edit);
+        let document_before = session.document.clone();
+        let revision = session.current_math_edit_revision();
+        assert!(
+            restore_math_edit(&mut session.document, position.clone(), revision.clone()).is_some()
+        );
+        assert_eq!(session.document, document_before);
+        let (content, mut projection) = caret_math::parse_projection(source, kind)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?
+            .into_parts();
+
+        match (kind, content) {
+            (caret_math::MathInputKind::Align, caret_math::ProjectedMath::Align(mut align)) => {
+                let Some(MathContent::Math(node)) = align.rows[0].cells[0].root.content.first_mut()
+                else {
+                    return Err(EditError::InvalidPosition.into());
+                };
+                node.source_range
+                    .as_mut()
+                    .ok_or(EditError::InvalidPosition)?
+                    .start += 1;
+                assert!(projection.bind_align_after_validated_edit(&align));
+            }
+            (caret_math::MathInputKind::Inline, caret_math::ProjectedMath::Tree(mut tree)) => {
+                let Some(MathContent::Math(node)) = tree.root.content.first_mut() else {
+                    return Err(EditError::InvalidPosition.into());
+                };
+                node.source_range
+                    .as_mut()
+                    .ok_or(EditError::InvalidPosition)?
+                    .start += 1;
+                assert!(projection.bind_tree_after_validated_edit(&tree));
+            }
+            _ => return Err(EditError::InvalidPosition.into()),
+        }
+
+        position.source_projection = Arc::new(projection);
+        position.projection_identity = Arc::as_ptr(&position.source_projection) as usize;
+        assert!(restore_math_edit(&mut session.document, position, revision).is_none());
+        assert_eq!(session.document, document_before);
+        assert_eq!(session.math_edit(), Some(&edit));
+    }
+    Ok(())
+}
+
+#[test]
+fn restored_history_rebinds_equivalent_text_segments_before_editing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    insert_equation_text(&mut session, r"\text{abc}")?;
+    move_into_math_text(&mut session)?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let mut position = history_position(&edit);
+    let mut projection = (*position.source_projection).clone();
+    let parsed = caret_math::parse_projection(edit.source(), caret_math::MathInputKind::Equation)?;
+    let (caret_math::ProjectedMath::Tree(mut tree), _) = parsed.into_parts() else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let text = first_math_text_flow_mut(&mut tree.root).ok_or(EditError::InvalidPosition)?;
+    let entry = text
+        .source_map
+        .first()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let display_start = entry.text_start as usize;
+    let display_end = entry.text_end as usize;
+    let source_start = entry.source_range.start as usize;
+    let source_end = entry.source_range.end as usize;
+    if display_end - display_start < 2 || display_end - display_start != source_end - source_start {
+        return Err(EditError::InvalidPosition.into());
+    }
+    let split = display_start + (display_end - display_start) / 2;
+    let source_split = source_start + (split - display_start);
+    let mut left = entry.clone();
+    left.text_end = split as u32;
+    left.source_range.end = source_split as u32;
+    let mut right = entry;
+    right.text_start = split as u32;
+    right.source_range.start = source_split as u32;
+    text.source_map = vec![left, right];
+    assert!(projection.bind_tree_after_validated_edit(&tree));
+    position.source_projection = Arc::new(projection);
+    position.projection_identity = Arc::as_ptr(&position.source_projection) as usize;
+
+    let revision = session.current_math_edit_revision();
+    let restored = restore_math_edit(&mut session.document, position, revision)
+        .ok_or(EditError::InvalidPosition)?;
+    session.math_edit = Some(restored);
+    let document_before = session.document().clone();
+    session.run(Command::InsertText("X".to_owned()))?;
+
+    assert!(
+        session
+            .math_edit()
+            .is_some_and(|edit| edit.source().contains("X"))
+    );
+    assert_ne!(session.document(), &document_before);
+
+    let mut align_session = session_with_text("")?;
+    accept(&mut align_session, "align")?;
+    align_session.run(Command::InsertText("α & \\text{abc}".to_owned()))?;
+    align_session.run(Command::MoveCaret(Direction::Backward))?;
+    let align_edit = align_session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let mut align_position = history_position(&align_edit);
+    let mut align_projection = (*align_position.source_projection).clone();
+    let parsed = caret_math::parse_projection(
+        align_position.source_projection.source(),
+        caret_math::MathInputKind::Align,
+    )?;
+    let (caret_math::ProjectedMath::Align(mut align), _) = parsed.into_parts() else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let text = first_math_text_flow_mut(&mut align.rows[0].cells[1].root)
+        .ok_or(EditError::InvalidPosition)?;
+    let entry = text
+        .source_map
+        .first()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let display_start = entry.text_start as usize;
+    let display_end = entry.text_end as usize;
+    let source_start = entry.source_range.start as usize;
+    let source_end = entry.source_range.end as usize;
+    if display_end - display_start < 2 || display_end - display_start != source_end - source_start {
+        return Err(EditError::InvalidPosition.into());
+    }
+    let split = display_start + (display_end - display_start) / 2;
+    let source_split = source_start + (split - display_start);
+    let mut left = entry.clone();
+    left.text_end = split as u32;
+    left.source_range.end = source_split as u32;
+    let mut right = entry;
+    right.text_start = split as u32;
+    right.source_range.start = source_split as u32;
+    text.source_map = vec![left, right];
+    assert!(align_projection.bind_align_after_validated_edit(&align));
+    align_position.source_projection = Arc::new(align_projection);
+    align_position.projection_identity = Arc::as_ptr(&align_position.source_projection) as usize;
+
+    let revision = align_session.current_math_edit_revision();
+    let restored = restore_math_edit(&mut align_session.document, align_position, revision)
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(matches!(
+        &restored.branch,
+        MathEditBranch::Text { path, .. } if path.align_cell() == Some((0, 1))
+    ));
+    align_session.math_edit = Some(restored);
+    let document_before = align_session.document().clone();
+    align_session.run(Command::InsertText("X".to_owned()))?;
+    assert!(
+        align_session
+            .math_edit()
+            .is_some_and(|edit| edit.source().contains("X"))
+    );
+    assert_ne!(align_session.document(), &document_before);
+    Ok(())
+}
+
+#[test]
 fn reentering_formula_rebases_text_path_for_pending_style_undo()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = r"\frac {x}{\text{t}}";
@@ -4760,6 +5130,70 @@ fn failed_math_history_restore_rolls_back_document_patch_and_keeps_history_posit
     assert_eq!(session.selection(), &selection_before_failed_undo);
     assert!(session.math_edit().is_none());
     assert!(session.edit_history.can_undo());
+    Ok(())
+}
+
+#[test]
+fn undo_rejects_a_stale_math_source_map_and_restores_the_history_transaction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath("x+y".to_owned()))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let (content, mut source_projection) = caret_math::parse_projection(
+        edit.source_projection.source(),
+        caret_math::MathInputKind::Inline,
+    )
+    .map_err(|error| EditError::InvalidMath(error.to_string()))?
+    .into_parts();
+    let caret_math::ProjectedMath::Tree(mut tree) = content else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let Some(MathContent::Math(node)) = tree.root.content.first_mut() else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    node.source_range
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .start += 1;
+    assert!(source_projection.bind_tree_after_validated_edit(&tree));
+    session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .source_projection = Arc::new(source_projection);
+
+    session.run(Command::SetPageGeometry(caret_doc::PageGeometry {
+        paper_size: caret_doc::PaperSize::A3,
+        orientation: caret_doc::Orientation::Landscape,
+        margins: caret_doc::PageMargins {
+            top: 36.0,
+            right: 54.0,
+            bottom: 72.0,
+            left: 90.0,
+        },
+    }))?;
+    let document_before_failed_undo = session.document.clone();
+    let selection_before_failed_undo = session.selection.clone();
+    let edit_before_failed_undo = session.math_edit().cloned();
+    let generation_before_failed_undo = session.document_generation;
+    let history_state_before_failed_undo = session.history_state_id;
+    assert!(session.can_undo());
+
+    assert!(matches!(
+        session.run(Command::Undo),
+        Err(EditError::InvalidPosition)
+    ));
+    assert_eq!(session.document, document_before_failed_undo);
+    assert_eq!(session.selection, selection_before_failed_undo);
+    assert_eq!(session.math_edit(), edit_before_failed_undo.as_ref());
+    assert_eq!(session.document_generation, generation_before_failed_undo);
+    assert_eq!(session.history_state_id, history_state_before_failed_undo);
+    assert!(session.can_undo());
+    assert!(!session.can_redo());
     Ok(())
 }
 

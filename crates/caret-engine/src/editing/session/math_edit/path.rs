@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
-use caret_math::{MathContentSourceMap, MathTreeSourceMap};
+use caret_math::{MathContentSourceMap, MathSourceMap, MathTextSourceMap, MathTreeSourceMap};
 use std::mem::size_of;
 use std::ops::Range;
 
@@ -57,6 +57,14 @@ impl MathTextFlowPath {
         base.checked_add(local_offset)
     }
 
+    pub(super) fn source_offset(&self, host_offset: usize) -> Option<usize> {
+        let base = self
+            .host_source_range
+            .0
+            .checked_sub(self.source_range.0 as usize)?;
+        host_offset.checked_sub(base)
+    }
+
     pub(super) fn with_host_source_base(mut self, base: usize) -> Option<Self> {
         self.host_source_range = (
             base.checked_add(self.source_range.0 as usize)?,
@@ -82,6 +90,60 @@ impl MathTextFlowPath {
             .map(|range| (range.start, range.end))
             == Some(self.source_range))
         .then_some(text)
+    }
+
+    /// 以当前源码投影中的 sidecar 校验路径，并返回对应 TextFlow 映射。
+    pub(super) fn resolve_in_projection<'a>(
+        &self,
+        tree: &'a MathTree,
+        projection: &'a MathSourceMap<'_>,
+    ) -> Option<(&'a TextFlow, &'a MathTextSourceMap)> {
+        let source_map = self.validate_projection(projection)?;
+        let text = self.resolve(tree)?;
+        source_map_matches_text(text, source_map, self.source_map_base(projection)?)
+            .then_some((text, source_map))
+    }
+
+    pub(super) fn resolve_mut_in_projection<'a>(
+        &self,
+        tree: &'a mut MathTree,
+        projection: &MathSourceMap<'_>,
+    ) -> Option<&'a mut TextFlow> {
+        let source_map = self.validate_projection(projection)?;
+        let text = self.resolve_mut(tree)?;
+        source_map_matches_text(text, source_map, self.source_map_base(projection)?).then_some(text)
+    }
+
+    fn validate_projection<'a>(
+        &self,
+        projection: &'a MathSourceMap<'_>,
+    ) -> Option<&'a MathTextSourceMap> {
+        let source_map = self.text_source_map_in_projection(projection)?;
+        let edit_base = projection.edit_range().start;
+        let expected = edit_base.checked_add(self.host_source_range.0)?
+            ..edit_base.checked_add(self.host_source_range.1)?;
+        (source_map.range()? == expected).then_some(source_map)
+    }
+
+    pub(super) fn text_source_map_in_projection<'a>(
+        &self,
+        projection: &'a MathSourceMap<'_>,
+    ) -> Option<&'a MathTextSourceMap> {
+        let tree_map = match self.align_cell {
+            Some((row, cell)) => projection.align()?.cell_tree(row, cell)?,
+            None => projection.tree()?,
+        };
+        tree_map.content_at(&self.steps)?.text()
+    }
+
+    fn source_map_base(&self, projection: &MathSourceMap<'_>) -> Option<usize> {
+        match self.align_cell {
+            Some((row, cell)) => projection
+                .align()?
+                .cell_range(row, cell)
+                .map(|range| range.start),
+            None => Some(0),
+        }
     }
 
     /// 按类型化树路径解析 TextFlow，不要求临时源码范围仍与旧投影一致。
@@ -176,6 +238,59 @@ impl MathTextFlowPath {
         self.host_source_range = range;
         self
     }
+}
+
+fn source_map_matches_text(
+    text: &TextFlow,
+    source_map: &MathTextSourceMap,
+    source_base: usize,
+) -> bool {
+    let mut tree_segments = Vec::with_capacity(text.source_map.len());
+    for entry in &text.source_map {
+        let display = entry.text_start as usize..entry.text_end as usize;
+        let Some(start) = source_base.checked_add(entry.source_range.start as usize) else {
+            return false;
+        };
+        let Some(end) = source_base.checked_add(entry.source_range.end as usize) else {
+            return false;
+        };
+        let source = start..end;
+        tree_segments.push((display, source));
+    }
+
+    let mut projection_segments = Vec::with_capacity(source_map.segments().len());
+    for segment in source_map.segments() {
+        let (Some(source), Some(display)) = (segment.source(), Some(segment.display())) else {
+            return false;
+        };
+        projection_segments.push((display, source));
+    }
+
+    normalized_linear_segments(tree_segments) == normalized_linear_segments(projection_segments)
+}
+
+fn normalized_linear_segments(
+    segments: Vec<(Range<usize>, Range<usize>)>,
+) -> Vec<(Range<usize>, Range<usize>)> {
+    let mut normalized: Vec<(Range<usize>, Range<usize>)> = Vec::with_capacity(segments.len());
+    for (display, source) in segments {
+        if display.start != display.end
+            && source.start != source.end
+            && display.len() == source.len()
+            && let Some((previous_display, previous_source)) = normalized.last_mut()
+            && previous_display.start != previous_display.end
+            && previous_source.start != previous_source.end
+            && previous_display.end == display.start
+            && previous_source.end == source.start
+            && previous_display.len() == previous_source.len()
+        {
+            previous_display.end = display.end;
+            previous_source.end = source.end;
+        } else {
+            normalized.push((display, source));
+        }
+    }
+    normalized
 }
 
 fn rebase_span(

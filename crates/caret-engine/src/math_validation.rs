@@ -54,32 +54,52 @@ pub(crate) fn project_align_for_edit(
 }
 
 /// 为历史源码重建瞬时范围，并要求持久化字段可完整映射。
+#[cfg(test)]
 pub(crate) fn tree_for_history_projection(
     tree: &MathTree,
     source: &str,
     kind: MathInputKind,
 ) -> Option<MathTree> {
+    tree_for_history_projection_with_map(tree, source, kind).map(|(tree, _)| tree)
+}
+
+pub(crate) fn tree_for_history_projection_with_map(
+    tree: &MathTree,
+    source: &str,
+    kind: MathInputKind,
+) -> Option<(MathTree, caret_math::MathTreeSourceMap)> {
     let projection = caret_math::parse_projection(source, kind).ok()?;
-    let (caret_math::ProjectedMath::Tree(projected), _) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Tree(projected), source_map) = projection.into_parts() else {
         return None;
     };
+    let source_map = source_map.tree()?.clone();
     let mut updated = tree.clone();
-    refresh_tree_ranges(&mut updated, &projected).then_some(updated)
+    refresh_tree_ranges(&mut updated, &projected).then_some((updated, source_map))
 }
 
 /// 恢复源码分支时，允许源写法不同于持久树的规范序列化，但语义树必须一致。
+#[cfg(test)]
 pub(crate) fn tree_for_source_history_projection(
     tree: &MathTree,
     source: &str,
     kind: MathInputKind,
 ) -> Option<MathTree> {
-    if let Some(updated) = tree_for_history_projection(tree, source, kind) {
-        return Some(updated);
+    tree_for_source_history_projection_with_map(tree, source, kind).map(|(tree, _)| tree)
+}
+
+pub(crate) fn tree_for_source_history_projection_with_map(
+    tree: &MathTree,
+    source: &str,
+    kind: MathInputKind,
+) -> Option<(MathTree, caret_math::MathTreeSourceMap)> {
+    if let Some(projected) = tree_for_history_projection_with_map(tree, source, kind) {
+        return Some(projected);
     }
     let projection = caret_math::parse_projection(source, kind).ok()?;
-    let (caret_math::ProjectedMath::Tree(projected), _) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Tree(projected), source_map) = projection.into_parts() else {
         return None;
     };
+    let source_map = source_map.tree()?.clone();
     if caret_math::serialize_tree(&projected) != caret_math::serialize_tree(tree)
         || placeholder_positions(&projected.root) != placeholder_positions(&tree.root)
         || text_flow_range_signature(&projected.root) != text_flow_range_signature(&tree.root)
@@ -87,28 +107,36 @@ pub(crate) fn tree_for_source_history_projection(
     {
         return None;
     }
-    Some(tree.clone())
+    Some((tree.clone(), source_map))
 }
 
 /// 为历史 Align 源码重建单元格范围，并保留所有持久化字段。
-pub(crate) fn align_for_history_projection(align: &Align, source: &str) -> Option<Align> {
+pub(crate) fn align_for_history_projection_with_map(
+    align: &Align,
+    source: &str,
+) -> Option<(Align, caret_math::AlignSourceMap)> {
     let projection = caret_math::parse_projection(source, MathInputKind::Align).ok()?;
-    let (caret_math::ProjectedMath::Align(projected), _) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Align(projected), source_map) = projection.into_parts() else {
         return None;
     };
+    let source_map = source_map.align()?.clone();
     let mut updated = align.clone();
-    refresh_align_ranges(&mut updated, &projected).then_some(updated)
+    refresh_align_ranges(&mut updated, &projected).then_some((updated, source_map))
 }
 
 /// 恢复源码分支的 Align 时验证规范语义并保留持久化行列与元数据。
-pub(crate) fn align_for_source_history_projection(align: &Align, source: &str) -> Option<Align> {
-    if let Some(updated) = align_for_history_projection(align, source) {
-        return Some(updated);
+pub(crate) fn align_for_source_history_projection_with_map(
+    align: &Align,
+    source: &str,
+) -> Option<(Align, caret_math::AlignSourceMap)> {
+    if let Some(projected) = align_for_history_projection_with_map(align, source) {
+        return Some(projected);
     }
     let projection = caret_math::parse_projection(source, MathInputKind::Align).ok()?;
-    let (caret_math::ProjectedMath::Align(projected), _) = projection.into_parts() else {
+    let (caret_math::ProjectedMath::Align(projected), source_map) = projection.into_parts() else {
         return None;
     };
+    let source_map = source_map.align()?.clone();
     let projected_anchors = projected
         .rows
         .iter()
@@ -132,7 +160,7 @@ pub(crate) fn align_for_source_history_projection(align: &Align, source: &str) -
     {
         return None;
     }
-    Some(align.clone())
+    Some((align.clone(), source_map))
 }
 
 type TextFlowRangeSignature = (String, Option<(u32, u32)>, Vec<(u32, u32, u32, u32)>);

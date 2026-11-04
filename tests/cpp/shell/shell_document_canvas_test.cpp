@@ -77,6 +77,30 @@ void ShellLoadTest::preeditCancellationDoesNotReenterTheInputMethodHandler() {
     QCOMPARE(event_count, 1);
 }
 
+void ShellLoadTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
+    caret::DocumentCanvas canvas;
+    int event_count = 0;
+    QObject::connect(
+        &canvas, &caret::DocumentCanvas::inputMethodEventRequested, &canvas,
+        [&event_count](const QString&, const QString&, int, int, int) { ++event_count; });
+    canvas.setInputMethodContext({{QStringLiteral("enabled"), true}});
+    QInputMethodEvent preedit(QStringLiteral("ni"), {});
+    QCoreApplication::sendEvent(&canvas, &preedit);
+    QCOMPARE(canvas.preeditText(), QStringLiteral("ni"));
+    QCOMPARE(event_count, 1);
+
+    canvas.setInputMethodContext({{QStringLiteral("enabled"), false}});
+    QVERIFY(!canvas.inputMethodQuery(Qt::ImEnabled).toBool());
+    QVERIFY(canvas.preeditText().isEmpty());
+    QCOMPARE(event_count, 2);
+
+    QInputMethodEvent stale_commit;
+    stale_commit.setCommitString(QStringLiteral("你好"));
+    QCoreApplication::sendEvent(&canvas, &stale_commit);
+    QVERIFY(canvas.preeditText().isEmpty());
+    QCOMPARE(event_count, 2);
+}
+
 #ifdef CARET_ENABLE_APP
 void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     auto runtime = caret::ffi::new_blank_document_runtime();
@@ -206,7 +230,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                   caret::shell_test::snapshot_from_theme_facade(theme_path, QColor(Qt::white), 16));
     caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
     const QString empty_snapshot = QStringLiteral(
-        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}]})");
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true}})");
     QString max_generation_snapshot = empty_snapshot;
     max_generation_snapshot.replace(
         QStringLiteral("\"documentGeneration\":\"0\""),
@@ -382,7 +406,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
 
     canvas->setInputMethodContext({{QStringLiteral("surroundingText"), QStringLiteral("A😀B")},
                                    {QStringLiteral("cursorPosition"), 3},
-                                   {QStringLiteral("anchorPosition"), 1}});
+                                   {QStringLiteral("anchorPosition"), 1},
+                                   {QStringLiteral("enabled"), true}});
     QCOMPARE(canvas->inputMethodQuery(Qt::ImSurroundingText).toString(), QStringLiteral("A😀B"));
     QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorPosition).toInt(), 3);
     QCOMPARE(canvas->inputMethodQuery(Qt::ImAnchorPosition).toInt(), 1);

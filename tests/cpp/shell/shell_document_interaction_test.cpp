@@ -69,6 +69,9 @@ struct LayoutViewModelTestProbe final {
     static bool installInteraction(LayoutViewModel& view_model, const QJsonObject& interaction) {
         return view_model.installInteraction(interaction);
     }
+    static bool installSnapshot(LayoutViewModel& view_model, const QJsonObject& snapshot) {
+        return view_model.installSnapshot(QJsonDocument(snapshot));
+    }
 };
 } // namespace caret
 
@@ -115,6 +118,36 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
                                                                  stale_malformed_interaction));
     QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
+    QCOMPARE(interaction_changed.size(), 0);
+
+    const QVariantMap previous_input_method_context = inline_view_model.inputMethodContext();
+    const QJsonObject invalid_input_method_context{
+        {QStringLiteral("surroundingText"), QStringLiteral("")},
+        {QStringLiteral("cursorPosition"), 0},
+        {QStringLiteral("anchorPosition"), 0},
+        {QStringLiteral("enabled"), QStringLiteral("false")}};
+    const QJsonObject malformed_input_context_interaction{
+        {QStringLiteral("documentGeneration"), inline_view_model.documentGeneration()},
+        {QStringLiteral("fontGeneration"), inline_view_model.fontGeneration()},
+        {QStringLiteral("selectionRects"), QJsonArray{}},
+        {QStringLiteral("inputMethodContext"), invalid_input_method_context},
+        {QStringLiteral("caretGeometry"), QJsonObject{{QStringLiteral("pageIndex"), 0},
+                                                      {QStringLiteral("xPt"), 0.0},
+                                                      {QStringLiteral("y0Pt"), 0.0},
+                                                      {QStringLiteral("y1Pt"), 1.0}}}};
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
+        inline_view_model, malformed_input_context_interaction));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
+    QCOMPARE(interaction_changed.size(), 0);
+
+    QJsonObject missing_input_context_snapshot = root;
+    missing_input_context_snapshot.remove(QStringLiteral("inputMethodContext"));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshot(inline_view_model,
+                                                              missing_input_context_snapshot));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
     QCOMPARE(inline_view_model.pageLayouts(), visible_pages);
     QCOMPARE(interaction_changed.size(), 0);
 
@@ -262,6 +295,7 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
 
 void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {
     caret::DocumentCanvas canvas;
+    canvas.setInputMethodContext({{QStringLiteral("enabled"), true}});
     QSignalSpy input_method_spy(&canvas, &caret::DocumentCanvas::inputMethodEventRequested);
     QVERIFY(input_method_spy.isValid());
 
@@ -311,11 +345,12 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QVERIFY(clipboard_commands.isValid());
     QVERIFY(structure_navigation.isValid());
     QCOMPARE(canvas->inputMethodContext(), QVariantMap{});
-    QVERIFY(canvas->inputMethodQuery(Qt::ImEnabled).toBool());
+    QVERIFY(!canvas->inputMethodQuery(Qt::ImEnabled).toBool());
     const QVariantMap input_method_context{
         {QStringLiteral("surroundingText"), QStringLiteral("caret")},
         {QStringLiteral("cursorPosition"), 5},
         {QStringLiteral("anchorPosition"), 0},
+        {QStringLiteral("enabled"), true},
     };
     canvas->setInputMethodContext(input_method_context);
     QCOMPARE(canvas->inputMethodContext(), input_method_context);

@@ -7,7 +7,7 @@ use super::super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::history::{self, DocumentPatch, MathEditPosition};
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::metadata::can_materialize_source_as_text;
-use super::text_branch::text_source_boundary;
+use super::text_branch::text_source_boundary_from_map;
 use super::{MathEditBranch, MathEditTarget, Session, find_inline_math, inline_math_slots};
 use crate::VisualAffinity;
 use caret_doc::{
@@ -43,10 +43,11 @@ impl Session {
             return Err(EditError::UnsupportedNewline);
         }
         let current_tree = self.math_tree_for_edit(&edit, None)?;
-        let caret_math::ParsedMath::Tree(projected_tree) =
-            caret_math::parse(&source, caret_math::MathInputKind::Inline)
+        let (projected_content, projected_source_map) =
+            caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
                 .map_err(|error| EditError::InvalidMath(error.to_string()))?
-        else {
+                .into_parts();
+        let caret_math::ProjectedMath::Tree(projected_tree) = projected_content else {
             return Err(EditError::InvalidPosition);
         };
         let (source_anchor, source_cursor) = match &edit.branch {
@@ -65,18 +66,34 @@ impl Session {
                 if !trees_correspond_for_position_mapping(current_tree, &projected_tree) {
                     return Err(EditError::UnsupportedOpaqueContent);
                 }
-                path.resolve(current_tree)
+                path.resolve_in_projection(current_tree, &edit.source_projection)
                     .ok_or(EditError::InvalidPosition)?;
                 let text = path
                     .resolve_structurally(&projected_tree)
                     .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let text_map = path
+                    .text_source_map_in_projection(&projected_source_map)
+                    .ok_or(EditError::UnsupportedOpaqueContent)?;
                 let MathEditBranch::Text { anchor, .. } = &edit.branch else {
                     unreachable!()
                 };
-                let anchor = text_source_boundary(text, *anchor)
-                    .ok_or(EditError::UnsupportedOpaqueContent)?;
-                let local = text_source_boundary(text, edit.cursor)
-                    .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let source_base = projected_source_map.edit_range().start;
+                let anchor = text_source_boundary_from_map(
+                    text,
+                    text_map,
+                    source_base,
+                    *anchor,
+                    Affinity::Downstream,
+                )
+                .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let local = text_source_boundary_from_map(
+                    text,
+                    text_map,
+                    source_base,
+                    edit.cursor,
+                    Affinity::Downstream,
+                )
+                .ok_or(EditError::UnsupportedOpaqueContent)?;
                 (anchor, local)
             }
         };

@@ -30,10 +30,10 @@ impl Session {
         };
         let range = anchor.min(edit.cursor)..anchor.max(edit.cursor);
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let text = path
-            .resolve(tree)
-            .ok_or(EditError::InvalidPosition)?
-            .clone();
+        let (text, _) = path
+            .resolve_in_projection(tree, &edit.source_projection)
+            .ok_or(EditError::InvalidPosition)?;
+        let text = (*text).clone();
         let display = text
             .runs
             .iter()
@@ -148,7 +148,7 @@ impl Session {
                 let mut paragraph = self.paragraph_for(&position)?.clone();
                 let math = find_inline_math_mut(&mut paragraph.inlines, math_id)
                     .ok_or(EditError::InvalidPosition)?;
-                path.resolve_mut(&mut math.math_tree)
+                path.resolve_mut_in_projection(&mut math.math_tree, &edit.source_projection)
                     .ok_or(EditError::InvalidPosition)?
                     .clone_from(&updated);
                 let before = history::paragraph_states_for_ids(
@@ -185,7 +185,7 @@ impl Session {
                 let mut next = before.clone();
                 let tree = block_math_tree_mut(&mut next, path.align_cell())
                     .ok_or(EditError::InvalidPosition)?;
-                path.resolve_mut(tree)
+                path.resolve_mut_in_projection(tree, &edit.source_projection)
                     .ok_or(EditError::InvalidPosition)?
                     .clone_from(&updated);
                 *slot = next.clone();

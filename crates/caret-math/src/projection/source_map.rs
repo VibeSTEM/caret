@@ -5,7 +5,7 @@
 
 use std::{collections::BTreeMap, mem::size_of, ops::Range};
 
-use caret_doc::{MathContent, MathFlow, MathPathStep, MathSourceRange, MathTree};
+use caret_doc::{MathContent, MathFlow, MathNodeKind, MathPathStep, MathSourceRange, MathTree};
 use serde_json::Value;
 
 /// 一个可选源码范围及其无法由解析器解释的扩展元数据。
@@ -24,6 +24,10 @@ impl MathRangeSourceMap {
     /// 返回需随结构位置保留的范围扩展元数据。
     pub fn extra(&self) -> &BTreeMap<String, Value> {
         &self.extra
+    }
+
+    fn same_location(&self, other: &Self) -> bool {
+        self.range == other.range
     }
 }
 
@@ -44,6 +48,16 @@ impl MathFlowSourceMap {
     pub fn content(&self) -> &[MathContentSourceMap] {
         &self.content
     }
+
+    fn same_locations(&self, other: &Self) -> bool {
+        self.range.same_location(&other.range)
+            && self.content.len() == other.content.len()
+            && self
+                .content
+                .iter()
+                .zip(&other.content)
+                .all(|(left, right)| left.same_locations(right))
+    }
 }
 
 /// 文档数学内容项的源码位置；MathNode 操作数与环境子项按树继续嵌套。
@@ -53,6 +67,7 @@ pub enum MathContentSourceMap {
     Math {
         range: MathRangeSourceMap,
         operands: Vec<MathFlowSourceMap>,
+        placeholder: bool,
     },
     Environment {
         range: MathRangeSourceMap,
@@ -94,6 +109,53 @@ impl MathContentSourceMap {
             Self::Text(_) | Self::Math { .. } | Self::Other => None,
         }
     }
+
+    fn same_locations(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(left), Self::Text(right)) => left.same_locations(right),
+            (
+                Self::Math {
+                    range: left_range,
+                    operands: left_operands,
+                    placeholder: left_placeholder,
+                },
+                Self::Math {
+                    range: right_range,
+                    operands: right_operands,
+                    placeholder: right_placeholder,
+                },
+            ) => {
+                (left_range.same_location(right_range)
+                    || (*left_placeholder
+                        && *right_placeholder
+                        && same_placeholder_location(left_range.range(), right_range.range())))
+                    && left_operands.len() == right_operands.len()
+                    && left_operands
+                        .iter()
+                        .zip(right_operands)
+                        .all(|(left, right)| left.same_locations(right))
+            }
+            (
+                Self::Environment {
+                    range: left_range,
+                    children: left_children,
+                },
+                Self::Environment {
+                    range: right_range,
+                    children: right_children,
+                },
+            ) => {
+                left_range.same_location(right_range)
+                    && left_children.len() == right_children.len()
+                    && left_children
+                        .iter()
+                        .zip(right_children)
+                        .all(|(left, right)| left.same_locations(right))
+            }
+            (Self::Other, Self::Other) => true,
+            _ => false,
+        }
+    }
 }
 
 /// TextFlow 的整体范围和显示文本到 LaTeX 源码的分段映射。
@@ -112,6 +174,11 @@ impl MathTextSourceMap {
     /// 返回映射片段；保留解析树中的顺序，包括零宽扩展锚点。
     pub fn segments(&self) -> &[MathTextSourceSegment] {
         &self.segments
+    }
+
+    fn same_locations(&self, other: &Self) -> bool {
+        self.range.same_location(&other.range)
+            && normalized_segments(&self.segments) == normalized_segments(&other.segments)
     }
 }
 
@@ -145,6 +212,41 @@ impl MathTextSourceSegment {
     }
 }
 
+fn normalized_segments(segments: &[MathTextSourceSegment]) -> Vec<(Range<usize>, Range<usize>)> {
+    let mut normalized: Vec<(Range<usize>, Range<usize>)> = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let Some(source) = segment.source.range() else {
+            continue;
+        };
+        if segment.display.start != segment.display.end
+            && segment.display.len() == source.len()
+            && let Some((display, previous_source)) = normalized.last_mut()
+            && display.start != display.end
+            && display.end == segment.display.start
+            && previous_source.end == source.start
+            && display.len() == previous_source.len()
+        {
+            display.end = segment.display.end;
+            previous_source.end = source.end;
+        } else {
+            normalized.push((segment.display.clone(), source));
+        }
+    }
+    normalized
+}
+
+fn same_placeholder_location(left: Option<Range<usize>>, right: Option<Range<usize>>) -> bool {
+    let (Some(left), Some(right)) = (left, right) else {
+        return false;
+    };
+    let centered = |point: &Range<usize>, span: &Range<usize>| {
+        point.start == point.end
+            && span.len() == 2
+            && point.start.checked_mul(2) == span.start.checked_add(span.end)
+    };
+    centered(&left, &right) || centered(&right, &left)
+}
+
 /// 与 MathTree 同形的临时源码范围树；不会写入 `.cdoc`。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MathTreeSourceMap {
@@ -176,6 +278,11 @@ impl MathTreeSourceMap {
     /// 返回数学树根流的范围映射。
     pub fn root(&self) -> &MathFlowSourceMap {
         &self.root
+    }
+
+    /// 校验结构路径对应的源码位置；忽略临时映射上的扩展元数据。
+    pub fn same_locations(&self, other: &Self) -> bool {
+        self.root.same_locations(&other.root)
     }
 
     /// 按文档模型结构路径取得内容映射；路径指向流而非内容时返回 `None`。
@@ -286,7 +393,11 @@ fn capture_content(
                 .iter()
                 .map(|flow| capture_flow(flow, source, offset, scope))
                 .collect::<Option<Vec<_>>>()?;
-            Some(MathContentSourceMap::Math { range, operands })
+            Some(MathContentSourceMap::Math {
+                range,
+                operands,
+                placeholder: node.kind == MathNodeKind::Placeholder,
+            })
         }
         MathContent::Environment(environment) => {
             let range = capture_range(environment.source_range.as_ref(), source, offset, scope)?;
@@ -364,7 +475,9 @@ fn estimate_content(content: &MathContentSourceMap) -> usize {
                     .map(|segment| estimate_range(&segment.source) + estimate_extra(&segment.extra))
                     .sum::<usize>()
         }
-        MathContentSourceMap::Math { range, operands } => {
+        MathContentSourceMap::Math {
+            range, operands, ..
+        } => {
             estimate_range(range)
                 + operands.capacity() * size_of::<MathFlowSourceMap>()
                 + operands.iter().map(estimate_flow).sum::<usize>()
@@ -389,4 +502,81 @@ fn estimate_extra(extra: &BTreeMap<String, Value>) -> usize {
             size_of::<(String, Value)>() + key.capacity() + value.to_string().capacity()
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProjectedMath;
+    use caret_doc::{MathSourceRange, TextFlowSourceMapEntry};
+
+    #[test]
+    fn location_comparison_normalizes_adjacent_linear_text_segments() {
+        let source = r"\text{abcd}";
+        let projection = crate::parse_projection(source, crate::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("text source should project: {error}"));
+        let (ProjectedMath::Tree(tree), _) = projection.into_parts() else {
+            panic!("inline text source should produce a tree");
+        };
+        let mut segmented = tree.clone();
+        let Some(MathContent::Text(text)) = segmented.root.content.first_mut() else {
+            panic!("text source should start with a TextFlow");
+        };
+        text.source_map = (0..4)
+            .map(|offset| TextFlowSourceMapEntry {
+                text_start: offset,
+                text_end: offset + 1,
+                source_range: MathSourceRange {
+                    start: 6 + offset,
+                    end: 7 + offset,
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            })
+            .collect();
+        let first = MathTreeSourceMap::capture(&tree, source, 0, None, false)
+            .unwrap_or_else(|| panic!("parsed tree should have valid source locations"));
+        let second = MathTreeSourceMap::capture(&segmented, source, 0, None, false)
+            .unwrap_or_else(|| panic!("segmented text should have valid source locations"));
+        assert!(first.same_locations(&second));
+    }
+
+    #[test]
+    fn location_comparison_accepts_the_center_anchor_of_empty_math_delimiters() {
+        let source = r"\text{ab$$cd}";
+        let projection = crate::parse_projection(source, crate::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("empty math anchor should project: {error}"));
+        let (ProjectedMath::Tree(tree), _) = projection.into_parts() else {
+            panic!("inline source should produce a tree");
+        };
+        let original = MathTreeSourceMap::capture(&tree, source, 0, None, false)
+            .unwrap_or_else(|| panic!("parsed anchor should have valid locations"));
+
+        let mut centered = tree.clone();
+        let Some(MathContent::Math(node)) = centered.root.content.get_mut(1) else {
+            panic!("empty math delimiter should project to a math node");
+        };
+        assert_eq!(node.kind, MathNodeKind::Placeholder);
+        node.source_range = Some(MathSourceRange {
+            start: 9,
+            end: 9,
+            extra: BTreeMap::new(),
+        });
+        let centered = MathTreeSourceMap::capture(&centered, source, 0, None, false)
+            .unwrap_or_else(|| panic!("center anchor should remain within source bounds"));
+        assert!(original.same_locations(&centered));
+
+        let mut misplaced = tree;
+        let Some(MathContent::Math(node)) = misplaced.root.content.get_mut(1) else {
+            panic!("empty math delimiter should project to a math node");
+        };
+        node.source_range = Some(MathSourceRange {
+            start: 8,
+            end: 8,
+            extra: BTreeMap::new(),
+        });
+        let misplaced = MathTreeSourceMap::capture(&misplaced, source, 0, None, false)
+            .unwrap_or_else(|| panic!("in-range misplaced anchor should still be capturable"));
+        assert!(!original.same_locations(&misplaced));
+    }
 }
