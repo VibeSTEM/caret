@@ -117,7 +117,7 @@ fn repository_crate_change_selects_direct_package_and_consumers() -> Result<(), 
     let root = repository_root()?;
     let plan = make_plan(&["crates/caret-foundation/Cargo.toml".into()], &root)?;
     assert!(plan.packages_l1.contains("caret-foundation"));
-    assert!(plan.packages_l2.is_empty(), "{plan:?}");
+    assert!(plan.packages_l2.contains("caret-ffi"), "{plan:?}");
     assert!(!plan.native);
     assert!(plan.native_labels.is_empty());
     assert!(!plan.full);

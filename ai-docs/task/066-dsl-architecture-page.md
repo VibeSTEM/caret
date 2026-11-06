@@ -43,6 +43,7 @@ issue 的其他反馈是后续设计约束或条件触发建议（编辑 crate �
 - `crates/caret-ffi/src/lib.rs`
 - `native/app/main.cpp`
 - `tests/src/layering.rs`
+- `tests/src/test_scope/tests.rs`
 - `ai-docs/task/066-dsl-architecture-page.md`（本 task）
 - `ai-docs/task-index.md`
 
@@ -55,6 +56,7 @@ issue 的其他反馈是后续设计约束或条件触发建议（编辑 crate �
 - [X] 运行时文档准确说明进程崩溃处理器的启动位置、输出和 Qt 日志边界。
 - [x] crash handler 在 GUI 子进程中、Qt 初始化前安装；安装失败可见且不阻止启动。
 - [x] 分层期望与 Cargo 依赖同步，并由 build/lint 检查覆盖集成结果。
+- [x] 依赖闭包选择器测试反映 `caret-ffi` 对 `caret-foundation` 的新边。
 - [x] 领域检查与独立 final review 已完成，发现的问题已修复并复验。
 
 ## 验证计划与结果
@@ -68,9 +70,12 @@ issue 的其他反馈是后续设计约束或条件触发建议（编辑 crate �
 | 2026-11-06 | `~/eit/panta` 接入方式对照                                                                                                                                 | FFI 返回 `Result<String>`，native main 在 Qt 前安装；错误直接写 UTF-8 stderr 并继续 | 通过；对照 panta `crates/panta-ffi/src/support.rs`、bridge 和 `native/app/main.cpp`                   |
 | 2026-11-06 | `cargo format --check` 与 `cargo lint --check`                                                                                                            | Rust/C++ 格式、Clippy、CMake、分层、qmllint、clang-tidy 等检查通过                    | 通过；完整 lint 9/9 阶段通过                                                                             |
 | 2026-11-06 | `cargo build --locked -p caret-launcher`                                                                                                                   | 编译 CXX bridge、native main 与 launcher                                              | 通过                                                                                                      |
+| 2026-11-06 | PR #95 CI 首轮 | 依赖变更影响闭包覆盖新增 `caret-ffi` 消费边 | 失败：`repository_crate_change_selects_direct_package_and_consumers` 仍断言 foundation 无 L2 消费者；现已更新断言 |
+| 2026-11-06 | `cargo test --locked -p caret-tests --bin caret-tests test_scope::tests::repository_crate_change_selects_direct_package_and_consumers` | 新依赖边纳入 L2 消费者选择 | 通过（1 passed） |
 | 2026-11-06 | Terra medium FFI/启动生命周期领域检查                                                                                                                      | 安装调用在正确进程和启动阶段；错误传播、依赖方向准确                                 | 通过；按只读代码检查确认与 Panta 模式一致；未触发真实崩溃场景                                            |
 | 2026-11-06 | 运行时崩溃/安装失败行为 | 实际触发处理器并观察 stderr、日志文件和退出语义 | 未执行；本次完成构建、静态评审与 lint，未启动受控崩溃进程、模拟不可写临时目录或在 Windows 构建运行 |
 | 2026-11-06 | Sol medium 独立 final review（完整 11 文件 diff）                                                                                                             | 完整 diff 无遗留问题                                                                  | 通过；确认 Panta 用法、FFI 错误传播、native 启动时机、分层与文档一致，无剩余发现                          |
+| 2026-11-06 | Sol medium 复查首轮 CI 修正 | 新依赖闭包断言精确，task 记录与修复一致 | 通过；确认 `caret-foundation` 变化会选择 `caret-ffi` 并保留其他范围断言 |
 
 ## 风险与回退
 
@@ -80,8 +85,9 @@ issue 的其他反馈是后续设计约束或条件触发建议（编辑 crate �
 
 - 2026-11-06：根据 issue #76 的 DSL 文档建议及 crash handler 延后接入建议建立 task；对编辑 crate 边界、结构索引和 CXX/ViewModel 反馈保留为后续设计约束。
 - 2026-11-06：维护者确认接入并要求沿用`panta` 用法。照其模式通过 `caret-ffi` 暴露 `Result<String>`，在 native `main` 最早期安装；失败捕获 `rust::Error` 后写 UTF-8 `stderr` 并继续启动。此处理器记录进程崩溃，不代替 Qt 消息处理器。
+- 2026-11-06：首轮 CI 发现 test-scope 选择器断言仍假设 `caret-foundation` 没有 L2 消费者；更新断言以要求 `caret-ffi` 纳入 L2。
 - 对照来源：`~/eit/panta`，HEAD `a101c08c79b8ec93e302aa42a4b6ee138807ca8a`；本任务改动遵循其 FFI 签名、调用时机与失败处理模式。
 
 ## 完成摘要
 
-新增 `.pa` DSL 架构页并接入核心架构索引；`caret-foundation` crash handler 已按 Panta 模式通过 FFI 在 native GUI 进程早期安装。构建、格式、lint、分层检查及 Terra/Sol 独立审查通过。未触发真实崩溃或安装失败场景，也未在 Windows 构建运行。
+新增 `.pa` DSL 架构页并接入核心架构索引；`caret-foundation` crash handler 已按 Panta 模式通过 FFI 在 native GUI 进程早期安装。构建、格式、lint、分层检查、依赖闭包定向测试及 Terra/Sol 独立审查通过。未触发真实崩溃或安装失败场景，也未在 Windows 构建运行。
