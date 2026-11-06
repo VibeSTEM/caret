@@ -952,7 +952,7 @@ void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
     QVERIFY(source.open(QIODevice::ReadOnly));
     const QString text = QString::fromUtf8(source.readAll());
     const qsizetype failure_start = text.indexOf(QStringLiteral(
-        "if (!succeeded) {\n                window.waitForCloseAfterFileOperation = false;"));
+        "if (!succeeded) {\n                rootWindow.waitForCloseAfterFileOperation = false;"));
     QVERIFY(failure_start >= 0);
     const qsizetype conflict_start = text.indexOf(QStringLiteral("if (conflict)"), failure_start);
     QVERIFY(conflict_start > failure_start);
@@ -967,7 +967,7 @@ void ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation() {
     QVERIFY(activity_start >= 0);
     QVERIFY(operation_start > activity_start);
     QVERIFY(text.mid(activity_start, operation_start - activity_start)
-                .contains(QStringLiteral("window.resumeCloseAfterFileOperation()")));
+                .contains(QStringLiteral("rootWindow.resumeCloseAfterFileOperation()")));
     const qsizetype save_finished_start =
         text.indexOf(QStringLiteral("function onDocumentSaveFinished(succeeded)"));
     QVERIFY(save_finished_start >= 0);
