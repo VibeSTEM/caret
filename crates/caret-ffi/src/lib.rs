@@ -12,6 +12,13 @@ fn version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
 }
 
+/// 安装进程级崩溃处理器；CXX 将错误转换成 `rust::Error` 交给 native 入口显示。
+fn install_crash_handler(log_dir: &str) -> Result<String, String> {
+    caret_foundation::crash::install_crash_handler(log_dir)
+        .map(|path| path.display().to_string())
+        .map_err(|error| error.to_string())
+}
+
 // 宏展开允许生成胶水使用 unsafe；手写运行时和转发保持普通 workspace lint。
 #[allow(unsafe_code, clippy::all)]
 mod generated {
@@ -38,7 +45,7 @@ mod generated {
         set_caret_blink_enabled, set_ui_selection, settings_constraints, settings_language_catalog,
         settings_load_warning, settings_snapshot, settings_theme_catalog,
     };
-    use crate::version;
+    use crate::{install_crash_handler, version};
 
     #[cxx::bridge(namespace = "caret::ffi")]
     pub(crate) mod bridge {
@@ -155,6 +162,8 @@ mod generated {
             type SettingsRuntime;
 
             fn version() -> String;
+            /// 安装进程级崩溃处理器；空目录使用系统临时目录。
+            fn install_crash_handler(log_dir: &str) -> Result<String>;
             fn builtin_theme_catalog() -> String;
             /// Rust 分配运行时；C++ 通过 rust::Box 持有并负责析构，句柄有效期随 Box。
             fn new_blank_document_runtime() -> Box<DocumentRuntime>;

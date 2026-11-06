@@ -32,9 +32,18 @@
 #include <cstdio>
 #include <exception>
 #include <qnamespace.h>
+#include <rust/cxx.h>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <limits>
+#include <windows.h>
+#endif
 
 Q_IMPORT_QML_PLUGIN(Caret_AdaptersPlugin)
 Q_IMPORT_QML_PLUGIN(Caret_ShellPlugin)
@@ -46,6 +55,35 @@ namespace {
 constexpr int kExitUsage = 64;
 constexpr int kExitUnavailable = 69;
 
+/// 将 UTF-8 诊断写到 stderr；Windows 控制台使用 UTF-16，重定向时保留 UTF-8。
+void write_stderr_utf8(std::string_view message) {
+#ifdef _WIN32
+    const HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD console_mode = 0;
+    if (output != nullptr && output != INVALID_HANDLE_VALUE &&
+        GetConsoleMode(output, &console_mode) != 0 &&
+        message.size() <= static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        const int byte_count = static_cast<int>(message.size());
+        const int wide_count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, message.data(),
+                                                   byte_count, nullptr, 0);
+        if (wide_count > 0) {
+            std::wstring wide_message(static_cast<std::size_t>(wide_count), L'\0');
+            const int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, message.data(),
+                                                      byte_count, wide_message.data(), wide_count);
+            if (converted == wide_count) {
+                DWORD written = 0;
+                if (WriteConsoleW(output, wide_message.data(), static_cast<DWORD>(wide_count),
+                                  &written, nullptr) != 0 &&
+                    written == static_cast<DWORD>(wide_count)) {
+                    return;
+                }
+            }
+        }
+    }
+#endif
+    (void)std::fwrite(message.data(), sizeof(char), message.size(), stderr);
+}
+
 void print_version() {
     const rust::String value = caret::ffi::version();
     (void)std::fwrite(value.data(), 1, value.size(), stdout);
@@ -55,6 +93,16 @@ void print_version() {
 } // namespace
 
 int main(int argc, char* argv[]) try {
+    // 原生崩溃此前控制台零输出；先于其他逻辑安装，错误直接写 stderr。
+    try {
+        caret::ffi::install_crash_handler(rust::String(""));
+    } catch (const rust::Error& error) {
+        std::string diagnostic = "caret: 崩溃日志初始化失败：";
+        diagnostic.append(error.what());
+        diagnostic.push_back('\n');
+        write_stderr_utf8(diagnostic);
+    }
+
     bool quit_after_load = false;
     std::vector<char*> forwarded;
     forwarded.push_back(argv[0]);

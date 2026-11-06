@@ -43,6 +43,7 @@ caret-math = { path = "crates/caret-math", version = "0.1.0" }
 caret-structure = { path = "crates/caret-structure", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
 caret-ffi = { path = "crates/caret-ffi", version = "0.1.0" }
+caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
 cc = "=1.4.6"
 cxx = "=1.0.202"
 cxx-build = "=1.0.202"

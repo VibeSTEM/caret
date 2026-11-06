@@ -30,8 +30,11 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
         &["caret-code", "caret-engine", "caret-doc", "caret-dsl-core"],
     ),
     ("caret-tests", &["caret-app", "caret-build", "caret-doc"]),
-    // 运行时只依赖 caret-app 读取内置主题。build script 使用 caret-build 定位托管 Clang。
-    ("caret-ffi", &["caret-app", "caret-build"]),
+    // 运行时依赖 caret-foundation 安装进程崩溃处理器；build script 使用 caret-build 定位托管 Clang。
+    (
+        "caret-ffi",
+        &["caret-app", "caret-foundation", "caret-build"],
+    ),
     (
         "caret-launcher",
         &["caret-ffi", "caret-build", "caret-dsl-core"],
