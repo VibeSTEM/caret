@@ -56,6 +56,7 @@
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <qcontainerfwd.h>
 #include <qtestcase.h>
@@ -227,6 +228,13 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     invalid_clip_frame.insert(QStringLiteral("shapes"), QVariantList{invalid_clip_shape});
     canvas->setGlyphFrames(QVariantList{invalid_clip_frame});
     QCOMPARE(canvas->glyphFrames(), accepted_glyph_frames);
+    QVariantMap invalid_line_shape =
+        decoration_only_request.value(QStringLiteral("shapes")).toList().first().toMap();
+    invalid_line_shape.insert(QStringLiteral("widthPt"), -1.0);
+    QVariantMap invalid_line_frame = decoration_only_request;
+    invalid_line_frame.insert(QStringLiteral("shapes"), QVariantList{invalid_line_shape});
+    canvas->setGlyphFrames(QVariantList{invalid_line_frame});
+    QCOMPARE(canvas->glyphFrames(), accepted_glyph_frames);
     QVERIFY(!canvas->pageSizesPt().isEmpty());
     QQuickWindow window;
     window.resize(1000, 1200);
@@ -330,6 +338,7 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
                                                        {QStringLiteral("paintOrder"), 0},
                                                    }});
     canvas->setGlyphFrames(QVariantList{ordered_frame});
+    QPoint glyph_ink_pixel(-1, -1);
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&]() {
             const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
@@ -342,8 +351,8 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             const QRect region(qFloor(origin.x() * scale_x), qFloor(origin.y() * scale_y),
                                qCeil(glyph_width * raster_scale * scale_x),
                                qCeil(glyph_height * raster_scale * scale_y));
-            const QImage pixels =
-                frame.copy(region.intersected(frame.rect())).convertToFormat(QImage::Format_ARGB32);
+            const QRect visible_region = region.intersected(frame.rect());
+            const QImage pixels = frame.copy(visible_region).convertToFormat(QImage::Format_ARGB32);
             if (pixels.isNull()) {
                 return false;
             }
@@ -352,9 +361,37 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             const bool saw_fill = std::any_of(pixel_begin, pixel_end, [](QRgb pixel) {
                 return qGreen(pixel) > 170 && qRed(pixel) < 100;
             });
-            const bool saw_ink =
-                std::any_of(pixel_begin, pixel_end, [](QRgb pixel) { return qGray(pixel) < 120; });
-            return saw_fill && saw_ink;
+            const auto ink_pixel =
+                std::find_if(pixel_begin, pixel_end, [](QRgb pixel) { return qGray(pixel) < 120; });
+            if (!saw_fill || ink_pixel == pixel_end || pixels.width() <= 0) {
+                return false;
+            }
+            const qsizetype ink_index = std::distance(pixel_begin, ink_pixel);
+            glyph_ink_pixel =
+                visible_region.topLeft() + QPoint(static_cast<int>(ink_index % pixels.width()),
+                                                  static_cast<int>(ink_index / pixels.width()));
+            return true;
+        }()),
+        3000);
+
+    QVariantMap overlay_shape =
+        ordered_frame.value(QStringLiteral("shapes")).toList().first().toMap();
+    overlay_shape.insert(QStringLiteral("paintOrder"),
+                         QVariant::fromValue<qulonglong>(std::numeric_limits<qulonglong>::max()));
+    ordered_frame.insert(QStringLiteral("shapes"), QVariantList{overlay_shape});
+    canvas->setGlyphFrames(QVariantList{ordered_frame});
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull()) {
+                return false;
+            }
+            if (glyph_ink_pixel.x() < 0 || glyph_ink_pixel.y() < 0 ||
+                glyph_ink_pixel.x() >= frame.width() || glyph_ink_pixel.y() >= frame.height()) {
+                return false;
+            }
+            const QRgb pixel = frame.pixel(glyph_ink_pixel);
+            return qGreen(pixel) > 170 && qRed(pixel) < 100 && qBlue(pixel) < 100;
         }()),
         3000);
 

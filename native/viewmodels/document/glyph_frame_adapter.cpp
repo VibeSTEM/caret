@@ -151,6 +151,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
         if (shape.kind > 1 || !std::isfinite(shape.x_pt) || !std::isfinite(shape.y_pt) ||
             !std::isfinite(shape.dx_pt) || !std::isfinite(shape.dy_pt) ||
             !std::isfinite(shape.width_pt) || !std::isfinite(shape.height_pt) ||
+            shape.width_pt < 0.0 || shape.height_pt < 0.0 ||
             !std::isfinite(shape.stroke_width_pt) || shape.stroke_width_pt < 0.0 ||
             (shape.kind == 0 && (!shape.stroke_enabled || shape.stroke_width_pt <= 0.0)) ||
             (shape.kind == 1 && (shape.width_pt <= 0.0 || shape.height_pt <= 0.0)) ||

@@ -63,6 +63,7 @@
 | 2026-11-06 | 本机 Rust：`cargo clippy --locked -p caret-layout --all-targets -- -D warnings`；`cargo clippy --locked -p caret-layout -p caret-engine --all-targets -- -D warnings` | 分页 crate 与相关 crate 全目标 lint 通过 | caret-layout 单 crate 通过。跨两个 crate 未通过：`page_glyphs.rs` 的 `append_math_items` 参数过多；`layout/tests.rs` 新增用例触发 5 项 `expect_used`。这些诊断在本次任务文件范围外，待相应实现整合后复验。 |
 | 2026-11-06 | 本机 Rust：对本次四个 Rust 文件运行 `rustfmt --edition 2024 --check` | 本次修改格式符合 rustfmt | 通过。仓库级 `cargo fmt --all -- --check` 另报告 `layout/tests.rs` 与 `lib.rs` 的格式差异，未在本次限定范围内修改。 |
 | 2026-11-06 | 本机：`cargo test --workspace --locked --offline`、`cargo lint --check`、`cargo format --check` | 页面图元、行内映射、跨层绘制与仓库检查通过 | 通过；包括 native CTest 9/9，像素用例验证不透明填色下字形可见及裁剪边界内的部分描边可见。`cargo quality` 的 advisory DB 检查因沙箱对宿主锁文件只读未完成，详见 068。 |
+| 2026-11-07 | 本机 C++：`cargo format --changed --check`；`cargo lint clang-tidy --changed --check`；`cargo lint includes --changed --check`；`cargo lint cppcheck --changed --check`；`CARET_TEST_CTEST_LABELS='^(qml)$' cargo test --locked -p caret-tests --test native` | 图元帧尺寸校验一致；更新 paint order 后 QSG 覆盖顺序正确 | 通过：macOS arm64 的 Qt offscreen 环境中，QML/Shell 相关 CTest 3/3；格式及三项 C++ lint 通过；独立 Terra 领域审查与 Sol final review 通过。未验证 Windows 和 macOS 桌面窗口环境。 |
 | — | 数学 `.cdoc` 与 `DocumentSession` 黑盒往返 | 三类公式真实保存、重开、字段保留；失败不覆盖原文件/会话 | 未执行 |
 | — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
 | — | 公式布局基准 | 记录输入、构建与缓存条件 | 未执行 |
