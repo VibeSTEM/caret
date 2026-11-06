@@ -5,5 +5,6 @@
 | 谁持有数据、命令怎么跑 | [运行时](runtime.md) |
 | 目标目录 | [仓库结构](repository-layout.md) |
 | 编辑器专有的技术选择 | [技术选择](tech-stack.md) |
+| `.pa` DSL 的定位与稳定边界 | [DSL 架构](dsl.md) |
 
-工具链、Qt、QML 组件和 DSL 的规则在[技术规范](../../standards/README.md)，这里不重复版本表。
+工具链、Qt、QML 组件和 DSL 的具体规则在[技术规范](../../standards/README.md)，这里不重复版本表。

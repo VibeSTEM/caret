@@ -167,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "caret-app",
  "caret-build",
+ "caret-foundation",
  "cxx",
  "cxx-build",
  "serde_json",

@@ -1,6 +1,6 @@
 # 运行时
 
-更新日期：2026-10-30。`caret-engine` 已实现 `Session`、UTF-8 位置、基础文本/IME 命令及编辑历史；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。结构索引在结构事务提交后重建。按段落修订的增量布局缓存仍由后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
+更新日期：2026-11-06。`caret-engine` 已实现 `Session`、UTF-8 位置、基础文本/IME 命令及编辑历史；Session 按文本编辑、导航、IME composition 分在 `editing/session/`，外部仍通过 `Session::run` 执行命令。结构索引在结构事务提交后重建。按段落修订的增量布局缓存仍由后续任务推进。路径、设置、语言、主题和运行时上下文在 `caret-app`。
 
 ## 权威与派生
 
@@ -17,6 +17,12 @@
 鼠标 hover 和按下后的拖选预览留在 C++ 画布。鼠标释放时，画布把最终插入点或选区作为导航更新提交到 Rust；`Session` 始终保存已提交的选区。
 
 派生数据可以整份丢掉再算。丢了 `Document` 就不能算回来。
+
+## 崩溃处理
+
+`caret-foundation` 提供进程级崩溃记录，不处理 Qt 的常规 `qWarning` / `qCritical` 消息。`caret-ffi` 暴露安全安装入口；native `main` 在处理参数和构造 `QGuiApplication` 之前安装处理器。安装时在系统临时目录预建日志文件；崩溃时向 `stderr` 和该文件写出进程异常信息，POSIX 尝试 best-effort 回溯，Windows 继续交给 WER。安装失败时 native 入口直接向 `stderr` 输出诊断并继续启动。Qt 的常规消息仍走 Qt 默认消息处理器。
+
+架构整理任务 040 曾移除未使用的 workspace dependency 别名并保留崩溃能力；2026-11-06 按 issue #76 的建议将处理器接入 native 启动路径。
 
 ## 会话
 
