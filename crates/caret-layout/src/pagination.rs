@@ -46,7 +46,21 @@ impl<'a> ParagraphPaginationInput<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum PaginationItem<'a> {
     Paragraph(ParagraphPaginationInput<'a>),
+    MathBlock(MathBlockPaginationInput<'a>),
     ExplicitPageBreak,
+}
+
+/// 一个不拆分的显示公式分页输入。
+#[derive(Debug, Clone, Copy)]
+pub struct MathBlockPaginationInput<'a> {
+    /// 文档中显示公式的稳定节点 ID。
+    pub math_id: &'a NodeId,
+    /// 相对页面版心左上角的水平偏移，单位为 pt。
+    pub x_offset_pt: f32,
+    /// 公式盒宽度，单位为 pt；必须有限且非负。
+    pub width_pt: f32,
+    /// 公式盒高度，单位为 pt；必须有限且非负。
+    pub height_pt: f32,
 }
 
 /// 一段连续行在页面上的引用；正文仍留在文档模型中。
@@ -57,10 +71,27 @@ pub struct ParagraphFragment {
     pub y_offset_pt: f32,
 }
 
+/// 一个页面中的显示公式片段；公式以自身 MathBox 坐标绘制。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathBlockFragment {
+    /// 文档中显示公式的稳定节点 ID。
+    pub math_id: NodeId,
+    /// 相对页面版心左上角的水平偏移，单位为 pt。
+    pub x_offset_pt: f32,
+    /// 相对页面版心顶部的垂直偏移，单位为 pt。
+    pub y_offset_pt: f32,
+    /// 公式盒宽度，单位为 pt。
+    pub width_pt: f32,
+    /// 公式盒高度，单位为 pt。
+    pub height_pt: f32,
+}
+
 /// 一个页面上的段落行片段及其推进高度。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PageLayout {
     pub fragments: Vec<ParagraphFragment>,
+    /// 本页显示公式片段；位置相对版心，公式不跨页拆分。
+    pub math_fragments: Vec<MathBlockFragment>,
     pub used_height_pt: f32,
 }
 
@@ -70,6 +101,7 @@ pub enum PaginationError {
     InvalidPageHeight,
     InvalidParagraphSpacing,
     InvalidLineHeight,
+    InvalidMathBlock,
 }
 
 impl std::fmt::Display for PaginationError {
@@ -78,6 +110,7 @@ impl std::fmt::Display for PaginationError {
             Self::InvalidPageHeight => "layout.invalid_page_height",
             Self::InvalidParagraphSpacing => "layout.invalid_paragraph_spacing",
             Self::InvalidLineHeight => "layout.invalid_line_height",
+            Self::InvalidMathBlock => "layout.invalid_math_block",
         };
         formatter.write_str(message)
     }
@@ -102,10 +135,47 @@ pub fn paginate_paragraphs(
     let keep_group_heights = build_keep_group_heights(items);
 
     for (item_index, item) in items.iter().enumerate() {
-        let PaginationItem::Paragraph(paragraph) = item else {
-            pages.push(PageLayout::default());
-            previous_space_after_pt = 0.0;
-            continue;
+        let paragraph = match item {
+            PaginationItem::ExplicitPageBreak => {
+                pages.push(PageLayout::default());
+                previous_space_after_pt = 0.0;
+                continue;
+            }
+            PaginationItem::MathBlock(math) => {
+                if !math.x_offset_pt.is_finite()
+                    || !math.width_pt.is_finite()
+                    || !math.height_pt.is_finite()
+                    || math.width_pt < 0.0
+                    || math.height_pt < 0.0
+                {
+                    return Err(PaginationError::InvalidMathBlock);
+                }
+                // 不让换页分支掩盖版面累计值与新公式相加时的浮点溢出。
+                if !current_page(&pages)
+                    .is_some_and(|page| (page.used_height_pt + math.height_pt).is_finite())
+                {
+                    return Err(PaginationError::InvalidMathBlock);
+                }
+                if current_page(&pages).is_some_and(page_has_content)
+                    && current_page(&pages)
+                        .is_some_and(|page| page.used_height_pt + math.height_pt > page_height_pt)
+                {
+                    pages.push(PageLayout::default());
+                }
+                let page = pages.last_mut().ok_or(PaginationError::InvalidMathBlock)?;
+                let y_offset_pt = page.used_height_pt;
+                page.math_fragments.push(MathBlockFragment {
+                    math_id: math.math_id.clone(),
+                    x_offset_pt: math.x_offset_pt,
+                    y_offset_pt,
+                    width_pt: math.width_pt,
+                    height_pt: math.height_pt,
+                });
+                page.used_height_pt += math.height_pt;
+                previous_space_after_pt = 0.0;
+                continue;
+            }
+            PaginationItem::Paragraph(paragraph) => paragraph,
         };
         if !paragraph.space_before_pt.is_finite()
             || !paragraph.space_after_pt.is_finite()
@@ -126,25 +196,22 @@ pub fn paginate_paragraphs(
             return Err(PaginationError::InvalidLineHeight);
         }
 
-        if paragraph.page_break_before
-            && current_page(&pages).is_some_and(|page| !page.fragments.is_empty())
-        {
+        if paragraph.page_break_before && current_page(&pages).is_some_and(page_has_content) {
             pages.push(PageLayout::default());
             previous_space_after_pt = 0.0;
         }
 
         let mut line_index = 0;
-        let mut pending_space_pt =
-            if current_page(&pages).is_some_and(|page| !page.fragments.is_empty()) {
-                previous_space_after_pt.max(paragraph.space_before_pt)
-            } else {
-                0.0
-            };
+        let mut pending_space_pt = if current_page(&pages).is_some_and(page_has_content) {
+            previous_space_after_pt.max(paragraph.space_before_pt)
+        } else {
+            0.0
+        };
 
         if is_keep_group_leader(items, item_index, paragraph)
             && let Some(Some(group_height)) = keep_group_heights.get(item_index)
             && let Some(page) = current_page(&pages)
-            && !page.fragments.is_empty()
+            && page_has_content(page)
             && page.used_height_pt + pending_space_pt + group_height > page_height_pt
         {
             pages.push(PageLayout::default());
@@ -160,7 +227,7 @@ pub fn paginate_paragraphs(
                 .sum::<f32>();
             if paragraph_height <= page_height_pt
                 && let Some(page) = current_page(&pages)
-                && !page.fragments.is_empty()
+                && page_has_content(page)
                 && page.used_height_pt + pending_space_pt + paragraph_height > page_height_pt
             {
                 pages.push(PageLayout::default());
@@ -180,7 +247,7 @@ pub fn paginate_paragraphs(
             for line in remaining_lines {
                 if page.used_height_pt + fitting_height_pt + line.metrics.height_pt > page_height_pt
                 {
-                    if fitting_lines == 0 && page.fragments.is_empty() {
+                    if fitting_lines == 0 && !page_has_content(page) {
                         fitting_lines = 1;
                     }
                     break;
@@ -201,7 +268,7 @@ pub fn paginate_paragraphs(
                 .is_some_and(|fragment| fragment.paragraph_id == *paragraph.paragraph_id);
             let mut lines_to_place = fitting_lines;
             if paragraph.widow_orphan_control && fitting_lines < remaining_count {
-                if fitting_lines == 1 && !page_has_paragraph && !page.fragments.is_empty() {
+                if fitting_lines == 1 && !page_has_paragraph && page_has_content(page) {
                     pages.push(PageLayout::default());
                     pending_space_pt = 0.0;
                     continue;
@@ -215,7 +282,7 @@ pub fn paginate_paragraphs(
                     let candidate = fitting_lines.saturating_sub(1);
                     if candidate > 0 && previous_fragment_lines + candidate >= 2 {
                         lines_to_place = candidate;
-                    } else if !page.fragments.is_empty()
+                    } else if page_has_content(page)
                         && (!page_has_paragraph || previous_fragment_lines >= 2)
                     {
                         pages.push(PageLayout::default());
@@ -335,6 +402,10 @@ fn build_keep_group_heights(items: &[PaginationItem<'_>]) -> Vec<Option<f32>> {
 
 fn current_page(pages: &[PageLayout]) -> Option<&PageLayout> {
     pages.last()
+}
+
+fn page_has_content(page: &PageLayout) -> bool {
+    !page.fragments.is_empty() || !page.math_fragments.is_empty()
 }
 
 #[cfg(test)]

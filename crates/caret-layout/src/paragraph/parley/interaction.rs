@@ -190,6 +190,27 @@ impl ParleyParagraphLayout {
             return None;
         }
         let raw_y = raw_top + raw_height / 2.0;
+        if let Some((source_range, logical_start)) = self.inline_object_at_point(x, line_index) {
+            let byte_index = if logical_start {
+                source_range.start
+            } else {
+                source_range.end
+            };
+            let affinity = if logical_start {
+                VisualAffinity::Downstream
+            } else {
+                VisualAffinity::Upstream
+            };
+            let cursor = self.cursor_at(byte_index, affinity)?;
+            return Some(ParagraphHit {
+                cursor,
+                logical_affinity: if logical_start {
+                    HitAffinity::Downstream
+                } else {
+                    HitAffinity::Upstream
+                },
+            });
+        }
         let raw = Cursor::from_point(&self.layout, x, raw_y);
         let raw_index = raw.index();
         let (byte_index, logical_affinity) = match (
@@ -273,23 +294,52 @@ impl ParleyParagraphLayout {
         );
         let focus =
             parley::editing::Cursor::from_byte_index(&self.layout, end, parley::Affinity::Upstream);
-        Some(
-            parley::editing::Selection::new(anchor, focus)
-                .geometry(&self.layout)
-                .into_iter()
-                .map(|(mut bounds, line_index)| {
-                    if let (Some(line_top), Some(line)) = (
-                        self.line_box_tops_pt.get(line_index),
-                        self.paragraph.lines.get(line_index),
-                    ) {
-                        // 选区背景使用共享行框，而不是 Parley 按实际字形返回的 run 边界。
-                        bounds.y0 = f64::from(*line_top);
-                        bounds.y1 = bounds.y0 + f64::from(line.metrics.height_pt);
-                    }
-                    (bounds, line_index)
-                })
-                .collect(),
-        )
+        let mut rectangles = parley::editing::Selection::new(anchor, focus)
+            .geometry(&self.layout)
+            .into_iter()
+            .map(|(mut bounds, line_index)| {
+                if let (Some(line_top), Some(line)) = (
+                    self.line_box_tops_pt.get(line_index),
+                    self.paragraph.lines.get(line_index),
+                ) {
+                    // 选区背景使用共享行框，而不是 Parley 按实际字形返回的 run 边界。
+                    bounds.y0 = f64::from(*line_top);
+                    bounds.y1 = bounds.y0 + f64::from(line.metrics.height_pt);
+                }
+                (bounds, line_index)
+            })
+            .collect::<Vec<_>>();
+        for (id, object_range) in &self.inline_object_source_ranges {
+            if start > object_range.start || object_range.end > end {
+                continue;
+            }
+            let Some((line_index, inline_box)) = self.positioned_inline_box(*id) else {
+                continue;
+            };
+            let (Some(line_top), Some(line)) = (
+                self.line_box_tops_pt.get(line_index),
+                self.paragraph.lines.get(line_index),
+            ) else {
+                continue;
+            };
+            let bounds = parley::BoundingBox::new(
+                f64::from(inline_box.x),
+                f64::from(*line_top),
+                f64::from(inline_box.x + inline_box.width),
+                f64::from(*line_top + line.metrics.height_pt),
+            );
+            if !rectangles.iter().any(|(existing, existing_line)| {
+                *existing_line == line_index && existing.x0 <= bounds.x0 && existing.x1 >= bounds.x1
+            }) {
+                rectangles.push((bounds, line_index));
+            }
+        }
+        rectangles.sort_by(|(left, left_line), (right, right_line)| {
+            left_line
+                .cmp(right_line)
+                .then_with(|| left.x0.total_cmp(&right.x0))
+        });
+        Some(rectangles)
     }
 
     /// 返回可见文字的选区几何；段落及软换行符本身不产生高亮矩形。
@@ -392,6 +442,25 @@ impl ParleyParagraphLayout {
         cursor: VisualCursor,
         width_pt: f32,
     ) -> Option<(parley::BoundingBox, usize)> {
+        if let Some((line_index, edge_x)) = self.inline_object_cursor_edge(cursor) {
+            let line = self.layout.get(line_index)?;
+            let metrics = line.metrics();
+            let raw_top = metrics.block_min_coord.min(metrics.content_block_min_coord);
+            let raw_bottom = metrics.block_max_coord.max(metrics.content_block_max_coord);
+            let offset = f64::from(
+                self.line_top_offsets_pt.get(line_index)?
+                    + self.baseline_adjustments_pt.get(line_index)?,
+            );
+            return Some((
+                parley::BoundingBox::new(
+                    f64::from(edge_x),
+                    f64::from(raw_top) + offset,
+                    f64::from(edge_x + width_pt),
+                    f64::from(raw_bottom) + offset,
+                ),
+                line_index,
+            ));
+        }
         let cursor = self.to_parley_cursor(cursor);
         if self.layout.text_len() == 0
             && let Some(line) = self.paragraph.lines.first()
@@ -449,6 +518,86 @@ impl ParleyParagraphLayout {
                 VisualAffinity::Downstream => parley::Affinity::Downstream,
             },
         )
+    }
+
+    fn inline_object_at_point(&self, x: f32, line_index: usize) -> Option<(Range<usize>, bool)> {
+        let line = self.layout.get(line_index)?;
+        for item in line.items() {
+            let PositionedLayoutItem::InlineBox(inline_box) = item else {
+                continue;
+            };
+            if x < inline_box.x || x > inline_box.x + inline_box.width {
+                continue;
+            }
+            let source_range = self
+                .inline_object_source_ranges
+                .iter()
+                .find(|(id, _)| *id == inline_box.id)
+                .map(|(_, range)| range.clone())?;
+            let rtl = self.inline_object_is_rtl(inline_box.id, &source_range);
+            let visual_left = x < inline_box.x + inline_box.width / 2.0;
+            return Some((source_range, visual_left != rtl));
+        }
+        None
+    }
+
+    fn positioned_inline_box(&self, id: u64) -> Option<(usize, parley::PositionedInlineBox)> {
+        for (line_index, line) in self.layout.lines().enumerate() {
+            for item in line.items() {
+                if let PositionedLayoutItem::InlineBox(inline_box) = item
+                    && inline_box.id == id
+                {
+                    return Some((line_index, inline_box));
+                }
+            }
+        }
+        None
+    }
+
+    fn inline_object_cursor_edge(&self, cursor: VisualCursor) -> Option<(usize, f32)> {
+        let byte_index = cursor.byte_index();
+        let object = match cursor.affinity() {
+            VisualAffinity::Downstream => self
+                .inline_object_source_ranges
+                .iter()
+                .find(|(_, range)| range.start == byte_index),
+            VisualAffinity::Upstream => self
+                .inline_object_source_ranges
+                .iter()
+                .find(|(_, range)| range.end == byte_index),
+        }?;
+        let (id, range) = object;
+        let (line_index, inline_box) = self.positioned_inline_box(*id)?;
+        let rtl = self.inline_object_is_rtl(*id, range);
+        let logical_start = cursor.affinity() == VisualAffinity::Downstream;
+        let visual_left = logical_start != rtl;
+        Some((
+            line_index,
+            if visual_left {
+                inline_box.x
+            } else {
+                inline_box.x + inline_box.width
+            },
+        ))
+    }
+
+    fn inline_object_is_rtl(&self, id: u64, source_range: &Range<usize>) -> bool {
+        for line in self.layout.lines() {
+            let contains_object = line.items().any(|item| {
+                matches!(item, PositionedLayoutItem::InlineBox(inline_box) if inline_box.id == id)
+            });
+            if !contains_object {
+                continue;
+            }
+            if let Some(run) = line.runs().find(|run| {
+                let range = run.text_range();
+                range.start <= source_range.start && source_range.end <= range.end
+            }) {
+                return run.is_rtl();
+            }
+            return self.layout.is_rtl();
+        }
+        self.layout.is_rtl()
     }
 
     fn from_parley_cursor(cursor: parley::editing::Cursor) -> VisualCursor {

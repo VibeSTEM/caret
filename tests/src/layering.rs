@@ -14,20 +14,40 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
     ("caret-foundation", &[]),
     ("caret-build", &[]),
     ("caret-dsl-core", &[]),
-    ("caret-code", &[]),
-    ("caret-doc", &[]),
+    ("caret-font-roles", &[]),
+    ("caret-doc", &["caret-foundation"]),
+    ("caret-grid-layout", &[]),
     // caret-math 解析与布局都直接读写 caret-doc 的数学树。
-    ("caret-math", &["caret-doc"]),
-    ("caret-layout", &["caret-code", "caret-doc", "caret-math"]),
+    (
+        "caret-math",
+        &["caret-doc", "caret-font-roles", "caret-grid-layout"],
+    ),
+    (
+        "caret-layout",
+        &["caret-doc", "caret-font-roles", "caret-foundation"],
+    ),
     (
         "caret-engine",
-        &["caret-doc", "caret-layout", "caret-math", "caret-structure"],
+        &[
+            "caret-doc",
+            "caret-font-roles",
+            "caret-layout",
+            "caret-math",
+            "caret-structure",
+            "caret-foundation",
+        ],
     ),
-    ("caret-structure", &["caret-doc"]),
+    ("caret-structure", &["caret-doc", "caret-foundation"]),
     ("caret-dslc", &["caret-dsl-core"]),
     (
         "caret-app",
-        &["caret-code", "caret-engine", "caret-doc", "caret-dsl-core"],
+        &[
+            "caret-engine",
+            "caret-doc",
+            "caret-dsl-core",
+            "caret-font-roles",
+            "caret-foundation",
+        ],
     ),
     ("caret-tests", &["caret-app", "caret-build", "caret-doc"]),
     // 运行时依赖 caret-foundation 安装进程崩溃处理器；build script 使用 caret-build 定位托管 Clang。
@@ -129,11 +149,14 @@ fn validate_cargo_metadata(metadata: &Value) -> Result<BTreeSet<(String, String)
             if !workspace_names.contains(destination) {
                 continue;
             }
+            let kind = dependency
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("normal");
+            if source == "caret-ffi" && destination == "caret-build" && kind != "build" {
+                return Err("caret-ffi -> caret-build 仅允许 build script 依赖".to_owned());
+            }
             if !allowed.contains(&destination) {
-                let kind = dependency
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("normal");
                 return Err(format!(
                     "禁止的 workspace 依赖边：{source} -> {destination}（{kind}）"
                 ));
@@ -228,5 +251,33 @@ mod tests {
             "unregistered workspace crate unexpectedly passed"
         );
         assert!(error.err().unwrap_or_default().contains("caret-new-crate"));
+    }
+
+    #[test]
+    fn caret_ffi_can_use_caret_build_only_from_its_build_script() {
+        let build_dependency = json!({
+            "workspace_members": ["ffi-id", "build-id"],
+            "packages": [
+                {"id": "ffi-id", "name": "caret-ffi", "dependencies": [
+                    {"name": "caret-build", "kind": "build"}
+                ]},
+                {"id": "build-id", "name": "caret-build", "dependencies": []}
+            ]
+        });
+        assert!(validate_cargo_metadata(&build_dependency).is_ok());
+
+        let runtime_dependency = json!({
+            "workspace_members": ["ffi-id", "build-id"],
+            "packages": [
+                {"id": "ffi-id", "name": "caret-ffi", "dependencies": [
+                    {"name": "caret-build", "kind": null}
+                ]},
+                {"id": "build-id", "name": "caret-build", "dependencies": []}
+            ]
+        });
+        let result = validate_cargo_metadata(&runtime_dependency);
+        assert!(result.is_err());
+        let error = result.err().unwrap_or_default();
+        assert!(error.contains("仅允许 build script"));
     }
 }

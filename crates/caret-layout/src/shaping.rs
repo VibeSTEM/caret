@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use caret_doc::{FlowContent, InlineEnvironmentKind, Paragraph, ParagraphContent, TextFlow};
+pub use caret_font_roles::FontRole;
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
@@ -19,14 +20,6 @@ pub struct ShapingStyle {
     pub bold: bool,
     pub italic: bool,
     pub language: Option<String>,
-}
-
-/// 文字的语义字体角色；代码块等宽策略由布局层统一解析。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum FontRole {
-    #[default]
-    Body,
-    Code,
 }
 
 impl ShapingStyle {

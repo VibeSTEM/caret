@@ -90,10 +90,10 @@ name = "caret-app"
 version = "0.1.0"
 dependencies = [
  "base64",
- "caret-code",
  "caret-doc",
  "caret-dsl-core",
  "caret-engine",
+ "caret-font-roles",
  "criterion",
  "fs4",
  "serde",
@@ -113,10 +113,6 @@ dependencies = [
  "sha2",
  "shlex",
 ]
-
-[[package]]
-name = "caret-code"
-version = "0.1.0"
 
 [[package]]
 name = "caret-doc"
@@ -151,10 +147,12 @@ name = "caret-engine"
 version = "0.1.0"
 dependencies = [
  "caret-doc",
+ "caret-font-roles",
  "caret-layout",
  "caret-math",
  "caret-structure",
  "criterion",
+ "fontique",
  "serde",
  "serde_json",
  "undo",
@@ -174,11 +172,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "caret-font-roles"
+version = "0.1.0"
+
+[[package]]
 name = "caret-foundation"
 version = "0.1.0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "caret-grid-layout"
+version = "0.1.0"
 
 [[package]]
 name = "caret-launcher"
@@ -193,9 +199,8 @@ dependencies = [
 name = "caret-layout"
 version = "0.1.0"
 dependencies = [
- "caret-code",
  "caret-doc",
- "caret-math",
+ "caret-font-roles",
  "criterion",
  "fontique",
  "icu_locale_core",
@@ -214,6 +219,8 @@ name = "caret-math"
 version = "0.1.0"
 dependencies = [
  "caret-doc",
+ "caret-font-roles",
+ "caret-grid-layout",
  "read-fonts 0.45.0",
  "serde_json",
  "skrifa",

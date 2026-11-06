@@ -105,6 +105,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_placement")}};
         }
         placements.push_back(QVariantMap{
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(placement.paint_order)},
             {QStringLiteral("imageIndex"), placement.image_index},
             {QStringLiteral("xPt"), placement.x_pt},
             {QStringLiteral("baselineYPt"), placement.baseline_y_pt},
@@ -130,6 +131,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
         }
         decorations.push_back(QVariantMap{
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(decoration.paint_order)},
             {QStringLiteral("xPt"), decoration.x_pt},
             {QStringLiteral("yPt"), decoration.y_pt},
             {QStringLiteral("widthPt"), decoration.width_pt},
@@ -143,6 +145,46 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
             {QStringLiteral("clipY1Pt"), decoration.clip_y1_pt},
         });
     }
+    QVariantList shapes;
+    shapes.reserve(static_cast<qsizetype>(frame.shapes.size()));
+    for (const auto& shape : frame.shapes) {
+        if (shape.kind > 1 || !std::isfinite(shape.x_pt) || !std::isfinite(shape.y_pt) ||
+            !std::isfinite(shape.dx_pt) || !std::isfinite(shape.dy_pt) ||
+            !std::isfinite(shape.width_pt) || !std::isfinite(shape.height_pt) ||
+            !std::isfinite(shape.stroke_width_pt) || shape.stroke_width_pt < 0.0 ||
+            (shape.kind == 0 && (!shape.stroke_enabled || shape.stroke_width_pt <= 0.0)) ||
+            (shape.kind == 1 && (shape.width_pt <= 0.0 || shape.height_pt <= 0.0)) ||
+            (shape.clip_enabled &&
+             (!std::isfinite(shape.clip_y0_pt) || !std::isfinite(shape.clip_y1_pt) ||
+              shape.clip_y0_pt < 0.0 || shape.clip_y1_pt <= shape.clip_y0_pt))) {
+            return {{QStringLiteral("valid"), false},
+                    {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_shape")}};
+        }
+        shapes.push_back(QVariantMap{
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(shape.paint_order)},
+            {QStringLiteral("kind"), shape.kind},
+            {QStringLiteral("xPt"), shape.x_pt},
+            {QStringLiteral("yPt"), shape.y_pt},
+            {QStringLiteral("dxPt"), shape.dx_pt},
+            {QStringLiteral("dyPt"), shape.dy_pt},
+            {QStringLiteral("widthPt"), shape.width_pt},
+            {QStringLiteral("heightPt"), shape.height_pt},
+            {QStringLiteral("fillEnabled"), shape.fill_enabled},
+            {QStringLiteral("fillRed"), shape.fill_red},
+            {QStringLiteral("fillGreen"), shape.fill_green},
+            {QStringLiteral("fillBlue"), shape.fill_blue},
+            {QStringLiteral("fillAlpha"), shape.fill_alpha},
+            {QStringLiteral("strokeEnabled"), shape.stroke_enabled},
+            {QStringLiteral("strokeRed"), shape.stroke_red},
+            {QStringLiteral("strokeGreen"), shape.stroke_green},
+            {QStringLiteral("strokeBlue"), shape.stroke_blue},
+            {QStringLiteral("strokeAlpha"), shape.stroke_alpha},
+            {QStringLiteral("strokeWidthPt"), shape.stroke_width_pt},
+            {QStringLiteral("clipEnabled"), shape.clip_enabled},
+            {QStringLiteral("clipY0Pt"), shape.clip_y0_pt},
+            {QStringLiteral("clipY1Pt"), shape.clip_y1_pt},
+        });
+    }
     return {{QStringLiteral("valid"), true},
             {QStringLiteral("documentGeneration"), QString::number(frame.document_generation)},
             {QStringLiteral("fontGeneration"), QString::number(frame.font_generation)},
@@ -150,7 +192,8 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
             {QStringLiteral("pageIndex"), frame.page_index},
             {QStringLiteral("images"), images},
             {QStringLiteral("placements"), placements},
-            {QStringLiteral("decorations"), decorations}};
+            {QStringLiteral("decorations"), decorations},
+            {QStringLiteral("shapes"), shapes}};
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(px_per_pt)

@@ -3,13 +3,14 @@ resolver = "3"
 members = [
     "crates/caret-app",
     "crates/caret-build",
-    "crates/caret-code",
     "crates/caret-doc",
     "crates/caret-dsl-core",
     "crates/caret-dslc",
     "crates/caret-engine",
     "crates/caret-ffi",
     "crates/caret-foundation",
+    "crates/caret-font-roles",
+    "crates/caret-grid-layout",
     "crates/caret-layout",
     "crates/caret-math",
     "crates/caret-structure",
@@ -34,7 +35,6 @@ libc = "0.2"
 base64 = "0.23.1"
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 caret-app = { path = "crates/caret-app", version = "0.1.0" }
-caret-code = { path = "crates/caret-code", version = "0.1.0" }
 caret-doc = { path = "crates/caret-doc", version = "0.1.0" }
 caret-engine = { path = "crates/caret-engine", version = "0.1.0" }
 caret-build = { path = "crates/caret-build", version = "0.1.0" }
@@ -44,6 +44,8 @@ caret-structure = { path = "crates/caret-structure", version = "0.1.0" }
 caret-dsl-core = { path = "crates/caret-dsl-core", version = "0.1.0" }
 caret-ffi = { path = "crates/caret-ffi", version = "0.1.0" }
 caret-foundation = { path = "crates/caret-foundation", version = "0.1.0" }
+caret-font-roles = { path = "crates/caret-font-roles", version = "0.1.0" }
+caret-grid-layout = { path = "crates/caret-grid-layout", version = "0.1.0" }
 cc = "=1.4.6"
 cxx = "=1.0.202"
 cxx-build = "=1.0.202"

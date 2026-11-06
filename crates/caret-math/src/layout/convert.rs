@@ -131,7 +131,10 @@ impl Converter<'_> {
                 let rows = node
                     .children
                     .iter()
-                    .map(|line| TableRow::Cells(vec![self.node(line, style)]))
+                    .map(|line| TableRow::Cells {
+                        id: None,
+                        cells: vec![self.node(line, style)],
+                    })
                     .collect();
                 let spec = TableSpec {
                     aligns: vec![Align::Center],
@@ -140,7 +143,7 @@ impl Converter<'_> {
                     column_gap: 0.0,
                     row_gap: 0.0,
                 };
-                layout_table(&self.ctx, style, rows, &spec)
+                layout_table(&mut self.ctx, style, rows, &spec)
             }
             K::OverUnder => {
                 let mut base = self.child(node, 0, style);
@@ -565,14 +568,20 @@ impl Converter<'_> {
                         .iter()
                         .map(|cell| self.node(cell, cell_style))
                         .collect();
-                    rows.push(TableRow::Cells(cells));
+                    rows.push(TableRow::Cells {
+                        id: Some(child.id.clone()),
+                        cells,
+                    });
                 }
                 K::Hline => spec.hlines.push(rows.len()),
                 K::Intertext => rows.push(TableRow::Full(self.node(child, cell_style))),
-                _ => rows.push(TableRow::Cells(vec![self.node(child, cell_style)])),
+                _ => rows.push(TableRow::Cells {
+                    id: None,
+                    cells: vec![self.node(child, cell_style)],
+                }),
             }
         }
-        let table = layout_table(&self.ctx, cell_style, rows, &spec);
+        let table = layout_table(&mut self.ctx, cell_style, rows, &spec);
         if left.is_none() && right.is_none() {
             return table;
         }

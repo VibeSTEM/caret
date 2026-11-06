@@ -10,9 +10,10 @@ use parley_engine::{Analysis, AnalysisOptions, Analyzer, BaseDirection};
 
 use crate::shaping::{StyledSpan, boundaries_for_spans};
 use crate::{
-    FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, LineSpacing,
-    ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings, ShapingStyle,
-    UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line, paragraph_has_empty_line,
+    FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, InlineObjectLayout,
+    LineSpacing, ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings,
+    ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line,
+    paragraph_has_empty_line,
 };
 
 fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
@@ -42,8 +43,355 @@ fn font_catalog_includes_the_embedded_code_font() {
     assert!(
         catalog.families().iter().any(|family| family
             .name
-            .eq_ignore_ascii_case(caret_code::BUILTIN_FONT_FAMILY)),
+            .eq_ignore_ascii_case(caret_font_roles::DEFAULT_CODE_FONT_FAMILY)),
         "embedded code font is missing from the selectable catalog"
+    );
+}
+
+#[test]
+fn font_catalog_includes_the_embedded_math_font() {
+    let catalog = FontCatalog::system()
+        .unwrap_or_else(|error| panic!("system font catalog unavailable: {error}"));
+    assert!(catalog.families().iter().any(|family| {
+        family
+            .name
+            .eq_ignore_ascii_case(caret_font_roles::DEFAULT_MATH_FONT_FAMILY)
+    }));
+}
+
+#[test]
+fn inline_object_uses_parley_advance_and_expands_the_shared_line_box() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("a\u{fffc}b", Some("en"));
+    let mut layouter = ParagraphLayouter::new();
+    let (_, plain) = layouter
+        .layout(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(200.0),
+        )
+        .unwrap_or_else(|error| panic!("plain paragraph should lay out: {error}"));
+    let (_, with_object) = layouter
+        .layout_with_inline_objects(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(200.0),
+            &[InlineObjectLayout {
+                id: 42,
+                source_bytes: 1..4,
+                advance_pt: 30.0,
+                ascent_pt: 20.0,
+                descent_pt: 5.0,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("inline object paragraph should lay out: {error}"));
+
+    let line = match with_object.layout.lines().next() {
+        Some(line) => line,
+        None => panic!("paragraph layout should have a line"),
+    };
+    assert!(line.items().any(|item| matches!(item, parley::PositionedLayoutItem::InlineBox(box_item) if box_item.id == 42)));
+    assert!(with_object.paragraph.lines[0].advance_pt > plain.paragraph.lines[0].advance_pt + 20.0);
+    assert!(
+        with_object.paragraph.lines[0].metrics.height_pt
+            > plain.paragraph.lines[0].metrics.height_pt
+    );
+
+    let object = line
+        .items()
+        .find_map(|item| match item {
+            parley::PositionedLayoutItem::InlineBox(box_item) => Some(box_item),
+            parley::PositionedLayoutItem::GlyphRun(_) => None,
+        })
+        .unwrap_or_else(|| panic!("inline object box should be positioned"));
+    let left_hit = with_object
+        .cursor_from_point_on_line(object.x + object.width * 0.25, 0)
+        .unwrap_or_else(|| panic!("left half of inline object should be hit-testable"));
+    let right_hit = with_object
+        .cursor_from_point_on_line(object.x + object.width * 0.75, 0)
+        .unwrap_or_else(|| panic!("right half of inline object should be hit-testable"));
+    assert_eq!(left_hit.cursor.byte_index(), 1);
+    assert_eq!(left_hit.logical_affinity, crate::HitAffinity::Downstream);
+    assert_eq!(right_hit.cursor.byte_index(), 4);
+    assert_eq!(right_hit.logical_affinity, crate::HitAffinity::Upstream);
+    let left_cursor = with_object.cursor_geometry(left_hit.cursor, 0.0);
+    let right_cursor = with_object.cursor_geometry(right_hit.cursor, 0.0);
+    assert!((left_cursor.x0 - f64::from(object.x)).abs() < 0.01);
+    assert!((right_cursor.x0 - f64::from(object.x + object.width)).abs() < 0.01);
+
+    let selection = with_object
+        .selection_geometry(1..4)
+        .unwrap_or_else(|| panic!("formula source range should be selectable"));
+    let formula_selection = selection
+        .iter()
+        .find(|(bounds, _)| {
+            (bounds.x0 - f64::from(object.x)).abs() < 0.01
+                && (bounds.x1 - f64::from(object.x + object.width)).abs() < 0.01
+        })
+        .unwrap_or_else(|| panic!("formula selection should cover its inline box"));
+    assert!(formula_selection.0.y1 > formula_selection.0.y0);
+    assert_eq!(formula_selection.1, 0);
+    assert!((formula_selection.0.y0 - f64::from(with_object.line_box_tops_pt[0])).abs() < 0.01);
+    assert!(
+        (formula_selection.0.y1
+            - formula_selection.0.y0
+            - f64::from(with_object.paragraph.lines[0].metrics.height_pt))
+        .abs()
+            < 0.01
+    );
+
+    let whole_selection = with_object
+        .selection_geometry(0..5)
+        .unwrap_or_else(|| panic!("text and formula selection should be available"));
+    let covering_rectangles = whole_selection
+        .iter()
+        .filter(|(bounds, _)| {
+            bounds.x0 <= f64::from(object.x) && bounds.x1 >= f64::from(object.x + object.width)
+        })
+        .count();
+    assert_eq!(
+        covering_rectangles, 1,
+        "formula selection must not be duplicated"
+    );
+
+    let partial_formula_selection = with_object
+        .selection_geometry(2..3)
+        .unwrap_or_else(|| panic!("partial UTF-8 formula range should be selectable"));
+    let formula_rectangles = partial_formula_selection
+        .iter()
+        .filter(|(bounds, _)| {
+            (bounds.x0 - f64::from(object.x)).abs() < 0.01
+                && (bounds.x1 - f64::from(object.x + object.width)).abs() < 0.01
+        })
+        .count();
+    assert_eq!(
+        formula_rectangles, 1,
+        "partial U+FFFC range selects its formula box"
+    );
+}
+
+#[test]
+fn inline_object_wider_than_line_occupies_an_overflowing_line() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("a\u{fffc}b", Some("en"));
+    let mut layouter = ParagraphLayouter::new();
+    for width_pt in [8.0, 10.0, 20.0] {
+        let (_, layout) = layouter
+            .layout_with_inline_objects(
+                &mut catalog,
+                &text,
+                &settings,
+                &base_style,
+                layout_options(width_pt),
+                &[InlineObjectLayout {
+                    id: 42,
+                    source_bytes: 1..4,
+                    advance_pt: 30.0,
+                    ascent_pt: 20.0,
+                    descent_pt: 5.0,
+                }],
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "an overwide inline object should remain layoutable at {width_pt} pt: {error}"
+                )
+            });
+
+        assert_eq!(
+            layout
+                .paragraph
+                .lines
+                .iter()
+                .map(|line| line.source_bytes.clone())
+                .collect::<Vec<_>>(),
+            [0..1, 1..4, 4..5]
+        );
+        assert!(layout.paragraph.lines[1].overflows_width);
+    }
+}
+
+#[test]
+fn inline_object_caret_affinity_selects_the_object_or_wrapped_neighbor() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("a\u{fffc}b", Some("en"));
+    let mut layouter = ParagraphLayouter::new();
+    let (_, layout) = layouter
+        .layout_with_inline_objects(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(20.0),
+            &[InlineObjectLayout {
+                id: 42,
+                source_bytes: 1..4,
+                advance_pt: 30.0,
+                ascent_pt: 20.0,
+                descent_pt: 5.0,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("layout failed: {error}"));
+    let upstream_before = layout
+        .cursor_at(1, crate::VisualAffinity::Upstream)
+        .and_then(|cursor| layout.cursor_geometry_with_line(cursor, 0.0))
+        .unwrap_or_else(|| panic!("upstream formula boundary should be placeable"));
+    let downstream_before = layout
+        .cursor_at(1, crate::VisualAffinity::Downstream)
+        .and_then(|cursor| layout.cursor_geometry_with_line(cursor, 0.0))
+        .unwrap_or_else(|| panic!("downstream formula boundary should be placeable"));
+    let upstream_after = layout
+        .cursor_at(4, crate::VisualAffinity::Upstream)
+        .and_then(|cursor| layout.cursor_geometry_with_line(cursor, 0.0))
+        .unwrap_or_else(|| panic!("upstream formula end should be placeable"));
+    let downstream_after = layout
+        .cursor_at(4, crate::VisualAffinity::Downstream)
+        .and_then(|cursor| layout.cursor_geometry_with_line(cursor, 0.0))
+        .unwrap_or_else(|| panic!("downstream formula end should be placeable"));
+
+    assert_eq!(upstream_before.1, 0);
+    assert!(upstream_before.0.x0 > 0.0);
+    assert_eq!(downstream_before.1, 1);
+    assert_eq!(downstream_before.0.x0, 0.0);
+    assert_eq!(upstream_after.1, 1);
+    assert_eq!(upstream_after.0.x0, 30.0);
+    assert_eq!(downstream_after.1, 2);
+    assert_eq!(downstream_after.0.x0, 0.0);
+}
+
+#[test]
+fn inline_objects_in_rtl_runs_map_visual_sides_to_logical_edges() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("א\u{fffc}\u{fffc}ב", Some("he"));
+    let mut layouter = ParagraphLayouter::new();
+    let (_, layout) = layouter
+        .layout_with_inline_objects(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(200.0),
+            &[
+                InlineObjectLayout {
+                    id: 42,
+                    source_bytes: 2..5,
+                    advance_pt: 30.0,
+                    ascent_pt: 20.0,
+                    descent_pt: 5.0,
+                },
+                InlineObjectLayout {
+                    id: 43,
+                    source_bytes: 5..8,
+                    advance_pt: 30.0,
+                    ascent_pt: 20.0,
+                    descent_pt: 5.0,
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("RTL inline objects should lay out: {error}"));
+    let line = layout
+        .layout
+        .lines()
+        .next()
+        .unwrap_or_else(|| panic!("RTL paragraph should have a line"));
+    let boxes = line
+        .items()
+        .filter_map(|item| match item {
+            parley::PositionedLayoutItem::InlineBox(box_item) => {
+                Some((box_item.id, box_item.x, box_item.width))
+            }
+            parley::PositionedLayoutItem::GlyphRun(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(boxes.len(), 2);
+
+    for (id, source_start, source_end) in [(42, 2, 5), (43, 5, 8)] {
+        let (_, x, width) = boxes
+            .iter()
+            .find(|(box_id, _, _)| *box_id == id)
+            .copied()
+            .unwrap_or_else(|| panic!("inline box {id} should be positioned"));
+        let visual_left = layout
+            .cursor_from_point_on_line(x + width * 0.25, 0)
+            .unwrap_or_else(|| panic!("left side of RTL formula {id} should be hit-testable"));
+        let visual_right = layout
+            .cursor_from_point_on_line(x + width * 0.75, 0)
+            .unwrap_or_else(|| panic!("right side of RTL formula {id} should be hit-testable"));
+        assert_eq!(visual_left.cursor.byte_index(), source_end);
+        assert_eq!(
+            visual_left.cursor.affinity(),
+            crate::VisualAffinity::Upstream
+        );
+        assert_eq!(visual_left.logical_affinity, crate::HitAffinity::Upstream);
+        assert_eq!(visual_right.cursor.byte_index(), source_start);
+        assert_eq!(
+            visual_right.cursor.affinity(),
+            crate::VisualAffinity::Downstream
+        );
+        assert_eq!(
+            visual_right.logical_affinity,
+            crate::HitAffinity::Downstream
+        );
+        assert!((layout.cursor_geometry(visual_left.cursor, 0.0).x0 - f64::from(x)).abs() < 0.01);
+        assert!(
+            (layout.cursor_geometry(visual_right.cursor, 0.0).x0 - f64::from(x + width)).abs()
+                < 0.01
+        );
+    }
+}
+
+#[test]
+fn duplicate_inline_object_ids_and_ranges_are_rejected_atomically() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("a\u{fffc}\u{fffc}b", Some("en"));
+    let object = |id, source_bytes| InlineObjectLayout {
+        id,
+        source_bytes,
+        advance_pt: 20.0,
+        ascent_pt: 12.0,
+        descent_pt: 4.0,
+    };
+    let mut layouter = ParagraphLayouter::new();
+    for invalid_objects in [
+        vec![object(42, 1..4), object(42, 4..7)],
+        vec![object(42, 1..4), object(43, 1..4)],
+    ] {
+        assert!(matches!(
+            layouter.layout_with_inline_objects(
+                &mut catalog,
+                &text,
+                &settings,
+                &base_style,
+                layout_options(200.0),
+                &invalid_objects,
+            ),
+            Err(crate::ParagraphLayoutError::InconsistentShaping)
+        ));
+    }
+    assert!(
+        layouter
+            .layout_with_inline_objects(
+                &mut catalog,
+                &text,
+                &settings,
+                &base_style,
+                layout_options(200.0),
+                &[object(42, 1..4), object(43, 4..7)],
+            )
+            .is_ok()
     );
 }
 

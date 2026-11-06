@@ -4,12 +4,12 @@
 // 署名：Yuki Lu
 
 use crate::{Affinity, Pos, Selection, Session, StoryId};
-use caret_doc::{Block, Document, DocumentUnits, NodeId, Paragraph};
+use caret_doc::{Block, Document, DocumentUnits, FlowContent, NodeId, Paragraph, ParagraphContent};
 use caret_layout::{
-    FontCatalog, FontCatalogError, PageLayout, PaginationItem, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
-    ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity, paginate_paragraphs,
-    paragraph_has_empty_line, resolve_paragraph_style,
+    FontCatalog, FontCatalogError, InlineObjectLayout, PageLayout, PaginationItem,
+    ParagraphLayoutOptions, ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout,
+    PositionedGlyphLayoutItem, ResolvedDocumentTextSettings, ShapingStyle, VisualAffinity,
+    paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -28,6 +28,7 @@ pub enum DocumentLayoutError {
     UnknownBreakKind(String),
     UnsupportedContent,
     UnsupportedParagraphMarkStyle,
+    Math(String),
 }
 
 impl std::fmt::Display for DocumentLayoutError {
@@ -46,6 +47,7 @@ impl std::fmt::Display for DocumentLayoutError {
             Self::UnsupportedParagraphMarkStyle => {
                 formatter.write_str("layout.unsupported_paragraph_mark_style")
             }
+            Self::Math(error) => write!(formatter, "layout.math: {error}"),
         }
     }
 }
@@ -66,6 +68,8 @@ pub struct LaidOutParagraph {
     pub environment_ids: Arc<[NodeId]>,
     pub text: Arc<str>,
     pub layout: Arc<ParleyParagraphLayout>,
+    /// 行内 MathBox 布局与 Parley inline-box ID 按顺序一一对应。
+    pub inline_math_layouts: Arc<[Arc<caret_math::layout::MathLayout>]>,
     utf16_checkpoints: Arc<[(usize, usize)]>,
     line_locations: Vec<Option<CaretLineLocation>>,
 }
@@ -83,6 +87,7 @@ impl LaidOutParagraph {
         environment_ids: Vec<NodeId>,
         text: String,
         layout: ParleyParagraphLayout,
+        inline_math_layouts: Vec<Arc<caret_math::layout::MathLayout>>,
     ) -> Self {
         let mut utf16_checkpoints = vec![(0, 0)];
         let mut utf16_offset = 0;
@@ -101,6 +106,7 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             text: Arc::from(text),
             layout: Arc::new(layout),
+            inline_math_layouts: Arc::from(inline_math_layouts),
             utf16_checkpoints: Arc::from(utf16_checkpoints),
             line_locations,
         }
@@ -113,6 +119,7 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             text: Arc::clone(&self.text),
             layout: Arc::clone(&self.layout),
+            inline_math_layouts: Arc::clone(&self.inline_math_layouts),
             utf16_checkpoints: Arc::clone(&self.utf16_checkpoints),
             line_locations: vec![None; self.layout.paragraph.lines.len()],
         }
@@ -147,7 +154,7 @@ pub struct PageLayoutSnapshot {
     pub layout: PageLayout,
 }
 
-/// 块级环境在单页上的内容范围，由其标题和子块的实际分页片段合并得到。
+/// 块级环境在单页上的内容范围，由其标题、段落和显示公式的实际分页片段合并得到。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageEnvironmentRange {
     pub environment_id: NodeId,
@@ -168,6 +175,8 @@ pub struct DocumentLayoutSnapshot {
     pub paragraphs: Vec<LaidOutParagraph>,
     pub pages: Vec<PageLayoutSnapshot>,
     pub environment_ranges: Vec<PageEnvironmentRange>,
+    /// 已排版的块级公式，页面片段通过 ID 引用同一份 MathBox。
+    pub math_blocks: HashMap<NodeId, Arc<caret_math::layout::MathLayout>>,
     paragraph_lookup: HashMap<NodeId, usize>,
 }
 
@@ -543,6 +552,7 @@ fn font_size_centipoints(font_size_pt: f32) -> Option<u16> {
 pub struct DocumentLayoutService {
     layouter: ParagraphLayouter,
     line_grid_metrics_cache: Option<LineGridMetricsCache>,
+    math_layout_engine: Option<caret_math::layout::MathLayoutEngine>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -679,8 +689,22 @@ impl DocumentLayoutService {
         let text_settings =
             ResolvedDocumentTextSettings::from_document_settings(&document.global_settings)
                 .map_err(|error| DocumentLayoutError::FontPreferences(error.to_string()))?;
+        if document_contains_math(&document.body) && self.math_layout_engine.is_none() {
+            self.math_layout_engine = Some(
+                caret_math::layout::MathLayoutEngine::new()
+                    .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+            );
+        }
+        let math_engine = self.math_layout_engine.as_ref();
         let mut ordered_inputs = Vec::new();
-        collect_blocks(&document.body, &mut ordered_inputs, &mut Vec::new())?;
+        collect_blocks(
+            &document.body,
+            &mut ordered_inputs,
+            &mut Vec::new(),
+            math_engine,
+            base_style.font_size_centipoints,
+            content_width_pt as f32,
+        )?;
 
         let paragraph_count = ordered_inputs
             .iter()
@@ -721,9 +745,19 @@ impl DocumentLayoutService {
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
             }
+            let (inline_object_layouts, inline_math_layouts) =
+                if let Some(math_engine) = &self.math_layout_engine {
+                    collect_inline_math_layouts(
+                        paragraph,
+                        base_style.font_size_centipoints,
+                        math_engine,
+                    )?
+                } else {
+                    (Vec::new(), Vec::new())
+                };
             let (text, layout) = self
                 .layouter
-                .layout(
+                .layout_with_inline_objects(
                     catalog,
                     paragraph,
                     &text_settings,
@@ -735,6 +769,7 @@ impl DocumentLayoutService {
                         line_grid_font_size_centipoints: base_style.font_size_centipoints,
                         first_line_indent_chars: style.first_line_indent_chars,
                     },
+                    &inline_object_layouts,
                 )
                 .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             resolved_styles.push(style);
@@ -744,11 +779,32 @@ impl DocumentLayoutService {
                 environment_ids.clone(),
                 text,
                 layout,
+                inline_math_layouts,
             ));
         }
 
         let mut pagination_items = Vec::with_capacity(ordered_inputs.len());
         let mut paragraph_index = 0;
+        let math_blocks = ordered_inputs
+            .iter()
+            .filter_map(|item| match item {
+                LayoutInput::MathBlock {
+                    math_id, layout, ..
+                } => Some((math_id.clone(), Arc::clone(layout))),
+                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let math_block_environment_ids = ordered_inputs
+            .iter()
+            .filter_map(|item| match item {
+                LayoutInput::MathBlock {
+                    math_id,
+                    environment_ids,
+                    ..
+                } => Some((math_id.clone(), environment_ids.clone())),
+                LayoutInput::Paragraph { .. } | LayoutInput::ExplicitBreak => None,
+            })
+            .collect::<HashMap<_, _>>();
         for item in ordered_inputs {
             match item {
                 LayoutInput::ExplicitBreak => {
@@ -769,6 +825,30 @@ impl DocumentLayoutService {
                         ),
                     ));
                     paragraph_index += 1;
+                }
+                LayoutInput::MathBlock {
+                    math_id,
+                    x_offset_pt,
+                    width_pt,
+                    height_pt,
+                    ..
+                } => {
+                    let math_id_ref = math_blocks
+                        .get_key_value(&math_id)
+                        .map(|(id, _)| id)
+                        .ok_or_else(|| {
+                            DocumentLayoutError::InvalidDocument(
+                                "missing block math layout".to_owned(),
+                            )
+                        })?;
+                    pagination_items.push(PaginationItem::MathBlock(
+                        caret_layout::MathBlockPaginationInput {
+                            math_id: math_id_ref,
+                            x_offset_pt,
+                            width_pt,
+                            height_pt,
+                        },
+                    ));
                 }
             }
         }
@@ -811,7 +891,12 @@ impl DocumentLayoutService {
                 }
             }
         }
-        let environment_ranges = collect_environment_ranges(&pages, &paragraphs, &paragraph_lookup);
+        let environment_ranges = collect_environment_ranges(
+            &pages,
+            &paragraphs,
+            &paragraph_lookup,
+            &math_block_environment_ids,
+        );
         Ok(DocumentLayoutSnapshot {
             session_id: None,
             document_generation,
@@ -821,6 +906,7 @@ impl DocumentLayoutService {
             paragraphs,
             pages,
             environment_ranges,
+            math_blocks,
         })
     }
 }
@@ -829,6 +915,7 @@ fn collect_environment_ranges(
     pages: &[PageLayoutSnapshot],
     paragraphs: &[LaidOutParagraph],
     paragraph_lookup: &HashMap<NodeId, usize>,
+    math_block_environment_ids: &HashMap<NodeId, Vec<NodeId>>,
 ) -> Vec<PageEnvironmentRange> {
     let mut ranges = HashMap::<(NodeId, usize), (f64, f64)>::new();
     for (page_index, page) in pages.iter().enumerate() {
@@ -866,6 +953,22 @@ fn collect_environment_ranges(
             let y0_pt = first_line.y0_pt;
             let y1_pt = last_line.y0_pt + f64::from(line.metrics.height_pt);
             for environment_id in paragraph.environment_ids.iter() {
+                ranges
+                    .entry((environment_id.clone(), page_index))
+                    .and_modify(|range| {
+                        range.0 = range.0.min(y0_pt);
+                        range.1 = range.1.max(y1_pt);
+                    })
+                    .or_insert((y0_pt, y1_pt));
+            }
+        }
+        for fragment in &page.layout.math_fragments {
+            let Some(environment_ids) = math_block_environment_ids.get(&fragment.math_id) else {
+                continue;
+            };
+            let y0_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+            let y1_pt = y0_pt + f64::from(fragment.height_pt);
+            for environment_id in environment_ids {
                 ranges
                     .entry((environment_id.clone(), page_index))
                     .and_modify(|range| {
@@ -966,6 +1069,138 @@ impl DocumentLayoutRuntime {
     }
 }
 
+fn contains_inline_math(nodes: &[ParagraphContent]) -> bool {
+    nodes.iter().any(|node| match node {
+        FlowContent::Math(_) => true,
+        FlowContent::Environment(environment) => contains_inline_math(&environment.children),
+        FlowContent::Text(_) | FlowContent::SoftBreak(_) | FlowContent::Opaque(_) => false,
+    })
+}
+
+fn document_contains_math(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Paragraph(paragraph) => contains_inline_math(&paragraph.inlines),
+        Block::Environment(environment) => {
+            environment
+                .title
+                .as_ref()
+                .is_some_and(|paragraph| contains_inline_math(&paragraph.inlines))
+                || document_contains_math(&environment.children)
+        }
+        Block::Equation(_) | Block::Align(_) => true,
+        Block::ExplicitBreak(_) | Block::Opaque(_) => false,
+    })
+}
+
+fn collect_inline_math_layouts(
+    paragraph: &Paragraph,
+    font_size_centipoints: u16,
+    engine: &caret_math::layout::MathLayoutEngine,
+) -> Result<
+    (
+        Vec<InlineObjectLayout>,
+        Vec<Arc<caret_math::layout::MathLayout>>,
+    ),
+    DocumentLayoutError,
+> {
+    fn visit(
+        nodes: &[ParagraphContent],
+        offset: &mut usize,
+        font_size_pt: f64,
+        engine: &caret_math::layout::MathLayoutEngine,
+        objects: &mut Vec<InlineObjectLayout>,
+        layouts: &mut Vec<Arc<caret_math::layout::MathLayout>>,
+    ) -> Result<(), DocumentLayoutError> {
+        for node in nodes {
+            match node {
+                FlowContent::Text(text) => {
+                    for run in &text.runs {
+                        *offset = offset.checked_add(run.text.len()).ok_or_else(|| {
+                            DocumentLayoutError::Math("inline text offset overflow".to_owned())
+                        })?;
+                    }
+                }
+                FlowContent::Math(math) => {
+                    let start = *offset;
+                    *offset = offset.checked_add('\u{fffc}'.len_utf8()).ok_or_else(|| {
+                        DocumentLayoutError::Math("inline math offset overflow".to_owned())
+                    })?;
+                    let layout = engine
+                        .layout(
+                            &math.math_tree.root,
+                            font_size_pt,
+                            caret_math::layout::MathStyle::Inline,
+                        )
+                        .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
+                    let as_f32 = |value: f64| {
+                        let value = value as f32;
+                        value.is_finite().then_some(value)
+                    };
+                    let advance_pt = as_f32(layout.width)
+                        .ok_or_else(|| {
+                            DocumentLayoutError::Math("invalid inline math width".to_owned())
+                        })?
+                        .max(0.0);
+                    let ascent_pt = as_f32(layout.ascent)
+                        .ok_or_else(|| {
+                            DocumentLayoutError::Math("invalid inline math ascent".to_owned())
+                        })?
+                        .max(0.0);
+                    let descent_pt = as_f32(layout.descent)
+                        .ok_or_else(|| {
+                            DocumentLayoutError::Math("invalid inline math descent".to_owned())
+                        })?
+                        .max(0.0);
+                    let id = u64::try_from(layouts.len()).map_err(|_| {
+                        DocumentLayoutError::Math("too many inline math objects".to_owned())
+                    })?;
+                    objects.push(InlineObjectLayout {
+                        id,
+                        source_bytes: start..*offset,
+                        advance_pt,
+                        ascent_pt,
+                        descent_pt,
+                    });
+                    layouts.push(layout);
+                }
+                FlowContent::Environment(environment) => visit(
+                    &environment.children,
+                    offset,
+                    font_size_pt,
+                    engine,
+                    objects,
+                    layouts,
+                )?,
+                FlowContent::SoftBreak(_) => {
+                    *offset = offset.checked_add('\n'.len_utf8()).ok_or_else(|| {
+                        DocumentLayoutError::Math("inline break offset overflow".to_owned())
+                    })?;
+                }
+                FlowContent::Opaque(_) => {
+                    *offset = offset.checked_add('\u{fffc}'.len_utf8()).ok_or_else(|| {
+                        DocumentLayoutError::Math("opaque inline offset overflow".to_owned())
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let font_size_pt = DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints));
+    let mut objects = Vec::new();
+    let mut layouts = Vec::new();
+    let mut offset = 0;
+    visit(
+        &paragraph.inlines,
+        &mut offset,
+        font_size_pt,
+        engine,
+        &mut objects,
+        &mut layouts,
+    )?;
+    Ok((objects, layouts))
+}
+
 enum LayoutInput<'a> {
     Paragraph {
         paragraph: &'a Paragraph,
@@ -973,12 +1208,23 @@ enum LayoutInput<'a> {
         environment_ids: Vec<NodeId>,
     },
     ExplicitBreak,
+    MathBlock {
+        math_id: NodeId,
+        layout: Arc<caret_math::layout::MathLayout>,
+        environment_ids: Vec<NodeId>,
+        x_offset_pt: f32,
+        width_pt: f32,
+        height_pt: f32,
+    },
 }
 
 fn collect_blocks<'a>(
     blocks: &'a [Block],
     ordered: &mut Vec<LayoutInput<'a>>,
     environment_ids: &mut Vec<NodeId>,
+    math_engine: Option<&caret_math::layout::MathLayoutEngine>,
+    font_size_centipoints: u16,
+    content_width_pt: f32,
 ) -> Result<(), DocumentLayoutError> {
     for block in blocks {
         match block {
@@ -996,7 +1242,14 @@ fn collect_blocks<'a>(
                         environment_ids: environment_ids.clone(),
                     });
                 }
-                collect_blocks(&environment.children, ordered, environment_ids)?;
+                collect_blocks(
+                    &environment.children,
+                    ordered,
+                    environment_ids,
+                    math_engine,
+                    font_size_centipoints,
+                    content_width_pt,
+                )?;
                 environment_ids.pop();
             }
             Block::ExplicitBreak(page_break) => {
@@ -1007,11 +1260,75 @@ fn collect_blocks<'a>(
                 }
                 ordered.push(LayoutInput::ExplicitBreak);
             }
-            Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {
-                return Err(DocumentLayoutError::UnsupportedContent);
+            Block::Equation(equation) => {
+                let engine = math_engine.ok_or(DocumentLayoutError::UnsupportedContent)?;
+                let layout = engine
+                    .layout(
+                        &equation.math_tree.root,
+                        DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints)),
+                        caret_math::layout::MathStyle::Display,
+                    )
+                    .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
+                push_math_block(
+                    ordered,
+                    equation.id.clone(),
+                    layout,
+                    environment_ids.clone(),
+                    content_width_pt,
+                )?;
             }
+            Block::Align(align) => {
+                let engine = math_engine.ok_or(DocumentLayoutError::UnsupportedContent)?;
+                let layout = Arc::new(
+                    caret_math::layout::layout_align(
+                        engine.font(),
+                        align,
+                        DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints)),
+                    )
+                    .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                );
+                push_math_block(
+                    ordered,
+                    align.id.clone(),
+                    layout,
+                    environment_ids.clone(),
+                    content_width_pt,
+                )?;
+            }
+            Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
         }
     }
+    Ok(())
+}
+
+fn push_math_block<'a>(
+    ordered: &mut Vec<LayoutInput<'a>>,
+    math_id: NodeId,
+    layout: Arc<caret_math::layout::MathLayout>,
+    environment_ids: Vec<NodeId>,
+    content_width_pt: f32,
+) -> Result<(), DocumentLayoutError> {
+    let width_pt = layout.width as f32;
+    let height_pt = (layout.ascent + layout.descent) as f32;
+    if !content_width_pt.is_finite()
+        || content_width_pt <= 0.0
+        || !width_pt.is_finite()
+        || width_pt < 0.0
+        || !height_pt.is_finite()
+        || height_pt < 0.0
+    {
+        return Err(DocumentLayoutError::Math(
+            "invalid display math geometry".to_owned(),
+        ));
+    }
+    ordered.push(LayoutInput::MathBlock {
+        math_id,
+        layout,
+        environment_ids,
+        x_offset_pt: (content_width_pt - width_pt) / 2.0,
+        width_pt,
+        height_pt,
+    });
     Ok(())
 }
 

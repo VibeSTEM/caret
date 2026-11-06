@@ -3,11 +3,10 @@
 use std::collections::BTreeMap;
 
 use caret_doc::{CdocFile, Document, DocumentSettings, OpenedDocument};
+use caret_font_roles::FontRole;
 use icu_locale_core::subtags::Script;
 
-use super::{
-    FontPreferenceError, FontPreferenceRules, FontPreferenceSource, FontSelectionContext, math,
-};
+use super::{FontPreferenceError, FontPreferenceRules, FontPreferenceSource, FontSelectionContext};
 
 fn script(tag: &str) -> Script {
     tag.parse()
@@ -23,9 +22,8 @@ fn context(script_tag: &str) -> FontSelectionContext<'_> {
     FontSelectionContext {
         script: script(script_tag),
         language: None,
-        math_context: false,
+        role: FontRole::Body,
         explicit_family: None,
-        code: false,
     }
 }
 
@@ -96,7 +94,7 @@ fn math_role_uses_explicit_family_before_its_builtin_family() {
     };
     let rules = compiled(&settings);
     let candidates = rules.family_candidates(FontSelectionContext {
-        math_context: true,
+        role: FontRole::Math,
         language: Some("en-US"),
         explicit_family: Some("Local Override"),
         ..context("Latn")
@@ -107,7 +105,11 @@ fn math_role_uses_explicit_family_before_its_builtin_family() {
             .iter()
             .map(|candidate| candidate.family)
             .collect::<Vec<_>>(),
-        ["Local Override", "Math Override", math::default_family()]
+        [
+            "Local Override",
+            "Math Override",
+            caret_font_roles::DEFAULT_MATH_FONT_FAMILY
+        ]
     );
     assert_eq!(candidates[0].source, FontPreferenceSource::Explicit);
     assert_eq!(candidates[1].source, FontPreferenceSource::Math);
@@ -125,7 +127,7 @@ fn code_font_uses_explicit_family_then_document_family_then_builtin_family() {
     };
     let rules = compiled(&settings);
     let candidates = rules.family_candidates(FontSelectionContext {
-        code: true,
+        role: FontRole::Code,
         explicit_family: Some("Inline Override"),
         ..context("Latn")
     });
@@ -138,7 +140,7 @@ fn code_font_uses_explicit_family_then_document_family_then_builtin_family() {
         [
             "Inline Override",
             "Code Family",
-            caret_code::BUILTIN_FONT_FAMILY
+            caret_font_roles::DEFAULT_CODE_FONT_FAMILY
         ]
     );
     assert_eq!(candidates[1].source, FontPreferenceSource::Code);
@@ -147,13 +149,13 @@ fn code_font_uses_explicit_family_then_document_family_then_builtin_family() {
     assert_eq!(
         default_rules
             .family_candidates(FontSelectionContext {
-                code: true,
+                role: FontRole::Code,
                 ..context("Latn")
             })
             .iter()
             .map(|candidate| candidate.family)
             .collect::<Vec<_>>(),
-        [caret_code::BUILTIN_FONT_FAMILY]
+        [caret_font_roles::DEFAULT_CODE_FONT_FAMILY]
     );
 }
 

@@ -1,8 +1,9 @@
 //! 验证页面字形快照、裁剪与栅格缓存。
 
 use caret_doc::{
-    Block, Document, InlineEnvironment, InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent,
-    ParagraphLineSpacing, Run, TextFlow,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, InlineEnvironment,
+    InlineEnvironmentKind, InlineMath, NodeId, Paragraph, ParagraphContent, ParagraphLineSpacing,
+    Run, TextFlow,
 };
 use caret_layout::{FontCatalog, PositionedGlyphLayoutItem, ShapingStyle};
 
@@ -113,6 +114,241 @@ fn natural_line_spacing_does_not_add_a_line_clip() {
         .unwrap_or_else(|error| panic!("natural line glyphs failed: {error}"));
     assert!(!page.runs.is_empty());
     assert!(page.runs.iter().all(|run| run.line_clip_y_pt.is_none()));
+}
+
+#[test]
+fn inline_math_uses_math_metrics_and_the_shared_page_glyph_path() {
+    let parsed = caret_math::parse(r"\frac{1}{2}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("a");
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should contain a paragraph");
+    };
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines.push(ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    }));
+    paragraph.inlines.push(text_run("b", Some("en")));
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("math glyph extraction failed: {error}"));
+    let laid_out = match snapshot.paragraph_by_id(&paragraph_id) {
+        Some(paragraph) => paragraph,
+        None => panic!("paragraph layout should exist"),
+    };
+    assert_eq!(laid_out.inline_math_layouts.len(), 1);
+    assert!(laid_out.layout.layout.lines().next().is_some_and(|line| {
+        line.items().any(|item| matches!(item, PositionedGlyphLayoutItem::InlineBox(box_item) if box_item.id == 0))
+    }));
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
+    );
+    assert!(
+        !page.decorations.is_empty(),
+        "the fraction bar should share the page snapshot"
+    );
+}
+
+#[test]
+fn unsupported_math_shapes_do_not_invalidate_the_page_snapshot() {
+    let parsed = caret_math::parse(r"\xcancel{x}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should contain a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    })];
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("unsupported shape must not invalidate the page: {error}"));
+    assert!(!page.runs.is_empty());
+}
+
+#[test]
+fn inline_math_lines_and_rectangles_are_extracted_with_page_coordinates_and_style() {
+    let parsed = caret_math::parse(r"\boxed{\xcancel{x}}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should contain a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    })];
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("inline shapes failed: {error}"));
+    assert!(
+        page.shapes
+            .iter()
+            .any(|shape| shape.kind == super::PageMathShapeKind::Line)
+    );
+    assert!(
+        page.shapes
+            .iter()
+            .any(|shape| shape.kind == super::PageMathShapeKind::Rectangle)
+    );
+    assert!(
+        page.shapes
+            .iter()
+            .all(|shape| shape.x_pt.is_finite() && shape.y_pt.is_finite())
+    );
+    let default_color = [17, 23, 31, 255];
+    let rasterized = PageGlyphRasterizer::default()
+        .rasterize(&page, 1.0, [0.0, 0.0], default_color)
+        .unwrap_or_else(|error| panic!("inline shape raster snapshot failed: {error}"));
+    let line = rasterized
+        .shapes
+        .iter()
+        .find(|shape| shape.kind == super::PageMathShapeKind::Line)
+        .unwrap_or_else(|| panic!("inline line should reach the raster snapshot"));
+    assert_eq!(line.stroke, Some(default_color));
+    let boxed = rasterized
+        .shapes
+        .iter()
+        .find(|shape| shape.kind == super::PageMathShapeKind::Rectangle)
+        .unwrap_or_else(|| panic!("boxed rectangle should reach the raster snapshot"));
+    assert_eq!(boxed.stroke, Some(default_color));
+}
+
+#[test]
+fn display_math_lines_and_rectangles_are_extracted() {
+    let equation =
+        match caret_math::parse(r"\boxed{\xcancel{x}}", caret_math::MathInputKind::Equation) {
+            Ok(caret_math::ParsedMath::Tree(math_tree)) => Equation {
+                id: NodeId::generate(),
+                math_tree,
+                extra: Default::default(),
+            },
+            other => panic!("valid equation should parse to a tree: {other:?}"),
+        };
+    let document = Document {
+        body: vec![Block::Equation(equation)],
+        ..Document::blank()
+    };
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("display shapes failed: {error}"));
+    assert!(
+        page.shapes
+            .iter()
+            .any(|shape| shape.kind == super::PageMathShapeKind::Line)
+    );
+    assert!(
+        page.shapes
+            .iter()
+            .any(|shape| shape.kind == super::PageMathShapeKind::Rectangle)
+    );
+}
+
+#[test]
+fn empty_fraction_shapes_do_not_invalidate_the_display_page_snapshot() {
+    let equation = match caret_math::parse(r"\frac{}{}", caret_math::MathInputKind::Equation) {
+        Ok(caret_math::ParsedMath::Tree(math_tree)) => Equation {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        },
+        other => panic!("valid equation should parse to a tree: {other:?}"),
+    };
+    let document = Document {
+        body: vec![Block::Equation(equation)],
+        ..Document::blank()
+    };
+    let snapshot = layout(&document);
+    assert!(snapshot.page_glyphs(0).is_ok());
+}
+
+#[test]
+fn environment_range_includes_its_display_math_child() {
+    let equation = match caret_math::parse("x+1", caret_math::MathInputKind::Equation) {
+        Ok(caret_math::ParsedMath::Tree(math_tree)) => Equation {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        },
+        other => panic!("valid equation should parse to a tree: {other:?}"),
+    };
+    let environment_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: vec![Block::Equation(equation)],
+        extra: Default::default(),
+    })];
+    let snapshot = layout(&document);
+    let range = snapshot
+        .environment_ranges
+        .iter()
+        .find(|range| range.environment_id == environment_id)
+        .unwrap_or_else(|| panic!("formula-only environment should have a page range"));
+    assert!(range.y1_pt > range.y0_pt);
+}
+
+#[test]
+fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
+    let equation = match caret_math::parse(r"\frac{x^2}{1}", caret_math::MathInputKind::Equation) {
+        Ok(caret_math::ParsedMath::Tree(math_tree)) => Equation {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        },
+        other => panic!("valid equation should parse to a tree: {other:?}"),
+    };
+    let align = match caret_math::parse(
+        r"\begin{aligned}x&=1\\y&=2\end{aligned}",
+        caret_math::MathInputKind::Align,
+    ) {
+        Ok(caret_math::ParsedMath::Align(align)) => align,
+        other => panic!("valid Align should parse: {other:?}"),
+    };
+    let mut document = Document::blank();
+    document.body.clear();
+    document.body.push(Block::Equation(equation));
+    document.body.push(Block::Align(align));
+
+    let snapshot = layout(&document);
+    assert_eq!(snapshot.pages[0].layout.math_fragments.len(), 2);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("display math glyph extraction failed: {error}"));
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
+    );
+    assert!(
+        !page.decorations.is_empty(),
+        "display formula rules should be present"
+    );
 }
 
 #[test]

@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 caret-doc.workspace = true
+caret-font-roles.workspace = true
+caret-grid-layout.workspace = true
 read-fonts.workspace = true
 skrifa.workspace = true
 serde_json.workspace = true

@@ -1,5 +1,5 @@
 [package]
-name = "caret-code"
+name = "caret-grid-layout"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

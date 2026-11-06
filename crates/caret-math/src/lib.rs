@@ -19,7 +19,6 @@ use std::{fmt, ops::Range};
 
 use caret_doc::{Align, MathTree};
 
-pub use fonts::BUILTIN_FONT_FAMILY;
 pub use parser::{classify_input, is_incomplete_input_prefix, parse, parse_projection};
 pub use projection::{
     AlignSourceMap, MathContentSourceMap, MathFlowSourceMap, MathProjection, MathRangeSourceMap,

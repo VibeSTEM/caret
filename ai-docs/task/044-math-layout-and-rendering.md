@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：027、043
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-11-04
+- 创建 / 更新：2026-10-29 / 2026-11-06
 
 ## 目标与背景
 
@@ -20,9 +20,13 @@
 
 覆盖正文中的行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的统一 `<default>` 标记与诊断回退。标记到角色默认字体的映射由[内置字体角色任务](064-builtin-font-roles.md)和[字体选择规范](../architecture/editor/font-selection.md)定义；本任务只消费数学字体接口。公式文本岛的行内 shaping 和宿主边界遵循[数学公式架构](../architecture/editor/math.md#公式中的普通文本)：复用正文 shaping，不获得宿主段落块级布局。
 
+页面字形快照现提取 glyph、Rule、Line 和 Rectangle；数学图元携带 paint order、颜色和裁剪范围，经 FFI 传到 Qt 场景图，按原顺序绘制。填色盒中的字形、描边与裁剪边界有像素级回归。公式内部命中/光标仍未实现；不得据此启用插入命令或 `.cdoc` 可写门控。
+
 数学 `.cdoc` 的可写能力也归本任务：在公式布局、绘制、命中和编辑焦点链路可用后，启用 `InlineMath`、`Equation`、`Align` 的持久化写入，并验证真实编码/解码、文件保存重开及应用 `DocumentSession` 往返。043 负责模型/schema 与安全预览，不负责该可写门控。
 
 不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
+
+`Align` 在 `caret-math` 内部临时适配为 `aligned` 矩阵，复用数学后端的列对齐和行距算法；文档模型仍保留 Align 行/单元格身份。Typst 派生的数学 `layout/table.rs` 保留数学片段和 MATH 度量适配，已测量网格的纯几何算法抽取到不依赖 `caret-math` 的 `caret-grid-layout`。045/046 的文档表格布局复用本任务生成的 MathBox 快照，并可在列宽求解与单元格内容重排后复用该几何算法；列表的标记/正文也可用其计算几何，但文档列宽策略、编号、文本重排与分页仍归各自任务。本分支完成 crate 与数学适配器接入；普通表格及列表尚未接入。
 
 ## 前置条件与待决策
 
@@ -55,7 +59,10 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | caret-layout 数学盒快照行为测试 | 坐标、基线、字形与源位置映射一致 | 未执行 |
+| 2026-11-06 | 本机 Rust：`cargo test --locked -p caret-layout`；`cargo test --locked -p caret-engine layout_view::tests::math_fragment_projection_keeps_content_origin_and_serializes_page_margins` | 分页边界与版心坐标投影行为正确 | 通过：caret-layout 106 项；定向投影测试 1 项。`cargo test --locked -p caret-layout -p caret-engine` 全包尝试未通过：caret-engine 有 2 项 `layout.rs` 测试失败（U+FFFC glyph run、负 inline math 度量用例索引越界），不属于本次分页/视图文件修复，待对应改动完成后复验。 |
+| 2026-11-06 | 本机 Rust：`cargo clippy --locked -p caret-layout --all-targets -- -D warnings`；`cargo clippy --locked -p caret-layout -p caret-engine --all-targets -- -D warnings` | 分页 crate 与相关 crate 全目标 lint 通过 | caret-layout 单 crate 通过。跨两个 crate 未通过：`page_glyphs.rs` 的 `append_math_items` 参数过多；`layout/tests.rs` 新增用例触发 5 项 `expect_used`。这些诊断在本次任务文件范围外，待相应实现整合后复验。 |
+| 2026-11-06 | 本机 Rust：对本次四个 Rust 文件运行 `rustfmt --edition 2024 --check` | 本次修改格式符合 rustfmt | 通过。仓库级 `cargo fmt --all -- --check` 另报告 `layout/tests.rs` 与 `lib.rs` 的格式差异，未在本次限定范围内修改。 |
+| 2026-11-06 | 本机：`cargo test --workspace --locked --offline`、`cargo lint --check`、`cargo format --check` | 页面图元、行内映射、跨层绘制与仓库检查通过 | 通过；包括 native CTest 9/9，像素用例验证不透明填色下字形可见及裁剪边界内的部分描边可见。`cargo quality` 的 advisory DB 检查因沙箱对宿主锁文件只读未完成，详见 068。 |
 | — | 数学 `.cdoc` 与 `DocumentSession` 黑盒往返 | 三类公式真实保存、重开、字段保留；失败不覆盖原文件/会话 | 未执行 |
 | — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
 | — | 公式布局基准 | 记录输入、构建与缓存条件 | 未执行 |
@@ -70,6 +77,8 @@
 - 2026-11-01：表格模型与交互拆到 045，表格布局和画布集成拆到 046；044 不依赖 012，也不负责单元格公式集成。
 - 2026-11-04：明确公式插入命令的候选接入与可用性门控归 044；公式树和内部编辑事务归 043，TeX 源码输入转换由 065 设计。
 - 2026-11-06：数学 `.cdoc` 可写能力、真实文件保存/重开及 `DocumentSession` 往返由 044 在布局、绘制、命中链路接通后统一验收；043 保留模型/schema 和只读安全预览职责。
+- 2026-11-06：架构重构分支从 Typst 数学表格算法抽取不依赖数学和文档模型的 `caret-grid-layout`；当前仅数学适配器接入。046 文档表格与 051 列表可复用测量后几何，具体列宽求解、正文重排、编号和分页仍归各任务，待实际接入验证。此项不改变 044 总体状态，未完成的命中/光标、命令、持久化与平台验收继续保持未完成。
+- 2026-11-06：Line/Rectangle 已加入页面字形快照、FFI 与 QSG 绘制，并按 MathItem paint order 排序；默认前景矩形描边和裁剪边界均有回归。环境页范围现汇总显示公式片段；公式内部命中/光标、插入命令门控、数学 `.cdoc` 可写与三平台验收仍未接入。
 
 ## 完成摘要
 

@@ -1,6 +1,9 @@
 //! 验证分页、段落约束和页面推进规则。
 
-use super::{PaginationError, PaginationItem, ParagraphPaginationInput, paginate_paragraphs};
+use super::{
+    MathBlockPaginationInput, PaginationError, PaginationItem, ParagraphPaginationInput,
+    paginate_paragraphs,
+};
 use crate::{LineMetrics, ParagraphLayout, ParagraphLine};
 use caret_doc::NodeId;
 use std::ops::Range;
@@ -65,6 +68,59 @@ fn next_paragraph_starts_new_page_when_spacing_and_line_do_not_fit()
     assert_eq!(pages[0].fragments[0].y_offset_pt, 0.0);
     assert_eq!(pages[1].fragments[0].y_offset_pt, 0.0);
     Ok(())
+}
+
+#[test]
+fn display_math_is_kept_together_and_starts_a_new_page_when_it_does_not_fit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let paragraph_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let text = paragraph(&[30.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&paragraph_id, &text, 0.0, 0.0),
+            PaginationItem::MathBlock(MathBlockPaginationInput {
+                math_id: &math_id,
+                x_offset_pt: 12.0,
+                width_pt: 26.0,
+                height_pt: 25.0,
+            }),
+        ],
+        50.0,
+    )?;
+
+    assert_eq!(pages.len(), 2);
+    assert!(pages[0].math_fragments.is_empty());
+    assert_eq!(pages[1].math_fragments[0].math_id, math_id);
+    assert_eq!(pages[1].math_fragments[0].x_offset_pt, 12.0);
+    assert_eq!(pages[1].math_fragments[0].y_offset_pt, 0.0);
+    Ok(())
+}
+
+#[test]
+fn display_math_rejects_height_sum_overflow_even_when_each_box_is_finite() {
+    let first_id = NodeId::generate();
+    let second_id = NodeId::generate();
+    let items = [
+        PaginationItem::MathBlock(MathBlockPaginationInput {
+            math_id: &first_id,
+            x_offset_pt: 0.0,
+            width_pt: 10.0,
+            height_pt: f32::MAX,
+        }),
+        PaginationItem::MathBlock(MathBlockPaginationInput {
+            math_id: &second_id,
+            x_offset_pt: 0.0,
+            width_pt: 10.0,
+            height_pt: f32::MAX,
+        }),
+    ];
+
+    assert_eq!(
+        paginate_paragraphs(&items, f32::MAX),
+        Err(PaginationError::InvalidMathBlock),
+        "连续公式高度求和溢出时必须拒绝整个分页结果"
+    );
 }
 
 #[test]

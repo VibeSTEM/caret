@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 caret-doc.workspace = true
+caret-font-roles.workspace = true
 caret-math.workspace = true
 caret-layout.workspace = true
 caret-structure.workspace = true
@@ -16,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
 undo.workspace = true
+fontique.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

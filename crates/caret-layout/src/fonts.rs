@@ -3,10 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-pub(crate) mod code;
-pub(crate) mod math;
-
-use fontique::{Collection, CollectionOptions, SourceCache};
+use fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use std::collections::HashSet;
 use std::sync::Arc;
 #[cfg(windows)]
@@ -90,7 +87,13 @@ impl FontCatalog {
         if collection.family_names().next().is_none() {
             return Err(FontCatalogError::Empty);
         }
-        code::register(&mut collection);
+        for face in caret_font_roles::default_code_font_faces() {
+            let data: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(face.bytes);
+            collection.register_fonts(Blob::new(data), None);
+        }
+        let math_font: Arc<dyn AsRef<[u8]> + Send + Sync> =
+            Arc::new(caret_font_roles::default_math_font());
+        collection.register_fonts(Blob::new(math_font), None);
         #[cfg(windows)]
         collection.load_fonts_from_paths(installed_font_paths());
         let mut font_context = parley::FontContext {
