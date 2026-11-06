@@ -11,7 +11,10 @@ use super::super::{
 use super::Session;
 use super::StructureSelection;
 use super::formatting::PendingInlineStyle;
-use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
+use super::history::{
+    self, DocumentPatch, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
+};
+use super::math_edit::{MathEditBranch, MathEditTarget, MathPositionAffinity, MathTextPosition};
 use std::mem;
 
 /// 供布局验证后安装的公式外组字候选。
@@ -19,6 +22,16 @@ use std::mem;
 pub struct CompositionUpdateCandidate {
     candidate: Session,
     base: CompositionCandidateBase,
+}
+
+/// 输入法预编辑范围的宿主；正文范围使用段落位置，数学文本范围使用树端点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompositionRange {
+    Paragraph(Selection),
+    MathText {
+        anchor: MathTextPosition,
+        focus: MathTextPosition,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +81,269 @@ impl CompositionCandidateBase {
     }
 }
 
+fn math_composition_document_patch(
+    before: &Session,
+    after: &Session,
+    edit: &super::math_edit::MathEdit,
+) -> Result<DocumentPatch, EditError> {
+    match &edit.target {
+        MathEditTarget::Inline { paragraph_id, .. } => {
+            let merge_epoch = before.history_merge_epoch;
+            let before = history::paragraph_states_for_ids(
+                &before.document,
+                &before.paragraph_index,
+                [paragraph_id.clone()],
+            );
+            let after = history::paragraph_states_for_ids(
+                &after.document,
+                &after.paragraph_index,
+                [paragraph_id.clone()],
+            );
+            if before.is_empty() || after.is_empty() {
+                return Err(EditError::InvalidPosition);
+            }
+            Ok(DocumentPatch::Paragraphs {
+                before,
+                after,
+                merge_group: None,
+                merge_epoch,
+            })
+        }
+        MathEditTarget::Block { block_id, .. } => {
+            let (parent_environment_ids, sibling_index, before) =
+                find_composition_math_block(&before.document.body, block_id, &[])
+                    .ok_or(EditError::InvalidPosition)?;
+            let (_, _, after) = find_composition_math_block(&after.document.body, block_id, &[])
+                .ok_or(EditError::InvalidPosition)?;
+            Ok(DocumentPatch::BlockRange {
+                parent_environment_ids,
+                sibling_index,
+                before: vec![before],
+                after: vec![after],
+            })
+        }
+    }
+}
+
+fn find_composition_math_block(
+    blocks: &[caret_doc::Block],
+    target_id: &caret_doc::NodeId,
+    parent_environment_ids: &[caret_doc::NodeId],
+) -> Option<(Vec<caret_doc::NodeId>, usize, caret_doc::Block)> {
+    for (index, block) in blocks.iter().enumerate() {
+        let matches_target = match block {
+            caret_doc::Block::Equation(equation) => &equation.id == target_id,
+            caret_doc::Block::Align(align) => &align.id == target_id,
+            _ => false,
+        };
+        if matches_target {
+            return Some((parent_environment_ids.to_vec(), index, block.clone()));
+        }
+        if let caret_doc::Block::Environment(environment) = block {
+            let mut child_parents = parent_environment_ids.to_vec();
+            child_parents.push(environment.id.clone());
+            if let Some(found) =
+                find_composition_math_block(&environment.children, target_id, &child_parents)
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
 impl Session {
+    fn math_text_edit_is_active(&self) -> bool {
+        self.math_edit()
+            .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Text { .. }))
+    }
+
+    fn math_text_composition_preview(
+        &self,
+        id: u64,
+        preedit: &str,
+        cursor_position_utf16: usize,
+    ) -> Result<(Self, CompositionRange), EditError> {
+        let (_, anchor_offset, focus_offset) = self
+            .math_text_selection_island_offsets()
+            .ok_or(EditError::InvalidPosition)?;
+        let replacement_start = anchor_offset.min(focus_offset);
+        let mut preview = self.transaction_clone();
+        preview.run(Command::CommitComposition {
+            id,
+            text: preedit.to_owned(),
+        })?;
+        let (island, _, preview_focus) = preview
+            .math_text_selection_island_offsets()
+            .ok_or(EditError::InvalidPosition)?;
+        let preedit_cursor = utf16_offset_to_utf8(
+            preedit,
+            cursor_position_utf16.min(preedit.encode_utf16().count()),
+        )?;
+        let cursor_offset = replacement_start
+            .checked_add(preedit_cursor)
+            .ok_or(EditError::InvalidPosition)?
+            .min(preview_focus);
+        let display = island.display();
+        let cursor_offset = super::super::grapheme::GraphemeMap::snap_in(
+            display,
+            cursor_offset,
+            Affinity::Downstream,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        let range_start = super::super::grapheme::GraphemeMap::snap_in(
+            display,
+            replacement_start,
+            Affinity::Upstream,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        let range_end = super::super::grapheme::GraphemeMap::snap_in(
+            display,
+            replacement_start
+                .checked_add(preedit.len())
+                .ok_or(EditError::InvalidPosition)?,
+            Affinity::Downstream,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        let anchor = island
+            .position_at_offset(range_start, MathPositionAffinity::Upstream)
+            .ok_or(EditError::InvalidPosition)?;
+        let focus = island
+            .position_at_offset(range_end, MathPositionAffinity::Downstream)
+            .ok_or(EditError::InvalidPosition)?;
+        let cursor = island
+            .position_at_offset(cursor_offset, MathPositionAffinity::Downstream)
+            .ok_or(EditError::InvalidPosition)?;
+        preview.set_math_text_selection_positions(cursor.clone(), cursor)?;
+        Ok((preview, CompositionRange::MathText { anchor, focus }))
+    }
+
+    fn commit_math_text_composition_replacement(
+        &mut self,
+        active_composition_id: Option<u64>,
+        replacement_composition_id: u64,
+        replacement_start: i32,
+        replacement_length: i32,
+        text: &str,
+    ) -> Result<Effect, EditError> {
+        self.ensure_math_edit_revision_current()?;
+        let original_session_id = self.session_id.clone();
+        let original_generation = self.document_generation;
+        let original_history_state_id = self.history_state_id;
+        let original_next_history_state_id = self.next_history_state_id;
+        let original_history_merge_epoch = self.history_merge_epoch;
+        let original_math_edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let mut candidate = self.transaction_clone();
+        let result = (|| {
+            let mut effects = Vec::with_capacity(2);
+            if let Some(id) = active_composition_id {
+                candidate.run(Command::CancelComposition { id })?;
+            }
+            effects.push(candidate.math_text_insert("")?);
+            candidate.set_math_text_composition_replacement_range(
+                replacement_start,
+                replacement_length,
+            )?;
+            candidate.run(Command::UpdateComposition {
+                id: replacement_composition_id,
+                preedit: String::new(),
+            })?;
+            effects.push(candidate.run(Command::CommitComposition {
+                id: replacement_composition_id,
+                text: text.to_owned(),
+            })?);
+            Ok(combine_effects(effects))
+        })();
+        let effect = result?;
+        let patch = if effect.document_changed {
+            Some(math_composition_document_patch(
+                self,
+                &candidate,
+                &original_math_edit,
+            )?)
+        } else {
+            None
+        };
+        let before_math_position = MathEditPosition::from_edit(&original_math_edit);
+        let after_math_position = candidate
+            .math_edit
+            .as_ref()
+            .map(MathEditPosition::from_edit);
+        let before_selection = self.selection.clone();
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_pending_style = self.pending_inline_style.clone();
+        candidate.edit_history = mem::replace(&mut self.edit_history, history::history());
+        candidate.history_estimated_bytes = self.history_estimated_bytes;
+        candidate.history_state_id = original_history_state_id;
+        candidate.next_history_state_id = original_next_history_state_id;
+        candidate.history_merge_epoch = original_history_merge_epoch;
+        if let Some(patch) = patch {
+            candidate.advance_history_merge_epoch();
+            let after_state_id = candidate.allocate_history_state_id();
+            let edit = SessionHistoryEdit::new(
+                patch,
+                SessionHistoryState::new(
+                    before_selection,
+                    before_visual_affinity,
+                    before_pending_style.clone(),
+                    original_history_state_id,
+                )
+                .with_math_edit(Some(before_math_position)),
+                SessionHistoryState::new(
+                    candidate.selection.clone(),
+                    candidate.selection_visual_affinity,
+                    candidate.pending_inline_style.clone(),
+                    after_state_id,
+                )
+                .with_math_edit(after_math_position),
+            );
+            candidate.record_history_edit(edit);
+            candidate.history_state_id = after_state_id;
+            candidate.session_id = original_session_id;
+            candidate.document_generation = original_generation;
+            candidate.advance_document_generation();
+            candidate.advance_history_merge_epoch();
+        } else {
+            candidate.history_state_id = original_history_state_id;
+            candidate.document_generation = original_generation;
+        }
+        candidate.sync_math_edit_revision();
+        *self = candidate;
+        Ok(effect)
+    }
+
+    fn set_math_text_composition_replacement_range(
+        &mut self,
+        replacement_start: i32,
+        replacement_length: i32,
+    ) -> Result<(), EditError> {
+        if replacement_start == 0 && replacement_length == 0 {
+            return Ok(());
+        }
+        let (island, anchor_offset, focus_offset) = self
+            .math_text_selection_island_offsets()
+            .ok_or(EditError::InvalidPosition)?;
+        let text = island.display();
+        if anchor_offset != focus_offset {
+            return Err(EditError::InvalidPosition);
+        }
+        let replacement_range =
+            utf16_replacement_range(text, focus_offset, replacement_start, replacement_length)?;
+        let anchor = island
+            .position_at_offset(replacement_range.start, MathPositionAffinity::Upstream)
+            .ok_or(EditError::InvalidPosition)?;
+        let focus = island
+            .position_at_offset(replacement_range.end, MathPositionAffinity::Downstream)
+            .ok_or(EditError::InvalidPosition)?;
+        self.set_math_text_selection_positions(anchor, focus)?;
+        Ok(())
+    }
+
     /// 按 Qt UTF-16 相对范围原子提交输入法替换，支持先取消已有预编辑再应用新范围。
     ///
-    /// `active_composition_id` 指向待替换的预编辑；两个传入的新 ID 分别用于先删除原选区和提交替换文本。
-    /// 若范围无效、文本编辑不兼容或任一事务命令失败，返回对应错误且保留当前会话状态。
+    /// `active_composition_id` 指向待替换的预编辑；普通段落分别使用两个新 ID 删除原选区并提交替换文本，
+    /// 数学 TextFlow 在候选会话中应用两段树编辑，再以一条历史记录原子安装最终结果。
+    /// 若范围无效或事务失败，保留当前会话状态。
     pub fn commit_composition_replacement(
         &mut self,
         active_composition_id: Option<u64>,
@@ -83,8 +354,19 @@ impl Session {
         text: &str,
     ) -> Result<Effect, EditError> {
         if self.math_edit.is_some() {
-            return Err(EditError::CompositionPending);
+            if !self.math_text_edit_is_active() {
+                return Err(EditError::CompositionPending);
+            }
+            return self.commit_math_text_composition_replacement(
+                active_composition_id,
+                replacement_composition_id,
+                replacement_start,
+                replacement_length,
+                text,
+            );
         }
+        let original_session_id = self.session_id.clone();
+        let original_generation = self.document_generation;
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
@@ -180,10 +462,9 @@ impl Session {
                 ),
             );
             candidate.record_history_edit(edit);
-            candidate.document_generation = self
-                .document_generation
-                .checked_add(1)
-                .unwrap_or(candidate.document_generation);
+            candidate.session_id = original_session_id;
+            candidate.document_generation = original_generation;
+            candidate.advance_document_generation();
         }
         *self = candidate;
         Ok(effect)
@@ -196,8 +477,8 @@ impl Session {
         preedit: String,
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
-    ) -> Result<(CompositionUpdateCandidate, Self, Selection), EditError> {
-        if self.math_edit.is_some() {
+    ) -> Result<(CompositionUpdateCandidate, Self, CompositionRange), EditError> {
+        if self.math_edit.is_some() && !self.math_text_edit_is_active() {
             return Err(EditError::CompositionPending);
         }
         let base = CompositionCandidateBase::from_session(self);
@@ -267,8 +548,8 @@ impl Session {
     pub fn composition_preview_with_range(
         &self,
         cursor_position_utf16: usize,
-    ) -> Result<(Self, Selection), EditError> {
-        if self.math_edit.is_some() {
+    ) -> Result<(Self, CompositionRange), EditError> {
+        if self.math_edit.is_some() && !self.math_text_edit_is_active() {
             return Err(EditError::CompositionPending);
         }
         let composition = self
@@ -276,6 +557,13 @@ impl Session {
             .as_ref()
             .ok_or(EditError::InvalidCompositionId)?;
         let preedit = composition.preedit.clone();
+        if self.math_text_edit_is_active() {
+            return self.math_text_composition_preview(
+                composition.id,
+                &preedit,
+                cursor_position_utf16,
+            );
+        }
         let mut preview = self.transaction_clone();
         preview.run(Command::CommitComposition {
             id: composition.id,
@@ -346,7 +634,7 @@ impl Session {
                 ..mapped_start
             },
         };
-        Ok((preview, range))
+        Ok((preview, CompositionRange::Paragraph(range)))
     }
 
     /// 将块环境外的预编辑位置映射到新建的同级段落，而不是映射回环境内部段落。
@@ -355,7 +643,7 @@ impl Session {
         mut preview: Self,
         preedit: &str,
         cursor_position_utf16: usize,
-    ) -> Result<(Self, Selection), EditError> {
+    ) -> Result<(Self, CompositionRange), EditError> {
         let normalized = preedit.replace("\r\n", "\n").replace('\r', "\n");
         let cursor_byte = utf16_offset_to_utf8(
             &normalized,
@@ -429,7 +717,7 @@ impl Session {
                 affinity: Affinity::Downstream,
             },
         };
-        Ok((preview, range))
+        Ok((preview, CompositionRange::Paragraph(range)))
     }
 
     /// 将 Qt 的 UTF-16 相对替换区间转换为同段落中按字素边界吸附的 Rust 选区。
@@ -442,7 +730,13 @@ impl Session {
             return Err(EditError::CompositionPending);
         }
         if self.math_edit.is_some() {
-            return Err(EditError::CompositionPending);
+            if !self.math_text_edit_is_active() {
+                return Err(EditError::CompositionPending);
+            }
+            return self.set_math_text_composition_replacement_range(
+                replacement_start,
+                replacement_length,
+            );
         }
         // 虚拟环境外位置没有相邻文本可供 IME 替换，保持外侧停靠点并将提交视为插入。
         if self.block_environment_exit.is_some() {
@@ -532,7 +826,9 @@ impl Session {
             return Err(EditError::InvalidCompositionId);
         }
         let prior = self.composition.take();
-        let result = if self.block_environment_exit.is_some() {
+        let result = if self.math_text_edit_is_active() {
+            self.math_text_insert(text)
+        } else if self.block_environment_exit.is_some() {
             self.insert_text_at_environment_exit(text)
         } else {
             self.insert_text(text)
@@ -564,6 +860,49 @@ impl Session {
             ..Effect::default()
         })
     }
+}
+
+#[cfg(test)]
+#[path = "composition/tests.rs"]
+mod tests;
+
+fn utf16_replacement_range(
+    text: &str,
+    cursor_offset: usize,
+    replacement_start: i32,
+    replacement_length: i32,
+) -> Result<std::ops::Range<usize>, EditError> {
+    if cursor_offset > text.len() || !text.is_char_boundary(cursor_offset) {
+        return Err(EditError::InvalidPosition);
+    }
+    let cursor_units = i64::try_from(utf8_offset_to_utf16(text, cursor_offset)?)
+        .map_err(|_| EditError::InvalidUtf16Offset)?;
+    let start_units = cursor_units + i64::from(replacement_start);
+    let end_units = start_units + i64::from(replacement_length);
+    let text_units =
+        i64::try_from(text.encode_utf16().count()).map_err(|_| EditError::InvalidUtf16Offset)?;
+    if start_units < 0 || end_units < 0 || start_units > text_units || end_units > text_units {
+        return Err(EditError::InvalidUtf16Offset);
+    }
+    let (start_units, end_units) = if start_units <= end_units {
+        (start_units, end_units)
+    } else {
+        (end_units, start_units)
+    };
+    let start = utf16_offset_to_utf8(
+        text,
+        usize::try_from(start_units).map_err(|_| EditError::InvalidUtf16Offset)?,
+    )?;
+    let end = utf16_offset_to_utf8(
+        text,
+        usize::try_from(end_units).map_err(|_| EditError::InvalidUtf16Offset)?,
+    )?;
+    Ok(
+        super::super::grapheme::GraphemeMap::snap_in(text, start, Affinity::Upstream)
+            .ok_or(EditError::InvalidPosition)?
+            ..super::super::grapheme::GraphemeMap::snap_in(text, end, Affinity::Downstream)
+                .ok_or(EditError::InvalidPosition)?,
+    )
 }
 
 fn combine_effects(effects: Vec<Effect>) -> Effect {

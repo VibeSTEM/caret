@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use crate::model::{Block, Document, Media, ModelError};
+use crate::model::{Block, Document, MathNodeKind, Media, ModelError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+mod math_capabilities;
+use math_capabilities::validate_raw_math_feature_declarations;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
@@ -317,6 +319,7 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
     }
     let features = parse_features(object.get("requiredFeatures"))?;
     validate_current_math_encoding(&raw)?;
+    validate_raw_math_feature_declarations(&raw, &features)?;
     if features.iter().any(|feature| {
         matches!(
             feature.as_str(),
@@ -495,6 +498,13 @@ fn inspect_math_tree_encoding(value: Option<&Value>) -> Result<(), DocumentError
 }
 
 fn inspect_math_flow_encoding(value: Option<&Value>) -> Result<(), DocumentError> {
+    inspect_math_flow_encoding_with_parent(value, None)
+}
+
+fn inspect_math_flow_encoding_with_parent(
+    value: Option<&Value>,
+    parent: Option<MathNodeKind>,
+) -> Result<(), DocumentError> {
     let Some(flow) = value.and_then(Value::as_object) else {
         return Ok(());
     };
@@ -508,12 +518,16 @@ fn inspect_math_flow_encoding(value: Option<&Value>) -> Result<(), DocumentError
             };
             match object.get("type").and_then(Value::as_str) {
                 Some("math") => {
+                    if !supported_raw_math_node(object, parent) {
+                        continue;
+                    }
                     if object.contains_key("sourceRange") {
                         return Err(retired_math_field("MathNode.sourceRange"));
                     }
                     if let Some(children) = object.get("children").and_then(Value::as_array) {
                         for child in children {
-                            inspect_math_flow_encoding(Some(child))?;
+                            let kind = raw_math_node_kind(object);
+                            inspect_math_flow_encoding_with_parent(Some(child), kind)?;
                         }
                     }
                 }
@@ -545,12 +559,16 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
     };
     match object.get("type").and_then(Value::as_str) {
         Some("math") => {
+            if !supported_raw_math_node(object, None) {
+                return Ok(());
+            }
             if object.contains_key("sourceRange") {
                 return Err(retired_math_field("MathNode.sourceRange"));
             }
             if let Some(children) = object.get("children").and_then(Value::as_array) {
                 for child in children {
-                    inspect_math_flow_encoding(Some(child))?;
+                    let kind = raw_math_node_kind(object);
+                    inspect_math_flow_encoding_with_parent(Some(child), kind)?;
                 }
             }
             Ok(())
@@ -575,7 +593,74 @@ fn inspect_math_content_encoding(value: &Value) -> Result<(), DocumentError> {
     }
 }
 
-fn is_known_inline_environment(object: &serde_json::Map<String, Value>) -> bool {
+fn raw_math_node_kind(object: &serde_json::Map<String, Value>) -> Option<MathNodeKind> {
+    object
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(|name| serde_json::from_value(Value::String(name.to_owned())).ok())
+}
+
+// 只检查当前解码器能解释的节点，避免把不透明子树里的 vendor 字段当成已退役字段。
+fn supported_raw_math_node(
+    object: &serde_json::Map<String, Value>,
+    parent: Option<MathNodeKind>,
+) -> bool {
+    let Some(kind) = raw_math_node_kind(object) else {
+        return false;
+    };
+    let mut attributes = std::collections::BTreeMap::new();
+    if let Some(values) = object.get("attributes") {
+        let Some(values) = values.as_object() else {
+            return false;
+        };
+        for (key, value) in values {
+            let Some(value) = value.as_str() else {
+                return false;
+            };
+            attributes.insert(key.clone(), value.to_owned());
+        }
+    }
+    let text = match object.get("text") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.as_str()),
+        _ => return false,
+    };
+    let children = match object.get("children") {
+        None => &[][..],
+        Some(Value::Array(children)) => children.as_slice(),
+        _ => return false,
+    };
+    let child_kinds = children
+        .iter()
+        .map(|flow| {
+            let content = flow.as_object()?.get("content")?.as_array()?;
+            let kind = if let [item] = content.as_slice()
+                && let Some(item) = item.as_object()
+                && item.get("type").and_then(Value::as_str) == Some("math")
+            {
+                let kind = raw_math_node_kind(item)?;
+                if matches!(
+                    kind,
+                    MathNodeKind::Placeholder | MathNodeKind::Hline | MathNodeKind::Intertext
+                ) {
+                    kind
+                } else {
+                    MathNodeKind::Row
+                }
+            } else {
+                MathNodeKind::Row
+            };
+            Some(kind)
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(child_kinds) = child_kinds else {
+        return false;
+    };
+    crate::model::math_node_attributes_supported(kind, text, &attributes)
+        && crate::model::math_node_structure_supported(parent, kind, text, &child_kinds)
+}
+
+pub(super) fn is_known_inline_environment(object: &serde_json::Map<String, Value>) -> bool {
     object.get("scope").and_then(Value::as_str) == Some("inline")
         && object
             .get("kind")
@@ -701,7 +786,13 @@ fn contains_opaque_block(blocks: &[Block]) -> bool {
                 .is_some_and(|title| title.inlines.iter().any(contains_opaque_inline))
                 || contains_opaque_block(&environment.children)
         }
-        Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) => false,
+        Block::Equation(equation) => contains_opaque_math_flow(&equation.math_tree.root),
+        Block::Align(align) => align.rows.iter().any(|row| {
+            row.cells
+                .iter()
+                .any(|tree| contains_opaque_math_flow(&tree.root))
+        }),
+        Block::ExplicitBreak(_) => false,
     })
 }
 

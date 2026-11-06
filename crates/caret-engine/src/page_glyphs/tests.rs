@@ -51,8 +51,6 @@ fn layout(document: &Document) -> DocumentLayoutSnapshot {
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }
@@ -274,7 +272,6 @@ fn unicode_visual_runs_keep_exact_font_instances_and_glyph_order() {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
-            source_range: None,
             props: Default::default(),
             children: vec![text_run("אבג 中文 😀", Some("he"))],
             extra: Default::default(),

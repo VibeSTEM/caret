@@ -51,6 +51,43 @@ fn session_replacement_invalidates_old_deadlines_and_keeps_autosave_enabled() {
 }
 
 #[test]
+fn revision_epoch_rollover_rejects_old_deadlines_and_preserves_draft_state() {
+    let mut lifecycle = DocumentLifecycleService::new(1);
+    lifecycle.set_auto_save_enabled(true, None, Duration::ZERO);
+    lifecycle.edited(u64::MAX, false, Duration::ZERO);
+    let Some(old) = lifecycle.next_deadline(Duration::ZERO) else {
+        panic!("old epoch should have an autosave deadline");
+    };
+    lifecycle.set_math_source_draft_pending(true, true);
+
+    lifecycle.set_session_generation(2, false);
+    lifecycle.edited(0, false, Duration::from_secs(2));
+
+    assert_eq!(lifecycle.next_deadline(Duration::from_secs(2)), None);
+    assert_eq!(
+        lifecycle.auto_save_deadline_fired(
+            old.session_generation(),
+            old.generation(),
+            Duration::from_secs(3),
+        ),
+        None
+    );
+    lifecycle.set_math_source_draft_pending(false, true);
+    let Some(current) = lifecycle.next_deadline(Duration::from_secs(3)) else {
+        panic!("zero revision should resume after the draft ends");
+    };
+    assert_eq!(current.session_generation(), 2);
+    assert_eq!(
+        lifecycle.auto_save_deadline_fired(
+            current.session_generation(),
+            current.generation(),
+            Duration::from_secs(3),
+        ),
+        Some(0)
+    );
+}
+
+#[test]
 fn failed_write_does_not_schedule_automatic_retry() {
     let mut lifecycle = DocumentLifecycleService::new(1);
     lifecycle.set_auto_save_enabled(true, None, Duration::ZERO);

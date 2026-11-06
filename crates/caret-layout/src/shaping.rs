@@ -264,8 +264,6 @@ mod tests {
                 props: BTreeMap::new(),
                 extra: BTreeMap::new(),
             }],
-            source_range: None,
-            source_map: Vec::new(),
             extra: BTreeMap::new(),
         })
     }
@@ -279,7 +277,6 @@ mod tests {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Bold,
                 definition_id: None,
-                source_range: None,
                 props: BTreeMap::new(),
                 children: vec![
                     run("\u{301}", None),
@@ -310,7 +307,6 @@ mod tests {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Italic,
                 definition_id: None,
-                source_range: None,
                 props: BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]),
                 children: vec![run("local", Some("en-GB"))],
                 extra: BTreeMap::new(),

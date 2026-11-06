@@ -195,8 +195,6 @@ fn equation_and_align_blocks_are_indexed_without_navigation_stops() {
 fn text_flow(run: Run) -> caret_doc::ParagraphContent {
     caret_doc::ParagraphContent::Text(caret_doc::TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }

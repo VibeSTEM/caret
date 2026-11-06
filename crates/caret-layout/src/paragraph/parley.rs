@@ -440,8 +440,6 @@ impl ParagraphLayouter {
                     props: Default::default(),
                     extra: Default::default(),
                 }],
-                source_range: None,
-                source_map: Vec::new(),
                 extra: Default::default(),
             })],
             mark_style: Default::default(),
@@ -645,7 +643,12 @@ fn font_families(names: &[String], emoji: bool, code: bool) -> Vec<FontFamilyNam
     if emoji {
         families.push(FontFamilyName::Generic(GenericFamily::Emoji));
     }
-    families.extend(names.iter().map(|family| FontFamilyName::named(family)));
+    families.extend(names.iter().map(|family| match family.as_str() {
+        "serif" => FontFamilyName::Generic(GenericFamily::Serif),
+        "sans-serif" => FontFamilyName::Generic(GenericFamily::SansSerif),
+        "monospace" => FontFamilyName::Generic(GenericFamily::Monospace),
+        _ => FontFamilyName::named(family),
+    }));
     if code {
         families.push(FontFamilyName::Generic(GenericFamily::Monospace));
     }
@@ -792,6 +795,24 @@ mod tests {
         assert_eq!(
             font_families(&[], false, true),
             vec![
+                FontFamilyName::Generic(GenericFamily::Monospace),
+                FontFamilyName::Generic(GenericFamily::SystemUi),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_generic_families_keep_their_generic_fontique_semantics() {
+        let names = vec![
+            "serif".to_owned(),
+            "sans-serif".to_owned(),
+            "monospace".to_owned(),
+        ];
+        assert_eq!(
+            font_families(&names, false, false),
+            vec![
+                FontFamilyName::Generic(GenericFamily::Serif),
+                FontFamilyName::Generic(GenericFamily::SansSerif),
                 FontFamilyName::Generic(GenericFamily::Monospace),
                 FontFamilyName::Generic(GenericFamily::SystemUi),
             ]

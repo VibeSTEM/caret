@@ -9,7 +9,11 @@ use caret_doc::{Align, MathTree};
 
 use crate::{MAX_MATH_SOURCE_BYTES, MathInputKind, ParsedMath};
 
+mod reconcile;
 mod source_map;
+pub use reconcile::{
+    reconcile_align_ranges, reconcile_tree_ranges, source_environment_props_match,
+};
 pub use source_map::{
     MathContentSourceMap, MathFlowSourceMap, MathRangeSourceMap, MathTextSourceMap,
     MathTextSourceSegment, MathTreeSourceMap,
@@ -27,7 +31,6 @@ pub struct AlignSourceMap {
     /// Align cell 的树映射，范围坐标已转换到完整公式源码。
     cell_trees: Vec<Vec<MathTreeSourceMap>>,
 }
-
 pub(crate) struct AlignSourceRanges {
     pub(crate) environment: Range<usize>,
     pub(crate) content: Range<usize>,
@@ -61,7 +64,9 @@ impl AlignSourceMap {
         self.cell_trees.get(row)?.get(cell)
     }
 
-    /// 校验 Align 环境、导航范围、cell 范围与每棵 cell 树映射。
+    /// 比较 Align 环境、导航范围、cell 范围及 cell 树中的源码位置。
+    ///
+    /// 仅比较位置身份，不比较映射扩展元数据；树内相邻线性文本片段可合并视为相同。
     pub fn same_locations(&self, other: &Self) -> bool {
         self.environment_range == other.environment_range
             && self.content_range == other.content_range
@@ -129,24 +134,52 @@ impl<'a> MathSourceMap<'a> {
         self.tree.as_ref()
     }
 
-    /// 在调用方完成结构/语义校验后重建树映射；失败时保留原有效映射。
+    /// 将已验证的独立范围映射绑定到普通公式树，成功后接管 `mapped`。
     ///
-    /// 新源码编辑必须与其目标树在同一事务中校验后调用。该函数只验证并采集范围，
-    /// 不负责证明任意目标树与 LaTeX 源码语义相同。
-    pub fn bind_tree_after_validated_edit(&mut self, tree: &MathTree) -> bool {
-        if self.kind == MathInputKind::Align {
-            return false;
-        }
-        let previous_signature = self
-            .tree
-            .as_ref()
-            .and_then(MathTreeSourceMap::semantic_signature);
-        let Some(mapped) =
-            MathTreeSourceMap::capture(tree, &self.source, 0, None, previous_signature.is_some())
-        else {
-            return false;
-        };
-        if previous_signature.is_some_and(|previous| mapped.semantic_signature() != Some(previous))
+    /// 调用方须在同一事务中验证树版本、源码语义和各结构位置的映射身份；映射范围使用
+    /// 完整源码坐标。本方法不证明映射与源码的语义对应；类型、范围、结构或已有语义签名
+    /// 不匹配时返回 `false`，保留原映射。
+    pub fn bind_tree_sidecar_after_validated_edit(
+        &mut self,
+        tree: &MathTree,
+        mapped: MathTreeSourceMap,
+    ) -> bool {
+        self.bind_tree_sidecar(tree, mapped, true)
+    }
+
+    /// 绑定已由 `MathTreeSourceMap::reconcile_for_tree` 对齐到目标树的 sidecar。
+    ///
+    /// 重对齐允许树保留不改变 TeX 显示内容的空 `TextFlow` 编辑锚点，因此新旧解析签名可以
+    /// 不同；目标树签名、完整源码范围及映射结构仍须通过校验。调用方不得跳过重对齐直接使用。
+    pub fn bind_reconciled_tree_sidecar_after_validated_edit(
+        &mut self,
+        tree: &MathTree,
+        mapped: MathTreeSourceMap,
+    ) -> bool {
+        self.bind_tree_sidecar(tree, mapped, false)
+    }
+
+    fn bind_tree_sidecar(
+        &mut self,
+        tree: &MathTree,
+        mapped: MathTreeSourceMap,
+        require_same_projection_signature: bool,
+    ) -> bool {
+        if self.kind == MathInputKind::Align
+            || self.align.is_some()
+            || !self.valid_source_ranges()
+            || mapped
+                .validates_projection(tree, &self.source, None)
+                .is_none()
+            || !mapped.signature_matches_tree(tree)
+            || (require_same_projection_signature
+                && self
+                    .tree
+                    .as_ref()
+                    .and_then(MathTreeSourceMap::semantic_signature)
+                    .is_some_and(|source_signature| {
+                        mapped.semantic_signature() != Some(source_signature)
+                    }))
         {
             return false;
         }
@@ -154,52 +187,202 @@ impl<'a> MathSourceMap<'a> {
         true
     }
 
-    /// 在调用方完成结构/语义校验后重建 Align 单元格映射。
+    /// 将独立映射绑定到 Align 的各个 cell，成功后接管 `mapped`。
     ///
-    /// 新源码编辑必须与其目标树在同一事务中校验后调用。该函数仅采集范围，
-    /// 不负责证明任意单元格树与 LaTeX 源码语义相同。
-    pub fn bind_align_after_validated_edit(&mut self, align: &Align) -> bool {
-        let Some(source_map) = &mut self.align else {
-            return false;
-        };
-        if align.rows.len() != source_map.cell_ranges.len()
-            || align
-                .rows
-                .iter()
-                .zip(&source_map.cell_ranges)
-                .any(|(row, ranges)| row.cells.len() != ranges.len())
-        {
+    /// 每个映射使用完整源码坐标并限制在对应 cell 范围。调用方须在同一事务中验证树版本、
+    /// 源码语义及各结构位置的映射身份；类型、行列、范围或任一 cell 结构/签名不匹配时
+    /// 返回 `false`，原映射不变。
+    pub fn bind_align_sidecars_after_validated_edit(
+        &mut self,
+        align: &Align,
+        mapped: Vec<Vec<MathTreeSourceMap>>,
+    ) -> bool {
+        self.bind_align_sidecars(align, mapped, true)
+    }
+
+    /// 绑定逐 cell 经 `reconcile_for_tree` 对齐的映射，允许空 TextFlow 编辑锚点。
+    pub fn bind_reconciled_align_sidecars_after_validated_edit(
+        &mut self,
+        align: &Align,
+        mapped: Vec<Vec<MathTreeSourceMap>>,
+    ) -> bool {
+        self.bind_align_sidecars(align, mapped, false)
+    }
+
+    fn bind_align_sidecars(
+        &mut self,
+        align: &Align,
+        mapped: Vec<Vec<MathTreeSourceMap>>,
+        require_same_projection_signature: bool,
+    ) -> bool {
+        if self.kind != MathInputKind::Align || self.tree.is_some() || !self.valid_source_ranges() {
             return false;
         }
-        let mut rows = Vec::with_capacity(align.rows.len());
-        for (row_index, (row, ranges)) in align.rows.iter().zip(&source_map.cell_ranges).enumerate()
+        let Some(current) = self.align.as_ref() else {
+            return false;
+        };
+        if align.rows.len() != current.cell_ranges.len() || mapped.len() != align.rows.len() {
+            return false;
+        }
+        for (row_index, ((row, ranges), maps)) in align
+            .rows
+            .iter()
+            .zip(&current.cell_ranges)
+            .zip(&mapped)
+            .enumerate()
         {
-            let mut cells = Vec::with_capacity(row.cells.len());
-            for (cell_index, (tree, range)) in row.cells.iter().zip(ranges).enumerate() {
-                let Some(mapped) = MathTreeSourceMap::capture(
-                    tree,
-                    &self.source,
-                    range.start,
-                    Some(range),
-                    source_map
-                        .cell_tree(row_index, cell_index)
-                        .and_then(MathTreeSourceMap::semantic_signature)
-                        .is_some(),
-                ) else {
-                    return false;
-                };
-                if source_map
-                    .cell_tree(row_index, cell_index)
-                    .and_then(MathTreeSourceMap::semantic_signature)
-                    .is_some_and(|previous| mapped.semantic_signature() != Some(previous))
+            if row.cells.len() != ranges.len() || row.cells.len() != maps.len() {
+                return false;
+            }
+            for (cell_index, ((tree, range), map)) in
+                row.cells.iter().zip(ranges).zip(maps).enumerate()
+            {
+                if !valid_range(range, &self.source)
+                    || range.start < current.content_range.start
+                    || range.end > current.content_range.end
+                    || map
+                        .validates_projection(tree, &self.source, Some(range))
+                        .is_none()
+                    || !map.signature_matches_tree(tree)
+                    || (require_same_projection_signature
+                        && current
+                            .cell_tree(row_index, cell_index)
+                            .and_then(MathTreeSourceMap::semantic_signature)
+                            .is_some_and(|source_signature| {
+                                map.semantic_signature() != Some(source_signature)
+                            }))
                 {
                     return false;
                 }
+            }
+        }
+        let Some(current) = self.align.as_mut() else {
+            return false;
+        };
+        current.cell_trees = mapped;
+        true
+    }
+
+    fn valid_source_ranges(&self) -> bool {
+        if !valid_range(&self.body_range, &self.source)
+            || !valid_range(&self.edit_range, &self.source)
+        {
+            return false;
+        }
+        match &self.align {
+            None => self.edit_range == (0..self.source.len()),
+            Some(align) => {
+                valid_range(&align.environment_range, &self.source)
+                    && valid_range(&align.content_range, &self.source)
+                    && self.body_range.start <= align.environment_range.start
+                    && align.environment_range.end <= self.body_range.end
+                    && align.environment_range.start <= align.content_range.start
+                    && align.content_range.end <= align.environment_range.end
+                    && align.content_range == self.edit_range
+                    && align.cell_ranges.len() == align.cell_navigation_ranges.len()
+                    && align
+                        .cell_ranges
+                        .iter()
+                        .zip(&align.cell_navigation_ranges)
+                        .all(|(cells, navigation)| {
+                            cells.len() == navigation.len()
+                                && cells.iter().zip(navigation).all(|(cell, nav)| {
+                                    valid_range(cell, &self.source)
+                                        && valid_range(nav, &self.source)
+                                        && align.content_range.start <= nav.start
+                                        && nav.end <= align.content_range.end
+                                        && nav.start <= cell.start
+                                        && cell.end <= nav.end
+                                })
+                        })
+            }
+        }
+    }
+
+    /// 过渡绑定入口：从当前源码重新生成 sidecar，再校验并绑定目标树。
+    ///
+    /// 编辑事务优先直接传入同次解析生成的 sidecar，避免重复解析。此入口保留给尚未迁移的
+    /// 调用点；源码、树或旧映射不能唯一对应时返回 `false`，原映射保持不变。
+    pub fn bind_tree_after_validated_edit(&mut self, tree: &MathTree) -> bool {
+        if self.kind == MathInputKind::Align {
+            return false;
+        }
+        let Ok(projection) = crate::parse_projection(&self.source, self.kind) else {
+            return false;
+        };
+        let (ProjectedMath::Tree(parsed), mut projection) = projection.into_parts() else {
+            return false;
+        };
+        let Some(parsed_map) = projection.tree().cloned() else {
+            return false;
+        };
+        let previous = self.tree.clone();
+        let Some(mapped) =
+            parsed_map.reconcile_for_tree(&parsed, tree, previous.as_ref(), &self.source, None)
+        else {
+            return false;
+        };
+        if !projection.bind_tree_sidecar_after_validated_edit(tree, mapped) {
+            return false;
+        }
+        self.tree = projection.tree;
+        true
+    }
+
+    /// 过渡 Align 绑定入口：重新解析当前源码并逐 cell 重建独立映射。
+    /// 编辑事务应优先传入同次解析的各 cell sidecar，避免重复解析。
+    pub fn bind_align_after_validated_edit(&mut self, align: &Align) -> bool {
+        if self.kind != MathInputKind::Align {
+            return false;
+        }
+        let Ok(projection) = crate::parse_projection(&self.source, self.kind) else {
+            return false;
+        };
+        let (ProjectedMath::Align(parsed), mut projection) = projection.into_parts() else {
+            return false;
+        };
+        let (Some(parsed_map), Some(previous_map)) = (projection.align(), self.align.clone())
+        else {
+            return false;
+        };
+        let mut rows = Vec::with_capacity(align.rows.len());
+        if parsed.rows.len() != align.rows.len()
+            || parsed_map.cell_navigation_ranges.len() != align.rows.len()
+        {
+            return false;
+        }
+        for (row_index, (parsed_row, target_row)) in parsed.rows.iter().zip(&align.rows).enumerate()
+        {
+            if parsed_row.cells.len() != target_row.cells.len() {
+                return false;
+            }
+            let mut cells = Vec::with_capacity(target_row.cells.len());
+            for (cell_index, (parsed_cell, target_cell)) in
+                parsed_row.cells.iter().zip(&target_row.cells).enumerate()
+            {
+                let (Some(parsed_cell_map), Some(scope)) = (
+                    parsed_map.cell_tree(row_index, cell_index),
+                    parsed_map.cell_range(row_index, cell_index),
+                ) else {
+                    return false;
+                };
+                let Some(mapped) = parsed_cell_map.reconcile_for_tree(
+                    parsed_cell,
+                    target_cell,
+                    previous_map.cell_tree(row_index, cell_index),
+                    &self.source,
+                    Some(&scope),
+                ) else {
+                    return false;
+                };
                 cells.push(mapped);
             }
             rows.push(cells);
         }
-        source_map.cell_trees = rows;
+        if !projection.bind_align_sidecars_after_validated_edit(align, rows) {
+            return false;
+        }
+        self.align = projection.align;
         true
     }
 
@@ -352,6 +535,13 @@ impl<'a> MathSourceMap<'a> {
     }
 }
 
+fn valid_range(range: &Range<usize>, source: &str) -> bool {
+    range.start <= range.end
+        && range.end <= source.len()
+        && source.is_char_boundary(range.start)
+        && source.is_char_boundary(range.end)
+}
+
 fn rebase_source_range(
     current: &Range<usize>,
     edit: &Range<usize>,
@@ -403,14 +593,12 @@ impl<'a> MathProjection<'a> {
         kind: MathInputKind,
         body_range: Range<usize>,
         tree: MathTree,
-        capture_source_map: bool,
+        tree_map: Option<MathTreeSourceMap>,
     ) -> Option<Self> {
         let edit_range = 0..source.len();
-        let mapped_tree = if capture_source_map {
-            Some(MathTreeSourceMap::capture(&tree, &source, 0, None, true)?)
-        } else {
-            None
-        };
+        if let Some(tree_map) = &tree_map {
+            tree_map.validates_projection(&tree, &source, None)?;
+        }
         Some(Self {
             content: ProjectedMath::Tree(tree),
             source_map: MathSourceMap {
@@ -419,7 +607,7 @@ impl<'a> MathProjection<'a> {
                 body_range,
                 edit_range,
                 align: None,
-                tree: mapped_tree,
+                tree: tree_map,
             },
         })
     }
@@ -429,46 +617,55 @@ impl<'a> MathProjection<'a> {
         body_range: Range<usize>,
         tree: Align,
         ranges: AlignSourceRanges,
-        capture_source_map: bool,
+        source_maps: Option<Vec<Vec<MathTreeSourceMap>>>,
     ) -> Option<Self> {
         if tree.rows.len() != ranges.cells.len() || tree.rows.len() != ranges.navigation.len() {
             return None;
         }
-        let mut cell_trees = Vec::with_capacity(tree.rows.len());
-        for ((row, ranges), navigation_ranges) in
-            tree.rows.iter().zip(&ranges.cells).zip(&ranges.navigation)
+        if let Some(source_maps) = &source_maps
+            && source_maps.len() != tree.rows.len()
         {
-            if row.cells.len() != ranges.len() || row.cells.len() != navigation_ranges.len() {
+            return None;
+        }
+        for (row_index, ((row, cell_ranges), navigation_ranges)) in tree
+            .rows
+            .iter()
+            .zip(&ranges.cells)
+            .zip(&ranges.navigation)
+            .enumerate()
+        {
+            if row.cells.len() != cell_ranges.len()
+                || row.cells.len() != navigation_ranges.len()
+                || source_maps
+                    .as_ref()
+                    .is_some_and(|maps| maps[row_index].len() != row.cells.len())
+            {
                 return None;
             }
-            let mut maps = Vec::with_capacity(row.cells.len());
-            for (cell, range) in row.cells.iter().zip(ranges) {
-                if capture_source_map {
-                    maps.push(MathTreeSourceMap::capture(
-                        cell,
-                        &source,
-                        range.start,
-                        Some(range),
-                        true,
-                    )?);
+            if let Some(maps) = &source_maps {
+                for ((cell_tree, cell_map), cell_range) in
+                    row.cells.iter().zip(&maps[row_index]).zip(cell_ranges)
+                {
+                    cell_map.validates_projection(cell_tree, &source, Some(cell_range))?;
                 }
             }
-            cell_trees.push(maps);
         }
+        let edit_range = ranges.content.clone();
+        let align = source_maps.map(|cell_trees| AlignSourceMap {
+            environment_range: ranges.environment,
+            content_range: ranges.content,
+            cell_ranges: ranges.cells,
+            cell_navigation_ranges: ranges.navigation,
+            cell_trees,
+        });
         Some(Self {
             content: ProjectedMath::Align(tree),
             source_map: MathSourceMap {
                 source,
                 kind: MathInputKind::Align,
                 body_range,
-                edit_range: ranges.content.clone(),
-                align: Some(AlignSourceMap {
-                    environment_range: ranges.environment,
-                    content_range: ranges.content,
-                    cell_ranges: ranges.cells,
-                    cell_navigation_ranges: ranges.navigation,
-                    cell_trees,
-                }),
+                edit_range,
+                align,
                 tree: None,
             },
         })
@@ -485,11 +682,13 @@ impl<'a> MathProjection<'a> {
     }
 
     /// 将树与源码映射分别移动给编辑会话持有，避免复制整棵树。
+    ///
+    /// 树不含瞬时位置；源码映射随第二个返回值单独移动。
     pub fn into_parts(self) -> (ProjectedMath, MathSourceMap<'a>) {
         (self.content, self.source_map)
     }
 
-    /// 消费投影并返回 Caret 文档节点；源码与范围继续由映射 sidecar 持有。
+    /// 只保留解析后的文档节点，临时源码与位置映射不得进入持久化模型。
     pub fn into_parsed(self) -> ParsedMath {
         match self.content {
             ProjectedMath::Tree(tree) => ParsedMath::Tree(tree),

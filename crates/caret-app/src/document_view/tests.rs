@@ -13,8 +13,6 @@ mod navigation;
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }

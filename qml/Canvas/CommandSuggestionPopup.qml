@@ -18,6 +18,49 @@ CommandPopupFrame {
     readonly property real maximumColumnWidth: 105
     readonly property real columnSpacing: Theme.spacingMedium
     readonly property real maximumPopupWidth: 240
+    readonly property var mathCandidateLabels: ({
+            "\\frac": qsTranslate("CommandCompletion", "Fraction"),
+            "\\sqrt": qsTranslate("CommandCompletion", "Square root"),
+            "\\superscript": qsTranslate("CommandCompletion", "Superscript"),
+            "\\subscript": qsTranslate("CommandCompletion", "Subscript"),
+            "\\sum": qsTranslate("CommandCompletion", "Summation"),
+            "\\int": qsTranslate("CommandCompletion", "Integral"),
+            "\\infty": qsTranslate("CommandCompletion", "Infinity"),
+            "\\alpha": qsTranslate("CommandCompletion", "Greek alpha"),
+            "\\beta": qsTranslate("CommandCompletion", "Greek beta"),
+            "\\gamma": qsTranslate("CommandCompletion", "Greek gamma"),
+            "\\delta": qsTranslate("CommandCompletion", "Greek delta"),
+            "\\epsilon": qsTranslate("CommandCompletion", "Greek epsilon"),
+            "\\zeta": qsTranslate("CommandCompletion", "Greek zeta"),
+            "\\eta": qsTranslate("CommandCompletion", "Greek eta"),
+            "\\theta": qsTranslate("CommandCompletion", "Greek theta"),
+            "\\iota": qsTranslate("CommandCompletion", "Greek iota"),
+            "\\kappa": qsTranslate("CommandCompletion", "Greek kappa"),
+            "\\lambda": qsTranslate("CommandCompletion", "Greek lambda"),
+            "\\mu": qsTranslate("CommandCompletion", "Greek mu"),
+            "\\nu": qsTranslate("CommandCompletion", "Greek nu"),
+            "\\xi": qsTranslate("CommandCompletion", "Greek xi"),
+            "\\pi": qsTranslate("CommandCompletion", "Greek pi"),
+            "\\rho": qsTranslate("CommandCompletion", "Greek rho"),
+            "\\sigma": qsTranslate("CommandCompletion", "Greek sigma"),
+            "\\tau": qsTranslate("CommandCompletion", "Greek tau"),
+            "\\upsilon": qsTranslate("CommandCompletion", "Greek upsilon"),
+            "\\phi": qsTranslate("CommandCompletion", "Greek phi"),
+            "\\chi": qsTranslate("CommandCompletion", "Greek chi"),
+            "\\psi": qsTranslate("CommandCompletion", "Greek psi"),
+            "\\omega": qsTranslate("CommandCompletion", "Greek omega"),
+            "\\Gamma": qsTranslate("CommandCompletion", "Greek capital Gamma"),
+            "\\Delta": qsTranslate("CommandCompletion", "Greek capital Delta"),
+            "\\Theta": qsTranslate("CommandCompletion", "Greek capital Theta"),
+            "\\Lambda": qsTranslate("CommandCompletion", "Greek capital Lambda"),
+            "\\Xi": qsTranslate("CommandCompletion", "Greek capital Xi"),
+            "\\Pi": qsTranslate("CommandCompletion", "Greek capital Pi"),
+            "\\Sigma": qsTranslate("CommandCompletion", "Greek capital Sigma"),
+            "\\Upsilon": qsTranslate("CommandCompletion", "Greek capital Upsilon"),
+            "\\Phi": qsTranslate("CommandCompletion", "Greek capital Phi"),
+            "\\Psi": qsTranslate("CommandCompletion", "Greek capital Psi"),
+            "\\Omega": qsTranslate("CommandCompletion", "Greek capital Omega")
+        })
     readonly property real aliasColumnWidth: Math.min(maximumColumnWidth, widestTextWidth(aliasMeasurements))
     readonly property real labelColumnWidth: Math.min(maximumColumnWidth, widestTextWidth(labelMeasurements))
     preferredWidth: candidateList.count > 0 ? Math.min(maximumPopupWidth, aliasColumnWidth + (labelColumnWidth > 0 ? columnSpacing + labelColumnWidth : 0) + Theme.spacingSmall * 2 + Theme.spacingTiny * 2 + Theme.borderWidth * 2) : Math.min(maximumPopupWidth, emptyMetrics.advanceWidth + Theme.spacingTiny * 2 + Theme.borderWidth * 2)
@@ -70,11 +113,14 @@ CommandPopupFrame {
         case "paragraph.first_line_indent.set":
             return qsTranslate("CommandCompletion", "First-line indent");
         case "insert.inline_math":
+        case "math.split_inline":
             return qsTranslate("CommandCompletion", "Inline math");
         case "insert.equation":
             return qsTranslate("CommandCompletion", "Single-line equation");
         case "insert.align":
             return qsTranslate("CommandCompletion", "Multiline equation");
+        case "math.insert":
+            return root.mathCandidateLabels[candidate.alias] || candidate.alias || candidate.commandId;
         case "insert.equation.fraction":
             return qsTranslate("CommandCompletion", "Fraction");
         case "insert.equation.radical":

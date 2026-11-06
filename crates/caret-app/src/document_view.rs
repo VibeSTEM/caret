@@ -5,8 +5,8 @@
 
 use caret_doc::Document;
 use caret_engine::{
-    DocumentLayoutRuntime, DocumentLayoutSnapshot, EditError, PageGlyphRasterizer, Selection,
-    Session, VisualAffinity,
+    CompositionRange, DocumentLayoutRuntime, DocumentLayoutSnapshot, EditError, MathEditTarget,
+    MathTextPosition, PageGlyphRasterizer, Session, VisualAffinity,
 };
 
 mod composition;
@@ -18,6 +18,21 @@ mod selection;
 mod snapshot;
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MathInteractionContext {
+    target: MathEditTarget,
+    anchor: MathTextPosition,
+    focus: MathTextPosition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InteractionContext {
+    document_generation: u64,
+    focused_paragraph_id: caret_doc::NodeId,
+    command_input_active: bool,
+    math_context: Option<MathInteractionContext>,
+}
 
 /// 当前文档会话与可复用的字体/布局运行时。
 pub struct DocumentViewRuntime {
@@ -32,8 +47,8 @@ pub struct DocumentViewRuntime {
     preedit_cursor_position_utf16: usize,
     composition_preview_session: Option<Session>,
     composition_snapshot: Option<DocumentLayoutSnapshot>,
-    composition_range: Option<Selection>,
-    last_interaction_context: Option<(u64, caret_doc::NodeId, bool)>,
+    composition_range: Option<CompositionRange>,
+    last_interaction_context: Option<InteractionContext>,
 }
 
 impl DocumentViewRuntime {

@@ -3,10 +3,57 @@
 use super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run,
+    InlineEnvironmentKind, MathContent, NodeId, Paragraph, ParagraphContent, Run,
 };
 use caret_engine::Command;
 use std::collections::BTreeMap;
+
+fn enter_math_text(runtime: &mut DocumentViewRuntime, source: &str) -> Result<(), String> {
+    let session = runtime.session_mut_for_test();
+    session
+        .run(Command::InsertInlineMath(source.to_owned()))
+        .map_err(|error| error.to_string())?;
+    session
+        .run(Command::EnterMath(caret_engine::Direction::Backward))
+        .map_err(|error| error.to_string())?;
+    for _ in 0..64 {
+        if matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(caret_engine::MathEditBranch::Text { .. })
+        ) {
+            return Ok(());
+        }
+        session
+            .run(Command::MoveCaret(caret_engine::Direction::Backward))
+            .map_err(|error| error.to_string())?;
+    }
+    Err("math TextFlow was not reached".to_owned())
+}
+
+fn inline_math_text(runtime: &DocumentViewRuntime) -> Result<String, String> {
+    let Some(Block::Paragraph(paragraph)) = runtime.session.document().body.first() else {
+        return Err("expected host paragraph".to_owned());
+    };
+    let Some(ParagraphContent::Math(math)) = paragraph
+        .inlines
+        .iter()
+        .find(|inline| matches!(inline, ParagraphContent::Math(_)))
+    else {
+        return Err("expected inline formula".to_owned());
+    };
+    let Some(MathContent::Math(fraction)) = math.math_tree.root.content.first() else {
+        return Err("expected fraction".to_owned());
+    };
+    let Some(text) = fraction.children.get(1).and_then(|flow| {
+        flow.content.iter().find_map(|content| match content {
+            MathContent::Text(text) => Some(text),
+            _ => None,
+        })
+    }) else {
+        return Err("expected denominator TextFlow".to_owned());
+    };
+    Ok(text.runs.iter().map(|run| run.text.as_str()).collect())
+}
 
 fn paragraph_with_text(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
@@ -122,7 +169,7 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
         .map_err(|error| error.to_string())?;
     assert!(matches!(
         runtime.session.math_edit().map(|edit| &edit.branch),
-        Some(caret_engine::MathEditBranch::Source)
+        Some(caret_engine::MathEditBranch::Source | caret_engine::MathEditBranch::Tree { .. })
     ));
     let before_document = runtime.session.document().clone();
     let before_generation = runtime.session.document_generation();
@@ -173,6 +220,191 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(snapshot["inputMethodContext"]["enabled"], true);
+    Ok(())
+}
+
+#[test]
+fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result<(), String> {
+    let source = r"\frac{1}{\text{A😀B}}";
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, source)?;
+    runtime
+        .session_mut_for_test()
+        .run(Command::SetMathTextSelection {
+            anchor: 1,
+            focus: 1,
+        })
+        .map_err(|error| error.to_string())?;
+
+    let initial_generation = runtime.session.document_generation();
+    let preview = runtime.input_method_event_json("に".to_owned(), String::new(), 0, 0, 1)?;
+    let preview: Value = serde_json::from_str(&preview).map_err(|error| error.to_string())?;
+    assert_eq!(preview["inputMethodContext"]["enabled"], true);
+    assert_eq!(preview["inputMethodContext"]["surroundingText"], "A😀B");
+    assert_eq!(preview["inputMethodContext"]["cursorPosition"], 1);
+    assert_eq!(preview["inputMethodContext"]["anchorPosition"], 1);
+    assert_eq!(runtime.session.document_generation(), initial_generation);
+    assert_eq!(inline_math_text(&runtime)?, "A😀B");
+    assert_eq!(
+        runtime
+            .session
+            .composition()
+            .map(|value| value.preedit.as_str()),
+        Some("に")
+    );
+
+    let committed = runtime.input_method_event_json(String::new(), "に".to_owned(), 0, 0, 0)?;
+    let committed: Value = serde_json::from_str(&committed).map_err(|error| error.to_string())?;
+    assert_eq!(committed["inputMethodContext"]["enabled"], true);
+    assert_eq!(inline_math_text(&runtime)?, "Aに😀B");
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(
+        runtime.session.document_generation(),
+        initial_generation + 1
+    );
+
+    runtime
+        .session_mut_for_test()
+        .run(Command::Undo)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(inline_math_text(&runtime)?, "A😀B");
+
+    let before_cancel_generation = runtime.session.document_generation();
+    runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 3)?;
+    let cancelled = runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
+    let cancelled: Value = serde_json::from_str(&cancelled).map_err(|error| error.to_string())?;
+    assert_eq!(cancelled["inputMethodContext"]["enabled"], true);
+    assert_eq!(inline_math_text(&runtime)?, "A😀B");
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(
+        runtime.session.document_generation(),
+        before_cancel_generation
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_math_text_ime_full_layout_restores_tree_and_retries_as_one_undoable_edit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r"\frac{1}{\text{A😀B}}";
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, source)?;
+    runtime
+        .session_mut_for_test()
+        .run(Command::SetMathTextSelection {
+            anchor: 1,
+            focus: 1,
+        })?;
+
+    let document_before = runtime.session.document().clone();
+    let session_id_before = runtime.session.session_id().clone();
+    let generation_before = runtime.session.document_generation();
+    let history_state_before = runtime.session.history_state_id();
+    let selection_before = runtime.session.selection().clone();
+    let math_edit_before = runtime.session.math_edit().cloned();
+    let math_context_before = runtime.session.math_text_input_context();
+
+    runtime.input_method_event_json("に".to_owned(), String::new(), 0, 0, 1)?;
+    let published_before = runtime.layout_snapshot_json()?;
+    let composition_before = runtime.session.composition().cloned();
+    let composition_id_before = runtime.composition_id;
+    let composition_range_before = runtime.composition_range.clone();
+    let composition_snapshot_before = runtime.composition_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )
+    });
+    let last_snapshot_before = runtime.last_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )
+    });
+
+    super::super::composition::fail_next_ime_full_layout_for_test();
+    let failed = runtime.input_method_event_json(String::new(), "に".to_owned(), 0, 0, 0);
+
+    assert!(failed.is_err());
+    assert_eq!(runtime.session.document(), &document_before);
+    assert_eq!(inline_math_text(&runtime)?, "A😀B");
+    assert_eq!(runtime.session.session_id(), &session_id_before);
+    assert_eq!(runtime.session.document_generation(), generation_before);
+    assert_eq!(runtime.session.history_state_id(), history_state_before);
+    assert_eq!(runtime.session.selection(), &selection_before);
+    assert_eq!(runtime.session.math_edit().cloned(), math_edit_before);
+    assert_eq!(
+        runtime.session.math_text_input_context(),
+        math_context_before
+    );
+    assert_eq!(runtime.session.composition(), composition_before.as_ref());
+    assert_eq!(runtime.composition_id, composition_id_before);
+    assert_eq!(runtime.composition_range, composition_range_before);
+    assert_eq!(
+        runtime.composition_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )),
+        composition_snapshot_before
+    );
+    assert_eq!(
+        runtime.last_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )),
+        last_snapshot_before
+    );
+    assert_eq!(runtime.layout_snapshot_json()?, published_before);
+
+    let committed = runtime.input_method_event_json(String::new(), "に".to_owned(), 0, 0, 0)?;
+    let committed: Value = serde_json::from_str(&committed)?;
+    assert_eq!(committed["inputMethodContext"]["enabled"], true);
+    assert_eq!(inline_math_text(&runtime)?, "Aに😀B");
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(runtime.session.document_generation(), generation_before + 1);
+    runtime.session_mut_for_test().run(Command::Undo)?;
+    assert_eq!(runtime.session.document(), &document_before);
+    assert_eq!(inline_math_text(&runtime)?, "A😀B");
+    Ok(())
+}
+
+#[test]
+fn math_textflow_ime_invalid_replacement_keeps_formula_and_focus() -> Result<(), String> {
+    let source = r"\frac{1}{\text{abcd}}";
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, source)?;
+    runtime
+        .session_mut_for_test()
+        .run(Command::SetMathTextSelection {
+            anchor: 2,
+            focus: 2,
+        })
+        .map_err(|error| error.to_string())?;
+    let before_generation = runtime.session.document_generation();
+    let before_edit = runtime.session.math_edit().cloned();
+    let before_document = runtime.session.document().clone();
+    assert!(
+        runtime
+            .input_method_event_json(String::new(), "X".to_owned(), -100, 1, 0)
+            .is_err()
+    );
+    assert_eq!(runtime.session.document(), &before_document);
+    assert_eq!(runtime.session.document_generation(), before_generation);
+    assert_eq!(runtime.session.math_edit().cloned(), before_edit);
+    assert!(runtime.session.composition().is_none());
+    assert_eq!(inline_math_text(&runtime)?, "abcd");
     Ok(())
 }
 
@@ -278,7 +510,6 @@ fn ime_preedit_inline_highlight_uses_the_preview_session_geometry()
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::new(),
         children: vec![text_flow(Run {
             text: "abcdef".to_owned(),
@@ -595,6 +826,31 @@ fn failed_ime_commit_keeps_its_composition_id_cancellable() -> Result<(), Box<dy
 }
 
 #[test]
+fn escape_cancels_math_text_preedit_and_keeps_formula_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{ab}}")?;
+    let before = inline_math_text(&runtime)?;
+    runtime.input_method_event_json("中".to_owned(), String::new(), 0, 0, 1)?;
+    assert!(runtime.session.composition().is_some());
+    assert!(runtime.composition_id.is_some());
+
+    runtime.handle_editor_key_json("escape")?;
+
+    assert!(runtime.session.composition().is_none());
+    assert!(runtime.composition_id.is_none());
+    assert!(runtime.composition_preview_session.is_none());
+    assert!(runtime.composition_snapshot.is_none());
+    assert!(runtime.composition_range.is_none());
+    assert_eq!(inline_math_text(&runtime)?, before);
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.branch),
+        Some(caret_engine::MathEditBranch::Text { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn invalid_new_preedit_after_commit_publishes_committed_snapshot()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
@@ -780,6 +1036,115 @@ fn failed_ime_preview_does_not_install_composition_state() -> Result<(), Box<dyn
     runtime.session.run(Command::Undo)?;
     assert_eq!(runtime.session.document().body.len(), 1);
     assert_eq!(runtime.session.document_generation(), 2);
+    Ok(())
+}
+
+#[test]
+fn failed_ime_commit_relayout_restores_session_and_published_composition_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("AB".to_owned())?;
+    runtime.input_method_event_json("X".to_owned(), String::new(), 0, 0, 1)?;
+
+    let published_before = runtime.layout_snapshot_json()?;
+    let document_before = runtime.session.document().clone();
+    let session_id_before = runtime.session.session_id().clone();
+    let generation_before = runtime.session.document_generation();
+    let history_state_before = runtime.session.history_state_id();
+    let selection_before = runtime.session.selection().clone();
+    let composition_before = runtime.session.composition().cloned();
+    let composition_id_before = runtime.composition_id;
+    let preview_session_id_before = runtime
+        .composition_preview_session
+        .as_ref()
+        .map(|session| session.session_id().clone());
+    let preview_generation_before = runtime
+        .composition_preview_session
+        .as_ref()
+        .map(caret_engine::Session::document_generation);
+    let preview_document_before = runtime
+        .composition_preview_session
+        .as_ref()
+        .map(|session| session.document().clone());
+    let composition_snapshot_before = runtime.composition_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )
+    });
+    let composition_range_before = runtime.composition_range.clone();
+    let last_snapshot_before = runtime.last_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )
+    });
+    let cursor_position_before = runtime.preedit_cursor_position_utf16;
+
+    super::super::composition::fail_next_ime_relayout_for_test();
+    let result = runtime.input_method_event_json(String::new(), "Z".to_owned(), 0, 0, 0);
+
+    assert!(result.is_err());
+    assert_eq!(runtime.session.document(), &document_before);
+    assert_eq!(runtime.session.session_id(), &session_id_before);
+    assert_eq!(runtime.session.document_generation(), generation_before);
+    assert_eq!(runtime.session.history_state_id(), history_state_before);
+    assert_eq!(runtime.session.selection(), &selection_before);
+    assert_eq!(runtime.session.composition(), composition_before.as_ref());
+    assert_eq!(runtime.composition_id, composition_id_before);
+    assert_eq!(
+        runtime
+            .composition_preview_session
+            .as_ref()
+            .map(|session| session.session_id().clone()),
+        preview_session_id_before
+    );
+    assert_eq!(
+        runtime
+            .composition_preview_session
+            .as_ref()
+            .map(caret_engine::Session::document_generation),
+        preview_generation_before
+    );
+    assert_eq!(
+        runtime
+            .composition_preview_session
+            .as_ref()
+            .map(|session| session.document().clone()),
+        preview_document_before
+    );
+    assert_eq!(
+        runtime.composition_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )),
+        composition_snapshot_before
+    );
+    assert_eq!(runtime.composition_range, composition_range_before);
+    assert_eq!(
+        runtime.last_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.font_generation,
+            snapshot.paragraphs.len(),
+            snapshot.pages.len(),
+        )),
+        last_snapshot_before
+    );
+    assert_eq!(
+        runtime.preedit_cursor_position_utf16,
+        cursor_position_before
+    );
+    assert_eq!(runtime.layout_snapshot_json()?, published_before);
     Ok(())
 }
 

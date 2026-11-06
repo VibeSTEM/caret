@@ -284,7 +284,8 @@ fn validate_paragraph_content<'a>(
         }
         ParagraphContent::Math(math) => {
             insert_id(ids, &math.id)?;
-            validate_math_tree(&math.math_tree, ids, node_count)
+            validate_math_tree(&math.math_tree, ids, node_count)?;
+            validate_inline_math_root(&math.math_tree.root)
         }
         ParagraphContent::Environment(environment) => {
             insert_id(ids, &environment.id)?;
@@ -315,6 +316,38 @@ fn validate_paragraph_content<'a>(
         }
         ParagraphContent::SoftBreak(_) | ParagraphContent::Opaque(_) => Ok(()),
     }
+}
+
+/// InlineMath 根流中的 TextFlow（包括透明 Row 与根行内环境后）必须提升到 Paragraph。
+/// MathNode 固定操作数中的 TextFlow 属于数学树，仍由通用 MathFlow 校验。
+fn validate_inline_math_root(flow: &MathFlow) -> Result<(), ModelError> {
+    fn validate_root_content(content: &MathContent) -> Result<(), ModelError> {
+        match content {
+            MathContent::Text(_) => Err(ModelError::InvalidDocument(
+                "InlineMath root TextFlow must be promoted to Paragraph".to_owned(),
+            )),
+            MathContent::Environment(environment) => {
+                for child in &environment.children {
+                    validate_root_content(child)?;
+                }
+                Ok(())
+            }
+            MathContent::Math(node) if node.kind == MathNodeKind::Row => {
+                for child_flow in &node.children {
+                    for child in &child_flow.content {
+                        validate_root_content(child)?;
+                    }
+                }
+                Ok(())
+            }
+            MathContent::Math(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => Ok(()),
+        }
+    }
+
+    for content in &flow.content {
+        validate_root_content(content)?;
+    }
+    Ok(())
 }
 
 fn validate_math_tree<'a>(

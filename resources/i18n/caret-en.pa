@@ -626,3 +626,198 @@ message_118:
   src: Underline
   tr: Underline
   st: finished
+
+message_119:
+  src: Superscript
+  tr: Superscript
+  st: finished
+
+message_120:
+  src: Subscript
+  tr: Subscript
+  st: finished
+
+message_121:
+  src: Summation
+  tr: Summation
+  st: finished
+
+message_122:
+  src: Integral
+  tr: Integral
+  st: finished
+
+message_123:
+  src: Infinity
+  tr: Infinity
+  st: finished
+
+message_124:
+  src: Greek alpha
+  tr: Greek alpha
+  st: finished
+
+message_125:
+  src: Greek beta
+  tr: Greek beta
+  st: finished
+
+message_126:
+  src: Greek gamma
+  tr: Greek gamma
+  st: finished
+
+message_127:
+  src: Greek delta
+  tr: Greek delta
+  st: finished
+
+message_128:
+  src: Greek epsilon
+  tr: Greek epsilon
+  st: finished
+
+message_129:
+  src: Greek zeta
+  tr: Greek zeta
+  st: finished
+
+message_130:
+  src: Greek eta
+  tr: Greek eta
+  st: finished
+
+message_131:
+  src: Greek theta
+  tr: Greek theta
+  st: finished
+
+message_132:
+  src: Greek iota
+  tr: Greek iota
+  st: finished
+
+message_133:
+  src: Greek kappa
+  tr: Greek kappa
+  st: finished
+
+message_134:
+  src: Greek lambda
+  tr: Greek lambda
+  st: finished
+
+message_135:
+  src: Greek mu
+  tr: Greek mu
+  st: finished
+
+message_136:
+  src: Greek nu
+  tr: Greek nu
+  st: finished
+
+message_137:
+  src: Greek xi
+  tr: Greek xi
+  st: finished
+
+message_138:
+  src: Greek pi
+  tr: Greek pi
+  st: finished
+
+message_139:
+  src: Greek rho
+  tr: Greek rho
+  st: finished
+
+message_140:
+  src: Greek sigma
+  tr: Greek sigma
+  st: finished
+
+message_141:
+  src: Greek tau
+  tr: Greek tau
+  st: finished
+
+message_142:
+  src: Greek upsilon
+  tr: Greek upsilon
+  st: finished
+
+message_143:
+  src: Greek phi
+  tr: Greek phi
+  st: finished
+
+message_144:
+  src: Greek chi
+  tr: Greek chi
+  st: finished
+
+message_145:
+  src: Greek psi
+  tr: Greek psi
+  st: finished
+
+message_146:
+  src: Greek omega
+  tr: Greek omega
+  st: finished
+
+message_147:
+  src: Greek capital Gamma
+  tr: Greek capital Gamma
+  st: finished
+
+message_148:
+  src: Greek capital Delta
+  tr: Greek capital Delta
+  st: finished
+
+message_149:
+  src: Greek capital Theta
+  tr: Greek capital Theta
+  st: finished
+
+message_150:
+  src: Greek capital Lambda
+  tr: Greek capital Lambda
+  st: finished
+
+message_151:
+  src: Greek capital Xi
+  tr: Greek capital Xi
+  st: finished
+
+message_152:
+  src: Greek capital Pi
+  tr: Greek capital Pi
+  st: finished
+
+message_153:
+  src: Greek capital Sigma
+  tr: Greek capital Sigma
+  st: finished
+
+message_154:
+  src: Greek capital Upsilon
+  tr: Greek capital Upsilon
+  st: finished
+
+message_155:
+  src: Greek capital Phi
+  tr: Greek capital Phi
+  st: finished
+
+message_156:
+  src: Greek capital Psi
+  tr: Greek capital Psi
+  st: finished
+
+message_157:
+  src: Greek capital Omega
+  tr: Greek capital Omega
+  st: finished

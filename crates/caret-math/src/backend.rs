@@ -41,6 +41,7 @@ pub(crate) enum BackendNodeKind {
     TextSpace,
     TextSymbol,
     TextStyle,
+    MathAlphabet,
     Color,
     TextColor,
     ColorBox,
@@ -130,6 +131,7 @@ impl BackendNodeKind {
             B::Style => M::Style,
             B::Group => M::Group,
             B::Placeholder => M::Placeholder,
+            B::MathAlphabet => M::Text,
             B::TextContent | B::TextSpace | B::TextSymbol | B::TextStyle => return None,
         })
     }
@@ -238,30 +240,11 @@ fn text_nodes(flow: &TextFlow) -> Vec<Node> {
 }
 
 fn append_run(output: &mut Vec<Node>, run: &Run, id: NodeId) {
-    let text = Node::leaf(
-        id.clone(),
+    output.push(Node::leaf(
+        id,
         MathNodeKind::TextContent,
         Some(run.text.clone()),
-    );
-    let bold = run.props.get("bold").and_then(serde_json::Value::as_bool) == Some(true);
-    let italic = run.props.get("italic").and_then(serde_json::Value::as_bool) == Some(true);
-    let style = match (bold, italic) {
-        (true, true) => Some("bi"),
-        (true, false) => Some("bf"),
-        (false, true) => Some("it"),
-        (false, false) => None,
-    };
-    output.push(if let Some(style) = style {
-        Node {
-            id,
-            kind: MathNodeKind::TextStyle,
-            text: None,
-            attributes: BTreeMap::from([("style".into(), style.into())]),
-            children: vec![text],
-        }
-    } else {
-        text
-    });
+    ));
 }
 
 fn math_node(node: &caret_doc::MathNode) -> Node {

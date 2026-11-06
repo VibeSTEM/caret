@@ -626,3 +626,198 @@ message_118:
   src: Underline
   tr: 下線
   st: finished
+
+message_119:
+  src: Superscript
+  tr: 上付き文字
+  st: finished
+
+message_120:
+  src: Subscript
+  tr: 下付き文字
+  st: finished
+
+message_121:
+  src: Summation
+  tr: 総和
+  st: finished
+
+message_122:
+  src: Integral
+  tr: 積分
+  st: finished
+
+message_123:
+  src: Infinity
+  tr: 無限大
+  st: finished
+
+message_124:
+  src: Greek alpha
+  tr: ギリシャ文字 α
+  st: finished
+
+message_125:
+  src: Greek beta
+  tr: ギリシャ文字 β
+  st: finished
+
+message_126:
+  src: Greek gamma
+  tr: ギリシャ文字 γ
+  st: finished
+
+message_127:
+  src: Greek delta
+  tr: ギリシャ文字 δ
+  st: finished
+
+message_128:
+  src: Greek epsilon
+  tr: ギリシャ文字 ε
+  st: finished
+
+message_129:
+  src: Greek zeta
+  tr: ギリシャ文字 ζ
+  st: finished
+
+message_130:
+  src: Greek eta
+  tr: ギリシャ文字 η
+  st: finished
+
+message_131:
+  src: Greek theta
+  tr: ギリシャ文字 θ
+  st: finished
+
+message_132:
+  src: Greek iota
+  tr: ギリシャ文字 ι
+  st: finished
+
+message_133:
+  src: Greek kappa
+  tr: ギリシャ文字 κ
+  st: finished
+
+message_134:
+  src: Greek lambda
+  tr: ギリシャ文字 λ
+  st: finished
+
+message_135:
+  src: Greek mu
+  tr: ギリシャ文字 μ
+  st: finished
+
+message_136:
+  src: Greek nu
+  tr: ギリシャ文字 ν
+  st: finished
+
+message_137:
+  src: Greek xi
+  tr: ギリシャ文字 ξ
+  st: finished
+
+message_138:
+  src: Greek pi
+  tr: ギリシャ文字 π
+  st: finished
+
+message_139:
+  src: Greek rho
+  tr: ギリシャ文字 ρ
+  st: finished
+
+message_140:
+  src: Greek sigma
+  tr: ギリシャ文字 σ
+  st: finished
+
+message_141:
+  src: Greek tau
+  tr: ギリシャ文字 τ
+  st: finished
+
+message_142:
+  src: Greek upsilon
+  tr: ギリシャ文字 υ
+  st: finished
+
+message_143:
+  src: Greek phi
+  tr: ギリシャ文字 φ
+  st: finished
+
+message_144:
+  src: Greek chi
+  tr: ギリシャ文字 χ
+  st: finished
+
+message_145:
+  src: Greek psi
+  tr: ギリシャ文字 ψ
+  st: finished
+
+message_146:
+  src: Greek omega
+  tr: ギリシャ文字 ω
+  st: finished
+
+message_147:
+  src: Greek capital Gamma
+  tr: ギリシャ大文字 Γ
+  st: finished
+
+message_148:
+  src: Greek capital Delta
+  tr: ギリシャ大文字 Δ
+  st: finished
+
+message_149:
+  src: Greek capital Theta
+  tr: ギリシャ大文字 Θ
+  st: finished
+
+message_150:
+  src: Greek capital Lambda
+  tr: ギリシャ大文字 Λ
+  st: finished
+
+message_151:
+  src: Greek capital Xi
+  tr: ギリシャ大文字 Ξ
+  st: finished
+
+message_152:
+  src: Greek capital Pi
+  tr: ギリシャ大文字 Π
+  st: finished
+
+message_153:
+  src: Greek capital Sigma
+  tr: ギリシャ大文字 Σ
+  st: finished
+
+message_154:
+  src: Greek capital Upsilon
+  tr: ギリシャ大文字 Υ
+  st: finished
+
+message_155:
+  src: Greek capital Phi
+  tr: ギリシャ大文字 Φ
+  st: finished
+
+message_156:
+  src: Greek capital Psi
+  tr: ギリシャ大文字 Ψ
+  st: finished
+
+message_157:
+  src: Greek capital Omega
+  tr: ギリシャ大文字 Ω
+  st: finished

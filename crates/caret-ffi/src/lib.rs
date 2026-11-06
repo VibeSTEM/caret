@@ -28,9 +28,9 @@ mod generated {
         move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime,
         paste_text_json, place_caret_at_page_json, prepare_document_file,
         prepare_recovery_document, rasterize_page_glyphs, recovery_entries_json,
-        recovery_update_deadline_fired, recovery_update_write_finished, redo_json,
+        recovery_update_deadline_fired, recovery_update_write_finished_with_binding, redo_json,
         selected_text_json, set_document_auto_save_enabled, set_document_recovery_id,
-        set_selection_json, split_paragraph_json, undo_json, update_recovery_document,
+        set_selection_json, split_paragraph_json, undo_json, update_recovery_document_for_snapshot,
         write_document_file, write_document_file_checked, write_document_file_replace_external,
     };
     use crate::settings::{
@@ -116,6 +116,7 @@ mod generated {
             session_generation: u64,
             document_generation: u64,
             recovery_binding_generation: u64,
+            recovery_rebind_pending: bool,
             history_state_id: u64,
             bytes: Vec<u8>,
             content_digest: String,
@@ -123,6 +124,12 @@ mod generated {
             recovery_id: String,
             recovery_original_path: String,
             recovery_baseline_digest: String,
+            error: String,
+        }
+
+        struct RecoveryUpdateResult {
+            binding_generation: u64,
+            superseded: bool,
             error: String,
         }
 
@@ -204,14 +211,15 @@ mod generated {
                 expected_document_generation: u64,
             ) -> DocumentOpenResult;
             /// 将恢复会话的新快照原子更新到同一恢复项。
-            fn update_recovery_document(
+            fn update_recovery_document_for_snapshot(
                 id: String,
                 original_path: String,
                 baseline_digest: String,
                 binding_generation: u64,
                 document_generation: u64,
+                rebind_pending: bool,
                 bytes: Vec<u8>,
-            ) -> String;
+            ) -> RecoveryUpdateResult;
             /// 捕获恢复副本刷新 deadline 对应的最新文档快照。
             fn recovery_update_deadline_fired(
                 runtime: &mut DocumentRuntime,
@@ -219,12 +227,13 @@ mod generated {
                 generation: u64,
             ) -> DocumentSaveSnapshot;
             /// 完成恢复副本写入并返回下一个有效 deadline。
-            fn recovery_update_write_finished(
+            fn recovery_update_write_finished_with_binding(
                 runtime: &mut DocumentRuntime,
                 session_generation: u64,
                 revision: u64,
                 recovery_id: String,
                 recovery_binding_generation: u64,
+                worker_binding_generation: u64,
                 succeeded: bool,
             ) -> String;
             /// 捕获不可变文档字节和会话/文档代际。

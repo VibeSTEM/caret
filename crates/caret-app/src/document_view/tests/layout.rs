@@ -100,7 +100,6 @@ fn inline_environment_highlight_uses_layout_geometry_and_replaces_block_highligh
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: vec![text_flow(Run {
                 text: text.clone(),
@@ -286,7 +285,6 @@ fn empty_inline_environment_does_not_hide_visible_block_highlight()
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::new(),
         children: Vec::new(),
         extra: BTreeMap::new(),

@@ -176,6 +176,8 @@ pub fn candidates() -> Vec<CommandCandidate> {
 
 /// 公式编辑中 `\` 子命令的稳定 ID；候选的 `value` 是插入到公式源码的 LaTeX 模板。
 pub const MATH_INSERT_COMMAND_ID: &str = "math.insert";
+/// 在数学 TextFlow 命令面板中插入或拆分为 InlineMath 的稳定 ID。
+pub const MATH_SPLIT_INLINE_COMMAND_ID: &str = "math.split_inline";
 
 /// 公式内子命令：别名、显示名称与模板；模板中的第一个 `{}` 是插入后的光标位置。
 const MATH_CANDIDATES: &[(&str, &str, &str)] = &[
@@ -224,15 +226,37 @@ const MATH_CANDIDATES: &[(&str, &str, &str)] = &[
 
 /// 公式编辑状态下 `\` 命令行列出的子命令。
 pub fn math_candidates() -> Vec<CommandCandidate> {
-    MATH_CANDIDATES
-        .iter()
-        .map(|(alias, label, template)| CommandCandidate {
-            alias: Cow::Borrowed(alias),
-            command_id: MATH_INSERT_COMMAND_ID,
-            label: Cow::Borrowed(label),
-            available: true,
-            value: Some((*template).to_owned()),
-            has_children: false,
+    let mut candidates = candidates()
+        .into_iter()
+        .filter(|candidate| {
+            matches!(
+                candidate.command_id,
+                "text.format.bold" | "text.format.italic" | "text.format.underline"
+            )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    candidates.extend(
+        MATH_CANDIDATES
+            .iter()
+            .map(|(alias, label, template)| CommandCandidate {
+                alias: Cow::Borrowed(alias),
+                command_id: MATH_INSERT_COMMAND_ID,
+                label: Cow::Borrowed(label),
+                available: true,
+                value: Some((*template).to_owned()),
+                has_children: false,
+            }),
+    );
+    candidates.insert(
+        0,
+        CommandCandidate {
+            alias: Cow::Borrowed("\\math"),
+            command_id: MATH_SPLIT_INLINE_COMMAND_ID,
+            label: Cow::Borrowed("Inline math"),
+            available: true,
+            value: None,
+            has_children: false,
+        },
+    );
+    candidates
 }

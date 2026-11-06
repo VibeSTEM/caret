@@ -21,18 +21,18 @@ mod paragraph;
 mod run;
 mod validation;
 
+pub(crate) use features::math_node_requires_syntax;
 pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
-pub use inline::{
-    FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow, TextFlowSourceMapEntry,
-};
+pub use inline::{FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow};
 pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
     MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow, MathNode,
-    MathNodeKind, MathPathStep, MathSourceRange, MathTree,
+    MathNodeKind, MathPathStep, MathTree,
 };
+pub(crate) use math::{math_node_attributes_supported, math_node_structure_supported};
 pub use paragraph::{Paragraph, ParagraphLayoutOverrides};
 pub use run::Run;
 

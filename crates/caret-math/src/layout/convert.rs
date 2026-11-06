@@ -169,7 +169,7 @@ impl Converter<'_> {
             }
             K::Accent => self.accent(node, style),
             K::Space => self.space(node, style),
-            K::Text => self.text(node, style),
+            K::Text | K::MathAlphabet => self.text(node, style),
             K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle => {
                 let text_style = Style {
                     text_mode: true,

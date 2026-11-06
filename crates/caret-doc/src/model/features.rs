@@ -186,28 +186,7 @@ fn collect_math_content_features(
     match content {
         MathContent::Text(text) => collect_text_flow_features(text, features),
         MathContent::Math(node) => {
-            if !node.attributes.is_empty()
-                || matches!(
-                    node.kind,
-                    MathNodeKind::SizedDelimiter
-                        | MathNodeKind::Matrix
-                        | MathNodeKind::Substack
-                        | MathNodeKind::Intertext
-                        | MathNodeKind::Hline
-                        | MathNodeKind::Sum
-                        | MathNodeKind::Integral
-                        | MathNodeKind::Product
-                        | MathNodeKind::Limit
-                        | MathNodeKind::OverUnder
-                        | MathNodeKind::CancelTo
-                        | MathNodeKind::Color
-                        | MathNodeKind::TextColor
-                        | MathNodeKind::ColorBox
-                        | MathNodeKind::FColorBox
-                        | MathNodeKind::Strut
-                        | MathNodeKind::Phantom
-                )
-            {
+            if math_node_requires_syntax(node.kind, !node.attributes.is_empty()) {
                 features.insert("caret.math.syntax.v1".to_owned());
             }
             for child in &node.children {
@@ -222,6 +201,31 @@ fn collect_math_content_features(
         }
         MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
     }
+}
+
+/// 判断数学节点是否依赖当前版本显式登记的语法/属性契约。
+pub(crate) fn math_node_requires_syntax(kind: MathNodeKind, has_attributes: bool) -> bool {
+    has_attributes
+        || matches!(
+            kind,
+            MathNodeKind::SizedDelimiter
+                | MathNodeKind::Matrix
+                | MathNodeKind::Substack
+                | MathNodeKind::Intertext
+                | MathNodeKind::Hline
+                | MathNodeKind::Sum
+                | MathNodeKind::Integral
+                | MathNodeKind::Product
+                | MathNodeKind::Limit
+                | MathNodeKind::OverUnder
+                | MathNodeKind::CancelTo
+                | MathNodeKind::Color
+                | MathNodeKind::TextColor
+                | MathNodeKind::ColorBox
+                | MathNodeKind::FColorBox
+                | MathNodeKind::Strut
+                | MathNodeKind::Phantom
+        )
 }
 
 fn collect_text_flow_features(text: &TextFlow, features: &mut std::collections::BTreeSet<String>) {

@@ -52,7 +52,7 @@ pub(super) fn to_edit_nodes(contents: &[ParagraphContent]) -> Result<Vec<EditNod
     for content in contents {
         match content {
             FlowContent::Text(flow) => {
-                if flow.source_range.is_some() || !flow.extra.is_empty() {
+                if !flow.extra.is_empty() {
                     return Err(EditError::UnsupportedOpaqueContent);
                 }
                 nodes.extend(flow.runs.iter().cloned().map(EditNode::Run));
@@ -63,7 +63,6 @@ pub(super) fn to_edit_nodes(contents: &[ParagraphContent]) -> Result<Vec<EditNod
                     id: environment.id.clone(),
                     kind: environment.kind,
                     definition_id: environment.definition_id.clone(),
-                    source_range: None,
                     props: environment.props.clone(),
                     children: to_edit_nodes(&environment.children)?,
                     extra: environment.extra.clone(),
@@ -83,8 +82,6 @@ pub(super) fn from_edit_nodes(nodes: Vec<EditNode>) -> Vec<ParagraphContent> {
         if !runs.is_empty() {
             contents.push(FlowContent::Text(TextFlow {
                 runs: std::mem::take(runs),
-                source_range: None,
-                source_map: Vec::new(),
                 extra: Default::default(),
             }));
         }
@@ -98,7 +95,6 @@ pub(super) fn from_edit_nodes(nodes: Vec<EditNode>) -> Vec<ParagraphContent> {
                     id: environment.id,
                     kind: environment.kind,
                     definition_id: environment.definition_id,
-                    source_range: None,
                     props: environment.props,
                     children: from_edit_nodes(environment.children),
                     extra: environment.extra,
@@ -648,8 +644,6 @@ fn single_run_text_flow(text: &str) -> TextFlow {
             props: Default::default(),
             extra: Default::default(),
         }],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     }
 }
@@ -657,11 +651,7 @@ fn single_run_text_flow(text: &str) -> TextFlow {
 fn validate_paragraph_text_flows(contents: &[ParagraphContent]) -> Result<(), EditError> {
     for content in contents {
         match content {
-            FlowContent::Text(text)
-                if text.source_range.is_some()
-                    || !text.source_map.is_empty()
-                    || !text.extra.is_empty() =>
-            {
+            FlowContent::Text(text) if !text.extra.is_empty() => {
                 return Err(EditError::UnsupportedOpaqueContent);
             }
             FlowContent::Environment(environment) => {
@@ -888,7 +878,6 @@ fn split_edit_node(
                 id: NodeId::generate(),
                 kind: environment.kind,
                 definition_id: environment.definition_id.clone(),
-                source_range: None,
                 props: environment.props.clone(),
                 children: right_children,
                 extra: Default::default(),

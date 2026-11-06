@@ -178,43 +178,68 @@ pub(super) struct SessionHistoryState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MathEditPosition {
     pub(super) target: MathEditTarget,
-    pub(super) projection_identity: usize,
+    pub(super) projection_identity: Option<usize>,
     pub(super) cursor: usize,
     pub(super) branch: MathEditBranch,
-    pub(super) source_projection: Arc<caret_math::MathSourceMap<'static>>,
+    pub(super) source_projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
 }
 
 impl MathEditPosition {
     pub(super) fn from_edit(edit: &MathEdit) -> Self {
+        let source_branch = matches!(&edit.branch, MathEditBranch::Source);
         Self {
             target: edit.target.clone(),
-            projection_identity: Arc::as_ptr(&edit.source_projection) as usize,
+            projection_identity: source_branch
+                .then(|| {
+                    edit.source_projection
+                        .as_ref()
+                        .map(|projection| Arc::as_ptr(projection) as usize)
+                })
+                .flatten(),
             cursor: edit.cursor,
             branch: edit.branch.clone(),
-            source_projection: Arc::clone(&edit.source_projection),
+            source_projection: source_branch
+                .then(|| edit.source_projection.clone())
+                .flatten(),
         }
     }
 
     pub(super) fn with_edit_state(edit: &MathEdit, cursor: usize, branch: MathEditBranch) -> Self {
+        let source_branch = matches!(&branch, MathEditBranch::Source);
         Self {
             target: edit.target.clone(),
-            projection_identity: Arc::as_ptr(&edit.source_projection) as usize,
+            projection_identity: source_branch
+                .then(|| {
+                    edit.source_projection
+                        .as_ref()
+                        .map(|projection| Arc::as_ptr(projection) as usize)
+                })
+                .flatten(),
             cursor,
             branch,
-            source_projection: Arc::clone(&edit.source_projection),
+            source_projection: source_branch
+                .then(|| edit.source_projection.clone())
+                .flatten(),
         }
     }
 
     fn estimated_bytes(&self, seen_projections: &mut std::collections::HashSet<usize>) -> usize {
         size_of::<Self>()
-            + if seen_projections.insert(Arc::as_ptr(&self.source_projection) as usize) {
-                self.source_projection.estimated_bytes()
-            } else {
-                0
-            }
+            + self.source_projection.as_ref().map_or(0, |projection| {
+                if seen_projections.insert(Arc::as_ptr(projection) as usize) {
+                    projection.estimated_bytes()
+                } else {
+                    0
+                }
+            })
             + match &self.branch {
                 MathEditBranch::Source => 0,
-                MathEditBranch::Text { path, .. } => path.estimated_bytes(),
+                MathEditBranch::Text { path, anchor, .. } => {
+                    path.estimated_bytes() + anchor.path.estimated_bytes()
+                }
+                MathEditBranch::Tree { path, anchor } => {
+                    path.estimated_bytes() + anchor.estimated_bytes()
+                }
             }
             + match &self.target {
                 MathEditTarget::Inline {
@@ -1321,15 +1346,6 @@ fn math_content_estimated_bytes(content: &caret_doc::MathContent) -> usize {
                             + string_value_map_bytes(&run.extra)
                     })
                     .sum::<usize>()
-                + text.source_map.capacity() * size_of::<caret_doc::TextFlowSourceMapEntry>()
-                + text
-                    .source_map
-                    .iter()
-                    .map(|entry| {
-                        string_value_map_bytes(&entry.source_range.extra)
-                            + string_value_map_bytes(&entry.extra)
-                    })
-                    .sum::<usize>()
                 + string_value_map_bytes(&text.extra)
         }
         MathContent::Math(node) => math_node_estimated_bytes(node),
@@ -1358,9 +1374,6 @@ fn math_node_estimated_bytes(node: &MathNode) -> usize {
             .iter()
             .map(|(key, value)| size_of::<String>() * 2 + key.capacity() + value.capacity())
             .sum::<usize>()
-        + node.source_range.as_ref().map_or(0, |range| {
-            size_of_val(range) + string_value_map_bytes(&range.extra)
-        })
         + node.children.capacity() * size_of::<caret_doc::MathFlow>()
         + node
             .children
@@ -1591,13 +1604,15 @@ pub(super) fn restore_history_transition(
 mod tests {
     use super::*;
     use caret_doc::MathContent;
-    use caret_math::{MathInputKind, ParsedMath};
+    use caret_math::MathInputKind;
     use serde_json::json;
 
     fn parsed_tree(source: &str) -> MathTree {
-        match caret_math::parse(source, MathInputKind::Inline) {
-            Ok(ParsedMath::Tree(tree)) => tree,
-            Ok(ParsedMath::Align(_)) => panic!("expected a formula tree"),
+        match caret_math::parse_projection(source, MathInputKind::Inline) {
+            Ok(projection) => match projection.into_parts().0 {
+                caret_math::ProjectedMath::Tree(tree) => tree,
+                caret_math::ProjectedMath::Align(_) => panic!("expected a formula tree"),
+            },
             Err(error) => panic!("test formula should parse: {error}"),
         }
     }
@@ -1615,13 +1630,13 @@ mod tests {
         );
         assert!(math_tree_estimated_bytes(&fraction) > before_extra);
 
-        let mapped = parsed_tree(r"\text{x}");
-        let mut unmapped = mapped.clone();
-        let Some(MathContent::Text(flow)) = unmapped.root.content.first_mut() else {
+        let short_text = parsed_tree(r"\text{x}");
+        let long_text = parsed_tree(&format!(r"\text{{{}}}", "x".repeat(256)));
+        let Some(MathContent::Text(flow)) = long_text.root.content.first() else {
             panic!("text command should produce a text flow");
         };
-        flow.source_map = Vec::new();
-        assert!(math_tree_estimated_bytes(&mapped) > math_tree_estimated_bytes(&unmapped));
+        assert_eq!(flow.runs[0].text.len(), 256);
+        assert!(math_tree_estimated_bytes(&long_text) > math_tree_estimated_bytes(&short_text));
     }
 
     #[test]
@@ -1637,10 +1652,10 @@ mod tests {
                 paragraph_id: NodeId::generate(),
                 math_id: NodeId::generate(),
             },
-            projection_identity: Arc::as_ptr(&projection) as usize,
+            projection_identity: Some(Arc::as_ptr(&projection) as usize),
             cursor: 0,
             branch: MathEditBranch::Source,
-            source_projection: Arc::clone(&projection),
+            source_projection: Some(Arc::clone(&projection)),
         };
 
         let mut seen = std::collections::HashSet::new();

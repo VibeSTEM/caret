@@ -216,6 +216,7 @@ dependencies = [
  "read-fonts 0.45.0",
  "serde_json",
  "skrifa",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -123,8 +123,6 @@ fn parse_text_flow(value: Value) -> Result<TextFlow, ModelError> {
     })?;
     Ok(TextFlow {
         runs,
-        source_range: None,
-        source_map: Vec::new(),
         extra: object.into_iter().collect(),
     })
 }
@@ -344,7 +342,6 @@ fn parse_inline_environment<T>(
         id: parse_id_field(&mut object)?,
         kind,
         definition_id: take_optional_string(&mut object, "definitionId")?,
-        source_range: None,
         props: take_map(&mut object, "props")?,
         children,
         extra: object.into_iter().collect(),

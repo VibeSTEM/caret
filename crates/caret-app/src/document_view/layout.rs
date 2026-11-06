@@ -5,14 +5,17 @@
 
 use super::DocumentViewRuntime;
 use caret_doc::NodeId;
-use caret_engine::{DocumentLayoutDeltaView, DocumentLayoutSnapshot, Selection, Session};
+use caret_engine::{CompositionRange, DocumentLayoutDeltaView, DocumentLayoutSnapshot, Session};
 
 impl DocumentViewRuntime {
     pub(super) fn composition_preview_delta_for(
         &self,
         updated: &DocumentLayoutSnapshot,
-        range: &Selection,
+        range: &CompositionRange,
     ) -> Option<(NodeId, usize, u64)> {
+        let CompositionRange::Paragraph(range) = range else {
+            return None;
+        };
         let selection = self.session.selection();
         if selection.anchor.paragraph_id != selection.focus.paragraph_id {
             return None;
@@ -75,10 +78,22 @@ impl DocumentViewRuntime {
     pub(super) fn composition_snapshot_for(
         &mut self,
         preview_session: &Session,
-        composition_range: &Selection,
+        composition_range: &CompositionRange,
     ) -> Result<DocumentLayoutSnapshot, String> {
+        if matches!(composition_range, CompositionRange::MathText { .. }) {
+            let mut snapshot = self
+                .layout
+                .layout_session(preview_session)
+                .map_err(|error| error.to_string())?;
+            snapshot.session_id = Some(self.session.session_id().clone());
+            snapshot.document_generation = self.session.document_generation();
+            return Ok(snapshot);
+        }
+        let CompositionRange::Paragraph(range) = composition_range else {
+            unreachable!("math text ranges return before the paragraph path")
+        };
         self.base_snapshot()?;
-        let changed_paragraph_id = composition_range.anchor.paragraph_id.clone();
+        let changed_paragraph_id = range.anchor.paragraph_id.clone();
         let mut snapshot = self
             .layout
             .layout_session_reusing(

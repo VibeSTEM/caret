@@ -1,7 +1,7 @@
 //! 文档数学树到 LaTeX 的序列化。
 //!
 //! 输出是解析器可接受的规范形式：参数一律加花括号，控制词后按需补空格。
-//! 对解析器产出的树，`parse(serialize(tree))` 与原树结构相同（节点 ID 与源范围除外）。
+//! 对局部着色使用 `TextColor` 表达作用域；解析后按 MathTree 语义对齐原树。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -89,26 +89,35 @@ impl Writer {
     }
 
     fn children(&mut self, children: &[MathNode]) {
+        let mut flattened = Vec::with_capacity(children.len());
+        flatten_transparent_rows(children, &mut flattened);
         let mut index = 0;
-        while index < children.len() {
-            let child = &children[index];
+        while index < flattened.len() {
+            let child = flattened[index];
             if is_text_item(child) {
                 let start = index;
-                while children.get(index).is_some_and(is_text_item) {
+                while flattened.get(index).is_some_and(|node| is_text_item(node)) {
                     index += 1;
                 }
                 self.command("text");
                 self.raw("{");
-                self.text_children(&children[start..index]);
+                let text_nodes = flattened[start..index]
+                    .iter()
+                    .map(|node| (*node).clone())
+                    .collect::<Vec<_>>();
+                self.text_children(&text_nodes);
                 self.raw("}");
                 continue;
             }
-            let is_last = index + 1 == children.len();
+            let is_last = index + 1 == flattened.len();
             if child.kind == MathNodeKind::Color && !is_last {
-                // `\color` 作用到列表末尾，不在末尾时用分组限定范围。
-                self.raw("{");
-                self.node(child);
-                self.raw("}");
+                self.command("textcolor");
+                self.color(Self::attribute(child, "color"));
+                if let Some(body) = Self::child(child, 0) {
+                    self.group(body);
+                } else {
+                    self.raw("{}");
+                }
             } else {
                 self.node(child);
             }
@@ -193,9 +202,7 @@ impl Writer {
             K::Symbol => {
                 let text = node.text.as_deref().unwrap_or_default();
                 if node.attributes.contains_key("atomClass") {
-                    for character in text.chars() {
-                        self.literal(character);
-                    }
+                    self.literal_symbol(text);
                 } else {
                     self.command(text);
                 }
@@ -354,7 +361,7 @@ impl Writer {
                 self.optional_group(Self::child(node, 0));
             }
             K::Space => self.space(node),
-            K::Text => self.text(node),
+            K::Text | K::MathAlphabet => self.text(node),
             K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle => {
                 // 文本项脱离 Text 出现时按 `\text` 包装。
                 self.command("text");
@@ -472,20 +479,45 @@ impl Writer {
     /// 字面字符，LaTeX 特殊字符加反斜杠转义。
     fn literal(&mut self, character: char) {
         match character {
-            '%' | '&' | '#' | '_' | '$' => {
+            '\'' => self.raw("\\char\"27 "),
+            '%' | '&' | '_' | '$' => {
                 self.raw("\\");
                 self.output.push(character);
             }
+            '#' => self.raw("\\#"),
             '{' => self.command("lbrace"),
             '}' => self.command("rbrace"),
             '\\' => self.command("backslash"),
-            '~' | '^' => {
-                self.raw("\\text{");
-                self.raw(&character.to_string());
-                self.raw("}");
-            }
+            '~' => self.raw("\\char\"7E "),
+            '^' => self.raw("\\char\"5E "),
             other => self.raw(&other.to_string()),
         }
+    }
+
+    fn literal_symbol(&mut self, text: &str) {
+        let grapheme_needs_char_encoding = text.chars().count() > 1
+            && text.chars().any(|character| {
+                matches!(
+                    character,
+                    '%' | '&' | '#' | '_' | '$' | '{' | '}' | '\\' | '\'' | '~' | '^'
+                )
+            });
+        for character in text.chars() {
+            if grapheme_needs_char_encoding
+                && matches!(
+                    character,
+                    '%' | '&' | '#' | '_' | '$' | '{' | '}' | '\\' | '\'' | '~' | '^'
+                )
+            {
+                self.char_literal(character);
+            } else {
+                self.literal(character);
+            }
+        }
+    }
+
+    fn char_literal(&mut self, character: char) {
+        self.raw(&format!("\\char\"{:X} ", character as u32));
     }
 
     fn space(&mut self, node: &MathNode) {
@@ -514,9 +546,7 @@ impl Writer {
 
     fn text(&mut self, node: &MathNode) {
         let style = Self::attribute(node, "style");
-        let text_mode = style == "text"
-            || node.children.is_empty() && matches!(style, "rm" | "bf" | "it" | "sf" | "tt")
-            || node.children.iter().any(is_text_item);
+        let text_mode = style == "text";
         if text_mode {
             self.command(match style {
                 "rm" => "textrm",
@@ -652,6 +682,16 @@ fn is_text_item(node: &MathNode) -> bool {
             | MathNodeKind::TextSymbol
             | MathNodeKind::TextStyle
     )
+}
+
+fn flatten_transparent_rows<'a>(children: &'a [MathNode], output: &mut Vec<&'a MathNode>) {
+    for child in children {
+        if child.kind == MathNodeKind::Row {
+            flatten_transparent_rows(&child.children, output);
+        } else {
+            output.push(child);
+        }
+    }
 }
 
 /// 有理数 em 长度写成解析器可读的形式：能精确写成小数 em 时用 em，

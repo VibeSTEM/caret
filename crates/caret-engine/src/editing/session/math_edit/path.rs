@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::MathPositionAffinity;
 use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
 use caret_math::{MathContentSourceMap, MathSourceMap, MathTextSourceMap, MathTreeSourceMap};
 use std::mem::size_of;
@@ -11,66 +12,28 @@ use std::ops::Range;
 /// 数学树结构路径步骤由文档模型统一定义，避免编辑器和源码 sidecar 各持一份。
 pub use caret_doc::MathPathStep as MathTextFlowPathStep;
 
-/// 定位公式树或 Align cell 内一个带源范围的 TextFlow。
+/// 通过结构步骤定位公式树或 Align cell 内的 TextFlow。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathTextFlowPath {
     steps: Vec<MathTextFlowPathStep>,
-    source_range: (u32, u32),
-    host_source_range: (usize, usize),
     align_cell: Option<(usize, usize)>,
 }
 
 impl MathTextFlowPath {
     pub(super) fn new(
         steps: Vec<MathTextFlowPathStep>,
-        source_range: (u32, u32),
         align_cell: Option<(usize, usize)>,
     ) -> Self {
-        Self {
-            steps,
-            source_range,
-            host_source_range: (source_range.0 as usize, source_range.1 as usize),
-            align_cell,
-        }
+        Self { steps, align_cell }
+    }
+
+    pub(super) fn with_structural_steps(&self, steps: Vec<MathTextFlowPathStep>) -> Self {
+        Self::new(steps, self.align_cell)
     }
 
     /// 返回从公式根流开始的类型化路径。
     pub fn steps(&self) -> &[MathTextFlowPathStep] {
         &self.steps
-    }
-
-    /// 返回用于校验路径仍指向原文本流的源码字节区间。
-    pub fn source_range(&self) -> (u32, u32) {
-        self.source_range
-    }
-
-    /// 返回相对 MathEdit.source 的范围；Align cell 路径会转换为宿主源码偏移。
-    pub(super) fn host_source_range(&self) -> (usize, usize) {
-        self.host_source_range
-    }
-
-    pub(super) fn host_offset(&self, local_offset: usize) -> Option<usize> {
-        let base = self
-            .host_source_range
-            .0
-            .checked_sub(self.source_range.0 as usize)?;
-        base.checked_add(local_offset)
-    }
-
-    pub(super) fn source_offset(&self, host_offset: usize) -> Option<usize> {
-        let base = self
-            .host_source_range
-            .0
-            .checked_sub(self.source_range.0 as usize)?;
-        host_offset.checked_sub(base)
-    }
-
-    pub(super) fn with_host_source_base(mut self, base: usize) -> Option<Self> {
-        self.host_source_range = (
-            base.checked_add(self.source_range.0 as usize)?,
-            base.checked_add(self.source_range.1 as usize)?,
-        );
-        Some(self)
     }
 
     /// 返回所属 Align 的行和 cell；独立数学树不含该归属。
@@ -83,13 +46,7 @@ impl MathTextFlowPath {
     }
 
     pub(super) fn resolve<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
-        let text = self.resolve_structurally(tree)?;
-        (text
-            .source_range
-            .as_ref()
-            .map(|range| (range.start, range.end))
-            == Some(self.source_range))
-        .then_some(text)
+        self.resolve_structurally(tree)
     }
 
     /// 以当前源码投影中的 sidecar 校验路径，并返回对应 TextFlow 映射。
@@ -98,31 +55,9 @@ impl MathTextFlowPath {
         tree: &'a MathTree,
         projection: &'a MathSourceMap<'_>,
     ) -> Option<(&'a TextFlow, &'a MathTextSourceMap)> {
-        let source_map = self.validate_projection(projection)?;
-        let text = self.resolve(tree)?;
-        source_map_matches_text(text, source_map, self.source_map_base(projection)?)
-            .then_some((text, source_map))
-    }
-
-    pub(super) fn resolve_mut_in_projection<'a>(
-        &self,
-        tree: &'a mut MathTree,
-        projection: &MathSourceMap<'_>,
-    ) -> Option<&'a mut TextFlow> {
-        let source_map = self.validate_projection(projection)?;
-        let text = self.resolve_mut(tree)?;
-        source_map_matches_text(text, source_map, self.source_map_base(projection)?).then_some(text)
-    }
-
-    fn validate_projection<'a>(
-        &self,
-        projection: &'a MathSourceMap<'_>,
-    ) -> Option<&'a MathTextSourceMap> {
         let source_map = self.text_source_map_in_projection(projection)?;
-        let edit_base = projection.edit_range().start;
-        let expected = edit_base.checked_add(self.host_source_range.0)?
-            ..edit_base.checked_add(self.host_source_range.1)?;
-        (source_map.range()? == expected).then_some(source_map)
+        let text = self.resolve_structurally(tree)?;
+        source_map_covers_text(text, source_map).then_some((text, source_map))
     }
 
     pub(super) fn text_source_map_in_projection<'a>(
@@ -136,50 +71,12 @@ impl MathTextFlowPath {
         tree_map.content_at(&self.steps)?.text()
     }
 
-    fn source_map_base(&self, projection: &MathSourceMap<'_>) -> Option<usize> {
-        match self.align_cell {
-            Some((row, cell)) => projection
-                .align()?
-                .cell_range(row, cell)
-                .map(|range| range.start),
-            None => Some(0),
-        }
-    }
-
     /// 按类型化树路径解析 TextFlow，不要求临时源码范围仍与旧投影一致。
     pub(super) fn resolve_structurally<'a>(&self, tree: &'a MathTree) -> Option<&'a TextFlow> {
         let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
             return None;
         };
         Some(text)
-    }
-
-    /// 更新解析器重建临时范围后的映射，同时保留稳定的结构路径和宿主偏移基址。
-    pub(super) fn rebind_ranges(&self, tree: &MathTree, host_base: usize) -> Option<Self> {
-        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
-            return None;
-        };
-        let range = text.source_range.as_ref()?;
-        let host_start = host_base.checked_add(range.start as usize)?;
-        let host_end = host_base.checked_add(range.end as usize)?;
-        Some(
-            Self::new(
-                self.steps.clone(),
-                (range.start, range.end),
-                self.align_cell,
-            )
-            .with_host_source_range((host_start, host_end)),
-        )
-    }
-
-    pub(super) fn resolve_mut<'a>(&self, tree: &'a mut MathTree) -> Option<&'a mut TextFlow> {
-        let text = self.resolve_structurally_mut(tree)?;
-        (text
-            .source_range
-            .as_ref()
-            .map(|range| (range.start, range.end))
-            == Some(self.source_range))
-        .then_some(text)
     }
 
     pub(super) fn resolve_structurally_mut<'a>(
@@ -192,126 +89,95 @@ impl MathTextFlowPath {
         };
         Some(text)
     }
+}
 
-    /// 依照同一结构路径取得新解析树中的对应文本流及其新源码范围。
-    pub(super) fn rebase(
-        &self,
-        tree: &MathTree,
-        old_edit: Range<usize>,
-        new_edit: Range<usize>,
-        host_old_edit: Range<usize>,
-        host_new_edit: Range<usize>,
-    ) -> Option<Self> {
-        let MathContent::Text(text) = resolve_content_path(&tree.root, &self.steps)? else {
-            return None;
-        };
-        let range = text.source_range.as_ref()?;
-        let (old_start, old_end) = (self.source_range.0 as usize, self.source_range.1 as usize);
-        let delta = new_edit.end as isize - old_edit.end as isize;
-        let expected = if old_start <= old_edit.start && old_end >= old_edit.end {
-            (old_start, old_end.checked_add_signed(delta)?)
-        } else if old_end < old_edit.start {
-            (old_start, old_end)
-        } else if old_start > old_edit.end {
-            (
-                old_start.checked_add_signed(delta)?,
-                old_end.checked_add_signed(delta)?,
-            )
-        } else {
-            return None;
-        };
-        if (range.start as usize, range.end as usize) != expected {
-            return None;
+/// 一个可编辑文本岛内、由具体 TextFlow 承载的端点。
+///
+/// `offset` 是所属 TextFlow 展平后的 UTF-8 字节偏移；`affinity` 在相邻 TextFlow
+/// 的共享边界决定端点归属上一个还是下一个流。两端可以拥有不同路径，但必须位于
+/// 同一个连续文本岛中。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathTextPosition {
+    pub path: MathTextFlowPath,
+    pub offset: usize,
+    pub affinity: MathPositionAffinity,
+}
+
+impl MathTextPosition {
+    pub fn new(path: MathTextFlowPath, offset: usize, affinity: MathPositionAffinity) -> Self {
+        Self {
+            path,
+            offset,
+            affinity,
         }
-        let host_range = rebase_span(self.host_source_range, host_old_edit, host_new_edit)?;
-        Some(
-            Self::new(
-                self.steps.clone(),
-                (range.start, range.end),
-                self.align_cell,
-            )
-            .with_host_source_range(host_range),
-        )
-    }
-
-    fn with_host_source_range(mut self, range: (usize, usize)) -> Self {
-        self.host_source_range = range;
-        self
     }
 }
 
-fn source_map_matches_text(
-    text: &TextFlow,
-    source_map: &MathTextSourceMap,
-    source_base: usize,
-) -> bool {
-    let mut tree_segments = Vec::with_capacity(text.source_map.len());
-    for entry in &text.source_map {
-        let display = entry.text_start as usize..entry.text_end as usize;
-        let Some(start) = source_base.checked_add(entry.source_range.start as usize) else {
-            return false;
-        };
-        let Some(end) = source_base.checked_add(entry.source_range.end as usize) else {
-            return false;
-        };
-        let source = start..end;
-        tree_segments.push((display, source));
+fn source_map_covers_text(text: &TextFlow, source_map: &MathTextSourceMap) -> bool {
+    let Some(display_len) = text_flow_display_len(text) else {
+        return false;
+    };
+    if display_len == 0 && source_map.segments().is_empty() {
+        return source_map
+            .range()
+            .is_some_and(|range| range.start == range.end);
     }
-
-    let mut projection_segments = Vec::with_capacity(source_map.segments().len());
+    let Some(source_range) = source_map.range() else {
+        return false;
+    };
+    let mut covered_until = 0;
+    let mut run_index = 0;
+    let mut run_start = 0;
+    let mut source_until = source_range.start;
     for segment in source_map.segments() {
-        let (Some(source), Some(display)) = (segment.source(), Some(segment.display())) else {
+        let display = segment.display();
+        if display.start > display.end
+            || display.start != covered_until
+            || display.end > display_len
+            || !text_flow_is_boundary(text, display.start, &mut run_index, &mut run_start)
+            || !text_flow_is_boundary(text, display.end, &mut run_index, &mut run_start)
+        {
+            return false;
+        }
+        let Some(source) = segment.source() else {
             return false;
         };
-        projection_segments.push((display, source));
-    }
-
-    normalized_linear_segments(tree_segments) == normalized_linear_segments(projection_segments)
-}
-
-fn normalized_linear_segments(
-    segments: Vec<(Range<usize>, Range<usize>)>,
-) -> Vec<(Range<usize>, Range<usize>)> {
-    let mut normalized: Vec<(Range<usize>, Range<usize>)> = Vec::with_capacity(segments.len());
-    for (display, source) in segments {
-        if display.start != display.end
-            && source.start != source.end
-            && display.len() == source.len()
-            && let Some((previous_display, previous_source)) = normalized.last_mut()
-            && previous_display.start != previous_display.end
-            && previous_source.start != previous_source.end
-            && previous_display.end == display.start
-            && previous_source.end == source.start
-            && previous_display.len() == previous_source.len()
+        if source.start > source.end
+            || source.start < source_until
+            || source.start < source_range.start
+            || source.end > source_range.end
         {
-            previous_display.end = display.end;
-            previous_source.end = source.end;
-        } else {
-            normalized.push((display, source));
+            return false;
         }
+        source_until = source.end;
+        covered_until = display.end;
     }
-    normalized
+    covered_until == display_len
 }
 
-fn rebase_span(
-    range: (usize, usize),
-    old_edit: Range<usize>,
-    new_edit: Range<usize>,
-) -> Option<(usize, usize)> {
-    let (start, end) = range;
-    let delta = new_edit.end as isize - old_edit.end as isize;
-    if start <= old_edit.start && end >= old_edit.end {
-        Some((start, end.checked_add_signed(delta)?))
-    } else if end < old_edit.start {
-        Some((start, end))
-    } else if start > old_edit.end {
-        Some((
-            start.checked_add_signed(delta)?,
-            end.checked_add_signed(delta)?,
-        ))
-    } else {
-        None
+fn text_flow_display_len(text: &TextFlow) -> Option<usize> {
+    text.runs
+        .iter()
+        .try_fold(0usize, |length, run| length.checked_add(run.text.len()))
+}
+
+fn text_flow_is_boundary(
+    text: &TextFlow,
+    offset: usize,
+    run_index: &mut usize,
+    run_start: &mut usize,
+) -> bool {
+    while let Some(run) = text.runs.get(*run_index) {
+        let Some(end) = run_start.checked_add(run.text.len()) else {
+            return false;
+        };
+        if offset <= end {
+            return offset >= *run_start && run.text.is_char_boundary(offset - *run_start);
+        }
+        *run_start = end;
+        *run_index += 1;
     }
+    offset == *run_start
 }
 
 pub(super) fn path_at_source_boundary(
@@ -319,7 +185,6 @@ pub(super) fn path_at_source_boundary(
     source_offset: usize,
     forward: bool,
     align_cell: Option<(usize, usize)>,
-    source_base: usize,
 ) -> Option<MathTextFlowPath> {
     fn visit(
         contents: &[MathContentSourceMap],
@@ -328,7 +193,6 @@ pub(super) fn path_at_source_boundary(
         source_offset: usize,
         forward: bool,
         align_cell: Option<(usize, usize)>,
-        source_base: usize,
     ) -> Option<MathTextFlowPath> {
         for (index, content) in contents.iter().enumerate() {
             path.push(if environment_children {
@@ -339,12 +203,8 @@ pub(super) fn path_at_source_boundary(
             let found = match content {
                 MathContentSourceMap::Text(text) => text.range().and_then(|range| {
                     let boundary = if forward { range.start } else { range.end };
-                    let start = range.start.checked_sub(source_base)?;
-                    let end = range.end.checked_sub(source_base)?;
-                    let start = u32::try_from(start).ok()?;
-                    let end = u32::try_from(end).ok()?;
                     (boundary == source_offset)
-                        .then(|| MathTextFlowPath::new(path.clone(), (start, end), align_cell))
+                        .then(|| MathTextFlowPath::new(path.clone(), align_cell))
                 }),
                 MathContentSourceMap::Math { operands, .. } => {
                     let mut found = None;
@@ -357,7 +217,6 @@ pub(super) fn path_at_source_boundary(
                             source_offset,
                             forward,
                             align_cell,
-                            source_base,
                         );
                         path.pop();
                         if found.is_some() {
@@ -366,15 +225,9 @@ pub(super) fn path_at_source_boundary(
                     }
                     found
                 }
-                MathContentSourceMap::Environment { children, .. } => visit(
-                    children,
-                    true,
-                    path,
-                    source_offset,
-                    forward,
-                    align_cell,
-                    source_base,
-                ),
+                MathContentSourceMap::Environment { children, .. } => {
+                    visit(children, true, path, source_offset, forward, align_cell)
+                }
                 MathContentSourceMap::Other => None,
             };
             path.pop();
@@ -392,17 +245,16 @@ pub(super) fn path_at_source_boundary(
         source_offset,
         forward,
         align_cell,
-        source_base,
     )
 }
 
-/// 查找同一 MathFlow 槽位中相邻的文本岛；环境包装透明，数学节点与软换行形成边界。
+/// 返回相邻 TextFlow 的结构路径；源码偏移由宿主映射适配器单独绑定。
 pub(super) fn adjacent_text_flow_path(
     tree: &MathTree,
     current: &MathTextFlowPath,
     forward: bool,
 ) -> Option<MathTextFlowPath> {
-    current.resolve(tree)?;
+    current.resolve_structurally(tree)?;
     let flow_prefix_end = current
         .steps
         .iter()
@@ -429,11 +281,178 @@ pub(super) fn adjacent_text_flow_path(
         candidates.get(index.checked_sub(1)?)?
     };
     let adjacent = adjacent.clone()?;
-    let host_base = current
-        .host_source_range
-        .0
-        .checked_sub(current.source_range.0 as usize)?;
-    adjacent.with_host_source_base(host_base)
+    Some(adjacent)
+}
+
+/// 返回当前槽位中由 InlineEnvironment 包装连接的连续文本流及其边界。
+pub(super) fn contiguous_text_flow_paths(
+    tree: &MathTree,
+    current: &MathTextFlowPath,
+) -> Option<Vec<MathTextFlowPath>> {
+    current.resolve_structurally(tree)?;
+    let flow_prefix_end = current
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, MathTextFlowPathStep::Operand(_)))
+        .map_or(0, |index| index + 1);
+    let flow_prefix = &current.steps[..flow_prefix_end];
+    let flow = resolve_flow_path(&tree.root, flow_prefix)?;
+    let mut candidates = Vec::new();
+    collect_text_island_candidates(
+        &flow.content,
+        false,
+        &mut flow_prefix.to_vec(),
+        current.align_cell,
+        &mut candidates,
+    );
+    let current_index = candidates.iter().position(|candidate| {
+        candidate
+            .as_ref()
+            .is_some_and(|candidate| candidate.steps == current.steps)
+    })?;
+    let start = candidates[..current_index]
+        .iter()
+        .rposition(Option::is_none)
+        .map_or(0, |index| index + 1);
+    let end = candidates[current_index + 1..]
+        .iter()
+        .position(Option::is_none)
+        .map_or(candidates.len(), |index| current_index + 1 + index);
+    candidates[start..end]
+        .iter()
+        .cloned()
+        .collect::<Option<Vec<_>>>()
+}
+
+/// 同一文本岛按结构顺序拼接后的显示文本和各流 UTF-8 范围。
+pub struct TextIslandSnapshot {
+    pub(super) paths: Vec<MathTextFlowPath>,
+    pub(super) ranges: Vec<Range<usize>>,
+    pub(super) display: String,
+    pub(super) current_index: usize,
+}
+
+impl TextIslandSnapshot {
+    /// 返回同一连续文本岛的拼接显示文本。
+    pub fn display(&self) -> &str {
+        &self.display
+    }
+
+    /// 将具体 TextFlow 端点转换为文本岛拼接后的 UTF-8 字节偏移。
+    pub(super) fn global_offset(&self, position: &MathTextPosition) -> Option<usize> {
+        let index = self.paths.iter().position(|path| path == &position.path)?;
+        let range = self.ranges.get(index)?;
+        let text_len = range.end.checked_sub(range.start)?;
+        (position.offset <= text_len)
+            .then(|| range.start.checked_add(position.offset))
+            .flatten()
+    }
+
+    /// 将文本岛拼接后的 UTF-8 字节偏移反向映射为具体 TextFlow 端点。
+    pub fn position_at_offset(
+        &self,
+        offset: usize,
+        affinity: MathPositionAffinity,
+    ) -> Option<MathTextPosition> {
+        let downstream = affinity == MathPositionAffinity::Downstream;
+        let (path, local_offset) = self.path_at_offset(offset, downstream)?;
+        Some(MathTextPosition::new(path, local_offset, affinity))
+    }
+
+    /// 将拼接文本中的有效 caret 偏移映射回其宿主 TextFlow。
+    pub(super) fn path_at_offset(
+        &self,
+        offset: usize,
+        downstream: bool,
+    ) -> Option<(MathTextFlowPath, usize)> {
+        if offset > self.display.len() || !self.display.is_char_boundary(offset) {
+            return None;
+        }
+        let index = if downstream {
+            self.ranges
+                .iter()
+                .position(|range| range.start <= offset && offset < range.end)
+                .or_else(|| {
+                    self.ranges
+                        .iter()
+                        .enumerate()
+                        .find(|(_, range)| range.is_empty() && range.start == offset)
+                        .map(|(index, _)| index)
+                })
+                .or_else(|| self.ranges.iter().rposition(|range| range.end == offset))
+        } else {
+            self.ranges
+                .iter()
+                .rposition(|range| range.start < offset && offset <= range.end)
+                .or_else(|| {
+                    self.ranges
+                        .iter()
+                        .enumerate()
+                        .find(|(_, range)| range.is_empty() && range.start == offset)
+                        .map(|(index, _)| index)
+                })
+                .or_else(|| self.ranges.iter().position(|range| range.start == offset))
+        }?;
+        let range = self.ranges.get(index)?;
+        Some((
+            self.paths.get(index)?.clone(),
+            offset.checked_sub(range.start)?,
+        ))
+    }
+}
+
+/// 汇总同一文本岛中的 TextFlow，所有范围使用拼接后显示文本的 UTF-8 字节坐标。
+pub(super) fn contiguous_text_flow_text(
+    tree: &MathTree,
+    current: &MathTextFlowPath,
+) -> Option<TextIslandSnapshot> {
+    let paths = contiguous_text_flow_paths(tree, current)?;
+    let current_index = paths
+        .iter()
+        .position(|path| path.steps() == current.steps())?;
+    let mut display = String::new();
+    let mut ranges = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let text = path.resolve_structurally(tree)?;
+        let start = display.len();
+        for run in &text.runs {
+            display.push_str(&run.text);
+        }
+        ranges.push(start..display.len());
+    }
+    Some(TextIslandSnapshot {
+        paths,
+        ranges,
+        display,
+        current_index,
+    })
+}
+
+/// 返回没有数学原子/换行/未知节点的根 MathFlow 首末 TextFlow 入口。
+///
+/// 结构导航只依赖树路径；源码位置属于显式源码编辑的临时投影，不应阻止普通文本流进入树编辑。
+pub(super) fn root_text_flow_path(
+    tree: &MathTree,
+    forward: bool,
+    align_cell: Option<(usize, usize)>,
+) -> Option<MathTextFlowPath> {
+    let mut candidates = Vec::new();
+    collect_text_island_candidates(
+        &tree.root.content,
+        false,
+        &mut Vec::new(),
+        align_cell,
+        &mut candidates,
+    );
+    if candidates.is_empty() || candidates.iter().any(Option::is_none) {
+        return None;
+    }
+    let candidate = if forward {
+        candidates.first()?
+    } else {
+        candidates.last()?
+    };
+    candidate.clone()
 }
 
 fn collect_text_island_candidates(
@@ -450,10 +469,8 @@ fn collect_text_island_candidates(
             MathTextFlowPathStep::Content(index)
         });
         match content {
-            MathContent::Text(text) => {
-                candidates.push(text.source_range.as_ref().map(|range| {
-                    MathTextFlowPath::new(path.clone(), (range.start, range.end), align_cell)
-                }));
+            MathContent::Text(_) => {
+                candidates.push(Some(MathTextFlowPath::new(path.clone(), align_cell)))
             }
             MathContent::Environment(environment) => collect_text_island_candidates(
                 &environment.children,
@@ -524,7 +541,7 @@ fn resolve_path_target<'a>(
     Some(target)
 }
 
-fn resolve_content_path_mut<'a>(
+pub(super) fn resolve_content_path_mut<'a>(
     root: &'a mut MathFlow,
     steps: &[MathTextFlowPathStep],
 ) -> Option<&'a mut MathContent> {

@@ -24,6 +24,7 @@ pub use parser::{classify_input, is_incomplete_input_prefix, parse, parse_projec
 pub use projection::{
     AlignSourceMap, MathContentSourceMap, MathFlowSourceMap, MathProjection, MathRangeSourceMap,
     MathSourceMap, MathTextSourceMap, MathTextSourceSegment, MathTreeSourceMap, ProjectedMath,
+    reconcile_align_ranges, reconcile_tree_ranges, source_environment_props_match,
 };
 pub use serialize::{serialize_align, serialize_node, serialize_tree};
 

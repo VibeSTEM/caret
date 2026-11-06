@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{InlineEnvironment, InlineMath, MathNode, MathSourceRange, OpaqueNode, Run};
+use super::{InlineEnvironment, InlineMath, MathNode, OpaqueNode, Run};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -14,21 +14,6 @@ use std::collections::BTreeMap;
 pub struct TextFlow {
     #[serde(default)]
     pub runs: Vec<Run>,
-    #[serde(skip)]
-    pub source_range: Option<MathSourceRange>,
-    #[serde(skip)]
-    pub source_map: Vec<TextFlowSourceMapEntry>,
-    #[serde(default, flatten)]
-    pub extra: BTreeMap<String, Value>,
-}
-
-/// 源码编辑期间显示字节到 LaTeX 字节的临时映射；不参与 `.cdoc` 编码。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextFlowSourceMapEntry {
-    pub text_start: u32,
-    pub text_end: u32,
-    pub source_range: MathSourceRange,
     #[serde(default, flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -1,6 +1,6 @@
 # Block、正文与公式内容的代码链路
 
-更新日期：2026-11-03。本文定义内容模型的目标职责链路；实现进度与验证证据以对应任务为准。持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
+更新日期：2026-11-04。本文定义内容模型的目标职责链路；实现进度与验证证据以对应任务为准。持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
 
 ## 文档模型与消费者
 
@@ -92,7 +92,7 @@ MathEdit 的 Text 分支沿 `MathTextFlowPath` 定位 MathFlow 中的 TextFlow�
 ## 代码入口
 
 - 模型与编解码：`crates/caret-doc/src/model/{inline,inline_environment,paragraph,math,codec,validation}.rs`
-- 编辑适配与事务：`crates/caret-engine/src/editing/{flow_map.rs,flow_edit.rs,grapheme.rs,text_map.rs,environment.rs,environment/,session/inline_content.rs,session/formatting/inline_tree.rs,session/math_edit.rs}`；公式文本拆分元数据在 `session/math_edit/text_split_metadata.rs`
+- 编辑适配与事务：`crates/caret-engine/src/editing/{flow_map.rs,flow_edit.rs,grapheme.rs,text_map.rs,environment.rs,environment/,session/inline_content.rs,session/formatting/inline_tree.rs,session/math_edit.rs,session/math_edit/inline_root_split.rs,session/math_edit/text_branch/split_tree_edit.rs,session/math_edit/text_run_split.rs}`
 - 公式解析、序列化与布局后端：`crates/caret-math/src/{parser.rs,serialize.rs,backend.rs,layout.rs}`
 - 正文 shaping 与分页：`crates/caret-layout/src/{paragraph.rs,shaping.rs}`、`crates/caret-engine/src/layout.rs`
 - 块结构索引：`crates/caret-structure/src/index.rs`

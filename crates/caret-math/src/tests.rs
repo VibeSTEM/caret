@@ -100,8 +100,11 @@ fn root_node_mut(tree: &mut caret_doc::MathTree) -> &mut MathNode {
 }
 
 fn tree(source: &str) -> caret_doc::MathTree {
-    match parse(source, MathInputKind::Equation) {
-        Ok(ParsedMath::Tree(tree)) => tree,
+    match crate::parse_projection(source, MathInputKind::Equation) {
+        Ok(projection) => match projection.into_parts().0 {
+            ProjectedMath::Tree(tree) => tree,
+            ProjectedMath::Align(_) => panic!("{source}: expected a math tree"),
+        },
         other => panic!("{source}: {other:?}"),
     }
 }
@@ -111,16 +114,206 @@ fn root_shape(source: &str) -> String {
 }
 
 #[test]
-fn coalesces_literal_ordinary_characters() {
+fn keeps_literal_symbol_stops_at_extended_grapheme_boundaries() {
     assert_eq!(
         root_shape("ab12+c"),
-        r#"Symbol("ab12"){"atomClass": "ord"}, Symbol("+"){"atomClass": "bin"}, Symbol("c"){"atomClass": "ord"}"#
+        r#"Symbol("a"){"atomClass": "ord"}, Symbol("b"){"atomClass": "ord"}, Symbol("1"){"atomClass": "ord"}, Symbol("2"){"atomClass": "ord"}, Symbol("+"){"atomClass": "bin"}, Symbol("c"){"atomClass": "ord"}"#
     );
     // 上标只作用于紧邻的字符，因此 `x` 不与前面的 `a` 合并。
     assert_eq!(
         root_shape("ax^2"),
         r#"Symbol("a"){"atomClass": "ord"}, Superscript[Symbol("x"){"atomClass": "ord"}, Symbol("2"){"atomClass": "ord"}]"#
     );
+    assert_eq!(
+        root_shape("e\u{301}x"),
+        r#"Symbol("e\u{301}"){"atomClass": "ord"}, Symbol("x"){"atomClass": "ord"}"#
+    );
+    assert_eq!(
+        root_shape(r"a\%b"),
+        r#"Symbol("a"){"atomClass": "ord"}, Symbol("%"){"atomClass": "ord"}, Symbol("b"){"atomClass": "ord"}"#
+    );
+    assert_eq!(
+        root_shape("\\%\u{301}x"),
+        r#"Symbol("%"){"atomClass": "ord"}, Symbol("\u{301}"){"atomClass": "ord"}, Symbol("x"){"atomClass": "ord"}"#
+    );
+    for source in ["xy", "e\u{301}x", "\\%\u{301}x"] {
+        let ParsedMath::Tree(ordinary) = parse(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+        else {
+            panic!("{source}: expected a math tree");
+        };
+        let ProjectedMath::Tree(projected) = crate::parse_projection(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+            .into_parts()
+            .0
+        else {
+            panic!("{source}: expected a projected math tree");
+        };
+        assert_eq!(shape_flow(&ordinary.root), shape_flow(&projected.root));
+    }
+}
+
+#[test]
+fn scripts_bind_to_the_complete_extended_grapheme_base() {
+    for (source, script_name, script_value) in [
+        ("e\u{301}^2", "superscript", "2"),
+        ("e\u{301}_2", "subscript", "2"),
+    ] {
+        let expected = format!(
+            "{}[Symbol(\"e\\u{{301}}\"){{\"atomClass\": \"ord\"}}, Symbol(\"{script_value}\"){{\"atomClass\": \"ord\"}}]",
+            if script_name == "superscript" {
+                "Superscript"
+            } else {
+                "Subscript"
+            }
+        );
+        assert_eq!(root_shape(source), expected, "{source}");
+
+        let projection = crate::parse_projection(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let ProjectedMath::Tree(parsed_tree) = projection.content() else {
+            panic!("{source}: expected a tree projection");
+        };
+        let first_range = projection
+            .source_map()
+            .tree()
+            .and_then(|map| map.root().content().first())
+            .and_then(crate::MathContentSourceMap::range)
+            .unwrap_or_else(|| panic!("{source}: missing script source range"));
+        assert_eq!(first_range, 0..source.len());
+
+        let serialized = serialize_tree(parsed_tree);
+        let reparsed = tree(&serialized);
+        assert_eq!(serialize_tree(&reparsed), serialized);
+        assert!(serialized.contains("e\u{301}"));
+    }
+
+    assert_eq!(
+        root_shape("e\u{301}x"),
+        r#"Symbol("e\u{301}"){"atomClass": "ord"}, Symbol("x"){"atomClass": "ord"}"#
+    );
+}
+
+#[test]
+fn unbraced_arguments_and_non_ordinary_literals_keep_grapheme_clusters() {
+    assert_eq!(
+        root_shape("x^e\u{301}"),
+        r#"Superscript[Symbol("x"){"atomClass": "ord"}, Symbol("e\u{301}"){"atomClass": "ord"}]"#
+    );
+    assert_eq!(
+        root_shape("\\sqrt e\u{301}"),
+        r#"Radical[Placeholder, Symbol("e\u{301}"){"atomClass": "ord"}]"#
+    );
+    assert_eq!(
+        root_shape("(\u{301}x"),
+        r#"Symbol("(\u{301}"){"atomClass": "open"}, Symbol("x"){"atomClass": "ord"}"#
+    );
+
+    for source in ["x^e\u{301}", "\\sqrt e\u{301}", "(\u{301}x"] {
+        let parsed = tree(source);
+        let serialized = serialize_tree(&parsed);
+        let reparsed = tree(&serialized);
+        assert_eq!(shape(&parsed.root), shape(&reparsed.root), "{source}");
+    }
+}
+
+#[test]
+fn serialized_literal_specials_and_apostrophe_preserve_tree_semantics() {
+    assert_eq!(serialize_tree(&tree("\\#")), "\\#");
+    assert_eq!(serialize_tree(&tree("\\%")), "\\%");
+    assert!(parse("\\char\"20 ", MathInputKind::Inline).is_err());
+    assert!(parse("\u{600}\\char\"20 ", MathInputKind::Inline).is_err());
+    assert!(parse("\\char\"0A ", MathInputKind::Inline).is_err());
+    for (source, expected) in [
+        ("\u{600}\\#", "\u{600}\\char\"23 "),
+        ("\u{600}\u{600}\\#", "\u{600}\u{600}\\char\"23 "),
+        ("\u{600}\\char\"27 ", "\u{600}\\char\"27 "),
+        ("\u{600}\\char\"7E ", "\u{600}\\char\"7E "),
+        ("\u{600}\\char\"5E ", "\u{600}\\char\"5E "),
+    ] {
+        let original = tree(source);
+        let serialized = serialize_tree(&original);
+        let reparsed = tree(&serialized);
+        assert_eq!(shape(&original.root), shape(&reparsed.root), "{source:?}");
+        assert_eq!(serialized, expected);
+    }
+    for source in [
+        "\\char\"25 \u{301}",
+        "\\char\"26 \u{301}",
+        "\\char\"23 \u{301}",
+        "\\char\"5F \u{301}",
+        "\\char\"24 \u{301}",
+        "\\char\"7B \u{301}",
+        "\\char\"7D \u{301}",
+        "\\char\"5C \u{301}",
+        "\\char\"27 \u{301}",
+        "\\char\"7E \u{301}",
+        "\\char\"5E \u{301}",
+    ] {
+        let original = tree(source);
+        assert_eq!(original.root.content.len(), 1, "{source:?}");
+        let serialized = serialize_tree(&original);
+        let reparsed = tree(&serialized);
+        assert_eq!(shape(&original.root), shape(&reparsed.root), "{source:?}");
+    }
+
+    let literal_apostrophe = tree("x\\char\"27 ");
+    let serialized = serialize_tree(&literal_apostrophe);
+    assert_eq!(serialized, "x\\char\"27 ");
+    assert_eq!(
+        shape(&literal_apostrophe.root),
+        shape(&tree(&serialized).root)
+    );
+    assert!(matches!(
+        literal_apostrophe.root.content.as_slice(),
+        [MathContent::Math(base), MathContent::Math(apostrophe)]
+            if base.text.as_deref() == Some("x")
+                && apostrophe.text.as_deref() == Some("'")
+                && apostrophe.attributes.contains_key("atomClass")
+    ));
+
+    let prime = tree("x'");
+    assert!(matches!(
+        prime.root.content.as_slice(),
+        [MathContent::Math(node)] if node.kind == K::Superscript
+    ));
+    assert_ne!(shape(&prime.root), shape(&literal_apostrophe.root));
+}
+
+#[test]
+fn long_plain_ascii_input_keeps_each_literal_atom() {
+    let source = "a".repeat(20_000);
+    let parsed = tree(&source);
+    assert_eq!(parsed.root.content.len(), source.len());
+    assert_eq!(serialize_tree(&parsed), source);
+}
+
+#[test]
+fn grapheme_extension_preserves_tex_tokens_and_scales_to_long_clusters() {
+    assert_eq!(
+        root_shape("\u{600}~"),
+        r#"Symbol("\u{600}"){"atomClass": "ord"}, Space{"spaceKind": "no_break_space"}"#
+    );
+    assert_eq!(
+        root_shape("\u{600}% comment\n x"),
+        r#"Symbol("\u{600}"){"atomClass": "ord"}, Symbol("x"){"atomClass": "ord"}"#
+    );
+
+    let mut source = String::from("x^e");
+    source.push_str(&"\u{301}".repeat(4096));
+    let parsed = tree(&source);
+    let Some(MathContent::Math(script)) = parsed.root.content.first() else {
+        panic!("expected a scripted math node");
+    };
+    let Some(MathContent::Math(base)) =
+        script.children.get(1).and_then(|flow| flow.content.first())
+    else {
+        panic!("missing script base");
+    };
+    assert_eq!(base.text.as_deref(), Some(&source[2..]));
+    let serialized = serialize_tree(&parsed);
+    let reparsed = tree(&serialized);
+    assert_eq!(shape(&parsed.root), shape(&reparsed.root));
 }
 
 #[test]
@@ -204,8 +397,13 @@ fn preserves_empty_text_flows_as_editable_tree_content() {
 
 #[test]
 fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
-    let escaped = tree(r"\text{a\%b}");
-    let Some(MathContent::Text(flow)) = escaped.root.content.first() else {
+    let escaped_source = r"\text{a\%b}";
+    let escaped = crate::parse_projection(escaped_source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("escaped text should project: {error}"));
+    let ProjectedMath::Tree(escaped_tree) = escaped.content() else {
+        panic!("inline text should produce a tree");
+    };
+    let Some(MathContent::Text(flow)) = escaped_tree.root.content.first() else {
         panic!("text command should produce a TextFlow");
     };
     assert_eq!(
@@ -215,27 +413,28 @@ fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
             .collect::<String>(),
         "a%b"
     );
+    let escaped_map = escaped
+        .source_map()
+        .tree()
+        .and_then(|tree| tree.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(crate::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("text flow should have an independent sidecar"));
     assert_eq!(
-        flow.source_map
+        escaped_map
+            .segments()
             .iter()
-            .map(|entry| (
-                entry.text_start,
-                entry.text_end,
-                entry.source_range.start,
-                entry.source_range.end,
-            ))
+            .map(|segment| (segment.display(), segment.source().unwrap_or_default()))
             .collect::<Vec<_>>(),
-        vec![(0, 1, 6, 7), (1, 2, 7, 9), (2, 3, 9, 10)]
+        vec![(0..1, 6..7), (1..2, 7..9), (2..3, 9..10)]
     );
-    let mut invalid_gap = escaped.clone();
-    let Some(MathContent::Text(flow)) = invalid_gap.root.content.first_mut() else {
-        panic!("text command should produce a TextFlow");
-    };
-    flow.source_map[1].text_start = 2;
-    assert!(invalid_gap.validate().is_ok());
 
-    let collapsed = tree(r"\text{a   b}");
-    let Some(MathContent::Text(flow)) = collapsed.root.content.first() else {
+    let collapsed_source = r"\text{a   b}";
+    let collapsed = crate::parse_projection(collapsed_source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("collapsed whitespace should project: {error}"));
+    let ProjectedMath::Tree(collapsed_tree) = collapsed.content() else {
+        panic!("inline text should produce a tree");
+    };
+    let Some(MathContent::Text(flow)) = collapsed_tree.root.content.first() else {
         panic!("text command should produce a TextFlow");
     };
     assert_eq!(
@@ -245,55 +444,176 @@ fn text_flow_source_map_accounts_for_escaped_characters_and_empty_text() {
             .collect::<String>(),
         "a b"
     );
+    let collapsed_map = collapsed
+        .source_map()
+        .tree()
+        .and_then(|tree| tree.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(crate::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("text flow should have an independent sidecar"));
     assert_eq!(
-        flow.source_map
+        collapsed_map
+            .segments()
             .iter()
-            .map(|entry| (
-                entry.text_start,
-                entry.text_end,
-                entry.source_range.start,
-                entry.source_range.end,
-            ))
+            .map(|segment| (segment.display(), segment.source().unwrap_or_default()))
             .collect::<Vec<_>>(),
-        vec![(0, 1, 6, 7), (1, 2, 7, 10), (2, 3, 10, 11)]
+        vec![(0..1, 6..7), (1..2, 7..10), (2..3, 10..11)]
     );
 
-    let mut invalid_boundary = escaped.clone();
-    let Some(MathContent::Text(flow)) = invalid_boundary.root.content.first_mut() else {
-        panic!("text command should produce a TextFlow");
+    let empty = crate::parse_projection(r"\text{}", MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("empty text should project: {error}"));
+    let ProjectedMath::Tree(empty_tree) = empty.content() else {
+        panic!("inline text should produce a tree");
     };
-    flow.source_map[0].text_end = 2;
-    assert!(invalid_boundary.validate().is_ok());
-    let mut invalid_utf8_boundary = tree(r"\text{é}");
-    let Some(MathContent::Text(flow)) = invalid_utf8_boundary.root.content.first_mut() else {
-        panic!("text command should produce a TextFlow");
-    };
-    flow.source_map[0].text_start = 1;
-    assert!(invalid_utf8_boundary.validate().is_ok());
-
-    let empty = tree(r"\text{}");
-    let Some(MathContent::Text(flow)) = empty.root.content.first() else {
+    let Some(MathContent::Text(flow)) = empty_tree.root.content.first() else {
         panic!("empty text command should retain a TextFlow");
     };
-    assert_eq!(flow.source_map.len(), 1);
-    assert_eq!(flow.source_map[0].text_start, 0);
-    assert_eq!(flow.source_map[0].text_end, 0);
-    assert_eq!(flow.source_map[0].source_range.start, 6);
-    assert_eq!(flow.source_map[0].source_range.end, 6);
+    assert!(flow.runs.iter().all(|run| run.text.is_empty()));
+    let empty_map = empty
+        .source_map()
+        .tree()
+        .and_then(|tree| tree.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(crate::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("empty text flow should have a sidecar"));
+    assert_eq!(empty_map.segments().len(), 1);
+    assert_eq!(empty_map.segments()[0].display(), 0..0);
+    assert_eq!(empty_map.segments()[0].source(), Some(6..6));
 }
 
 #[test]
 fn records_source_ranges() {
     let source = r"\frac{a}{bc}";
-    let tree = tree(source);
-    let Some(MathContent::Math(fraction)) = tree.root.content.first() else {
-        panic!("expected fraction node");
+    let projection = crate::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("fraction should project: {error}"));
+    let first_range = projection
+        .source_map()
+        .tree()
+        .and_then(|tree| {
+            tree.content_at(&[
+                caret_doc::MathPathStep::Content(0),
+                caret_doc::MathPathStep::Operand(1),
+                caret_doc::MathPathStep::Content(0),
+            ])
+        })
+        .and_then(crate::MathContentSourceMap::range)
+        .unwrap_or_else(|| panic!("fraction denominator should map its first symbol"));
+    let second_range = projection
+        .source_map()
+        .tree()
+        .and_then(|tree| {
+            tree.content_at(&[
+                caret_doc::MathPathStep::Content(0),
+                caret_doc::MathPathStep::Operand(1),
+                caret_doc::MathPathStep::Content(1),
+            ])
+        })
+        .and_then(crate::MathContentSourceMap::range)
+        .unwrap_or_else(|| panic!("fraction denominator should map its second symbol"));
+    assert_eq!(&source[first_range], "b");
+    assert_eq!(&source[second_range], "c");
+}
+
+#[test]
+fn top_level_text_font_commands_map_to_textflow_environments() {
+    for (source, expected_family) in [(r"\textsf{x}", "sans-serif"), (r"\texttt{x}", "monospace")] {
+        let ParsedMath::Tree(tree) = parse(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("supported text font command should parse: {error}"))
+        else {
+            panic!("text font command should produce a math tree");
+        };
+        let [MathContent::Environment(environment)] = tree.root.content.as_slice() else {
+            panic!("text font command should become a root TextFlow environment");
+        };
+        assert_eq!(environment.kind, caret_doc::InlineEnvironmentKind::Font);
+        assert_eq!(
+            environment.props.get("fontFamily"),
+            Some(&serde_json::Value::String(expected_family.to_owned()))
+        );
+        assert!(matches!(
+            environment.children.as_slice(),
+            [MathContent::Text(text)] if text.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "x"
+        ));
+    }
+
+    for (source, expected_style) in [(r"\mathsf{x}", "sf"), (r"\mathtt{x}", "tt")] {
+        let ParsedMath::Tree(tree) = parse(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("math alphabet command should parse: {error}"))
+        else {
+            panic!("math alphabet command should produce a math tree");
+        };
+        assert!(
+            matches!(
+                tree.root.content.as_slice(),
+                [MathContent::Math(node)]
+                    if node.kind == K::Text && node.attributes.get("style").is_some_and(|style| style == expected_style)
+            ),
+            "unexpected math alphabet tree: {:?}",
+            tree.root.content
+        );
+    }
+}
+
+#[test]
+fn math_alphabet_and_text_font_commands_roundtrip_with_distinct_semantics() {
+    for source in [
+        r"\mathsf{}",
+        r"\mathtt{}",
+        r"\mathbf{}",
+        r"\mathit{}",
+        r"\mathrm{}",
+        r"\frac{\mathsf{}}{\mathtt{x}}",
+    ] {
+        let ParsedMath::Tree(tree) = parse(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("math alphabet command should parse: {error}"))
+        else {
+            panic!("math alphabet command should produce a math tree");
+        };
+        let serialized = serialize_tree(&tree);
+        assert_eq!(
+            serialized, source,
+            "math alphabet changed during serialization"
+        );
+        let ParsedMath::Tree(reparsed) = parse(&serialized, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("serialized math alphabet should parse: {error}"))
+        else {
+            panic!("serialized math alphabet should produce a math tree");
+        };
+        assert_eq!(shape_flow(&tree.root), shape_flow(&reparsed.root));
+    }
+
+    let source = r"\text{\textsf{a\textrm{b}}}";
+    let ParsedMath::Tree(tree) = parse(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("nested text font commands should parse: {error}"))
+    else {
+        panic!("text font commands should produce a math tree");
     };
-    let range = fraction.children[1]
-        .source_range
-        .as_ref()
-        .unwrap_or_else(|| panic!("缺少源范围"));
-    assert_eq!(&source[range.start as usize..range.end as usize], "bc");
+    let [MathContent::Environment(outer)] = tree.root.content.as_slice() else {
+        panic!("text group should produce a text font environment");
+    };
+    let [MathContent::Text(first), MathContent::Environment(serif)] = outer.children.as_slice()
+    else {
+        panic!(
+            "nested text font commands should remain separate environments: {:?}",
+            outer.children
+        );
+    };
+    assert_eq!(
+        first
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>(),
+        "a"
+    );
+    assert_eq!(outer.kind, caret_doc::InlineEnvironmentKind::Font);
+    assert_eq!(
+        outer.props.get("fontFamily"),
+        Some(&serde_json::Value::String("sans-serif".to_owned()))
+    );
+    assert_eq!(
+        serif.props.get("fontFamily"),
+        Some(&serde_json::Value::String("serif".to_owned()))
+    );
+    assert_eq!(serialize_tree(&tree), source);
 }
 
 #[test]
@@ -388,25 +708,23 @@ fn splits_align_cells_with_rebased_ranges() {
         panic!("second Align cell should have a source range");
     };
     assert_eq!(&source[second_cell.clone()], r"= \frac{d}{e}");
-    let cell = &align.rows[1].cells[1];
-    let fraction = cell
+    let fraction_index = align.rows[1].cells[1]
         .root
         .content
         .iter()
-        .find_map(|content| match content {
-            MathContent::Math(node) if node.kind == K::Fraction => Some(node),
-            _ => None,
+        .position(|content| {
+            matches!(
+                content,
+                MathContent::Math(node) if node.kind == K::Fraction
+            )
         })
-        .unwrap_or_else(|| panic!("expected fraction node"));
-    let range = fraction
-        .source_range
-        .as_ref()
-        .unwrap_or_else(|| panic!("缺少源范围"));
-    let cell_source = &source[second_cell.clone()];
-    assert_eq!(
-        &cell_source[range.start as usize..range.end as usize],
-        r"\frac{d}{e}"
-    );
+        .unwrap_or_else(|| panic!("fraction node should exist in the second Align cell"));
+    let range = align_map
+        .cell_tree(1, 1)
+        .and_then(|cell| cell.content_at(&[caret_doc::MathPathStep::Content(fraction_index)]))
+        .and_then(crate::MathContentSourceMap::range)
+        .unwrap_or_else(|| panic!("fraction in the second Align cell should be mapped"));
+    assert_eq!(&source[range], r"\frac{d}{e}");
     let regenerated = serialize_align(align);
     let Ok(ParsedMath::Align(again)) = parse(&regenerated, MathInputKind::Align) else {
         panic!("序列化结果应可解析：{regenerated}");
@@ -480,6 +798,287 @@ fn parse_projection_owns_source_and_keeps_tree_projection_free() {
 }
 
 #[test]
+fn ordinary_parse_returns_math_trees_without_projection_metadata() {
+    let ParsedMath::Tree(tree) = parse(
+        r"\frac{\text{\textbf{a\textsf{b}}}}{c}",
+        MathInputKind::Inline,
+    )
+    .unwrap_or_else(|error| panic!("valid formula should parse: {error}")) else {
+        panic!("inline input should parse to a tree");
+    };
+    let bytes =
+        serde_json::to_vec(&tree).unwrap_or_else(|error| panic!("tree should encode: {error}"));
+    let restored: caret_doc::MathTree = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("tree should decode: {error}"));
+    assert_eq!(tree, restored);
+
+    let ParsedMath::Align(align) = parse(
+        r"\begin{aligned}\text{\textbf{a}}&=\text{\texttt{b}}\\c&=d\end{aligned}",
+        MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid alignment should parse: {error}")) else {
+        panic!("align input should parse to an alignment");
+    };
+    let bytes =
+        serde_json::to_vec(&align).unwrap_or_else(|error| panic!("align should encode: {error}"));
+    let restored: caret_doc::Align = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("align should decode: {error}"));
+    assert_eq!(align, restored);
+}
+
+#[test]
+fn projection_sidecar_is_separate_from_persistent_tree_and_align() {
+    let source = r"\frac{\text{\textbf{a\textsf{b}}}}{c}";
+    let projection = crate::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid formula should project: {error}"));
+    let tree_map = projection
+        .source_map()
+        .tree()
+        .unwrap_or_else(|| panic!("projection should have a tree map"));
+    assert!(tree_map.root().content()[0].range().is_some());
+    assert!(math_source_map_has_text_segments(tree_map.root()));
+    let ProjectedMath::Tree(projected_tree) = projection.content() else {
+        panic!("inline projection should contain a MathTree");
+    };
+    let persistent_tree = serde_json::to_value(projected_tree)
+        .unwrap_or_else(|error| panic!("projected tree should encode: {error}"));
+    let ParsedMath::Tree(tree) = projection.into_parsed() else {
+        panic!("inline projection should return a tree");
+    };
+    assert_eq!(
+        persistent_tree,
+        serde_json::to_value(&tree)
+            .unwrap_or_else(|error| panic!("parsed tree should encode: {error}"))
+    );
+    let restored: caret_doc::MathTree = serde_json::from_slice(
+        &serde_json::to_vec(&tree).unwrap_or_else(|error| panic!("tree should encode: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("tree should decode: {error}"));
+    assert_eq!(tree, restored);
+
+    let source = r"\begin{aligned}\text{\textbf{a}}&=\text{\textsf{b}}\\c&=d\end{aligned}";
+    let projection = crate::parse_projection(source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("valid alignment should project: {error}"));
+    let align_map = projection
+        .source_map()
+        .align()
+        .unwrap_or_else(|| panic!("Align projection should have a sidecar"));
+    assert!(align_map.cell_tree(0, 0).is_some());
+    let ProjectedMath::Align(projected_align) = projection.content() else {
+        panic!("Align projection should contain an Align");
+    };
+    let persistent_align = serde_json::to_value(projected_align)
+        .unwrap_or_else(|error| panic!("projected Align should encode: {error}"));
+    let ParsedMath::Align(align) = projection.into_parsed() else {
+        panic!("Align projection should return an Align");
+    };
+    assert_eq!(
+        persistent_align,
+        serde_json::to_value(&align)
+            .unwrap_or_else(|error| panic!("parsed Align should encode: {error}"))
+    );
+    let restored: caret_doc::Align = serde_json::from_slice(
+        &serde_json::to_vec(&align).unwrap_or_else(|error| panic!("align should encode: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("align should decode: {error}"));
+    assert_eq!(align, restored);
+}
+
+#[test]
+fn parser_builds_independent_tree_and_align_sidecars_during_lowering() {
+    let inline_source = r"\frac{\text{A\%中}}{\textsf{xy}}";
+    let projection = crate::parse_projection(inline_source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should project: {error}"));
+    let ProjectedMath::Tree(tree) = projection.content() else {
+        panic!("inline formula should produce a tree");
+    };
+    let tree_map = projection
+        .source_map()
+        .tree()
+        .unwrap_or_else(|| panic!("inline formula should have a tree sidecar"));
+    assert_eq!(tree_map.root().content().len(), tree.root.content.len());
+    assert!(
+        tree_map
+            .validates_projection(tree, inline_source, None)
+            .is_some()
+    );
+
+    let source = r"\text{x}";
+    let projection = crate::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid text formula should project: {error}"));
+    let ProjectedMath::Tree(unanchored_tree) = projection.content() else {
+        panic!("inline text should produce a MathTree");
+    };
+    assert!(
+        projection
+            .source_map()
+            .tree()
+            .unwrap_or_else(|| panic!("inline text should have a tree sidecar"))
+            .validates_projection(unanchored_tree, source, None)
+            .is_some()
+    );
+
+    let align_source =
+        r"\begin{aligned}x^2   &=\frac{x}{y}\\中_1   &=\texttt{z}\\&=\text{}\end{aligned}";
+    let projection = crate::parse_projection(align_source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("valid Align should project: {error}"));
+    let align_map = projection
+        .source_map()
+        .align()
+        .unwrap_or_else(|| panic!("Align should have a source map"));
+    let ProjectedMath::Align(align) = projection.content() else {
+        panic!("Align input should produce an Align");
+    };
+    for (row_index, row) in align.rows.iter().enumerate() {
+        for (cell_index, tree) in row.cells.iter().enumerate() {
+            let range = align_map
+                .cell_range(row_index, cell_index)
+                .unwrap_or_else(|| panic!("Align cell should have a source range"));
+            let sidecar = align_map
+                .cell_tree(row_index, cell_index)
+                .unwrap_or_else(|| panic!("Align cell should have an independent sidecar"));
+            assert!(
+                sidecar
+                    .validates_projection(tree, projection.source_map().source(), Some(&range))
+                    .is_some()
+            );
+        }
+    }
+}
+
+#[test]
+fn reconciled_text_split_rebinds_complete_tree_sidecar_coordinates() {
+    let source = r"\text{a}\text{bc}";
+    let previous = crate::parse_projection(r"\text{ab}\text{c}", MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid previous formula should project: {error}"));
+    let ProjectedMath::Tree(previous_tree) = previous.content() else {
+        panic!("inline formula should produce a tree");
+    };
+    let previous_map = previous
+        .source_map()
+        .tree()
+        .unwrap_or_else(|| panic!("previous projection should carry a tree sidecar"));
+    let projection = crate::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid edited formula should project: {error}"));
+    let (ProjectedMath::Tree(parsed), mut source_map) = projection.into_parts() else {
+        panic!("inline formula should produce a tree");
+    };
+    let parsed_map = source_map
+        .tree()
+        .cloned()
+        .unwrap_or_else(|| panic!("edited projection should carry a tree sidecar"));
+    let mapped = parsed_map
+        .reconcile_for_tree(&parsed, previous_tree, Some(previous_map), source, None)
+        .unwrap_or_else(|| panic!("equivalent adjacent text flows should reconcile"));
+    assert!(source_map.bind_tree_sidecar_after_validated_edit(previous_tree, mapped));
+    let map = source_map
+        .tree()
+        .unwrap_or_else(|| panic!("validated edit should install a tree sidecar"));
+    let first = map
+        .content_at(&[caret_doc::MathPathStep::Content(0)])
+        .and_then(crate::MathContentSourceMap::text)
+        .and_then(crate::MathTextSourceMap::range)
+        .unwrap_or_else(|| panic!("first target text flow should have a source range"));
+    let second = map
+        .content_at(&[caret_doc::MathPathStep::Content(1)])
+        .and_then(crate::MathContentSourceMap::text)
+        .and_then(crate::MathTextSourceMap::range)
+        .unwrap_or_else(|| panic!("second target text flow should have a source range"));
+    assert_eq!(&source[first], r"a}\text{b");
+    assert_eq!(&source[second], "c");
+}
+
+#[test]
+fn reconciled_align_cell_split_rebinds_complete_source_coordinates() {
+    let source = r"\begin{aligned}\text{a}\text{bc}&x\end{aligned}";
+    let previous = crate::parse_projection(
+        r"\begin{aligned}\text{ab}\text{c}&x\end{aligned}",
+        MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid previous Align should project: {error}"));
+    let ProjectedMath::Align(previous_align) = previous.content() else {
+        panic!("Align input should produce an Align");
+    };
+    let previous_align_map = previous
+        .source_map()
+        .align()
+        .unwrap_or_else(|| panic!("previous Align should carry a sidecar"));
+    let projection = crate::parse_projection(source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("valid edited Align should project: {error}"));
+    let (ProjectedMath::Align(parsed), mut source_map) = projection.into_parts() else {
+        panic!("Align input should produce an Align");
+    };
+    let parsed_align_map = source_map
+        .align()
+        .cloned()
+        .unwrap_or_else(|| panic!("edited Align should carry a sidecar"));
+    let mut mapped_cells = Vec::with_capacity(previous_align.rows.len());
+    for (row_index, row) in previous_align.rows.iter().enumerate() {
+        let mut mapped_row = Vec::with_capacity(row.cells.len());
+        for (cell_index, target_tree) in row.cells.iter().enumerate() {
+            let parsed_tree = &parsed.rows[row_index].cells[cell_index];
+            let scope = parsed_align_map
+                .cell_range(row_index, cell_index)
+                .unwrap_or_else(|| panic!("edited Align cell should have a source range"));
+            let old_cell_map = previous_align_map
+                .cell_tree(row_index, cell_index)
+                .unwrap_or_else(|| panic!("previous Align cell should have a sidecar"));
+            let parsed_cell_map = parsed_align_map
+                .cell_tree(row_index, cell_index)
+                .unwrap_or_else(|| panic!("edited Align cell should have a sidecar"));
+            mapped_row.push(
+                parsed_cell_map
+                    .reconcile_for_tree(
+                        parsed_tree,
+                        target_tree,
+                        Some(old_cell_map),
+                        source,
+                        Some(&scope),
+                    )
+                    .unwrap_or_else(|| panic!("equivalent Align cells should reconcile")),
+            );
+        }
+        mapped_cells.push(mapped_row);
+    }
+    assert!(source_map.bind_align_sidecars_after_validated_edit(previous_align, mapped_cells));
+    let cell_map = source_map
+        .align()
+        .and_then(|align| align.cell_tree(0, 0))
+        .unwrap_or_else(|| panic!("first Align cell should have a sidecar"));
+    let first = cell_map
+        .content_at(&[caret_doc::MathPathStep::Content(0)])
+        .and_then(crate::MathContentSourceMap::text)
+        .and_then(crate::MathTextSourceMap::range)
+        .unwrap_or_else(|| panic!("first target cell text should have a source range"));
+    let second = cell_map
+        .content_at(&[caret_doc::MathPathStep::Content(1)])
+        .and_then(crate::MathContentSourceMap::text)
+        .and_then(crate::MathTextSourceMap::range)
+        .unwrap_or_else(|| panic!("second target cell text should have a source range"));
+    assert_eq!(&source[first], r"a}\text{b");
+    assert_eq!(&source[second], "c");
+}
+
+fn math_source_map_has_text_segments(flow: &crate::MathFlowSourceMap) -> bool {
+    flow.content()
+        .iter()
+        .any(math_content_map_has_text_segments)
+}
+
+fn math_content_map_has_text_segments(content: &crate::MathContentSourceMap) -> bool {
+    match content {
+        crate::MathContentSourceMap::Text(text) => !text.segments().is_empty(),
+        crate::MathContentSourceMap::Math { operands, .. } => {
+            operands.iter().any(math_source_map_has_text_segments)
+        }
+        crate::MathContentSourceMap::Environment { children, .. } => {
+            children.iter().any(math_content_map_has_text_segments)
+        }
+        crate::MathContentSourceMap::Other => false,
+    }
+}
+
+#[test]
 fn projection_sidecar_maps_escaped_text_by_utf8_display_segments() {
     let source = r"\text{a\%中}";
     let projection = match crate::parse_projection(source, MathInputKind::Inline) {
@@ -544,22 +1143,22 @@ fn failed_sidecar_rebind_keeps_the_previous_valid_map() {
         Ok(projection) => projection,
         Err(error) => panic!("valid formula should project: {error}"),
     };
-    let (ProjectedMath::Tree(mut valid_tree), mut source_map) = projection.into_parts() else {
+    let (ProjectedMath::Tree(valid_tree), mut source_map) = projection.into_parts() else {
         panic!("inline formula should have a tree");
     };
     let previous = source_map
         .tree()
         .cloned()
         .unwrap_or_else(|| panic!("parsed tree should carry a sidecar"));
-    let Some(MathContent::Text(text)) = valid_tree.root.content.first_mut() else {
-        panic!("plain formula should project to text");
-    };
-    let Some(range) = &mut text.source_range else {
-        panic!("projected text should retain its transient source range");
-    };
-    range.end = source_map.source().len() as u32 + 1;
+    let incompatible = crate::parse_projection(r"\text{y}", MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid replacement should project: {error}"));
+    let incompatible_map = incompatible
+        .source_map()
+        .tree()
+        .cloned()
+        .unwrap_or_else(|| panic!("replacement should have a sidecar"));
 
-    assert!(!source_map.bind_tree_after_validated_edit(&valid_tree));
+    assert!(!source_map.bind_tree_sidecar_after_validated_edit(&valid_tree, incompatible_map));
     assert_eq!(source_map.tree(), Some(&previous));
 }
 
@@ -581,29 +1180,11 @@ fn sidecar_rebind_rejects_semantically_different_tree_without_losing_map() {
     };
     text.runs[0].text = "y".to_owned();
 
-    assert!(!source_map.bind_tree_after_validated_edit(&changed_tree));
-    assert_eq!(source_map.tree(), Some(&previous));
-}
-
-#[test]
-fn sidecar_rebind_rejects_text_without_a_source_range() {
-    let projection = match crate::parse_projection(r"\text{x}", MathInputKind::Inline) {
-        Ok(projection) => projection,
-        Err(error) => panic!("valid formula should project: {error}"),
-    };
-    let (ProjectedMath::Tree(mut changed_tree), mut source_map) = projection.into_parts() else {
-        panic!("inline formula should have a tree");
-    };
-    let previous = source_map
+    let mapped = source_map
         .tree()
         .cloned()
-        .unwrap_or_else(|| panic!("parsed tree should carry a sidecar"));
-    let Some(MathContent::Text(text)) = changed_tree.root.content.first_mut() else {
-        panic!("text command should project to a TextFlow");
-    };
-    text.source_range = None;
-
-    assert!(!source_map.bind_tree_after_validated_edit(&changed_tree));
+        .unwrap_or_else(|| panic!("parsed formula should have a sidecar"));
+    assert!(!source_map.bind_tree_sidecar_after_validated_edit(&changed_tree, mapped));
     assert_eq!(source_map.tree(), Some(&previous));
 }
 
@@ -669,16 +1250,13 @@ fn source_map_rebases_inline_and_align_ranges_for_a_text_edit() {
         Ok(projection) => projection,
         Err(error) => panic!("valid inline text should project: {error}"),
     };
-    let source_range = match inline.content() {
-        ProjectedMath::Tree(tree) => match &tree.root.content[0] {
-            MathContent::Text(text) => {
-                text.source_map[0].source_range.start as usize
-                    ..text.source_map[0].source_range.end as usize
-            }
-            _ => panic!("expected a root text flow"),
-        },
-        ProjectedMath::Align(_) => panic!("inline input should not produce Align"),
-    };
+    let source_range = inline
+        .source_map()
+        .tree()
+        .and_then(|tree| tree.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .and_then(crate::MathContentSourceMap::text)
+        .and_then(crate::MathTextSourceMap::range)
+        .unwrap_or_else(|| panic!("root text flow should have a sidecar range"));
     let updated_inline =
         match inline
             .source_map()
@@ -914,6 +1492,73 @@ fn empty_align_keeps_an_editable_placeholder_cell() {
     assert_eq!(round_trip.rows[0].cells.len(), 1);
 }
 
+#[test]
+fn align_preserves_a_trailing_empty_row_after_row_break() {
+    let source = "\\begin{aligned}a\\\\ % before\n % after\n\\end{aligned}";
+    let projection = crate::parse_projection(source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("valid trailing empty Align row should parse: {error}"));
+    let (ProjectedMath::Align(align), source_map) = projection.into_parts() else {
+        panic!("Align input should produce an Align tree");
+    };
+
+    assert_eq!(align.rows.len(), 2);
+    assert!(matches!(
+        align.rows[1].cells[0].root.content.as_slice(),
+        [MathContent::Math(node)] if node.kind == K::Placeholder
+    ));
+    let align_map = source_map
+        .align()
+        .unwrap_or_else(|| panic!("Align projection should retain its source map"));
+    let semantic = align_map
+        .cell_range(1, 0)
+        .unwrap_or_else(|| panic!("trailing empty cell should have a semantic range"));
+    assert_eq!(&source[semantic.clone()], "");
+    let navigation = align_map.cell_navigation_ranges()[1][0].clone();
+    assert!(navigation.end > navigation.start);
+    assert!(source[navigation].contains("% before"));
+
+    let serialized = crate::serialize_align(&align);
+    let reparsed = crate::parse(&serialized, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("serialized trailing empty row should parse: {error}"));
+    let ParsedMath::Align(reparsed) = reparsed else {
+        panic!("serialized Align input should remain Align");
+    };
+    assert_eq!(reparsed.rows.len(), 2);
+}
+
+#[test]
+fn matrix_trailing_row_break_keeps_the_existing_matrix_shape() {
+    for (source, without_trailing_break) in [
+        (
+            r"\begin{matrix}a\\\end{matrix}",
+            r"\begin{matrix}a\end{matrix}",
+        ),
+        (
+            r"\begin{array}{cc}a&b\\\end{array}",
+            r"\begin{array}{cc}a&b\end{array}",
+        ),
+        (
+            r"\begin{aligned}a\\\end{aligned}",
+            r"\begin{aligned}a\end{aligned}",
+        ),
+    ] {
+        let projection = crate::parse_projection(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("matrix trailing row break should parse: {error}"));
+        let baseline = crate::parse_projection(without_trailing_break, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("matrix without trailing break should parse: {error}"));
+        let (ProjectedMath::Tree(tree), _) = projection.into_parts() else {
+            panic!("matrix source should lower to a math tree");
+        };
+        let (ProjectedMath::Tree(baseline), _) = baseline.into_parts() else {
+            panic!("baseline source should lower to a math tree");
+        };
+        assert_eq!(
+            crate::serialize_tree(&tree),
+            crate::serialize_tree(&baseline)
+        );
+    }
+}
+
 const ROUND_TRIP_CASES: &[&str] = &[
     "x",
     "ab+12",
@@ -989,26 +1634,6 @@ fn math_font_commands_remain_math_nodes() {
     let bold = tree(r"\mathbf{x}");
     assert_ne!(shape(&plain.root), shape(&bold.root));
     assert_eq!(serialize_tree(&bold), r"\mathbf{x}");
-}
-
-#[test]
-fn serializes_combined_text_run_styles_as_parseable_tex() {
-    let mut math_tree = self::tree(r"\text{x}");
-    let Some(MathContent::Text(text)) = math_tree.root.content.first_mut() else {
-        panic!("text command should produce a TextFlow");
-    };
-    let Some(run) = text.runs.first_mut() else {
-        panic!("text command should produce a Run");
-    };
-    run.props
-        .insert("bold".to_owned(), serde_json::Value::Bool(true));
-    run.props
-        .insert("italic".to_owned(), serde_json::Value::Bool(true));
-
-    let serialized = serialize_tree(&math_tree);
-    assert_eq!(serialized, r"\text{\textbf{\textit{x}}}");
-    let reparsed = self::tree(&serialized);
-    assert_eq!(serialize_tree(&reparsed), serialized);
 }
 
 #[test]

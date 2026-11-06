@@ -305,30 +305,30 @@ QVariantMap LayoutViewModel::saveDocument(const QString& requested_path) {
             emit documentSaveFinished(true);
             emit documentFileOperationFinished(true, QString{});
         });
-    watcher->setFuture(QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes),
-                                                               baseline_digest, queued_digest,
-                                                               saving_current_path, recovery_id,
-                                                               recovery_binding_generation,
-                                                               document_generation] {
-        rust::Vec<std::uint8_t> payload;
-        payload.reserve(static_cast<std::size_t>(bytes.size()));
-        for (const char byte : bytes) {
-            payload.push_back(static_cast<std::uint8_t>(byte));
-        }
-        if (saving_current_path) {
-            return layout_view_model_support::from_write_result(ffi::write_document_file_checked(
-                layout_view_model_support::to_rust_string(path), std::move(payload),
-                layout_view_model_support::to_rust_string(baseline_digest),
-                layout_view_model_support::to_rust_string(queued_digest),
-                layout_view_model_support::to_rust_string(recovery_id),
-                recovery_binding_generation, document_generation));
-        }
-        const rust::String error = ffi::write_document_file(
-            layout_view_model_support::to_rust_string(path), std::move(payload));
-        auto result = std::make_shared<layout_view_model_support::DocumentWriteResult>();
-        result->error = QString::fromUtf8(error.data(), static_cast<qsizetype>(error.size()));
-        return result;
-    }));
+    watcher->setFuture(
+        QtConcurrent::run(&m_document_io_pool, [path, bytes = std::move(bytes), baseline_digest,
+                                                queued_digest, saving_current_path, recovery_id,
+                                                recovery_binding_generation, document_generation] {
+            rust::Vec<std::uint8_t> payload;
+            payload.reserve(static_cast<std::size_t>(bytes.size()));
+            for (const char byte : bytes) {
+                payload.push_back(static_cast<std::uint8_t>(byte));
+            }
+            if (saving_current_path) {
+                return layout_view_model_support::from_write_result(
+                    ffi::write_document_file_checked(
+                        layout_view_model_support::to_rust_string(path), std::move(payload),
+                        layout_view_model_support::to_rust_string(baseline_digest),
+                        layout_view_model_support::to_rust_string(queued_digest),
+                        layout_view_model_support::to_rust_string(recovery_id),
+                        recovery_binding_generation, document_generation));
+            }
+            const rust::String error = ffi::write_document_file(
+                layout_view_model_support::to_rust_string(path), std::move(payload));
+            auto result = std::make_shared<layout_view_model_support::DocumentWriteResult>();
+            result->error = QString::fromUtf8(error.data(), static_cast<qsizetype>(error.size()));
+            return result;
+        }));
     return {{QStringLiteral("valid"), true}, {QStringLiteral("pending"), true}};
 #else
     Q_UNUSED(requested_path)

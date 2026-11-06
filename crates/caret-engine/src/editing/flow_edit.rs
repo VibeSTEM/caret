@@ -180,11 +180,7 @@ fn can_merge_text_flows<T>(contents: &[FlowContent<T>], left: usize, right: usiz
     matches!(
         (contents.get(left), contents.get(right)),
         (Some(FlowContent::Text(left)), Some(FlowContent::Text(right)))
-            if left.source_range.is_none()
-                && right.source_range.is_none()
-                && left.source_map.is_empty()
-                && right.source_map.is_empty()
-                && left.extra.is_empty()
+            if left.extra.is_empty()
                 && right.extra.is_empty()
     )
 }

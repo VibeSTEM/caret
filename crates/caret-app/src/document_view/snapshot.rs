@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::DocumentViewRuntime;
+use super::{DocumentViewRuntime, InteractionContext, MathInteractionContext};
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection, StructureClass,
-    StructureKind, StructurePosition,
+    Affinity, CompositionRange, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection,
+    StructureClass, StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -78,7 +78,7 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
 }
 
 fn math_input_method_enabled(session: &caret_engine::Session) -> bool {
-    session.math_edit().is_none()
+    session.math_edit().is_none() || session.math_text_input_context().is_some()
 }
 
 pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
@@ -415,7 +415,12 @@ impl DocumentViewRuntime {
         let composition_rectangles = if composing {
             self.composition_range
                 .as_ref()
-                .and_then(|range| snapshot.composition_geometry(range))
+                .and_then(|range| match range {
+                    CompositionRange::Paragraph(selection) => {
+                        snapshot.composition_geometry(selection)
+                    }
+                    CompositionRange::MathText { .. } => None,
+                })
                 .unwrap_or_default()
                 .into_iter()
                 .map(|rectangle| {
@@ -437,33 +442,54 @@ impl DocumentViewRuntime {
                 "compositionRects".to_owned(),
                 serde_json::Value::Array(composition_rectangles),
             );
-        let context = self
-            .last_snapshot
-            .as_ref()
-            .and_then(|snapshot| {
-                snapshot.paragraph_by_id(&self.session.selection().focus.paragraph_id)
-            })
-            .ok_or_else(|| "ime.unknown_paragraph".to_owned())?;
+        let math_context = self.session.math_text_input_context();
         let logical_selection = self.session.selection();
-        let cursor_position = context
-            .utf16_offset(logical_selection.focus.offset)
-            .ok_or_else(|| "ime.cursor_position: invalid UTF-8 boundary".to_owned())?;
-        let anchor_position =
-            if logical_selection.anchor.paragraph_id == logical_selection.focus.paragraph_id {
-                context
-                    .utf16_offset(logical_selection.anchor.offset)
-                    .ok_or_else(|| "ime.anchor_position: invalid UTF-8 boundary".to_owned())?
-            } else {
-                cursor_position
-            };
+        let (surrounding_text, cursor_position, anchor_position) = if let Some(context) =
+            &math_context
+        {
+            (
+                context.surrounding_text.clone(),
+                context.focus_utf16,
+                context.anchor_utf16,
+            )
+        } else {
+            let context = self
+                .last_snapshot
+                .as_ref()
+                .and_then(|snapshot| {
+                    snapshot.paragraph_by_id(&logical_selection.focus.paragraph_id)
+                })
+                .ok_or_else(|| "ime.unknown_paragraph".to_owned())?;
+            let cursor = context
+                .utf16_offset(logical_selection.focus.offset)
+                .ok_or_else(|| "ime.cursor_position: invalid UTF-8 boundary".to_owned())?;
+            let anchor =
+                if logical_selection.anchor.paragraph_id == logical_selection.focus.paragraph_id {
+                    context
+                        .utf16_offset(logical_selection.anchor.offset)
+                        .ok_or_else(|| "ime.anchor_position: invalid UTF-8 boundary".to_owned())?
+                } else {
+                    cursor
+                };
+            (context.text.to_string(), cursor, anchor)
+        };
         let input_method_context = serde_json::json!({
-            "surroundingText": context.text.as_ref(),
+            "surroundingText": surrounding_text,
             "cursorPosition": cursor_position,
             "anchorPosition": anchor_position,
             "enabled": math_input_method_enabled(&self.session),
         });
-        self.last_interaction_context =
-            Some((snapshot.document_generation, context.id.clone(), false));
+        let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
+            target: context.target.clone(),
+            anchor: context.anchor.clone(),
+            focus: context.focus.clone(),
+        });
+        self.last_interaction_context = Some(InteractionContext {
+            document_generation: snapshot.document_generation,
+            focused_paragraph_id: logical_selection.focus.paragraph_id.clone(),
+            command_input_active: false,
+            math_context: math_context_key,
+        });
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("inputMethodContext".to_owned(), input_method_context);
@@ -476,11 +502,18 @@ impl DocumentViewRuntime {
         let input_method_enabled = math_input_method_enabled(&self.session);
         let visual_affinity = self.session.selection_visual_affinity();
         let command_input_context = self.session.command_line();
-        let context_key = (
-            self.session.document_generation(),
-            selection.focus.paragraph_id.clone(),
-            command_input_context.is_some(),
-        );
+        let math_context = self.session.math_text_input_context();
+        let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
+            target: context.target.clone(),
+            anchor: context.anchor.clone(),
+            focus: context.focus.clone(),
+        });
+        let context_key = InteractionContext {
+            document_generation: self.session.document_generation(),
+            focused_paragraph_id: selection.focus.paragraph_id.clone(),
+            command_input_active: command_input_context.is_some(),
+            math_context: math_context_key,
+        };
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
         let command_input_context = command_input_context.map(|line| {
@@ -528,21 +561,29 @@ impl DocumentViewRuntime {
         let paragraph = snapshot
             .paragraph_by_id(&focus.paragraph_id)
             .ok_or_else(|| "ime.unknown_paragraph".to_owned())?;
-        let cursor_position = paragraph
-            .utf16_offset(focus.offset)
-            .ok_or_else(|| "ime.cursor_position: invalid UTF-8 boundary".to_owned())?;
-        let anchor_position = if selection.anchor.paragraph_id == focus.paragraph_id {
-            paragraph
-                .utf16_offset(selection.anchor.offset)
-                .ok_or_else(|| "ime.anchor_position: invalid UTF-8 boundary".to_owned())?
+        let (cursor_position, anchor_position) = if let Some(context) = &math_context {
+            (context.focus_utf16, context.anchor_utf16)
         } else {
-            cursor_position
+            let cursor = paragraph
+                .utf16_offset(focus.offset)
+                .ok_or_else(|| "ime.cursor_position: invalid UTF-8 boundary".to_owned())?;
+            let anchor = if selection.anchor.paragraph_id == focus.paragraph_id {
+                paragraph
+                    .utf16_offset(selection.anchor.offset)
+                    .ok_or_else(|| "ime.anchor_position: invalid UTF-8 boundary".to_owned())?
+            } else {
+                cursor
+            };
+            (cursor, anchor)
         };
         let mut input_method_context = serde_json::Map::new();
         if include_surrounding_text {
             input_method_context.insert(
                 "surroundingText".to_owned(),
-                serde_json::Value::String(paragraph.text.to_string()),
+                serde_json::Value::String(math_context.as_ref().map_or_else(
+                    || paragraph.text.to_string(),
+                    |context| context.surrounding_text.clone(),
+                )),
             );
         }
         input_method_context.insert(

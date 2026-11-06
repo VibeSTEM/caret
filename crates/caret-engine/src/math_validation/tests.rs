@@ -8,11 +8,30 @@ use caret_doc::{InlineMath, NodeId, OpenedDocument};
 use std::collections::BTreeMap;
 
 fn parse_inline(source: &str) -> MathTree {
-    match caret_math::parse(source, MathInputKind::Inline) {
-        Ok(caret_math::ParsedMath::Tree(tree)) => tree,
-        Ok(caret_math::ParsedMath::Align(_)) => panic!("expected an inline tree"),
+    match caret_math::parse_projection(source, MathInputKind::Inline) {
+        Ok(projection) => match projection.into_parts().0 {
+            caret_math::ProjectedMath::Tree(tree) => tree,
+            caret_math::ProjectedMath::Align(_) => panic!("expected an inline tree"),
+        },
         Err(error) => panic!("test formula should parse: {error}"),
     }
+}
+
+fn projection_for_tree(tree: &MathTree, source: &str) -> caret_math::MathSourceMap<'static> {
+    let projection = caret_math::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("test formula should project: {error}"));
+    let (caret_math::ProjectedMath::Tree(parsed), mut source_map) = projection.into_parts() else {
+        panic!("test formula should produce a tree");
+    };
+    let candidate = caret_math::reconcile_tree_ranges(tree, &parsed)
+        .unwrap_or_else(|| panic!("test target should reconcile with its source"));
+    assert!(bind_tree_sidecar(
+        &mut source_map,
+        &parsed,
+        &candidate,
+        None
+    ));
+    source_map
 }
 
 #[test]
@@ -57,20 +76,6 @@ fn edit_projection_is_regenerated_from_the_persistent_tree() {
     let source = r"\frac {x}{\text{t}}";
     let mut tree = parse_inline(source);
     let canonical = caret_math::serialize_tree(&tree);
-    let original_text_range = tree.root.content.iter().find_map(|content| match content {
-        MathContent::Math(node) => node
-            .children
-            .iter()
-            .flat_map(|flow| &flow.content)
-            .find_map(|content| match content {
-                MathContent::Text(text) => text
-                    .source_range
-                    .as_ref()
-                    .map(|range| (range.start, range.end)),
-                _ => None,
-            }),
-        _ => None,
-    });
     let Some(MathContent::Math(fraction)) = tree.root.content.first_mut() else {
         panic!("fraction should be the root formula content");
     };
@@ -88,11 +93,6 @@ fn edit_projection_is_regenerated_from_the_persistent_tree() {
     else {
         panic!("fraction denominator should contain text");
     };
-    if let Some(range) = &mut text.source_range {
-        range
-            .extra
-            .insert("vendorRange".to_owned(), serde_json::json!(7));
-    }
     if let Some(run) = text.runs.first_mut() {
         run.props
             .insert("underline".to_owned(), serde_json::json!(true));
@@ -131,20 +131,15 @@ fn edit_projection_is_regenerated_from_the_persistent_tree() {
             _ => None,
         })
         .unwrap_or_else(|| panic!("projected formula should retain its text flow"));
-    assert_ne!(
-        projected_text
-            .source_range
-            .as_ref()
-            .map(|range| (range.start, range.end)),
-        original_text_range
-    );
-    assert_eq!(
-        projected_text
-            .source_range
-            .as_ref()
-            .map(|range| &range.extra["vendorRange"]),
-        Some(&serde_json::json!(7))
-    );
+    let text_map = source_map
+        .tree()
+        .and_then(|tree| tree.root().content().first())
+        .and_then(caret_math::MathContentSourceMap::operands)
+        .and_then(|operands| operands.get(1))
+        .and_then(|flow| flow.content().first())
+        .and_then(caret_math::MathContentSourceMap::text)
+        .unwrap_or_else(|| panic!("projected text flow should have a sidecar"));
+    assert!(text_map.range().is_some());
     assert_eq!(
         projected_text.runs[0].props["underline"],
         serde_json::json!(true)
@@ -159,28 +154,70 @@ fn edit_projection_is_regenerated_from_the_persistent_tree() {
             .unwrap_or_else(|error| panic!("math tree should serialize: {error}"))
     );
     let history_tree = tree_for_history_projection(&tree, &canonical, MathInputKind::Inline)
-        .unwrap_or_else(|| panic!("canonical history source should rebind transient ranges"));
+        .unwrap_or_else(|| panic!("canonical history source should validate the sidecar"));
     assert_eq!(
         serde_json::to_value(&history_tree).ok(),
         serde_json::to_value(&tree).ok()
     );
-    let history_text = history_tree
-        .root
+    assert!(matches!(
+        history_tree.root.content.first(),
+        Some(MathContent::Math(node)) if node.children.get(1).is_some_and(|flow| matches!(flow.content.first(), Some(MathContent::Text(_))))
+    ));
+}
+
+#[test]
+fn edit_projection_retains_document_font_family_not_represented_by_tex() {
+    let mut tree = parse_inline(r"\text{abcd}");
+    let Some(MathContent::Text(text)) = tree.root.content.pop() else {
+        panic!("formula should contain a text flow");
+    };
+    tree.root
         .content
-        .iter()
-        .find_map(|content| match content {
-            MathContent::Math(node) => node
-                .children
-                .iter()
-                .flat_map(|flow| &flow.content)
-                .find_map(|content| match content {
-                    MathContent::Text(text) => Some(text),
-                    _ => None,
-                }),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("history formula should retain its text flow"));
-    assert_eq!(history_text.source_range, projected_text.source_range);
+        .push(MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: caret_doc::InlineEnvironmentKind::Font,
+            definition_id: None,
+            props: BTreeMap::from([("fontFamily".to_owned(), serde_json::json!("Noto Serif"))]),
+            children: vec![MathContent::Text(text)],
+            extra: BTreeMap::new(),
+        }));
+
+    let (projection, projected) = project_tree_for_edit(&tree, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("font family should survive location projection: {error}"));
+    assert_eq!(projection.source(), r"\text{\textrm{abcd}}");
+    let Some(MathContent::Environment(environment)) = projected.root.content.first() else {
+        panic!("font environment should remain in the document tree");
+    };
+    assert_eq!(
+        environment.props.get("fontFamily"),
+        Some(&serde_json::json!("Noto Serif"))
+    );
+}
+
+#[test]
+fn source_projection_rejects_a_different_font_style_class_atomically() {
+    let mut tree = parse_inline(r"\text{abcd}");
+    let Some(MathContent::Text(text)) = tree.root.content.pop() else {
+        panic!("formula should contain a text flow");
+    };
+    tree.root
+        .content
+        .push(MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: caret_doc::InlineEnvironmentKind::Font,
+            definition_id: None,
+            props: BTreeMap::from([("fontFamily".to_owned(), serde_json::json!("Noto Serif"))]),
+            children: vec![MathContent::Text(text)],
+            extra: BTreeMap::new(),
+        }));
+    let before = serde_json::to_value(&tree)
+        .unwrap_or_else(|error| panic!("math tree should serialize: {error}"));
+
+    assert!(
+        tree_for_history_projection_with_map(&tree, r"\text{\textsf{abcd}}", MathInputKind::Inline)
+            .is_none()
+    );
+    assert_eq!(serde_json::to_value(&tree).ok(), Some(before));
 }
 
 #[test]
@@ -195,21 +232,6 @@ fn history_projection_rejects_a_missing_empty_math_anchor_in_a_text_flow() {
     text.runs[0]
         .extra
         .insert("vendorRun".to_owned(), serde_json::json!("kept"));
-    text.source_range = Some(MathSourceRange {
-        start: 6,
-        end: 10,
-        extra: BTreeMap::from([("vendorRange".to_owned(), serde_json::json!(9))]),
-    });
-    text.source_map = vec![caret_doc::TextFlowSourceMapEntry {
-        text_start: 0,
-        text_end: 4,
-        source_range: MathSourceRange {
-            start: 6,
-            end: 10,
-            extra: BTreeMap::new(),
-        },
-        extra: BTreeMap::new(),
-    }];
     let persistent_before = serde_json::to_value(&tree)
         .unwrap_or_else(|error| panic!("math tree should serialize: {error}"));
 
@@ -223,14 +245,7 @@ fn history_projection_rejects_a_missing_empty_math_anchor_in_a_text_flow() {
     let Some(MathContent::Text(unchanged)) = tree.root.content.first() else {
         panic!("projection failure must leave the persisted text flow intact");
     };
-    assert_eq!(
-        unchanged
-            .source_range
-            .as_ref()
-            .map(|range| range.start..range.end),
-        Some(6..10)
-    );
-    assert_eq!(unchanged.source_map.len(), 1);
+    assert_eq!(unchanged.runs[0].text, "abcd");
     assert_eq!(
         unchanged.runs[0].props["underline"],
         serde_json::json!(true)
@@ -297,7 +312,6 @@ fn history_projection_does_not_expand_placeholders_into_math_nodes() {
         kind: caret_doc::MathNodeKind::Placeholder,
         text: None,
         attributes: BTreeMap::new(),
-        source_range: None,
         children: Vec::new(),
         extra: BTreeMap::new(),
     }));
@@ -317,15 +331,9 @@ fn source_history_rejects_uncommitted_placeholder_shape() {
         kind: caret_doc::MathNodeKind::Placeholder,
         text: None,
         attributes: BTreeMap::new(),
-        source_range: Some(MathSourceRange {
-            start: 0,
-            end: 0,
-            extra: BTreeMap::from([("vendorRange".to_owned(), serde_json::json!(3))]),
-        }),
         children: Vec::new(),
         extra: BTreeMap::new(),
     };
-    let original_range = placeholder.source_range.clone();
     tree.root
         .content
         .push(MathContent::Math(placeholder.clone()));
@@ -336,36 +344,26 @@ fn source_history_rejects_uncommitted_placeholder_shape() {
     };
     assert_eq!(unchanged.kind, caret_doc::MathNodeKind::Placeholder);
     assert_eq!(unchanged.id, placeholder.id);
-    assert_eq!(unchanged.source_range, original_range);
+    assert_eq!(unchanged.extra, placeholder.extra);
 }
 
 #[test]
 fn source_history_rebinds_text_ranges_across_canonical_text_flow_merge() -> Result<(), String> {
     let tree = parse_inline(r"\text{a}\text{b}");
     assert_eq!(caret_math::serialize_tree(&tree), r"\text{ab}");
+    let stored_projection = projection_for_tree(&tree, r"\text{ab}");
 
-    let (updated, source_map) =
-        tree_for_source_history_projection_with_map(&tree, r"\text{ab}", MathInputKind::Inline)
-            .ok_or_else(|| {
-                "canonical source should preserve text-flow identity and ranges".to_owned()
-            })?;
-    assert_eq!(caret_math::serialize_tree(&updated), r"\text{ab}");
-    assert_eq!(
-        text_flow_range_signature(&tree.root).len(),
-        text_flow_range_signature(&updated.root).len()
-    );
-    let (caret_math::ProjectedMath::Tree(_), mut canonical_source_map) =
-        caret_math::parse_projection(r"\text{ab}", MathInputKind::Inline)
-            .map_err(|error| error.to_string())?
-            .into_parts()
-    else {
-        return Err("canonical inline source should project to a MathTree".to_owned());
-    };
-    assert!(canonical_source_map.bind_tree_after_validated_edit(&updated));
-    let canonical_tree_map = canonical_source_map
+    let (updated, source_map) = tree_for_source_history_projection_with_map(
+        &tree,
+        &stored_projection,
+        MathInputKind::Inline,
+    )
+    .ok_or_else(|| "canonical source should preserve text-flow identity and ranges".to_owned())?;
+    assert_eq!(updated, tree);
+    let canonical_tree_map = stored_projection
         .tree()
         .ok_or_else(|| "bound canonical source should expose its tree map".to_owned())?;
-    assert!(source_map.same_locations(canonical_tree_map));
+    assert_eq!(&source_map, canonical_tree_map);
     Ok(())
 }
 
@@ -390,33 +388,115 @@ fn source_history_rebinds_text_ranges_inside_inline_environment() -> Result<(), 
     };
     run.text = "b".to_owned();
     environment.children = vec![MathContent::Text(first), MathContent::Text(second)];
+    let stored_projection = projection_for_tree(&tree, source);
 
-    let (updated, source_map) =
-        tree_for_source_history_projection_with_map(&tree, source, MathInputKind::Inline)
-            .ok_or_else(|| "nested canonical projection should refresh text ranges".to_owned())?;
+    let (updated, source_map) = tree_for_source_history_projection_with_map(
+        &tree,
+        &stored_projection,
+        MathInputKind::Inline,
+    )
+    .ok_or_else(|| "nested canonical projection should refresh text ranges".to_owned())?;
     let Some(MathContent::Environment(environment)) = updated.root.content.first() else {
         return Err("updated formula should preserve its inline environment".to_owned());
     };
     if environment.children.len() != 2 {
         return Err("history projection should preserve both text-flow identities".to_owned());
     }
-    let (caret_math::ProjectedMath::Tree(_), mut canonical_source_map) =
-        caret_math::parse_projection(source, MathInputKind::Inline)
-            .map_err(|error| error.to_string())?
-            .into_parts()
-    else {
-        return Err("canonical inline source should project to a MathTree".to_owned());
-    };
-    if !canonical_source_map.bind_tree_after_validated_edit(&updated) {
-        return Err("updated nested tree should bind to its source projection".to_owned());
-    }
-    let canonical_tree_map = canonical_source_map
+    let canonical_tree_map = stored_projection
         .tree()
         .ok_or_else(|| "bound canonical source should expose its tree map".to_owned())?;
-    if !source_map.same_locations(canonical_tree_map) {
+    if &source_map != canonical_tree_map || updated != tree {
         return Err("nested range refresh should match canonical source locations".to_owned());
     }
     Ok(())
+}
+
+#[test]
+fn source_history_uses_sidecar_when_the_tree_has_no_temporary_ranges() {
+    let source = r"\frac {\text{same}}{\text{same}}";
+    let projection = caret_math::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("noncanonical source should project: {error}"));
+    let (caret_math::ProjectedMath::Tree(mut tree), stored_projection) = projection.into_parts()
+    else {
+        panic!("inline formula should produce a tree");
+    };
+    let Some(MathContent::Math(fraction)) = tree.root.content.first_mut() else {
+        panic!("formula should contain a fraction");
+    };
+    let fraction_id = fraction.id.clone();
+    let Some(MathContent::Text(text)) = fraction
+        .children
+        .get_mut(1)
+        .and_then(|flow| flow.content.first_mut())
+    else {
+        panic!("second operand should contain text");
+    };
+    text.runs[0]
+        .props
+        .insert("underline".to_owned(), serde_json::json!(true));
+    text.runs[0]
+        .extra
+        .insert("vendorRun".to_owned(), serde_json::json!("retained"));
+    let before = tree.clone();
+
+    let (restored, map) = tree_for_source_history_projection_with_map(
+        &tree,
+        &stored_projection,
+        MathInputKind::Inline,
+    )
+    .unwrap_or_else(|| panic!("matching source sidecar should restore the tree"));
+
+    assert_eq!(tree, before);
+    assert_eq!(restored, before);
+    assert_eq!(Some(&map), stored_projection.tree());
+    assert!(
+        matches!(restored.root.content.first(), Some(MathContent::Math(node)) if node.id == fraction_id)
+    );
+}
+
+#[test]
+fn source_history_rejects_a_stale_tree_version_without_changing_the_tree() {
+    let source = r"\frac{a}{b}";
+    let projection = caret_math::parse_projection(source, MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("formula should project: {error}"));
+    let (caret_math::ProjectedMath::Tree(mut tree), stale_projection) = projection.into_parts()
+    else {
+        panic!("inline formula should produce a tree");
+    };
+    let Some(MathContent::Math(fraction)) = tree.root.content.first_mut() else {
+        panic!("formula should contain a fraction");
+    };
+    fraction.kind = caret_doc::MathNodeKind::Radical;
+    let before = tree.clone();
+
+    assert!(
+        tree_for_source_history_projection_with_map(
+            &tree,
+            &stale_projection,
+            MathInputKind::Inline
+        )
+        .is_none()
+    );
+    assert_eq!(tree, before);
+}
+
+#[test]
+fn align_source_history_keeps_cell_identity_without_dto_ranges() {
+    let source = r"\begin{aligned}\text{same}&\text{same}\\x&y\end{aligned}";
+    let projection = caret_math::parse_projection(source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("Align source should project: {error}"));
+    let (caret_math::ProjectedMath::Align(align), stored_projection) = projection.into_parts()
+    else {
+        panic!("Align source should produce an Align");
+    };
+    let before = align.clone();
+
+    let (restored, map) = align_for_source_history_projection_with_map(&align, &stored_projection)
+        .unwrap_or_else(|| panic!("matching Align sidecar should restore every cell"));
+
+    assert_eq!(align, before);
+    assert_eq!(restored, before);
+    assert_eq!(Some(&map), stored_projection.align());
 }
 
 #[test]
@@ -432,83 +512,6 @@ fn canonical_text_flow_merge_keeps_model_only_run_properties_opaque_to_source_sh
         .insert("underline".to_owned(), serde_json::json!(true));
 
     assert!(parse_tree_with_same_semantics(&tree, MathInputKind::Inline).is_some());
-}
-
-#[test]
-fn canonical_text_flow_split_rejects_unmappable_range_extensions() {
-    let mut projection_tree = parse_inline(r"\text{ab}");
-    let Some(MathContent::Text(projected)) = projection_tree.root.content.first_mut() else {
-        panic!("text formula should start with a text flow");
-    };
-    let Some(range) = projected.source_range.as_mut() else {
-        panic!("projected text flow should have a source range");
-    };
-    range
-        .extra
-        .insert("vendorRange".to_owned(), serde_json::json!("whole-flow"));
-
-    let tree = ["a", "b"]
-        .map(|text| {
-            MathContent::Text(caret_doc::TextFlow {
-                runs: vec![caret_doc::Run {
-                    text: text.to_owned(),
-                    language: None,
-                    props: BTreeMap::new(),
-                    extra: BTreeMap::new(),
-                }],
-                ..Default::default()
-            })
-        })
-        .to_vec();
-
-    assert!(collect_tree_text_sequence(&tree, 0, projected).is_none());
-}
-
-#[test]
-fn duplicate_empty_source_map_ranges_keep_extensions_one_to_one() {
-    let make_entry = |extension: &str, source_extension: &str| caret_doc::TextFlowSourceMapEntry {
-        text_start: 0,
-        text_end: 0,
-        source_range: MathSourceRange {
-            start: 6,
-            end: 6,
-            extra: BTreeMap::from([(
-                "rangeExtension".to_owned(),
-                serde_json::json!(source_extension),
-            )]),
-        },
-        extra: BTreeMap::from([("entryExtension".to_owned(), serde_json::json!(extension))]),
-    };
-    let mut text = TextFlow {
-        runs: vec![caret_doc::Run {
-            text: String::new(),
-            language: None,
-            props: BTreeMap::new(),
-            extra: BTreeMap::new(),
-        }],
-        source_range: None,
-        source_map: vec![
-            make_entry("first", "first-range"),
-            make_entry("second", "second-range"),
-        ],
-        extra: BTreeMap::new(),
-    };
-    let refreshed = vec![
-        make_entry("parsed-first", "parsed-first-range"),
-        make_entry("parsed-second", "parsed-second-range"),
-    ];
-
-    assert!(refresh_text_ranges_from_map(&mut text, None, refreshed));
-    assert_eq!(text.source_map[0].extra["entryExtension"], "first");
-    assert_eq!(text.source_map[1].extra["entryExtension"], "second");
-    assert_eq!(
-        text.source_map[0].source_range.extra["rangeExtension"],
-        "first-range"
-    );
-    assert_eq!(
-        text.source_map[1].source_range.extra["rangeExtension"],
-        "second-range"
-    );
 }
 
 #[test]
@@ -547,33 +550,46 @@ fn formula_text_metadata_and_run_splits_do_not_change_source_semantics() {
             extra: BTreeMap::new(),
         },
     ];
-    if let Some(range) = &mut text.source_range {
-        range
-            .extra
-            .insert("vendorRange".to_owned(), serde_json::json!(7));
-    }
     assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
 }
 
 #[test]
-fn formula_text_source_map_must_match_the_parser_output() {
-    let mut tree = parse_inline(r"\text{a\%b}");
+fn source_history_rejects_stale_escaped_text_tree_without_changing_it() {
+    let projection = caret_math::parse_projection(r"\text{a\%b}", MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("escaped text should project: {error}"));
+    let (caret_math::ProjectedMath::Tree(mut tree), stale_projection) = projection.into_parts()
+    else {
+        panic!("inline source should produce a tree");
+    };
     let Some(MathContent::Text(text)) = tree.root.content.first_mut() else {
         panic!("text formula should start with a text flow");
     };
-    text.source_map[1].source_range.start += 1;
+    text.runs[0].text.push('x');
+    let before = tree.clone();
     assert!(
-        validate_tree(&tree, MathInputKind::Inline, "text")
-            .is_err_and(|error| error.contains("source and tree disagree"))
+        tree_for_source_history_projection_with_map(
+            &tree,
+            &stale_projection,
+            MathInputKind::Inline,
+        )
+        .is_none()
     );
+    assert_eq!(tree, before);
 }
 
 #[test]
 fn formula_text_environment_semantics_match_source_and_keep_extensions() {
-    let mut tree = parse_inline(r"\text{\textbf{x}}");
+    let mut tree = parse_inline(r"\frac{\text{\textbf{x}}}{1}");
     {
-        let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
-            panic!("formatted text formula should start with an environment");
+        let Some(MathContent::Math(fraction)) = tree.root.content.first_mut() else {
+            panic!("formula should start with a fraction");
+        };
+        let Some(MathContent::Environment(environment)) = fraction
+            .children
+            .first_mut()
+            .and_then(|flow| flow.content.first_mut())
+        else {
+            panic!("fraction numerator should contain a text format environment");
         };
         environment
             .props
@@ -581,8 +597,15 @@ fn formula_text_environment_semantics_match_source_and_keep_extensions() {
     }
     assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
     {
-        let Some(MathContent::Environment(environment)) = tree.root.content.first_mut() else {
-            panic!("formatted text formula should start with an environment");
+        let Some(MathContent::Math(fraction)) = tree.root.content.first_mut() else {
+            panic!("formula should start with a fraction");
+        };
+        let Some(MathContent::Environment(environment)) = fraction
+            .children
+            .first_mut()
+            .and_then(|flow| flow.content.first_mut())
+        else {
+            panic!("fraction numerator should contain a text format environment");
         };
         environment
             .props
@@ -639,7 +662,7 @@ fn formula_text_source_can_reset_bold_and_italic_semantics() {
 
 #[test]
 fn edited_text_style_is_the_source_projection_authority() {
-    let tree = parse_inline(r"\text{\textsf{x}}");
+    let tree = parse_inline(r"\frac{\text{\textsf{x}}}{1}");
     assert_eq!(validate_tree(&tree, MathInputKind::Inline, "text"), Ok(()));
 
     let mut document = Document::blank();
@@ -690,47 +713,33 @@ fn matrix_flows_with_rows_and_markers_round_trip_through_cdoc() {
 }
 
 #[test]
-fn align_cell_source_and_node_ranges_must_match_the_parsed_tree() {
-    let mut align = match caret_math::parse(r"\begin{aligned}xy\end{aligned}", MathInputKind::Align)
-    {
-        Ok(caret_math::ParsedMath::Align(align)) => align,
-        Ok(caret_math::ParsedMath::Tree(_)) => panic!("expected aligned formula"),
-        Err(error) => panic!("test align formula should parse: {error}"),
+fn align_source_history_rejects_stale_cell_mapping_atomically() {
+    let projection =
+        caret_math::parse_projection(r"\begin{aligned}xy\end{aligned}", MathInputKind::Align)
+            .unwrap_or_else(|error| panic!("test align formula should project: {error}"));
+    let (caret_math::ProjectedMath::Align(mut align), stale_projection) = projection.into_parts()
+    else {
+        panic!("expected aligned formula");
     };
     let Some(MathContent::Math(node)) = align.rows[0].cells[0].root.content.first_mut() else {
-        panic!("parsed cell should retain a ranged node");
+        panic!("parsed cell should retain its math node");
     };
-    let Some(range) = node.source_range.as_mut() else {
-        panic!("parsed cell node should retain its projection range");
-    };
-    range.end = range.end.saturating_add(1);
-    let Err(error) = validate_align(&align) else {
-        panic!("mismatched align source and cells must be rejected");
-    };
-    assert!(!error.is_empty());
-
-    let mut tree = parse_inline("x+y");
-    let Some(MathContent::Math(node)) = tree.root.content.first_mut() else {
-        panic!("parsed row should retain its first semantic node");
-    };
-    let Some(range) = node.source_range.as_mut() else {
-        panic!("parsed math node should retain its source range");
-    };
-    range.start = 1;
-    let Err(error) = validate_tree(&tree, MathInputKind::Inline, "test") else {
-        panic!("incorrect source range must be rejected");
-    };
-    assert!(error.contains("source and tree disagree"));
+    node.kind = caret_doc::MathNodeKind::Radical;
+    let before = align.clone();
+    assert!(align_for_source_history_projection_with_map(&align, &stale_projection).is_none());
+    assert_eq!(align, before);
 }
 
 #[test]
 fn align_text_style_semantics_must_match_the_source() {
-    let mut align = match caret_math::parse(
+    let mut align = match caret_math::parse_projection(
         r"\begin{aligned}\text{\textbf{x}}\end{aligned}",
         MathInputKind::Align,
     ) {
-        Ok(caret_math::ParsedMath::Align(align)) => align,
-        Ok(caret_math::ParsedMath::Tree(_)) => panic!("expected aligned formula"),
+        Ok(projection) => match projection.into_parts().0 {
+            caret_math::ProjectedMath::Align(align) => align,
+            caret_math::ProjectedMath::Tree(_) => panic!("expected aligned formula"),
+        },
         Err(error) => panic!("test align formula should parse: {error}"),
     };
     let Some(MathContent::Environment(environment)) =
@@ -743,12 +752,14 @@ fn align_text_style_semantics_must_match_the_source() {
         .insert("enabled".to_owned(), serde_json::json!(false));
     assert!(validate_align(&align).is_ok());
 
-    let align = match caret_math::parse(
+    let align = match caret_math::parse_projection(
         r"\begin{aligned}\text{\textsf{x}}\end{aligned}",
         MathInputKind::Align,
     ) {
-        Ok(caret_math::ParsedMath::Align(align)) => align,
-        Ok(caret_math::ParsedMath::Tree(_)) => panic!("expected aligned formula"),
+        Ok(projection) => match projection.into_parts().0 {
+            caret_math::ProjectedMath::Align(align) => align,
+            caret_math::ProjectedMath::Tree(_) => panic!("expected aligned formula"),
+        },
         Err(error) => panic!("test align formula should parse: {error}"),
     };
     assert!(validate_align(&align).is_ok());

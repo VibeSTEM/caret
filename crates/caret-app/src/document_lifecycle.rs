@@ -72,6 +72,14 @@ impl DocumentLifecycleService {
         self.math_source_draft_pending = false;
     }
 
+    /// 文档修订代际回绕时重置异步身份，同时保留当前源码草稿状态。
+    pub fn set_session_generation(&mut self, session_generation: u64, has_recovery: bool) {
+        self.auto_save.set_session_generation(session_generation);
+        self.recovery_update
+            .set_session_generation(session_generation);
+        self.recovery_update.set_enabled(has_recovery);
+    }
+
     /// 切换用户自动保存设置，并在需要时安排当前 dirty revision。
     pub fn set_auto_save_enabled(
         &mut self,
@@ -176,6 +184,11 @@ impl DocumentLifecycleService {
     ) -> Option<DocumentLifecycleDeadline> {
         let _ = self.recovery_update.save_finished(revision, succeeded, now);
         self.next_deadline(now)
+    }
+
+    /// 旧恢复快照完成后，为期间产生的新修订恢复唤醒。
+    pub fn resume_recovery_revision(&mut self, revision: u64, now: Duration) {
+        let _ = self.recovery_update.resume_dirty_revision(revision, now);
     }
 
     /// 手动保存覆盖待执行的 AutoSave revision 时取消重复写入。
