@@ -27,7 +27,7 @@ use crate::{
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
-use crate::shaping::paragraph_style_spans;
+use crate::shaping::{StyledSpan, paragraph_style_spans};
 
 mod interaction;
 mod line_mapping;
@@ -120,6 +120,216 @@ pub struct ParagraphLayouter {
     space_adjustments_pt: std::collections::HashMap<SpaceStyleKey, f32>,
     space_font_preferences: Option<crate::FontPreferenceRules>,
     space_style_signature: Option<Vec<ShapingStyle>>,
+}
+
+/// 一个连续文本岛的样式范围；边界不会阻断组合字符或连字塑形。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextIslandSpan<'a> {
+    pub text: &'a str,
+    pub style: ShapingStyle,
+    pub underline: bool,
+}
+
+/// 单行文本岛的自然字体度量和水平推进，单位为 pt。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextIslandMetrics {
+    pub advance_pt: f32,
+    pub ascent_pt: f32,
+    pub descent_pt: f32,
+}
+
+/// Parley 原始单行塑形结果；不包含段落行网格、缩进或分页数据。
+#[derive(Debug, Clone)]
+pub struct TextIslandLayout {
+    pub text: String,
+    pub layout: Layout<[u8; 4]>,
+    pub metrics: TextIslandMetrics,
+    /// 输入文本的扩展字素簇边界，包含 0 和文本末尾。
+    pub grapheme_boundaries: Vec<usize>,
+    /// 字体偏好首选族未安装；generic family 不会触发此诊断。
+    pub requested_family_missing: bool,
+}
+
+/// 文本岛塑形失败；输入含 mandatory break、字号非法或 Parley 输出不一致时返回错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextIslandError {
+    InvalidFontSize,
+    MandatoryBreak,
+    InconsistentShaping,
+}
+
+impl std::fmt::Display for TextIslandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidFontSize => "layout.invalid_font_size",
+            Self::MandatoryBreak => "layout.text_island_mandatory_break",
+            Self::InconsistentShaping => "layout.inconsistent_parley_output",
+        })
+    }
+}
+
+impl std::error::Error for TextIslandError {}
+
+/// 可复用单行文本岛塑形器；字体集合由 `FontCatalog` 持有。
+#[derive(Default)]
+pub struct TextIslandLayouter {
+    context: LayoutContext<[u8; 4]>,
+    font_generation: Option<u64>,
+    space_adjustments_pt: std::collections::HashMap<SpaceStyleKey, f32>,
+    space_font_preferences: Option<crate::FontPreferenceRules>,
+    space_style_signature: Option<(Vec<ShapingStyle>, Option<u32>)>,
+}
+
+impl TextIslandLayouter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 将连续 spans 拼成一个 UTF-8 文本后整体塑形，跨 span 的 grapheme 与连字保持完整。
+    /// 空输入返回零度量的空布局；mandatory break、零字号或非有限/负的结果度量会失败。
+    pub fn shape(
+        &mut self,
+        catalog: &mut FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        spans: &[TextIslandSpan<'_>],
+    ) -> Result<TextIslandLayout, TextIslandError> {
+        self.shape_with_font_size_pt(catalog, settings, spans, None)
+    }
+
+    /// 使用布局派生的 pt 字号塑形；与文档存储字号不同，此值保留脚本缩放的小数精度。
+    pub fn shape_at_font_size_pt(
+        &mut self,
+        catalog: &mut FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        spans: &[TextIslandSpan<'_>],
+        font_size_pt: f32,
+    ) -> Result<TextIslandLayout, TextIslandError> {
+        self.shape_with_font_size_pt(catalog, settings, spans, Some(font_size_pt))
+    }
+
+    fn shape_with_font_size_pt(
+        &mut self,
+        catalog: &mut FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        spans: &[TextIslandSpan<'_>],
+        font_size_override_pt: Option<f32>,
+    ) -> Result<TextIslandLayout, TextIslandError> {
+        if font_size_override_pt.is_some_and(|size| !size.is_finite() || size <= 0.0) {
+            return Err(TextIslandError::InvalidFontSize);
+        }
+        let mandatory = CodePointMapData::<props::LineBreak>::new();
+        for span in spans {
+            if font_size_override_pt.is_none()
+                && !span.text.is_empty()
+                && span.style.font_size_centipoints == 0
+            {
+                return Err(TextIslandError::InvalidFontSize);
+            }
+            if span
+                .text
+                .chars()
+                .any(|character| is_mandatory_line_break(mandatory.get(character)))
+            {
+                return Err(TextIslandError::MandatoryBreak);
+            }
+        }
+        let text: String = spans.iter().map(|span| span.text).collect();
+        if text.is_empty() {
+            return Ok(TextIslandLayout {
+                text,
+                layout: Layout::default(),
+                metrics: TextIslandMetrics {
+                    advance_pt: 0.0,
+                    ascent_pt: 0.0,
+                    descent_pt: 0.0,
+                },
+                grapheme_boundaries: vec![0],
+                requested_family_missing: false,
+            });
+        }
+        let styled_spans: Vec<_> = spans
+            .iter()
+            .filter(|span| !span.text.is_empty())
+            .map(|span| StyledSpan {
+                text: span.text,
+                style: span.style.clone(),
+                underline: span.underline,
+            })
+            .collect();
+        let signature = (
+            styled_spans.iter().map(|span| span.style.clone()).collect(),
+            font_size_override_pt.map(f32::to_bits),
+        );
+        let generation = catalog.generation();
+        if self.font_generation != Some(generation) {
+            self.context = LayoutContext::default();
+            self.font_generation = Some(generation);
+            self.space_adjustments_pt.clear();
+        }
+        if self.space_font_preferences.as_ref() != Some(settings.font_preferences()) {
+            self.space_font_preferences = Some(settings.font_preferences().clone());
+            self.space_adjustments_pt.clear();
+        }
+        if self.space_style_signature.as_ref() != Some(&signature) {
+            self.space_style_signature = Some(signature);
+            self.space_adjustments_pt.clear();
+        }
+        let base_style = &styled_spans[0].style;
+        let prepared = prepare_text_shaping(
+            &text,
+            &styled_spans,
+            settings,
+            catalog,
+            font_size_override_pt,
+        );
+        let grapheme_boundaries = prepared.boundaries.grapheme.clone();
+        let requested_family_missing = prepared.requested_family_missing;
+        let layout = build_prepared_layout(
+            &mut self.context,
+            catalog,
+            &text,
+            base_style,
+            &prepared,
+            &mut self.space_adjustments_pt,
+            PreparedLayoutOptions {
+                width_pt: None,
+                first_line_indent_chars: None,
+                inline_objects: &[],
+            },
+        )
+        .map_err(|_| TextIslandError::InconsistentShaping)?;
+        let line = layout
+            .lines()
+            .next()
+            .ok_or(TextIslandError::InconsistentShaping)?;
+        if layout.lines().count() != 1 {
+            return Err(TextIslandError::InconsistentShaping);
+        }
+        let line_metrics = line.metrics();
+        let mut metrics = TextIslandMetrics {
+            advance_pt: line_metrics.advance,
+            ascent_pt: line_metrics.baseline - line_metrics.content_block_min_coord,
+            descent_pt: line_metrics.content_block_max_coord - line_metrics.baseline,
+        };
+        if !metrics.advance_pt.is_finite()
+            || metrics.advance_pt < 0.0
+            || !metrics.ascent_pt.is_finite()
+            || metrics.ascent_pt < 0.0
+            || !metrics.descent_pt.is_finite()
+            || metrics.descent_pt < 0.0
+        {
+            return Err(TextIslandError::InconsistentShaping);
+        }
+        // 归一化负零，同时保留自然字形度量。
+        metrics.advance_pt = metrics.advance_pt.max(0.0);
+        Ok(TextIslandLayout {
+            text,
+            layout,
+            metrics,
+            grapheme_boundaries,
+            requested_family_missing,
+        })
+    }
 }
 
 /// ASCII 与显式全字宽空格分别使用可观察的字符语义，但都按实际字体宽度校准。
@@ -234,212 +444,30 @@ impl ParagraphLayouter {
         {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
-        let boundaries = boundaries_for_spans(&text, &spans);
-        let decisions = Arc::new(line_break_decisions(&text, &boundaries));
-        let available_families = Arc::clone(&catalog.family_names_lowercase);
-        let mut requested_family_missing = false;
-        let mut span_ranges = Vec::with_capacity(spans.len());
-        let mut span_space_style_indices = Vec::with_capacity(spans.len());
-        let mut space_styles = Vec::new();
-        let mut space_style_indices = std::collections::HashMap::new();
-        let mut offset = 0usize;
-        for span in &spans {
-            let end = offset + span.text.len();
-            span_ranges.push((offset..end, &span.style, span.underline));
-            let style_index = *space_style_indices.entry(&span.style).or_insert_with(|| {
-                let index = space_styles.len();
-                space_styles.push(&span.style);
-                index
-            });
-            span_space_style_indices.push(style_index);
-            offset = end;
-        }
-        let emoji_presentation = CodePointSetDataBorrowed::new::<props::EmojiPresentation>();
-        let mut style_ranges: Vec<(Range<usize>, ShapingStyle, Script, bool, bool)> = Vec::new();
-        // 普通空格只保留每种塑形样式的一个测量样本；字距规则应用到连续样式区间，
-        // 避免每个空格都创建一个 Parley 样式 run。
-        let mut space_samples: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
-        let mut word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
-        let mut em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
-        let mut sampled_space_keys = std::collections::HashSet::new();
-        let mut span_index = 0usize;
-        let first_script = boundaries
-            .grapheme
-            .windows(2)
-            .find_map(|range| strong_script(&text[range[0]..range[1]]));
-        let mut previous_script = first_script;
-        for pair in boundaries.grapheme.windows(2) {
-            let range = pair[0]..pair[1];
-            if range.is_empty() {
-                continue;
-            }
-            while span_ranges
-                .get(span_index)
-                .is_some_and(|(span_range, _, _)| span_range.end <= range.start)
-            {
-                span_index += 1;
-            }
-            let cluster_text = &text[range.clone()];
-            let script = strong_script(cluster_text)
-                .or(previous_script)
-                .unwrap_or_else(default_script);
-            previous_script = Some(script);
-            let emoji = is_emoji_grapheme(&text[range.clone()], &emoji_presentation);
-            let space_kind = if cluster_text.starts_with(' ') {
-                Some(SpaceKind::Ordinary)
-            } else if cluster_text.starts_with('\u{2003}') {
-                Some(SpaceKind::Em)
-            } else {
-                None
-            };
-            let code_role = span_ranges
-                .get(span_index)
-                .is_some_and(|(_, style, _)| style.font_role == crate::shaping::FontRole::Code);
-            // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
-            // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
-            if !code_role
-                && span_ranges.get(span_index).is_some()
-                && !cluster_text.contains('\u{00a0}')
-            {
-                let key = SpaceStyleKey {
-                    style_index: span_space_style_indices[span_index],
-                    script,
-                    emoji,
-                    kind: SpaceKind::Ordinary,
-                };
-                if let Some((previous_range, previous_key)) = word_spacing_ranges.last_mut()
-                    && previous_range.end == range.start
-                    && *previous_key == key
-                {
-                    previous_range.end = range.end;
-                } else {
-                    word_spacing_ranges.push((range.clone(), key));
-                }
-            }
-            if let Some(kind) = space_kind
-                && !code_role
-                && span_ranges.get(span_index).is_some()
-            {
-                let space_end = range.start
-                    + match kind {
-                        SpaceKind::Ordinary => ' '.len_utf8(),
-                        SpaceKind::Em => '\u{2003}'.len_utf8(),
-                    };
-                let key = SpaceStyleKey {
-                    style_index: span_space_style_indices[span_index],
-                    script,
-                    emoji,
-                    kind,
-                };
-                if sampled_space_keys.insert(key) {
-                    space_samples.push((range.start..space_end, key));
-                }
-                if kind == SpaceKind::Em {
-                    em_space_ranges.push((range.start..space_end, key));
-                }
-            }
-            let mut fragment_index = span_index;
-            while let Some((span_range, style, underline)) = span_ranges.get(fragment_index) {
-                if span_range.start >= range.end {
-                    break;
-                }
-                let fragment = span_range.start.max(range.start)..span_range.end.min(range.end);
-                if fragment.start < fragment.end {
-                    if let Some((
-                        previous,
-                        previous_style,
-                        previous_script,
-                        previous_emoji,
-                        previous_underline,
-                    )) = style_ranges.last_mut()
-                        && previous.end == fragment.start
-                        && *previous_style == **style
-                        && *previous_script == script
-                        && *previous_emoji == emoji
-                        && *previous_underline == *underline
-                    {
-                        previous.end = fragment.end;
-                    } else {
-                        style_ranges.push((fragment, (*style).clone(), script, emoji, *underline));
-                    }
-                }
-                if span_range.end <= range.end {
-                    fragment_index += 1;
-                } else {
-                    break;
-                }
-            }
-            span_index = fragment_index;
-        }
-        let mut family_names_by_key =
-            std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
-        for (_, style, script, emoji, _) in &style_ranges {
-            let key = (style.clone(), *script, *emoji);
-            let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
-                let candidates = settings.font_preferences().family_candidates(
-                    crate::font_selection::FontSelectionContext {
-                        script: *script,
-                        language: style.language.as_deref(),
-                        role: style.font_role,
-                        explicit_family: style.requested_family.as_deref(),
-                    },
-                );
-                requested_family_missing |= candidates.first().is_some_and(|candidate| {
-                    !available_families.contains(&candidate.family.to_lowercase())
-                });
-                let mut names = Vec::with_capacity(candidates.len());
-                for candidate in candidates {
-                    names.push(candidate.family.to_owned());
-                }
-                names
-            });
-        }
+        let prepared = prepare_text_shaping_with_grapheme_fences(
+            &text,
+            &spans,
+            settings,
+            catalog,
+            None,
+            &inline_object_ranges,
+        );
+        let boundaries = prepared.boundaries.clone();
+        let requested_family_missing = prepared.requested_family_missing;
 
-        let has_uncalibrated_spaces = space_samples
-            .iter()
-            .any(|(_, key)| !self.space_adjustments_pt.contains_key(key));
-        let (mut layout, mut callback_count) = {
-            let layout_input = ParleyLayoutInput {
-                text: &text,
-                base_style,
-                style_ranges: &style_ranges,
-                family_names_by_key: &family_names_by_key,
-                word_spacing_ranges: &word_spacing_ranges,
-                em_space_ranges: &em_space_ranges,
-                space_adjustments_pt: &self.space_adjustments_pt,
-                decisions: &decisions,
-                width_pt,
+        let layout = build_prepared_layout(
+            &mut self.context,
+            catalog,
+            &text,
+            base_style,
+            &prepared,
+            &mut self.space_adjustments_pt,
+            PreparedLayoutOptions {
+                width_pt: Some(width_pt),
                 first_line_indent_chars,
                 inline_objects,
-            };
-            build_parley_layout(&mut self.context, catalog, &layout_input)
-        };
-        if has_uncalibrated_spaces {
-            cache_space_adjustments(
-                &layout,
-                &space_samples,
-                &space_styles,
-                &mut self.space_adjustments_pt,
-            );
-            let layout_input = ParleyLayoutInput {
-                text: &text,
-                base_style,
-                style_ranges: &style_ranges,
-                family_names_by_key: &family_names_by_key,
-                word_spacing_ranges: &word_spacing_ranges,
-                em_space_ranges: &em_space_ranges,
-                space_adjustments_pt: &self.space_adjustments_pt,
-                decisions: &decisions,
-                width_pt,
-                first_line_indent_chars,
-                inline_objects,
-            };
-            (layout, callback_count) =
-                build_parley_layout(&mut self.context, catalog, &layout_input);
-        }
-        if callback_count != decisions.len {
-            return Err(ParagraphLayoutError::InconsistentShaping);
-        }
+            },
+        )?;
         let ParagraphLineMapping {
             paragraph: paragraph_layout,
             line_top_offsets_pt,
@@ -531,16 +559,306 @@ impl ParagraphLayouter {
     }
 }
 
+type PreparedStyleRange = (Range<usize>, ShapingStyle, Script, bool, bool, f32);
+
+struct PreparedTextShaping {
+    boundaries: crate::UnicodeBoundaries,
+    decisions: Arc<PackedLineBreakDecisions>,
+    style_ranges: Vec<PreparedStyleRange>,
+    space_style_font_sizes_pt: Vec<f32>,
+    space_samples: Vec<(Range<usize>, SpaceStyleKey)>,
+    word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)>,
+    em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)>,
+    family_names_by_key: std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
+    requested_family_missing: bool,
+}
+
+struct PreparedLayoutOptions<'a> {
+    width_pt: Option<f32>,
+    first_line_indent_chars: Option<u16>,
+    inline_objects: &'a [InlineObjectLayout],
+}
+
+fn build_prepared_layout(
+    context: &mut LayoutContext<[u8; 4]>,
+    catalog: &mut FontCatalog,
+    text: &str,
+    base_style: &ShapingStyle,
+    prepared: &PreparedTextShaping,
+    space_adjustments_pt: &mut std::collections::HashMap<SpaceStyleKey, f32>,
+    options: PreparedLayoutOptions<'_>,
+) -> Result<Layout<[u8; 4]>, ParagraphLayoutError> {
+    let PreparedLayoutOptions {
+        width_pt,
+        first_line_indent_chars,
+        inline_objects,
+    } = options;
+    let mut build =
+        |context: &mut LayoutContext<[u8; 4]>,
+         adjustments: &std::collections::HashMap<SpaceStyleKey, f32>| {
+            let input = ParleyLayoutInput {
+                text,
+                base_style,
+                style_ranges: &prepared.style_ranges,
+                family_names_by_key: &prepared.family_names_by_key,
+                word_spacing_ranges: &prepared.word_spacing_ranges,
+                em_space_ranges: &prepared.em_space_ranges,
+                space_adjustments_pt: adjustments,
+                decisions: &prepared.decisions,
+                width_pt,
+                first_line_indent_chars,
+                inline_objects,
+            };
+            build_parley_layout(context, catalog, &input)
+        };
+    let (mut layout, mut callback_count) = build(context, space_adjustments_pt);
+    if prepared
+        .space_samples
+        .iter()
+        .any(|(_, key)| !space_adjustments_pt.contains_key(key))
+    {
+        cache_space_adjustments(
+            &layout,
+            &prepared.space_samples,
+            &prepared.space_style_font_sizes_pt,
+            space_adjustments_pt,
+        );
+        (layout, callback_count) = build(context, space_adjustments_pt);
+    }
+    if callback_count != prepared.decisions.len {
+        return Err(ParagraphLayoutError::InconsistentShaping);
+    }
+    Ok(layout)
+}
+
+fn prepare_text_shaping(
+    text: &str,
+    spans: &[StyledSpan<'_>],
+    settings: &ResolvedDocumentTextSettings,
+    catalog: &FontCatalog,
+    font_size_override_pt: Option<f32>,
+) -> PreparedTextShaping {
+    prepare_text_shaping_with_grapheme_fences(
+        text,
+        spans,
+        settings,
+        catalog,
+        font_size_override_pt,
+        &[],
+    )
+}
+
+fn prepare_text_shaping_with_grapheme_fences(
+    text: &str,
+    spans: &[StyledSpan<'_>],
+    settings: &ResolvedDocumentTextSettings,
+    catalog: &FontCatalog,
+    font_size_override_pt: Option<f32>,
+    grapheme_fences: &[Range<usize>],
+) -> PreparedTextShaping {
+    let mut boundaries = boundaries_for_spans(text, spans);
+    for fence in grapheme_fences {
+        boundaries.grapheme.push(fence.start);
+        boundaries.grapheme.push(fence.end);
+    }
+    boundaries.grapheme.sort_unstable();
+    boundaries.grapheme.dedup();
+    let decisions = Arc::new(line_break_decisions(text, &boundaries));
+    let available_families = Arc::clone(&catalog.family_names_lowercase);
+    let mut requested_family_missing = false;
+    let mut span_ranges = Vec::with_capacity(spans.len());
+    let mut span_space_style_indices = Vec::with_capacity(spans.len());
+    let mut space_style_font_sizes_pt = Vec::new();
+    let mut space_style_indices = std::collections::HashMap::new();
+    let mut offset = 0usize;
+    for span in spans {
+        let end = offset + span.text.len();
+        span_ranges.push((offset..end, &span.style, span.underline));
+        let style_index = *space_style_indices.entry(&span.style).or_insert_with(|| {
+            let index = space_style_font_sizes_pt.len();
+            space_style_font_sizes_pt.push(
+                font_size_override_pt
+                    .unwrap_or_else(|| font_size_pt(span.style.font_size_centipoints)),
+            );
+            index
+        });
+        span_space_style_indices.push(style_index);
+        offset = end;
+    }
+    let emoji_presentation = CodePointSetDataBorrowed::new::<props::EmojiPresentation>();
+    let mut style_ranges: Vec<PreparedStyleRange> = Vec::new();
+    // 普通空格只保留每种塑形样式的一个测量样本；字距规则应用到连续样式区间，
+    // 避免每个空格都创建一个 Parley 样式 run。
+    let mut space_samples: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+    let mut word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+    let mut em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
+    let mut sampled_space_keys = std::collections::HashSet::new();
+    let mut span_index = 0usize;
+    let first_script = boundaries
+        .grapheme
+        .windows(2)
+        .find_map(|range| strong_script(&text[range[0]..range[1]]));
+    let mut previous_script = first_script;
+    for pair in boundaries.grapheme.windows(2) {
+        let range = pair[0]..pair[1];
+        if range.is_empty() {
+            continue;
+        }
+        while span_ranges
+            .get(span_index)
+            .is_some_and(|(span_range, _, _)| span_range.end <= range.start)
+        {
+            span_index += 1;
+        }
+        let cluster_text = &text[range.clone()];
+        let script = strong_script(cluster_text)
+            .or(previous_script)
+            .unwrap_or_else(default_script);
+        previous_script = Some(script);
+        let emoji = is_emoji_grapheme(&text[range.clone()], &emoji_presentation);
+        let space_kind = if cluster_text.starts_with(' ') {
+            Some(SpaceKind::Ordinary)
+        } else if cluster_text.starts_with('\u{2003}') {
+            Some(SpaceKind::Em)
+        } else {
+            None
+        };
+        let code_role = span_ranges
+            .get(span_index)
+            .is_some_and(|(_, style, _)| style.font_role == crate::shaping::FontRole::Code);
+        // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
+        // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
+        if !code_role && span_ranges.get(span_index).is_some() && !cluster_text.contains('\u{00a0}')
+        {
+            let key = SpaceStyleKey {
+                style_index: span_space_style_indices[span_index],
+                script,
+                emoji,
+                kind: SpaceKind::Ordinary,
+            };
+            if let Some((previous_range, previous_key)) = word_spacing_ranges.last_mut()
+                && previous_range.end == range.start
+                && *previous_key == key
+            {
+                previous_range.end = range.end;
+            } else {
+                word_spacing_ranges.push((range.clone(), key));
+            }
+        }
+        if let Some(kind) = space_kind
+            && !code_role
+            && span_ranges.get(span_index).is_some()
+        {
+            let space_end = range.start
+                + match kind {
+                    SpaceKind::Ordinary => ' '.len_utf8(),
+                    SpaceKind::Em => '\u{2003}'.len_utf8(),
+                };
+            let key = SpaceStyleKey {
+                style_index: span_space_style_indices[span_index],
+                script,
+                emoji,
+                kind,
+            };
+            if sampled_space_keys.insert(key) {
+                space_samples.push((range.start..space_end, key));
+            }
+            if kind == SpaceKind::Em {
+                em_space_ranges.push((range.start..space_end, key));
+            }
+        }
+        let mut fragment_index = span_index;
+        while let Some((span_range, style, underline)) = span_ranges.get(fragment_index) {
+            if span_range.start >= range.end {
+                break;
+            }
+            let fragment = span_range.start.max(range.start)..span_range.end.min(range.end);
+            if fragment.start < fragment.end {
+                let fragment_font_size_pt = font_size_override_pt
+                    .unwrap_or_else(|| font_size_pt(style.font_size_centipoints));
+                if let Some((
+                    previous,
+                    previous_style,
+                    previous_script,
+                    previous_emoji,
+                    previous_underline,
+                    previous_font_size_pt,
+                )) = style_ranges.last_mut()
+                    && previous.end == fragment.start
+                    && *previous_style == **style
+                    && *previous_script == script
+                    && *previous_emoji == emoji
+                    && *previous_underline == *underline
+                    && *previous_font_size_pt == fragment_font_size_pt
+                {
+                    previous.end = fragment.end;
+                } else {
+                    style_ranges.push((
+                        fragment,
+                        (*style).clone(),
+                        script,
+                        emoji,
+                        *underline,
+                        fragment_font_size_pt,
+                    ));
+                }
+            }
+            if span_range.end <= range.end {
+                fragment_index += 1;
+            } else {
+                break;
+            }
+        }
+        span_index = fragment_index;
+    }
+    let mut family_names_by_key =
+        std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
+    for (_, style, script, emoji, _, _) in &style_ranges {
+        let key = (style.clone(), *script, *emoji);
+        let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
+            let candidates = settings.font_preferences().family_candidates(
+                crate::font_selection::FontSelectionContext {
+                    script: *script,
+                    language: style.language.as_deref(),
+                    role: style.font_role,
+                    explicit_family: style.requested_family.as_deref(),
+                },
+            );
+            requested_family_missing |= candidates.first().is_some_and(|candidate| {
+                !is_generic_family(candidate.family)
+                    && !available_families.contains(&candidate.family.to_lowercase())
+            });
+            let mut names = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                names.push(candidate.family.to_owned());
+            }
+            names
+        });
+    }
+
+    PreparedTextShaping {
+        boundaries,
+        decisions,
+        style_ranges,
+        space_style_font_sizes_pt,
+        space_samples,
+        word_spacing_ranges,
+        em_space_ranges,
+        family_names_by_key,
+        requested_family_missing,
+    }
+}
+
 struct ParleyLayoutInput<'a> {
     text: &'a str,
     base_style: &'a ShapingStyle,
-    style_ranges: &'a [(Range<usize>, ShapingStyle, Script, bool, bool)],
+    style_ranges: &'a [PreparedStyleRange],
     family_names_by_key: &'a std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
     word_spacing_ranges: &'a [(Range<usize>, SpaceStyleKey)],
     em_space_ranges: &'a [(Range<usize>, SpaceStyleKey)],
     space_adjustments_pt: &'a std::collections::HashMap<SpaceStyleKey, f32>,
     decisions: &'a Arc<PackedLineBreakDecisions>,
-    width_pt: f32,
+    width_pt: Option<f32>,
     first_line_indent_chars: Option<u16>,
     inline_objects: &'a [InlineObjectLayout],
 }
@@ -579,7 +897,7 @@ fn build_parley_layout(
         WhiteSpaceCollapse::BreakSpaces,
     ));
 
-    for (range, style, script, emoji, underline) in style_ranges {
+    for (range, style, script, emoji, underline, resolved_font_size_pt) in style_ranges {
         let key = (style.clone(), *script, *emoji);
         let family_names = family_names_by_key
             .get(&key)
@@ -595,7 +913,7 @@ fn build_parley_layout(
             range.clone(),
         );
         builder.push(
-            StyleProperty::FontSize(font_size_pt(style.font_size_centipoints)),
+            StyleProperty::FontSize(*resolved_font_size_pt),
             range.clone(),
         );
         builder.push(
@@ -665,7 +983,7 @@ fn build_parley_layout(
         let indent_pt = font_size_pt(base_style.font_size_centipoints) * f32::from(chars);
         layout.set_text_indent(indent_pt, IndentOptions::default());
     }
-    layout.break_all_lines(Some(width_pt));
+    layout.break_all_lines(width_pt);
     if first_line_indent_chars.is_some() {
         layout.align(Alignment::Start, AlignmentOptions::default());
     }
@@ -676,7 +994,7 @@ fn build_parley_layout(
 fn cache_space_adjustments(
     layout: &Layout<[u8; 4]>,
     space_samples: &[(Range<usize>, SpaceStyleKey)],
-    space_styles: &[&ShapingStyle],
+    space_style_font_sizes_pt: &[f32],
     adjustments: &mut std::collections::HashMap<SpaceStyleKey, f32>,
 ) {
     let spaces_by_start: std::collections::HashMap<_, _> = space_samples
@@ -697,11 +1015,10 @@ fn cache_space_adjustments(
                     SpaceKind::Ordinary => ORDINARY_SPACE_EM_PERCENT,
                     SpaceKind::Em => EM_SPACE_EM_PERCENT,
                 };
-                let Some(style) = space_styles.get(key.style_index) else {
+                let Some(font_size_pt) = space_style_font_sizes_pt.get(key.style_index) else {
                     continue;
                 };
-                let target_advance =
-                    font_size_pt(style.font_size_centipoints) * f32::from(target_percent) * 0.01;
+                let target_advance = *font_size_pt * f32::from(target_percent) * 0.01;
                 let adjustment = target_advance - cluster.advance();
                 if target_advance.is_finite() && adjustment.is_finite() {
                     adjustments.insert(**key, adjustment);
@@ -715,16 +1032,27 @@ fn font_size_pt(font_size_centipoints: u16) -> f32 {
     DocumentUnits::centipoints_to_points(u32::from(font_size_centipoints)) as f32
 }
 
+fn is_generic_family(family: &str) -> bool {
+    generic_family(family).is_some()
+}
+
+fn generic_family(family: &str) -> Option<GenericFamily> {
+    match family.trim().to_ascii_lowercase().as_str() {
+        "serif" => Some(GenericFamily::Serif),
+        "sans-serif" => Some(GenericFamily::SansSerif),
+        "monospace" => Some(GenericFamily::Monospace),
+        _ => None,
+    }
+}
+
 fn font_families(names: &[String], emoji: bool, code: bool) -> Vec<FontFamilyName<'_>> {
     let mut families = Vec::with_capacity(names.len() + 3);
     if emoji {
         families.push(FontFamilyName::Generic(GenericFamily::Emoji));
     }
-    families.extend(names.iter().map(|family| match family.as_str() {
-        "serif" => FontFamilyName::Generic(GenericFamily::Serif),
-        "sans-serif" => FontFamilyName::Generic(GenericFamily::SansSerif),
-        "monospace" => FontFamilyName::Generic(GenericFamily::Monospace),
-        _ => FontFamilyName::named(family),
+    families.extend(names.iter().map(|family| match generic_family(family) {
+        Some(generic) => FontFamilyName::Generic(generic),
+        None => FontFamilyName::named(family),
     }));
     if code {
         families.push(FontFamilyName::Generic(GenericFamily::Monospace));

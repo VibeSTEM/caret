@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+#include "glyph_frame_adapter.hpp"
+
 #include "layout_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
@@ -23,42 +25,14 @@
 #include <qcontainerfwd.h>
 
 namespace caret {
-QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt,
-                                                 qreal page_origin_device_x_px,
-                                                 qreal page_origin_device_y_px, int foreground_red,
-                                                 int foreground_green, int foreground_blue,
-                                                 int foreground_alpha) {
 #ifdef CARET_ENABLE_APP
-    const QCoreApplication* application = QCoreApplication::instance();
-    if (application == nullptr || QThread::currentThread() != application->thread()) {
-        return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("layout.glyphs_wrong_thread")}};
-    }
-    if (page_index < 0 || !std::isfinite(px_per_pt) || px_per_pt <= 0.0 ||
-        !std::isfinite(page_origin_device_x_px) || !std::isfinite(page_origin_device_y_px) ||
-        foreground_red < 0 || foreground_red > 255 || foreground_green < 0 ||
-        foreground_green > 255 || foreground_blue < 0 || foreground_blue > 255 ||
-        foreground_alpha < 0 || foreground_alpha > 255) {
+QVariantMap glyph_frame_adapter::to_variant_map(const ffi::PageGlyphFrame& frame,
+                                                double px_per_pt) {
+    if (!std::isfinite(px_per_pt) || px_per_pt <= 0.0 ||
+        frame.page_index > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_request")}};
     }
-    auto* runtime = document_runtime();
-    if (runtime == nullptr) {
-        return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
-    }
-
-    const ffi::GlyphRasterRequest request{
-        .page_index = static_cast<std::uint32_t>(page_index),
-        .px_per_pt = static_cast<double>(px_per_pt),
-        .page_origin_device_x_px = static_cast<double>(page_origin_device_x_px),
-        .page_origin_device_y_px = static_cast<double>(page_origin_device_y_px),
-        .foreground_red = static_cast<std::uint8_t>(foreground_red),
-        .foreground_green = static_cast<std::uint8_t>(foreground_green),
-        .foreground_blue = static_cast<std::uint8_t>(foreground_blue),
-        .foreground_alpha = static_cast<std::uint8_t>(foreground_alpha),
-    };
-    const auto frame = ffi::rasterize_page_glyphs(*runtime, request);
     if (!frame.error.empty()) {
         return {
             {QStringLiteral("valid"), false},
@@ -71,7 +45,9 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
     for (const auto& image : frame.images) {
         const auto width = static_cast<std::uint64_t>(image.width);
         const auto height = static_cast<std::uint64_t>(image.height);
-        if ((width != 0 && height > std::numeric_limits<std::uint64_t>::max() / width) ||
+        if (width > static_cast<std::uint64_t>(std::numeric_limits<int>::max() / 4) ||
+            height > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+            (width != 0 && height > std::numeric_limits<std::uint64_t>::max() / width) ||
             width * height > std::numeric_limits<std::uint64_t>::max() / 4 ||
             width * height * 4 != image.pixels.size() ||
             image.pixels.size() > static_cast<std::size_t>(std::numeric_limits<qsizetype>::max())) {
@@ -148,13 +124,13 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
     QVariantList shapes;
     shapes.reserve(static_cast<qsizetype>(frame.shapes.size()));
     for (const auto& shape : frame.shapes) {
-        if (shape.kind > 1 || !std::isfinite(shape.x_pt) || !std::isfinite(shape.y_pt) ||
-            !std::isfinite(shape.dx_pt) || !std::isfinite(shape.dy_pt) ||
-            !std::isfinite(shape.width_pt) || !std::isfinite(shape.height_pt) ||
-            shape.width_pt < 0.0 || shape.height_pt < 0.0 ||
-            !std::isfinite(shape.stroke_width_pt) || shape.stroke_width_pt < 0.0 ||
+        if (shape.kind > 1 || !std::isfinite(shape.width_pt) || !std::isfinite(shape.height_pt) ||
+            !std::isfinite(shape.stroke_width_pt) || shape.width_pt < 0.0 ||
+            shape.height_pt < 0.0 || shape.stroke_width_pt < 0.0 ||
             (shape.kind == 0 && (!shape.stroke_enabled || shape.stroke_width_pt <= 0.0)) ||
             (shape.kind == 1 && (shape.width_pt <= 0.0 || shape.height_pt <= 0.0)) ||
+            !std::isfinite(shape.x_pt) || !std::isfinite(shape.y_pt) ||
+            !std::isfinite(shape.dx_pt) || !std::isfinite(shape.dy_pt) ||
             (shape.clip_enabled &&
              (!std::isfinite(shape.clip_y0_pt) || !std::isfinite(shape.clip_y1_pt) ||
               shape.clip_y0_pt < 0.0 || shape.clip_y1_pt <= shape.clip_y0_pt))) {
@@ -195,6 +171,46 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
             {QStringLiteral("placements"), placements},
             {QStringLiteral("decorations"), decorations},
             {QStringLiteral("shapes"), shapes}};
+}
+#endif
+
+QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt,
+                                                 qreal page_origin_device_x_px,
+                                                 qreal page_origin_device_y_px, int foreground_red,
+                                                 int foreground_green, int foreground_blue,
+                                                 int foreground_alpha) {
+#ifdef CARET_ENABLE_APP
+    const QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr || QThread::currentThread() != application->thread()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.glyphs_wrong_thread")}};
+    }
+    if (page_index < 0 || !std::isfinite(px_per_pt) || px_per_pt <= 0.0 ||
+        !std::isfinite(page_origin_device_x_px) || !std::isfinite(page_origin_device_y_px) ||
+        foreground_red < 0 || foreground_red > 255 || foreground_green < 0 ||
+        foreground_green > 255 || foreground_blue < 0 || foreground_blue > 255 ||
+        foreground_alpha < 0 || foreground_alpha > 255) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_request")}};
+    }
+    auto* runtime = document_runtime();
+    if (runtime == nullptr) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+
+    const ffi::GlyphRasterRequest request{
+        .page_index = static_cast<std::uint32_t>(page_index),
+        .px_per_pt = static_cast<double>(px_per_pt),
+        .page_origin_device_x_px = static_cast<double>(page_origin_device_x_px),
+        .page_origin_device_y_px = static_cast<double>(page_origin_device_y_px),
+        .foreground_red = static_cast<std::uint8_t>(foreground_red),
+        .foreground_green = static_cast<std::uint8_t>(foreground_green),
+        .foreground_blue = static_cast<std::uint8_t>(foreground_blue),
+        .foreground_alpha = static_cast<std::uint8_t>(foreground_alpha),
+    };
+    const auto frame = ffi::rasterize_page_glyphs(*runtime, request);
+    return glyph_frame_adapter::to_variant_map(frame, px_per_pt);
 #else
     Q_UNUSED(page_index)
     Q_UNUSED(px_per_pt)

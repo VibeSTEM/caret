@@ -28,7 +28,7 @@ pub use editing::{
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
     LaidOutParagraph, PageCaretGeometry, PageEnvironmentRange, PageHit, PageLayoutSnapshot,
-    PageSelectionRect,
+    PageMathTextHit, PageSelectionRect,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

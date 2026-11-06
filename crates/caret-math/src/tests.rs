@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K};
+use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K, MathTree, TextFlow};
 
 use crate::{
     MathInputKind, MathInputStatus, MathParseError, ParsedMath, ProjectedMath, classify_input,
@@ -393,6 +393,21 @@ fn preserves_empty_text_flows_as_editable_tree_content() {
         let round_trip = tree(&serialized);
         assert_eq!(shape(&original.root), shape(&round_trip.root));
     }
+}
+
+#[test]
+fn empty_zero_run_text_flow_does_not_change_serialized_output() {
+    let tree = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: caret_doc::NodeId::generate(),
+            content: vec![MathContent::Text(TextFlow::default())],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+
+    assert_eq!(serialize_tree(&tree), "");
 }
 
 #[test]

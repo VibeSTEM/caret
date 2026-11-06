@@ -362,7 +362,12 @@ impl Writer {
             }
             K::Space => self.space(node),
             K::Text | K::MathAlphabet => self.text(node),
-            K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle => {
+            K::TextContent
+            | K::TextSpace
+            | K::TextSymbol
+            | K::TextStyle
+            | K::SoftBreak
+            | K::Opaque => {
                 // 文本项脱离 Text 出现时按 `\text` 包装。
                 self.command("text");
                 self.raw("{");
@@ -599,6 +604,8 @@ impl Writer {
                     Some("no_break_space") => self.raw("~"),
                     _ => self.raw(" "),
                 },
+                MathNodeKind::SoftBreak => self.raw(" "),
+                MathNodeKind::Opaque => self.raw("�"),
                 MathNodeKind::TextSymbol => {
                     self.raw("\\");
                     self.output
@@ -681,6 +688,8 @@ fn is_text_item(node: &MathNode) -> bool {
             | MathNodeKind::TextSpace
             | MathNodeKind::TextSymbol
             | MathNodeKind::TextStyle
+            | MathNodeKind::SoftBreak
+            | MathNodeKind::Opaque
     )
 }
 

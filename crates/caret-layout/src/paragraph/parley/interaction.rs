@@ -5,7 +5,10 @@
 
 use std::ops::Range;
 
-use super::{HitAffinity, ParagraphHit, ParleyParagraphLayout, VisualAffinity, VisualCursor};
+use super::{
+    HitAffinity, ParagraphHit, ParleyParagraphLayout, TextIslandLayout, VisualAffinity,
+    VisualCursor,
+};
 use parley::{Layout, PositionedLayoutItem};
 
 impl ParleyParagraphLayout {
@@ -91,6 +94,31 @@ impl ParleyParagraphLayout {
                 byte_index,
                 affinity,
             })
+    }
+
+    /// 将视觉光标侧映射为数学树端点的逻辑邻接侧。
+    pub fn logical_affinity_at(
+        &self,
+        byte_index: usize,
+        affinity: VisualAffinity,
+    ) -> Option<HitAffinity> {
+        use parley::editing::Cursor;
+
+        let cursor = self.cursor_at(byte_index, affinity)?;
+        let raw = self.to_parley_cursor(cursor);
+        let bounds = raw.geometry(&self.layout, 0.0);
+        let opposite = match affinity {
+            VisualAffinity::Upstream => parley::Affinity::Downstream,
+            VisualAffinity::Downstream => parley::Affinity::Upstream,
+        };
+        let other = Cursor::from_byte_index(&self.layout, byte_index, opposite);
+        let same_visual_position =
+            (bounds.x0 - other.geometry(&self.layout, 0.0).x0).abs() <= 0.0001;
+        Some(if same_visual_position {
+            HitAffinity::Downstream
+        } else {
+            hit_affinity(raw.affinity())
+        })
     }
 
     /// 按视觉顺序移动，并跳过 Parley 在 Run 内部暴露的字素停靠点。
@@ -274,6 +302,13 @@ impl ParleyParagraphLayout {
     ) -> Option<Vec<(parley::BoundingBox, usize)>> {
         if range.start > range.end || range.end > self.layout.text_len() {
             return None;
+        }
+        if range.is_empty() {
+            return self
+                .grapheme_boundaries
+                .binary_search(&range.start)
+                .ok()
+                .map(|_| Vec::new());
         }
         let start_index = self
             .grapheme_boundaries
@@ -631,6 +666,324 @@ impl ParleyParagraphLayout {
         }
         Some((line_index, raw_top + raw_height / 2.0))
     }
+}
+
+impl TextIslandLayout {
+    /// 将文本岛局部坐标命中到 UTF-8 字节边界，并保留 Parley 的视觉侧与逻辑侧。
+    pub fn cursor_from_point(&self, x_pt: f32, y_pt: f32) -> Option<ParagraphHit> {
+        use parley::editing::Cursor;
+
+        if !x_pt.is_finite() || !y_pt.is_finite() {
+            return None;
+        }
+        if self.layout.text_len() == 0 {
+            return Some(ParagraphHit {
+                cursor: VisualCursor {
+                    byte_index: 0,
+                    affinity: VisualAffinity::Downstream,
+                },
+                logical_affinity: HitAffinity::Downstream,
+            });
+        }
+        let raw = Cursor::from_point(&self.layout, x_pt, y_pt);
+        let raw_index = raw.index();
+        let affinity = match raw.affinity() {
+            parley::Affinity::Upstream => VisualAffinity::Upstream,
+            parley::Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        let (byte_index, logical_affinity) = match (
+            self.grapheme_boundaries.binary_search(&raw_index),
+            raw.affinity(),
+        ) {
+            (Ok(_), affinity) => (
+                raw_index,
+                match affinity {
+                    parley::Affinity::Upstream => HitAffinity::Upstream,
+                    parley::Affinity::Downstream => HitAffinity::Downstream,
+                },
+            ),
+            (Err(index), parley::Affinity::Downstream) => (
+                *self.grapheme_boundaries.get(index.saturating_sub(1))?,
+                HitAffinity::Downstream,
+            ),
+            (Err(index), parley::Affinity::Upstream) => {
+                (*self.grapheme_boundaries.get(index)?, HitAffinity::Upstream)
+            }
+        };
+        Some(ParagraphHit {
+            cursor: VisualCursor {
+                byte_index,
+                affinity,
+            },
+            logical_affinity,
+        })
+    }
+
+    /// 字节偏移必须落在扩展字素簇边界；非法位置不静默吸附。
+    pub fn cursor_at(&self, byte_index: usize, affinity: VisualAffinity) -> Option<VisualCursor> {
+        self.grapheme_boundaries
+            .binary_search(&byte_index)
+            .ok()
+            .map(|_| VisualCursor {
+                byte_index,
+                affinity,
+            })
+    }
+
+    /// 在同一文本岛内按 Parley 视觉顺序移动到下一个字素停靠点。
+    pub fn move_visual(&self, cursor: VisualCursor, forward: bool) -> Option<VisualCursor> {
+        self.cursor_at(cursor.byte_index, cursor.affinity)?;
+        let mut candidate = self.to_parley_cursor(cursor);
+        for _ in 0..=self.layout.text_len().saturating_add(1) {
+            candidate = if forward {
+                candidate.next_visual(&self.layout)
+            } else {
+                candidate.previous_visual(&self.layout)
+            };
+            if candidate == self.to_parley_cursor(cursor) {
+                return None;
+            }
+            if let Some(cursor) = text_island_cursor(candidate)
+                && self
+                    .grapheme_boundaries
+                    .binary_search(&cursor.byte_index)
+                    .is_ok()
+            {
+                return Some(cursor);
+            }
+        }
+        None
+    }
+
+    /// 在相邻视觉行按期望 x 移动，并返回可复用的目标 x。
+    pub fn move_vertical(
+        &self,
+        cursor: VisualCursor,
+        line_delta: isize,
+        preferred_x: Option<f32>,
+    ) -> Option<(VisualCursor, f32)> {
+        if line_delta == 0 {
+            return None;
+        }
+        let raw = self.to_parley_cursor(cursor);
+        let current_line = raw
+            .logical_clusters(&self.layout)
+            .into_iter()
+            .flatten()
+            .next()
+            .map(|cluster| cluster.path().line_index())?;
+        let target_line = current_line.checked_add_signed(line_delta)?;
+        let line = self.layout.get(target_line)?;
+        let metrics = line.metrics();
+        let x = preferred_x.unwrap_or_else(|| raw.geometry(&self.layout, 0.0).x0 as f32);
+        if !x.is_finite() {
+            return None;
+        }
+        let y = (metrics.block_min_coord + metrics.block_max_coord) * 0.5;
+        let candidate = parley::editing::Cursor::from_point(&self.layout, x, y);
+        let candidate_index = candidate.index();
+        let byte_index = match self.grapheme_boundaries.binary_search(&candidate_index) {
+            Ok(index) => *self.grapheme_boundaries.get(index)?,
+            Err(index) => *self.grapheme_boundaries.get(index.saturating_sub(1))?,
+        };
+        let affinity = match candidate.affinity() {
+            parley::Affinity::Upstream => VisualAffinity::Upstream,
+            parley::Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        Some((
+            VisualCursor {
+                byte_index,
+                affinity,
+            },
+            x,
+        ))
+    }
+
+    /// 将光标移到当前视觉行首尾，并校验结果落在扩展字素边界。
+    pub fn move_to_visual_line_edge(
+        &self,
+        cursor: VisualCursor,
+        end: bool,
+    ) -> Option<VisualCursor> {
+        let selection = parley::editing::Selection::from(self.to_parley_cursor(cursor));
+        let moved = if end {
+            selection.line_end(&self.layout, false)
+        } else {
+            selection.line_start(&self.layout, false)
+        };
+        let cursor = text_island_cursor(moved.focus())?;
+        self.grapheme_boundaries
+            .binary_search(&cursor.byte_index)
+            .is_ok()
+            .then_some(cursor)
+    }
+
+    /// 将视觉 caret 侧映射为公式树端点的逻辑邻接侧。
+    pub fn logical_affinity_at(
+        &self,
+        byte_index: usize,
+        affinity: VisualAffinity,
+    ) -> Option<HitAffinity> {
+        let cursor = self.cursor_at(byte_index, affinity)?;
+        let raw = self.to_parley_cursor(cursor);
+        let bounds = raw.geometry(&self.layout, 0.0);
+        let opposite = match affinity {
+            VisualAffinity::Upstream => parley::Affinity::Downstream,
+            VisualAffinity::Downstream => parley::Affinity::Upstream,
+        };
+        let other = parley::editing::Cursor::from_byte_index(&self.layout, byte_index, opposite);
+        let same_visual_position =
+            (bounds.x0 - other.geometry(&self.layout, 0.0).x0).abs() <= 0.0001;
+        Some(if same_visual_position {
+            HitAffinity::Downstream
+        } else {
+            hit_affinity(raw.affinity())
+        })
+    }
+
+    /// 返回文本岛局部坐标中的插入点；非法 UTF-8 或非字素边界位置不吸附。
+    pub fn cursor_geometry(
+        &self,
+        cursor: VisualCursor,
+        width_pt: f32,
+    ) -> Option<parley::BoundingBox> {
+        if !width_pt.is_finite()
+            || width_pt < 0.0
+            || self
+                .grapheme_boundaries
+                .binary_search(&cursor.byte_index)
+                .is_err()
+        {
+            return None;
+        }
+        Some(
+            self.to_parley_cursor(cursor)
+                .geometry(&self.layout, width_pt),
+        )
+    }
+
+    /// 以稳定文本偏移和视觉侧查询插入点，不静默吸附非法偏移。
+    pub fn cursor_geometry_at(
+        &self,
+        byte_index: usize,
+        affinity: VisualAffinity,
+        width_pt: f32,
+    ) -> Option<parley::BoundingBox> {
+        if !width_pt.is_finite()
+            || width_pt < 0.0
+            || self.grapheme_boundaries.binary_search(&byte_index).is_err()
+        {
+            return None;
+        }
+        let cursor = VisualCursor {
+            byte_index,
+            affinity,
+        };
+        Some(
+            self.to_parley_cursor(cursor)
+                .geometry(&self.layout, width_pt),
+        )
+    }
+
+    /// 返回文本岛局部坐标中的字素安全选区矩形。
+    pub fn selection_geometry(
+        &self,
+        range: Range<usize>,
+    ) -> Option<Vec<(parley::BoundingBox, usize)>> {
+        if range.start > range.end || range.end > self.layout.text_len() {
+            return None;
+        }
+        if range.is_empty() {
+            return self
+                .grapheme_boundaries
+                .binary_search(&range.start)
+                .ok()
+                .map(|_| Vec::new());
+        }
+        let start_index = self
+            .grapheme_boundaries
+            .partition_point(|boundary| *boundary <= range.start)
+            .saturating_sub(1);
+        let start = *self.grapheme_boundaries.get(start_index)?;
+        let end_index = self
+            .grapheme_boundaries
+            .partition_point(|boundary| *boundary < range.end);
+        let end = *self.grapheme_boundaries.get(end_index)?;
+        if start == end {
+            return Some(Vec::new());
+        }
+        let anchor = parley::editing::Cursor::from_byte_index(
+            &self.layout,
+            start,
+            parley::Affinity::Downstream,
+        );
+        let focus =
+            parley::editing::Cursor::from_byte_index(&self.layout, end, parley::Affinity::Upstream);
+        Some(parley::editing::Selection::new(anchor, focus).geometry(&self.layout))
+    }
+
+    /// 按文本岛中实际字体下划线度量生成输入法预编辑装饰。
+    pub fn composition_geometry(
+        &self,
+        range: Range<usize>,
+    ) -> Option<Vec<(parley::BoundingBox, usize)>> {
+        let selection = self.selection_geometry(range)?;
+        if selection.is_empty() {
+            return Some(Vec::new());
+        }
+        let line = self.layout.lines().next()?;
+        let mut result = Vec::new();
+        for (bounds, line_index) in selection {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                    continue;
+                };
+                let run_x0 = f64::from(glyph_run.offset());
+                let run_x1 = run_x0 + f64::from(glyph_run.advance());
+                let x0 = bounds.x0.max(run_x0);
+                let x1 = bounds.x1.min(run_x1);
+                if x1 <= x0 {
+                    continue;
+                }
+                let metrics = glyph_run.run().font_metrics();
+                let thickness = f64::from(if metrics.underline_size > 0.0 {
+                    metrics.underline_size
+                } else {
+                    glyph_run.run().font_size() / 18.0
+                });
+                let baseline = glyph_run.baseline();
+                let y0 = f64::from(baseline - metrics.underline_offset);
+                if y0.is_finite() && thickness.is_finite() && thickness > 0.0 {
+                    result.push((
+                        parley::BoundingBox::new(x0, y0, x1, y0 + thickness),
+                        line_index,
+                    ));
+                }
+            }
+        }
+        Some(result)
+    }
+
+    fn to_parley_cursor(&self, cursor: VisualCursor) -> parley::editing::Cursor {
+        parley::editing::Cursor::from_byte_index(
+            &self.layout,
+            cursor.byte_index,
+            match cursor.affinity {
+                VisualAffinity::Upstream => parley::Affinity::Upstream,
+                VisualAffinity::Downstream => parley::Affinity::Downstream,
+            },
+        )
+    }
+}
+
+fn text_island_cursor(cursor: parley::editing::Cursor) -> Option<VisualCursor> {
+    Some(VisualCursor {
+        byte_index: cursor.index(),
+        affinity: match cursor.affinity() {
+            parley::Affinity::Upstream => VisualAffinity::Upstream,
+            parley::Affinity::Downstream => VisualAffinity::Downstream,
+        },
+    })
 }
 
 fn cursor_geometry_on_logical_cluster(

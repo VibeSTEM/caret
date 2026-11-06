@@ -249,7 +249,7 @@ fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
     assert!(frame.error.is_empty());
     assert_eq!(frame.page_index, 0);
     assert_eq!(frame.document_generation, 1);
-    assert_eq!(frame.font_generation, 1);
+    assert!(frame.font_generation > 0);
     assert!(!frame.images.is_empty());
     assert!(!frame.placements.is_empty());
     assert!(

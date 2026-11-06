@@ -230,11 +230,45 @@ impl DocumentViewRuntime {
 
     /// 按文档顺序提取当前选区纯文本，跨段落以换行分隔。
     pub fn selected_text_json(&mut self) -> Result<String, String> {
-        let text = self
-            .session
-            .selected_text()
-            .map_err(|error| format!("clipboard.selection_text: {error}"))?;
+        let text = if let Some(context) = self.session.math_text_input_context() {
+            let start = context.anchor_utf16.min(context.focus_utf16);
+            let end = context.anchor_utf16.max(context.focus_utf16);
+            utf16_range(&context.surrounding_text, start..end)
+                .ok_or_else(|| "clipboard.invalid_math_selection".to_owned())?
+                .to_owned()
+        } else {
+            self.session
+                .selected_text()
+                .map_err(|error| format!("clipboard.selection_text: {error}"))?
+        };
         serde_json::to_string(&serde_json::json!({ "text": text }))
             .map_err(|error| format!("clipboard.serialize: {error}"))
     }
+}
+
+fn utf16_range(text: &str, range: std::ops::Range<usize>) -> Option<&str> {
+    if range.start > range.end {
+        return None;
+    }
+    let mut utf16_offset = 0;
+    let mut byte_start = (range.start == 0).then_some(0);
+    let mut byte_end = (range.end == 0).then_some(0);
+    for (byte_offset, character) in text.char_indices() {
+        if utf16_offset == range.start {
+            byte_start = Some(byte_offset);
+        }
+        if utf16_offset == range.end {
+            byte_end = Some(byte_offset);
+        }
+        utf16_offset += character.len_utf16();
+    }
+    if utf16_offset == range.start {
+        byte_start = Some(text.len());
+    }
+    if utf16_offset == range.end {
+        byte_end = Some(text.len());
+    }
+    let byte_start = byte_start?;
+    let byte_end = byte_end?;
+    text.get(byte_start..byte_end)
 }

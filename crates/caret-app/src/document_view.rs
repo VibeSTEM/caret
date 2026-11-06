@@ -21,9 +21,12 @@ mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MathInteractionContext {
+    surrounding_text: String,
     target: MathEditTarget,
     anchor: MathTextPosition,
     focus: MathTextPosition,
+    anchor_visual_affinity: caret_engine::VisualAffinity,
+    visual_affinity: caret_engine::VisualAffinity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

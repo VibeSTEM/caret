@@ -15,6 +15,7 @@
 
 use caret_doc::NodeId;
 
+use crate::backend::NodePosition;
 use crate::symbols::AtomClass;
 
 /// 帧内坐标点，单位 pt。
@@ -85,9 +86,17 @@ pub(crate) enum Item {
         fill: Option<MathColor>,
         stroke: Option<(Option<MathColor>, f64)>,
     },
+    /// 正文 Parley 文本岛；token 由同一文档布局代际的 engine sidecar 解析。
+    TextIsland {
+        token: u64,
+        width: f64,
+        baseline: f64,
+        color: Option<MathColor>,
+    },
     /// 节点占位范围，供命中测试与选区使用，不绘制。位置是左上角。
     Node {
-        id: NodeId,
+        id: Option<NodeId>,
+        position: Option<NodePosition>,
         width: f64,
         height: f64,
         baseline: f64,
@@ -155,6 +164,8 @@ pub(crate) struct Fragment {
     pub class: AtomClass,
     /// 是否是空白片段（显式间距），空白不参与原子间距。
     pub space: bool,
+    /// 零宽布局标记只跟随行位置，不参与原子分类、合成或末尾斜体修正。
+    pub position_marker: bool,
     pub italics_correction: f64,
     /// 上、下重音附着点，自左边缘起量。
     pub accent_attach: (f64, f64),
@@ -181,6 +192,7 @@ impl Fragment {
             frame,
             class,
             space: false,
+            position_marker: false,
             italics_correction: 0.0,
             accent_attach: (attach, attach),
             text_like: false,

@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
-use caret_doc::{MathContent, MathFlow, NodeId};
+use caret_doc::{
+    FlowContent, InlineEnvironment, InlineEnvironmentKind, MathContent, MathFlow, MathNode,
+    MathNodeKind, MathPathStep, NodeId, Run, TextFlow,
+};
 
-use super::{MathItem, MathLayout, MathLayoutEngine, MathStyle, layout_align, layout_math};
+use super::{
+    MathItem, MathLayout, MathLayoutEngine, MathLayoutError, MathNodeBox, MathStyle,
+    MathTextRequest, MathTextRunBox, MathTextShape, MathTextShapeError, MathTextShaper,
+    layout_align, layout_math, layout_math_with_text_shaper,
+};
 use crate::layout::MathFont;
 use crate::{MathInputKind, ParsedMath, parse};
 
@@ -92,6 +99,12 @@ fn finite(layout: &MathLayout) -> bool {
                 stroke_width,
                 ..
             } => values.extend([*x, *y, *width, *height, *stroke_width]),
+            MathItem::TextIsland {
+                x,
+                baseline_y,
+                width,
+                ..
+            } => values.extend([*x, *baseline_y, *width]),
         }
     }
     values.iter().all(|value| value.is_finite())
@@ -276,11 +289,16 @@ fn signed_glyph_ink_metrics_do_not_erase_matrix_contents() {
 #[test]
 fn substack_rows_do_not_duplicate_math_node_ids() {
     let layout = display(r"\substack{a\\long}");
-    assert!(layout.nodes.iter().enumerate().all(|(index, node)| {
-        layout.nodes[index + 1..]
-            .iter()
-            .all(|later| later.id != node.id)
-    }));
+    let ids: Vec<_> = layout
+        .nodes
+        .iter()
+        .filter_map(|node| node.id.as_ref())
+        .collect();
+    assert!(
+        ids.iter()
+            .enumerate()
+            .all(|(index, id)| { ids[index + 1..].iter().all(|later| later != id) })
+    );
 }
 
 #[test]
@@ -295,12 +313,1078 @@ fn node_boxes_cover_children() {
     let Some(MathContent::Math(root_node)) = tree.content.first() else {
         panic!("formula should start with a math node");
     };
-    assert_eq!(first.id, root_node.id);
+    assert_eq!(first.id.as_ref(), Some(&tree.id));
+    assert!(
+        layout
+            .nodes
+            .iter()
+            .any(|node| node.id.as_ref() == Some(&root_node.id))
+    );
     assert!((first.width - layout.width).abs() < EPSILON);
     for node in &layout.nodes {
         assert!(node.x >= -EPSILON && node.x + node.width <= layout.width + EPSILON);
     }
     assert!(layout.nodes.len() >= 3);
+}
+
+#[test]
+fn text_run_boxes_use_flow_path_and_run_index_instead_of_generated_ids() {
+    let root_id = NodeId::generate();
+    let runs = vec![
+        Run {
+            text: "alpha".into(),
+            language: Some("en".into()),
+            props: std::collections::BTreeMap::from([(
+                "underline".into(),
+                serde_json::Value::Bool(true),
+            )]),
+            extra: std::collections::BTreeMap::from([(
+                "vendor-run-field".into(),
+                serde_json::Value::String("preserve".into()),
+            )]),
+        },
+        Run {
+            text: "βeta".into(),
+            language: Some("el".into()),
+            props: Default::default(),
+            extra: Default::default(),
+        },
+    ];
+    let root = MathFlow {
+        id: root_id.clone(),
+        content: vec![FlowContent::Text(TextFlow {
+            runs: runs.clone(),
+            extra: Default::default(),
+        })],
+        extra: Default::default(),
+    };
+    let backend_nodes = crate::backend::flow_nodes_for_layout(&root);
+    let layout_runs: Vec<_> = backend_nodes[0]
+        .children
+        .iter()
+        .map(|node| node.run.clone())
+        .collect();
+    assert_eq!(layout_runs, runs.into_iter().map(Some).collect::<Vec<_>>());
+
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let run_boxes: Vec<_> = layout
+        .nodes
+        .iter()
+        .filter(|node| node.text_run_index.is_some())
+        .collect();
+
+    assert_eq!(run_boxes.len(), 2);
+    for (run_index, node) in run_boxes.iter().enumerate() {
+        assert_eq!(node.id, None, "TextFlow runs have no persistent NodeId");
+        assert_eq!(node.scope_id, root_id);
+        assert_eq!(node.path, [MathPathStep::Content(0)]);
+        assert_eq!(node.text_run_index, Some(run_index));
+    }
+}
+
+#[test]
+fn text_run_paths_include_math_operands() {
+    let root = root(r"\frac{\text{numerator}}{\text{denominator}}");
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let paths: Vec<_> = layout
+        .nodes
+        .iter()
+        .filter(|node| node.text_run_index == Some(0))
+        .map(|node| node.path.clone())
+        .collect();
+
+    assert_eq!(paths.len(), 2);
+    assert_eq!(
+        paths[0],
+        [
+            MathPathStep::Content(0),
+            MathPathStep::Operand(0),
+            MathPathStep::Content(0),
+        ]
+    );
+    assert_eq!(
+        paths[1],
+        [
+            MathPathStep::Content(0),
+            MathPathStep::Operand(1),
+            MathPathStep::Content(0),
+        ]
+    );
+}
+
+#[test]
+fn matrix_row_boxes_keep_the_root_scope_and_operand_path() {
+    let root = root(r"\begin{matrix} a & b \\ c & d \end{matrix}");
+    let Some(MathContent::Math(matrix)) = root.content.first() else {
+        panic!("matrix should be a root math node");
+    };
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+
+    for (row_index, row) in matrix.children.iter().enumerate() {
+        let row_box = layout
+            .nodes
+            .iter()
+            .find(|node| node.id.as_ref() == Some(&row.id))
+            .unwrap_or_else(|| panic!("missing matrix row box for {}", row.id));
+        assert_eq!(row_box.scope_id, root.id);
+        assert_eq!(
+            row_box.path,
+            [MathPathStep::Content(0), MathPathStep::Operand(row_index)]
+        );
+    }
+}
+
+#[test]
+fn text_run_paths_include_nested_environment_children() {
+    let root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![FlowContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: Default::default(),
+            children: vec![FlowContent::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Italic,
+                definition_id: None,
+                props: Default::default(),
+                children: vec![FlowContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: "nested".into(),
+                        language: Some("en".into()),
+                        props: Default::default(),
+                        extra: Default::default(),
+                    }],
+                    extra: Default::default(),
+                })],
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        })],
+        extra: Default::default(),
+    };
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let run_box = layout
+        .nodes
+        .iter()
+        .find(|node| node.text_run_index == Some(0))
+        .unwrap_or_else(|| panic!("nested text run box should be emitted"));
+
+    assert_eq!(run_box.scope_id, root.id);
+    assert_eq!(
+        run_box.path,
+        [
+            MathPathStep::Content(0),
+            MathPathStep::EnvironmentChild(0),
+            MathPathStep::EnvironmentChild(0),
+        ]
+    );
+}
+
+#[test]
+fn align_text_run_scopes_distinguish_repeated_cell_paths() {
+    let align = match parse(
+        r"\begin{aligned} \text{a} & \text{b} \\ \text{c} & \text{d} \end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("valid aligned input should parse: {other:?}"),
+    };
+    let layout = layout_align(font(), &align, SIZE)
+        .unwrap_or_else(|error| panic!("valid Align should lay out: {error}"));
+
+    for row in &align.rows {
+        for cell in &row.cells {
+            let run_box = layout
+                .nodes
+                .iter()
+                .find(|node| node.scope_id == cell.root.id && node.text_run_index == Some(0))
+                .unwrap_or_else(|| panic!("missing text run for Align cell {}", cell.root.id));
+            assert_eq!(run_box.path, [MathPathStep::Content(0)]);
+        }
+    }
+}
+
+#[test]
+fn empty_math_and_text_flows_emit_stable_position_boxes() {
+    let empty_math_flow = MathFlow {
+        id: NodeId::generate(),
+        content: Vec::new(),
+        extra: Default::default(),
+    };
+    let empty_math_layout = layout_math(font(), &empty_math_flow, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let math_slot = empty_math_layout
+        .nodes
+        .first()
+        .unwrap_or_else(|| panic!("empty MathFlow should retain a position box"));
+    assert_eq!(math_slot.id.as_ref(), Some(&empty_math_flow.id));
+    assert_eq!(math_slot.scope_id, empty_math_flow.id);
+    assert!(!math_slot.is_text_flow);
+
+    let empty_text_flow = MathFlow {
+        id: NodeId::generate(),
+        content: vec![FlowContent::Text(TextFlow::default())],
+        extra: Default::default(),
+    };
+    let empty_text_layout = layout_math(font(), &empty_text_flow, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let text_slot = empty_text_layout
+        .nodes
+        .iter()
+        .find(|node| node.is_text_flow)
+        .unwrap_or_else(|| panic!("empty TextFlow should retain a position box"));
+    assert_eq!(text_slot.id, None);
+    assert_eq!(text_slot.scope_id, empty_text_flow.id);
+    assert_eq!(text_slot.path, [MathPathStep::Content(0)]);
+    assert!(text_slot.is_text_flow);
+    assert_eq!(text_slot.text_run_index, None);
+}
+
+#[test]
+fn empty_math_flow_operand_keeps_its_parent_path_box() {
+    let mut root = root(r"\frac{x}{y}");
+    let Some(MathContent::Math(fraction)) = root.content.first_mut() else {
+        panic!("fraction should be a root math node");
+    };
+    let Some(empty_operand) = fraction.children.first_mut() else {
+        panic!("fraction should have a numerator flow");
+    };
+    empty_operand.content.clear();
+    let empty_flow_id = empty_operand.id.clone();
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let empty_box = layout
+        .nodes
+        .iter()
+        .find(|node| node.id.as_ref() == Some(&empty_flow_id))
+        .unwrap_or_else(|| panic!("empty MathFlow operand should retain a position box"));
+
+    assert!(empty_box.is_flow);
+    assert_eq!(empty_box.scope_id, root.id);
+    assert_eq!(
+        empty_box.path,
+        [MathPathStep::Content(0), MathPathStep::Operand(0)]
+    );
+}
+
+#[test]
+fn transparent_single_glyph_row_preserves_script_and_accent_geometry() {
+    for source in ["x^2", r"\hat{x}"] {
+        let plain = root(source);
+        let mut wrapped = plain.clone();
+        let Some(MathContent::Math(parent)) = wrapped.content.first_mut() else {
+            panic!("formula should begin with a math node");
+        };
+        let Some(base_flow) = parent.children.first_mut() else {
+            panic!("parent node should have a base flow");
+        };
+        let Some(MathContent::Math(base)) = base_flow.content.first().cloned() else {
+            panic!("base should be a math node");
+        };
+        let inner_row = MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            children: vec![MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Math(base)],
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        };
+        let inner_row_id = inner_row.id.clone();
+        let outer_row = MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            children: vec![MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Math(inner_row)],
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        };
+        let outer_row_id = outer_row.id.clone();
+        base_flow.content = vec![MathContent::Math(outer_row)];
+
+        let plain_layout = layout_math(font(), &plain, SIZE, MathStyle::Display)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let wrapped_layout = layout_math(font(), &wrapped, SIZE, MathStyle::Display)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+
+        assert_eq!(wrapped_layout.items, plain_layout.items, "{source}");
+        assert_eq!(wrapped_layout.width, plain_layout.width, "{source}");
+        assert_eq!(wrapped_layout.ascent, plain_layout.ascent, "{source}");
+        assert_eq!(wrapped_layout.descent, plain_layout.descent, "{source}");
+
+        let row_box = |id: &NodeId| {
+            wrapped_layout
+                .nodes
+                .iter()
+                .find(|node| node.id.as_ref() == Some(id))
+                .unwrap_or_else(|| panic!("missing transparent Row node box: {id}"))
+        };
+        let outer_box = row_box(&outer_row_id);
+        let inner_box = row_box(&inner_row_id);
+        assert!(
+            outer_box.width > 0.0,
+            "{source}: outer Row should cover content, got {outer_box:?}"
+        );
+        assert!(
+            inner_box.width > 0.0,
+            "{source}: inner Row should cover content"
+        );
+        assert!(outer_box.x <= inner_box.x + EPSILON, "{source}");
+        assert!(outer_box.y <= inner_box.y + EPSILON, "{source}");
+        assert!(
+            outer_box.x + outer_box.width + EPSILON >= inner_box.x + inner_box.width,
+            "{source}"
+        );
+        assert!(
+            outer_box.y + outer_box.height + EPSILON >= inner_box.y + inner_box.height,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn text_island_shaper_replaces_math_glyphs_and_keeps_run_positions() {
+    struct MockTextShaper {
+        next_token: u64,
+    }
+
+    impl MathTextShaper for MockTextShaper {
+        fn shape(&mut self, request: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            let mut x = 0.0;
+            let mut runs = Vec::with_capacity(request.runs.len());
+            for run in &request.runs {
+                let width = run.text.chars().count() as f64 * 4.0;
+                runs.push(MathTextRunBox {
+                    id: None,
+                    scope_id: run.scope_id.clone(),
+                    path: run.path.clone(),
+                    run_index: run.run_index,
+                    is_text_flow: run.is_text_flow,
+                    is_flow: false,
+                    is_container: false,
+                    x,
+                    y: 0.0,
+                    width,
+                    height: 10.0,
+                    baseline: 8.0,
+                });
+                x += width;
+            }
+            let token = self.next_token;
+            self.next_token += 1;
+            Ok(MathTextShape {
+                token,
+                width: x,
+                ascent: 8.0,
+                descent: 2.0,
+                requested_family_missing: false,
+                runs,
+                containers: request
+                    .containers
+                    .iter()
+                    .map(|container| MathTextRunBox {
+                        id: container.id.clone(),
+                        scope_id: container.scope_id.clone(),
+                        path: container.path.clone(),
+                        run_index: None,
+                        is_text_flow: false,
+                        is_flow: container.is_flow,
+                        is_container: container.is_container,
+                        x: 0.0,
+                        y: 0.0,
+                        width: x,
+                        height: 10.0,
+                        baseline: 8.0,
+                    })
+                    .collect(),
+            })
+        }
+    }
+
+    let root = root(r"\text{alpha}");
+    let mut shaper = MockTextShaper { next_token: 1 };
+    let layout = layout_math_with_text_shaper(font(), &root, SIZE, MathStyle::Display, &mut shaper)
+        .unwrap_or_else(|error| panic!("math text shaping should succeed: {error}"));
+
+    let text_item = layout
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MathItem::TextIsland {
+                token,
+                width,
+                baseline_y,
+                ..
+            } => Some((*token, *width, *baseline_y)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("text island item should be published"));
+    assert_eq!(text_item.0, 1);
+    assert_eq!(text_item.1, 20.0);
+    assert!(text_item.2.is_finite());
+    assert!(
+        !layout
+            .items
+            .iter()
+            .any(|item| matches!(item, MathItem::Glyph { .. }))
+    );
+    let text_run = layout
+        .nodes
+        .iter()
+        .find(|node| node.text_run_index == Some(0))
+        .unwrap_or_else(|| panic!("TextFlow Run range should use shaped geometry"));
+    assert_eq!(text_run.scope_id, root.id);
+    assert!(text_run.width > 0.0);
+}
+
+#[test]
+fn text_islands_follow_editable_flow_boundaries() {
+    struct RecordingTextShaper {
+        requests: Vec<MathTextRequest>,
+        next_token: u64,
+    }
+
+    impl MathTextShaper for RecordingTextShaper {
+        fn shape(&mut self, request: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            self.requests.push(request.clone());
+            let mut x = 0.0;
+            let runs = request
+                .runs
+                .iter()
+                .map(|run| {
+                    let width = run.text.chars().count() as f64 * 4.0;
+                    let bounds = MathTextRunBox {
+                        id: None,
+                        scope_id: run.scope_id.clone(),
+                        path: run.path.clone(),
+                        run_index: run.run_index,
+                        is_text_flow: run.is_text_flow,
+                        is_flow: false,
+                        is_container: false,
+                        x,
+                        y: 0.0,
+                        width,
+                        height: 10.0,
+                        baseline: 8.0,
+                    };
+                    x += width;
+                    bounds
+                })
+                .collect();
+            let token = self.next_token;
+            self.next_token += 1;
+            Ok(MathTextShape {
+                token,
+                width: x,
+                ascent: 8.0,
+                descent: 2.0,
+                requested_family_missing: false,
+                runs,
+                containers: request
+                    .containers
+                    .iter()
+                    .map(|container| MathTextRunBox {
+                        id: container.id.clone(),
+                        scope_id: container.scope_id.clone(),
+                        path: container.path.clone(),
+                        run_index: None,
+                        is_text_flow: false,
+                        is_flow: container.is_flow,
+                        is_container: container.is_container,
+                        x: 0.0,
+                        y: 0.0,
+                        width: x,
+                        height: 10.0,
+                        baseline: 8.0,
+                    })
+                    .collect(),
+            })
+        }
+    }
+
+    let text = |value: &str| {
+        MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let bold_id = NodeId::generate();
+    let nested_flow = MathFlow {
+        id: NodeId::generate(),
+        content: vec![
+            text("a"),
+            MathContent::Environment(InlineEnvironment {
+                id: bold_id.clone(),
+                kind: InlineEnvironmentKind::Bold,
+                definition_id: None,
+                props: Default::default(),
+                children: vec![
+                    text("\u{301}"),
+                    MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Symbol,
+                        text: Some("x".to_owned()),
+                        attributes: Default::default(),
+                        children: Vec::new(),
+                        extra: Default::default(),
+                    }),
+                    text("z"),
+                ],
+                extra: Default::default(),
+            }),
+            text("c"),
+            MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+            text("d"),
+            MathContent::Opaque(caret_doc::OpaqueNode {
+                raw: serde_json::json!({"type": "future", "payload": 1}),
+            }),
+            text("e"),
+            MathContent::Math(MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Fraction,
+                text: None,
+                attributes: Default::default(),
+                children: vec![
+                    MathFlow {
+                        id: NodeId::generate(),
+                        content: vec![text("u")],
+                        extra: Default::default(),
+                    },
+                    MathFlow {
+                        id: NodeId::generate(),
+                        content: vec![text("v")],
+                        extra: Default::default(),
+                    },
+                ],
+                extra: Default::default(),
+            }),
+            MathContent::Text(TextFlow {
+                runs: Vec::new(),
+                extra: Default::default(),
+            }),
+        ],
+        extra: Default::default(),
+    };
+    let root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::Math(MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            children: vec![nested_flow],
+            extra: Default::default(),
+        })],
+        extra: Default::default(),
+    };
+    let mut shaper = RecordingTextShaper {
+        requests: Vec::new(),
+        next_token: 0,
+    };
+
+    layout_math_with_text_shaper(font(), &root, SIZE, MathStyle::Inline, &mut shaper)
+        .unwrap_or_else(|error| panic!("valid text islands should shape: {error}"));
+    let request_texts: Vec<String> = shaper
+        .requests
+        .iter()
+        .map(|request| request.runs.iter().map(|run| run.text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        request_texts,
+        ["a\u{301}", "zc", " ", "d", "�", "e", "u", "v", ""]
+    );
+    assert_eq!(shaper.requests[0].runs.len(), 2);
+    assert_eq!(shaper.requests[0].runs[0].style.bold, None);
+    assert_eq!(shaper.requests[0].runs[1].style.bold, Some(true));
+    assert!(
+        shaper.requests[0]
+            .containers
+            .iter()
+            .any(|container| container.id.as_ref() == Some(&bold_id))
+    );
+    assert!(shaper.requests[8].runs[0].text.is_empty());
+    assert!(shaper.requests[8].runs[0].is_text_flow);
+    assert_eq!(shaper.requests[8].runs[0].run_index, None);
+
+    let space_root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![text("m"), text("n")],
+        extra: Default::default(),
+    };
+    let mut backend_nodes = crate::backend::flow_nodes_for_layout(&space_root);
+    backend_nodes[0].children.insert(
+        1,
+        crate::backend::Node {
+            id: None,
+            position: Some(crate::backend::NodePosition {
+                scope_id: space_root.id.clone(),
+                path: vec![MathPathStep::Content(1)],
+                text_run_index: None,
+                is_text_flow: true,
+                is_flow: false,
+                is_container: false,
+            }),
+            kind: crate::backend::BackendNodeKind::TextSpace,
+            text: None,
+            run: None,
+            attributes: Default::default(),
+            children: Vec::new(),
+        },
+    );
+    super::layout_nodes(
+        font(),
+        backend_nodes,
+        SIZE,
+        MathStyle::Inline,
+        Some(&mut shaper),
+    )
+    .unwrap_or_else(|error| panic!("TextSpace should use body shaping: {error}"));
+    let text_space_request = shaper
+        .requests
+        .last()
+        .unwrap_or_else(|| panic!("TextSpace should produce a body shaping request"));
+    let text_space: String = text_space_request
+        .runs
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect();
+    assert_eq!(text_space, "m n");
+    assert_eq!(text_space_request.runs.len(), 3);
+}
+
+#[test]
+fn flow_and_text_style_boxes_are_unique_and_cover_math_islands() {
+    #[derive(Default)]
+    struct RecordingShaper {
+        requests: Vec<MathTextRequest>,
+        next_token: u64,
+    }
+
+    impl MathTextShaper for RecordingShaper {
+        fn shape(&mut self, request: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            self.requests.push(request.clone());
+            let mut x = 0.0;
+            let runs = request
+                .runs
+                .iter()
+                .map(|run| {
+                    let width = run.text.chars().count() as f64 * 4.0;
+                    let bounds = MathTextRunBox {
+                        id: None,
+                        scope_id: run.scope_id.clone(),
+                        path: run.path.clone(),
+                        run_index: run.run_index,
+                        is_text_flow: run.is_text_flow,
+                        is_flow: false,
+                        is_container: false,
+                        x,
+                        y: 0.0,
+                        width,
+                        height: 10.0,
+                        baseline: 8.0,
+                    };
+                    x += width;
+                    bounds
+                })
+                .collect();
+            let containers = request
+                .containers
+                .iter()
+                .map(|container| MathTextRunBox {
+                    id: container.id.clone(),
+                    scope_id: container.scope_id.clone(),
+                    path: container.path.clone(),
+                    run_index: None,
+                    is_text_flow: false,
+                    is_flow: container.is_flow,
+                    is_container: container.is_container,
+                    x: 0.0,
+                    y: 0.0,
+                    width: x,
+                    height: 10.0,
+                    baseline: 8.0,
+                })
+                .collect();
+            let token = self.next_token;
+            self.next_token += 1;
+            Ok(MathTextShape {
+                token,
+                width: x,
+                ascent: 8.0,
+                descent: 2.0,
+                requested_family_missing: false,
+                runs,
+                containers,
+            })
+        }
+    }
+
+    let text = |value: &str| {
+        MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let math_symbol = || {
+        MathContent::Math(MathNode {
+            id: NodeId::generate(),
+            kind: MathNodeKind::Symbol,
+            text: Some("x".to_owned()),
+            attributes: Default::default(),
+            children: Vec::new(),
+            extra: Default::default(),
+        })
+    };
+    let environment = |id, kind, props, children| {
+        MathContent::Environment(InlineEnvironment {
+            id,
+            kind,
+            definition_id: None,
+            props,
+            children,
+            extra: Default::default(),
+        })
+    };
+    let find_container = |layout: &MathLayout, id: &NodeId| -> MathNodeBox {
+        let matches: Vec<_> = layout
+            .nodes
+            .iter()
+            .filter(|node| node.id.as_ref() == Some(id) && node.is_container)
+            .cloned()
+            .collect();
+        assert_eq!(matches.len(), 1, "container {id} must have one box");
+        matches[0].clone()
+    };
+    let assert_covers_descendants = |layout: &MathLayout, container: &MathNodeBox| {
+        let descendants: Vec<_> = layout
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.scope_id == container.scope_id
+                    && node.path.len() > container.path.len()
+                    && node.path.starts_with(&container.path)
+            })
+            .collect();
+        assert!(!descendants.is_empty(), "container has no descendant boxes");
+        for child in descendants {
+            assert!(child.x >= container.x - EPSILON);
+            assert!(child.y >= container.y - EPSILON);
+            assert!(child.x + child.width <= container.x + container.width + EPSILON);
+            assert!(child.y + child.height <= container.y + container.height + EPSILON);
+        }
+    };
+
+    let pure_math_environment_id = NodeId::generate();
+    let pure_math = MathFlow {
+        id: NodeId::generate(),
+        content: vec![environment(
+            pure_math_environment_id.clone(),
+            InlineEnvironmentKind::Bold,
+            Default::default(),
+            vec![math_symbol()],
+        )],
+        extra: Default::default(),
+    };
+    let mut shaper = RecordingShaper::default();
+    let pure_layout =
+        layout_math_with_text_shaper(font(), &pure_math, SIZE, MathStyle::Inline, &mut shaper)
+            .unwrap_or_else(|error| panic!("pure math environment should lay out: {error}"));
+    assert_covers_descendants(
+        &pure_layout,
+        &find_container(&pure_layout, &pure_math_environment_id),
+    );
+
+    let font_id = NodeId::generate();
+    let italic_id = NodeId::generate();
+    let bold_id = NodeId::generate();
+    let numerator_flow_id = NodeId::generate();
+    let denominator_flow_id = NodeId::generate();
+    let numerator = MathFlow {
+        id: numerator_flow_id.clone(),
+        content: vec![environment(
+            NodeId::generate(),
+            InlineEnvironmentKind::Italic,
+            BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]),
+            vec![text("x")],
+        )],
+        extra: Default::default(),
+    };
+    let denominator = MathFlow {
+        id: denominator_flow_id.clone(),
+        content: vec![environment(
+            NodeId::generate(),
+            InlineEnvironmentKind::Bold,
+            BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]),
+            vec![text("y")],
+        )],
+        extra: Default::default(),
+    };
+    let fraction = MathContent::Math(MathNode {
+        id: NodeId::generate(),
+        kind: MathNodeKind::Fraction,
+        text: None,
+        attributes: Default::default(),
+        children: vec![numerator, denominator],
+        extra: Default::default(),
+    });
+    let root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![environment(
+            font_id.clone(),
+            InlineEnvironmentKind::Font,
+            BTreeMap::from([("fontFamily".to_owned(), serde_json::json!("sans-serif"))]),
+            vec![environment(
+                italic_id.clone(),
+                InlineEnvironmentKind::Italic,
+                Default::default(),
+                vec![environment(
+                    bold_id.clone(),
+                    InlineEnvironmentKind::Bold,
+                    Default::default(),
+                    vec![text("a"), fraction, text("b")],
+                )],
+            )],
+        )],
+        extra: Default::default(),
+    };
+    let first_request = shaper.requests.len();
+    let layout = layout_math_with_text_shaper(font(), &root, SIZE, MathStyle::Inline, &mut shaper)
+        .unwrap_or_else(|error| panic!("mixed math environments should lay out: {error}"));
+    assert_eq!(
+        shaper.requests[first_request..]
+            .iter()
+            .map(|request| request
+                .runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>())
+            .collect::<Vec<_>>(),
+        ["a", "x", "y", "b"]
+    );
+    let outer = &shaper.requests[first_request].runs[0].style;
+    assert_eq!(outer.bold, Some(true));
+    assert_eq!(outer.italic, Some(true));
+    assert_eq!(outer.font_family.as_deref(), Some("sans-serif"));
+    let numerator_style = &shaper.requests[first_request + 1].runs[0].style;
+    assert_eq!(numerator_style.bold, Some(true));
+    assert_eq!(numerator_style.italic, Some(false));
+    assert_eq!(numerator_style.font_family.as_deref(), Some("sans-serif"));
+    let denominator_style = &shaper.requests[first_request + 2].runs[0].style;
+    assert_eq!(denominator_style.bold, Some(false));
+    assert_eq!(denominator_style.italic, Some(true));
+    assert_eq!(denominator_style.font_family.as_deref(), Some("sans-serif"));
+    for id in [&font_id, &italic_id, &bold_id] {
+        assert_covers_descendants(&layout, &find_container(&layout, id));
+    }
+    let numerator_flow = layout
+        .nodes
+        .iter()
+        .filter(|node| node.id.as_ref() == Some(&numerator_flow_id) && node.is_flow)
+        .count();
+    let denominator_flow = layout
+        .nodes
+        .iter()
+        .filter(|node| node.id.as_ref() == Some(&denominator_flow_id) && node.is_flow)
+        .count();
+    assert_eq!(numerator_flow, 1);
+    assert_eq!(denominator_flow, 1);
+}
+
+#[test]
+fn coalescing_container_boxes_preserves_distinct_paths_and_first_occurrence_order() {
+    let id = NodeId::generate();
+    let scope_id = NodeId::generate();
+    let make_box = |path, x, width| MathNodeBox {
+        id: Some(id.clone()),
+        scope_id: scope_id.clone(),
+        path,
+        text_run_index: None,
+        is_text_flow: false,
+        is_flow: false,
+        is_container: true,
+        x,
+        y: 0.0,
+        width,
+        height: 10.0,
+        baseline: 8.0,
+    };
+    let mut nodes = vec![
+        make_box(vec![MathPathStep::Content(0)], 0.0, 1.0),
+        make_box(vec![MathPathStep::Content(1)], 5.0, 1.0),
+        make_box(vec![MathPathStep::Content(0)], 2.0, 1.0),
+    ];
+    super::coalesce_container_boxes(&mut nodes);
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].path, [MathPathStep::Content(0)]);
+    assert_eq!(nodes[1].path, [MathPathStep::Content(1)]);
+    assert_eq!(nodes[0].x, 0.0);
+    assert_eq!(nodes[0].width, 3.0);
+}
+
+#[test]
+fn math_alphabet_keeps_its_variant_when_text_islands_are_shaped() {
+    struct EmptyTextShaper(u64);
+
+    impl MathTextShaper for EmptyTextShaper {
+        fn shape(&mut self, request: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            Ok(MathTextShape {
+                token: self.0,
+                width: 0.0,
+                ascent: 8.0,
+                descent: 2.0,
+                requested_family_missing: false,
+                runs: request
+                    .runs
+                    .iter()
+                    .map(|run| MathTextRunBox {
+                        id: None,
+                        scope_id: run.scope_id.clone(),
+                        path: run.path.clone(),
+                        run_index: run.run_index,
+                        is_text_flow: run.is_text_flow,
+                        is_flow: false,
+                        is_container: false,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 10.0,
+                        baseline: 8.0,
+                    })
+                    .collect(),
+                containers: request
+                    .containers
+                    .iter()
+                    .map(|container| MathTextRunBox {
+                        id: container.id.clone(),
+                        scope_id: container.scope_id.clone(),
+                        path: container.path.clone(),
+                        run_index: None,
+                        is_text_flow: false,
+                        is_flow: container.is_flow,
+                        is_container: container.is_container,
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 10.0,
+                        baseline: 8.0,
+                    })
+                    .collect(),
+            })
+            .inspect(|_shape| {
+                self.0 += 1;
+            })
+        }
+    }
+
+    let source = r"\mathbb{R}+\text{x}";
+    let without_text_shaper = lay(source, MathStyle::Inline);
+    let with_text_island = root(source);
+    let mut shaper = EmptyTextShaper(1);
+    let shaped = layout_math_with_text_shaper(
+        font(),
+        &with_text_island,
+        SIZE,
+        MathStyle::Inline,
+        &mut shaper,
+    )
+    .unwrap_or_else(|error| panic!("mixed math and text should lay out: {error}"));
+
+    assert_eq!(
+        glyph_ids(&shaped)[..2],
+        glyph_ids(&without_text_shaper)[..2],
+        "the MathAlphabet and following operator should keep their math variants"
+    );
+}
+
+#[test]
+fn text_shaper_cannot_return_flow_bounds_for_a_run() {
+    struct InvalidFlowRunShaper;
+
+    impl MathTextShaper for InvalidFlowRunShaper {
+        fn shape(&mut self, request: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            let runs = request
+                .runs
+                .iter()
+                .map(|run| MathTextRunBox {
+                    id: None,
+                    scope_id: run.scope_id.clone(),
+                    path: run.path.clone(),
+                    run_index: run.run_index,
+                    is_text_flow: run.is_text_flow,
+                    is_flow: true,
+                    is_container: false,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 4.0,
+                    height: 10.0,
+                    baseline: 8.0,
+                })
+                .collect();
+            Ok(MathTextShape {
+                token: 1,
+                width: 4.0,
+                ascent: 8.0,
+                descent: 2.0,
+                requested_family_missing: false,
+                runs,
+                containers: Vec::new(),
+            })
+        }
+    }
+
+    let mut shaper = InvalidFlowRunShaper;
+    assert_eq!(
+        layout_math_with_text_shaper(
+            font(),
+            &root(r"\text{x}"),
+            SIZE,
+            MathStyle::Inline,
+            &mut shaper,
+        ),
+        Err(MathLayoutError::TextShapingFailed)
+    );
+}
+
+#[test]
+fn text_island_shaping_failure_rejects_the_complete_math_layout() {
+    struct FailedTextShaper;
+    impl MathTextShaper for FailedTextShaper {
+        fn shape(
+            &mut self,
+            _request: MathTextRequest,
+        ) -> Result<MathTextShape, MathTextShapeError> {
+            Err(MathTextShapeError::Failed)
+        }
+    }
+
+    let root = root(r"\text{cannot fall back to math glyphs}");
+    let mut shaper = FailedTextShaper;
+    assert_eq!(
+        layout_math_with_text_shaper(font(), &root, SIZE, MathStyle::Display, &mut shaper),
+        Err(super::MathLayoutError::TextShapingFailed)
+    );
 }
 
 #[test]
@@ -454,9 +1538,11 @@ fn align_layout_uses_document_rows_and_cell_roots() {
             .any(|item| matches!(item, MathItem::Glyph { .. }))
     );
     for id in expected_ids {
-        assert!(
-            layout.nodes.iter().any(|node| node.id == id),
-            "missing node box for {id}"
-        );
+        let count = layout
+            .nodes
+            .iter()
+            .filter(|node| node.id.as_ref() == Some(&id))
+            .count();
+        assert_eq!(count, 1, "expected one node box for {id}");
     }
 }

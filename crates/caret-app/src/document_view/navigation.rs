@@ -40,6 +40,9 @@ impl DocumentViewRuntime {
         forward: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if let Some(result) = move_math_visual(self, forward, extend) {
+            return result;
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session
@@ -243,6 +246,9 @@ impl DocumentViewRuntime {
         line_delta: isize,
         extend: bool,
     ) -> Result<String, String> {
+        if let Some(result) = move_math_vertical(self, line_delta, extend) {
+            return result;
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session
@@ -342,6 +348,9 @@ impl DocumentViewRuntime {
         end: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if let Some(result) = move_math_line_edge(self, end, extend) {
+            return result;
+        }
         let current = self.session.selection().clone();
         let current_visual = self.session.selection_visual_affinity();
         let current_anchor_visual = self.anchor_visual_affinity;
@@ -393,6 +402,217 @@ impl DocumentViewRuntime {
         self.preferred_visual_x_pt = None;
         self.interaction_state_json()
     }
+}
+
+fn move_math_visual(
+    runtime: &mut DocumentViewRuntime,
+    forward: bool,
+    extend: bool,
+) -> Option<Result<String, String>> {
+    let context = runtime.session.math_text_input_context()?;
+    let anchor_visual_affinity = context.anchor_visual_affinity;
+    let (position, visual_affinity, collapsed_selection) = if !extend
+        && context.anchor_utf16 != context.focus_utf16
+    {
+        let snapshot = match runtime.current_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return Some(Err(error)),
+        };
+        let anchor_key = snapshot.math_text_caret_geometry(
+            &context.target,
+            &context.anchor,
+            anchor_visual_affinity,
+        );
+        let focus_key = snapshot.math_text_caret_geometry(
+            &context.target,
+            &context.focus,
+            context.visual_affinity,
+        );
+        match (anchor_key, focus_key) {
+            (Some(anchor), Some(focus)) => {
+                let anchor_key = (anchor.page_index, anchor.y0_pt, anchor.x_pt);
+                let focus_key = (focus.page_index, focus.y0_pt, focus.x_pt);
+                let pick_anchor = if forward {
+                    anchor_key > focus_key
+                } else {
+                    anchor_key < focus_key
+                };
+                if pick_anchor {
+                    (context.anchor.clone(), anchor_visual_affinity, true)
+                } else {
+                    (context.focus.clone(), context.visual_affinity, true)
+                }
+            }
+            _ => return Some(Err("navigation.invalid_math_caret".to_owned())),
+        }
+    } else {
+        let movement = runtime.current_snapshot().and_then(|snapshot| {
+            snapshot
+                .move_math_text_visual(
+                    &context.target,
+                    &context.focus,
+                    context.visual_affinity,
+                    forward,
+                )
+                .ok_or_else(|| "navigation.math_text_edge".to_owned())
+        });
+        match movement {
+            Ok((position, visual_affinity)) => (position, visual_affinity, false),
+            Err(error) if error == "navigation.math_text_edge" && !extend => {
+                let direction = if context.focus_utf16 == 0 {
+                    Direction::Backward
+                } else if context.focus_utf16 == context.surrounding_text.encode_utf16().count() {
+                    Direction::Forward
+                } else {
+                    return Some(runtime.interaction_state_json());
+                };
+                return Some(
+                    runtime
+                        .session
+                        .run(Command::MoveCaret(direction))
+                        .map_err(|error| format!("navigation.math_text: {error}"))
+                        .and_then(|effect| {
+                            if effect.selection_changed {
+                                runtime.anchor_visual_affinity =
+                                    runtime.session.selection_visual_affinity();
+                                runtime.preferred_visual_x_pt = None;
+                            }
+                            runtime.interaction_state_json()
+                        }),
+                );
+            }
+            Err(error) if error == "navigation.math_text_edge" => {
+                return Some(runtime.interaction_state_json());
+            }
+            Err(error) => return Some(Err(error)),
+        }
+    };
+    let anchor = if extend && !collapsed_selection {
+        context.anchor.clone()
+    } else {
+        position.clone()
+    };
+    let next_anchor_visual_affinity = if extend && !collapsed_selection {
+        anchor_visual_affinity
+    } else {
+        visual_affinity
+    };
+    let result = runtime
+        .session
+        .set_math_text_selection_positions_with_visual_affinities(
+            anchor,
+            position,
+            next_anchor_visual_affinity,
+            visual_affinity,
+        )
+        .map_err(|error| format!("selection.math_text: {error}"));
+    Some(result.and_then(|_| {
+        runtime.anchor_visual_affinity = next_anchor_visual_affinity;
+        runtime.preferred_visual_x_pt = None;
+        runtime.interaction_state_json()
+    }))
+}
+
+fn move_math_vertical(
+    runtime: &mut DocumentViewRuntime,
+    line_delta: isize,
+    extend: bool,
+) -> Option<Result<String, String>> {
+    let context = runtime.session.math_text_input_context()?;
+    let anchor_visual_affinity = context.anchor_visual_affinity;
+    let preferred_x = runtime.preferred_visual_x_pt;
+    let moved = runtime.current_snapshot().and_then(|snapshot| {
+        snapshot
+            .move_math_text_vertical(
+                &context.target,
+                &context.focus,
+                context.visual_affinity,
+                line_delta,
+                preferred_x,
+            )
+            .ok_or_else(|| "navigation.math_text_edge".to_owned())
+    });
+    let (position, visual_affinity, preferred_x) = match moved {
+        Ok(moved) => moved,
+        Err(error) if error == "navigation.math_text_edge" => {
+            return Some(runtime.interaction_state_json());
+        }
+        Err(error) => return Some(Err(error)),
+    };
+    let anchor = if extend {
+        context.anchor.clone()
+    } else {
+        position.clone()
+    };
+    let next_anchor_visual_affinity = if extend {
+        anchor_visual_affinity
+    } else {
+        visual_affinity
+    };
+    let result = runtime
+        .session
+        .set_math_text_selection_positions_with_visual_affinities(
+            anchor,
+            position,
+            next_anchor_visual_affinity,
+            visual_affinity,
+        )
+        .map_err(|error| format!("selection.math_text: {error}"));
+    Some(result.and_then(|_| {
+        runtime.anchor_visual_affinity = next_anchor_visual_affinity;
+        runtime.preferred_visual_x_pt = Some(preferred_x);
+        runtime.interaction_state_json()
+    }))
+}
+
+fn move_math_line_edge(
+    runtime: &mut DocumentViewRuntime,
+    end: bool,
+    extend: bool,
+) -> Option<Result<String, String>> {
+    let context = runtime.session.math_text_input_context()?;
+    let anchor_visual_affinity = context.anchor_visual_affinity;
+    let moved = runtime.current_snapshot().and_then(|snapshot| {
+        snapshot
+            .move_math_text_line_edge(
+                &context.target,
+                &context.focus,
+                context.visual_affinity,
+                end,
+            )
+            .ok_or_else(|| "navigation.math_text_edge".to_owned())
+    });
+    let (position, visual_affinity) = match moved {
+        Ok(moved) => moved,
+        Err(error) if error == "navigation.math_text_edge" => {
+            return Some(runtime.interaction_state_json());
+        }
+        Err(error) => return Some(Err(error)),
+    };
+    let anchor = if extend {
+        context.anchor.clone()
+    } else {
+        position.clone()
+    };
+    let next_anchor_visual_affinity = if extend {
+        anchor_visual_affinity
+    } else {
+        visual_affinity
+    };
+    let result = runtime
+        .session
+        .set_math_text_selection_positions_with_visual_affinities(
+            anchor,
+            position,
+            next_anchor_visual_affinity,
+            visual_affinity,
+        )
+        .map_err(|error| format!("selection.math_text: {error}"));
+    Some(result.and_then(|_| {
+        runtime.anchor_visual_affinity = next_anchor_visual_affinity;
+        runtime.preferred_visual_x_pt = None;
+        runtime.interaction_state_json()
+    }))
 }
 
 pub(super) fn block_environment_at(

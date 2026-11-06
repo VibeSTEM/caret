@@ -11,6 +11,7 @@ use crate::{LineMetrics, LineMetricsError};
 mod parley;
 pub use parley::{
     HitAffinity, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter, ParleyParagraphLayout,
+    TextIslandError, TextIslandLayout, TextIslandLayouter, TextIslandMetrics, TextIslandSpan,
     VisualAffinity, VisualCursor,
 };
 

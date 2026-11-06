@@ -14,10 +14,9 @@ use caret_grid_layout::{CellMetrics, GridRow, GridSpec, HorizontalAlignment, lay
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
-use caret_doc::NodeId;
-
 use super::frame::{Fragment, Frame, Item, Point};
 use super::glyph::glyph_fragment;
+use crate::backend::NodePosition;
 use crate::symbols::AtomClass;
 
 /// 表格线粗细（em）。
@@ -32,7 +31,8 @@ pub(crate) enum Align {
 
 pub(crate) enum TableRow {
     Cells {
-        id: Option<NodeId>,
+        id: Option<caret_doc::NodeId>,
+        position: Option<NodePosition>,
         cells: Vec<Fragment>,
     },
     /// 跨越全部列、左对齐的整行。
@@ -104,12 +104,17 @@ pub(crate) fn layout_table(
     for (r, row) in rows.into_iter().enumerate() {
         let row_layout = &grid.rows[r];
         match row {
-            TableRow::Cells { id, cells } => {
+            TableRow::Cells {
+                id,
+                position,
+                cells,
+            } => {
                 if let Some(id) = id {
                     frame.push(
                         Point::new(0.0, row_layout.top),
                         Item::Node {
-                            id,
+                            id: Some(id),
+                            position,
                             width: grid.width,
                             height: row_layout.ascent + row_layout.descent,
                             baseline: row_layout.ascent,

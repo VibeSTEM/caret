@@ -243,6 +243,11 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     assert_eq!(preview["inputMethodContext"]["surroundingText"], "A😀B");
     assert_eq!(preview["inputMethodContext"]["cursorPosition"], 1);
     assert_eq!(preview["inputMethodContext"]["anchorPosition"], 1);
+    assert!(
+        preview["compositionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
     assert_eq!(runtime.session.document_generation(), initial_generation);
     assert_eq!(inline_math_text(&runtime)?, "A😀B");
     assert_eq!(
@@ -279,6 +284,77 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     assert_eq!(
         runtime.session.document_generation(),
         before_cancel_generation
+    );
+    Ok(())
+}
+
+#[test]
+fn math_textflow_short_preedit_replacement_publishes_preview_caret_and_underline()
+-> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{abcdef}}")?;
+    runtime
+        .session_mut_for_test()
+        .run(Command::SetMathTextSelection {
+            anchor: 0,
+            focus: 6,
+        })
+        .map_err(|error| error.to_string())?;
+
+    let preview = runtime.input_method_event_json("xy".to_owned(), String::new(), 0, 0, 1)?;
+    let preview: Value = serde_json::from_str(&preview).map_err(|error| error.to_string())?;
+    assert_eq!(preview["inputMethodContext"]["surroundingText"], "abcdef");
+    assert!(preview["caretGeometry"]["xPt"].as_f64().is_some());
+    assert!(
+        preview["compositionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    let current_caret: Value =
+        serde_json::from_str(&runtime.current_caret_json()?).map_err(|error| error.to_string())?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(preview["caretGeometry"]["xPt"], current_caret["xPt"]);
+    assert_eq!(preview["caretGeometry"]["y0Pt"], current_caret["y0Pt"]);
+    assert_eq!(interaction["caretGeometry"]["xPt"], current_caret["xPt"]);
+    assert_eq!(interaction["caretGeometry"]["y0Pt"], current_caret["y0Pt"]);
+    assert_eq!(inline_math_text(&runtime)?, "abcdef");
+    Ok(())
+}
+
+#[test]
+fn failed_math_text_preedit_publication_restores_the_committed_session() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{abcdef}}")?;
+    let document_before = runtime.session.document().clone();
+    let context_before = runtime.session.math_text_input_context();
+    let edit_before = runtime.session.math_edit().cloned();
+    let last_snapshot_before = runtime.last_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.pages.len(),
+        )
+    });
+
+    super::super::composition::fail_next_ime_preview_publish_for_test();
+    let result = runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 4);
+
+    assert!(result.is_err());
+    assert_eq!(runtime.session.document(), &document_before);
+    assert_eq!(runtime.session.math_text_input_context(), context_before);
+    assert_eq!(runtime.session.math_edit().cloned(), edit_before);
+    assert!(runtime.session.composition().is_none());
+    assert!(runtime.composition_preview_session.is_none());
+    assert!(runtime.composition_snapshot.is_none());
+    assert!(runtime.composition_range.is_none());
+    assert_eq!(
+        runtime.last_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.pages.len(),
+        )),
+        last_snapshot_before
     );
     Ok(())
 }

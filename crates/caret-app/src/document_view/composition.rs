@@ -61,6 +61,7 @@ impl ImeCommitCheckpoint {
 thread_local! {
     static FAIL_NEXT_IME_RELAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_IME_FULL_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_IME_PREVIEW_PUBLISH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -71,6 +72,11 @@ pub(super) fn fail_next_ime_relayout_for_test() {
 #[cfg(test)]
 pub(super) fn fail_next_ime_full_layout_for_test() {
     FAIL_NEXT_IME_FULL_LAYOUT.with(|fail| fail.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn fail_next_ime_preview_publish_for_test() {
+    FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.set(true));
 }
 
 impl DocumentViewRuntime {
@@ -317,6 +323,26 @@ impl DocumentViewRuntime {
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
     ) -> Result<String, String> {
+        let checkpoint = ImeCommitCheckpoint::capture(self);
+        let result = self.install_composition_update_inner(
+            id,
+            preedit,
+            replacement_range,
+            cursor_position_utf16,
+        );
+        if result.is_err() {
+            checkpoint.restore(self);
+        }
+        result
+    }
+
+    fn install_composition_update_inner(
+        &mut self,
+        id: u64,
+        preedit: String,
+        replacement_range: Option<(i32, i32)>,
+        cursor_position_utf16: usize,
+    ) -> Result<String, String> {
         let (candidate, preview, range) = self
             .session
             .composition_update_candidate(id, preedit, replacement_range, cursor_position_utf16)
@@ -334,6 +360,10 @@ impl DocumentViewRuntime {
         self.composition_snapshot = Some(snapshot);
         self.composition_range = Some(range);
         self.preedit_cursor_position_utf16 = cursor_position_utf16;
+        #[cfg(test)]
+        if FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.replace(false)) {
+            return Err("layout.injected_ime_preview_publish_failure".to_owned());
+        }
         match delta {
             Some((paragraph_id, page_start_index, base_generation)) => self
                 .layout_snapshot_json_with_delta(Some((

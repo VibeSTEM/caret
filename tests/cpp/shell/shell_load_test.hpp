@@ -58,6 +58,7 @@ class ShellLoadTest : public QObject {
     void documentHistoryUndoRedoTracksRustSession();
     void invalidDocumentFileStatusPreservesThePublishedProjection();
     void interactionResponseErrorsRefreshAutoSaveDeadline();
+    void glyphFrameAdapterRejectsFramesOutsideCanvasLimits();
     void underlinedTextRendersTheRustFfiDecorationInTheQtCanvas();
     void documentCaretNavigationUpdatesObservablePosition();
     void confirmedConflictReplacementWritesCurrentDocument();

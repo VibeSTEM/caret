@@ -7,11 +7,13 @@
 
 use std::collections::BTreeMap;
 
-use caret_doc::{FlowContent, InlineEnvironmentKind, MathContent, MathFlow, NodeId, Run, TextFlow};
+use caret_doc::{
+    FlowContent, InlineEnvironmentKind, MathContent, MathFlow, MathPathStep, NodeId, Run, TextFlow,
+};
 
 use BackendNodeKind as MathNodeKind;
 
-/// 后端私有节点类别。文本解析标记只存在于这个临时表示中，不进入文档 schema。
+/// 后端私有节点类别。文本解析与 MathFlow 边界标记只存在于临时表示中，不进入文档 schema。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendNodeKind {
     Row,
@@ -41,6 +43,8 @@ pub(crate) enum BackendNodeKind {
     TextSpace,
     TextSymbol,
     TextStyle,
+    SoftBreak,
+    Opaque,
     MathAlphabet,
     Color,
     TextColor,
@@ -132,26 +136,52 @@ impl BackendNodeKind {
             B::Group => M::Group,
             B::Placeholder => M::Placeholder,
             B::MathAlphabet => M::Text,
-            B::TextContent | B::TextSpace | B::TextSymbol | B::TextStyle => return None,
+            B::TextContent
+            | B::TextSpace
+            | B::TextSymbol
+            | B::TextStyle
+            | B::SoftBreak
+            | B::Opaque => return None,
         })
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NodePosition {
+    pub(crate) scope_id: NodeId,
+    pub(crate) path: Vec<MathPathStep>,
+    pub(crate) text_run_index: Option<usize>,
+    pub(crate) is_text_flow: bool,
+    pub(crate) is_flow: bool,
+    pub(crate) is_container: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
-    pub(crate) id: NodeId,
+    pub(crate) id: Option<NodeId>,
+    /// LaTeX 序列化不消费布局身份，因此只在布局投影时设置。
+    pub(crate) position: Option<NodePosition>,
     pub(crate) kind: BackendNodeKind,
     pub(crate) text: Option<String>,
+    /// 布局投影保留完整 Run，以供共享正文 shaping 使用；序列化投影不克隆它。
+    pub(crate) run: Option<Run>,
     pub(crate) attributes: BTreeMap<String, String>,
     pub(crate) children: Vec<Node>,
 }
 
 impl Node {
-    fn leaf(id: NodeId, kind: BackendNodeKind, text: Option<String>) -> Self {
+    fn leaf(
+        id: Option<NodeId>,
+        position: Option<NodePosition>,
+        kind: BackendNodeKind,
+        text: Option<String>,
+    ) -> Self {
         Self {
             id,
+            position,
             kind,
             text,
+            run: None,
             attributes: BTreeMap::new(),
             children: Vec::new(),
         }
@@ -159,19 +189,79 @@ impl Node {
 }
 
 pub(crate) fn flow_nodes(flow: &MathFlow) -> Vec<Node> {
-    contents_nodes(&flow.content)
+    contents_nodes_in_scope(&flow.content, None, &[])
 }
 
-pub(crate) fn contents_nodes(contents: &[MathContent]) -> Vec<Node> {
-    contents.iter().flat_map(content_nodes).collect()
+pub(crate) fn flow_nodes_for_layout(flow: &MathFlow) -> Vec<Node> {
+    let position = Some(NodePosition {
+        scope_id: flow.id.clone(),
+        path: Vec::new(),
+        text_run_index: None,
+        is_text_flow: false,
+        is_flow: true,
+        is_container: false,
+    });
+    let children = if flow.content.is_empty() {
+        Vec::new()
+    } else {
+        contents_nodes_in_scope(&flow.content, Some(&flow.id), &[])
+    };
+    vec![Node {
+        id: Some(flow.id.clone()),
+        position,
+        kind: MathNodeKind::Row,
+        text: None,
+        run: None,
+        attributes: BTreeMap::new(),
+        children,
+    }]
 }
 
-fn content_nodes(content: &MathContent) -> Vec<Node> {
+fn contents_nodes_in_scope(
+    contents: &[MathContent],
+    scope_id: Option<&NodeId>,
+    parent_path: &[MathPathStep],
+) -> Vec<Node> {
+    contents
+        .iter()
+        .enumerate()
+        .flat_map(|(index, content)| {
+            let path = if scope_id.is_some() {
+                let mut path = parent_path.to_vec();
+                path.push(MathPathStep::Content(index));
+                path
+            } else {
+                Vec::new()
+            };
+            content_nodes(content, scope_id, path)
+        })
+        .collect()
+}
+
+fn content_nodes(
+    content: &MathContent,
+    scope_id: Option<&NodeId>,
+    path: Vec<MathPathStep>,
+) -> Vec<Node> {
     match content {
-        FlowContent::Text(text) => text_nodes(text),
-        FlowContent::Math(node) => vec![math_node(node)],
+        FlowContent::Text(text) => text_nodes(text, scope_id, path),
+        FlowContent::Math(node) => vec![math_node(node, scope_id, path)],
         FlowContent::Environment(environment) => {
-            let children = contents_nodes(&environment.children);
+            let children = environment
+                .children
+                .iter()
+                .enumerate()
+                .flat_map(|(index, child)| {
+                    let child_path = if scope_id.is_some() {
+                        let mut child_path = path.clone();
+                        child_path.push(MathPathStep::EnvironmentChild(index));
+                        child_path
+                    } else {
+                        Vec::new()
+                    };
+                    content_nodes(child, scope_id, child_path)
+                })
+                .collect();
             let style = match environment.kind {
                 InlineEnvironmentKind::Bold => Some(
                     if environment
@@ -204,80 +294,174 @@ fn content_nodes(content: &MathContent) -> Vec<Node> {
                 {
                     Some("sans-serif") => Some("sf"),
                     Some("monospace") => Some("tt"),
+                    _ if scope_id.is_some() => Some("font"),
                     _ => Some("rm"),
                 },
             };
+            let mut attributes =
+                BTreeMap::from([("style".to_owned(), style.unwrap_or("rm").to_owned())]);
+            if environment.kind == InlineEnvironmentKind::Font
+                && let Some(family) = environment
+                    .props
+                    .get("fontFamily")
+                    .and_then(serde_json::Value::as_str)
+            {
+                attributes.insert("fontFamily".to_owned(), family.to_owned());
+            }
             vec![Node {
-                id: environment.id.clone(),
+                id: Some(environment.id.clone()),
+                position: scope_id.map(|scope_id| NodePosition {
+                    scope_id: scope_id.clone(),
+                    path,
+                    text_run_index: None,
+                    is_text_flow: false,
+                    is_flow: false,
+                    is_container: true,
+                }),
                 kind: MathNodeKind::TextStyle,
                 text: None,
-                attributes: BTreeMap::from([(
-                    "style".to_owned(),
-                    style.unwrap_or("rm").to_owned(),
-                )]),
+                run: None,
+                attributes,
                 children,
             }]
         }
         FlowContent::SoftBreak(_) => vec![Node::leaf(
-            NodeId::generate(),
-            MathNodeKind::TextSpace,
-            Some("space".into()),
+            None,
+            position(scope_id, path, None, false, false),
+            MathNodeKind::SoftBreak,
+            None,
         )],
         FlowContent::Opaque(_) => vec![Node::leaf(
-            NodeId::generate(),
-            MathNodeKind::TextContent,
-            Some("�".into()),
+            None,
+            position(scope_id, path, None, false, false),
+            MathNodeKind::Opaque,
+            None,
         )],
     }
 }
 
-fn text_nodes(flow: &TextFlow) -> Vec<Node> {
+fn text_nodes(flow: &TextFlow, scope_id: Option<&NodeId>, path: Vec<MathPathStep>) -> Vec<Node> {
     let mut output = Vec::new();
-    for run in &flow.runs {
-        append_run(&mut output, run, NodeId::generate());
+    if flow.runs.is_empty() {
+        let Some(scope_id) = scope_id else {
+            return output;
+        };
+        output.push(Node::leaf(
+            None,
+            position(Some(scope_id), path, None, true, false),
+            MathNodeKind::TextContent,
+            Some(String::new()),
+        ));
+        return output;
+    }
+    for (run_index, run) in flow.runs.iter().enumerate() {
+        append_run(&mut output, run, scope_id, path.clone(), run_index);
     }
     output
 }
 
-fn append_run(output: &mut Vec<Node>, run: &Run, id: NodeId) {
-    output.push(Node::leaf(
-        id,
+fn append_run(
+    output: &mut Vec<Node>,
+    run: &Run,
+    scope_id: Option<&NodeId>,
+    path: Vec<MathPathStep>,
+    run_index: usize,
+) {
+    let mut node = Node::leaf(
+        None,
+        position(scope_id, path, Some(run_index), true, false),
         MathNodeKind::TextContent,
         Some(run.text.clone()),
-    ));
+    );
+    if scope_id.is_some() {
+        node.run = Some(run.clone());
+    }
+    output.push(node);
 }
 
-fn math_node(node: &caret_doc::MathNode) -> Node {
+fn position(
+    scope_id: Option<&NodeId>,
+    path: Vec<MathPathStep>,
+    text_run_index: Option<usize>,
+    is_text_flow: bool,
+    is_flow: bool,
+) -> Option<NodePosition> {
+    scope_id.map(|scope_id| NodePosition {
+        scope_id: scope_id.clone(),
+        path,
+        text_run_index,
+        is_text_flow,
+        is_flow,
+        is_container: false,
+    })
+}
+
+fn math_node(
+    node: &caret_doc::MathNode,
+    scope_id: Option<&NodeId>,
+    path: Vec<MathPathStep>,
+) -> Node {
     Node {
-        id: node.id.clone(),
+        id: Some(node.id.clone()),
+        position: position(scope_id, path.clone(), None, false, false).map(|mut position| {
+            position.is_container = matches!(
+                node.kind,
+                caret_doc::MathNodeKind::Row | caret_doc::MathNodeKind::Text
+            );
+            position
+        }),
         kind: node.kind.into(),
         text: node.text.clone(),
+        run: None,
         attributes: node.attributes.clone(),
-        children: contents_nodes_from_flows(&node.children),
+        children: contents_nodes_from_flows(&node.children, scope_id, &path),
     }
 }
 
-fn contents_nodes_from_flows(flows: &[MathFlow]) -> Vec<Node> {
+fn contents_nodes_from_flows(
+    flows: &[MathFlow],
+    scope_id: Option<&NodeId>,
+    parent_path: &[MathPathStep],
+) -> Vec<Node> {
     flows
         .iter()
-        .flat_map(|flow| match flow.content.as_slice() {
-            [MathContent::Math(node)]
-                if matches!(
-                    node.kind,
-                    caret_doc::MathNodeKind::Hline
-                        | caret_doc::MathNodeKind::Intertext
-                        | caret_doc::MathNodeKind::Placeholder
-                ) =>
-            {
-                vec![math_node(node)]
+        .enumerate()
+        .flat_map(|(index, flow)| {
+            let operand_path = if scope_id.is_some() {
+                let mut path = parent_path.to_vec();
+                path.push(MathPathStep::Operand(index));
+                path
+            } else {
+                Vec::new()
+            };
+            match flow.content.as_slice() {
+                [MathContent::Math(node)]
+                    if matches!(
+                        node.kind,
+                        caret_doc::MathNodeKind::Hline
+                            | caret_doc::MathNodeKind::Intertext
+                            | caret_doc::MathNodeKind::Placeholder
+                    ) =>
+                {
+                    let path = if scope_id.is_some() {
+                        let mut path = operand_path;
+                        path.push(MathPathStep::Content(0));
+                        path
+                    } else {
+                        Vec::new()
+                    };
+                    vec![math_node(node, scope_id, path)]
+                }
+                _ => vec![Node {
+                    id: Some(flow.id.clone()),
+                    position: position(scope_id, operand_path.clone(), None, false, true),
+                    kind: MathNodeKind::Row,
+                    text: None,
+                    run: None,
+                    attributes: BTreeMap::new(),
+                    children: contents_nodes_in_scope(&flow.content, scope_id, &operand_path),
+                }],
             }
-            _ => vec![Node {
-                id: flow.id.clone(),
-                kind: MathNodeKind::Row,
-                text: None,
-                attributes: BTreeMap::new(),
-                children: contents_nodes(&flow.content),
-            }],
         })
         .collect()
 }

@@ -1,6 +1,7 @@
 // Qt/QML 画布几何、输入和缩放行为的集成测试。
 #include "canvas_policy.hpp"
 #include "document_canvas.hpp"
+#include "glyph_frame_adapter.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
 #include "shell_load_test.hpp"
@@ -56,6 +57,7 @@
 #include <QtTest/qtest.h>
 #include <QtTest/qtestcase.h>
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <qcontainerfwd.h>
@@ -103,6 +105,71 @@ void ShellLoadTest::mathSourceDisablesInputMethodAndCancelsPreedit() {
 }
 
 #ifdef CARET_ENABLE_APP
+void ShellLoadTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
+    const auto invalid_scale_result =
+        caret::glyph_frame_adapter::to_variant_map(caret::ffi::PageGlyphFrame{}, 0.0);
+    QVERIFY(!invalid_scale_result.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalid_scale_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_request"));
+
+    caret::ffi::PageGlyphFrame oversized_page_frame{};
+    oversized_page_frame.page_index = std::numeric_limits<std::uint32_t>::max();
+    const auto oversized_page_result =
+        caret::glyph_frame_adapter::to_variant_map(oversized_page_frame, 1.0);
+    QVERIFY(!oversized_page_result.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(oversized_page_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_request"));
+
+    caret::ffi::PageGlyphFrame oversized_image_frame{};
+    caret::ffi::GlyphImage oversized_image{};
+    oversized_image.width = static_cast<std::uint32_t>(std::numeric_limits<int>::max() / 4 + 1);
+    oversized_image_frame.images.push_back(oversized_image);
+    const auto oversized_image_result =
+        caret::glyph_frame_adapter::to_variant_map(oversized_image_frame, 1.0);
+    QVERIFY(!oversized_image_result.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(oversized_image_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_image"));
+
+    const auto invalid_width_result = [] {
+        caret::ffi::PageGlyphFrame frame{};
+        caret::ffi::GlyphShape shape{};
+        shape.kind = 0;
+        shape.width_pt = -1.0;
+        shape.stroke_enabled = true;
+        shape.stroke_width_pt = 3.0;
+        frame.shapes.push_back(shape);
+        return caret::glyph_frame_adapter::to_variant_map(frame, 1.0);
+    }();
+    QVERIFY(!invalid_width_result.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalid_width_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_shape"));
+
+    const auto invalid_height_result = [] {
+        caret::ffi::PageGlyphFrame frame{};
+        caret::ffi::GlyphShape shape{};
+        shape.kind = 0;
+        shape.height_pt = -1.0;
+        shape.stroke_enabled = true;
+        shape.stroke_width_pt = 3.0;
+        frame.shapes.push_back(shape);
+        return caret::glyph_frame_adapter::to_variant_map(frame, 1.0);
+    }();
+    QVERIFY(!invalid_height_result.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(invalid_height_result.value(QStringLiteral("error")).toString(),
+             QStringLiteral("layout.glyphs_invalid_shape"));
+
+    caret::ffi::PageGlyphFrame zero_size_line_frame{};
+    caret::ffi::GlyphShape zero_size_line{};
+    zero_size_line.kind = 0;
+    zero_size_line.dx_pt = 4.0;
+    zero_size_line.stroke_enabled = true;
+    zero_size_line.stroke_width_pt = 3.0;
+    zero_size_line_frame.shapes.push_back(zero_size_line);
+    QVERIFY(caret::glyph_frame_adapter::to_variant_map(zero_size_line_frame, 1.0)
+                .value(QStringLiteral("valid"))
+                .toBool());
+}
+
 void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String initial_snapshot = caret::ffi::layout_snapshot_json(*runtime);
@@ -300,18 +367,32 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
         3000);
 
     const QVariantList placements = request.value(QStringLiteral("placements")).toList();
-    const QVariantMap first_placement = placements.first().toMap();
+    QVariantMap first_placement = placements.first().toMap();
     const QVariantList images = request.value(QStringLiteral("images")).toList();
-    const QVariantMap first_image =
+    QVariantMap first_image =
         images.at(first_placement.value(QStringLiteral("imageIndex")).toInt()).toMap();
     const qreal raster_scale = request.value(QStringLiteral("rasterPxPerPt")).toReal();
-    const qreal glyph_x = first_placement.value(QStringLiteral("xPt")).toReal() +
-                          first_image.value(QStringLiteral("left")).toReal() / raster_scale;
-    const qreal glyph_y = first_placement.value(QStringLiteral("baselineYPt")).toReal() -
-                          first_image.value(QStringLiteral("top")).toReal() / raster_scale;
+    // 显式指定非零像素相位，避免断言依赖平台栅格结果。
+    first_placement.insert(QStringLiteral("pixelPhaseX"), 0.25);
+    first_placement.insert(QStringLiteral("pixelPhaseY"), 0.5);
+    first_placement.insert(QStringLiteral("pixelPhaseApplied"), true);
+    first_placement.insert(QStringLiteral("imageIndex"), 0);
+    first_image.insert(QStringLiteral("pixelPhaseApplied"), true);
+    const qreal phase_x = first_placement.value(QStringLiteral("pixelPhaseX")).toReal();
+    const qreal phase_y = first_placement.value(QStringLiteral("pixelPhaseY")).toReal();
+    QVERIFY(phase_x > 0.0);
+    QVERIFY(phase_y > 0.0);
+    const qreal glyph_x =
+        first_placement.value(QStringLiteral("xPt")).toReal() +
+        (first_image.value(QStringLiteral("left")).toReal() - phase_x) / raster_scale;
+    const qreal glyph_y =
+        first_placement.value(QStringLiteral("baselineYPt")).toReal() +
+        (-first_image.value(QStringLiteral("top")).toReal() - phase_y) / raster_scale;
     const qreal glyph_width = first_image.value(QStringLiteral("width")).toReal() / raster_scale;
     const qreal glyph_height = first_image.value(QStringLiteral("height")).toReal() / raster_scale;
     QVariantMap ordered_frame = request;
+    ordered_frame.insert(QStringLiteral("images"), QVariantList{first_image});
+    ordered_frame.insert(QStringLiteral("placements"), QVariantList{first_placement});
     ordered_frame.insert(QStringLiteral("decorations"), QVariantList{});
     ordered_frame.insert(QStringLiteral("shapes"), QVariantList{QVariantMap{
                                                        {QStringLiteral("kind"), 1},
@@ -339,6 +420,7 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
                                                    }});
     canvas->setGlyphFrames(QVariantList{ordered_frame});
     QPoint glyph_ink_pixel(-1, -1);
+    QImage phase_applied_render;
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&]() {
             const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
@@ -366,6 +448,7 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             if (!saw_fill || ink_pixel == pixel_end || pixels.width() <= 0) {
                 return false;
             }
+            phase_applied_render = frame;
             const qsizetype ink_index = std::distance(pixel_begin, ink_pixel);
             glyph_ink_pixel =
                 visible_region.topLeft() + QPoint(static_cast<int>(ink_index % pixels.width()),
@@ -373,6 +456,30 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             return true;
         }()),
         3000);
+
+    QVariantMap phase_unapplied_placement = first_placement;
+    phase_unapplied_placement.insert(QStringLiteral("pixelPhaseApplied"), false);
+    QVariantMap phase_unapplied_image = first_image;
+    phase_unapplied_image.insert(QStringLiteral("pixelPhaseApplied"), false);
+    QVariantMap phase_unapplied_frame = ordered_frame;
+    phase_unapplied_frame.insert(QStringLiteral("images"), QVariantList{phase_unapplied_image});
+    phase_unapplied_frame.insert(QStringLiteral("placements"),
+                                 QVariantList{phase_unapplied_placement});
+    canvas->setGlyphFrames(QVariantList{phase_unapplied_frame});
+    const QRect phase_region =
+        QRect(glyph_ink_pixel - QPoint(2, 2), QSize(5, 5)).intersected(phase_applied_render.rect());
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull() || phase_region.isEmpty() || phase_region.right() >= frame.width() ||
+                phase_region.bottom() >= frame.height()) {
+                return false;
+            }
+            return phase_applied_render.copy(phase_region) != frame.copy(phase_region);
+        }()),
+        3000);
+
+    canvas->setGlyphFrames(QVariantList{ordered_frame});
 
     QVariantMap overlay_shape =
         ordered_frame.value(QStringLiteral("shapes")).toList().first().toMap();

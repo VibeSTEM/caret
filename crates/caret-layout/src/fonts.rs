@@ -5,9 +5,14 @@
 
 use fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 #[cfg(windows)]
 use std::{env, fs, path::PathBuf};
+
+static NEXT_FONT_CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// 将共享默认标记转换为“由字体角色提供默认值”，避免把标记送入后端查询。
 pub(crate) fn requested_family(family: Option<&str>) -> Option<&str> {
@@ -29,12 +34,17 @@ pub struct FontFamily {
 pub enum FontCatalogError {
     /// 系统字体后端未返回任何可用字体。
     Empty,
+    /// 进程内字体目录代际编号耗尽。
+    GenerationExhausted,
 }
 
 impl std::fmt::Display for FontCatalogError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => formatter.write_str("layout.font_catalog_empty"),
+            Self::GenerationExhausted => {
+                formatter.write_str("layout.font_catalog_generation_exhausted")
+            }
         }
     }
 }
@@ -52,13 +62,12 @@ pub struct FontCatalog {
 impl FontCatalog {
     /// 枚举当前系统与用户字体并构建初始目录。
     pub fn system() -> Result<Self, FontCatalogError> {
-        Self::build(1)
+        Self::build()
     }
 
     /// 原子重建目录与字体数据缓存；旧目录在新目录构建完成前仍保持有效。
     pub fn refresh(&mut self) -> Result<u64, FontCatalogError> {
-        let next_generation = self.generation.saturating_add(1);
-        let replacement = Self::build(next_generation)?;
+        let replacement = Self::build()?;
         *self = replacement;
         Ok(self.generation)
     }
@@ -78,7 +87,13 @@ impl FontCatalog {
         &mut self.font_context
     }
 
-    fn build(generation: u64) -> Result<Self, FontCatalogError> {
+    fn build() -> Result<Self, FontCatalogError> {
+        let generation = NEXT_FONT_CATALOG_GENERATION
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| FontCatalogError::GenerationExhausted)?
+            + 1;
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: true,

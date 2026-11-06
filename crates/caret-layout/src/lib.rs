@@ -27,6 +27,7 @@ pub use pagination::{
 pub use paragraph::{
     HitAffinity, InlineObjectLayout, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
     ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine, ParleyParagraphLayout,
+    TextIslandError, TextIslandLayout, TextIslandLayouter, TextIslandMetrics, TextIslandSpan,
     VisualAffinity, VisualCursor, has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};

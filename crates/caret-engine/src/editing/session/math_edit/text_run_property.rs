@@ -93,6 +93,8 @@ impl Session {
                     path: path.clone(),
                     anchor,
                     focus_affinity: MathPositionAffinity::Downstream,
+                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                    visual_affinity: crate::VisualAffinity::Downstream,
                 },
                 align_cell: path.align_cell(),
                 cursor,
@@ -141,6 +143,8 @@ impl Session {
                     MathPositionAffinity::Downstream,
                 ),
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                visual_affinity: crate::VisualAffinity::Downstream,
             },
         );
         let before = SessionHistoryState::new(

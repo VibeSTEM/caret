@@ -18,19 +18,24 @@ mod radical;
 mod run;
 mod scripts;
 mod table;
+mod text;
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use caret_doc::{Align, DocumentUnits, MathFlow, NodeId};
+use caret_doc::{Align, DocumentUnits, MathFlow, MathPathStep, NodeId};
 
 pub use crate::fonts::{MathFont, MathFontError};
 pub use context::{MathDiagnostic, MathSize};
 pub use frame::MathColor;
+pub use text::{
+    MathTextContainer, MathTextRequest, MathTextRun, MathTextRunBox, MathTextRunStyle,
+    MathTextShape, MathTextShapeError, MathTextShaper,
+};
 
-use crate::backend::{BackendNodeKind, Node, flow_nodes};
+use crate::backend::{BackendNodeKind, Node, NodePosition, flow_nodes_for_layout};
 use context::{Context, Style};
 use convert::Converter;
 use frame::Item;
@@ -48,12 +53,14 @@ pub enum MathStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathLayoutError {
     InvalidSize,
+    TextShapingFailed,
 }
 
 impl Display for MathLayoutError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSize => formatter.write_str("math.layout.invalid_size"),
+            Self::TextShapingFailed => formatter.write_str("math.layout.text_shaping_failed"),
         }
     }
 }
@@ -98,12 +105,33 @@ pub enum MathItem {
         stroke: Option<MathColor>,
         stroke_width: f64,
     },
+    /// 正文 Parley 文本岛；实际 glyph/run 使用 engine 持有的 token sidecar 绘制。
+    TextIsland {
+        token: u64,
+        x: f64,
+        baseline_y: f64,
+        width: f64,
+        color: Option<MathColor>,
+    },
 }
 
 /// 某个数学节点在公式中的范围，供命中测试、光标与选区使用。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MathNodeBox {
-    pub id: NodeId,
+    /// 持久结构节点 ID；TextFlow/Run 没有自身 ID 时为 `None`。
+    pub id: Option<NodeId>,
+    /// 路径作用域：MathTree 使用根 MathFlow ID；Align 本体、行和单元格边界分别用自身 ID。
+    pub scope_id: NodeId,
+    /// 相对 MathFlow scope 的结构路径；Align 本体/行盒路径为空，cell 文本以 cell root 为 scope。
+    pub path: Vec<MathPathStep>,
+    /// TextFlow 内的 Run 下标；普通数学节点为 `None`。
+    pub text_run_index: Option<usize>,
+    /// 该盒是否代表 TextFlow（空 TextFlow 没有 Run 下标）。
+    pub is_text_flow: bool,
+    /// MathFlow 聚合盒。
+    pub is_flow: bool,
+    /// 透明 Row 这类容器盒会按子节点扩展范围。
+    pub is_container: bool,
     pub x: f64,
     /// 顶边（相对基线，向下为正，通常为负）。
     pub y: f64,
@@ -123,6 +151,8 @@ pub struct MathLayout {
     /// 按前序遍历排列；外层节点在内层之前。
     pub nodes: Vec<MathNodeBox>,
     pub diagnostics: Vec<MathDiagnostic>,
+    /// 文本岛请求的非通用字体族不可用，已使用回退字体。
+    pub requested_text_family_missing: bool,
 }
 
 /// 以给定字体与字号（pt）排版一棵数学树。
@@ -133,7 +163,27 @@ pub fn layout_math(
     style: MathStyle,
 ) -> Result<MathLayout, MathLayoutError> {
     validate_size(size)?;
-    layout_nodes(font, flow_nodes(root), size, style)
+    layout_nodes(font, flow_nodes_for_layout(root), size, style, None)
+}
+
+/// 排版公式并通过调用方提供的正文 shaping 回调处理 TextFlow 文本岛。
+///
+/// 含局部 Parley token 的结果不进入 `MathLayoutEngine` 内容缓存；调用方必须与结果同代持有回调 sidecar。
+pub fn layout_math_with_text_shaper(
+    font: &MathFont,
+    root: &MathFlow,
+    size: f64,
+    style: MathStyle,
+    text_shaper: &mut dyn MathTextShaper,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    layout_nodes(
+        font,
+        flow_nodes_for_layout(root),
+        size,
+        style,
+        Some(text_shaper),
+    )
 }
 
 /// 以对齐公式的稳定行/单元格身份进行显示公式排版。
@@ -150,46 +200,124 @@ pub fn layout_align(
         .rows
         .iter()
         .map(|row| Node {
-            id: row.id.clone(),
+            id: Some(row.id.clone()),
+            position: Some(NodePosition {
+                scope_id: row.id.clone(),
+                path: Vec::new(),
+                text_run_index: None,
+                is_text_flow: false,
+                is_flow: false,
+                is_container: false,
+            }),
             kind: BackendNodeKind::Row,
             text: None,
+            run: None,
             attributes: Default::default(),
             children: row
                 .cells
                 .iter()
-                .map(|cell| Node {
-                    id: cell.root.id.clone(),
-                    kind: BackendNodeKind::Row,
-                    text: None,
-                    attributes: Default::default(),
-                    children: flow_nodes(&cell.root),
-                })
+                .flat_map(|cell| flow_nodes_for_layout(&cell.root))
                 .collect(),
         })
         .collect();
     let matrix = Node {
-        id: align.id.clone(),
+        id: Some(align.id.clone()),
+        position: Some(NodePosition {
+            scope_id: align.id.clone(),
+            path: Vec::new(),
+            text_run_index: None,
+            is_text_flow: false,
+            is_flow: false,
+            is_container: false,
+        }),
         kind: BackendNodeKind::Matrix,
         text: None,
+        run: None,
         attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
         children: rows,
     };
-    layout_nodes(font, vec![matrix], size, MathStyle::Display)
+    layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
 }
 
-fn layout_nodes(
+/// 使用调用方正文 shaping 处理 Align 单元格中的 TextFlow。
+pub fn layout_align_with_text_shaper(
     font: &MathFont,
+    align: &Align,
+    size: f64,
+    text_shaper: &mut dyn MathTextShaper,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    let rows = align
+        .rows
+        .iter()
+        .map(|row| Node {
+            id: Some(row.id.clone()),
+            position: Some(NodePosition {
+                scope_id: row.id.clone(),
+                path: Vec::new(),
+                text_run_index: None,
+                is_text_flow: false,
+                is_flow: false,
+                is_container: false,
+            }),
+            kind: BackendNodeKind::Row,
+            text: None,
+            run: None,
+            attributes: Default::default(),
+            children: row
+                .cells
+                .iter()
+                .flat_map(|cell| flow_nodes_for_layout(&cell.root))
+                .collect(),
+        })
+        .collect();
+    let matrix = Node {
+        id: Some(align.id.clone()),
+        position: Some(NodePosition {
+            scope_id: align.id.clone(),
+            path: Vec::new(),
+            text_run_index: None,
+            is_text_flow: false,
+            is_flow: false,
+            is_container: false,
+        }),
+        kind: BackendNodeKind::Matrix,
+        text: None,
+        run: None,
+        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        children: rows,
+    };
+    layout_nodes(
+        font,
+        vec![matrix],
+        size,
+        MathStyle::Display,
+        Some(text_shaper),
+    )
+}
+
+fn layout_nodes<'a>(
+    font: &'a MathFont,
     backend_nodes: Vec<Node>,
     size: f64,
     style: MathStyle,
+    text_shaper: Option<&'a mut dyn MathTextShaper>,
 ) -> Result<MathLayout, MathLayoutError> {
     let mut converter = Converter {
         ctx: Context::new(font, size),
+        text_shaper,
+        text_shaping_error: None,
+        requested_text_family_missing: false,
+        text_tokens: std::collections::HashSet::new(),
+        math_text_style: Default::default(),
     };
     let fragment = match backend_nodes.as_slice() {
         [node] => converter.node(node, Style::root(style == MathStyle::Display)),
         nodes => converter.row(nodes, Style::root(style == MathStyle::Display)),
     };
+    if converter.text_shaping_error.is_some() {
+        return Err(MathLayoutError::TextShapingFailed);
+    }
     let frame = fragment.frame;
     let baseline = frame.baseline;
     let mut layout = MathLayout {
@@ -199,6 +327,7 @@ fn layout_nodes(
         items: Vec::with_capacity(frame.items.len()),
         nodes: Vec::new(),
         diagnostics: converter.ctx.diagnostics,
+        requested_text_family_missing: converter.requested_text_family_missing,
     };
     for (point, item) in frame.items {
         let (x, y) = (point.x, point.y - baseline);
@@ -248,22 +377,143 @@ fn layout_nodes(
                 stroke: stroke.and_then(|(color, _)| color),
                 stroke_width: stroke.map_or(0.0, |(_, width)| width),
             }),
+            Item::TextIsland {
+                token,
+                width,
+                baseline,
+                color,
+            } => layout.items.push(MathItem::TextIsland {
+                token,
+                x,
+                baseline_y: y + baseline,
+                width,
+                color,
+            }),
             Item::Node {
                 id,
+                position,
                 width,
                 height,
                 baseline: node_baseline,
-            } => layout.nodes.push(MathNodeBox {
-                id,
-                x,
-                y,
-                width,
-                height,
-                baseline: y + node_baseline,
-            }),
+            } => {
+                if let Some(position) = position {
+                    layout.nodes.push(MathNodeBox {
+                        id,
+                        scope_id: position.scope_id,
+                        path: position.path,
+                        text_run_index: position.text_run_index,
+                        is_text_flow: position.is_text_flow,
+                        is_flow: position.is_flow,
+                        is_container: position.is_container,
+                        x,
+                        y,
+                        width,
+                        height,
+                        baseline: y + node_baseline,
+                    });
+                }
+            }
         }
     }
+    coalesce_container_boxes(&mut layout.nodes);
+    expand_container_boxes(&mut layout.nodes);
     Ok(layout)
+}
+
+type ContainerBoxIdentity = (NodeId, NodeId, Vec<(u8, usize)>);
+
+fn coalesce_container_boxes(nodes: &mut Vec<MathNodeBox>) {
+    let mut indexes: HashMap<ContainerBoxIdentity, usize> = HashMap::new();
+    let mut coalesced: Vec<MathNodeBox> = Vec::with_capacity(nodes.len());
+    for node in nodes.drain(..) {
+        let identity = node.id.as_ref().and_then(|id| {
+            (node.is_flow || node.is_container).then(|| {
+                let path = node
+                    .path
+                    .iter()
+                    .map(|step| match step {
+                        MathPathStep::Content(index) => (0, *index),
+                        MathPathStep::EnvironmentChild(index) => (1, *index),
+                        MathPathStep::Operand(index) => (2, *index),
+                    })
+                    .collect();
+                (id.clone(), node.scope_id.clone(), path)
+            })
+        });
+        let Some(identity) = identity else {
+            coalesced.push(node);
+            continue;
+        };
+        if let Some(&index) = indexes.get(&identity) {
+            let existing = &mut coalesced[index];
+            let existing_was_empty = existing.width == 0.0 && existing.height == 0.0;
+            let right = (existing.x + existing.width).max(node.x + node.width);
+            let bottom = (existing.y + existing.height).max(node.y + node.height);
+            existing.x = existing.x.min(node.x);
+            existing.y = existing.y.min(node.y);
+            existing.width = right - existing.x;
+            existing.height = bottom - existing.y;
+            existing.is_flow |= node.is_flow;
+            existing.is_container |= node.is_container;
+            if existing_was_empty && (node.width != 0.0 || node.height != 0.0) {
+                existing.baseline = node.baseline;
+            }
+        } else {
+            indexes.insert(identity, coalesced.len());
+            coalesced.push(node);
+        }
+    }
+    *nodes = coalesced;
+}
+
+fn expand_container_boxes(nodes: &mut [MathNodeBox]) {
+    fn contains(ancestor: &MathNodeBox, child: &MathNodeBox) -> bool {
+        ancestor.scope_id == child.scope_id
+            && child.path.starts_with(&ancestor.path)
+            && (child.path.len() > ancestor.path.len() || child.is_text_flow)
+    }
+
+    fn include(bounds: &mut Option<(f64, f64, f64, f64)>, node: &MathNodeBox) {
+        let node_bounds = (node.x, node.y, node.x + node.width, node.y + node.height);
+        *bounds = Some(match *bounds {
+            Some((x0, y0, x1, y1)) => (
+                x0.min(node_bounds.0),
+                y0.min(node_bounds.1),
+                x1.max(node_bounds.2),
+                y1.max(node_bounds.3),
+            ),
+            None => node_bounds,
+        });
+    }
+
+    // 盒子按前序排列，使每个节点只遍历当前活动流/容器祖先（深度上限为 32）。
+    let mut ancestors = Vec::new();
+    let mut bounds = vec![None; nodes.len()];
+    for index in 0..nodes.len() {
+        while ancestors
+            .last()
+            .is_some_and(|&ancestor| !contains(&nodes[ancestor], &nodes[index]))
+        {
+            ancestors.pop();
+        }
+        for &ancestor in &ancestors {
+            include(&mut bounds[ancestor], &nodes[index]);
+        }
+        if nodes[index].is_flow || nodes[index].is_container {
+            include(&mut bounds[index], &nodes[index]);
+            ancestors.push(index);
+        }
+    }
+
+    for (node, bounds) in nodes.iter_mut().zip(bounds) {
+        let Some((x0, y0, x1, y1)) = bounds else {
+            continue;
+        };
+        node.x = x0;
+        node.y = y0;
+        node.width = x1 - x0;
+        node.height = y1 - y0;
+    }
 }
 
 fn validate_size(size: f64) -> Result<(), MathLayoutError> {
@@ -333,6 +583,23 @@ impl MathLayoutEngine {
         }
         cache.insert(key, Arc::clone(&layout));
         Ok(layout)
+    }
+
+    /// 通过正文 shaping 回调排版；为避免复用悬空的局部 sidecar，此路径不进入内容缓存。
+    pub fn layout_with_text_shaper(
+        &self,
+        root: &MathFlow,
+        size: f64,
+        style: MathStyle,
+        text_shaper: &mut dyn MathTextShaper,
+    ) -> Result<Arc<MathLayout>, MathLayoutError> {
+        Ok(Arc::new(layout_math_with_text_shaper(
+            self.font,
+            root,
+            size,
+            style,
+            text_shaper,
+        )?))
     }
 
     /// 当前缓存条目数。

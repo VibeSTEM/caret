@@ -27,6 +27,14 @@ impl MathTextFlowPath {
         Self { steps, align_cell }
     }
 
+    /// 将同代 MathLayout 的稳定结构路径转成可由 Session 校验的文本路径。
+    pub(crate) fn from_layout_path(
+        steps: Vec<MathTextFlowPathStep>,
+        align_cell: Option<(usize, usize)>,
+    ) -> Self {
+        Self { steps, align_cell }
+    }
+
     pub(super) fn with_structural_steps(&self, steps: Vec<MathTextFlowPathStep>) -> Self {
         Self::new(steps, self.align_cell)
     }

@@ -30,6 +30,7 @@ qt_add_qml_module(
   document/layout_view_model_response_commands.cpp
   document/layout_view_model_selection_commands.cpp
   document/glyph_frame_adapter.cpp
+  document/glyph_frame_adapter.hpp
   document/document_runtime_bridge.hpp
   document/document_runtime_bridge.cpp
   settings/preferences_view_model.hpp

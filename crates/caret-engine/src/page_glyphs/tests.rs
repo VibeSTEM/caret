@@ -159,6 +159,183 @@ fn inline_math_uses_math_metrics_and_the_shared_page_glyph_path() {
 }
 
 #[test]
+fn display_math_text_uses_body_parley_fonts_and_keeps_the_sidecar_in_the_page_snapshot() {
+    let parsed = caret_math::parse(
+        r"\textbf{ordinary text} + x",
+        caret_math::MathInputKind::Inline,
+    )
+    .unwrap_or_else(|error| panic!("valid inline text should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline text should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("text-island glyph extraction failed: {error}"));
+    assert!(
+        !page.runs.is_empty(),
+        "ordinary math text must resolve its engine-owned Parley sidecar"
+    );
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() != caret_font_roles::default_math_font() }),
+        "ordinary text in a display formula must use the body font role"
+    );
+    let math_layout = &snapshot.math_blocks[&equation_id];
+    let text_flow_box = math_layout
+        .nodes
+        .iter()
+        .find(|node| node.is_text_flow && node.text_run_index.is_some())
+        .unwrap_or_else(|| panic!("text flow should retain its layout box"));
+    assert!(text_flow_box.y < 0.0);
+    assert!(text_flow_box.baseline.abs() < 0.01);
+    assert!((text_flow_box.y + math_layout.ascent).abs() < 0.01);
+    let math_fragment = &snapshot.pages[0].layout.math_fragments[0];
+    let expected_baseline =
+        snapshot.pages[0].margin_top_pt + f64::from(math_fragment.y_offset_pt) + math_layout.ascent;
+    assert!(
+        page.runs
+            .iter()
+            .flat_map(|run| &run.glyphs)
+            .all(|glyph| { (glyph.baseline_y_pt - expected_baseline).abs() < 0.05 })
+    );
+}
+
+#[test]
+fn zero_advance_underlined_math_text_does_not_fail_page_glyph_extraction() {
+    let parsed = caret_math::parse("\\text{\u{200b}}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("zero-width underlined text should parse: {error}"));
+    let caret_math::ParsedMath::Tree(mut math_tree) = parsed else {
+        panic!("underlined inline text should produce a MathTree");
+    };
+    let Some(caret_doc::MathContent::Text(flow)) = math_tree.root.content.first_mut() else {
+        panic!("formula should contain a TextFlow");
+    };
+    let Some(run) = flow.runs.first_mut() else {
+        panic!("TextFlow should contain its zero-width Run");
+    };
+    run.props
+        .insert("underline".to_owned(), serde_json::Value::Bool(true));
+    let mut document = document_with_text("");
+    document.body.push(Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    }));
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("zero-width text must not fail page extraction: {error}"));
+    assert!(page.decorations.is_empty());
+    let rasterized = PageGlyphRasterizer::default()
+        .rasterize(&page, 1.0, [0.0, 0.0], [0, 0, 0, 255])
+        .unwrap_or_else(|error| panic!("zero-width text must rasterize: {error}"));
+    assert_eq!(rasterized.images.len(), 1);
+}
+
+#[test]
+fn inline_math_operand_text_uses_body_parley_shaping() {
+    let parsed = caret_math::parse(
+        r"\frac{\text{ordinary text}}{x}",
+        caret_math::MathInputKind::Inline,
+    )
+    .unwrap_or_else(|error| panic!("valid mixed formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("mixed inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should contain a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    })];
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("inline text-island extraction failed: {error}"));
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() != caret_font_roles::default_math_font() })
+    );
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
+    );
+}
+
+#[test]
+fn missing_formula_text_font_family_is_reported_after_body_fallback() {
+    let parsed = caret_math::parse(r"\textsf{ordinary text}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid display text should parse: {error}"));
+    let caret_math::ParsedMath::Tree(mut math_tree) = parsed else {
+        panic!("display text should produce a MathTree");
+    };
+    let [caret_doc::MathContent::Environment(font_environment)] =
+        math_tree.root.content.as_mut_slice()
+    else {
+        panic!("text font command should produce a root font environment");
+    };
+    assert_eq!(font_environment.kind, InlineEnvironmentKind::Font);
+    font_environment.props.insert(
+        "fontFamily".to_owned(),
+        serde_json::Value::String("Caret Missing Test Font Family".to_owned()),
+    );
+    let mut document = document_with_text("");
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+
+    let snapshot = layout(&document);
+    let math_layout = &snapshot.math_blocks[&equation_id];
+    assert!(math_layout.requested_text_family_missing);
+    assert!(
+        !snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("body fallback glyphs should extract: {error}"))
+            .runs
+            .is_empty()
+    );
+}
+
+#[test]
+fn empty_formula_text_environment_keeps_its_source_container_kind() {
+    let parsed = caret_math::parse(r"\textbf{}", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid empty text environment should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("empty formula text should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+
+    let snapshot = layout(&document);
+    assert!(snapshot.math_blocks.contains_key(&equation_id));
+}
+
+#[test]
 fn unsupported_math_shapes_do_not_invalidate_the_page_snapshot() {
     let parsed = caret_math::parse(r"\xcancel{x}", caret_math::MathInputKind::Inline)
         .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
@@ -324,7 +501,7 @@ fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
         other => panic!("valid equation should parse to a tree: {other:?}"),
     };
     let align = match caret_math::parse(
-        r"\begin{aligned}x&=1\\y&=2\end{aligned}",
+        r"\begin{aligned}x&=\text{one}\\y&=2\end{aligned}",
         caret_math::MathInputKind::Align,
     ) {
         Ok(caret_math::ParsedMath::Align(align)) => align,
@@ -344,6 +521,12 @@ fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
         page.runs
             .iter()
             .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
+    );
+    assert!(
+        page.runs
+            .iter()
+            .any(|run| { run.font.data.as_ref() != caret_font_roles::default_math_font() }),
+        "Align TextFlow should use body shaping and its page sidecar"
     );
     assert!(
         !page.decorations.is_empty(),

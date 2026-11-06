@@ -100,6 +100,8 @@ fn math_tree_edge_position(
                 path,
                 anchor,
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: VisualAffinity::Downstream,
+                visual_affinity: VisualAffinity::Downstream,
             },
         ));
     }
@@ -375,6 +377,10 @@ pub enum MathEditBranch {
         path: MathTextFlowPath,
         anchor: MathTextPosition,
         focus_affinity: MathPositionAffinity,
+        /// Parley 的锚点视觉侧，用于双向文本中的选区折叠与撤销恢复。
+        anchor_visual_affinity: VisualAffinity,
+        /// Parley 的视觉侧；同一双向文本字节边界可对应两个不同插入点。
+        visual_affinity: VisualAffinity,
     },
     /// 以结构路径定位数学内容序列；`MathEdit.cursor` 是该序列中的边界索引。
     Tree {
@@ -836,6 +842,191 @@ impl Session {
     /// 当前公式编辑状态；为 `None` 时光标在正文中。
     pub fn math_edit(&self) -> Option<&MathEdit> {
         self.math_edit.as_ref()
+    }
+
+    /// 从同一当前布局代际的公式文本命中进入树原生编辑。
+    ///
+    /// 调用方须先确认快照的字体代际仍有效；此方法校验命中会话、文档代际、宿主身份、
+    /// TextFlow 路径及字素边界。任何校验失败都不改变选区或编辑状态。
+    pub fn focus_math_text_hit(
+        &mut self,
+        hit: &crate::PageMathTextHit,
+        current_font_generation: u64,
+    ) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.command_line.is_some() {
+            return Err(EditError::UnknownCommand);
+        }
+        if hit.session_id.as_ref() != Some(&self.session_id)
+            || hit.document_generation != self.document_generation
+            || hit.font_generation != current_font_generation
+            || self.has_uncommitted_math_source_draft()
+        {
+            return Err(EditError::InvalidPosition);
+        }
+
+        let align_cell = hit.position.path.align_cell();
+        let expected_host = match (&hit.target, align_cell) {
+            (MathEditTarget::Inline { math_id, .. }, None) => MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            },
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: false,
+                },
+                None,
+            ) => MathPositionHost::Equation {
+                owner_id: block_id.clone(),
+            },
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: true,
+                },
+                Some((row, cell)),
+            ) => {
+                let Block::Align(value) = find_block_by_id(&self.document.body, block_id)
+                    .ok_or(EditError::InvalidPosition)?
+                else {
+                    return Err(EditError::InvalidPosition);
+                };
+                let row = value.rows.get(row).ok_or(EditError::InvalidPosition)?;
+                let cell = row.cells.get(cell).ok_or(EditError::InvalidPosition)?;
+                MathPositionHost::AlignCell {
+                    row_id: row.id.clone(),
+                    cell_id: cell.root.id.clone(),
+                }
+            }
+            _ => return Err(EditError::InvalidPosition),
+        };
+        if expected_host != hit.host {
+            return Err(EditError::InvalidPosition);
+        }
+        let tree = math_tree_for_target(&self.document, &hit.target, align_cell)
+            .ok_or(EditError::InvalidPosition)?;
+        let island = path::contiguous_text_flow_text(tree, &hit.position.path)
+            .ok_or(EditError::InvalidPosition)?;
+        let island_offset = island
+            .global_offset(&hit.position)
+            .ok_or(EditError::InvalidPosition)?;
+        if !is_grapheme_boundary(&island.display, island_offset) {
+            return Err(EditError::InvalidPosition);
+        }
+
+        if let Some(edit) = &mut self.math_edit
+            && edit.target == hit.target
+            && let MathEditBranch::Text {
+                path,
+                anchor,
+                focus_affinity,
+                anchor_visual_affinity,
+                visual_affinity,
+            } = &mut edit.branch
+            && *path == hit.position.path
+            && *anchor == hit.position
+            && edit.cursor == hit.position.offset
+            && *focus_affinity == hit.position.affinity
+            && *anchor_visual_affinity == hit.visual_affinity
+            && *visual_affinity == hit.visual_affinity
+            && self.selection.anchor == self.selection.focus
+        {
+            return Ok(Effect::default());
+        }
+
+        if let Some(edit) = &mut self.math_edit
+            && edit.target == hit.target
+            && let MathEditBranch::Text {
+                path,
+                anchor,
+                focus_affinity,
+                anchor_visual_affinity,
+                visual_affinity,
+            } = &mut edit.branch
+            && *path == hit.position.path
+            && *anchor == hit.position
+            && edit.cursor == hit.position.offset
+            && *focus_affinity == hit.position.affinity
+        {
+            *anchor_visual_affinity = hit.visual_affinity;
+            *visual_affinity = hit.visual_affinity;
+            self.advance_history_merge_epoch();
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+
+        let parked_position = match &hit.target {
+            MathEditTarget::Inline {
+                paragraph_id,
+                math_id,
+            } => {
+                let story = self
+                    .story_for_paragraph(paragraph_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let probe = Pos {
+                    story,
+                    paragraph_id: paragraph_id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                };
+                let start = inline_math_slots(self.paragraph_for(&probe)?)?
+                    .into_iter()
+                    .find(|(_, id)| id == math_id)
+                    .map(|(start, _)| start)
+                    .ok_or(EditError::InvalidPosition)?;
+                Some(Pos {
+                    offset: start + OBJECT_REPLACEMENT.len_utf8(),
+                    affinity: Affinity::Upstream,
+                    ..probe
+                })
+            }
+            MathEditTarget::Block { block_id, .. } => {
+                let forward = self.paragraph_beside_math_chain(block_id, Direction::Forward)?;
+                match forward {
+                    Some(position) => Some(position),
+                    None => self.paragraph_beside_math_chain(block_id, Direction::Backward)?,
+                }
+            }
+        };
+
+        let position = parked_position.unwrap_or_else(|| self.selection.focus.clone());
+        self.selection = Selection {
+            anchor: position.clone(),
+            focus: position.clone(),
+        };
+        self.selection_visual_affinity = match position.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        self.math_edit = Some(MathEdit {
+            target: hit.target.clone(),
+            source_projection: None,
+            source_draft: None,
+            revision: self.current_math_edit_revision(),
+            cursor: hit.position.offset,
+            branch: MathEditBranch::Text {
+                path: hit.position.path.clone(),
+                anchor: hit.position.clone(),
+                focus_affinity: hit.position.affinity,
+                anchor_visual_affinity: hit.visual_affinity,
+                visual_affinity: hit.visual_affinity,
+            },
+        });
+        self.pending_inline_style.clear();
+        self.selected_block_environment = None;
+        self.selected_block_environments.clear();
+        self.structure_selection = None;
+        self.block_environment_exit = None;
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
     }
 
     /// 公式编辑期间截获输入；`None` 表示命令由 Session 的常规分派继续处理。
@@ -1581,10 +1772,16 @@ impl Session {
                 let focus_affinity = position.affinity;
                 if let Some(current) = &mut self.math_edit {
                     current.cursor = position.offset;
+                    let visual_affinity = match direction {
+                        Direction::Backward => VisualAffinity::Upstream,
+                        Direction::Forward => VisualAffinity::Downstream,
+                    };
                     current.branch = MathEditBranch::Text {
                         path: position.path.clone(),
                         anchor: position,
                         focus_affinity,
+                        anchor_visual_affinity: visual_affinity,
+                        visual_affinity,
                     };
                 }
                 self.advance_history_merge_epoch();
@@ -1602,6 +1799,9 @@ impl Session {
                             path: current_path,
                             anchor,
                             focus_affinity,
+                            anchor_visual_affinity,
+                            visual_affinity,
+                            ..
                         } = &mut current.branch
                         {
                             *anchor = MathTextPosition::new(
@@ -1610,6 +1810,12 @@ impl Session {
                                 MathPositionAffinity::Downstream,
                             );
                             *focus_affinity = MathPositionAffinity::Downstream;
+                            let next_visual_affinity = match direction {
+                                Direction::Backward => VisualAffinity::Upstream,
+                                Direction::Forward => VisualAffinity::Downstream,
+                            };
+                            *anchor_visual_affinity = next_visual_affinity;
+                            *visual_affinity = next_visual_affinity;
                         }
                     }
                 }
@@ -1623,6 +1829,14 @@ impl Session {
                                 MathPositionAffinity::Downstream,
                             ),
                             focus_affinity: MathPositionAffinity::Downstream,
+                            anchor_visual_affinity: match direction {
+                                Direction::Backward => VisualAffinity::Upstream,
+                                Direction::Forward => VisualAffinity::Downstream,
+                            },
+                            visual_affinity: match direction {
+                                Direction::Backward => VisualAffinity::Upstream,
+                                Direction::Forward => VisualAffinity::Downstream,
+                            },
                         };
                         current.cursor = cursor;
                     }
@@ -1653,6 +1867,14 @@ impl Session {
                                     MathPositionAffinity::Downstream,
                                 ),
                                 focus_affinity: MathPositionAffinity::Downstream,
+                                anchor_visual_affinity: match direction {
+                                    Direction::Backward => VisualAffinity::Upstream,
+                                    Direction::Forward => VisualAffinity::Downstream,
+                                },
+                                visual_affinity: match direction {
+                                    Direction::Backward => VisualAffinity::Upstream,
+                                    Direction::Forward => VisualAffinity::Downstream,
+                                },
                             };
                             current.cursor = cursor;
                         }
@@ -2316,6 +2538,8 @@ impl Session {
                 path: text_path,
                 anchor: text_anchor,
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: VisualAffinity::Downstream,
+                visual_affinity: VisualAffinity::Downstream,
             };
             self.math_edit = Some(text_edit.clone());
             return match self.math_text_delete(direction) {
@@ -2418,6 +2642,36 @@ impl Session {
         anchor_position: MathTextPosition,
         focus_position: MathTextPosition,
     ) -> Result<Effect, EditError> {
+        self.set_math_text_selection_positions_with_visual_affinity(
+            anchor_position,
+            focus_position,
+            VisualAffinity::Downstream,
+        )
+    }
+
+    /// 设置数学文本选区并保留 Parley 的视觉 caret 侧。
+    pub fn set_math_text_selection_positions_with_visual_affinity(
+        &mut self,
+        anchor_position: MathTextPosition,
+        focus_position: MathTextPosition,
+        visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        self.set_math_text_selection_positions_with_visual_affinities(
+            anchor_position,
+            focus_position,
+            VisualAffinity::Downstream,
+            visual_affinity,
+        )
+    }
+
+    /// 设置数学文本选区并保留锚点与焦点各自的 Parley 视觉侧。
+    pub fn set_math_text_selection_positions_with_visual_affinities(
+        &mut self,
+        anchor_position: MathTextPosition,
+        focus_position: MathTextPosition,
+        anchor_visual_affinity: VisualAffinity,
+        visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -2427,6 +2681,9 @@ impl Session {
             path,
             anchor,
             focus_affinity: old_focus_affinity,
+            anchor_visual_affinity: old_anchor_visual_affinity,
+            visual_affinity: old_visual_affinity,
+            ..
         } = &edit.branch
         else {
             return Err(EditError::InvalidPosition);
@@ -2445,6 +2702,11 @@ impl Session {
         {
             return Err(EditError::InvalidPosition);
         }
+        let anchor_visual_affinity = if anchor_offset == focus_offset {
+            visual_affinity
+        } else {
+            anchor_visual_affinity
+        };
         let old_anchor_offset = island
             .global_offset(anchor)
             .ok_or(EditError::InvalidPosition)?;
@@ -2457,9 +2719,11 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         if old_anchor_offset == anchor_offset
             && old_focus_offset == focus_offset
-            && anchor.affinity == anchor_position.affinity
+            && anchor == &anchor_position
             && path == &focus_position.path
             && *old_focus_affinity == focus_position.affinity
+            && *old_anchor_visual_affinity == anchor_visual_affinity
+            && *old_visual_affinity == visual_affinity
         {
             return Ok(Effect::default());
         }
@@ -2470,6 +2734,8 @@ impl Session {
                 path: focus_position.path.clone(),
                 anchor: anchor_position,
                 focus_affinity: focus_position.affinity,
+                anchor_visual_affinity,
+                visual_affinity,
             };
         }
         self.advance_history_merge_epoch();
@@ -2653,6 +2919,8 @@ impl Session {
                         path,
                         anchor,
                         focus_affinity: MathPositionAffinity::Downstream,
+                        anchor_visual_affinity: VisualAffinity::Downstream,
+                        visual_affinity: VisualAffinity::Downstream,
                     };
                 }
             }
@@ -2854,6 +3122,8 @@ impl Session {
             path,
             anchor,
             focus_affinity: MathPositionAffinity::Downstream,
+            anchor_visual_affinity: VisualAffinity::Downstream,
+            visual_affinity: VisualAffinity::Downstream,
         };
         self.math_edit = Some(edit);
         Ok(())
@@ -2953,6 +3223,8 @@ impl Session {
                 path,
                 anchor,
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: VisualAffinity::Downstream,
+                visual_affinity: VisualAffinity::Downstream,
             };
         }
         self.advance_history_merge_epoch();

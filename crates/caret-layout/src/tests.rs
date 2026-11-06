@@ -12,8 +12,8 @@ use crate::shaping::{StyledSpan, boundaries_for_spans};
 use crate::{
     FontCatalog, FontLineMetrics, GlyphRasterOptions, GlyphRasterizer, InlineObjectLayout,
     LineSpacing, ParagraphLayoutOptions, ParagraphLayouter, ResolvedDocumentTextSettings,
-    ShapingStyle, UNICODE_DATA_VERSION, UnicodeBoundaries, has_empty_line,
-    paragraph_has_empty_line,
+    ShapingStyle, TextIslandError, TextIslandLayouter, TextIslandSpan, UNICODE_DATA_VERSION,
+    UnicodeBoundaries, has_empty_line, paragraph_has_empty_line,
 };
 
 fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
@@ -35,6 +35,13 @@ fn paragraph(text: &str, language: Option<&str>) -> Paragraph {
 
 fn font_catalog() -> FontCatalog {
     FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"))
+}
+
+#[test]
+fn font_catalog_generations_are_unique_across_instances() {
+    let first = font_catalog();
+    let second = font_catalog();
+    assert_ne!(first.generation(), second.generation());
 }
 
 #[test]
@@ -266,6 +273,39 @@ fn inline_object_caret_affinity_selects_the_object_or_wrapped_neighbor() {
     assert_eq!(upstream_after.0.x0, 30.0);
     assert_eq!(downstream_after.1, 2);
     assert_eq!(downstream_after.0.x0, 0.0);
+}
+
+#[test]
+fn inline_object_boundaries_fence_adjacent_combining_graphemes() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph("a\u{fffc}\u{0301}b", Some("en"));
+    let mut layouter = ParagraphLayouter::new();
+    let (_, layout) = layouter
+        .layout_with_inline_objects(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(200.0),
+            &[InlineObjectLayout {
+                id: 42,
+                source_bytes: 1..4,
+                advance_pt: 12.0,
+                ascent_pt: 10.0,
+                descent_pt: 2.0,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("inline object should lay out: {error}"));
+
+    assert_eq!(layout.grapheme_boundaries, [0, 1, 4, 6, 7]);
+    assert!(
+        layout
+            .cursor_at(4, crate::VisualAffinity::Downstream)
+            .is_some()
+    );
+    assert!(layout.selection_geometry(4..6).is_some());
 }
 
 #[test]
@@ -1311,6 +1351,416 @@ fn font_environment_default_marker_does_not_request_a_literal_font() {
 }
 
 #[test]
+fn text_island_matches_paragraph_shaping_and_keeps_trailing_space_advance() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let source = "office ";
+    let mut paragraph_layouter = ParagraphLayouter::new();
+    let (_, paragraph_result) = paragraph_layouter
+        .layout(
+            &mut catalog,
+            &paragraph(source, Some("en")),
+            &settings,
+            &style,
+            layout_options(1000.0),
+        )
+        .unwrap_or_else(|error| panic!("paragraph shaping failed: {error}"));
+    let mut island_layouter = TextIslandLayouter::new();
+    let island = island_layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[
+                TextIslandSpan {
+                    text: "of",
+                    style: style.clone(),
+                    underline: false,
+                },
+                TextIslandSpan {
+                    text: "fice ",
+                    style: style.clone(),
+                    underline: false,
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("text island shaping failed: {error}"));
+
+    assert_eq!(island.text, source);
+    assert_eq!(
+        glyph_signature(&island.layout),
+        glyph_signature(&paragraph_result.layout)
+    );
+    assert_eq!(island.layout.lines().count(), 1);
+    assert!(
+        (island.metrics.advance_pt - paragraph_result.paragraph.lines[0].advance_pt).abs() < 0.01
+    );
+    assert!(island.metrics.advance_pt > 0.0);
+    assert!(island.metrics.ascent_pt.is_finite() && island.metrics.ascent_pt > 0.0);
+    assert!(island.metrics.descent_pt.is_finite() && island.metrics.descent_pt >= 0.0);
+    let without_space = island_layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text: "office",
+                style: style.clone(),
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("text without trailing whitespace failed: {error}"));
+    assert!(island.metrics.advance_pt - without_space.metrics.advance_pt > 5.9);
+}
+
+#[test]
+fn derived_text_island_font_size_scales_calibrated_spaces() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let mut layouter = TextIslandLayouter::new();
+
+    for text in ["a a", "a\u{2003}a"] {
+        let base = layouter
+            .shape_at_font_size_pt(
+                &mut catalog,
+                &settings,
+                &[TextIslandSpan {
+                    text,
+                    style: style.clone(),
+                    underline: false,
+                }],
+                12.0,
+            )
+            .unwrap_or_else(|error| panic!("base-size text island failed: {error}"));
+        for derived_size_pt in [6.0, 6.135] {
+            let derived = layouter
+                .shape_at_font_size_pt(
+                    &mut catalog,
+                    &settings,
+                    &[TextIslandSpan {
+                        text,
+                        style: style.clone(),
+                        underline: false,
+                    }],
+                    derived_size_pt,
+                )
+                .unwrap_or_else(|error| panic!("derived-size text island failed: {error}"));
+            let expected_advance = base.metrics.advance_pt * derived_size_pt / 12.0;
+            assert!(
+                (derived.metrics.advance_pt - expected_advance).abs() < 0.6,
+                "space calibration must use {derived_size_pt} pt for {text:?}: base={}, derived={}, expected={expected_advance}",
+                base.metrics.advance_pt,
+                derived.metrics.advance_pt,
+            );
+        }
+    }
+}
+
+#[test]
+fn text_island_shapes_graphemes_across_spans_and_handles_rtl() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = TextIslandLayouter::new();
+    let latin = ShapingStyle {
+        language: Some("en".to_owned()),
+        ..ShapingStyle::new(1200)
+    };
+    let combining = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[
+                TextIslandSpan {
+                    text: "e",
+                    style: latin.clone(),
+                    underline: false,
+                },
+                TextIslandSpan {
+                    text: "\u{301}",
+                    style: latin.clone(),
+                    underline: true,
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("cross-span grapheme shaping failed: {error}"));
+    let glyphs = glyph_signature(&combining.layout);
+    assert_eq!(combining.text, "e\u{301}");
+    assert_eq!(
+        glyphs.len(),
+        1,
+        "base and combining mark should shape as one cluster"
+    );
+
+    let ligature_reference = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text: "office",
+                style: latin.clone(),
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("reference ligature shaping failed: {error}"));
+    let ligature_across_spans = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[
+                TextIslandSpan {
+                    text: "of",
+                    style: latin.clone(),
+                    underline: false,
+                },
+                TextIslandSpan {
+                    text: "fice",
+                    style: latin.clone(),
+                    underline: true,
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("cross-span ligature shaping failed: {error}"));
+    assert_eq!(
+        glyph_signature(&ligature_across_spans.layout),
+        glyph_signature(&ligature_reference.layout),
+        "underline span boundaries should not change ligature shaping"
+    );
+
+    let rtl_style = ShapingStyle {
+        language: Some("he".to_owned()),
+        ..ShapingStyle::new(1200)
+    };
+    let rtl = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[
+                TextIslandSpan {
+                    text: "אב",
+                    style: rtl_style.clone(),
+                    underline: false,
+                },
+                TextIslandSpan {
+                    text: "ג",
+                    style: rtl_style,
+                    underline: true,
+                },
+            ],
+        )
+        .unwrap_or_else(|error| panic!("cross-span RTL shaping failed: {error}"));
+    assert_eq!(rtl.text, "אבג");
+    assert_eq!(rtl.layout.lines().count(), 1);
+    assert!(
+        rtl.layout
+            .lines()
+            .flat_map(|line| line.runs())
+            .any(|run| run.is_rtl())
+    );
+}
+
+#[test]
+fn text_island_hit_and_selection_geometry_stay_on_grapheme_boundaries() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let mut layouter = TextIslandLayouter::new();
+    for text in ["a\u{301}b", "العربية"] {
+        let island = layouter
+            .shape(
+                &mut catalog,
+                &settings,
+                &[TextIslandSpan {
+                    text,
+                    style: ShapingStyle::new(1200),
+                    underline: false,
+                }],
+            )
+            .unwrap_or_else(|error| panic!("grapheme interaction island failed: {error}"));
+        let line = island
+            .layout
+            .lines()
+            .next()
+            .unwrap_or_else(|| panic!("nonempty island should have a line"));
+        let line_metrics = line.metrics();
+        let y = (line_metrics.block_min_coord + line_metrics.block_max_coord) / 2.0;
+        for x in [0.0, line_metrics.advance] {
+            let hit = island
+                .cursor_from_point(x, y)
+                .unwrap_or_else(|| panic!("line edge should hit {text:?}"));
+            assert!(
+                island
+                    .grapheme_boundaries
+                    .contains(&hit.cursor.byte_index()),
+                "hit split a grapheme in {text:?}"
+            );
+            assert!(island.cursor_geometry(hit.cursor, 0.0).is_some());
+        }
+        assert!(
+            island
+                .selection_geometry(0..text.len())
+                .is_some_and(|rectangles| {
+                    !rectangles.is_empty()
+                        && rectangles.iter().all(|(bounds, _)| bounds.x1 > bounds.x0)
+                })
+        );
+        assert_eq!(island.selection_geometry(0..0), Some(Vec::new()));
+        assert!(island.selection_geometry(0..text.len() + 1).is_none());
+        if text == "a\u{301}b" {
+            assert!(
+                island.selection_geometry(1..1).is_none(),
+                "a collapsed selection inside a grapheme must not select the grapheme"
+            );
+        }
+    }
+}
+
+#[test]
+fn text_island_rejects_mandatory_break_and_recovers_after_empty_or_failed_input() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let mut layouter = TextIslandLayouter::new();
+    let empty = layouter
+        .shape(&mut catalog, &settings, &[])
+        .unwrap_or_else(|error| panic!("empty text island should succeed: {error}"));
+    assert_eq!(empty.metrics.advance_pt, 0.0);
+    assert_eq!(empty.metrics.ascent_pt, 0.0);
+    assert_eq!(empty.metrics.descent_pt, 0.0);
+    assert_eq!(empty.layout.lines().count(), 0);
+    assert_eq!(empty.grapheme_boundaries, [0]);
+    assert!(!empty.requested_family_missing);
+
+    assert_eq!(
+        layouter
+            .shape(
+                &mut catalog,
+                &settings,
+                &[TextIslandSpan {
+                    text: "a\nb",
+                    style: style.clone(),
+                    underline: false
+                }],
+            )
+            .err(),
+        Some(TextIslandError::MandatoryBreak),
+    );
+    assert_eq!(
+        layouter
+            .shape(
+                &mut catalog,
+                &settings,
+                &[TextIslandSpan {
+                    text: "invalid size",
+                    style: ShapingStyle::new(0),
+                    underline: false,
+                }],
+            )
+            .err(),
+        Some(TextIslandError::InvalidFontSize),
+    );
+    let shaped = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text: "recovered",
+                style,
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("layouter should recover after a rejected input: {error}"));
+    assert_eq!(shaped.layout.lines().count(), 1);
+    assert!(shaped.metrics.advance_pt.is_finite());
+}
+
+#[test]
+fn generic_font_families_are_not_reported_as_missing_paragraph_requests() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    for family in ["sans-serif", "monospace", "Monospace", " monospace "] {
+        let style = ShapingStyle {
+            requested_family: Some(family.to_owned()),
+            ..ShapingStyle::new(1200)
+        };
+        let mut layouter = ParagraphLayouter::new();
+        let (_, result) = layouter
+            .layout(
+                &mut catalog,
+                &paragraph("generic family", Some("en")),
+                &settings,
+                &style,
+                layout_options(240.0),
+            )
+            .unwrap_or_else(|error| panic!("generic font layout failed: {error}"));
+        assert!(
+            !result.requested_family_missing,
+            "{family} is a generic family"
+        );
+        let mut island_layouter = TextIslandLayouter::new();
+        let island = island_layouter
+            .shape(
+                &mut catalog,
+                &settings,
+                &[TextIslandSpan {
+                    text: "generic family",
+                    style,
+                    underline: false,
+                }],
+            )
+            .unwrap_or_else(|error| panic!("generic font island failed: {error}"));
+        assert!(
+            !island.requested_family_missing,
+            "{family} is generic in islands too"
+        );
+    }
+}
+
+#[test]
+fn text_island_rebuilds_font_fallback_after_catalog_refresh() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let style = ShapingStyle {
+        requested_family: Some("Caret Missing Island Family B1F9".to_owned()),
+        ..ShapingStyle::new(1200)
+    };
+    let mut layouter = TextIslandLayouter::new();
+    let first = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text: "fallback 文本",
+                style: style.clone(),
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("initial island fallback failed: {error}"));
+    assert!(first.requested_family_missing);
+    assert!(!glyph_signature(&first.layout).is_empty());
+
+    let old_generation = catalog.generation();
+    let new_generation = catalog
+        .refresh()
+        .unwrap_or_else(|error| panic!("font catalog refresh failed: {error}"));
+    assert!(new_generation > old_generation);
+    let refreshed = layouter
+        .shape(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text: "fallback 文本",
+                style,
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("island fallback after refresh failed: {error}"));
+    assert!(refreshed.requested_family_missing);
+    assert_eq!(
+        glyph_signature(&refreshed.layout),
+        glyph_signature(&first.layout)
+    );
+}
+
+#[test]
 fn paragraph_layouter_rebuilds_parley_context_after_font_refresh() {
     let mut catalog = font_catalog();
     let settings = document_settings();
@@ -1675,6 +2125,8 @@ fn caret_and_selection_geometry_never_split_extended_graphemes() {
         .unwrap_or_else(|| panic!("valid grapheme selection was rejected"));
     assert!(!snapped.is_empty());
     assert_eq!(snapped, full_cluster);
+    assert_eq!(result.selection_geometry(0..0), Some(Vec::new()));
+    assert!(result.selection_geometry(1..1).is_none());
 
     let cjk = paragraph("你好hello", Some("zh"));
     let (_, cjk_layout) = layouter

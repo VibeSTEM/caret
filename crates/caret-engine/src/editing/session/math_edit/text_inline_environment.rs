@@ -90,6 +90,8 @@ impl Session {
                         MathPositionAffinity::Downstream,
                     ),
                     focus_affinity: MathPositionAffinity::Downstream,
+                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                    visual_affinity: crate::VisualAffinity::Downstream,
                 },
                 align_cell: selected_path.align_cell(),
                 cursor: next_cursor,
@@ -177,6 +179,8 @@ impl Session {
                         MathPositionAffinity::Downstream,
                     ),
                     focus_affinity: MathPositionAffinity::Downstream,
+                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                    visual_affinity: crate::VisualAffinity::Downstream,
                 },
                 align_cell: selected_path.align_cell(),
                 cursor: next_cursor,
@@ -214,6 +218,8 @@ impl Session {
                     MathPositionAffinity::Downstream,
                 ),
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                visual_affinity: crate::VisualAffinity::Downstream,
             },
         );
         let before = SessionHistoryState::new(
@@ -266,6 +272,8 @@ impl Session {
                     MathPositionAffinity::Downstream,
                 ),
                 focus_affinity: MathPositionAffinity::Downstream,
+                anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                visual_affinity: crate::VisualAffinity::Downstream,
             },
         );
         let before = SessionHistoryState::new(

@@ -2049,6 +2049,8 @@ fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), Ed
         path: text_path.clone(),
         anchor: MathTextPosition::new(text_path, cursor, MathPositionAffinity::Downstream),
         focus_affinity: MathPositionAffinity::Downstream,
+        anchor_visual_affinity: crate::VisualAffinity::Downstream,
+        visual_affinity: crate::VisualAffinity::Downstream,
     };
     let mut align_document = Document::blank();
     align_document.body.push(Block::Align(align_block));
@@ -2839,6 +2841,63 @@ fn math_text_selection_replaces_and_undo_restores_the_selection() -> Result<(), 
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
     Ok(())
 }
+
+#[test]
+fn collapsed_math_text_selection_keeps_one_visual_affinity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut session, r"\text{abcd}")?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    let context = session
+        .math_text_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    let anchor = MathTextPosition::new(
+        context.focus.path.clone(),
+        1,
+        MathPositionAffinity::Upstream,
+    );
+    let focus = MathTextPosition::new(
+        context.focus.path.clone(),
+        3,
+        MathPositionAffinity::Downstream,
+    );
+    session.set_math_text_selection_positions_with_visual_affinities(
+        anchor,
+        focus,
+        crate::VisualAffinity::Upstream,
+        crate::VisualAffinity::Downstream,
+    )?;
+    session.run(Command::InsertText("X".to_owned()))?;
+    session.run(Command::Undo)?;
+    let restored = session
+        .math_text_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!((restored.anchor_utf16, restored.focus_utf16), (1, 3));
+    assert_eq!(
+        restored.anchor_visual_affinity,
+        crate::VisualAffinity::Upstream
+    );
+    assert_eq!(restored.visual_affinity, crate::VisualAffinity::Downstream);
+
+    session.set_math_text_selection_positions_with_visual_affinities(
+        restored.focus.clone(),
+        restored.focus,
+        crate::VisualAffinity::Downstream,
+        crate::VisualAffinity::Upstream,
+    )?;
+    let collapsed = session
+        .math_text_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(collapsed.anchor_utf16, collapsed.focus_utf16);
+    assert_eq!(
+        collapsed.anchor_visual_affinity,
+        crate::VisualAffinity::Upstream
+    );
+    assert_eq!(collapsed.visual_affinity, crate::VisualAffinity::Upstream);
+    Ok(())
+}
+
 #[test]
 fn math_text_selection_delete_collapses_at_start_and_arrows_collapse_by_direction()
 -> Result<(), EditError> {
@@ -4832,6 +4891,8 @@ fn tree_native_align_text_navigation_crosses_cells_in_both_directions() -> Resul
             path: text_path.clone(),
             anchor: MathTextPosition::new(text_path, 1, MathPositionAffinity::Downstream),
             focus_affinity: MathPositionAffinity::Downstream,
+            anchor_visual_affinity: crate::VisualAffinity::Downstream,
+            visual_affinity: crate::VisualAffinity::Downstream,
         },
     });
 
@@ -7226,6 +7287,8 @@ fn math_text_selection_rejects_cross_align_cell_range_atomically()
             path: path_zero.clone(),
             anchor: MathTextPosition::new(path_zero.clone(), 0, MathPositionAffinity::Downstream),
             focus_affinity: MathPositionAffinity::Downstream,
+            anchor_visual_affinity: crate::VisualAffinity::Downstream,
+            visual_affinity: crate::VisualAffinity::Downstream,
         },
     });
     let before_document = session.document().clone();

@@ -149,6 +149,31 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
 }
 
 /// 将最终选区一次性投影为页面矩形；文本布局负责文字几何，结构环境复用环境范围。
+fn math_text_selection_json(
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    target: &caret_engine::MathEditTarget,
+    anchor: &caret_engine::MathTextPosition,
+    focus: &caret_engine::MathTextPosition,
+) -> Result<Value, String> {
+    let rectangles = snapshot
+        .math_text_selection_geometry(target, anchor, focus)
+        .ok_or_else(|| "layout.invalid_math_selection_geometry".to_owned())?;
+    Ok(Value::Array(
+        rectangles
+            .into_iter()
+            .map(|rectangle| {
+                json!({
+                    "pageIndex": rectangle.page_index,
+                    "x0Pt": rectangle.x0_pt,
+                    "y0Pt": rectangle.y0_pt,
+                    "x1Pt": rectangle.x1_pt,
+                    "y1Pt": rectangle.y1_pt,
+                })
+            })
+            .collect(),
+    ))
+}
+
 fn selection_rectangles_json(
     selection: &caret_engine::Selection,
     structure_selection: Option<(&caret_engine::Pos, &caret_engine::Pos)>,
@@ -397,8 +422,16 @@ impl DocumentViewRuntime {
                     serde_json::Value::Bool(true),
                 );
         }
+        let math_context = self.session.math_text_input_context();
+        let math_geometry_context = self
+            .composition_preview_session
+            .as_ref()
+            .and_then(caret_engine::Session::math_text_input_context)
+            .or_else(|| math_context.clone());
         let rectangles = if composing {
             Value::Array(Vec::new())
+        } else if let Some(context) = &math_context {
+            math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
         } else {
             selection_rectangles_json(
                 &selection,
@@ -412,6 +445,23 @@ impl DocumentViewRuntime {
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("selectionRects".to_owned(), rectangles);
+        if let Some(context) = &math_geometry_context {
+            let (caret, font_size_centipoints) = snapshot
+                .math_text_caret(&context.target, &context.focus, context.visual_affinity)
+                .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?;
+            view.as_object_mut()
+                .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+                .insert(
+                    "caretGeometry".to_owned(),
+                    json!({
+                        "pageIndex": caret.page_index,
+                        "xPt": caret.x_pt,
+                        "y0Pt": caret.y0_pt,
+                        "y1Pt": caret.y1_pt,
+                        "fontSizeCentipoints": font_size_centipoints,
+                    }),
+                );
+        }
         let composition_rectangles = if composing {
             self.composition_range
                 .as_ref()
@@ -419,7 +469,11 @@ impl DocumentViewRuntime {
                     CompositionRange::Paragraph(selection) => {
                         snapshot.composition_geometry(selection)
                     }
-                    CompositionRange::MathText { .. } => None,
+                    CompositionRange::MathText { anchor, focus } => {
+                        math_geometry_context.as_ref().and_then(|context| {
+                            snapshot.math_text_composition_geometry(&context.target, anchor, focus)
+                        })
+                    }
                 })
                 .unwrap_or_default()
                 .into_iter()
@@ -480,9 +534,12 @@ impl DocumentViewRuntime {
             "enabled": math_input_method_enabled(&self.session),
         });
         let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
+            surrounding_text: context.surrounding_text.clone(),
             target: context.target.clone(),
             anchor: context.anchor.clone(),
             focus: context.focus.clone(),
+            anchor_visual_affinity: context.anchor_visual_affinity,
+            visual_affinity: context.visual_affinity,
         });
         self.last_interaction_context = Some(InteractionContext {
             document_generation: snapshot.document_generation,
@@ -504,9 +561,12 @@ impl DocumentViewRuntime {
         let command_input_context = self.session.command_line();
         let math_context = self.session.math_text_input_context();
         let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
+            surrounding_text: context.surrounding_text.clone(),
             target: context.target.clone(),
             anchor: context.anchor.clone(),
             focus: context.focus.clone(),
+            anchor_visual_affinity: context.anchor_visual_affinity,
+            visual_affinity: context.visual_affinity,
         });
         let context_key = InteractionContext {
             document_generation: self.session.document_generation(),
@@ -540,6 +600,11 @@ impl DocumentViewRuntime {
             .as_ref()
             .unwrap_or(&self.session);
         let focus_environment_id = current_block_environment_id(highlight_session);
+        let math_geometry_context = self
+            .composition_preview_session
+            .as_ref()
+            .and_then(caret_engine::Session::math_text_input_context)
+            .or_else(|| math_context.clone());
         let block_environment_exit = self.session.block_environment_exit();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
         let structure_selection = self
@@ -549,7 +614,7 @@ impl DocumentViewRuntime {
         let snapshot = self.current_snapshot()?;
         let inline_environment_rectangles =
             inline_environment_highlight_rects(inline_environment, snapshot);
-        let rectangles = selection_rectangles_json(
+        let body_rectangles = selection_rectangles_json(
             &selection,
             structure_selection
                 .as_ref()
@@ -557,6 +622,11 @@ impl DocumentViewRuntime {
             &selected_environment_ids,
             snapshot,
         );
+        let rectangles = if let Some(context) = &math_geometry_context {
+            math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
+        } else {
+            body_rectangles
+        };
         let focus = &selection.focus;
         let paragraph = snapshot
             .paragraph_by_id(&focus.paragraph_id)
@@ -612,13 +682,22 @@ impl DocumentViewRuntime {
                 serde_json::Value::from(cursor_utf16),
             );
         }
-        let caret = snapshot
-            .caret_geometry(focus, visual_affinity)
-            .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
-        let caret = caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
-        let font_size_centipoints = snapshot
-            .font_size_centipoints_at(focus, visual_affinity)
-            .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
+        let (caret, font_size_centipoints) = if let Some(context) = &math_geometry_context {
+            snapshot
+                .math_text_caret(&context.target, &context.focus, context.visual_affinity)
+                .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?
+        } else {
+            let caret = snapshot
+                .caret_geometry(focus, visual_affinity)
+                .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
+            let caret =
+                caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
+            let font_size_centipoints =
+                snapshot
+                    .font_size_centipoints_at(focus, visual_affinity)
+                    .ok_or_else(|| "layout.invalid_caret_font_size".to_owned())?;
+            (caret, font_size_centipoints)
+        };
         let serialized = serde_json::to_string(&serde_json::json!({
             "documentGeneration": snapshot.document_generation.to_string(),
             "fontGeneration": snapshot.font_generation.to_string(),
