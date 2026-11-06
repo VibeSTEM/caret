@@ -11,18 +11,12 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
+use caret_font_roles::default_math_font;
 use read_fonts::TableProvider;
 use read_fonts::tables::math::{Math, MathConstant, MathKernCorner, StretchAxis};
 use read_fonts::types::GlyphId;
 use skrifa::MetadataProvider;
 use skrifa::instance::{LocationRef, Size};
-
-/// 数学字体角色使用的内置字体族名。
-pub const BUILTIN_FONT_FAMILY: &str = "STIX Two Math";
-
-/// 内置数学字体字节，许可证见仓库公共字体资源目录中的 `OFL.txt`。
-pub const STIX_TWO_MATH: &[u8] =
-    include_bytes!("../../../resources/fonts/math/stix-two-math/STIXTwoMath-Regular.otf");
 
 /// 伸展方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +128,7 @@ impl MathFont {
     /// 进程内共享的内置 STIX Two Math 实例。
     pub fn builtin() -> Result<&'static MathFont, MathFontError> {
         static FONT: OnceLock<Result<MathFont, MathFontError>> = OnceLock::new();
-        FONT.get_or_init(|| MathFont::from_static(STIX_TWO_MATH))
+        FONT.get_or_init(|| MathFont::from_static(default_math_font()))
             .as_ref()
             .map_err(|error| *error)
     }

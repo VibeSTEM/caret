@@ -21,13 +21,13 @@ pub use line_metrics::{
     calculate_line_metrics, calculate_line_metrics_with_grid,
 };
 pub use pagination::{
-    PageLayout, PaginationError, PaginationItem, ParagraphFragment, ParagraphPaginationInput,
-    paginate_paragraphs,
+    MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError, PaginationItem,
+    ParagraphFragment, ParagraphPaginationInput, paginate_paragraphs,
 };
 pub use paragraph::{
-    HitAffinity, ParagraphHit, ParagraphLayout, ParagraphLayoutError, ParagraphLayoutOptions,
-    ParagraphLayouter, ParagraphLine, ParleyParagraphLayout, VisualAffinity, VisualCursor,
-    has_empty_line, paragraph_has_empty_line,
+    HitAffinity, InlineObjectLayout, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
+    ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine, ParleyParagraphLayout,
+    VisualAffinity, VisualCursor, has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};

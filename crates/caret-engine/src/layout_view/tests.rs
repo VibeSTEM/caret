@@ -58,6 +58,41 @@ fn layout_projection_keeps_utf8_ranges_and_large_generation_ids_in_json()
 }
 
 #[test]
+fn math_fragment_projection_keeps_content_origin_and_serializes_page_margins()
+-> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(Document::blank())?;
+    let mut runtime = DocumentLayoutRuntime::new_system()?;
+    let mut snapshot = runtime.layout_session(&session)?;
+    let page = snapshot
+        .pages
+        .first_mut()
+        .ok_or("layout should have a page")?;
+    page.margin_left_pt = 47.0;
+    page.margin_top_pt = 31.0;
+    page.layout
+        .math_fragments
+        .push(caret_layout::MathBlockFragment {
+            math_id: NodeId::generate(),
+            x_offset_pt: 8.5,
+            y_offset_pt: 12.25,
+            width_pt: 42.0,
+            height_pt: 19.0,
+        });
+
+    let view = DocumentLayoutView::from(&snapshot);
+    let json = serde_json::to_value(&view)?;
+    assert_eq!(view.margins_pt.left, 47.0);
+    assert_eq!(view.margins_pt.top, 31.0);
+    assert_eq!(view.pages[0].math_fragments[0].x_offset_pt, 8.5);
+    assert_eq!(view.pages[0].math_fragments[0].y_offset_pt, 12.25);
+    assert_eq!(json["marginsPt"]["left"], 47.0);
+    assert_eq!(json["marginsPt"]["top"], 31.0);
+    assert_eq!(json["pages"][0]["mathFragments"][0]["xOffsetPt"], 8.5);
+    assert_eq!(json["pages"][0]["mathFragments"][0]["yOffsetPt"], 12.25);
+    Ok(())
+}
+
+#[test]
 fn paragraph_delta_starts_at_the_first_page_changed_by_reflow() {
     let target = NodeId::generate();
     let predecessor = NodeId::generate();
@@ -105,6 +140,7 @@ fn page_with_paragraphs(paragraph_ids: &[NodeId]) -> PageLayoutSnapshot {
                     y_offset_pt: 0.0,
                 })
                 .collect(),
+            math_fragments: vec![],
             used_height_pt: 12.0,
         },
     }

@@ -70,6 +70,7 @@ mod generated {
         }
 
         struct GlyphPlacement {
+            paint_order: u64,
             image_index: u32,
             x_pt: f64,
             baseline_y_pt: f64,
@@ -81,6 +82,7 @@ mod generated {
         }
 
         struct GlyphDecoration {
+            paint_order: u64,
             x_pt: f64,
             y_pt: f64,
             width_pt: f64,
@@ -94,6 +96,31 @@ mod generated {
             clip_y1_pt: f64,
         }
 
+        struct GlyphShape {
+            paint_order: u64,
+            kind: u8,
+            x_pt: f64,
+            y_pt: f64,
+            dx_pt: f64,
+            dy_pt: f64,
+            width_pt: f64,
+            height_pt: f64,
+            fill_enabled: bool,
+            fill_red: u8,
+            fill_green: u8,
+            fill_blue: u8,
+            fill_alpha: u8,
+            stroke_enabled: bool,
+            stroke_red: u8,
+            stroke_green: u8,
+            stroke_blue: u8,
+            stroke_alpha: u8,
+            stroke_width_pt: f64,
+            clip_enabled: bool,
+            clip_y0_pt: f64,
+            clip_y1_pt: f64,
+        }
+
         struct PageGlyphFrame {
             document_generation: u64,
             font_generation: u64,
@@ -102,6 +129,7 @@ mod generated {
             images: Vec<GlyphImage>,
             placements: Vec<GlyphPlacement>,
             decorations: Vec<GlyphDecoration>,
+            shapes: Vec<GlyphShape>,
         }
 
         struct DocumentOpenResult {

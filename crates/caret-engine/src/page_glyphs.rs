@@ -9,6 +9,7 @@ use caret_layout::{
     RasterizedGlyph, RasterizedGlyphKey,
 };
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use crate::DocumentLayoutSnapshot;
 
@@ -21,6 +22,7 @@ pub struct PageGlyphSnapshot {
     pub page_index: usize,
     pub runs: Vec<PageGlyphRun>,
     pub decorations: Vec<PageGlyphDecoration>,
+    pub shapes: Vec<PageMathShape>,
 }
 
 /// 同一页的唯一栅格图片；同字形重复使用时只传输一份像素数据。
@@ -37,6 +39,7 @@ pub struct PageGlyphImage {
 /// 页面中某个 glyph 图片的放置位置和可选行框裁切范围。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageGlyphPlacement {
+    pub paint_order: u64,
     pub image_index: usize,
     pub x_pt: f64,
     pub baseline_y_pt: f64,
@@ -54,6 +57,7 @@ pub struct RasterizedPageGlyphs {
     pub images: Vec<PageGlyphImage>,
     pub placements: Vec<PageGlyphPlacement>,
     pub decorations: Vec<PageGlyphDecoration>,
+    pub shapes: Vec<PageMathShape>,
 }
 
 /// 持有有界 glyph 缓存的页面栅格化入口。
@@ -91,6 +95,17 @@ impl PageGlyphRasterizer {
                 ..*decoration
             })
             .collect();
+        let shapes = page
+            .shapes
+            .iter()
+            .map(|shape| {
+                let mut shape = *shape;
+                if shape.stroke_width_pt > 0.0 {
+                    shape.stroke = Some(shape.stroke.unwrap_or(default_foreground));
+                }
+                shape
+            })
+            .collect();
         let mut image_indexes = HashMap::<RasterizedGlyphKey, usize>::new();
         for run in &page.runs {
             let pixels_per_em = run.font_size_pt * pixels_per_pt;
@@ -124,6 +139,7 @@ impl PageGlyphRasterizer {
                     index
                 };
                 placements.push(PageGlyphPlacement {
+                    paint_order: run.paint_order,
                     image_index,
                     x_pt: glyph.x_pt,
                     baseline_y_pt: glyph.baseline_y_pt,
@@ -140,6 +156,7 @@ impl PageGlyphRasterizer {
             images,
             placements,
             decorations,
+            shapes,
         })
     }
 }
@@ -163,6 +180,7 @@ fn page_glyph_image(image: &RasterizedGlyph) -> PageGlyphImage {
 /// 同一字体实例与绘制样式的视觉字形序列。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageGlyphRun {
+    pub paint_order: u64,
     pub paragraph_id: NodeId,
     pub line_index: usize,
     /// Exactly 行距要求逐行裁切时的页面局部 y 范围；还需与页面裁切取交集。
@@ -189,12 +207,37 @@ pub struct PageGlyph {
 /// 页面中的字符装饰矩形，坐标使用页面局部 pt。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PageGlyphDecoration {
+    pub paint_order: u64,
     pub x_pt: f64,
     pub y_pt: f64,
     pub width_pt: f64,
     pub height_pt: f64,
     pub color: Option<[u8; 4]>,
     pub line_clip_y_pt: Option<[f64; 2]>,
+}
+
+/// 数学排版产生的线段或矩形；坐标使用页面局部 pt，颜色缺省时由画布前景色补齐。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageMathShape {
+    pub paint_order: u64,
+    pub kind: PageMathShapeKind,
+    pub x_pt: f64,
+    pub y_pt: f64,
+    pub dx_pt: f64,
+    pub dy_pt: f64,
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub fill: Option<[u8; 4]>,
+    pub stroke: Option<[u8; 4]>,
+    pub stroke_width_pt: f64,
+    pub line_clip_y_pt: Option<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PageMathShapeKind {
+    Line = 0,
+    Rectangle = 1,
 }
 
 /// 页面或字形来源无效时拒绝整份页面输出，不发布部分字形。
@@ -208,6 +251,7 @@ pub enum PageGlyphError {
     InvalidRasterGeometry,
     GlyphRasterizationFailed,
     UnsupportedInlineBox,
+    MissingMathBlock,
 }
 
 impl std::fmt::Display for PageGlyphError {
@@ -221,6 +265,7 @@ impl std::fmt::Display for PageGlyphError {
             Self::InvalidRasterGeometry => "layout.glyphs.invalid_raster_geometry",
             Self::GlyphRasterizationFailed => "layout.glyphs.rasterization_failed",
             Self::UnsupportedInlineBox => "layout.glyphs.unsupported_inline_box",
+            Self::MissingMathBlock => "layout.glyphs.missing_math_block",
         })
     }
 }
@@ -246,6 +291,8 @@ impl DocumentLayoutSnapshot {
         }
         let mut runs = Vec::new();
         let mut decorations = Vec::new();
+        let mut shapes = Vec::new();
+        let mut next_paint_order = 0_u64;
         for fragment in &page.layout.fragments {
             let paragraph = self
                 .paragraph_by_id(&fragment.paragraph_id)
@@ -313,6 +360,7 @@ impl DocumentLayoutSnapshot {
                         return Err(PageGlyphError::InvalidLineGeometry);
                     }
                     decorations.push(PageGlyphDecoration {
+                        paint_order: next_paint_order,
                         x_pt,
                         y_pt,
                         width_pt,
@@ -320,10 +368,46 @@ impl DocumentLayoutSnapshot {
                         color,
                         line_clip_y_pt,
                     });
+                    next_paint_order += 1;
                 }
                 for item in line.items() {
                     let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
-                        return Err(PageGlyphError::UnsupportedInlineBox);
+                        let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
+                            return Err(PageGlyphError::UnsupportedInlineBox);
+                        };
+                        let math_layout = paragraph
+                            .inline_math_layouts
+                            .get(
+                                usize::try_from(inline_box.id)
+                                    .map_err(|_| PageGlyphError::UnsupportedInlineBox)?,
+                            )
+                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                        let object_baseline_y_pt = page_line_top_pt
+                            + f64::from(inline_box.y)
+                            + f64::from(inline_box.baseline.unwrap_or(inline_box.height))
+                            - raw_top_pt
+                            + baseline_adjustment_pt;
+                        let object_x_pt = page.margin_left_pt + f64::from(inline_box.x);
+                        if !object_baseline_y_pt.is_finite() || !object_x_pt.is_finite() {
+                            return Err(PageGlyphError::InvalidGlyphSource);
+                        }
+                        append_math_items(
+                            &math_layout.items,
+                            MathItemHost {
+                                paragraph_id: &paragraph.id,
+                                line_index,
+                                line_clip_y_pt,
+                                object_x_pt,
+                                baseline_y_pt: object_baseline_y_pt,
+                            },
+                            MathItemOutput {
+                                runs: &mut runs,
+                                decorations: &mut decorations,
+                                shapes: &mut shapes,
+                            },
+                            &mut next_paint_order,
+                        )?;
+                        continue;
                     };
                     let run = glyph_run.run();
                     let font_size_pt = run.font_size();
@@ -355,6 +439,7 @@ impl DocumentLayoutSnapshot {
                     }
                     if !glyphs.is_empty() {
                         runs.push(PageGlyphRun {
+                            paint_order: next_paint_order,
                             paragraph_id: paragraph.id.clone(),
                             line_index,
                             line_clip_y_pt,
@@ -370,10 +455,43 @@ impl DocumentLayoutSnapshot {
                                 .then_some(glyph_run.style().brush),
                             glyphs,
                         });
+                        next_paint_order += 1;
                     }
                 }
                 page_line_top_pt += line_height_pt;
             }
+        }
+        for fragment in &page.layout.math_fragments {
+            let layout = self
+                .math_blocks
+                .get(&fragment.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let object_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+            let baseline_y_pt =
+                page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent;
+            if !object_x_pt.is_finite()
+                || !baseline_y_pt.is_finite()
+                || !fragment.width_pt.is_finite()
+                || !fragment.height_pt.is_finite()
+            {
+                return Err(PageGlyphError::InvalidLineGeometry);
+            }
+            append_math_items(
+                &layout.items,
+                MathItemHost {
+                    paragraph_id: &fragment.math_id,
+                    line_index: 0,
+                    line_clip_y_pt: None,
+                    object_x_pt,
+                    baseline_y_pt,
+                },
+                MathItemOutput {
+                    runs: &mut runs,
+                    decorations: &mut decorations,
+                    shapes: &mut shapes,
+                },
+                &mut next_paint_order,
+            )?;
         }
         Ok(PageGlyphSnapshot {
             session_id: self.session_id.clone(),
@@ -382,8 +500,186 @@ impl DocumentLayoutSnapshot {
             page_index,
             runs,
             decorations,
+            shapes,
         })
     }
+}
+
+struct MathItemHost<'a> {
+    paragraph_id: &'a NodeId,
+    line_index: usize,
+    line_clip_y_pt: Option<[f64; 2]>,
+    object_x_pt: f64,
+    baseline_y_pt: f64,
+}
+
+struct MathItemOutput<'a> {
+    runs: &'a mut Vec<PageGlyphRun>,
+    decorations: &'a mut Vec<PageGlyphDecoration>,
+    shapes: &'a mut Vec<PageMathShape>,
+}
+
+fn append_math_items(
+    items: &[caret_math::layout::MathItem],
+    host: MathItemHost<'_>,
+    output: MathItemOutput<'_>,
+    next_paint_order: &mut u64,
+) -> Result<(), PageGlyphError> {
+    for item in items {
+        let color_bytes = |color: Option<caret_math::layout::MathColor>| {
+            color.map(|color| [color.red, color.green, color.blue, color.alpha])
+        };
+        match item {
+            caret_math::layout::MathItem::Glyph {
+                glyph,
+                x,
+                y,
+                size,
+                color,
+            } => {
+                let font_size_pt = *size as f32;
+                let x_pt = host.object_x_pt + x;
+                let baseline_y_pt = host.baseline_y_pt + y;
+                if !font_size_pt.is_finite()
+                    || font_size_pt <= 0.0
+                    || !x_pt.is_finite()
+                    || !baseline_y_pt.is_finite()
+                {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                output.runs.push(PageGlyphRun {
+                    paint_order: *next_paint_order,
+                    paragraph_id: host.paragraph_id.clone(),
+                    line_index: host.line_index,
+                    line_clip_y_pt: host.line_clip_y_pt,
+                    font: math_font_data(),
+                    font_size_pt,
+                    normalized_coords: Vec::new(),
+                    synthesis: GlyphSynthesis::default(),
+                    foreground: color_bytes(*color),
+                    glyphs: vec![PageGlyph {
+                        glyph_id: u32::from(*glyph),
+                        x_pt,
+                        baseline_y_pt,
+                    }],
+                });
+                *next_paint_order += 1;
+            }
+            caret_math::layout::MathItem::Rule {
+                x,
+                y,
+                width,
+                height,
+                color,
+            } => {
+                let x_pt = host.object_x_pt + x;
+                let y_pt = host.baseline_y_pt + y;
+                if !x_pt.is_finite()
+                    || !y_pt.is_finite()
+                    || !width.is_finite()
+                    || !height.is_finite()
+                    || *width <= 0.0
+                    || *height <= 0.0
+                {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                output.decorations.push(PageGlyphDecoration {
+                    paint_order: *next_paint_order,
+                    x_pt,
+                    y_pt,
+                    width_pt: *width,
+                    height_pt: *height,
+                    color: color_bytes(*color),
+                    line_clip_y_pt: host.line_clip_y_pt,
+                });
+                *next_paint_order += 1;
+            }
+            caret_math::layout::MathItem::Line {
+                x,
+                y,
+                dx,
+                dy,
+                thickness,
+                color,
+            } => {
+                let x_pt = host.object_x_pt + x;
+                let y_pt = host.baseline_y_pt + y;
+                if !x_pt.is_finite()
+                    || !y_pt.is_finite()
+                    || !dx.is_finite()
+                    || !dy.is_finite()
+                    || !thickness.is_finite()
+                    || *thickness <= 0.0
+                {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                output.shapes.push(PageMathShape {
+                    paint_order: *next_paint_order,
+                    kind: PageMathShapeKind::Line,
+                    x_pt,
+                    y_pt,
+                    dx_pt: *dx,
+                    dy_pt: *dy,
+                    width_pt: 0.0,
+                    height_pt: 0.0,
+                    fill: None,
+                    stroke: color_bytes(*color),
+                    stroke_width_pt: *thickness,
+                    line_clip_y_pt: host.line_clip_y_pt,
+                });
+                *next_paint_order += 1;
+            }
+            caret_math::layout::MathItem::Rectangle {
+                x,
+                y,
+                width,
+                height,
+                fill,
+                stroke,
+                stroke_width,
+            } => {
+                let x_pt = host.object_x_pt + x;
+                let y_pt = host.baseline_y_pt + y;
+                if !x_pt.is_finite()
+                    || !y_pt.is_finite()
+                    || !width.is_finite()
+                    || !height.is_finite()
+                    || *width <= 0.0
+                    || *height <= 0.0
+                    || !stroke_width.is_finite()
+                    || *stroke_width < 0.0
+                {
+                    return Err(PageGlyphError::InvalidGlyphSource);
+                }
+                output.shapes.push(PageMathShape {
+                    paint_order: *next_paint_order,
+                    kind: PageMathShapeKind::Rectangle,
+                    x_pt,
+                    y_pt,
+                    dx_pt: 0.0,
+                    dy_pt: 0.0,
+                    width_pt: *width,
+                    height_pt: *height,
+                    fill: color_bytes(*fill),
+                    stroke: color_bytes(*stroke),
+                    stroke_width_pt: *stroke_width,
+                    line_clip_y_pt: host.line_clip_y_pt,
+                });
+                *next_paint_order += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn math_font_data() -> GlyphFontData {
+    static FONT: OnceLock<GlyphFontData> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let data: Arc<dyn AsRef<[u8]> + Send + Sync> =
+            Arc::new(caret_font_roles::default_math_font());
+        GlyphFontData::new(fontique::Blob::new(data), 0)
+    })
+    .clone()
 }
 
 #[cfg(test)]

@@ -5,8 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::fonts::{code, math};
 use caret_doc::DocumentSettings;
+use caret_font_roles::FontRole;
 use icu_locale_core::{Locale, subtags::Script};
 use icu_properties::{
     PropertyNamesLong, PropertyNamesShort, PropertyParser, props::Script as UnicodeScript,
@@ -70,16 +70,14 @@ pub fn unicode_script_choices() -> Vec<(String, String)> {
 /// 已完成文字分析后的字体选择上下文；不在这里重新分类字符。
 #[derive(Debug, Clone, Copy)]
 pub struct FontSelectionContext<'a> {
+    /// 当前请求的语义字体角色，角色默认名不包含文档偏好策略。
+    pub role: FontRole,
     /// Parley 等分析器解析出的真实脚本，不能由文档语言替代。
     pub script: Script,
     /// Run/Paragraph/文档继承后得到的 BCP 47 语言。
     pub language: Option<&'a str>,
-    /// 数学公式使用独立字体角色，不继承正文 Script 字体偏好。
-    pub math_context: bool,
     /// Font EnvironmentNode 等局部显式请求，优先于所有文档默认值。
     pub explicit_family: Option<&'a str>,
-    /// 代码文本使用文档代码字体和等宽通用族，不继承正文脚本字体。
-    pub code: bool,
 }
 
 /// 偏好键规范化失败；不因本机缺少某字体而返回此错误。
@@ -213,7 +211,7 @@ impl FontPreferenceRules {
             context.explicit_family,
             FontPreferenceSource::Explicit,
         );
-        if context.code {
+        if context.role == FontRole::Code {
             push_candidate(
                 &mut result,
                 self.code_family.as_deref(),
@@ -221,12 +219,12 @@ impl FontPreferenceRules {
             );
             push_candidate(
                 &mut result,
-                Some(code::default_family()),
+                context.role.default_font_family(),
                 FontPreferenceSource::Code,
             );
             return result;
         }
-        if context.math_context {
+        if context.role == FontRole::Math {
             push_candidate(
                 &mut result,
                 self.math_family.as_deref(),
@@ -234,7 +232,7 @@ impl FontPreferenceRules {
             );
             push_candidate(
                 &mut result,
-                Some(math::default_family()),
+                context.role.default_font_family(),
                 FontPreferenceSource::Math,
             );
             return result;

@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use std::{
+    collections::HashSet,
     ops::Range,
     sync::{
         Arc,
@@ -15,13 +16,14 @@ use caret_doc::{DocumentUnits, Paragraph};
 use icu_locale_core::subtags::Script;
 use icu_properties::{CodePointMapData, CodePointSetDataBorrowed, PropertyNamesShort, props};
 use parley::{
-    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, Language, Layout,
-    LayoutContext, StyleProperty, WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontFamilyName, GenericFamily, IndentOptions, InlineBox,
+    InlineBoxKind, Language, Layout, LayoutContext, StyleProperty, VerticalAlign,
+    WhiteSpaceCollapse,
 };
 
 use crate::{
-    FontCatalog, FontLineMetrics, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ResolvedDocumentTextSettings, ShapingStyle,
+    FontCatalog, FontLineMetrics, InlineObjectLayout, LineSpacing, ParagraphLayout,
+    ParagraphLayoutError, ResolvedDocumentTextSettings, ShapingStyle,
     shaping::{boundaries_for_spans, is_mandatory_line_break},
 };
 
@@ -93,6 +95,8 @@ pub struct ParleyParagraphLayout {
     pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
+    /// Parley inline-box ID 与逻辑 U+FFFC 源范围的映射，供命中和选区几何使用。
+    inline_object_source_ranges: Vec<(u64, Range<usize>)>,
 }
 
 /// 段落布局的版心宽度、行距和共享行网格度量。
@@ -150,6 +154,23 @@ impl ParagraphLayouter {
         base_style: &ShapingStyle,
         options: ParagraphLayoutOptions,
     ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
+        self.layout_with_inline_objects(catalog, paragraph, settings, base_style, options, &[])
+    }
+
+    /// 使用同一 Parley 布局排正文和行内对象。
+    ///
+    /// `inline_objects` 的 ID 必须唯一，源范围不得重复或重叠且必须恰好覆盖逻辑文本中的一个 U+FFFC；盒推进、上升和下降度量必须有限且非负。塑形时以等 UTF-8 长度的零宽占位符代替 U+FFFC，所以 Parley 的字节索引仍直接对应返回的逻辑文本，只有 inline box 为对象提供推进。
+    ///
+    /// 成功时返回逻辑源文本及其 Parley 塑形布局。宽度、字号、对象范围或对象度量无效，以及塑形结果无法映射回源文本时返回 `ParagraphLayoutError`；目录和 Parley 上下文仍由 `self` 管理。
+    pub fn layout_with_inline_objects(
+        &mut self,
+        catalog: &mut FontCatalog,
+        paragraph: &Paragraph,
+        settings: &ResolvedDocumentTextSettings,
+        base_style: &ShapingStyle,
+        options: ParagraphLayoutOptions,
+        inline_objects: &[InlineObjectLayout],
+    ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
         let font_generation = catalog.generation();
         if self.font_generation != Some(font_generation) {
             self.context = LayoutContext::default();
@@ -183,6 +204,36 @@ impl ParagraphLayouter {
             self.space_adjustments_pt.clear();
         }
         let text: String = spans.iter().map(|span| span.text).collect();
+        let mut inline_object_ids = HashSet::with_capacity(inline_objects.len());
+        let mut inline_object_ranges = Vec::with_capacity(inline_objects.len());
+        if inline_objects.iter().any(|object| {
+            object.source_bytes.start >= object.source_bytes.end
+                || object.source_bytes.end > text.len()
+                || !text.is_char_boundary(object.source_bytes.start)
+                || !text.is_char_boundary(object.source_bytes.end)
+                || text.get(object.source_bytes.clone()) != Some("\u{fffc}")
+                || !inline_object_ids.insert(object.id)
+                || !object.advance_pt.is_finite()
+                || !object.ascent_pt.is_finite()
+                || !object.descent_pt.is_finite()
+                || object.advance_pt < 0.0
+                || object.ascent_pt < 0.0
+                || object.descent_pt < 0.0
+        }) {
+            return Err(ParagraphLayoutError::InconsistentShaping);
+        }
+        inline_object_ranges.extend(
+            inline_objects
+                .iter()
+                .map(|object| object.source_bytes.clone()),
+        );
+        inline_object_ranges.sort_unstable_by_key(|range| range.start);
+        if inline_object_ranges
+            .windows(2)
+            .any(|ranges| ranges[0].end > ranges[1].start)
+        {
+            return Err(ParagraphLayoutError::InconsistentShaping);
+        }
         let boundaries = boundaries_for_spans(&text, &spans);
         let decisions = Arc::new(line_break_decisions(&text, &boundaries));
         let available_families = Arc::clone(&catalog.family_names_lowercase);
@@ -329,9 +380,8 @@ impl ParagraphLayouter {
                     crate::font_selection::FontSelectionContext {
                         script: *script,
                         language: style.language.as_deref(),
-                        math_context: false,
+                        role: style.font_role,
                         explicit_family: style.requested_family.as_deref(),
-                        code: style.font_role == crate::shaping::FontRole::Code,
                     },
                 );
                 requested_family_missing |= candidates.first().is_some_and(|candidate| {
@@ -360,6 +410,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                inline_objects,
             };
             build_parley_layout(&mut self.context, catalog, &layout_input)
         };
@@ -381,6 +432,7 @@ impl ParagraphLayouter {
                 decisions: &decisions,
                 width_pt,
                 first_line_indent_chars,
+                inline_objects,
             };
             (layout, callback_count) =
                 build_parley_layout(&mut self.context, catalog, &layout_input);
@@ -401,6 +453,7 @@ impl ParagraphLayouter {
             spacing,
             line_grid_metrics,
             line_grid_font_size_centipoints,
+            inline_objects,
         )?;
         Ok((
             text,
@@ -415,6 +468,10 @@ impl ParagraphLayouter {
                 baseline_adjustments_pt,
                 empty_line_indent_pt,
                 requested_family_missing,
+                inline_object_source_ranges: inline_objects
+                    .iter()
+                    .map(|object| (object.id, object.source_bytes.clone()))
+                    .collect(),
             },
         ))
     }
@@ -485,6 +542,7 @@ struct ParleyLayoutInput<'a> {
     decisions: &'a Arc<PackedLineBreakDecisions>,
     width_pt: f32,
     first_line_indent_chars: Option<u16>,
+    inline_objects: &'a [InlineObjectLayout],
 }
 
 /// 构建 Parley 布局，并在对应空白范围应用由实际字体度量得出的 advance 修正。
@@ -504,8 +562,15 @@ fn build_parley_layout(
         decisions,
         width_pt,
         first_line_indent_chars,
+        inline_objects,
     } = *input;
-    let mut builder = context.ranged_builder(catalog.parley_context(), text, 1.0, false);
+    // Parley 会把 inline box 插入指定索引，但不会替换该索引上的文本。保留三字节宽度，
+    // 将逻辑 U+FFFC 换成等长、零推进的 U+200B；避免原替换字符贡献独立 advance，并保持源字节偏移不变。
+    let mut shaping_text = text.to_owned();
+    for object in inline_objects {
+        shaping_text.replace_range(object.source_bytes.clone(), "\u{200b}");
+    }
+    let mut builder = context.ranged_builder(catalog.parley_context(), &shaping_text, 1.0, false);
     builder.push_default(StyleProperty::FontFamily(GenericFamily::SystemUi.into()));
     builder.push_default(StyleProperty::FontSize(font_size_pt(
         base_style.font_size_centipoints,
@@ -576,6 +641,18 @@ fn build_parley_layout(
         };
         builder.push(StyleProperty::LetterSpacing(adjustment_pt), range.clone());
     }
+    for object in inline_objects {
+        builder.push_inline_box(InlineBox {
+            id: object.id,
+            kind: InlineBoxKind::InFlow,
+            // 放在零宽占位符之后，避免 Parley 的超宽独占行将前后文本范围算到错误一侧。
+            index: object.source_bytes.end,
+            width: object.advance_pt,
+            height: object.ascent_pt.max(0.0) + object.descent_pt.max(0.0),
+            baseline: Some(object.ascent_pt.max(0.0)),
+            vertical_align: VerticalAlign::BASELINE,
+        });
+    }
 
     let callback_index = Arc::new(AtomicUsize::new(0));
     let callback_cursor = Arc::clone(&callback_index);
@@ -583,7 +660,7 @@ fn build_parley_layout(
     let line_break_override =
         move |_| callback_decisions.get(callback_cursor.fetch_add(1, Ordering::Relaxed));
     builder.set_line_break_override(Some(&line_break_override));
-    let mut layout = builder.build(text);
+    let mut layout = builder.build(&shaping_text);
     if let Some(chars) = first_line_indent_chars {
         let indent_pt = font_size_pt(base_style.font_size_centipoints) * f32::from(chars);
         layout.set_text_indent(indent_pt, IndentOptions::default());

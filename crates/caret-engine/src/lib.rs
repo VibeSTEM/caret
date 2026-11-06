@@ -37,5 +37,6 @@ pub use layout_view::{
 };
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,
-    PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, RasterizedPageGlyphs,
+    PageGlyphRasterizer, PageGlyphRun, PageGlyphSnapshot, PageMathShape, PageMathShapeKind,
+    RasterizedPageGlyphs,
 };

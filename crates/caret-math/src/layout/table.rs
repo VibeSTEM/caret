@@ -7,12 +7,15 @@
 //   原路径：crates/typst-layout/src/math/table.rs
 //   提交：9dfd3a08500b7896045f907433cf7b4b02434fad（v0.15.1）
 //   版权：Copyright 2023 Typst Project Developers，Apache License 2.0
-//   修改：单元格改为单个片段（列对齐由 Caret 按列指定，不做单元格内子列）；
-//   新增整行（`\intertext`）；横竖线以实心矩形输出；行高下限沿用 Typst 的“分母样式圆括号”。
+//   修改：网格列宽、行高、对齐和网格线坐标已抽取至 caret-grid-layout；本适配器保留数学片段、数学轴线、字号线宽和行节点盒；
+//   单元格为单个片段（按列指定对齐）；支持整行（`\intertext`）；为矩阵行输出稳定节点 ID 命中盒。
 
+use caret_grid_layout::{CellMetrics, GridRow, GridSpec, HorizontalAlignment, layout_grid};
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
+use caret_doc::NodeId;
+
 use super::frame::{Fragment, Frame, Item, Point};
 use super::glyph::glyph_fragment;
 use crate::symbols::AtomClass;
@@ -28,7 +31,10 @@ pub(crate) enum Align {
 }
 
 pub(crate) enum TableRow {
-    Cells(Vec<Fragment>),
+    Cells {
+        id: Option<NodeId>,
+        cells: Vec<Fragment>,
+    },
     /// 跨越全部列、左对齐的整行。
     Full(Fragment),
 }
@@ -44,22 +50,12 @@ pub(crate) struct TableSpec {
 }
 
 pub(crate) fn layout_table(
-    ctx: &Context<'_>,
+    ctx: &mut Context<'_>,
     style: Style,
     rows: Vec<TableRow>,
     spec: &TableSpec,
 ) -> Fragment {
-    let nrows = rows.len();
-    let ncols = rows
-        .iter()
-        .map(|row| match row {
-            TableRow::Cells(cells) => cells.len(),
-            TableRow::Full(_) => 0,
-        })
-        .max()
-        .unwrap_or(0)
-        .max(spec.aligns.len());
-    if nrows == 0 {
+    if rows.is_empty() {
         return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
     }
 
@@ -68,113 +64,100 @@ pub(crate) fn layout_table(
             .map(|g| (g.ascent(), g.descent()))
             .unwrap_or((0.0, 0.0));
 
-    let mut widths = vec![0.0_f64; ncols];
-    let mut heights = vec![(paren_ascent, paren_descent); nrows];
-    for (r, row) in rows.iter().enumerate() {
-        let cells: &[Fragment] = match row {
-            TableRow::Cells(cells) => cells,
-            TableRow::Full(full) => std::slice::from_ref(full),
-        };
-        for (c, cell) in cells.iter().enumerate() {
-            heights[r].0 = heights[r].0.max(cell.ascent());
-            heights[r].1 = heights[r].1.max(cell.descent());
-            if let TableRow::Cells(_) = row {
-                widths[c] = widths[c].max(cell.width());
-            }
-        }
-    }
-
-    let gap_x = spec.column_gap;
-    let gap_y = spec.row_gap;
     let stroke = STROKE_EM * ctx.font_size(style);
-
-    // 列起点：竖线占据一个列间隙。
-    let mut column_x = Vec::with_capacity(ncols);
-    let mut x = 0.0;
-    let mut vline_x = Vec::new();
-    for c in 0..=ncols {
-        if spec.vlines.contains(&c) {
-            vline_x.push(x + gap_x / 2.0);
-            x += gap_x;
-        } else if c > 0 && c < ncols {
-            x += gap_x;
+    let grid_rows: Vec<_> = rows
+        .iter()
+        .map(|row| match row {
+            TableRow::Cells { cells, .. } => GridRow::Cells(cells.iter().map(metrics).collect()),
+            TableRow::Full(full) => GridRow::Full(metrics(full)),
+        })
+        .collect();
+    let grid_spec = GridSpec {
+        // 显式保留源算法配置的空列。
+        column_widths: vec![None; spec.aligns.len()],
+        column_alignments: spec
+            .aligns
+            .iter()
+            .map(|align| match align {
+                Align::Left => HorizontalAlignment::Left,
+                Align::Center => HorizontalAlignment::Center,
+                Align::Right => HorizontalAlignment::Right,
+            })
+            .collect(),
+        vertical_rules: spec.vlines.clone(),
+        horizontal_rules: spec.hlines.clone(),
+        column_gap: spec.column_gap,
+        row_gap: spec.row_gap,
+        minimum_row_ascent: paren_ascent,
+        minimum_row_descent: paren_descent,
+    };
+    let grid = match layout_grid(&grid_rows, &grid_spec) {
+        Ok(grid) => grid,
+        Err(error) => {
+            ctx.diagnostic("math.grid.layout", error.to_string());
+            return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
         }
-        if let Some(width) = widths.get(c) {
-            column_x.push(x);
-            x += width;
-        }
-    }
-    let mut total_width = x;
-    for row in &rows {
-        if let TableRow::Full(full) = row {
-            total_width = total_width.max(full.width());
-        }
-    }
-
-    let top_pad = if spec.hlines.contains(&0) { gap_y } else { 0.0 };
-    let mut row_y = Vec::with_capacity(nrows);
-    let mut y = top_pad;
-    let mut hline_y = Vec::new();
-    for (r, &(ascent, descent)) in heights.iter().enumerate() {
-        if r > 0 {
-            if spec.hlines.contains(&r) {
-                hline_y.push(y + gap_y / 2.0);
-            }
-            y += gap_y;
-        } else if spec.hlines.contains(&0) {
-            hline_y.push(gap_y / 2.0);
-        }
-        row_y.push(y);
-        y += ascent + descent;
-    }
-    if spec.hlines.contains(&nrows) {
-        hline_y.push(y + gap_y / 2.0);
-        y += gap_y;
-    }
-    let total_height = y;
+    };
 
     let axis = ctx.styled(C::AxisHeight, style);
-    let mut frame = Frame::new(total_width, total_height, total_height / 2.0 + axis);
+    let mut frame = Frame::new(grid.width, grid.height, grid.height / 2.0 + axis);
     for (r, row) in rows.into_iter().enumerate() {
-        let baseline_y = row_y[r] + heights[r].0;
+        let row_layout = &grid.rows[r];
         match row {
-            TableRow::Cells(cells) => {
-                for (c, cell) in cells.into_iter().enumerate() {
-                    let slack = widths[c] - cell.width();
-                    let dx = match spec.aligns.get(c).copied().unwrap_or(Align::Center) {
-                        Align::Left => 0.0,
-                        Align::Center => slack / 2.0,
-                        Align::Right => slack,
-                    };
-                    let pos = Point::new(column_x[c] + dx, baseline_y - cell.ascent());
+            TableRow::Cells { id, cells } => {
+                if let Some(id) = id {
+                    frame.push(
+                        Point::new(0.0, row_layout.top),
+                        Item::Node {
+                            id,
+                            width: grid.width,
+                            height: row_layout.ascent + row_layout.descent,
+                            baseline: row_layout.ascent,
+                        },
+                    );
+                }
+                for (cell, position) in cells.into_iter().zip(&row_layout.cells) {
+                    let pos = Point::new(position.x, position.baseline - cell.ascent());
                     frame.push_frame(pos, cell.frame);
                 }
             }
             TableRow::Full(full) => {
-                let pos = Point::new(0.0, baseline_y - full.ascent());
+                let position = row_layout.full.unwrap_or(caret_grid_layout::CellPosition {
+                    x: 0.0,
+                    baseline: row_layout.baseline,
+                });
+                let pos = Point::new(position.x, position.baseline - full.ascent());
                 frame.push_frame(pos, full.frame);
             }
         }
     }
-    for vx in vline_x {
+    for vx in grid.vertical_rule_positions {
         frame.push(
             Point::new(vx - stroke / 2.0, 0.0),
             Item::Rule {
                 width: stroke,
-                height: total_height,
+                height: grid.height,
                 color: style.color,
             },
         );
     }
-    for hy in hline_y {
+    for hy in grid.horizontal_rule_positions {
         frame.push(
             Point::new(0.0, hy - stroke / 2.0),
             Item::Rule {
-                width: total_width,
+                width: grid.width,
                 height: stroke,
                 color: style.color,
             },
         );
     }
     Fragment::new(frame, AtomClass::Ord)
+}
+
+fn metrics(fragment: &Fragment) -> CellMetrics {
+    CellMetrics {
+        width: fragment.width(),
+        ascent: fragment.ascent(),
+        descent: fragment.descent(),
+    }
 }

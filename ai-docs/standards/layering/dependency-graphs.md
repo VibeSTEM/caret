@@ -1,6 +1,6 @@
 # 依赖图
 
-更新日期：2026-10-30。本文集中展示 Rust crate 与 native 目标的允许依赖方向；层级规则和边界要求见[分层索引](../layering.md)。
+更新日期：2026-11-06。本文集中展示 Rust crate 与 native 目标的允许依赖方向；层级规则和边界要求见[分层索引](../layering.md)。
 
 ```mermaid
 flowchart TB
@@ -23,19 +23,21 @@ flowchart TB
     math["caret-math"]
   end
   subgraph L2["L2 叶子"]
-    code["caret-code"]
     doc["caret-doc"]
     dslc["caret-dslc"]
+    grid["caret-grid-layout"]
   end
   subgraph L1["L1 基础"]
     foundation["caret-foundation"]
     build["caret-build"]
     dslcore["caret-dsl-core"]
+    fontroles["caret-font-roles"]
   end
 
   launcher --> ffi
   launcher --> build
   launcher --> dslcore
+  ffi -. "build script" .-> build
   cli --> app
   cli --> foundation
   launcher ~~~ cli
@@ -43,24 +45,26 @@ flowchart TB
   ffi --> foundation
   app --> engine
   app --> dslcore
-  app --> code
+  app --> fontroles
   app --> doc
   app --> foundation
   engine --> doc
   engine --> layout
   engine --> structure
   engine --> math
+  engine --> fontroles
   layout --> doc
-  layout --> code
-  layout --> math
+  layout --> fontroles
   structure --> doc
   math --> doc
+  math --> fontroles
+  math --> grid
   dslc --> dslcore
   layout ~~~ structure
   structure ~~~ math
   doc ~~~ dslc
   foundation ~~~ build
-  code ~~~ doc
+  dslc ~~~ grid
   build ~~~ dslcore
 ```
 
@@ -95,3 +99,5 @@ flowchart TB
 ```
 
 `caret-foundation`、`caret-build`、`caret-dsl-core` 没有指向其他 workspace crate 的边。`caret-doc`、布局、结构索引和会话在需要时可以指向 `caret-foundation`，图里不再重复这几条边。画布和 ViewModel 互不依赖，由 native 入口把它们接在一起。逐帧绘制、命中和输入留在画布里；跨到 Rust 的是命令和页面快照，不是每个指针事件。
+
+Rust 图中的虚线箭头表示仅构建脚本依赖；它不允许 crate 在运行时代码中调用目标 crate。

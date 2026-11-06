@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 fn command_line_state(session: &caret_engine::Session) -> Value {
     let code_font_family = &session.document().global_settings.default_code_font_family;
     let effective_code_font_family = if code_font_family == caret_doc::DEFAULT_FONT_FAMILY {
-        caret_code::BUILTIN_FONT_FAMILY
+        caret_font_roles::DEFAULT_CODE_FONT_FAMILY
     } else {
         code_font_family
     };

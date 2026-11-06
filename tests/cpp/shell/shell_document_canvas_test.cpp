@@ -159,6 +159,51 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     QVariantMap decoration_only_request = request;
     decoration_only_request.insert(QStringLiteral("images"), QVariantList{});
     decoration_only_request.insert(QStringLiteral("placements"), QVariantList{});
+    decoration_only_request.insert(QStringLiteral("shapes"),
+                                   QVariantList{
+                                       QVariantMap{{QStringLiteral("kind"), 0},
+                                                   {QStringLiteral("xPt"), 200.0},
+                                                   {QStringLiteral("yPt"), 200.0},
+                                                   {QStringLiteral("dxPt"), 30.0},
+                                                   {QStringLiteral("dyPt"), 0.0},
+                                                   {QStringLiteral("widthPt"), 0.0},
+                                                   {QStringLiteral("heightPt"), 0.0},
+                                                   {QStringLiteral("fillEnabled"), false},
+                                                   {QStringLiteral("fillRed"), 0},
+                                                   {QStringLiteral("fillGreen"), 0},
+                                                   {QStringLiteral("fillBlue"), 0},
+                                                   {QStringLiteral("fillAlpha"), 0},
+                                                   {QStringLiteral("strokeEnabled"), true},
+                                                   {QStringLiteral("strokeRed"), 20},
+                                                   {QStringLiteral("strokeGreen"), 40},
+                                                   {QStringLiteral("strokeBlue"), 240},
+                                                   {QStringLiteral("strokeAlpha"), 255},
+                                                   {QStringLiteral("strokeWidthPt"), 3.0},
+                                                   {QStringLiteral("clipEnabled"), false},
+                                                   {QStringLiteral("clipY0Pt"), 0.0},
+                                                   {QStringLiteral("clipY1Pt"), 0.0}},
+                                       QVariantMap{{QStringLiteral("kind"), 1},
+                                                   {QStringLiteral("xPt"), 250.0},
+                                                   {QStringLiteral("yPt"), 200.0},
+                                                   {QStringLiteral("dxPt"), 0.0},
+                                                   {QStringLiteral("dyPt"), 0.0},
+                                                   {QStringLiteral("widthPt"), 30.0},
+                                                   {QStringLiteral("heightPt"), 20.0},
+                                                   {QStringLiteral("fillEnabled"), true},
+                                                   {QStringLiteral("fillRed"), 20},
+                                                   {QStringLiteral("fillGreen"), 230},
+                                                   {QStringLiteral("fillBlue"), 40},
+                                                   {QStringLiteral("fillAlpha"), 255},
+                                                   {QStringLiteral("strokeEnabled"), true},
+                                                   {QStringLiteral("strokeRed"), 240},
+                                                   {QStringLiteral("strokeGreen"), 30},
+                                                   {QStringLiteral("strokeBlue"), 30},
+                                                   {QStringLiteral("strokeAlpha"), 255},
+                                                   {QStringLiteral("strokeWidthPt"), 2.0},
+                                                   {QStringLiteral("clipEnabled"), false},
+                                                   {QStringLiteral("clipY0Pt"), 0.0},
+                                                   {QStringLiteral("clipY1Pt"), 0.0}},
+                                   });
 
     auto* canvas = new caret::DocumentCanvas();
     canvas->setPageSizesPt(view_model.pageSizesPt());
@@ -174,6 +219,27 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
     canvas->setHeight(1200);
     window.show();
     QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
+            const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
+            const QPointF line_point = canvas->documentToContent(0, QPointF(215.0, 200.0));
+            const QPointF fill_point = canvas->documentToContent(0, QPointF(265.0, 210.0));
+            const QRgb line_pixel =
+                frame.pixel(qBound(0, qRound(line_point.x() * scale_x), frame.width() - 1),
+                            qBound(0, qRound(line_point.y() * scale_y), frame.height() - 1));
+            const QRgb fill_pixel =
+                frame.pixel(qBound(0, qRound(fill_point.x() * scale_x), frame.width() - 1),
+                            qBound(0, qRound(fill_point.y() * scale_y), frame.height() - 1));
+            return qBlue(line_pixel) > 180 && qRed(line_pixel) < 100 && qGreen(line_pixel) < 100 &&
+                   qGreen(fill_pixel) > 180 && qRed(fill_pixel) < 100;
+        }()),
+        3000);
 
     const int page_index = request.value(QStringLiteral("pageIndex")).toInt();
     const QPointF decoration_origin = canvas->documentToContent(
@@ -205,6 +271,158 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             const auto* last_pixel = first_pixel + region.sizeInBytes() / sizeof(QRgb);
             return std::any_of(first_pixel, last_pixel,
                                [](QRgb pixel) { return qGray(pixel) < 160; });
+        }()),
+        3000);
+
+    const QVariantList placements = request.value(QStringLiteral("placements")).toList();
+    const QVariantMap first_placement = placements.first().toMap();
+    const QVariantList images = request.value(QStringLiteral("images")).toList();
+    const QVariantMap first_image =
+        images.at(first_placement.value(QStringLiteral("imageIndex")).toInt()).toMap();
+    const qreal raster_scale = request.value(QStringLiteral("rasterPxPerPt")).toReal();
+    const qreal glyph_x = first_placement.value(QStringLiteral("xPt")).toReal() +
+                          first_image.value(QStringLiteral("left")).toReal() / raster_scale;
+    const qreal glyph_y = first_placement.value(QStringLiteral("baselineYPt")).toReal() -
+                          first_image.value(QStringLiteral("top")).toReal() / raster_scale;
+    const qreal glyph_width = first_image.value(QStringLiteral("width")).toReal() / raster_scale;
+    const qreal glyph_height = first_image.value(QStringLiteral("height")).toReal() / raster_scale;
+    QVariantMap ordered_frame = request;
+    ordered_frame.insert(QStringLiteral("decorations"), QVariantList{});
+    ordered_frame.insert(QStringLiteral("shapes"), QVariantList{QVariantMap{
+                                                       {QStringLiteral("kind"), 1},
+                                                       {QStringLiteral("xPt"), glyph_x},
+                                                       {QStringLiteral("yPt"), glyph_y},
+                                                       {QStringLiteral("widthPt"), glyph_width},
+                                                       {QStringLiteral("heightPt"), glyph_height},
+                                                       {QStringLiteral("fillEnabled"), true},
+                                                       {QStringLiteral("fillRed"), 20},
+                                                       {QStringLiteral("fillGreen"), 220},
+                                                       {QStringLiteral("fillBlue"), 40},
+                                                       {QStringLiteral("fillAlpha"), 255},
+                                                       {QStringLiteral("strokeEnabled"), false},
+                                                       {QStringLiteral("strokeWidthPt"), 0.0},
+                                                       {QStringLiteral("paintOrder"), 0},
+                                                   }});
+    canvas->setGlyphFrames(QVariantList{ordered_frame});
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
+            const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
+            const QPointF origin = canvas->documentToContent(0, QPointF(glyph_x, glyph_y));
+            const QRect region(qFloor(origin.x() * scale_x), qFloor(origin.y() * scale_y),
+                               qCeil(glyph_width * raster_scale * scale_x),
+                               qCeil(glyph_height * raster_scale * scale_y));
+            const QImage pixels =
+                frame.copy(region.intersected(frame.rect())).convertToFormat(QImage::Format_ARGB32);
+            if (pixels.isNull()) {
+                return false;
+            }
+            const auto* pixel_begin = reinterpret_cast<const QRgb*>(pixels.constBits());
+            const auto* pixel_end = pixel_begin + pixels.sizeInBytes() / sizeof(QRgb);
+            const bool saw_fill = std::any_of(pixel_begin, pixel_end, [](QRgb pixel) {
+                return qGreen(pixel) > 170 && qRed(pixel) < 100;
+            });
+            const bool saw_ink =
+                std::any_of(pixel_begin, pixel_end, [](QRgb pixel) { return qGray(pixel) < 120; });
+            return saw_fill && saw_ink;
+        }()),
+        3000);
+
+    QVariantMap clipped_frame = ordered_frame;
+    clipped_frame.insert(QStringLiteral("placements"), QVariantList{});
+    clipped_frame.insert(QStringLiteral("images"), QVariantList{});
+    QVariantMap edge_line =
+        decoration_only_request.value(QStringLiteral("shapes")).toList().first().toMap();
+    edge_line.insert(QStringLiteral("yPt"), 200.0);
+    edge_line.insert(QStringLiteral("strokeRed"), 240);
+    edge_line.insert(QStringLiteral("strokeGreen"), 30);
+    edge_line.insert(QStringLiteral("strokeBlue"), 30);
+    edge_line.insert(QStringLiteral("strokeWidthPt"), 3.0);
+    edge_line.insert(QStringLiteral("clipEnabled"), true);
+    edge_line.insert(QStringLiteral("clipY0Pt"), 200.0);
+    edge_line.insert(QStringLiteral("clipY1Pt"), 220.0);
+    edge_line.insert(QStringLiteral("paintOrder"), 0);
+    clipped_frame.insert(QStringLiteral("shapes"), QVariantList{edge_line});
+    QVariantMap unclipped_frame = clipped_frame;
+    edge_line.insert(QStringLiteral("clipEnabled"), false);
+    unclipped_frame.insert(QStringLiteral("shapes"), QVariantList{edge_line});
+    auto* unclipped_canvas = new caret::DocumentCanvas();
+    unclipped_canvas->setPageSizesPt(view_model.pageSizesPt());
+    unclipped_canvas->setPageMarginsPt(view_model.pageMarginsPt());
+    unclipped_canvas->setGlyphFrames(QVariantList{unclipped_frame});
+    QQuickWindow unclipped_window;
+    unclipped_window.resize(1000, 1200);
+    unclipped_canvas->setParent(&unclipped_window);
+    unclipped_canvas->setParentItem(unclipped_window.contentItem());
+    unclipped_canvas->setWidth(1000);
+    unclipped_canvas->setHeight(1200);
+    unclipped_window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(unclipped_window.isExposed(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame =
+                unclipped_window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale_x = static_cast<qreal>(frame.width()) / unclipped_window.width();
+            const qreal scale_y = static_cast<qreal>(frame.height()) / unclipped_window.height();
+            const QPointF visible_top =
+                unclipped_canvas->documentToContent(0, QPointF(212.0, 200.5));
+            const QPointF visible_bottom =
+                unclipped_canvas->documentToContent(0, QPointF(218.0, 202.0));
+            const QRect region(
+                QPoint(qFloor(visible_top.x() * scale_x), qFloor(visible_top.y() * scale_y)),
+                QPoint(qCeil(visible_bottom.x() * scale_x), qCeil(visible_bottom.y() * scale_y)));
+            const QImage pixels =
+                frame.copy(region.intersected(frame.rect())).convertToFormat(QImage::Format_ARGB32);
+            if (pixels.isNull()) {
+                return false;
+            }
+            const auto* pixel_begin = reinterpret_cast<const QRgb*>(pixels.constBits());
+            const auto* pixel_end = pixel_begin + pixels.sizeInBytes() / sizeof(QRgb);
+            return std::any_of(pixel_begin, pixel_end,
+                               [](QRgb pixel) { return qRed(pixel) > 170 && qGreen(pixel) < 100; });
+        }()),
+        3000);
+    auto* clip_canvas = new caret::DocumentCanvas();
+    clip_canvas->setPageSizesPt(view_model.pageSizesPt());
+    clip_canvas->setPageMarginsPt(view_model.pageMarginsPt());
+    clip_canvas->setGlyphFrames(QVariantList{clipped_frame});
+    QQuickWindow clip_window;
+    clip_window.resize(1000, 1200);
+    clip_canvas->setParent(&clip_window);
+    clip_canvas->setParentItem(clip_window.contentItem());
+    clip_canvas->setWidth(1000);
+    clip_canvas->setHeight(1200);
+    clip_window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(clip_window.isExposed(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        ([&]() {
+            const QImage frame = clip_window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+            if (frame.isNull()) {
+                return false;
+            }
+            const qreal scale_x = static_cast<qreal>(frame.width()) / clip_window.width();
+            const qreal scale_y = static_cast<qreal>(frame.height()) / clip_window.height();
+            const QPointF visible_top = clip_canvas->documentToContent(0, QPointF(212.0, 200.5));
+            const QPointF visible_bottom = clip_canvas->documentToContent(0, QPointF(218.0, 202.0));
+            const QRect region(
+                QPoint(qFloor(visible_top.x() * scale_x), qFloor(visible_top.y() * scale_y)),
+                QPoint(qCeil(visible_bottom.x() * scale_x), qCeil(visible_bottom.y() * scale_y)));
+            const QImage pixels =
+                frame.copy(region.intersected(frame.rect())).convertToFormat(QImage::Format_ARGB32);
+            if (pixels.isNull()) {
+                return false;
+            }
+            const auto* pixel_begin = reinterpret_cast<const QRgb*>(pixels.constBits());
+            const auto* pixel_end = pixel_begin + pixels.sizeInBytes() / sizeof(QRgb);
+            return std::any_of(pixel_begin, pixel_end,
+                               [](QRgb pixel) { return qRed(pixel) > 170 && qGreen(pixel) < 100; });
         }()),
         3000);
 }

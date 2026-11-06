@@ -38,6 +38,133 @@ fn text_flow(run: Run) -> ParagraphContent {
     })
 }
 
+fn inline_math(source: &str) -> ParagraphContent {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse(source, caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("inline math should parse: {error}"))
+    else {
+        panic!("inline source should produce a math tree")
+    };
+    ParagraphContent::Math(caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: BTreeMap::new(),
+    })
+}
+
+#[test]
+fn inline_math_uses_one_box_and_preserves_logical_source_positions() {
+    let mut paragraph = paragraph("a");
+    paragraph.inlines = vec![
+        text_flow(Run {
+            text: "a ".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        inline_math("="),
+        text_flow(Run {
+            text: " b".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body.push(Block::Paragraph(paragraph));
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| {
+            panic!("negative signed MathLayout metrics must not fail paragraph layout: {error}")
+        });
+    let laid_out_paragraph = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("paragraph {paragraph_id} should be laid out"));
+    assert!(
+        laid_out_paragraph.inline_math_layouts[0].descent < 0.0,
+        "the STIX equals glyph exercises signed descent"
+    );
+    let layout = &laid_out_paragraph.layout;
+    assert_eq!(layout.paragraph.lines[0].source_bytes, 0..7);
+
+    let mut boxes = Vec::new();
+    let mut math_placeholder_advances = Vec::new();
+    let mut item_advance = 0.0f32;
+    for line in layout.layout.lines() {
+        for item in line.items() {
+            match item {
+                caret_layout::PositionedGlyphLayoutItem::InlineBox(inline_box) => {
+                    item_advance += inline_box.width;
+                    boxes.push(inline_box);
+                }
+                caret_layout::PositionedGlyphLayoutItem::GlyphRun(run) => {
+                    item_advance += run.advance();
+                    math_placeholder_advances.extend(
+                        run.run()
+                            .clusters()
+                            .filter(|cluster| cluster.text_range() == (2..5))
+                            .map(|cluster| cluster.advance()),
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(boxes.len(), 1, "the formula contributes one inline box");
+    assert_eq!(math_placeholder_advances.len(), 1);
+    assert_eq!(
+        math_placeholder_advances[0], 0.0,
+        "the zero-width shaping placeholder contributes no advance"
+    );
+    assert!((layout.paragraph.lines[0].advance_pt - item_advance).abs() < 0.01);
+    assert!(boxes[0].width.is_finite() && boxes[0].width >= 0.0);
+    assert!(boxes[0].height.is_finite() && boxes[0].height >= 0.0);
+    assert!(
+        boxes[0]
+            .baseline
+            .is_some_and(|baseline| baseline.is_finite() && baseline >= 0.0)
+    );
+
+    assert!(layout.cursor_at(2, VisualAffinity::Downstream).is_some());
+    assert!(layout.cursor_at(5, VisualAffinity::Downstream).is_some());
+}
+
+#[test]
+fn negative_inline_math_whitespace_does_not_fail_document_layout() {
+    let mut paragraph = paragraph("");
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![inline_math(r"\!")];
+    let mut document = Document::blank();
+    document.body.push(Block::Paragraph(paragraph));
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| {
+            panic!("negative width or signed extents must not fail paragraph layout: {error}")
+        });
+    let layout = snapshot
+        .paragraph_by_id(&paragraph_id)
+        .unwrap_or_else(|| panic!("paragraph {paragraph_id} should be laid out"));
+    assert_eq!(layout.inline_math_layouts.len(), 1);
+    assert!(
+        layout.inline_math_layouts[0].width < 0.0,
+        "the formula retains its negative MathBox advance"
+    );
+    assert!(
+        layout
+            .layout
+            .paragraph
+            .lines
+            .iter()
+            .all(|line| line.advance_pt.is_finite())
+    );
+}
+
 #[test]
 fn cjk_text_keeps_paragraph_spacing_fixed_and_environment_tracks_line_boxes() {
     fn layout_section(title_text: &str, body_text: &str) -> super::DocumentLayoutSnapshot {

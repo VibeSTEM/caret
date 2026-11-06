@@ -49,13 +49,15 @@ pub struct PageMarginsView {
     pub left: f64,
 }
 
-/// 页面尺寸及其段落行片段。
+/// 页面尺寸、段落行片段和显示公式片段。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageLayoutView {
     pub width_pt: f64,
     pub height_pt: f64,
     pub fragments: Vec<PageFragmentView>,
+    /// 显示公式片段；偏移相对版心，边距由快照的 `margins_pt` 单独提供。
+    pub math_fragments: Vec<MathFragmentView>,
 }
 
 /// 页面引用的段落与半开行范围。
@@ -66,6 +68,24 @@ pub struct PageFragmentView {
     pub first_line: usize,
     pub line_end: usize,
     pub y_offset_pt: f64,
+}
+
+/// 页面引用的显示公式 MathBox 及相对版心原点的放置矩形。
+///
+/// `x_offset_pt` 和 `y_offset_pt` 均为版心局部坐标；转换为页面坐标时，分别加左边距和上边距。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MathFragmentView {
+    /// 显示公式的稳定文档节点 ID。
+    pub math_id: String,
+    /// 相对页面版心左侧的水平偏移，单位为 pt。
+    pub x_offset_pt: f64,
+    /// 相对页面版心顶部的垂直偏移，单位为 pt。
+    pub y_offset_pt: f64,
+    /// MathBox 宽度，单位为 pt。
+    pub width_pt: f64,
+    /// MathBox 高度，单位为 pt。
+    pub height_pt: f64,
 }
 
 /// 块环境在指定页面上的范围，坐标与页面段落几何同源，单位为 pt。
@@ -255,6 +275,18 @@ fn page_views(snapshot: &DocumentLayoutSnapshot, page_start_index: usize) -> Vec
                     first_line: fragment.line_range.start,
                     line_end: fragment.line_range.end,
                     y_offset_pt: f64::from(fragment.y_offset_pt),
+                })
+                .collect(),
+            math_fragments: page
+                .layout
+                .math_fragments
+                .iter()
+                .map(|fragment| MathFragmentView {
+                    math_id: fragment.math_id.to_string(),
+                    x_offset_pt: f64::from(fragment.x_offset_pt),
+                    y_offset_pt: f64::from(fragment.y_offset_pt),
+                    width_pt: f64::from(fragment.width_pt),
+                    height_pt: f64::from(fragment.height_pt),
                 })
                 .collect(),
         })

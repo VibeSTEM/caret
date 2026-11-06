@@ -92,6 +92,23 @@ pub struct ParagraphLine {
     pub metrics: LineMetrics,
 }
 
+/// 由 Caret 文档提供并与正文共用 Parley 行断、行框的安全盒度量。
+///
+/// 数值以 pt 计且必须有限、非负。公式的原始绘制坐标和有符号度量由数学布局单独持有，不从这些盒度量恢复。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InlineObjectLayout {
+    /// 对应 Parley 输出中该对象盒的唯一 ID。
+    pub id: u64,
+    /// 逻辑 UTF-8 源文本中单个 U+FFFC 的范围。
+    pub source_bytes: Range<usize>,
+    /// 对象占用的水平推进距离。
+    pub advance_pt: f32,
+    /// 对象基线上方的安全盒高度。
+    pub ascent_pt: f32,
+    /// 对象基线下方的安全盒高度。
+    pub descent_pt: f32,
+}
+
 /// 分页消费的段落行框。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParagraphLayout {

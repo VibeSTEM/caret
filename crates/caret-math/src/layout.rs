@@ -24,13 +24,13 @@ use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use caret_doc::{DocumentUnits, MathFlow, NodeId};
+use caret_doc::{Align, DocumentUnits, MathFlow, NodeId};
 
-pub use crate::fonts::{MathFont, MathFontError, STIX_TWO_MATH};
+pub use crate::fonts::{MathFont, MathFontError};
 pub use context::{MathDiagnostic, MathSize};
 pub use frame::MathColor;
 
-use crate::backend::flow_nodes;
+use crate::backend::{BackendNodeKind, Node, flow_nodes};
 use context::{Context, Style};
 use convert::Converter;
 use frame::Item;
@@ -133,10 +133,59 @@ pub fn layout_math(
     style: MathStyle,
 ) -> Result<MathLayout, MathLayoutError> {
     validate_size(size)?;
+    layout_nodes(font, flow_nodes(root), size, style)
+}
+
+/// 以对齐公式的稳定行/单元格身份进行显示公式排版。
+///
+/// `Align` 本身与数学树不是同一种文档结构。此适配只在布局调用期间构造后端矩阵，
+/// 保留 Align、行和单元格根流的 ID，不改写或规范化持久化模型。
+pub fn layout_align(
+    font: &MathFont,
+    align: &Align,
+    size: f64,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    let rows = align
+        .rows
+        .iter()
+        .map(|row| Node {
+            id: row.id.clone(),
+            kind: BackendNodeKind::Row,
+            text: None,
+            attributes: Default::default(),
+            children: row
+                .cells
+                .iter()
+                .map(|cell| Node {
+                    id: cell.root.id.clone(),
+                    kind: BackendNodeKind::Row,
+                    text: None,
+                    attributes: Default::default(),
+                    children: flow_nodes(&cell.root),
+                })
+                .collect(),
+        })
+        .collect();
+    let matrix = Node {
+        id: align.id.clone(),
+        kind: BackendNodeKind::Matrix,
+        text: None,
+        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        children: rows,
+    };
+    layout_nodes(font, vec![matrix], size, MathStyle::Display)
+}
+
+fn layout_nodes(
+    font: &MathFont,
+    backend_nodes: Vec<Node>,
+    size: f64,
+    style: MathStyle,
+) -> Result<MathLayout, MathLayoutError> {
     let mut converter = Converter {
         ctx: Context::new(font, size),
     };
-    let backend_nodes = flow_nodes(root);
     let fragment = match backend_nodes.as_slice() {
         [node] => converter.node(node, Style::root(style == MathStyle::Display)),
         nodes => converter.row(nodes, Style::root(style == MathStyle::Display)),

@@ -84,7 +84,10 @@ fn command_line_snapshot_projects_the_document_code_font() -> Result<(), String>
     default_runtime.command_line_command_json("begin", String::new())?;
     let default: Value = serde_json::from_str(&default_runtime.command_line_state_json()?)
         .map_err(|error| error.to_string())?;
-    assert_eq!(default["codeFontFamily"], caret_code::BUILTIN_FONT_FAMILY);
+    assert_eq!(
+        default["codeFontFamily"],
+        caret_font_roles::DEFAULT_CODE_FONT_FAMILY
+    );
     Ok(())
 }
 

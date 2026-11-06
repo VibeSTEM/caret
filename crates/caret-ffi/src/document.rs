@@ -522,6 +522,7 @@ pub(crate) fn rasterize_page_glyphs(
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
         placements.push(bridge::GlyphPlacement {
+            paint_order: placement.paint_order,
             image_index,
             x_pt: placement.x_pt,
             baseline_y_pt: placement.baseline_y_pt,
@@ -545,6 +546,7 @@ pub(crate) fn rasterize_page_glyphs(
             .map(|clip| (true, clip[0], clip[1]))
             .unwrap_or((false, 0.0, 0.0));
         decorations.push(bridge::GlyphDecoration {
+            paint_order: decoration.paint_order,
             x_pt: decoration.x_pt,
             y_pt: decoration.y_pt,
             width_pt: decoration.width_pt,
@@ -558,6 +560,39 @@ pub(crate) fn rasterize_page_glyphs(
             clip_y1_pt,
         });
     }
+    let mut shapes = Vec::with_capacity(rasterized.shapes.len());
+    for shape in rasterized.shapes {
+        let (clip_enabled, clip_y0_pt, clip_y1_pt) = shape
+            .line_clip_y_pt
+            .map(|clip| (true, clip[0], clip[1]))
+            .unwrap_or((false, 0.0, 0.0));
+        let fill = shape.fill.unwrap_or([0; 4]);
+        let stroke = shape.stroke.unwrap_or([0; 4]);
+        shapes.push(bridge::GlyphShape {
+            paint_order: shape.paint_order,
+            kind: shape.kind as u8,
+            x_pt: shape.x_pt,
+            y_pt: shape.y_pt,
+            dx_pt: shape.dx_pt,
+            dy_pt: shape.dy_pt,
+            width_pt: shape.width_pt,
+            height_pt: shape.height_pt,
+            fill_enabled: shape.fill.is_some(),
+            fill_red: fill[0],
+            fill_green: fill[1],
+            fill_blue: fill[2],
+            fill_alpha: fill[3],
+            stroke_enabled: shape.stroke.is_some(),
+            stroke_red: stroke[0],
+            stroke_green: stroke[1],
+            stroke_blue: stroke[2],
+            stroke_alpha: stroke[3],
+            stroke_width_pt: shape.stroke_width_pt,
+            clip_enabled,
+            clip_y0_pt,
+            clip_y1_pt,
+        });
+    }
     bridge::PageGlyphFrame {
         document_generation: rasterized.document_generation,
         font_generation: rasterized.font_generation,
@@ -566,6 +601,7 @@ pub(crate) fn rasterize_page_glyphs(
         images,
         placements,
         decorations,
+        shapes,
     }
 }
 
@@ -578,6 +614,7 @@ fn empty_glyph_frame(page_index: u32, error: String) -> bridge::PageGlyphFrame {
         images: Vec::new(),
         placements: Vec::new(),
         decorations: Vec::new(),
+        shapes: Vec::new(),
     }
 }
 

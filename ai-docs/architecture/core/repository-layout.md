@@ -1,6 +1,6 @@
 # 仓库结构
 
-更新日期：2026-10-29。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
+更新日期：2026-11-06。先列当前仓库目录，再单列尚未创建的编辑器领域 crate，避免把目标结构误读为现状。没有消费者之前不建空 crate。依赖方向以[分层规范](../../standards/layering.md)为准。
 
 ```text
 当前仓库
@@ -62,8 +62,11 @@
 │   │       ├── page_glyphs.rs
 │   │       └── page_glyphs/tests.rs
 │   ├── caret-foundation/
+│   ├── caret-font-roles/       # 字体角色、默认族名和静态字体资源
+│   ├── caret-grid-layout/      # 不依赖领域的网格几何
 │   ├── caret-layout/
 │   │   └── src/paragraph/parley/{interaction.rs,line_mapping.rs}
+│   ├── caret-math/             # 数学解析、文档树投影与公式布局
 │   ├── caret-structure/
 │   │   └── src/{index.rs,index/tests.rs}
 │   └── launcher/
@@ -92,10 +95,11 @@
     └── src/
 
 规划中的 crate
-└── caret-cli/           # 应用命令行
+├── caret-cli/           # 应用命令行
+└── caret-code/          # 真实代码语义 API 出现后创建的 L3 代码领域
 ```
 
-crate 的职责和允许依赖以[分层规范](../../standards/layering.md)为唯一来源；运行时职责见[运行时](runtime.md)。`caret-engine` 已创建并通过 `Session::run` 提供编辑命令入口；`caret-cli` 已列入任务 014，尚未创建。
+crate 的职责和允许依赖以[分层规范](../../standards/layering.md)为唯一来源；运行时职责见[运行时](runtime.md)。`caret-engine` 已创建并通过 `Session::run` 提供编辑命令入口；`caret-cli` 已列入任务 014，尚未创建。`caret-code` 在 050/051 出现真实、可复用的代码语义 API 时再创建；静态字体资源由 `caret-font-roles` 管理，不以空 crate 占位。
 
 ## 模块拆分原则
 

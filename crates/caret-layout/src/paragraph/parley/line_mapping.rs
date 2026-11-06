@@ -7,8 +7,9 @@ use caret_doc::DocumentUnits;
 use parley::Layout;
 
 use crate::{
-    FontLineMetrics, LineMetricsError, LineSpacing, ParagraphLayout, ParagraphLayoutError,
-    ParagraphLine, calculate_line_metrics_with_grid,
+    FontLineMetrics, InkBounds, InlineObjectLayout, InlineObjectMetrics, LineMetricsError,
+    LineSpacing, ParagraphLayout, ParagraphLayoutError, ParagraphLine,
+    calculate_line_metrics_with_grid,
 };
 
 pub(super) fn font_line_metrics(metrics: parley::FontMetrics) -> FontLineMetrics {
@@ -34,6 +35,7 @@ pub(super) fn make_paragraph_lines(
     spacing: LineSpacing,
     line_grid_metrics: FontLineMetrics,
     line_grid_font_size_centipoints: u16,
+    inline_objects: &[InlineObjectLayout],
 ) -> Result<ParagraphLineMapping, ParagraphLayoutError> {
     let line_grid = calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], spacing)?;
     if text.is_empty() {
@@ -61,6 +63,74 @@ pub(super) fn make_paragraph_lines(
     if lines.is_empty() {
         return Err(ParagraphLayoutError::InconsistentShaping);
     }
+    let object_lines = lines
+        .iter()
+        .enumerate()
+        .flat_map(|(line_index, line)| {
+            line.items().filter_map(move |item| match item {
+                parley::PositionedLayoutItem::InlineBox(inline_box) => Some((
+                    inline_box.id,
+                    inline_objects
+                        .iter()
+                        .find(|object| object.id == inline_box.id)
+                        .map(|object| object.source_bytes.clone())?,
+                    line_index,
+                )),
+                parley::PositionedLayoutItem::GlyphRun(_) => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    // Parley 对只含超宽对象的行会给出越界的空范围哨兵。将对象的逻辑源码范围归给该行，
+    // 并从相邻视觉行移除占位字节，使源码范围与消费范围保持有序且互不重叠。
+    let mut source_ranges = Vec::with_capacity(lines.len());
+    for (line_index, line) in lines.iter().enumerate() {
+        let raw_range = line.text_range();
+        let owned_objects = object_lines
+            .iter()
+            .filter(|(_, _, object_line)| *object_line == line_index)
+            .collect::<Vec<_>>();
+        let mut source_range = if raw_range.start > text.len() || raw_range.start > raw_range.end {
+            let start = owned_objects
+                .iter()
+                .map(|(_, range, _)| range.start)
+                .min()
+                .ok_or(ParagraphLayoutError::InconsistentShaping)?;
+            let end = owned_objects
+                .iter()
+                .map(|(_, range, _)| range.end)
+                .max()
+                .ok_or(ParagraphLayoutError::InconsistentShaping)?;
+            start..end
+        } else {
+            raw_range
+        };
+        for (_, object_range, object_line) in &object_lines {
+            if *object_line == line_index
+                || source_range.end <= object_range.start
+                || source_range.start >= object_range.end
+            {
+                continue;
+            }
+            if source_range.start < object_range.start {
+                source_range.end = object_range.start;
+            } else if source_range.end > object_range.end {
+                source_range.start = object_range.end;
+            } else {
+                source_range = if line_index < *object_line {
+                    object_range.start..object_range.start
+                } else {
+                    object_range.end..object_range.end
+                };
+            }
+        }
+        if source_range.end > text.len()
+            || !text.is_char_boundary(source_range.start)
+            || !text.is_char_boundary(source_range.end)
+        {
+            return Err(ParagraphLayoutError::InconsistentShaping);
+        }
+        source_ranges.push(source_range);
+    }
     let mut paragraph_lines = Vec::with_capacity(lines.len());
     let mut line_top_offsets_pt = Vec::with_capacity(lines.len());
     let mut line_box_tops_pt = Vec::with_capacity(lines.len());
@@ -73,20 +143,16 @@ pub(super) fn make_paragraph_lines(
     let mut top_pt = 0.0f32;
     for (index, line) in lines.iter().enumerate() {
         let metrics = line.metrics();
-        let source_bytes = line.text_range();
-        if source_bytes.start > source_bytes.end
-            || source_bytes.end > text.len()
-            || !text.is_char_boundary(source_bytes.start)
-            || !text.is_char_boundary(source_bytes.end)
-            || !metrics.advance.is_finite()
+        let source_bytes = source_ranges[index].clone();
+        if !metrics.advance.is_finite()
             || !metrics.line_height.is_finite()
             || metrics.line_height <= 0.0
         {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
-        let consumed_end = lines
+        let consumed_end = source_ranges
             .get(index + 1)
-            .map_or(text.len(), |next| next.text_range().start);
+            .map_or(text.len(), |next| next.start);
         if consumed_end < source_bytes.end || consumed_end > text.len() {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
@@ -96,15 +162,38 @@ pub(super) fn make_paragraph_lines(
                 .filter(|run| run.font_size() > line_grid_font_size_pt)
                 .map(|run| font_line_metrics(*run.font_metrics())),
         );
-        let line_metrics =
-            calculate_line_metrics_with_grid(line_grid_metrics, &font_metrics, &[], spacing)
-                .map_err(|error| match error {
-                    LineMetricsError::InvalidFontMetrics
-                    | LineMetricsError::InvalidObjectMetrics
-                    | LineMetricsError::InvalidLineSpacing => {
-                        ParagraphLayoutError::InvalidLineMetrics(error)
-                    }
-                })?;
+        let line_objects = inline_objects
+            .iter()
+            .filter(|object| {
+                source_bytes.start <= object.source_bytes.start
+                    && object.source_bytes.end <= source_bytes.end
+            })
+            .map(|object| InlineObjectMetrics {
+                source_bytes: object.source_bytes.clone(),
+                advance_pt: object.advance_pt,
+                ascent_pt: object.ascent_pt,
+                descent_pt: object.descent_pt,
+                ink_bounds: InkBounds {
+                    left: 0.0,
+                    top: -object.ascent_pt,
+                    right: object.advance_pt,
+                    bottom: object.descent_pt,
+                },
+            })
+            .collect::<Vec<_>>();
+        let line_metrics = calculate_line_metrics_with_grid(
+            line_grid_metrics,
+            &font_metrics,
+            &line_objects,
+            spacing,
+        )
+        .map_err(|error| match error {
+            LineMetricsError::InvalidFontMetrics
+            | LineMetricsError::InvalidObjectMetrics
+            | LineMetricsError::InvalidLineSpacing => {
+                ParagraphLayoutError::InvalidLineMetrics(error)
+            }
+        })?;
         let raw_top = metrics.block_min_coord;
         let raw_baseline_from_top = metrics.baseline - raw_top;
         if !raw_top.is_finite() || !raw_baseline_from_top.is_finite() {

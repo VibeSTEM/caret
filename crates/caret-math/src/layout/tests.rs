@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use caret_doc::{MathContent, MathFlow};
+use caret_doc::{MathContent, MathFlow, NodeId};
 
-use super::{MathItem, MathLayout, MathLayoutEngine, MathStyle, layout_math};
+use super::{MathItem, MathLayout, MathLayoutEngine, MathStyle, layout_align, layout_math};
 use crate::layout::MathFont;
 use crate::{MathInputKind, ParsedMath, parse};
 
@@ -262,6 +262,28 @@ fn matrix_rows_stack() {
 }
 
 #[test]
+fn negative_space_does_not_erase_matrix_contents() {
+    let layout = display(r"\begin{matrix}\! & x\end{matrix}");
+    assert!(!glyph_ids(&layout).is_empty());
+}
+
+#[test]
+fn signed_glyph_ink_metrics_do_not_erase_matrix_contents() {
+    let layout = display(r"\begin{matrix}= & x\end{matrix}");
+    assert!(glyph_ids(&layout).len() >= 2);
+}
+
+#[test]
+fn substack_rows_do_not_duplicate_math_node_ids() {
+    let layout = display(r"\substack{a\\long}");
+    assert!(layout.nodes.iter().enumerate().all(|(index, node)| {
+        layout.nodes[index + 1..]
+            .iter()
+            .all(|later| later.id != node.id)
+    }));
+}
+
+#[test]
 fn node_boxes_cover_children() {
     let tree = root(r"\frac{a}{b}");
     let layout = layout_math(font(), &tree, SIZE, MathStyle::Display)
@@ -404,4 +426,37 @@ fn placeholder_renders_box() {
         .filter(|item| matches!(item, MathItem::Rectangle { .. }))
         .count();
     assert_eq!(boxes, 2);
+}
+
+#[test]
+fn align_layout_uses_document_rows_and_cell_roots() {
+    let align = match parse(
+        r"\begin{aligned}x&=1\\y&=2\end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("Align source should produce an Align document node: {other:?}"),
+    };
+    let expected_ids = std::iter::once(align.id.clone())
+        .chain(align.rows.iter().flat_map(|row| {
+            std::iter::once(row.id.clone()).chain(row.cells.iter().map(|cell| cell.root.id.clone()))
+        }))
+        .collect::<Vec<NodeId>>();
+    let layout = layout_align(font(), &align, SIZE)
+        .unwrap_or_else(|error| panic!("valid Align should lay out: {error}"));
+
+    assert!(layout.width > 0.0);
+    assert!(layout.ascent > 0.0);
+    assert!(
+        layout
+            .items
+            .iter()
+            .any(|item| matches!(item, MathItem::Glyph { .. }))
+    );
+    for id in expected_ids {
+        assert!(
+            layout.nodes.iter().any(|node| node.id == id),
+            "missing node box for {id}"
+        );
+    }
 }
