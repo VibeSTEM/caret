@@ -48,7 +48,7 @@
 | Linux ICU | 同一 Qt 供给 | 与 Qt Linux 工具 ABI 匹配，不替换成系统 ICU |
 | GoogleTest | SDK 清单 | `find_package(GTest CONFIG)`，仅测试构建 |
 
-Qt 放在 `.toolchain/qt/staging`，跨 profile 共享。官方源失败时可以尝试来源仓库已有的镜像策略；每个来源都做强校验。SDK 放在 `.toolchain/sdk/<name>/<version>/<triple>/`，用限制搜索路径的 `find_package` 消费。
+Qt 放在 `.toolchain/qt/staging`（或 `$CARET_TOOLCHAIN_ROOT/qt/staging`），跨 profile 共享。kit 中所有主模块、附加模块和平台运行库摘要共同生成缓存指纹；升级或回退时会清空 staging 与解包标记，再重新强校验和解包，避免混用版本文件。若回退到尚未使用该指纹机制的旧版供给脚本，先删除对应生成目录 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），再运行旧脚本。官方源失败时可以尝试来源仓库已有的镜像策略；每个来源都做强校验。SDK 放在 `.toolchain/sdk/<name>/<version>/<triple>/`，用限制搜索路径的 `find_package` 消费。
 
 ## GoogleTest 生产与消费
 

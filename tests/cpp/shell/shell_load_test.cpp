@@ -16,6 +16,7 @@
 #include "theme_catalog.hpp"
 #endif
 #include <QByteArray>
+#include <QChar>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>

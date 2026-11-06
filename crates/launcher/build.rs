@@ -187,10 +187,7 @@ fn orchestrate() -> Result<(PathBuf, PathBuf), String> {
     }
     if let Some(sdk) = provision::macos_sdk()? {
         configure.arg(format!("-DCMAKE_OSX_SYSROOT={}", sdk.display()));
-        let deployment = match std::env::var("MACOSX_DEPLOYMENT_TARGET") {
-            Ok(version) => version,
-            Err(_) => provision::MACOS_DEPLOYMENT_TARGET.to_owned(),
-        };
+        let deployment = provision::macos_deployment_target().map_err(|error| error.to_string())?;
         configure.arg(format!("-DCMAKE_OSX_DEPLOYMENT_TARGET={deployment}"));
     }
     run_step("configure", &mut configure)?;

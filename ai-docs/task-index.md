@@ -98,5 +98,6 @@
 | 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | in-progress |
 | 065 | 数学编辑 | [TeX 源码输入与结构化公式转换](task/065-tex-math-input-conversion.md) | P2 | 043、044、037 | M | planned |
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
+| 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | in-progress |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

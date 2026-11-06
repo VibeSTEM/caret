@@ -5,6 +5,7 @@
 
 #include "application_translator.hpp"
 
+#include <QChar>
 #include <QCoreApplication>
 #include <QPointer>
 #include <QQmlEngine>

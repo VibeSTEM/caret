@@ -1,6 +1,6 @@
 # 技术基线与版本决策
 
-更新日期：2026-10-25。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX、native 工程和 GoogleTest SDK 已接入。GoogleTest 1.18.0 由 [016](../task/016-googletest-package.md) 独立生产并发布，消费摘要见 `native/cmake/googletest-sha256.json`。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
+更新日期：2026-11-06。下表是锁定版本。Rust、CMake、Ninja、LLVM、uv、hyperfine、DSL、Qt、CXX、native 工程和 GoogleTest SDK 已接入。GoogleTest 1.18.0 由 [016](../task/016-googletest-package.md) 独立生产并发布，消费摘要见 `native/cmake/googletest-sha256.json`。升级时以供给代码里的 URL 和 SHA256 为准，并在同一次提交里更新本表。
 
 ## 当前选择
 
@@ -12,14 +12,14 @@
 | Rust | stable 1.99.0，edition 2024 | MSRV 1.99；工具链文件锁定 channel 和 rustfmt、clippy |
 | Cargo | 开发入口 | 调度构建、测试、格式、lint、覆盖率和打包 |
 | CMake + Ninja | CMake 4.4.3 + Ninja 1.13.2 | Cargo 供给固定资产。native 树的 `cmake_minimum_required` 沿用来源，当前为 3.22 |
-| Qt | 6.11.2 | qtbase、qtdeclarative、QtSvg、QtTools、QtScxml；Linux 附带与该 Qt 匹配的 ICU 73.2 |
+| Qt | 6.12.0 | qtbase、qtdeclarative、QtSvg、QtTools、QtScxml；Linux 附带与该 Qt 匹配的 ICU 73.2 |
 | GoogleTest | 1.18.0 | 仅 `BUILD_TESTING=ON` 时取静态 SDK |
 | CXX | 1.0.202 | Rust 与 C++ 的桥接；生成器和库版本必须相同 |
 | Python 工具 | uv 0.12.18，CPython 3.14.7 | 只服务质量工具。cmakelang 0.6.13，cppcheck 1.5.1 |
 | 路径与锁 | Rust `Path` / `PathBuf`，fs4 1.1.0 | 逻辑路径服务和安装锁一起移植 |
 | DSL | pest 2.8，`.pa` | `caret-dsl-core` 与 `caret-dslc` |
 | 基准计时 | hyperfine 2.0.0 | 按需安装，不进入默认构建 |
-| macOS 部署目标 | 13.0 | LLVM 不替代 Apple SDK；sysroot 仍用系统 SDK |
+| macOS 部署目标 | 14.4 | Qt 6.12.0 官方 arm64 包的最低系统版本；LLVM 不替代 Apple SDK，sysroot 仍用系统 SDK |
 | 供给目录 | 仓库根 `.toolchain/` | 预编译工具、Qt、SDK 和 uv / Python。编译产物仍在 `target/` |
 
 ## 版本维护

@@ -8,7 +8,25 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Qt 与 macOS 原生 SDK 制品共同支持的最低部署版本。
-pub const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+pub const MACOS_DEPLOYMENT_TARGET: &str = "14.4";
+
+/// 读取并校验显式 macOS 部署目标；不能低于托管 Qt 的最低版本。
+pub fn macos_deployment_target() -> Result<String, std::io::Error> {
+    let version = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+        .unwrap_or_else(|_| MACOS_DEPLOYMENT_TARGET.to_owned());
+    let mut components = version.split('.');
+    let major = components.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = components.next().and_then(|part| part.parse::<u32>().ok());
+    if !matches!((major, minor), (Some(major), Some(minor)) if (major, minor) >= (14, 4)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "MACOSX_DEPLOYMENT_TARGET={version} 低于托管 Qt 所需的最低版本 {MACOS_DEPLOYMENT_TARGET}"
+            ),
+        ));
+    }
+    Ok(version)
+}
 
 pub fn use_system_tools() -> bool {
     matches!(

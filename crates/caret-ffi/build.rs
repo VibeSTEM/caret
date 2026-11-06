@@ -47,8 +47,7 @@ fn main() -> Result<(), io::Error> {
         builder.env(key, value);
     }
     if let Some(sdk) = provision::macos_sdk().map_err(io::Error::other)? {
-        let deployment = env::var("MACOSX_DEPLOYMENT_TARGET")
-            .unwrap_or_else(|_| provision::MACOS_DEPLOYMENT_TARGET.to_owned());
+        let deployment = provision::macos_deployment_target()?;
         builder
             .flag("-isysroot")
             .flag(sdk.as_os_str())

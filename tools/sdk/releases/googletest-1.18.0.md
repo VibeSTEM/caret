@@ -11,6 +11,6 @@ SDK。每个归档都包含上游 CMake 包、头文件、静态库、源码元�
   `GTest::gtest_main`；CI 从归档解包到独立目录后编译、链接并运行测试程序。
 - 许可证：BSD-3-Clause；每个归档都包含从上游源码复制的
   `share/licenses/GoogleTest/LICENSE`。
-- macOS arm64 制品以 macOS 13.0 为最低部署版本；Qt 与其他运行时依赖也须满足此基线。
+- macOS arm64 静态 SDK 以 macOS 13.0 编译，Caret 应用部署目标由托管 Qt 等运行时依赖的最低版本决定，当前为 macOS 14.4。
 
 Release 使用单一 tag `sdk-googletest-1.18.0`。`sdk-googletest.yml` 重新生产时，只有所有平台矩阵任务通过后才会上传完整的三平台制品集，上传完成前保持 draft。已发布的资产不可覆盖；重跑只有三个平台的摘要全部相同时才视为幂等成功，否则须升级版本或使用新的 tag。每个归档都有对应的 `.sha256` 校验文件。升级时重新核验上游源码 pin、归档内容、链接和测试结果。
