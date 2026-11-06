@@ -28,6 +28,7 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <qcontainerfwd.h>
@@ -39,6 +40,14 @@
 namespace caret {
 namespace {
 using canvas_detail::is_finite_positive;
+
+enum class PaintItemKind : std::uint8_t { Glyph, Decoration, Shape };
+
+struct PaintItem {
+    quint64 order = 0;
+    QSGNode* node = nullptr;
+    PaintItemKind kind = PaintItemKind::Shape;
+};
 
 class PageGlyphNode final : public QSGNode {
   public:
@@ -60,6 +69,7 @@ class PageGlyphNode final : public QSGNode {
         clearNodeChildren(decoration_nodes);
         clearNodeChildren(shape_nodes);
         clearNodeChildren(paint_nodes);
+        paint_items.clear();
     }
 
     void clearGlyphResources() {
@@ -76,6 +86,7 @@ class PageGlyphNode final : public QSGNode {
     QSGNode* decoration_nodes = nullptr;
     QSGNode* shape_nodes = nullptr;
     QSGNode* paint_nodes = nullptr;
+    QVector<PaintItem> paint_items;
 
   private:
     static void clearNodeChildren(QSGNode* node) {
@@ -308,12 +319,25 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         return;
     }
     const qreal image_to_logical_scale = logical_scale / raster_pixels_per_point;
-    QVector<QPair<quint64, QSGNode*>> ordered_paint_nodes;
-    while (group->paint_nodes->firstChild() != nullptr) {
-        QSGNode* child = group->paint_nodes->firstChild();
-        group->paint_nodes->removeChildNode(child);
-        delete child;
+    for (const PaintItem& item : group->paint_items) {
+        if (item.node == nullptr || item.node->parent() != group->paint_nodes) {
+            continue;
+        }
+        group->paint_nodes->removeChildNode(item.node);
+        switch (item.kind) {
+        case PaintItemKind::Glyph:
+            group->glyph_nodes->appendChildNode(item.node);
+            break;
+        case PaintItemKind::Decoration:
+            group->decoration_nodes->appendChildNode(item.node);
+            break;
+        case PaintItemKind::Shape:
+            group->shape_nodes->appendChildNode(item.node);
+            break;
+        }
     }
+    group->paint_items.clear();
+    QVector<PaintItem> ordered_paint_nodes;
 
     if (create_textures) {
         QVector<QSGTexture*> previous_textures = std::move(group->textures);
@@ -424,7 +448,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         }
         if (glyph_node != nullptr) {
             ordered_paint_nodes.push_back(
-                {placement.value(QStringLiteral("paintOrder")).toULongLong(), glyph_node});
+                {placement.value(QStringLiteral("paintOrder")).toULongLong(), glyph_node,
+                 PaintItemKind::Glyph});
         }
     }
     while (reusable_node != nullptr) {
@@ -482,7 +507,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         }
         if (rect_node != nullptr) {
             ordered_paint_nodes.push_back(
-                {decoration.value(QStringLiteral("paintOrder")).toULongLong(), rect_node});
+                {decoration.value(QStringLiteral("paintOrder")).toULongLong(), rect_node,
+                 PaintItemKind::Decoration});
         }
     }
     while (reusable_node != nullptr) {
@@ -554,8 +580,8 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
                 line_parent = clipped;
             }
             append_shape_lines(line_parent, {first, second}, color, line_width);
-            ordered_paint_nodes.push_back(
-                {shape.value(QStringLiteral("paintOrder")).toULongLong(), shape_item});
+            ordered_paint_nodes.push_back({shape.value(QStringLiteral("paintOrder")).toULongLong(),
+                                           shape_item, PaintItemKind::Shape});
             continue;
         }
 
@@ -573,34 +599,52 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         }
         if (shape.value(QStringLiteral("strokeEnabled")).toBool() && stroke_width > 0.0) {
             const qreal line_width = stroke_width * logical_scale;
-            const QVector<QPointF> corners{rect.topLeft(), rect.topRight(), rect.bottomLeft(),
-                                           rect.bottomRight()};
-            QVector<QPointF> edges;
-            for (const auto& pair :
-                 {std::pair{0, 1}, std::pair{1, 3}, std::pair{3, 2}, std::pair{2, 0}}) {
-                const QPointF first = corners.at(pair.first);
-                const QPointF second = corners.at(pair.second);
-                edges.push_back(first);
-                edges.push_back(second);
-            }
-            if (!edges.isEmpty()) {
-                const QColor stroke(shape.value(QStringLiteral("strokeRed")).toInt(),
-                                    shape.value(QStringLiteral("strokeGreen")).toInt(),
-                                    shape.value(QStringLiteral("strokeBlue")).toInt(),
-                                    shape.value(QStringLiteral("strokeAlpha")).toInt());
+            const QColor stroke(shape.value(QStringLiteral("strokeRed")).toInt(),
+                                shape.value(QStringLiteral("strokeGreen")).toInt(),
+                                shape.value(QStringLiteral("strokeBlue")).toInt(),
+                                shape.value(QStringLiteral("strokeAlpha")).toInt());
+            QSGNode* stroke_parent = shape_item;
+            if (!clip_rect.contains(rect.adjusted(-line_width / 2.0, -line_width / 2.0,
+                                                  line_width / 2.0, line_width / 2.0))) {
                 auto* clipped = make_rect_clip_node(clip_rect);
                 shape_item->appendChildNode(clipped);
-                append_shape_lines(clipped, edges, stroke, line_width);
+                stroke_parent = clipped;
+            }
+            const qreal half_width = line_width / 2.0;
+            if (line_width >= std::min(rect.width(), rect.height())) {
+                stroke_parent->appendChildNode(new QSGSimpleRectNode(
+                    rect.adjusted(-half_width, -half_width, half_width, half_width), stroke));
+            } else {
+                stroke_parent->appendChildNode(
+                    new QSGSimpleRectNode(QRectF(rect.left() - half_width, rect.top() - half_width,
+                                                 rect.width() + line_width, line_width),
+                                          stroke));
+                stroke_parent->appendChildNode(new QSGSimpleRectNode(
+                    QRectF(rect.left() - half_width, rect.bottom() - half_width,
+                           rect.width() + line_width, line_width),
+                    stroke));
+                const qreal side_height = rect.height() - line_width;
+                if (side_height > 0.0) {
+                    stroke_parent->appendChildNode(new QSGSimpleRectNode(
+                        QRectF(rect.left() - half_width, rect.top() + half_width, line_width,
+                               side_height),
+                        stroke));
+                    stroke_parent->appendChildNode(new QSGSimpleRectNode(
+                        QRectF(rect.right() - half_width, rect.top() + half_width, line_width,
+                               side_height),
+                        stroke));
+                }
             }
         }
-        ordered_paint_nodes.push_back(
-            {shape.value(QStringLiteral("paintOrder")).toULongLong(), shape_item});
+        ordered_paint_nodes.push_back({shape.value(QStringLiteral("paintOrder")).toULongLong(),
+                                       shape_item, PaintItemKind::Shape});
     }
     std::stable_sort(
         ordered_paint_nodes.begin(), ordered_paint_nodes.end(),
-        [](const auto& first, const auto& second) { return first.first < second.first; });
-    for (const auto& paint_node : ordered_paint_nodes) {
-        QSGNode* node = paint_node.second;
+        [](const auto& first, const auto& second) { return first.order < second.order; });
+    group->paint_items = ordered_paint_nodes;
+    for (const PaintItem& paint_node : ordered_paint_nodes) {
+        QSGNode* node = paint_node.node;
         if (node->parent() != nullptr) {
             node->parent()->removeChildNode(node);
         }

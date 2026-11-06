@@ -105,7 +105,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_placement")}};
         }
         placements.push_back(QVariantMap{
-            {QStringLiteral("paintOrder"), placement.paint_order},
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(placement.paint_order)},
             {QStringLiteral("imageIndex"), placement.image_index},
             {QStringLiteral("xPt"), placement.x_pt},
             {QStringLiteral("baselineYPt"), placement.baseline_y_pt},
@@ -131,7 +131,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_decoration")}};
         }
         decorations.push_back(QVariantMap{
-            {QStringLiteral("paintOrder"), decoration.paint_order},
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(decoration.paint_order)},
             {QStringLiteral("xPt"), decoration.x_pt},
             {QStringLiteral("yPt"), decoration.y_pt},
             {QStringLiteral("widthPt"), decoration.width_pt},
@@ -161,7 +161,7 @@ QVariantMap LayoutViewModel::rasterizePageGlyphs(int page_index, qreal px_per_pt
                     {QStringLiteral("error"), QStringLiteral("layout.glyphs_invalid_shape")}};
         }
         shapes.push_back(QVariantMap{
-            {QStringLiteral("paintOrder"), shape.paint_order},
+            {QStringLiteral("paintOrder"), QVariant::fromValue<qulonglong>(shape.paint_order)},
             {QStringLiteral("kind"), shape.kind},
             {QStringLiteral("xPt"), shape.x_pt},
             {QStringLiteral("yPt"), shape.y_pt},
