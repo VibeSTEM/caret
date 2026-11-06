@@ -1,4 +1,4 @@
-# Qt 6.11.2 预编译供给。来源仓库 panta ee84d95 的官方归档与 SHA256。
+# Qt 6.12.0 预编译供给。官方在线仓库的归档名与 MirrorBrain SHA-256。
 # 不源码构建。解包使用 cmake -E tar（libarchive 支持 7z）。
 # 官方 download.qt.io 失败时回退清华 TUNA；CARET_QT_MIRROR 可插到最前。
 # SHA256 与来源无关，始终强制。
@@ -22,50 +22,50 @@ set(QT_STAGING "${QT_PROVISION_DIR}/staging")
 set(QT_EXTRACTED "${QT_PROVISION_DIR}/extracted")
 
 if(APPLE)
-  set(_qt_repo_path "mac_x64/desktop/qt6_6112/qt6_6112/qt.qt6.6112.clang_64")
-  set(_qt_addon_repo_path "mac_x64/desktop/qt6_6112/qt6_6112/qt.qt6.6112.addons.qtscxml.clang_64")
+  set(_qt_repo_path "mac_x64/desktop/qt6_6120/qt6_6120/qt.qt6.6120.clang_64")
+  set(_qt_addon_repo_path "mac_x64/desktop/qt6_6120/qt6_6120/qt.qt6.6120.addons.qtscxml.clang_64")
   set(_qt_addon_archives
-      "6.11.2-0-202608131016qtscxml-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z|9cabcf73b1ef81cb396a205380950d947535e20b7b6e21204e59a52199a98bfe"
+      "6.12.0-0-202609280346qtscxml-MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z|7a011bb00213e17e12e7e3aab3aee65a447bd44290f5de3d29f6cb6c8961c8ba"
   )
   set(_qt_archives
-      "6.11.2-0-202608131016qtbase-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z|9592f84f7e26d532c5c56824d1da7c9214a766cb0a17beb5af71022bcfbcd271"
-      "6.11.2-0-202608131016qtdeclarative-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z|ceb8e3f3830531a52de5007ef3f50ffc5525021feb132ee322f59583eb2903cf"
-      "6.11.2-0-202608131016qttools-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z|415b5008059d0066ac0d4806de98f6e8dacf7b5c80ca0305875160d2107d3719"
-      "6.11.2-0-202608131016qtsvg-MacOS-MacOS_15-Clang-MacOS-MacOS_15-X86_64-ARM64.7z|c52f6cec6ce4b52ca017e0046345a85d33b2b73e0f6a93474bb7a60f8e829317"
+      "6.12.0-0-202609280346qtbase-MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z|1e0df66ed17ae97997971ff481983c5c0b7497a52ef52f699725701401fd80ee"
+      "6.12.0-0-202609280346qtdeclarative-MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z|6b070cade4201db28ed34f65331085c3916a718bc6a30ea24c2f57e67debacea"
+      "6.12.0-0-202609280346qttools-MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z|c503c114fbb96a2c2dad07fae4d195cb800ab498c9deb440c879e657ec14e8f8"
+      "6.12.0-0-202609280346qtsvg-MacOS-MacOS_26-Clang-MacOS-MacOS_26-X86_64-ARM64.7z|428c6d02a7bdaf832463aa97a19c1c0920a8e840c751499d05fa9e43dc69f172"
   )
 elseif(WIN32)
   set(_qt_repo_path
-      "windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/qt.qt6.6112.win64_msvc2022_64")
+      "windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64/qt.qt6.6120.win64_msvc2022_64")
   set(_qt_addon_repo_path
-      "windows_x86/desktop/qt6_6112/qt6_6112_msvc2022_64/qt.qt6.6112.addons.qtscxml.win64_msvc2022_64"
+      "windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64/qt.qt6.6120.addons.qtscxml.win64_msvc2022_64"
   )
   set(_qt_addon_archives
-      "6.11.2-0-202608131017qtscxml-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|47539713e42a72f29ef0da0be2ad82428eefb7158bfe766b2e1dc7e63640e058"
+      "6.12.0-0-202609280346qtscxml-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|686d38b961a31de55dfc10d3177827ba0691fce1d642a058d7bb5614ad13671a"
   )
   set(_qt_archives
-      "6.11.2-0-202608131017qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|fd984b7264361b4dd3fd2a417702ca1258e4086268f2ee6a69b9a393d9c3f6bb"
-      "6.11.2-0-202608131017qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|5591ca564c1a9299a45a15b6b1d324c86e0aaed7cf6c47b7e6fe464aecae2587"
-      "6.11.2-0-202608131017qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|5f2b387a1f8055102b1388ff4ea743124ed6389d442f75c659728bb5c2a56946"
-      "6.11.2-0-202608131017qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|417f44499c835b2303f3ff78043179bb23442f33d5d2816fbf7e8dbf275b1c89"
+      "6.12.0-0-202609280346qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|219d1b86def3be418e31d704572bc4acc91b2ec373c65595c9fb12b42bf098dc"
+      "6.12.0-0-202609280346qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|258146e9972fadbc1162cda31c7d7ed7e627f5022b2a848f2edb84d9c2ce27db"
+      "6.12.0-0-202609280346qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|73328e361429378df518f391ebe4d82c51e833f4d5a951692768ab5a5a1d7da5"
+      "6.12.0-0-202609280346qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z|dfcad02224b71724e3314d0bc3ffc0b862dfa6e02bc4aadd39f1738f6c364c79"
   )
 elseif(UNIX)
-  set(_qt_repo_path "linux_x64/desktop/qt6_6112/qt6_6112/qt.qt6.6112.linux_gcc_64")
+  set(_qt_repo_path "linux_x64/desktop/qt6_6120/qt6_6120/qt.qt6.6120.linux_gcc_64")
   set(_qt_addon_repo_path
-      "linux_x64/desktop/qt6_6112/qt6_6112/qt.qt6.6112.addons.qtscxml.linux_gcc_64")
+      "linux_x64/desktop/qt6_6120/qt6_6120/qt.qt6.6120.addons.qtscxml.linux_gcc_64")
   set(_qt_addon_archives
-      "6.11.2-0-202608131018qtscxml-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|8579d82fba91dfe1b24e3203f740ac5647d5515c51182a4158b0e748dc6f00f7"
+      "6.12.0-0-202609280346qtscxml-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|64f368903ead49900f76346a0de50d8348b354bf10cf1b38aca61a7f48d3a096"
   )
   set(_qt_archives
-      "6.11.2-0-202608131018qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|0f86f13b161141e77b1d056b54e2b6fc40fb16f243e71123346f9fb35d418027"
-      "6.11.2-0-202608131018qtdeclarative-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|5f0ce87c077f749723dbb6e923142adb860c146ecaf93c68197feda5307f22dd"
-      "6.11.2-0-202608131018qttools-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|42d5f3dbfc25647d9d95ef8b64401dc7e3ef7c83a39a29b548dfa0985f71c0ca"
-      "6.11.2-0-202608131018qtsvg-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|939fe0e5d49d11d6d3eceea0184219703c25a1f8dc75f45e99071ca244824a0d"
+      "6.12.0-0-202609280346qtbase-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|943023b929d0c08eafe7341700b5ed7601284410b7afd6093f950be291d1d7cd"
+      "6.12.0-0-202609280346qtdeclarative-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|0c719e17ea9fbd37aa615595149dca2578985656433f27bf2846cffe4b687d3e"
+      "6.12.0-0-202609280346qttools-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|5d6f90961df3a1e5a57fac69bbbe6983860bad11c419a49736b84914588b4334"
+      "6.12.0-0-202609280346qtsvg-Linux-RHEL_9_6-GCC-Linux-RHEL_9_6-X86_64.7z|22a7404505a2883c54556183f19adfff1cdbea30664e34bfd4171180802142e9"
   )
-  # Qt Linux 工具使用与该发行版配套的 ICU 73。此归档由 Qt 官方仓库提供，
+  # Qt Linux 工具使用与该发行版配套的 ICU 73.2。此归档由 Qt 官方仓库提供，
   # 文件直接放入 staging/lib，供 rcc、qtpaths、qmlimportscanner 等工具通过
   # $ORIGIN/../lib 解析；不使用系统 ICU，也不在本地编译 ICU。
   set(_qt_runtime_archives
-      "6.11.2-0-202608131018icu-linux-Rhel8.6-x86_64.7z|111bdae30a66fff6ef65620e95766170fa5a6f425c360ea33b79cb2ec7e2fd86"
+      "6.12.0-0-202609280346icu-linux-Rhel8.6-x86_64.7z|1fdbcd67b1760f3a3f031c64637a9f19992aed2f35aa615e12a468f8c655d4da"
   )
 else()
   message(FATAL_ERROR "Qt 预编译供给暂不支持平台：${CMAKE_SYSTEM_NAME}（记录到 dependency-acquisition.md 再扩展）")
@@ -146,6 +146,25 @@ function(caret_qt_fetch_extract entry repo_path workdir)
   file(REMOVE "${_archive_path}")
 endfunction()
 
+# 将全部平台 kit 组件作为一个缓存单元。升级或回退时清除共享 staging 与
+# 组件指纹，避免只覆盖新版文件、遗留旧版文件，或因旧指纹跳过回退解包。
+string(
+  SHA256
+    _qt_kit_sha
+    "${_qt_repo_path}\n${_qt_addon_repo_path}\n${_qt_archives}\n${_qt_addon_archives}\n${_qt_runtime_archives}"
+)
+set(_qt_kit_marker "${QT_PROVISION_DIR}/kit.sha256")
+set(_qt_reset_staging TRUE)
+if(EXISTS "${_qt_kit_marker}")
+  file(STRINGS "${_qt_kit_marker}" _recorded_kit_sha)
+  if(_recorded_kit_sha STREQUAL "${_qt_kit_sha}" AND EXISTS "${QT_STAGING}/bin")
+    set(_qt_reset_staging FALSE)
+  endif()
+endif()
+if(_qt_reset_staging)
+  file(REMOVE_RECURSE "${QT_STAGING}" "${QT_EXTRACTED}")
+  file(REMOVE "${_qt_kit_marker}")
+endif()
 file(MAKE_DIRECTORY "${QT_PROVISION_DIR}/archives" "${QT_EXTRACTED}" "${QT_STAGING}")
 foreach(entry IN LISTS _qt_archives)
   string(REPLACE "|" ";" _kv "${entry}")
@@ -182,11 +201,25 @@ foreach(entry IN LISTS _qt_addon_archives)
   file(WRITE "${_extract_marker}" "${_archive_sha}\n")
 endforeach()
 
-if(DEFINED _qt_runtime_archives AND NOT EXISTS "${QT_STAGING}/lib/libicui18n.so.73")
+if(DEFINED _qt_runtime_archives)
   foreach(entry IN LISTS _qt_runtime_archives)
+    string(REPLACE "|" ";" _kv "${entry}")
+    list(GET _kv 0 _archive_name)
+    list(GET _kv 1 _archive_sha)
+    set(_extract_marker "${QT_EXTRACTED}/${_archive_name}.sha256")
+    if(EXISTS "${_extract_marker}" AND EXISTS "${QT_STAGING}/lib/libicui18n.so.73")
+      file(STRINGS "${_extract_marker}" _recorded_sha)
+      if(_recorded_sha STREQUAL "${_archive_sha}")
+        continue()
+      endif()
+    endif()
     caret_qt_fetch_extract("${entry}" "${_qt_repo_path}" "${QT_STAGING}/lib")
+    file(WRITE "${_extract_marker}" "${_archive_sha}\n")
   endforeach()
 endif()
+
+# 仅完整供给成功后提交 kit 指纹；中断的本地 staging 下次会重新创建。
+file(WRITE "${_qt_kit_marker}" "${_qt_kit_sha}\n")
 
 unset(_qt_repo_path)
 unset(_qt_addon_repo_path)
@@ -201,3 +234,7 @@ unset(_archive_sha)
 unset(_qt_runtime_archives)
 unset(_extract_marker)
 unset(_recorded_sha)
+unset(_qt_kit_sha)
+unset(_qt_kit_marker)
+unset(_recorded_kit_sha)
+unset(_qt_reset_staging)

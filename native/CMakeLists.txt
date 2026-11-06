@@ -56,7 +56,7 @@ endif()
 if(CARET_ENABLE_PERFORMANCE)
   list(APPEND _caret_qt_components GuiPrivate)
 endif()
-find_package(Qt6 6.11 REQUIRED COMPONENTS ${_caret_qt_components} PATHS "${QT_STAGING}"
+find_package(Qt6 6.12 REQUIRED COMPONENTS ${_caret_qt_components} PATHS "${QT_STAGING}"
                                           NO_DEFAULT_PATH)
 if(CARET_ENABLE_APP
    AND UNIX

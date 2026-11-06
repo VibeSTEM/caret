@@ -13,7 +13,7 @@ import Caret.Shell
 import Caret.ViewModels
 
 Window {
-    id: window
+    id: rootWindow
 
     objectName: "caretWindow"
     visible: true
@@ -58,7 +58,7 @@ Window {
             closeAfterSaveRequested = true;
             closeAfterSaveSucceeded = false;
             closeAfterAutoSaveFlush = true;
-            Qt.callLater(window.saveDocument);
+            Qt.callLater(rootWindow.saveDocument);
             return;
         }
         if (LayoutViewModel.documentEdited)
@@ -68,13 +68,13 @@ Window {
     }
 
     Component.onCompleted: {
-        WindowChromeMetrics.observeWindow(window);
+        WindowChromeMetrics.observeWindow(rootWindow);
         pendingRecoveryScan = true;
         const recovery = LayoutViewModel.refreshRecoveryEntries();
         if (!recovery.valid) {
             pendingRecoveryScan = false;
             console.warn("Recovery scan skipped:", recovery.error);
-            Qt.callLater(window.requestStartupAutoSavePath);
+            Qt.callLater(rootWindow.requestStartupAutoSavePath);
         }
     }
 
@@ -91,14 +91,14 @@ Window {
                 Layout.minimumHeight: Theme.titlebarHeight
                 Layout.preferredHeight: Theme.titlebarHeight
                 Layout.maximumHeight: Theme.titlebarHeight
-                window: window
+                window: rootWindow
                 leftInset: WindowChromeMetrics.leadingSystemControlsInset
                 rightInset: WindowChromeMetrics.trailingSystemControlsInset
                 onSettingsRequested: settingsController.open()
                 onOpenRequested: openDialog.open()
-                documentName: window.documentName
-                onSaveRequested: window.saveDocument()
-                onAutoSaveRequested: enabled => window.requestAutoSave(enabled)
+                documentName: rootWindow.documentName
+                onSaveRequested: rootWindow.saveDocument()
+                onAutoSaveRequested: enabled => rootWindow.requestAutoSave(enabled)
                 onUndoRequested: LayoutViewModel.undo()
                 onRedoRequested: LayoutViewModel.redo()
             }
@@ -139,7 +139,7 @@ Window {
     SettingsDialog {
         id: settingsDialog
         objectName: "settingsDialog"
-        ownerWindow: window
+        ownerWindow: rootWindow
         controller: settingsController
         pages: [
             {
@@ -220,14 +220,14 @@ Window {
         title: qsTr("Save external backup copy")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("All files (*)")]
-        selectedFile: window.suggestedRecoveryExportUrl
+        selectedFile: rootWindow.suggestedRecoveryExportUrl
         acceptLabel: qsTr("Save copy")
         onAccepted: {
-            const result = LayoutViewModel.exportRecovery(window.pendingRecoveryExportId, DocumentPathAdapter.localFilePath(selectedFile));
+            const result = LayoutViewModel.exportRecovery(rootWindow.pendingRecoveryExportId, DocumentPathAdapter.localFilePath(selectedFile));
             if (!result.valid)
                 documentOperationError.showError(result.error);
         }
-        onRejected: window.pendingRecoveryExportId = ""
+        onRejected: rootWindow.pendingRecoveryExportId = ""
     }
 
     FileDialog {
@@ -237,32 +237,32 @@ Window {
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("Caret documents (*.cdoc)")]
         defaultSuffix: "cdoc"
-        selectedFile: window.suggestedSaveFileUrl
+        selectedFile: rootWindow.suggestedSaveFileUrl
         acceptLabel: qsTr("Save")
         onAccepted: {
             const result = LayoutViewModel.saveDocument(DocumentPathAdapter.localFilePath(selectedFile));
             if (!result.valid && !result.needsSaveAs) {
-                window.closeAfterSaveRequested = false;
-                window.closeAfterSaveSucceeded = false;
+                rootWindow.closeAfterSaveRequested = false;
+                rootWindow.closeAfterSaveSucceeded = false;
                 documentOperationError.showError(result.error);
             }
         }
         onRejected: {
-            window.closeAfterSaveRequested = false;
-            window.closeAfterSaveSucceeded = false;
-            if (window.pendingAutoSaveEnable)
-                window.cancelAutoSaveEnable();
+            rootWindow.closeAfterSaveRequested = false;
+            rootWindow.closeAfterSaveSucceeded = false;
+            if (rootWindow.pendingAutoSaveEnable)
+                rootWindow.cancelAutoSaveEnable();
         }
     }
 
     UnsavedChangesDialog {
         id: closeConfirmation
-        ownerWindow: window
+        ownerWindow: rootWindow
         mathSourceDraftPending: LayoutViewModel.documentMathSourceDraftPending
         onSaveRequested: {
-            window.closeAfterSaveRequested = true;
-            window.closeAfterSaveSucceeded = false;
-            Qt.callLater(window.saveDocument);
+            rootWindow.closeAfterSaveRequested = true;
+            rootWindow.closeAfterSaveSucceeded = false;
+            Qt.callLater(rootWindow.saveDocument);
         }
         onDiscardRequested: {
             const result = LayoutViewModel.discardCurrentRecovery();
@@ -270,26 +270,26 @@ Window {
                 documentOperationError.showError(result.error);
                 return;
             }
-            Qt.callLater(window.closeWindow);
+            Qt.callLater(rootWindow.closeWindow);
         }
     }
 
     SaveConflictDialog {
         id: saveConflictDialog
-        ownerWindow: window
+        ownerWindow: rootWindow
         conflictedFileName: LayoutViewModel.documentFileName
         replaceAllowed: LayoutViewModel.saveConflictCanReplace
-        onSaveCopyRequested: window.requestSaveCopy()
+        onSaveCopyRequested: rootWindow.requestSaveCopy()
         onReplaceRequested: {
             const result = LayoutViewModel.replaceExternalVersion();
             if (!result.valid)
                 documentOperationError.showError(result.error);
         }
         onCancelRequested: {
-            if (window.closeAfterSaveRequested) {
-                window.closeAfterSaveRequested = false;
-                window.closeAfterSaveSucceeded = false;
-                window.closeAfterAutoSaveFlush = false;
+            if (rootWindow.closeAfterSaveRequested) {
+                rootWindow.closeAfterSaveRequested = false;
+                rootWindow.closeAfterSaveSucceeded = false;
+                rootWindow.closeAfterAutoSaveFlush = false;
                 closeConfirmation.open();
             }
         }
@@ -300,10 +300,10 @@ Window {
         entries: LayoutViewModel.recoveryEntries
         busy: LayoutViewModel.documentFileBusy
         onRestoreRequested: id => {
-            window.pendingRecoveryRestore = true;
+            rootWindow.pendingRecoveryRestore = true;
             const result = LayoutViewModel.restoreRecovery(id);
             if (!result.valid) {
-                window.pendingRecoveryRestore = false;
+                rootWindow.pendingRecoveryRestore = false;
                 documentOperationError.showError(result.error);
             }
         }
@@ -315,11 +315,11 @@ Window {
             }
             if (LayoutViewModel.recoveryEntries.length === 0) {
                 recoveryDialog.close();
-                window.requestStartupAutoSavePath();
+                rootWindow.requestStartupAutoSavePath();
             }
         }
-        onExportRequested: id => window.requestRecoveryExport(id)
-        onDismissRequested: window.requestStartupAutoSavePath()
+        onExportRequested: id => rootWindow.requestRecoveryExport(id)
+        onDismissRequested: rootWindow.requestStartupAutoSavePath()
     }
 
     MessageDialog {
@@ -349,67 +349,67 @@ Window {
         target: LayoutViewModel
 
         function onDocumentFileActivityFinished() {
-            window.resumeCloseAfterFileOperation();
+            rootWindow.resumeCloseAfterFileOperation();
         }
 
         function onDocumentSaveFinished(succeeded) {
-            if (window.closeAfterSaveRequested)
-                window.closeAfterSaveSucceeded = succeeded;
+            if (rootWindow.closeAfterSaveRequested)
+                rootWindow.closeAfterSaveSucceeded = succeeded;
         }
 
         function onDocumentFileOperationFinished(succeeded, error, conflict, recoveryWriteFailed, recoveryError) {
-            if (window.pendingRecoveryScan) {
-                window.pendingRecoveryScan = false;
+            if (rootWindow.pendingRecoveryScan) {
+                rootWindow.pendingRecoveryScan = false;
                 if (!succeeded) {
                     console.warn("Recovery scan failed:", error);
-                    if (window.waitForCloseAfterFileOperation) {
-                        window.resumeCloseAfterFileOperation();
+                    if (rootWindow.waitForCloseAfterFileOperation) {
+                        rootWindow.resumeCloseAfterFileOperation();
                         return;
                     }
-                    window.requestStartupAutoSavePath();
+                    rootWindow.requestStartupAutoSavePath();
                     return;
                 }
-                if (window.waitForCloseAfterFileOperation) {
-                    window.resumeCloseAfterFileOperation();
+                if (rootWindow.waitForCloseAfterFileOperation) {
+                    rootWindow.resumeCloseAfterFileOperation();
                     return;
                 }
                 if (LayoutViewModel.recoveryEntries.length > 0)
                     recoveryDialog.open();
                 else
-                    window.requestStartupAutoSavePath();
+                    rootWindow.requestStartupAutoSavePath();
                 return;
             }
-            if (window.pendingRecoveryExportId.length > 0) {
-                window.pendingRecoveryExportId = "";
+            if (rootWindow.pendingRecoveryExportId.length > 0) {
+                rootWindow.pendingRecoveryExportId = "";
                 if (!succeeded)
                     documentOperationError.showError(error);
-                window.resumeCloseAfterFileOperation();
+                rootWindow.resumeCloseAfterFileOperation();
                 return;
             }
-            if (window.pendingRecoveryRestore) {
+            if (rootWindow.pendingRecoveryRestore) {
                 if (!succeeded) {
-                    window.pendingRecoveryRestore = false;
+                    rootWindow.pendingRecoveryRestore = false;
                     documentOperationError.showError(error);
-                    window.resumeCloseAfterFileOperation();
+                    rootWindow.resumeCloseAfterFileOperation();
                     return;
                 }
-                window.pendingRecoveryRestore = false;
+                rootWindow.pendingRecoveryRestore = false;
                 recoveryDialog.close();
-                if (window.waitForCloseAfterFileOperation) {
-                    window.resumeCloseAfterFileOperation();
+                if (rootWindow.waitForCloseAfterFileOperation) {
+                    rootWindow.resumeCloseAfterFileOperation();
                     return;
                 }
-                window.requestStartupAutoSavePath();
+                rootWindow.requestStartupAutoSavePath();
                 return;
             }
             if (!succeeded) {
-                window.waitForCloseAfterFileOperation = false;
-                if (window.pendingAutoSaveEnable)
-                    window.cancelAutoSaveEnable();
-                if (window.closeAfterAutoSaveFlush) {
-                    window.closeAfterSaveRequested = false;
-                    window.closeAfterSaveSucceeded = false;
-                    window.closeAfterAutoSaveFlush = false;
+                rootWindow.waitForCloseAfterFileOperation = false;
+                if (rootWindow.pendingAutoSaveEnable)
+                    rootWindow.cancelAutoSaveEnable();
+                if (rootWindow.closeAfterAutoSaveFlush) {
+                    rootWindow.closeAfterSaveRequested = false;
+                    rootWindow.closeAfterSaveSucceeded = false;
+                    rootWindow.closeAfterAutoSaveFlush = false;
                     closeConfirmation.open();
                     return;
                 }
@@ -419,16 +419,16 @@ Window {
                     saveConflictDialog.open();
                     return;
                 }
-                window.closeAfterSaveRequested = false;
-                window.closeAfterSaveSucceeded = false;
+                rootWindow.closeAfterSaveRequested = false;
+                rootWindow.closeAfterSaveSucceeded = false;
                 documentOperationError.showError(error);
                 return;
             }
-            if (window.pendingAutoSaveEnable && !LayoutViewModel.documentFileBusy)
-                window.commitAutoSaveEnable();
+            if (rootWindow.pendingAutoSaveEnable && !LayoutViewModel.documentFileBusy)
+                rootWindow.commitAutoSaveEnable();
             else if (PreferencesViewModel.autoSaveEnabled && LayoutViewModel.documentPath.length > 0)
                 LayoutViewModel.setAutoSaveEnabled(true);
-            window.resumeCloseAfterFileOperation();
+            rootWindow.resumeCloseAfterFileOperation();
         }
     }
 
@@ -440,12 +440,12 @@ Window {
 
     Shortcut {
         sequences: [StandardKey.Save]
-        onActivated: window.saveDocument()
+        onActivated: rootWindow.saveDocument()
     }
 
     Shortcut {
         sequences: [StandardKey.SaveAs]
-        onActivated: window.requestSaveAs()
+        onActivated: rootWindow.requestSaveAs()
     }
 
     Shortcut {

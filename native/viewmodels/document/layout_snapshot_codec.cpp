@@ -6,6 +6,7 @@
 #include "layout_snapshot_codec.hpp"
 
 #include <QByteArray>
+#include <QChar>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>

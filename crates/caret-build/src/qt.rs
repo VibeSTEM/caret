@@ -1,4 +1,4 @@
-//! 锁定 Qt 6.11.2 与 Linux ICU。归档表在 `native/cmake/qt-provision.cmake`，
+//! 锁定 Qt 6.12.0 与 Linux ICU。归档表在 `native/cmake/qt-provision.cmake`，
 //! 安装根是 `.toolchain/qt`，不写入 `target/`。
 //
 // SPDX-License-Identifier: Apache-2.0

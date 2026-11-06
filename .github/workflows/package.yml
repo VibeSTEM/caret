@@ -41,7 +41,7 @@ jobs:
       - uses: ./.github/actions/caret-cache-restore
       - name: Set macOS deployment target
         if: runner.os == 'macOS'
-        run: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
+        run: echo "MACOSX_DEPLOYMENT_TARGET=14.4" >> "$GITHUB_ENV"
       - name: Build and install release application
         shell: bash
         run: cargo run --locked --release --package caret-tests -- package "$PACKAGE_DIR"

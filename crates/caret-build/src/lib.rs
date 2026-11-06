@@ -24,8 +24,8 @@ pub use compiler::{
     LlvmCompilers, compiler_rt_dll_dir, resolve_cmake, resolve_llvm_compilers, resolve_ninja,
 };
 pub use environment::{
-    MACOS_DEPLOYMENT_TARGET, macos_sdk, native_test_env, prepend_path, target_root,
-    use_system_tools, windows_sdk_env,
+    MACOS_DEPLOYMENT_TARGET, macos_deployment_target, macos_sdk, native_test_env, prepend_path,
+    target_root, use_system_tools, windows_sdk_env,
 };
 pub use install::{install_directory, install_lock};
 pub use paths::{exe_name, toolchain_root};
