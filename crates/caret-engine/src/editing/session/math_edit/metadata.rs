@@ -6,9 +6,32 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use caret_doc::{Align, Block, MathContent, MathFlow, MathNode, MathTree, TextFlow};
-use caret_math::MathSourceMap;
+use caret_math::{MathContentSourceMap, MathFlowSourceMap, MathSourceMap, MathTreeSourceMap};
 
 pub(super) fn preserve_display_math_metadata(
+    original: &Block,
+    updated: &mut Block,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
+    previous_source: &MathSourceMap<'_>,
+    updated_source: &MathSourceMap<'_>,
+) -> bool {
+    let mut candidate = updated.clone();
+    if !preserve_display_math_metadata_inner(
+        original,
+        &mut candidate,
+        old_edit,
+        new_edit,
+        previous_source,
+        updated_source,
+    ) {
+        return false;
+    }
+    *updated = candidate;
+    true
+}
+
+fn preserve_display_math_metadata_inner(
     original: &Block,
     updated: &mut Block,
     old_edit: &std::ops::Range<usize>,
@@ -19,11 +42,24 @@ pub(super) fn preserve_display_math_metadata(
     match (original, updated) {
         (Block::Equation(original), Block::Equation(updated)) => {
             updated.extra.clone_from(&original.extra);
+            let (Some(previous_map), Some(updated_map)) =
+                (previous_source.tree(), updated_source.tree())
+            else {
+                return false;
+            };
+            let (Some(old_edit), Some(new_edit)) = (
+                edit_range_in_source(previous_source, old_edit),
+                edit_range_in_source(updated_source, new_edit),
+            ) else {
+                return false;
+            };
             preserve_math_tree_metadata_for_edit(
                 &original.math_tree,
                 &mut updated.math_tree,
-                old_edit,
-                new_edit,
+                &old_edit,
+                &new_edit,
+                previous_map,
+                updated_map,
             )
         }
         (Block::Align(original), Block::Align(updated)) => {
@@ -55,6 +91,50 @@ pub(super) fn preserve_align_metadata(
     previous_source: &MathSourceMap<'_>,
     updated_source: &MathSourceMap<'_>,
 ) -> bool {
+    let mut candidate = updated.clone();
+    if !preserve_align_metadata_inner(
+        previous,
+        &mut candidate,
+        old_edit,
+        new_edit,
+        previous_source,
+        updated_source,
+    ) {
+        return false;
+    }
+    *updated = candidate;
+    true
+}
+
+fn preserve_align_metadata_inner(
+    previous: &Align,
+    updated: &mut Align,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
+    previous_source: &MathSourceMap<'_>,
+    updated_source: &MathSourceMap<'_>,
+) -> bool {
+    let (Some(previous_align_map), Some(updated_align_map)) =
+        (previous_source.align(), updated_source.align())
+    else {
+        return false;
+    };
+    // 暂无按编辑映射迁移扩展的接口，拒绝未知归属以免扩展落到其他节点。
+    if previous.rows.iter().enumerate().any(|(row_index, row)| {
+        row.cells.iter().enumerate().any(|(cell_index, _)| {
+            previous_align_map
+                .cell_tree(row_index, cell_index)
+                .is_none_or(|map| flow_map_has_extra(map.root()))
+        })
+    }) || updated.rows.iter().enumerate().any(|(row_index, row)| {
+        row.cells.iter().enumerate().any(|(cell_index, _)| {
+            updated_align_map
+                .cell_tree(row_index, cell_index)
+                .is_none_or(|map| flow_map_has_extra(map.root()))
+        })
+    }) {
+        return false;
+    }
     updated.extra.clone_from(&previous.extra);
     let Some(mut previous_cells) = align_cell_source_ranges(previous, previous_source) else {
         return false;
@@ -62,10 +142,18 @@ pub(super) fn preserve_align_metadata(
     let Some(mut updated_cells) = align_cell_source_ranges(updated, updated_source) else {
         return false;
     };
+    let Some(mut previous_navigation_cells) = align_cell_navigation_ranges(previous_source) else {
+        return false;
+    };
+    let Some(mut updated_navigation_cells) = align_cell_navigation_ranges(updated_source) else {
+        return false;
+    };
     let previous_base = previous_source.edit_range().start;
     let updated_base = updated_source.edit_range().start;
     if !shift_cell_ranges(&mut previous_cells, previous_base)
         || !shift_cell_ranges(&mut updated_cells, updated_base)
+        || !shift_cell_ranges(&mut previous_navigation_cells, previous_base)
+        || !shift_cell_ranges(&mut updated_navigation_cells, updated_base)
     {
         return false;
     }
@@ -79,8 +167,8 @@ pub(super) fn preserve_align_metadata(
     };
     let old_edit = old_start..old_end;
     let new_edit = new_start..new_end;
-    let previous_rows = align_row_source_ranges(&previous_cells);
-    let updated_rows = align_row_source_ranges(&updated_cells);
+    let previous_rows = align_row_navigation_ranges(&previous_navigation_cells);
+    let updated_rows = align_row_navigation_ranges(&updated_navigation_cells);
     let prefix_end = old_edit.start;
     let previous_tail = old_edit.end;
     let updated_tail = new_edit.end;
@@ -160,6 +248,7 @@ pub(super) fn preserve_align_metadata(
         }
     }
     let mut matched_cells = HashSet::new();
+    let mut matched_updated_cells = HashSet::new();
     for (row_index, row) in updated.rows.iter_mut().enumerate() {
         for (cell_index, cell) in row.cells.iter_mut().enumerate() {
             let range = &updated_cells[row_index][cell_index];
@@ -178,15 +267,35 @@ pub(super) fn preserve_align_metadata(
                     && old_source == new_source
                     && matched_cells.insert((old_row, old_cell))
                 {
+                    matched_updated_cells.insert((row_index, cell_index));
                     let old_cell_range = &previous_cells[old_row][old_cell];
                     let old_local_edit = old_cell_range.end..old_cell_range.end;
                     let new_local_edit = updated_cells[row_index][cell_index].len()
                         ..updated_cells[row_index][cell_index].len();
+                    let Some(old_absolute) =
+                        offset_range(&old_local_edit, previous_base + old_cell_range.start)
+                    else {
+                        return false;
+                    };
+                    let Some(new_absolute) = offset_range(
+                        &new_local_edit,
+                        updated_base + updated_cells[row_index][cell_index].start,
+                    ) else {
+                        return false;
+                    };
+                    let (Some(old_map), Some(new_map)) = (
+                        previous_align_map.cell_tree(old_row, old_cell),
+                        updated_align_map.cell_tree(row_index, cell_index),
+                    ) else {
+                        return false;
+                    };
                     metadata_preserved &= preserve_math_tree_metadata_for_edit(
                         &previous.rows[old_row].cells[old_cell],
                         cell,
-                        &old_local_edit,
-                        &new_local_edit,
+                        &old_absolute,
+                        &new_absolute,
+                        old_map,
+                        new_map,
                     );
                     break;
                 }
@@ -194,25 +303,47 @@ pub(super) fn preserve_align_metadata(
         }
     }
 
-    let old_changed_cells = changed_cell_candidates(&previous_cells, &old_edit);
-    let new_changed_cells = changed_cell_candidates(&updated_cells, &new_edit);
+    let old_changed_cells = changed_cell_candidates(&previous_navigation_cells, &old_edit);
+    // 空 cell 的语义范围可能是注释之后的零宽点；导航范围才能将注释前的编辑归回该 cell。
+    let new_changed_cells = changed_cell_candidates(&updated_navigation_cells, &new_edit);
     if old_changed_cells.len() == 1 && new_changed_cells.len() == 1 {
         let (old_row, old_cell) = old_changed_cells[0];
         let (new_row, new_cell) = new_changed_cells[0];
-        if !matched_cells.contains(&(old_row, old_cell)) {
+        if !matched_cells.contains(&(old_row, old_cell))
+            && !matched_updated_cells.contains(&(new_row, new_cell))
+        {
             let old_cell_range = &previous_cells[old_row][old_cell];
             let new_cell_range = &updated_cells[new_row][new_cell];
             let old_local_edit = local_edit_range(&old_edit, old_cell_range, old_cell_range.len());
             let new_local_edit = local_edit_range(&new_edit, new_cell_range, new_cell_range.len());
+            let Some(old_absolute) =
+                offset_range(&old_local_edit, previous_base + old_cell_range.start)
+            else {
+                return false;
+            };
+            let Some(new_absolute) =
+                offset_range(&new_local_edit, updated_base + new_cell_range.start)
+            else {
+                return false;
+            };
+            let (Some(old_map), Some(new_map)) = (
+                previous_align_map.cell_tree(old_row, old_cell),
+                updated_align_map.cell_tree(new_row, new_cell),
+            ) else {
+                return false;
+            };
             let preserved = preserve_math_tree_metadata_for_edit(
                 &previous.rows[old_row].cells[old_cell],
                 &mut updated.rows[new_row].cells[new_cell],
-                &old_local_edit,
-                &new_local_edit,
+                &old_absolute,
+                &new_absolute,
+                old_map,
+                new_map,
             );
             metadata_preserved &= preserved;
             if preserved {
                 matched_cells.insert((old_row, old_cell));
+                matched_updated_cells.insert((new_row, new_cell));
             }
         }
     }
@@ -250,6 +381,12 @@ pub(super) fn align_cell_source_ranges(
         .collect()
 }
 
+fn align_cell_navigation_ranges(
+    source: &MathSourceMap<'_>,
+) -> Option<Vec<Vec<std::ops::Range<usize>>>> {
+    Some(source.align()?.cell_navigation_ranges().to_vec())
+}
+
 fn shift_cell_ranges(cells: &mut [Vec<std::ops::Range<usize>>], base: usize) -> bool {
     cells.iter_mut().flatten().all(|range| {
         let (Some(start), Some(end)) = (range.start.checked_sub(base), range.end.checked_sub(base))
@@ -275,12 +412,19 @@ fn edit_range_in_source(
     )
 }
 
-fn align_row_source_ranges(cells: &[Vec<std::ops::Range<usize>>]) -> Vec<std::ops::Range<usize>> {
+fn offset_range(range: &std::ops::Range<usize>, base: usize) -> Option<std::ops::Range<usize>> {
+    Some(base.checked_add(range.start)?..base.checked_add(range.end)?)
+}
+
+fn align_row_navigation_ranges(
+    cells: &[Vec<std::ops::Range<usize>>],
+) -> Vec<std::ops::Range<usize>> {
     cells
         .iter()
-        .map(|row| match (row.first(), row.last()) {
-            (Some(first), Some(last)) => first.start..last.end,
-            _ => 0..0,
+        .map(|row| {
+            let start = row.iter().map(|range| range.start).min().unwrap_or(0);
+            let end = row.iter().map(|range| range.end).max().unwrap_or(start);
+            start..end
         })
         .collect()
 }
@@ -381,12 +525,20 @@ fn map_changed_rows(
     }
 }
 
-/// 仅当未变源码范围唯一对应时复用节点身份；覆盖编辑范围的节点沿用解析器生成的新元数据。
-/// 通过源码范围匹配并恢复节点元数据；存在未匹配的未知字段时返回 `false`。
+/// 按未变源码范围匹配节点，并在可唯一对应时沿祖先路径恢复身份；未知字段无法无歧义迁移时返回 `false`。
 #[cfg(test)]
 pub(super) fn preserve_math_tree_metadata(previous: &MathTree, updated: &mut MathTree) -> bool {
     let previous_source = caret_math::serialize_tree(previous);
     let updated_source = caret_math::serialize_tree(updated);
+    let (Ok(old), Ok(new)) = (
+        caret_math::parse_projection(&previous_source, caret_math::MathInputKind::Inline),
+        caret_math::parse_projection(&updated_source, caret_math::MathInputKind::Inline),
+    ) else {
+        return false;
+    };
+    let (Some(old_map), Some(new_map)) = (old.source_map().tree(), new.source_map().tree()) else {
+        return false;
+    };
     let (prefix_end, previous_tail, updated_tail) =
         unchanged_source_boundaries(&previous_source, &updated_source);
     preserve_math_tree_metadata_for_edit(
@@ -394,23 +546,42 @@ pub(super) fn preserve_math_tree_metadata(previous: &MathTree, updated: &mut Mat
         updated,
         &(prefix_end..previous_tail),
         &(prefix_end..updated_tail),
+        old_map,
+        new_map,
     )
 }
 
+/// 根据完整源码的绝对编辑范围匹配持久节点；映射须由调用方验证其树版本与源码。
+/// 无法确定扩展归属时拒绝修改，并保持 `updated` 不变。
 pub(super) fn preserve_math_tree_metadata_for_edit(
     previous: &MathTree,
     updated: &mut MathTree,
     old_edit: &std::ops::Range<usize>,
     new_edit: &std::ops::Range<usize>,
+    previous_map: &MathTreeSourceMap,
+    updated_map: &MathTreeSourceMap,
 ) -> bool {
-    updated.extra.clone_from(&previous.extra);
-    preserve_math_flow_metadata(
+    if old_edit.start > old_edit.end
+        || new_edit.start > new_edit.end
+        || flow_map_has_extra(previous_map.root())
+        || flow_map_has_extra(updated_map.root())
+    {
+        return false;
+    }
+    let mut candidate = updated.clone();
+    candidate.extra.clone_from(&previous.extra);
+    if !preserve_math_flow_metadata(
         &previous.root,
-        &mut updated.root,
-        old_edit.start,
-        old_edit.end,
-        new_edit.end,
-    )
+        &mut candidate.root,
+        previous_map.root(),
+        updated_map.root(),
+        old_edit,
+        new_edit,
+    ) {
+        return false;
+    }
+    *updated = candidate;
+    true
 }
 
 fn range_intersects_edit(range: &std::ops::Range<usize>, edit: &std::ops::Range<usize>) -> bool {
@@ -433,74 +604,62 @@ fn local_edit_range(
 fn preserve_math_flow_metadata(
     previous: &MathFlow,
     updated: &mut MathFlow,
-    prefix_end: usize,
-    previous_tail: usize,
-    updated_tail: usize,
+    previous_map: &MathFlowSourceMap,
+    updated_map: &MathFlowSourceMap,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
 ) -> bool {
-    let mut metadata_preserved = true;
     updated.id.clone_from(&previous.id);
     updated.extra.clone_from(&previous.extra);
-    if let (Some(previous_range), Some(updated_range)) =
-        (&previous.source_range, &mut updated.source_range)
-    {
-        updated_range.extra.clone_from(&previous_range.extra);
-    } else if previous
-        .source_range
-        .as_ref()
-        .is_some_and(|range| !range.extra.is_empty())
-    {
-        metadata_preserved = false;
-    }
-    metadata_preserved
-        && preserve_math_content_list_metadata(
-            &previous.content,
-            &mut updated.content,
-            prefix_end,
-            previous_tail,
-            updated_tail,
-        )
+    preserve_math_content_list_metadata(
+        &previous.content,
+        &mut updated.content,
+        previous_map.content(),
+        updated_map.content(),
+        old_edit,
+        new_edit,
+    )
 }
 
 fn preserve_math_content_list_metadata(
     previous: &[MathContent],
     updated: &mut [MathContent],
-    prefix_end: usize,
-    previous_tail: usize,
-    updated_tail: usize,
+    previous_map: &[MathContentSourceMap],
+    updated_map: &[MathContentSourceMap],
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
 ) -> bool {
+    if previous.len() != previous_map.len() || updated.len() != updated_map.len() {
+        return false;
+    }
     let mut metadata_preserved = true;
     let mut matched_previous = HashSet::new();
     let mut previous_by_mapped_range = HashMap::<(usize, usize), VecDeque<usize>>::new();
     let mut previous_containing_edit = Vec::new();
-    for (index, candidate) in previous.iter().enumerate() {
-        if let Some((start, end)) =
-            mapped_content_range(candidate, prefix_end, previous_tail, updated_tail)
-        {
-            previous_by_mapped_range
-                .entry((start, end))
-                .or_default()
-                .push_back(index);
-        }
-        if content_source_range(candidate).is_some_and(|range| {
-            range.start as usize <= prefix_end && range.end as usize >= previous_tail
-        }) {
-            previous_containing_edit.push(index);
+    for (index, map) in previous_map.iter().enumerate() {
+        if let Some(range) = map.range() {
+            if let Some(mapped) = map_tree_range(&range, old_edit, new_edit) {
+                previous_by_mapped_range
+                    .entry(mapped)
+                    .or_default()
+                    .push_back(index);
+            }
+            if range.start <= old_edit.start && range.end >= old_edit.end {
+                previous_containing_edit.push(index);
+            }
         }
     }
-    for child in updated {
-        let mapped_match = content_source_range(child).and_then(|range| {
-            let expected = (range.start as usize, range.end as usize);
-            let candidates = previous_by_mapped_range.get_mut(&expected)?;
+    for (child, map) in updated.iter_mut().zip(updated_map) {
+        let mapped_match = map.range().and_then(|range| {
+            let candidates = previous_by_mapped_range.get_mut(&(range.start, range.end))?;
             let match_index = candidates.iter().position(|index| {
                 !matched_previous.contains(index) && content_kind_matches(&previous[*index], child)
             })?;
             let index = candidates.remove(match_index)?;
-            Some((index, &previous[index]))
+            Some(index)
         });
-        let containing_match = content_source_range(child).and_then(|range| {
-            let start = range.start as usize;
-            let end = range.end as usize;
-            if start > prefix_end || end < updated_tail {
+        let containing_match = map.range().and_then(|range| {
+            if range.start > new_edit.start || range.end < new_edit.end {
                 return None;
             }
             let mut candidates = previous_containing_edit.iter().filter(|index| {
@@ -508,19 +667,17 @@ fn preserve_math_content_list_metadata(
                     && content_kind_matches(&previous[**index], child)
             });
             let index = *candidates.next()?;
-            candidates
-                .next()
-                .is_none()
-                .then_some((index, &previous[index]))
+            candidates.next().is_none().then_some(index)
         });
-        if let Some((index, matched)) = mapped_match.or(containing_match) {
+        if let Some(index) = mapped_match.or(containing_match) {
             matched_previous.insert(index);
             metadata_preserved &= preserve_math_content_metadata(
-                matched,
+                &previous[index],
                 child,
-                prefix_end,
-                previous_tail,
-                updated_tail,
+                &previous_map[index],
+                map,
+                old_edit,
+                new_edit,
             );
         }
     }
@@ -535,161 +692,113 @@ fn preserve_math_content_list_metadata(
 fn preserve_math_content_metadata(
     previous: &MathContent,
     updated: &mut MathContent,
-    prefix_end: usize,
-    previous_tail: usize,
-    updated_tail: usize,
+    previous_map: &MathContentSourceMap,
+    updated_map: &MathContentSourceMap,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
 ) -> bool {
-    match (previous, updated) {
-        (MathContent::Math(previous), MathContent::Math(updated)) => {
-            preserve_math_node_metadata(previous, updated, prefix_end, previous_tail, updated_tail)
-        }
-        (MathContent::Text(previous), MathContent::Text(updated)) => {
+    match (previous, updated, previous_map, updated_map) {
+        (
+            MathContent::Math(previous),
+            MathContent::Math(updated),
+            MathContentSourceMap::Math {
+                operands: old_operands,
+                ..
+            },
+            MathContentSourceMap::Math {
+                operands: new_operands,
+                ..
+            },
+        ) => preserve_math_node_metadata(
+            previous,
+            updated,
+            old_operands,
+            new_operands,
+            old_edit,
+            new_edit,
+        ),
+        (
+            MathContent::Text(previous),
+            MathContent::Text(updated),
+            MathContentSourceMap::Text(_),
+            MathContentSourceMap::Text(_),
+        ) => {
             let same_text = previous
                 .runs
                 .iter()
                 .flat_map(|run| run.text.chars())
                 .eq(updated.runs.iter().flat_map(|run| run.text.chars()));
             if same_text {
-                let mut metadata_preserved = true;
-                let mut matched_entries = HashSet::new();
-                // 未知字段只沿未编辑且唯一的源码映射迁移，避免把扩展数据猜配到别的文本。
-                let mut previous_entries = HashMap::<(u32, u32, usize, usize), Vec<usize>>::new();
-                let mut updated_entry_counts = HashMap::<(u32, u32, usize, usize), usize>::new();
-                for (index, entry) in previous.source_map.iter().enumerate() {
-                    let old_range =
-                        entry.source_range.start as usize..entry.source_range.end as usize;
-                    if let Some((start, end)) =
-                        map_unchanged_range(&old_range, prefix_end, previous_tail, updated_tail)
-                    {
-                        previous_entries
-                            .entry((entry.text_start, entry.text_end, start, end))
-                            .or_default()
-                            .push(index);
-                    }
-                }
-                for entry in &updated.source_map {
-                    *updated_entry_counts
-                        .entry((
-                            entry.text_start,
-                            entry.text_end,
-                            entry.source_range.start as usize,
-                            entry.source_range.end as usize,
-                        ))
-                        .or_default() += 1;
-                }
-                for updated_entry in &mut updated.source_map {
-                    let key = (
-                        updated_entry.text_start,
-                        updated_entry.text_end,
-                        updated_entry.source_range.start as usize,
-                        updated_entry.source_range.end as usize,
-                    );
-                    if let Some(indices) = previous_entries.get(&key)
-                        && indices.len() == 1
-                        && updated_entry_counts.get(&key) == Some(&1)
-                        && let Some(index) = indices.first().copied()
-                        && !matched_entries.contains(&index)
-                    {
-                        let old_entry = &previous.source_map[index];
-                        matched_entries.insert(index);
-                        updated_entry.extra.clone_from(&old_entry.extra);
-                        updated_entry
-                            .source_range
-                            .extra
-                            .clone_from(&old_entry.source_range.extra);
-                    } else if !updated_entry.extra.is_empty()
-                        || !updated_entry.source_range.extra.is_empty()
-                    {
-                        metadata_preserved = false;
-                    }
-                }
-                if previous
-                    .source_map
-                    .iter()
-                    .enumerate()
-                    .any(|(index, entry)| {
-                        !matched_entries.contains(&index)
-                            && (!entry.extra.is_empty() || !entry.source_range.extra.is_empty())
-                    })
-                {
-                    metadata_preserved = false;
-                }
                 updated.runs.clone_from(&previous.runs);
                 updated.extra.clone_from(&previous.extra);
-                if let Some(old) = &previous.source_range {
-                    let Some(new) = &mut updated.source_range else {
-                        return false;
-                    };
-                    new.extra.clone_from(&old.extra);
-                }
-                metadata_preserved
+                true
             } else {
                 previous.extra.is_empty()
-                    && previous
-                        .source_range
-                        .as_ref()
-                        .is_none_or(|range| range.extra.is_empty())
                     && previous.runs.iter().all(|run| {
                         run.language.is_none() && run.props.is_empty() && run.extra.is_empty()
                     })
-                    && previous
-                        .source_map
-                        .iter()
-                        .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
             }
         }
-        (MathContent::Environment(previous), MathContent::Environment(updated))
-            if previous.kind == updated.kind =>
-        {
+        (
+            MathContent::Environment(previous),
+            MathContent::Environment(updated),
+            MathContentSourceMap::Environment {
+                children: old_children,
+                ..
+            },
+            MathContentSourceMap::Environment {
+                children: new_children,
+                ..
+            },
+        ) if previous.kind == updated.kind => {
             updated.id.clone_from(&previous.id);
             updated.extra.clone_from(&previous.extra);
             updated.props.clone_from(&previous.props);
             updated.definition_id.clone_from(&previous.definition_id);
-            if let (Some(old), Some(new)) = (&previous.source_range, &mut updated.source_range) {
-                new.extra.clone_from(&old.extra);
-            }
-            (previous
-                .source_range
-                .as_ref()
-                .is_none_or(|range| range.extra.is_empty())
-                || updated.source_range.is_some())
-                && preserve_math_content_list_metadata(
-                    &previous.children,
-                    &mut updated.children,
-                    prefix_end,
-                    previous_tail,
-                    updated_tail,
-                )
+            preserve_math_content_list_metadata(
+                &previous.children,
+                &mut updated.children,
+                old_children,
+                new_children,
+                old_edit,
+                new_edit,
+            )
         }
-        (MathContent::SoftBreak(previous), MathContent::SoftBreak(updated)) => {
+        (
+            MathContent::SoftBreak(previous),
+            MathContent::SoftBreak(updated),
+            MathContentSourceMap::Other,
+            MathContentSourceMap::Other,
+        ) => {
             updated.extra.clone_from(&previous.extra);
             true
         }
-        (MathContent::Opaque(_), MathContent::Opaque(_)) => true,
-        _ => !content_has_metadata(previous),
+        (
+            MathContent::Opaque(_),
+            MathContent::Opaque(_),
+            MathContentSourceMap::Other,
+            MathContentSourceMap::Other,
+        ) => true,
+        _ => false,
     }
 }
 
 fn preserve_math_node_metadata(
     previous: &MathNode,
     updated: &mut MathNode,
-    prefix_end: usize,
-    previous_tail: usize,
-    updated_tail: usize,
+    previous_map: &[MathFlowSourceMap],
+    updated_map: &[MathFlowSourceMap],
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
 ) -> bool {
+    if previous.children.len() != previous_map.len() || updated.children.len() != updated_map.len()
+    {
+        return false;
+    }
     let mut preserved = true;
     if previous.kind == updated.kind {
         updated.id.clone_from(&previous.id);
         updated.extra.clone_from(&previous.extra);
-        if let (Some(old), Some(new)) = (&previous.source_range, &mut updated.source_range) {
-            new.extra.clone_from(&old.extra);
-        } else if previous
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
-        {
-            preserved = false;
-        }
     } else if !previous.extra.is_empty() {
         preserved = false;
     }
@@ -700,40 +809,65 @@ fn preserve_math_node_metadata(
                 .iter()
                 .all(|child| !flow_has_metadata(child));
     }
-    for (old, new) in previous.children.iter().zip(&mut updated.children) {
-        preserved &= preserve_math_flow_metadata(old, new, prefix_end, previous_tail, updated_tail);
+    for ((old, old_map), (new, new_map)) in previous
+        .children
+        .iter()
+        .zip(previous_map)
+        .zip(updated.children.iter_mut().zip(updated_map))
+    {
+        preserved &= preserve_math_flow_metadata(old, new, old_map, new_map, old_edit, new_edit);
     }
     preserved
 }
 
-fn content_source_range(content: &MathContent) -> Option<&caret_doc::MathSourceRange> {
-    match content {
-        MathContent::Text(text) => text.source_range.as_ref(),
-        MathContent::Math(node) => node.source_range.as_ref(),
-        MathContent::Environment(environment) => environment.source_range.as_ref(),
-        _ => None,
-    }
-}
-fn mapped_content_range(
-    content: &MathContent,
-    prefix_end: usize,
-    previous_tail: usize,
-    updated_tail: usize,
+fn map_tree_range(
+    range: &std::ops::Range<usize>,
+    old_edit: &std::ops::Range<usize>,
+    new_edit: &std::ops::Range<usize>,
 ) -> Option<(usize, usize)> {
-    let range = content_source_range(content)?;
-    let (start, end) = (range.start as usize, range.end as usize);
-    if end <= prefix_end {
-        Some((start, end))
-    } else if start >= previous_tail {
-        let shift = updated_tail as isize - previous_tail as isize;
-        Some((
-            start.checked_add_signed(shift)?,
-            end.checked_add_signed(shift)?,
-        ))
+    let (from, to) = if range.end <= old_edit.start
+        && !(range.is_empty() && range.start == old_edit.start && old_edit.is_empty())
+    {
+        (old_edit.start, new_edit.start)
+    } else if range.start >= old_edit.end
+        && !(range.is_empty() && range.start == old_edit.end && old_edit.is_empty())
+    {
+        (old_edit.end, new_edit.end)
     } else {
-        None
+        return None;
+    };
+    let translate = |position: usize| {
+        if to >= from {
+            position.checked_add(to - from)
+        } else {
+            position.checked_sub(from - to)
+        }
+    };
+    Some((translate(range.start)?, translate(range.end)?))
+}
+
+fn flow_map_has_extra(flow: &MathFlowSourceMap) -> bool {
+    !flow.range_extra().is_empty() || flow.content().iter().any(content_map_has_extra)
+}
+
+fn content_map_has_extra(content: &MathContentSourceMap) -> bool {
+    match content {
+        MathContentSourceMap::Text(text) => {
+            !text.range_extra().is_empty()
+                || text.segments().iter().any(|segment| {
+                    !segment.extra().is_empty() || !segment.source_extra().is_empty()
+                })
+        }
+        MathContentSourceMap::Math {
+            range, operands, ..
+        } => !range.extra().is_empty() || operands.iter().any(flow_map_has_extra),
+        MathContentSourceMap::Environment { range, children } => {
+            !range.extra().is_empty() || children.iter().any(content_map_has_extra)
+        }
+        MathContentSourceMap::Other => false,
     }
 }
+
 fn content_kind_matches(left: &MathContent, right: &MathContent) -> bool {
     match (left, right) {
         (MathContent::Text(_), MathContent::Text(_))
@@ -748,27 +882,15 @@ fn content_has_metadata(content: &MathContent) -> bool {
     match content {
         MathContent::Text(text) => {
             !text.extra.is_empty()
-                || text
-                    .source_range
-                    .as_ref()
-                    .is_some_and(|range| !range.extra.is_empty())
                 || text.runs.iter().any(|run| {
                     run.language.is_some() || !run.props.is_empty() || !run.extra.is_empty()
                 })
-                || text
-                    .source_map
-                    .iter()
-                    .any(|entry| !entry.extra.is_empty() || !entry.source_range.extra.is_empty())
         }
         MathContent::Math(node) => node_has_metadata(node),
         MathContent::Environment(environment) => {
             environment.definition_id.is_some()
                 || !environment.props.is_empty()
                 || !environment.extra.is_empty()
-                || environment
-                    .source_range
-                    .as_ref()
-                    .is_some_and(|range| !range.extra.is_empty())
                 || environment.children.iter().any(content_has_metadata)
         }
         MathContent::SoftBreak(value) => !value.extra.is_empty(),
@@ -776,12 +898,7 @@ fn content_has_metadata(content: &MathContent) -> bool {
     }
 }
 fn flow_has_metadata(flow: &MathFlow) -> bool {
-    !flow.extra.is_empty()
-        || flow
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
-        || flow.content.iter().any(content_has_metadata)
+    !flow.extra.is_empty() || flow.content.iter().any(content_has_metadata)
 }
 
 fn tree_has_metadata(tree: &MathTree) -> bool {
@@ -800,12 +917,7 @@ pub(super) fn can_materialize_source_as_text(tree: &MathTree) -> bool {
 }
 
 fn flow_source_is_textual(flow: &MathFlow, parsed: &MathFlow) -> bool {
-    flow.extra.is_empty()
-        && flow
-            .source_range
-            .as_ref()
-            .is_none_or(|range| range.extra.is_empty())
-        && content_sequence_source_is_textual(&flow.content, &parsed.content)
+    flow.extra.is_empty() && content_sequence_source_is_textual(&flow.content, &parsed.content)
 }
 
 fn content_sequence_source_is_textual(contents: &[MathContent], parsed: &[MathContent]) -> bool {
@@ -869,10 +981,6 @@ fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> boo
         (MathContent::Text(text), MathContent::Text(_)) => text_flow_is_plain(text),
         (MathContent::Math(node), MathContent::Math(parsed_node)) => {
             node.extra.is_empty()
-                && node
-                    .source_range
-                    .as_ref()
-                    .is_none_or(|range| range.extra.is_empty())
                 && node.children.len() == parsed_node.children.len()
                 && node
                     .children
@@ -884,10 +992,6 @@ fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> boo
             environment.definition_id.is_none()
                 && environment.props == parsed_environment.props
                 && environment.extra.is_empty()
-                && environment
-                    .source_range
-                    .as_ref()
-                    .is_none_or(|range| range.extra.is_empty())
                 && content_sequence_source_is_textual(
                     &environment.children,
                     &parsed_environment.children,
@@ -902,17 +1006,9 @@ fn content_source_is_textual(content: &MathContent, parsed: &MathContent) -> boo
 fn text_flow_is_plain(text: &TextFlow) -> bool {
     text.extra.is_empty()
         && text
-            .source_range
-            .as_ref()
-            .is_none_or(|range| range.extra.is_empty())
-        && text
             .runs
             .iter()
             .all(|run| run.language.is_none() && run.props.is_empty() && run.extra.is_empty())
-        && text
-            .source_map
-            .iter()
-            .all(|entry| entry.extra.is_empty() && entry.source_range.extra.is_empty())
 }
 
 fn row_has_metadata(row: &caret_doc::MathAlignRow) -> bool {
@@ -920,12 +1016,7 @@ fn row_has_metadata(row: &caret_doc::MathAlignRow) -> bool {
 }
 
 fn node_has_metadata(node: &MathNode) -> bool {
-    !node.extra.is_empty()
-        || node
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
-        || node.children.iter().any(flow_has_metadata)
+    !node.extra.is_empty() || node.children.iter().any(flow_has_metadata)
 }
 
 #[cfg(test)]
@@ -951,4 +1042,133 @@ pub(super) fn unchanged_source_boundaries(previous: &str, updated: &str) -> (usi
         }
     }
     (prefix_end, previous_tail, updated_tail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preserve_math_tree_metadata_for_edit;
+    use caret_doc::MathContent;
+    use caret_math::{MathInputKind, ProjectedMath, parse_projection};
+
+    #[test]
+    fn metadata_follows_unchanged_source_after_insertion() {
+        let (ProjectedMath::Tree(mut previous), old_map) =
+            parse_projection("a+a", MathInputKind::Inline)
+                .unwrap_or_else(|_| panic!("valid previous formula"))
+                .into_parts()
+        else {
+            panic!("expected tree")
+        };
+        let (ProjectedMath::Tree(mut updated), new_map) =
+            parse_projection("a+a+a", MathInputKind::Inline)
+                .unwrap_or_else(|_| panic!("valid updated formula"))
+                .into_parts()
+        else {
+            panic!("expected tree")
+        };
+        let MathContent::Math(original) = &mut previous.root.content[0] else {
+            panic!("expected node")
+        };
+        original.extra.insert("vendor".into(), serde_json::json!(1));
+        let original_id = original.id.clone();
+        assert!(preserve_math_tree_metadata_for_edit(
+            &previous,
+            &mut updated,
+            &(0..0),
+            &(0..2),
+            old_map.tree().unwrap_or_else(|| panic!("old map")),
+            new_map.tree().unwrap_or_else(|| panic!("new map")),
+        ));
+        let MathContent::Math(original) = &updated.root.content[2] else {
+            panic!("expected node")
+        };
+        assert_eq!(original.id, original_id);
+        assert_eq!(original.extra["vendor"], 1);
+    }
+
+    #[test]
+    fn rejected_metadata_mapping_keeps_candidate_unchanged() {
+        let (ProjectedMath::Tree(mut previous), old_map) =
+            parse_projection("a+b", MathInputKind::Inline)
+                .unwrap_or_else(|_| panic!("valid previous formula"))
+                .into_parts()
+        else {
+            panic!("expected tree")
+        };
+        let source = r"\frac{a}{b}";
+        let (ProjectedMath::Tree(mut updated), new_map) =
+            parse_projection(source, MathInputKind::Inline)
+                .unwrap_or_else(|_| panic!("valid updated formula"))
+                .into_parts()
+        else {
+            panic!("expected tree")
+        };
+        let MathContent::Math(original) = &mut previous.root.content[0] else {
+            panic!("expected node")
+        };
+        original.extra.insert("vendor".into(), serde_json::json!(1));
+        let before = updated.clone();
+        assert!(!preserve_math_tree_metadata_for_edit(
+            &previous,
+            &mut updated,
+            &(0..3),
+            &(0..source.len()),
+            old_map.tree().unwrap_or_else(|| panic!("old map")),
+            new_map.tree().unwrap_or_else(|| panic!("new map")),
+        ));
+        assert_eq!(updated, before);
+    }
+
+    #[test]
+    fn align_cell_metadata_survives_shift_in_complete_source() {
+        let old = r"\begin{aligned}a&b\end{aligned}";
+        let new = r"\begin{aligned}aa&b\end{aligned}";
+        let (ProjectedMath::Align(mut previous), old_map) =
+            parse_projection(old, MathInputKind::Align)
+                .unwrap_or_else(|_| panic!("valid previous align"))
+                .into_parts()
+        else {
+            panic!("expected align")
+        };
+        let (ProjectedMath::Align(mut updated), new_map) =
+            parse_projection(new, MathInputKind::Align)
+                .unwrap_or_else(|_| panic!("valid updated align"))
+                .into_parts()
+        else {
+            panic!("expected align")
+        };
+        let previous_tree = &mut previous.rows[0].cells[1];
+        let MathContent::Math(original) = &mut previous_tree.root.content[0] else {
+            panic!("expected node")
+        };
+        original.extra.insert("vendor".into(), serde_json::json!(1));
+        let original_id = original.id.clone();
+        let old_cell = old_map.align().unwrap_or_else(|| panic!("old align map"));
+        let new_cell = new_map.align().unwrap_or_else(|| panic!("new align map"));
+        let old_end = old_cell
+            .cell_range(0, 1)
+            .unwrap_or_else(|| panic!("old cell"))
+            .end;
+        let new_end = new_cell
+            .cell_range(0, 1)
+            .unwrap_or_else(|| panic!("new cell"))
+            .end;
+        assert!(preserve_math_tree_metadata_for_edit(
+            previous_tree,
+            &mut updated.rows[0].cells[1],
+            &(old_end..old_end),
+            &(new_end..new_end),
+            old_cell
+                .cell_tree(0, 1)
+                .unwrap_or_else(|| panic!("old tree map")),
+            new_cell
+                .cell_tree(0, 1)
+                .unwrap_or_else(|| panic!("new tree map")),
+        ));
+        let MathContent::Math(original) = &updated.rows[0].cells[1].root.content[0] else {
+            panic!("expected node")
+        };
+        assert_eq!(original.id, original_id);
+        assert_eq!(original.extra["vendor"], 1);
+    }
 }

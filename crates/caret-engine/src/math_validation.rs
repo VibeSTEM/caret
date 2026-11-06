@@ -1,15 +1,73 @@
-//! 在编辑器服务边界校验数学源码与持久化树，并重建源码投影的瞬时范围。
+//! 在编辑器服务边界校验数学树，并将解析位置绑定到独立源码 sidecar。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{
-    Align, InlineEnvironment, MathContent, MathFlow, MathNode, MathSourceRange, MathTree, TextFlow,
-};
+use caret_doc::{Align, MathContent, MathFlow, MathNode, MathTree};
 #[cfg(test)]
-use caret_doc::{Block, Document, FlowContent, ParagraphContent};
+use caret_doc::{Block, Document, FlowContent, InlineEnvironment, ParagraphContent};
 use caret_math::MathInputKind;
-use std::collections::BTreeMap;
+
+pub(crate) fn bind_tree_sidecar(
+    source_map: &mut caret_math::MathSourceMap<'_>,
+    parsed: &MathTree,
+    target: &MathTree,
+    previous: Option<&caret_math::MathTreeSourceMap>,
+) -> bool {
+    let Some(parsed_map) = source_map.tree().cloned() else {
+        return false;
+    };
+    let Some(mapped) =
+        parsed_map.reconcile_for_tree(parsed, target, previous, source_map.source(), None)
+    else {
+        return false;
+    };
+    source_map.bind_reconciled_tree_sidecar_after_validated_edit(target, mapped)
+}
+
+pub(crate) fn bind_align_sidecars(
+    source_map: &mut caret_math::MathSourceMap<'_>,
+    parsed: &Align,
+    target: &Align,
+    previous: Option<&caret_math::AlignSourceMap>,
+) -> bool {
+    let Some(parsed_sidecar) = source_map.align() else {
+        return false;
+    };
+    if parsed.rows.len() != target.rows.len() {
+        return false;
+    }
+    let source = source_map.source();
+    let mut mapped_rows = Vec::with_capacity(target.rows.len());
+    for (row_index, (parsed_row, target_row)) in parsed.rows.iter().zip(&target.rows).enumerate() {
+        if parsed_row.cells.len() != target_row.cells.len() {
+            return false;
+        }
+        let mut mapped_cells = Vec::with_capacity(target_row.cells.len());
+        for (cell_index, (parsed_cell, target_cell)) in
+            parsed_row.cells.iter().zip(&target_row.cells).enumerate()
+        {
+            let (Some(parsed_map), Some(scope)) = (
+                parsed_sidecar.cell_tree(row_index, cell_index).cloned(),
+                parsed_sidecar.cell_range(row_index, cell_index),
+            ) else {
+                return false;
+            };
+            let Some(mapped) = parsed_map.reconcile_for_tree(
+                parsed_cell,
+                target_cell,
+                previous.and_then(|previous| previous.cell_tree(row_index, cell_index)),
+                source,
+                Some(&scope),
+            ) else {
+                return false;
+            };
+            mapped_cells.push(mapped);
+        }
+        mapped_rows.push(mapped_cells);
+    }
+    source_map.bind_reconciled_align_sidecars_after_validated_edit(target, mapped_rows)
+}
 
 pub(crate) fn project_tree_for_edit(
     tree: &MathTree,
@@ -22,12 +80,10 @@ pub(crate) fn project_tree_for_edit(
     else {
         return Err("formula tree projected to a different formula kind".to_owned());
     };
-    let mut updated = tree.clone();
-    if !refresh_tree_ranges(&mut updated, &projected) {
-        return Err("formula tree cannot be projected without losing structure".to_owned());
-    }
-    if !source_map.bind_tree_after_validated_edit(&updated) {
-        return Err("formula tree ranges cannot be bound to its source map".to_owned());
+    let updated = caret_math::reconcile_tree_ranges(tree, &projected)
+        .ok_or_else(|| "formula tree cannot be projected without losing structure".to_owned())?;
+    if !bind_tree_sidecar(&mut source_map, &projected, &updated, None) {
+        return Err("formula tree cannot be bound to its source sidecar".to_owned());
     }
     updated.validate().map_err(|error| error.to_string())?;
     Ok((source_map, updated))
@@ -43,18 +99,16 @@ pub(crate) fn project_align_for_edit(
     else {
         return Err("align tree projected to a different formula kind".to_owned());
     };
-    let mut updated = align.clone();
-    if !refresh_align_ranges(&mut updated, &projected) {
-        return Err("align projection changed its structure".to_owned());
-    }
-    if !source_map.bind_align_after_validated_edit(&updated) {
-        return Err("align ranges cannot be bound to their source map".to_owned());
+    let updated = caret_math::reconcile_align_ranges(align, &projected)
+        .ok_or_else(|| "align projection changed its structure".to_owned())?;
+    if !bind_align_sidecars(&mut source_map, &projected, &updated, None) {
+        return Err("align tree cannot be bound to its source sidecar".to_owned());
     }
     updated.validate().map_err(|error| error.to_string())?;
     Ok((source_map, updated))
 }
 
-/// 为历史源码重建瞬时范围，并要求持久化字段可完整映射。
+/// 为历史源码重建独立位置 sidecar，并要求持久化树可完整映射。
 #[cfg(test)]
 pub(crate) fn tree_for_history_projection(
     tree: &MathTree,
@@ -74,10 +128,8 @@ pub(crate) fn tree_for_history_projection_with_map(
     else {
         return None;
     };
-    let mut updated = tree.clone();
-    if !refresh_tree_ranges(&mut updated, &projected)
-        || !source_map.bind_tree_after_validated_edit(&updated)
-    {
+    let updated = caret_math::reconcile_tree_ranges(tree, &projected)?;
+    if !bind_tree_sidecar(&mut source_map, &projected, &updated, None) {
         return None;
     }
     Some((updated, source_map.tree()?.clone()))
@@ -90,715 +142,204 @@ pub(crate) fn tree_for_source_history_projection(
     source: &str,
     kind: MathInputKind,
 ) -> Option<MathTree> {
-    tree_for_source_history_projection_with_map(tree, source, kind).map(|(tree, _)| tree)
+    let projection = caret_math::parse_projection(source, kind).ok()?;
+    tree_for_source_history_projection_with_map(tree, projection.source_map(), kind)
+        .map(|(tree, _)| tree)
 }
 
+/// 用历史持有的源码映射验证恢复目标；调用方负责校验投影身份和文档版本。
 pub(crate) fn tree_for_source_history_projection_with_map(
     tree: &MathTree,
-    source: &str,
+    stored_projection: &caret_math::MathSourceMap<'_>,
     kind: MathInputKind,
 ) -> Option<(MathTree, caret_math::MathTreeSourceMap)> {
-    if let Some(projected) = tree_for_history_projection_with_map(tree, source, kind) {
-        return Some(projected);
-    }
-    let projection = caret_math::parse_projection(source, kind).ok()?;
-    let (caret_math::ProjectedMath::Tree(projected), source_map) = projection.into_parts() else {
-        return None;
-    };
-    let source_map = source_map.tree()?.clone();
-    if caret_math::serialize_tree(&projected) != caret_math::serialize_tree(tree)
-        || placeholder_positions(&projected.root) != placeholder_positions(&tree.root)
-        || text_flow_range_signature(&projected.root) != text_flow_range_signature(&tree.root)
-        || node_range_signature(&projected.root) != node_range_signature(&tree.root)
-    {
+    if stored_projection.kind() != kind {
         return None;
     }
-    Some((tree.clone(), source_map))
-}
-
-/// 为历史 Align 源码重建单元格范围，并保留所有持久化字段。
-pub(crate) fn align_for_history_projection_with_map(
-    align: &Align,
-    source: &str,
-) -> Option<(Align, caret_math::AlignSourceMap)> {
-    let projection = caret_math::parse_projection(source, MathInputKind::Align).ok()?;
-    let (caret_math::ProjectedMath::Align(projected), mut source_map) = projection.into_parts()
+    let stored_map = stored_projection.tree()?;
+    let projection = caret_math::parse_projection(stored_projection.source(), kind).ok()?;
+    let (caret_math::ProjectedMath::Tree(projected), mut parsed_projection) =
+        projection.into_parts()
     else {
         return None;
     };
-    let mut updated = align.clone();
-    if !refresh_align_ranges(&mut updated, &projected)
-        || !source_map.bind_align_after_validated_edit(&updated)
+    if tree.schema_version != projected.schema_version
+        || caret_math::serialize_tree(&projected) != caret_math::serialize_tree(tree)
     {
         return None;
     }
-    Some((updated, source_map.align()?.clone()))
+    let updated = caret_math::reconcile_tree_ranges(tree, &projected)?;
+    if !bind_tree_sidecar(&mut parsed_projection, &projected, &updated, None) {
+        return None;
+    }
+    let candidate_map = parsed_projection.tree()?;
+    if !stored_map.same_locations(candidate_map)
+        || !source_map_extras_preserved(candidate_map.root(), stored_map.root())
+    {
+        return None;
+    }
+    Some((tree.clone(), stored_map.clone()))
 }
 
 /// 恢复源码分支的 Align 时验证规范语义并保留持久化行列与元数据。
 pub(crate) fn align_for_source_history_projection_with_map(
     align: &Align,
-    source: &str,
+    stored_projection: &caret_math::MathSourceMap<'_>,
 ) -> Option<(Align, caret_math::AlignSourceMap)> {
-    if let Some(projected) = align_for_history_projection_with_map(align, source) {
-        return Some(projected);
+    if stored_projection.kind() != MathInputKind::Align {
+        return None;
     }
-    let projection = caret_math::parse_projection(source, MathInputKind::Align).ok()?;
-    let (caret_math::ProjectedMath::Align(projected), source_map) = projection.into_parts() else {
+    let stored_map = stored_projection.align()?;
+    let projection =
+        caret_math::parse_projection(stored_projection.source(), MathInputKind::Align).ok()?;
+    let (caret_math::ProjectedMath::Align(projected), mut parsed_projection) =
+        projection.into_parts()
+    else {
         return None;
     };
-    let source_map = source_map.align()?.clone();
-    let projected_anchors = projected
-        .rows
-        .iter()
-        .flat_map(|row| &row.cells)
-        .map(|tree| placeholder_positions(&tree.root))
-        .collect::<Vec<_>>();
-    let stored_anchors = align
-        .rows
-        .iter()
-        .flat_map(|row| &row.cells)
-        .map(|tree| placeholder_positions(&tree.root))
-        .collect::<Vec<_>>();
-    let projected_text_ranges = align_text_flow_range_signature(&projected);
-    let stored_text_ranges = align_text_flow_range_signature(align);
-    let projected_node_ranges = align_node_range_signature(&projected);
-    let stored_node_ranges = align_node_range_signature(align);
-    if caret_math::serialize_align(&projected) != caret_math::serialize_align(align)
-        || projected_anchors != stored_anchors
-        || projected_text_ranges != stored_text_ranges
-        || projected_node_ranges != stored_node_ranges
-    {
+    if caret_math::serialize_align(&projected) != caret_math::serialize_align(align) {
         return None;
     }
-    Some((align.clone(), source_map))
+    let updated = caret_math::reconcile_align_ranges(align, &projected)?;
+    if !bind_align_sidecars(&mut parsed_projection, &projected, &updated, None) {
+        return None;
+    }
+    let candidate_map = parsed_projection.align()?;
+    if !stored_map.same_locations(candidate_map) {
+        return None;
+    }
+    for (row_index, row) in align.rows.iter().enumerate() {
+        for cell_index in 0..row.cells.len() {
+            let candidate = candidate_map.cell_tree(row_index, cell_index)?;
+            let stored = stored_map.cell_tree(row_index, cell_index)?;
+            if !source_map_extras_preserved(candidate.root(), stored.root()) {
+                return None;
+            }
+        }
+    }
+    Some((align.clone(), stored_map.clone()))
 }
 
-type TextFlowRangeSignature = (String, Option<(u32, u32)>, Vec<(u32, u32, u32, u32)>);
-type NodeRangeSignature = Vec<Option<(u32, u32)>>;
-type AlignNodeRangeSignature = Vec<Vec<NodeRangeSignature>>;
+fn source_map_extras_preserved(
+    candidate: &caret_math::MathFlowSourceMap,
+    stored: &caret_math::MathFlowSourceMap,
+) -> bool {
+    extras_contained(candidate.range_extra(), stored.range_extra())
+        && candidate.content().len() == stored.content().len()
+        && candidate
+            .content()
+            .iter()
+            .zip(stored.content())
+            .all(|(candidate, stored)| content_map_extras_preserved(candidate, stored))
+}
 
-fn text_flow_range_signature(flow: &MathFlow) -> Vec<TextFlowRangeSignature> {
-    fn collect_content(content: &MathContent, signature: &mut Vec<TextFlowRangeSignature>) {
-        match content {
-            MathContent::Text(text) => signature.push((
-                text.runs
+fn content_map_extras_preserved(
+    candidate: &caret_math::MathContentSourceMap,
+    stored: &caret_math::MathContentSourceMap,
+) -> bool {
+    use caret_math::MathContentSourceMap;
+
+    match (candidate, stored) {
+        (MathContentSourceMap::Text(candidate), MathContentSourceMap::Text(stored)) => {
+            extras_contained(candidate.range_extra(), stored.range_extra())
+                && text_map_extras_preserved(candidate.segments(), stored.segments())
+        }
+        (
+            MathContentSourceMap::Math {
+                range: candidate_range,
+                operands: candidate_operands,
+                ..
+            },
+            MathContentSourceMap::Math {
+                range: stored_range,
+                operands: stored_operands,
+                ..
+            },
+        ) => {
+            extras_contained(candidate_range.extra(), stored_range.extra())
+                && candidate_operands.len() == stored_operands.len()
+                && candidate_operands
                     .iter()
-                    .map(|run| run.text.as_str())
-                    .collect::<String>(),
-                text.source_range
-                    .as_ref()
-                    .map(|range| (range.start, range.end)),
-                text.source_map
+                    .zip(stored_operands)
+                    .all(|(candidate, stored)| source_map_extras_preserved(candidate, stored))
+        }
+        (
+            MathContentSourceMap::Environment {
+                range: candidate_range,
+                children: candidate_children,
+            },
+            MathContentSourceMap::Environment {
+                range: stored_range,
+                children: stored_children,
+            },
+        ) => {
+            extras_contained(candidate_range.extra(), stored_range.extra())
+                && candidate_children.len() == stored_children.len()
+                && candidate_children
                     .iter()
-                    .map(|entry| {
-                        (
-                            entry.text_start,
-                            entry.text_end,
-                            entry.source_range.start,
-                            entry.source_range.end,
-                        )
-                    })
-                    .collect(),
-            )),
-            MathContent::Math(node) => {
-                for child in &node.children {
-                    collect_flow(child, signature);
-                }
-            }
-            MathContent::Environment(environment) => {
-                for child in &environment.children {
-                    collect_content(child, signature);
-                }
-            }
-            MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+                    .zip(stored_children)
+                    .all(|(candidate, stored)| content_map_extras_preserved(candidate, stored))
         }
-    }
-
-    fn collect_flow(flow: &MathFlow, signature: &mut Vec<TextFlowRangeSignature>) {
-        for content in &flow.content {
-            collect_content(content, signature);
-        }
-    }
-
-    let mut signature = Vec::new();
-    collect_flow(flow, &mut signature);
-    signature
-}
-
-fn align_text_flow_range_signature(align: &Align) -> Vec<Vec<Vec<TextFlowRangeSignature>>> {
-    align
-        .rows
-        .iter()
-        .map(|row| {
-            row.cells
-                .iter()
-                .map(|tree| text_flow_range_signature(&tree.root))
-                .collect()
-        })
-        .collect()
-}
-
-fn node_range_signature(flow: &MathFlow) -> NodeRangeSignature {
-    fn collect_content(content: &MathContent, ranges: &mut Vec<Option<(u32, u32)>>) {
-        match content {
-            MathContent::Math(node) => {
-                ranges.push(
-                    node.source_range
-                        .as_ref()
-                        .map(|range| (range.start, range.end)),
-                );
-                for child in &node.children {
-                    collect_flow(child, ranges);
-                }
-            }
-            MathContent::Environment(environment) => {
-                ranges.push(
-                    environment
-                        .source_range
-                        .as_ref()
-                        .map(|range| (range.start, range.end)),
-                );
-                for child in &environment.children {
-                    collect_content(child, ranges);
-                }
-            }
-            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
-        }
-    }
-
-    fn collect_flow(flow: &MathFlow, ranges: &mut Vec<Option<(u32, u32)>>) {
-        ranges.push(
-            flow.source_range
-                .as_ref()
-                .map(|range| (range.start, range.end)),
-        );
-        for content in &flow.content {
-            collect_content(content, ranges);
-        }
-    }
-
-    let mut ranges = Vec::new();
-    collect_flow(flow, &mut ranges);
-    ranges
-}
-
-fn align_node_range_signature(align: &Align) -> AlignNodeRangeSignature {
-    align
-        .rows
-        .iter()
-        .map(|row| {
-            row.cells
-                .iter()
-                .map(|tree| node_range_signature(&tree.root))
-                .collect()
-        })
-        .collect()
-}
-
-fn placeholder_positions(flow: &MathFlow) -> Vec<usize> {
-    fn collect_content(content: &MathContent, text_offset: &mut usize, positions: &mut Vec<usize>) {
-        match content {
-            MathContent::Text(text) => {
-                *text_offset += text.runs.iter().map(|run| run.text.len()).sum::<usize>();
-            }
-            MathContent::Math(node) if node.kind == caret_doc::MathNodeKind::Placeholder => {
-                positions.push(*text_offset);
-            }
-            MathContent::Math(node) => {
-                for child in &node.children {
-                    collect_flow(child, text_offset, positions);
-                }
-            }
-            MathContent::Environment(environment) => {
-                for child in &environment.children {
-                    collect_content(child, text_offset, positions);
-                }
-            }
-            MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
-        }
-    }
-
-    fn collect_flow(flow: &MathFlow, text_offset: &mut usize, positions: &mut Vec<usize>) {
-        for content in &flow.content {
-            collect_content(content, text_offset, positions);
-        }
-    }
-
-    let mut positions = Vec::new();
-    let mut text_offset = 0;
-    collect_flow(flow, &mut text_offset, &mut positions);
-    positions
-}
-
-fn refresh_tree_ranges(tree: &mut MathTree, projection: &MathTree) -> bool {
-    if tree.schema_version != projection.schema_version
-        || !refresh_range(&mut tree.root.source_range, &projection.root.source_range)
-    {
-        return false;
-    }
-    refresh_flow_ranges(&mut tree.root, &projection.root)
-}
-
-fn refresh_align_ranges(align: &mut Align, projection: &Align) -> bool {
-    if align.rows.len() != projection.rows.len() {
-        return false;
-    }
-    align
-        .rows
-        .iter_mut()
-        .zip(&projection.rows)
-        .all(|(row, projected_row)| {
-            row.cells.len() == projected_row.cells.len()
-                && row
-                    .cells
-                    .iter_mut()
-                    .zip(&projected_row.cells)
-                    .all(|(cell, projected_cell)| refresh_tree_ranges(cell, projected_cell))
-        })
-}
-
-fn refresh_range(range: &mut Option<MathSourceRange>, projected: &Option<MathSourceRange>) -> bool {
-    match (range.as_ref(), projected) {
-        (Some(current), Some(projected)) => {
-            let mut refreshed = projected.clone();
-            refreshed.extra.clone_from(&current.extra);
-            *range = Some(refreshed);
-        }
-        (Some(current), None) if !current.extra.is_empty() => return false,
-        (_, None) => *range = None,
-        (None, Some(projected)) => *range = Some(projected.clone()),
-    }
-    true
-}
-
-fn refresh_flow_ranges(tree: &mut MathFlow, projection: &MathFlow) -> bool {
-    if !refresh_range(&mut tree.source_range, &projection.source_range) {
-        return false;
-    }
-    refresh_content_sequence_ranges(&mut tree.content, &projection.content)
-}
-
-fn refresh_content_sequence_ranges(tree: &mut [MathContent], projection: &[MathContent]) -> bool {
-    let (mut tree_index, mut projection_index) = (0, 0);
-    while tree_index < tree.len() || projection_index < projection.len() {
-        if let (Some(MathContent::Text(current)), Some(MathContent::Text(parsed))) =
-            (tree.get(tree_index), projection.get(projection_index))
-        {
-            let has_following_empty_flow = matches!(tree.get(tree_index + 1),
-                Some(MathContent::Text(next))
-                    if next.runs.iter().all(|run| run.text.is_empty()));
-            if same_display_text(current, parsed) && !has_following_empty_flow {
-                let Some(MathContent::Text(current)) = tree.get_mut(tree_index) else {
-                    return false;
-                };
-                if !refresh_text_ranges(current, parsed) {
-                    return false;
-                }
-                tree_index += 1;
-                projection_index += 1;
-                continue;
-            }
-            if let Some((next_tree_index, pieces)) =
-                collect_tree_text_sequence(tree, tree_index, parsed)
-            {
-                let mut piece_index = 0;
-                for content in &mut tree[tree_index..next_tree_index] {
-                    let MathContent::Text(current) = content else {
-                        return false;
-                    };
-                    let Some((source_range, source_map)) = pieces.get(piece_index).cloned() else {
-                        return false;
-                    };
-                    if !refresh_text_ranges_from_map(current, source_range, source_map) {
-                        return false;
-                    }
-                    piece_index += 1;
-                }
-                if piece_index != pieces.len() {
-                    return false;
-                }
-                tree_index = next_tree_index;
-                projection_index += 1;
-                continue;
-            }
-            let Some((source_range, source_map, next_projection_index)) =
-                collect_projected_text_sequence(current, projection, projection_index)
-            else {
-                return false;
-            };
-            let Some(MathContent::Text(current)) = tree.get_mut(tree_index) else {
-                return false;
-            };
-            if !refresh_text_ranges_from_map(current, source_range, source_map) {
-                return false;
-            }
-            tree_index += 1;
-            projection_index = next_projection_index;
-            continue;
-        }
-        match (tree.get_mut(tree_index), projection.get(projection_index)) {
-            (Some(current), Some(projected)) => {
-                if !refresh_content_ranges(current, projected) {
-                    return false;
-                }
-                tree_index += 1;
-                projection_index += 1;
-            }
-            (None, None) => return true,
-            _ => return false,
-        }
-    }
-    true
-}
-
-fn refresh_content_ranges(tree: &mut MathContent, projection: &MathContent) -> bool {
-    match (tree, projection) {
-        (MathContent::Text(previous), MathContent::Text(projected)) => {
-            if !same_display_text(previous, projected) {
-                return false;
-            }
-            refresh_text_ranges(previous, projected)
-        }
-        (MathContent::Math(previous), MathContent::Math(projected)) => {
-            refresh_node_ranges(previous, projected)
-        }
-        (MathContent::Environment(previous), MathContent::Environment(projected)) => {
-            refresh_environment_ranges(previous, projected)
-        }
-        (MathContent::SoftBreak(_), MathContent::SoftBreak(_)) => true,
-        (MathContent::Opaque(previous), MathContent::Opaque(projected)) => {
-            previous.raw == projected.raw
-        }
+        (MathContentSourceMap::Other, MathContentSourceMap::Other) => true,
         _ => false,
     }
 }
 
-fn refresh_text_ranges(tree: &mut TextFlow, projection: &TextFlow) -> bool {
-    refresh_text_ranges_from_map(
-        tree,
-        projection.source_range.clone(),
-        projection.source_map.clone(),
-    )
-}
-
-fn collect_projected_text_sequence(
-    text: &TextFlow,
-    content: &[MathContent],
-    start: usize,
-) -> Option<(
-    Option<MathSourceRange>,
-    Vec<caret_doc::TextFlowSourceMapEntry>,
-    usize,
-)> {
-    let expected = text
-        .runs
-        .iter()
-        .map(|run| run.text.as_str())
-        .collect::<String>();
-    let (mut display, mut source_range, mut source_map) =
-        (String::new(), None::<MathSourceRange>, Vec::new());
-    let mut index = start;
-    while let Some(item) = content.get(index) {
-        match item {
-            MathContent::Text(projected) => {
-                let text_offset = u32::try_from(display.len()).ok()?;
-                let fragment = projected
-                    .runs
-                    .iter()
-                    .map(|run| run.text.as_str())
-                    .collect::<String>();
-                if !expected.get(display.len()..)?.starts_with(&fragment) {
-                    return None;
-                }
-                display.push_str(&fragment);
-                match (&mut source_range, &projected.source_range) {
-                    (Some(current), Some(next)) => current.end = next.end,
-                    (None, Some(next)) => source_range = Some(next.clone()),
-                    (_, None) => return None,
-                }
-                for entry in &projected.source_map {
-                    source_map.push(caret_doc::TextFlowSourceMapEntry {
-                        text_start: text_offset.checked_add(entry.text_start)?,
-                        text_end: text_offset.checked_add(entry.text_end)?,
-                        source_range: entry.source_range.clone(),
-                        extra: entry.extra.clone(),
-                    });
-                }
-                index += 1;
-                if display == expected {
-                    return Some((source_range, source_map, index));
-                }
-            }
-            _ => return None,
-        }
-    }
-    None
-}
-
-type TextRangeProjection = (
-    Option<MathSourceRange>,
-    Vec<caret_doc::TextFlowSourceMapEntry>,
-);
-type SplitTextProjection = (usize, Vec<TextRangeProjection>);
-
-fn collect_tree_text_sequence(
-    content: &[MathContent],
-    start: usize,
-    projected: &TextFlow,
-) -> Option<SplitTextProjection> {
-    if !projected
-        .source_range
-        .as_ref()
-        .is_some_and(|range| range.extra.is_empty())
-    {
-        return None;
-    }
-    let expected = projected
-        .runs
-        .iter()
-        .map(|run| run.text.as_str())
-        .collect::<String>();
-    let total = content
-        .get(start..)?
-        .iter()
-        .take_while(|item| matches!(item, MathContent::Text(_)))
-        .map(|item| match item {
-            MathContent::Text(flow) => flow
-                .runs
-                .iter()
-                .map(|run| run.text.as_str())
-                .collect::<String>(),
-            _ => String::new(),
-        })
-        .collect::<String>();
-    if total != expected {
-        return None;
-    }
-    let sequence_end = start.checked_add(
-        content
-            .get(start..)?
-            .iter()
-            .take_while(|item| matches!(item, MathContent::Text(_)))
-            .count(),
-    )?;
-
-    let mut pieces = Vec::new();
-    let mut display_start = 0usize;
-    let mut index = start;
-    while index < sequence_end {
-        let MathContent::Text(flow) = content.get(index)? else {
-            return None;
-        };
-        let display_len = flow
-            .runs
-            .iter()
-            .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
-        let display_end = display_start.checked_add(display_len)?;
-        let source_start = text_display_source_boundary(projected, display_start)?;
-        let source_end = text_display_source_boundary(projected, display_end)?;
-        let source_range = if display_start == 0 && display_end == expected.len() {
-            projected.source_range.clone()
-        } else {
-            Some(MathSourceRange {
-                start: u32::try_from(source_start).ok()?,
-                end: u32::try_from(source_end).ok()?,
-                extra: BTreeMap::new(),
-            })
-        };
-        let source_map = text_display_source_map_piece(projected, display_start, display_end)?;
-        pieces.push((source_range, source_map));
-        display_start = display_end;
-        index += 1;
-    }
-    (index > start && index <= content.len()).then_some((index, pieces))
-}
-
-fn text_display_source_boundary(flow: &TextFlow, display: usize) -> Option<usize> {
-    if display == 0 {
-        return Some(flow.source_range.as_ref()?.start as usize);
-    }
-    let display_len = flow
-        .runs
-        .iter()
-        .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
-    if display == display_len {
-        return Some(flow.source_range.as_ref()?.end as usize);
-    }
-    let mut candidates = Vec::new();
-    for entry in &flow.source_map {
-        let display_start = entry.text_start as usize;
-        let display_end = entry.text_end as usize;
-        let source_start = entry.source_range.start as usize;
-        let source_end = entry.source_range.end as usize;
-        if display == display_start {
-            candidates.push(source_start);
-        } else if display == display_end {
-            candidates.push(source_end);
-        } else if display_start < display
-            && display < display_end
-            && display_end - display_start == source_end - source_start
-        {
-            candidates.push(source_start.checked_add(display - display_start)?);
-        }
-    }
-    candidates.sort_unstable();
-    candidates.dedup();
-    (candidates.len() == 1).then(|| candidates[0])
-}
-
-fn text_display_source_map_piece(
-    flow: &TextFlow,
-    display_start: usize,
-    display_end: usize,
-) -> Option<Vec<caret_doc::TextFlowSourceMapEntry>> {
-    let mut result = Vec::new();
-    for entry in &flow.source_map {
-        let start = entry.text_start as usize;
-        let end = entry.text_end as usize;
-        if start == end {
-            let belongs = display_start <= start
-                && (start < display_end
-                    || display_end == flow_display_len(flow) && start == display_end);
-            if belongs {
-                let mut anchor = entry.clone();
-                anchor.text_start = u32::try_from(start - display_start).ok()?;
-                anchor.text_end = anchor.text_start;
-                result.push(anchor);
-            }
-            continue;
-        }
-        let overlap_start = start.max(display_start);
-        let overlap_end = end.min(display_end);
-        if overlap_start >= overlap_end {
-            continue;
-        }
-        let source_start = entry.source_range.start as usize;
-        let source_end = entry.source_range.end as usize;
-        let linear = end - start == source_end - source_start;
-        if !linear && (overlap_start != start || overlap_end != end) {
-            return None;
-        }
-        if (overlap_start != start || overlap_end != end)
-            && (!entry.extra.is_empty() || !entry.source_range.extra.is_empty())
-        {
-            return None;
-        }
-        let mut piece = entry.clone();
-        piece.text_start = u32::try_from(overlap_start - display_start).ok()?;
-        piece.text_end = u32::try_from(overlap_end - display_start).ok()?;
-        if linear {
-            piece.source_range.start =
-                u32::try_from(source_start.checked_add(overlap_start - start)?).ok()?;
-            piece.source_range.end =
-                u32::try_from(source_start.checked_add(overlap_end - start)?).ok()?;
-        }
-        result.push(piece);
-    }
-    if display_start == display_end
-        && !result
-            .iter()
-            .any(|entry| entry.text_start == 0 && entry.text_end == 0)
-    {
-        let source = text_display_source_boundary(flow, display_start)?;
-        let boundary = u32::try_from(source).ok()?;
-        result.push(caret_doc::TextFlowSourceMapEntry {
-            text_start: 0,
-            text_end: 0,
-            source_range: MathSourceRange {
-                start: boundary,
-                end: boundary,
-                extra: BTreeMap::new(),
-            },
-            extra: BTreeMap::new(),
-        });
-    }
-    Some(result)
-}
-
-fn flow_display_len(flow: &TextFlow) -> usize {
-    flow.runs.iter().map(|run| run.text.len()).sum()
-}
-
-fn refresh_text_ranges_from_map(
-    tree: &mut TextFlow,
-    projected_range: Option<MathSourceRange>,
-    mut projected_map: Vec<caret_doc::TextFlowSourceMapEntry>,
+fn text_map_extras_preserved(
+    candidate: &[caret_math::MathTextSourceSegment],
+    stored: &[caret_math::MathTextSourceSegment],
 ) -> bool {
-    if !refresh_range(&mut tree.source_range, &projected_range) {
-        return false;
+    if candidate
+        .iter()
+        .all(|segment| segment.extra().is_empty() && segment.source_extra().is_empty())
+    {
+        return true;
     }
-    let mut used = vec![false; projected_map.len()];
-    for old in &tree.source_map {
-        let Some((index, projected)) =
-            projected_map
-                .iter_mut()
-                .enumerate()
-                .find(|(index, projected)| {
-                    !used[*index]
-                        && (projected.text_start, projected.text_end)
-                            == (old.text_start, old.text_end)
-                })
-        else {
-            if !old.extra.is_empty() || !old.source_range.extra.is_empty() {
+    let mut stored_by_position: std::collections::BTreeMap<_, Vec<_>> =
+        std::collections::BTreeMap::new();
+    for segment in stored {
+        stored_by_position
+            .entry(text_segment_position(segment))
+            .or_default()
+            .push(segment);
+    }
+    let mut occurrences = std::collections::BTreeMap::new();
+    for segment in candidate {
+        let position = text_segment_position(segment);
+        let occurrence = occurrences.entry(position).or_insert(0usize);
+        if !segment.extra().is_empty() || !segment.source_extra().is_empty() {
+            let Some(stored) = stored_by_position
+                .get(&position)
+                .and_then(|segments| segments.get(*occurrence))
+            else {
+                return false;
+            };
+            if !extras_contained(segment.extra(), stored.extra())
+                || !extras_contained(segment.source_extra(), stored.source_extra())
+            {
                 return false;
             }
-            continue;
-        };
-        used[index] = true;
-        projected.extra.clone_from(&old.extra);
-        projected
-            .source_range
-            .extra
-            .clone_from(&old.source_range.extra);
+        }
+        *occurrence += 1;
     }
-    tree.source_map = projected_map;
     true
 }
 
-fn refresh_node_ranges(tree: &mut MathNode, projection: &MathNode) -> bool {
-    if tree.kind == caret_doc::MathNodeKind::Placeholder {
-        return projection.kind == tree.kind
-            && refresh_range(&mut tree.source_range, &projection.source_range);
-    }
-    if tree.kind != projection.kind
-        || tree.text != projection.text
-        || tree.attributes != projection.attributes
-        || tree.children.len() != projection.children.len()
-        || !refresh_range(&mut tree.source_range, &projection.source_range)
-    {
-        return false;
-    }
-    tree.children
-        .iter_mut()
-        .zip(&projection.children)
-        .all(|(tree, projection)| refresh_flow_ranges(tree, projection))
+fn text_segment_position(
+    segment: &caret_math::MathTextSourceSegment,
+) -> (usize, usize, Option<(usize, usize)>) {
+    let display = segment.display();
+    let source = segment.source().map(|range| (range.start, range.end));
+    (display.start, display.end, source)
 }
 
-fn refresh_environment_ranges(
-    tree: &mut InlineEnvironment<MathContent>,
-    projection: &InlineEnvironment<MathContent>,
+fn extras_contained(
+    candidate: &std::collections::BTreeMap<String, serde_json::Value>,
+    stored: &std::collections::BTreeMap<String, serde_json::Value>,
 ) -> bool {
-    if tree.kind != projection.kind
-        || !source_environment_props_match(tree.kind, &tree.props, &projection.props)
-        || !refresh_range(&mut tree.source_range, &projection.source_range)
-    {
-        return false;
-    }
-    refresh_content_sequence_ranges(&mut tree.children, &projection.children)
-}
-
-fn same_display_text(previous: &TextFlow, projected: &TextFlow) -> bool {
-    previous
-        .runs
+    candidate
         .iter()
-        .map(|run| run.text.as_str())
-        .collect::<String>()
-        == projected
-            .runs
-            .iter()
-            .map(|run| run.text.as_str())
-            .collect::<String>()
+        .all(|(key, value)| stored.get(key) == Some(value))
 }
 
 /// 验证文档中每棵数学树都与其 LaTeX 源码表达相同语义。
@@ -846,9 +387,9 @@ fn validate_document_math_sources(document: &Document) -> Result<(), String> {
 #[cfg(test)]
 fn validate_tree(tree: &MathTree, kind: MathInputKind, id: &str) -> Result<(), String> {
     let source = caret_math::serialize_tree(tree);
-    let parsed = caret_math::parse(&source, kind)
+    let projection = caret_math::parse_projection(&source, kind)
         .map_err(|error| format!("math {id} source does not parse: {error}"))?;
-    let caret_math::ParsedMath::Tree(parsed) = parsed else {
+    let caret_math::ProjectedMath::Tree(parsed) = projection.into_parts().0 else {
         return Err(format!(
             "math {id} source parsed as a different formula kind"
         ));
@@ -875,9 +416,9 @@ pub(crate) fn parse_tree_with_same_semantics(
 #[cfg(test)]
 fn validate_align(align: &Align) -> Result<(), String> {
     let source = caret_math::serialize_align(align);
-    let parsed = caret_math::parse(&source, MathInputKind::Align)
+    let projection = caret_math::parse_projection(&source, MathInputKind::Align)
         .map_err(|error| format!("align {} source does not parse: {error}", align.id))?;
-    let caret_math::ParsedMath::Align(parsed) = parsed else {
+    let caret_math::ProjectedMath::Align(parsed) = projection.into_parts().0 else {
         return Err(format!(
             "align {} source parsed as a different formula kind",
             align.id
@@ -913,22 +454,14 @@ fn is_empty_align_placeholder(tree: &MathTree) -> bool {
 
 #[cfg(test)]
 fn same_flow_semantics(left: &MathFlow, right: &MathFlow) -> bool {
-    same_flow_projection(left, right, true)
+    same_flow_structure(left, right)
 }
 
 fn same_flow_structure(left: &MathFlow, right: &MathFlow) -> bool {
-    same_flow_projection(left, right, false)
+    same_content_sequence_projection(&left.content, &right.content)
 }
 
-fn same_flow_projection(left: &MathFlow, right: &MathFlow, compare_ranges: bool) -> bool {
-    same_content_sequence_projection(&left.content, &right.content, compare_ranges)
-}
-
-fn same_content_sequence_projection(
-    left: &[MathContent],
-    right: &[MathContent],
-    compare_ranges: bool,
-) -> bool {
+fn same_content_sequence_projection(left: &[MathContent], right: &[MathContent]) -> bool {
     let (mut left_index, mut right_index) = (0, 0);
     while left_index < left.len() && right_index < right.len() {
         if matches!(left[left_index], MathContent::Text(_))
@@ -936,20 +469,11 @@ fn same_content_sequence_projection(
         {
             let left_end = text_group_end(left, left_index);
             let right_end = text_group_end(right, right_index);
-            if compare_ranges {
-                if left_end - left_index != right_end - right_index
-                    || !left[left_index..left_end]
-                        .iter()
-                        .zip(&right[right_index..right_end])
-                        .all(|(left, right)| same_content_semantics(left, right))
-                {
-                    return false;
-                }
-            } else if left_end - left_index == right_end - right_index {
+            if left_end - left_index == right_end - right_index {
                 if !left[left_index..left_end]
                     .iter()
                     .zip(&right[right_index..right_end])
-                    .all(|(left, right)| same_content_projection(left, right, false))
+                    .all(|(left, right)| same_content_projection(left, right))
                 {
                     return false;
                 }
@@ -961,12 +485,7 @@ fn same_content_sequence_projection(
             right_index = right_end;
             continue;
         }
-        let matches = if compare_ranges {
-            same_content_semantics(&left[left_index], &right[right_index])
-        } else {
-            same_content_projection(&left[left_index], &right[right_index], false)
-        };
-        if !matches {
+        if !same_content_projection(&left[left_index], &right[right_index]) {
             return false;
         }
         left_index += 1;
@@ -1002,68 +521,18 @@ fn same_text_group(left: &[MathContent], right: &[MathContent]) -> bool {
     text(left) == text(right)
 }
 
-fn same_content_semantics(left: &MathContent, right: &MathContent) -> bool {
-    same_content_projection(left, right, true)
-}
-
-fn same_content_projection(left: &MathContent, right: &MathContent, compare_ranges: bool) -> bool {
+fn same_content_projection(left: &MathContent, right: &MathContent) -> bool {
     match (left, right) {
-        (MathContent::Text(left), MathContent::Text(right)) => {
-            (!compare_ranges
-                || (left
-                    .source_range
-                    .as_ref()
-                    .map(|range| (range.start, range.end))
-                    == right
-                        .source_range
-                        .as_ref()
-                        .map(|range| (range.start, range.end))
-                    && left.source_map.len() == right.source_map.len()
-                    && left
-                        .source_map
-                        .iter()
-                        .zip(&right.source_map)
-                        .all(|(left, right)| {
-                            (left.text_start, left.text_end) == (right.text_start, right.text_end)
-                                && (left.source_range.start, left.source_range.end)
-                                    == (right.source_range.start, right.source_range.end)
-                        })))
-                && left
-                    .runs
-                    .iter()
-                    .flat_map(|run| run.text.chars())
-                    .eq(right.runs.iter().flat_map(|run| run.text.chars()))
-        }
-        (MathContent::Math(left), MathContent::Math(right)) => {
-            if compare_ranges {
-                same_node_semantics(left, right)
-            } else {
-                same_node_projection(left, right, false)
-            }
-        }
+        (MathContent::Text(left), MathContent::Text(right)) => left
+            .runs
+            .iter()
+            .flat_map(|run| run.text.chars())
+            .eq(right.runs.iter().flat_map(|run| run.text.chars())),
+        (MathContent::Math(left), MathContent::Math(right)) => same_node_projection(left, right),
         (MathContent::Environment(left), MathContent::Environment(right)) => {
-            let children_match = if compare_ranges {
-                left.children.len() == right.children.len()
-                    && left
-                        .children
-                        .iter()
-                        .zip(&right.children)
-                        .all(|(left, right)| same_content_projection(left, right, true))
-            } else {
-                same_content_sequence_projection(&left.children, &right.children, false)
-            };
             left.kind == right.kind
-                && source_environment_props_match(left.kind, &left.props, &right.props)
-                && (!compare_ranges
-                    || left
-                        .source_range
-                        .as_ref()
-                        .map(|range| (range.start, range.end))
-                        == right
-                            .source_range
-                            .as_ref()
-                            .map(|range| (range.start, range.end)))
-                && children_match
+                && caret_math::source_environment_props_match(left.kind, &left.props, &right.props)
+                && same_content_sequence_projection(&left.children, &right.children)
         }
         (MathContent::SoftBreak(_), MathContent::SoftBreak(_)) => true,
         (MathContent::Opaque(left), MathContent::Opaque(right)) => left.raw == right.raw,
@@ -1071,63 +540,16 @@ fn same_content_projection(left: &MathContent, right: &MathContent, compare_rang
     }
 }
 
-fn source_environment_props_match(
-    kind: caret_doc::InlineEnvironmentKind,
-    stored: &std::collections::BTreeMap<String, serde_json::Value>,
-    parsed: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> bool {
-    // 未知属性可作为元数据保留；已知样式属性必须能由源码准确表达。
-    let parsed_props_match = parsed
-        .iter()
-        .all(|(key, value)| stored.get(key) == Some(value));
-    if !parsed_props_match {
-        return false;
-    }
-
-    let enabled_is_representable = !kind.supports_enabled()
-        || match stored.get("enabled") {
-            None => true,
-            Some(serde_json::Value::Bool(enabled)) => {
-                parsed
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true)
-                    == *enabled
-            }
-            Some(_) => false,
-        };
-    let font_is_representable = !kind.supports_font_family()
-        || match stored.get("fontFamily") {
-            None => true,
-            Some(family) => parsed.get("fontFamily") == Some(family),
-        };
-
-    enabled_is_representable && font_is_representable
-}
-
-fn same_node_semantics(left: &MathNode, right: &MathNode) -> bool {
-    same_node_projection(left, right, true)
-}
-
-fn same_node_projection(left: &MathNode, right: &MathNode, compare_ranges: bool) -> bool {
+fn same_node_projection(left: &MathNode, right: &MathNode) -> bool {
     left.kind == right.kind
         && left.text == right.text
         && left.attributes == right.attributes
-        && (!compare_ranges
-            || left
-                .source_range
-                .as_ref()
-                .map(|range| (range.start, range.end))
-                == right
-                    .source_range
-                    .as_ref()
-                    .map(|range| (range.start, range.end)))
         && left.children.len() == right.children.len()
         && left
             .children
             .iter()
             .zip(&right.children)
-            .all(|(left, right)| same_flow_projection(left, right, compare_ranges))
+            .all(|(left, right)| same_flow_structure(left, right))
 }
 
 #[cfg(test)]

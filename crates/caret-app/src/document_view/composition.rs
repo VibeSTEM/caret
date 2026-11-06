@@ -6,6 +6,73 @@
 use super::DocumentViewRuntime;
 use caret_engine::Command;
 
+struct ImeCommitCheckpoint {
+    session: caret_engine::SessionCheckpoint,
+    last_snapshot: Option<caret_engine::DocumentLayoutSnapshot>,
+    preferred_visual_x_pt: Option<f32>,
+    anchor_visual_affinity: caret_engine::VisualAffinity,
+    composition_id: Option<u64>,
+    next_composition_id: u64,
+    preedit_cursor_position_utf16: usize,
+    composition_preview_session: Option<caret_engine::SessionCheckpoint>,
+    composition_snapshot: Option<caret_engine::DocumentLayoutSnapshot>,
+    composition_range: Option<caret_engine::CompositionRange>,
+    last_interaction_context: Option<super::InteractionContext>,
+}
+
+impl ImeCommitCheckpoint {
+    fn capture(runtime: &DocumentViewRuntime) -> Self {
+        Self {
+            session: runtime.session.checkpoint(),
+            last_snapshot: runtime.last_snapshot.clone(),
+            preferred_visual_x_pt: runtime.preferred_visual_x_pt,
+            anchor_visual_affinity: runtime.anchor_visual_affinity,
+            composition_id: runtime.composition_id,
+            next_composition_id: runtime.next_composition_id,
+            preedit_cursor_position_utf16: runtime.preedit_cursor_position_utf16,
+            composition_preview_session: runtime
+                .composition_preview_session
+                .as_ref()
+                .map(caret_engine::Session::checkpoint),
+            composition_snapshot: runtime.composition_snapshot.clone(),
+            composition_range: runtime.composition_range.clone(),
+            last_interaction_context: runtime.last_interaction_context.clone(),
+        }
+    }
+
+    fn restore(self, runtime: &mut DocumentViewRuntime) {
+        runtime.session.restore_checkpoint(self.session);
+        runtime.last_snapshot = self.last_snapshot;
+        runtime.preferred_visual_x_pt = self.preferred_visual_x_pt;
+        runtime.anchor_visual_affinity = self.anchor_visual_affinity;
+        runtime.composition_id = self.composition_id;
+        runtime.next_composition_id = self.next_composition_id;
+        runtime.preedit_cursor_position_utf16 = self.preedit_cursor_position_utf16;
+        runtime.composition_preview_session = self
+            .composition_preview_session
+            .map(caret_engine::SessionCheckpoint::into_session);
+        runtime.composition_snapshot = self.composition_snapshot;
+        runtime.composition_range = self.composition_range;
+        runtime.last_interaction_context = self.last_interaction_context;
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_IME_RELAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_IME_FULL_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn fail_next_ime_relayout_for_test() {
+    FAIL_NEXT_IME_RELAYOUT.with(|fail| fail.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn fail_next_ime_full_layout_for_test() {
+    FAIL_NEXT_IME_FULL_LAYOUT.with(|fail| fail.set(true));
+}
+
 impl DocumentViewRuntime {
     /// 将 Qt 输入法预编辑、替换和提交事件交给 Rust Session。
     pub fn input_method_event_json(
@@ -20,9 +87,50 @@ impl DocumentViewRuntime {
             || !commit.is_empty()
             || replacement_start != 0
             || replacement_length != 0;
-        if has_input && self.session.math_edit().is_some() {
+        if has_input
+            && self.session.math_edit().is_some()
+            && self.session.math_text_input_context().is_none()
+        {
             return Err("ime.disabled_math_edit".to_owned());
         }
+        let has_commit = !commit.is_empty();
+        let has_replacement = replacement_start != 0 || replacement_length != 0;
+        let commit_current = has_commit
+            || (self.composition_id.is_some() && has_replacement)
+            || (self.composition_id.is_none() && !has_commit && has_replacement);
+        if commit_current && self.session.command_line().is_none() {
+            let checkpoint = ImeCommitCheckpoint::capture(self);
+            return match self.input_method_event_json_inner(
+                preedit,
+                commit,
+                replacement_start,
+                replacement_length,
+                cursor_position_utf16,
+            ) {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    checkpoint.restore(self);
+                    Err(error)
+                }
+            };
+        }
+        self.input_method_event_json_inner(
+            preedit,
+            commit,
+            replacement_start,
+            replacement_length,
+            cursor_position_utf16,
+        )
+    }
+
+    fn input_method_event_json_inner(
+        &mut self,
+        preedit: String,
+        commit: String,
+        replacement_start: i32,
+        replacement_length: i32,
+        cursor_position_utf16: usize,
+    ) -> Result<String, String> {
         if self.session.command_line().is_some() {
             self.session
                 .input_method_command_line(
@@ -51,14 +159,23 @@ impl DocumentViewRuntime {
         let selection_is_single_paragraph =
             selection_before.anchor.paragraph_id == selection_before.focus.paragraph_id;
         let outside_environment = self.session.block_environment_exit().is_some();
-        let reusable_paragraph_id =
+        let reusable_paragraph_id = if self.session.math_text_input_context().is_some() {
+            None
+        } else {
             (selection_is_single_paragraph && !outside_environment).then(|| {
                 composition_range_before
                     .as_ref()
-                    .filter(|range| range.anchor.paragraph_id == range.focus.paragraph_id)
-                    .map(|range| range.anchor.paragraph_id.clone())
+                    .and_then(|range| match range {
+                        caret_engine::CompositionRange::Paragraph(range)
+                            if range.anchor.paragraph_id == range.focus.paragraph_id =>
+                        {
+                            Some(range.anchor.paragraph_id.clone())
+                        }
+                        _ => None,
+                    })
                     .unwrap_or_else(|| selection_before.focus.paragraph_id.clone())
-            });
+            })
+        };
         let previous_preview_page_start = previous_layout.as_ref().and_then(|previous| {
             let preview = self.composition_snapshot.as_ref()?;
             let paragraph_id = reusable_paragraph_id.as_ref()?;
@@ -92,6 +209,10 @@ impl DocumentViewRuntime {
         if let (Some(previous), Some(paragraph_id)) =
             (previous_layout.as_ref(), reusable_paragraph_id.as_ref())
         {
+            #[cfg(test)]
+            if FAIL_NEXT_IME_RELAYOUT.with(|fail| fail.replace(false)) {
+                return Err("layout.injected_ime_relayout_failure".to_owned());
+            }
             self.relayout_reusing_paragraph(previous, paragraph_id)?;
             let updated = self
                 .last_snapshot
@@ -156,6 +277,10 @@ impl DocumentViewRuntime {
                     base_generation,
                 )))
             } else {
+                #[cfg(test)]
+                if FAIL_NEXT_IME_FULL_LAYOUT.with(|fail| fail.replace(false)) {
+                    return Err("layout.injected_ime_full_layout_failure".to_owned());
+                }
                 self.layout_snapshot_json()
             }
         } else {

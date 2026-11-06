@@ -48,7 +48,6 @@ fn environment(id: NodeId, text: &str, extra: BTreeMap<String, Value>) -> Paragr
         id,
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children: vec![run(text)],
         extra,
@@ -64,7 +63,6 @@ fn inline_environment(
         id,
         kind,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children,
         extra: BTreeMap::new(),
@@ -149,8 +147,6 @@ const TOGGLE_UNDERLINE: Command = Command::ToggleRunUnderline;
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }
@@ -689,7 +685,6 @@ fn mixed_selection_applies_bold_to_the_entire_range() {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::from([("enabled".to_owned(), Value::Bool(true))]),
         children: vec![run("a")],
         extra: BTreeMap::new(),
@@ -719,7 +714,6 @@ fn toggling_a_fully_bold_range_creates_an_explicit_local_off_state() {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::new(),
         children: vec![run("text")],
         extra: BTreeMap::new(),
@@ -1123,7 +1117,6 @@ fn font_environment(text: &str, family: &str, extra: BTreeMap<String, Value>) ->
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Font,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
         children: vec![run(text)],
         extra,

@@ -626,3 +626,198 @@ message_118:
   src: Underline
   tr: 底線
   st: finished
+
+message_119:
+  src: Superscript
+  tr: 上標
+  st: finished
+
+message_120:
+  src: Subscript
+  tr: 下標
+  st: finished
+
+message_121:
+  src: Summation
+  tr: 求和
+  st: finished
+
+message_122:
+  src: Integral
+  tr: 積分
+  st: finished
+
+message_123:
+  src: Infinity
+  tr: 無窮大
+  st: finished
+
+message_124:
+  src: Greek alpha
+  tr: 希臘字母 α
+  st: finished
+
+message_125:
+  src: Greek beta
+  tr: 希臘字母 β
+  st: finished
+
+message_126:
+  src: Greek gamma
+  tr: 希臘字母 γ
+  st: finished
+
+message_127:
+  src: Greek delta
+  tr: 希臘字母 δ
+  st: finished
+
+message_128:
+  src: Greek epsilon
+  tr: 希臘字母 ε
+  st: finished
+
+message_129:
+  src: Greek zeta
+  tr: 希臘字母 ζ
+  st: finished
+
+message_130:
+  src: Greek eta
+  tr: 希臘字母 η
+  st: finished
+
+message_131:
+  src: Greek theta
+  tr: 希臘字母 θ
+  st: finished
+
+message_132:
+  src: Greek iota
+  tr: 希臘字母 ι
+  st: finished
+
+message_133:
+  src: Greek kappa
+  tr: 希臘字母 κ
+  st: finished
+
+message_134:
+  src: Greek lambda
+  tr: 希臘字母 λ
+  st: finished
+
+message_135:
+  src: Greek mu
+  tr: 希臘字母 μ
+  st: finished
+
+message_136:
+  src: Greek nu
+  tr: 希臘字母 ν
+  st: finished
+
+message_137:
+  src: Greek xi
+  tr: 希臘字母 ξ
+  st: finished
+
+message_138:
+  src: Greek pi
+  tr: 希臘字母 π
+  st: finished
+
+message_139:
+  src: Greek rho
+  tr: 希臘字母 ρ
+  st: finished
+
+message_140:
+  src: Greek sigma
+  tr: 希臘字母 σ
+  st: finished
+
+message_141:
+  src: Greek tau
+  tr: 希臘字母 τ
+  st: finished
+
+message_142:
+  src: Greek upsilon
+  tr: 希臘字母 υ
+  st: finished
+
+message_143:
+  src: Greek phi
+  tr: 希臘字母 φ
+  st: finished
+
+message_144:
+  src: Greek chi
+  tr: 希臘字母 χ
+  st: finished
+
+message_145:
+  src: Greek psi
+  tr: 希臘字母 ψ
+  st: finished
+
+message_146:
+  src: Greek omega
+  tr: 希臘字母 ω
+  st: finished
+
+message_147:
+  src: Greek capital Gamma
+  tr: 大寫希臘字母 Γ
+  st: finished
+
+message_148:
+  src: Greek capital Delta
+  tr: 大寫希臘字母 Δ
+  st: finished
+
+message_149:
+  src: Greek capital Theta
+  tr: 大寫希臘字母 Θ
+  st: finished
+
+message_150:
+  src: Greek capital Lambda
+  tr: 大寫希臘字母 Λ
+  st: finished
+
+message_151:
+  src: Greek capital Xi
+  tr: 大寫希臘字母 Ξ
+  st: finished
+
+message_152:
+  src: Greek capital Pi
+  tr: 大寫希臘字母 Π
+  st: finished
+
+message_153:
+  src: Greek capital Sigma
+  tr: 大寫希臘字母 Σ
+  st: finished
+
+message_154:
+  src: Greek capital Upsilon
+  tr: 大寫希臘字母 Υ
+  st: finished
+
+message_155:
+  src: Greek capital Phi
+  tr: 大寫希臘字母 Φ
+  st: finished
+
+message_156:
+  src: Greek capital Psi
+  tr: 大寫希臘字母 Ψ
+  st: finished
+
+message_157:
+  src: Greek capital Omega
+  tr: 大寫希臘字母 Ω
+  st: finished

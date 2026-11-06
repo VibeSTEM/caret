@@ -3,11 +3,11 @@
 - 状态：in-progress
 - 依赖：027、043
 - 优先级：P2
-- 创建 / 更新：2026-10-29 / 2026-11-01
+- 创建 / 更新：2026-10-29 / 2026-11-04
 
 ## 目标与背景
 
-把 `caret-math` 的数学盒布局呈现到 Caret 页面画布。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。总体验收由 [011 M3 公式](011-impl-math.md)管理。表格模型与表格画布分别由 045、046 负责。
+把 `caret-math` 的数学盒布局呈现到 Caret 页面画布，并在持久化、布局、绘制、命中和光标路径都可处理公式时接通 `\math`、`\equation`、`\align` 命令。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。总体验收由 [011 M3 公式](011-impl-math.md)管理。表格模型与表格画布分别由 045、046 负责。
 
 ## 必读
 
@@ -16,9 +16,11 @@
 
 ## 范围与非目标
 
-实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。
+实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。接通正文/块级公式插入候选（`insert.inline_math`、`insert.equation`、`insert.align`）的可用性、候选状态及插入后焦点迁移；Math TextFlow 内部 `math.split_inline` 的结构事务由 043 提供，044 验证其可见几何与可用条件。 当前 `math.split_inline` 仅在选区两端属于同一 TextFlow 时可用；跨 TextFlow 选区暂禁用，直到树事务支持跨流拆分。
 
 覆盖正文中的行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的统一 `<default>` 标记与诊断回退。标记到角色默认字体的映射由[内置字体角色任务](064-builtin-font-roles.md)和[字体选择规范](../architecture/editor/font-selection.md)定义；本任务只消费数学字体接口。公式文本岛的行内 shaping 和宿主边界遵循[数学公式架构](../architecture/editor/math.md#公式中的普通文本)：复用正文 shaping，不获得宿主段落块级布局。
+
+数学 `.cdoc` 的可写能力也归本任务：在公式布局、绘制、命中和编辑焦点链路可用后，启用 `InlineMath`、`Equation`、`Align` 的持久化写入，并验证真实编码/解码、文件保存重开及应用 `DocumentSession` 往返。043 负责模型/schema 与安全预览，不负责该可写门控。
 
 不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
 
@@ -31,7 +33,9 @@
 1. 定义缓存键和 generation：公式树、字体、字号、语言、缩放/分辨率中哪些影响布局、绘制及 atlas 缓存。
 2. 把数学盒输出映射到 Caret 整数坐标与字形/rule 快照；确认公式文本岛混合正文 shaping 时尺寸与基线一致。
 3. 接入画布绘制、光标几何、命中测试与选择范围；验证输入更新不会重建未受影响的公式/段落快照。
-4. 补充具有行为断言的布局/渲染/缓存测试，做性能对比；独立架构与代码评审并处理发现。
+4. 接通正文/块级 `insert.inline_math`、`insert.equation`、`insert.align` 命令候选和可执行状态；仅在结果可保存、显示、命中与编辑时启用。验证 Math TextFlow 内 `math.split_inline` 的候选只在 Text 分支且两端属于同一 TextFlow 时可用；跨 TextFlow 选区保持禁用。
+5. 启用数学 `.cdoc` 可写能力并覆盖 `InlineMath`、`Equation`、`Align` 的真实保存、关闭后重开与 `DocumentSession` 往返；失败保存不得改变原文件或打开会话。
+6. 补充具有行为断言的布局/渲染/缓存测试，做性能对比；独立架构与代码评审并处理发现。
 
 ## 预计改动
 
@@ -41,7 +45,9 @@
 
 - [ ] `InlineMath` 与块级 `Equation`/`Align` 可显示；多行对齐、基线、括号/分数等伸展符号使用数学布局度量。
 - [ ] 绘制、命中、光标几何引用同一 generation/几何快照，旧异步结果不能覆盖新布局。
-- [ ] 数学 `\text{...}` 英文、中文内容复用正文 TextFlow shaping 与语言行为；已支持的 Run 属性和 InlineEnvironment 生效。Bold/Italic 的嵌套与 `\textmd` / `\textup` 重置分别组合字重、字形，不覆盖另一个样式维度。文本岛的默认字体族，以及数学文本 `\textsf` / `\texttt` 的字体策略与 fallback 由[065](065-math-text-font-environments.md)验收，不作为 044 的完成前置；044 仍为数学字形提供确定的缺字 fallback/诊断。
+- [ ] 正文/块级公式插入命令仅在结果可持久化、布局、绘制、命中和编辑时成为可执行命令；成功插入后焦点正确，失败保持文档与焦点。Math TextFlow 的 `math.split_inline` 与 043 树事务正确连接；跨 TextFlow 端点时命令不可用。
+- [ ] 数学载体在完成布局接入后可由 `CdocFile::to_bytes` 编码、真实写入文件并重新打开；`InlineMath`、`Equation`、`Align` 与 TextFlow 的 ID、属性及未知可选字段往返保持，`DocumentSession` 保存点、dirty 状态及失败原子性正确。不能只把数学能力名加入可写列表而跳过布局门控。
+- [ ] 数学 `\text{...}` 英文、中文内容复用正文 TextFlow shaping 与语言行为；已支持的 Run 属性和 InlineEnvironment 生效。Bold/Italic 的嵌套与 `\textmd` / `\textup` 重置分别组合字重、字形，不覆盖另一个样式维度。`\textsf` / `\texttt` 映射到共享 TextFlow 的字体族语义；`sans-serif` / `monospace` 通用族、字体覆盖与 fallback 遵循[字体选择规范](../architecture/editor/font-selection.md)，Math/Code 默认资源遵循[064](064-builtin-font-roles.md)。044 验收这些语义在公式中的 shaping、度量与缺字诊断，不再依赖独立数学文本字体任务。
 - [ ] 同一公式快照在缩放与三平台检查中不依赖临时栅格图；页面内编辑没有显著重复重排，性能结果记录基线和测试输入。
 - [ ] 无 SVG/PNG-only 交互路径；测试、格式、lint、独立评审通过。
 
@@ -50,6 +56,7 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | — | caret-layout 数学盒快照行为测试 | 坐标、基线、字形与源位置映射一致 | 未执行 |
+| — | 数学 `.cdoc` 与 `DocumentSession` 黑盒往返 | 三类公式真实保存、重开、字段保留；失败不覆盖原文件/会话 | 未执行 |
 | — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
 | — | 公式布局基准 | 记录输入、构建与缓存条件 | 未执行 |
 
@@ -61,6 +68,8 @@
 
 - 2026-10-29：从 011 拆出公式布局与画布渲染。
 - 2026-11-01：表格模型与交互拆到 045，表格布局和画布集成拆到 046；044 不依赖 012，也不负责单元格公式集成。
+- 2026-11-04：明确公式插入命令的候选接入与可用性门控归 044；公式树和内部编辑事务归 043，TeX 源码输入转换由 065 设计。
+- 2026-11-06：数学 `.cdoc` 可写能力、真实文件保存/重开及 `DocumentSession` 往返由 044 在布局、绘制、命中链路接通后统一验收；043 保留模型/schema 和只读安全预览职责。
 
 ## 完成摘要
 

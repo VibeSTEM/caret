@@ -8,7 +8,7 @@ use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::Session;
 use super::math_edit::find_inline_math;
 use super::math_edit::inline_root_split::{
-    InlineRootFocus, replace_inline_math_with_split, split_inline_math_root,
+    InlineRootFocus, replace_inline_math_with_split, split_inline_math_root_with_map,
 };
 
 impl Session {
@@ -216,10 +216,10 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
-        let caret_math::ParsedMath::Tree(math_tree) =
-            caret_math::parse(source, caret_math::MathInputKind::Inline)
-                .map_err(|error| EditError::InvalidMath(error.to_string()))?
-        else {
+        let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let (projected, source_projection) = projection.into_parts();
+        let caret_math::ProjectedMath::Tree(math_tree) = projected else {
             return Err(EditError::InvalidMath("expected inline math".to_owned()));
         };
         let edit_body = if enter_edit {
@@ -266,7 +266,9 @@ impl Session {
         );
         let math =
             find_inline_math(&paragraph.inlines, &math_id).ok_or(EditError::InvalidPosition)?;
-        let root_split = split_inline_math_root(math, root_cursor, root_cursor, source)?;
+        let source_map = source_projection.tree().ok_or(EditError::InvalidPosition)?;
+        let root_split =
+            split_inline_math_root_with_map(math, source_map, root_cursor, root_cursor, source)?;
         if let Some(split) = &root_split
             && !replace_inline_math_with_split(
                 &mut paragraph.inlines,
@@ -326,20 +328,32 @@ impl Session {
                     anchor: pos.clone(),
                     focus: pos,
                 };
+                let projection =
+                    caret_math::parse_projection(&math_source, caret_math::MathInputKind::Inline)
+                        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+                let (parsed, mut source_projection) = projection.into_parts();
+                let caret_math::ProjectedMath::Tree(parsed_tree) = parsed else {
+                    return Err(EditError::InvalidMath("expected inline math".to_owned()));
+                };
+                let retained_tree = find_inline_math(&paragraph.inlines, &math_id)
+                    .map(|math| &math.math_tree)
+                    .ok_or(EditError::InvalidPosition)?;
+                if !crate::math_validation::bind_tree_sidecar(
+                    &mut source_projection,
+                    &parsed_tree,
+                    retained_tree,
+                    None,
+                ) {
+                    return Err(EditError::InvalidMath(
+                        "split formula cannot be bound to its source map".to_owned(),
+                    ));
+                }
                 next_math_edit = Some(super::math_edit::MathEdit {
                     target: super::math_edit::MathEditTarget::Inline {
                         paragraph_id: paragraph_id.clone(),
                         math_id,
                     },
-                    source_projection: std::sync::Arc::new(
-                        caret_math::parse_projection(
-                            &math_source,
-                            caret_math::MathInputKind::Inline,
-                        )
-                        .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                        .into_parts()
-                        .1,
-                    ),
+                    source_projection: Some(std::sync::Arc::new(source_projection)),
                     source_draft: None,
                     revision: self.current_math_edit_revision(),
                     cursor,
@@ -358,21 +372,40 @@ impl Session {
                     focus: pos,
                 };
                 if let Some(body) = edit_body {
+                    let (source_projection, cursor, branch) = if source.is_empty() {
+                        let position = super::math_edit::MathTreePosition {
+                            host: super::math_edit::MathPositionHost::InlineMath {
+                                owner_id: math_id.clone(),
+                            },
+                            path: super::math_edit::MathSequencePath::root(),
+                            offset: 0,
+                            affinity: super::math_edit::MathPositionAffinity::Downstream,
+                        };
+                        (
+                            None,
+                            0,
+                            super::math_edit::MathEditBranch::Tree {
+                                path: position.path.clone(),
+                                anchor: position,
+                            },
+                        )
+                    } else {
+                        (
+                            Some(std::sync::Arc::new(source_projection.clone())),
+                            body.start,
+                            super::math_edit::MathEditBranch::Source,
+                        )
+                    };
                     next_math_edit = Some(super::math_edit::MathEdit {
                         target: super::math_edit::MathEditTarget::Inline {
                             paragraph_id: paragraph_id.clone(),
                             math_id,
                         },
-                        source_projection: std::sync::Arc::new(
-                            caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
-                                .map_err(|error| EditError::InvalidMath(error.to_string()))?
-                                .into_parts()
-                                .1,
-                        ),
+                        source_projection,
                         source_draft: None,
                         revision: self.current_math_edit_revision(),
-                        cursor: body.start,
-                        branch: super::math_edit::MathEditBranch::Source,
+                        cursor,
+                        branch,
                     });
                 }
             }

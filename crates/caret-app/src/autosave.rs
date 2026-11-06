@@ -26,7 +26,7 @@ pub struct AutoSavePolicy {
     generation: u64,
     first_edit: Option<Duration>,
     deadline: Option<Duration>,
-    latest_revision: u64,
+    latest_revision: Option<u64>,
     in_flight_revision: Option<u64>,
 }
 
@@ -39,7 +39,7 @@ impl AutoSavePolicy {
             generation: 0,
             first_edit: None,
             deadline: None,
-            latest_revision: 0,
+            latest_revision: None,
             in_flight_revision: None,
         }
     }
@@ -68,10 +68,14 @@ impl AutoSavePolicy {
 
     /// 记录成功编辑并计算下一次单次唤醒 deadline。
     pub fn edited(&mut self, revision: u64, now: Duration) -> Option<AutoSaveDeadline> {
-        if !self.enabled || revision <= self.latest_revision {
+        if !self.enabled
+            || self
+                .latest_revision
+                .is_some_and(|latest| revision <= latest)
+        {
             return self.current_deadline(now);
         }
-        self.latest_revision = revision;
+        self.latest_revision = Some(revision);
         if self.in_flight_revision.is_none() {
             let first_edit = *self.first_edit.get_or_insert(now);
             let quiet_deadline = now.saturating_add(QUIET_PERIOD);
@@ -88,10 +92,13 @@ impl AutoSavePolicy {
         revision: u64,
         now: Duration,
     ) -> Option<AutoSaveDeadline> {
-        if !self.enabled || revision == 0 {
+        if !self.enabled {
             return self.current_deadline(now);
         }
-        self.latest_revision = self.latest_revision.max(revision);
+        self.latest_revision = Some(
+            self.latest_revision
+                .map_or(revision, |latest| latest.max(revision)),
+        );
         if self.in_flight_revision.is_none() && self.deadline.is_none() {
             self.first_edit = Some(now);
             self.deadline = Some(now.saturating_add(QUIET_PERIOD));
@@ -117,7 +124,7 @@ impl AutoSavePolicy {
     pub fn reset_pending_work(&mut self) {
         self.first_edit = None;
         self.deadline = None;
-        self.latest_revision = 0;
+        self.latest_revision = None;
         self.in_flight_revision = None;
         self.generation = self.generation.saturating_add(1);
     }
@@ -134,11 +141,10 @@ impl AutoSavePolicy {
             || generation != self.generation
             || self.deadline.is_none_or(|deadline| now < deadline)
             || self.in_flight_revision.is_some()
-            || self.latest_revision == 0
         {
             return None;
         }
-        let revision = self.latest_revision;
+        let revision = self.latest_revision?;
         self.in_flight_revision = Some(revision);
         self.deadline = None;
         Some(revision)
@@ -160,7 +166,7 @@ impl AutoSavePolicy {
             self.deadline = None;
             return None;
         }
-        if self.latest_revision > revision && self.enabled {
+        if self.latest_revision.is_some_and(|latest| latest > revision) && self.enabled {
             self.first_edit = Some(now);
             self.deadline = Some(now.saturating_add(QUIET_PERIOD));
             self.generation = self.generation.saturating_add(1);
@@ -173,8 +179,10 @@ impl AutoSavePolicy {
 
     /// 手动保存覆盖了尚未触发的修订时，撤销重复的自动写入。
     pub fn manually_saved(&mut self, revision: u64) {
-        if self.in_flight_revision.is_none() && self.latest_revision <= revision {
-            self.latest_revision = revision;
+        if self.in_flight_revision.is_none()
+            && self.latest_revision.is_none_or(|latest| latest <= revision)
+        {
+            self.latest_revision = Some(revision);
             self.first_edit = None;
             self.deadline = None;
             self.generation = self.generation.saturating_add(1);

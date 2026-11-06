@@ -15,7 +15,7 @@ pub(crate) use recovery::*;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 pub(super) struct PreparedDocument {
@@ -26,6 +26,7 @@ pub(super) struct PreparedDocument {
         Option<(String, caret_app::document_recovery::RecoverySessionLease)>,
     pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
     pub(super) recovery_binding_generation: u64,
+    pub(super) recovery_update_gate: Option<Arc<recovery::RecoveryUpdateGate>>,
 }
 
 pub(super) fn prepared_documents() -> &'static Mutex<HashMap<u64, PreparedDocument>> {
@@ -44,6 +45,7 @@ pub struct DocumentRuntime {
     pub(super) lifecycle: caret_app::document_lifecycle::DocumentLifecycleService,
     pub(super) recovery_lease: Option<caret_app::document_recovery::RecoverySessionLease>,
     pub(super) recovery_binding_generation: u64,
+    pub(super) recovery_update_gate: Option<Arc<recovery::RecoveryUpdateGate>>,
     pub(super) monotonic_origin: Instant,
 }
 
@@ -54,6 +56,7 @@ pub(crate) fn new_blank_document_runtime() -> Box<DocumentRuntime> {
         lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(1),
         recovery_lease: None,
         recovery_binding_generation: 0,
+        recovery_update_gate: None,
         monotonic_origin: Instant::now(),
     })
 }
@@ -84,6 +87,7 @@ pub(crate) fn prepare_document_file(
             recovery_source: None,
             recovery_lease: None,
             recovery_binding_generation: 0,
+            recovery_update_gate: None,
         };
         prepared_documents()
             .lock()
@@ -111,8 +115,9 @@ pub(crate) fn cancel_prepared_document(ticket: u64) {
         && let Some(mut prepared) = documents.remove(&ticket)
         && let Some(lease) = prepared.recovery_lease.take()
         && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+        && storage.remove_leased(&lease).is_ok()
     {
-        let _ = storage.remove_leased(&lease);
+        forget_recovery_gate(lease.id());
     }
 }
 
@@ -138,18 +143,21 @@ pub(crate) fn install_prepared_document(runtime: &mut DocumentRuntime, ticket: u
     if let Err(error) = installed {
         if let Some(lease) = prepared.recovery_lease.take()
             && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+            && storage.remove_leased(&lease).is_ok()
         {
-            let _ = storage.remove_leased(&lease);
+            forget_recovery_gate(lease.id());
         }
         return error;
     }
     if let Some((_source_id, source_lease)) = prepared.recovery_source.take()
         && let Ok(storage) = crate::document::recovery_storage_for_cleanup()
+        && storage.remove_leased(&source_lease).is_ok()
     {
-        let _ = storage.remove_leased(&source_lease);
+        forget_recovery_gate(source_lease.id());
     }
     runtime.recovery_lease = prepared.recovery_lease.take();
     runtime.recovery_binding_generation = prepared.recovery_binding_generation;
+    runtime.recovery_update_gate = prepared.recovery_update_gate.take();
     if let Ok(installed) = &runtime.runtime {
         runtime.lifecycle.set_session(
             installed.session_generation(),
@@ -179,6 +187,10 @@ pub(crate) fn document_save_snapshot(
         Err(error) => empty_save_snapshot(error.clone()),
     };
     snapshot.recovery_binding_generation = runtime.recovery_binding_generation;
+    snapshot.recovery_rebind_pending = runtime
+        .recovery_update_gate
+        .as_ref()
+        .is_some_and(|gate| gate.pending.load(std::sync::atomic::Ordering::Acquire));
     snapshot
 }
 
@@ -198,6 +210,7 @@ fn to_bridge_snapshot(snapshot: DocumentSaveSnapshot) -> bridge::DocumentSaveSna
         session_generation: snapshot.session_generation,
         document_generation: snapshot.document_generation,
         recovery_binding_generation: 0,
+        recovery_rebind_pending: false,
         history_state_id: snapshot.history_state_id,
         bytes: snapshot.bytes,
         content_digest: snapshot.content_digest,
@@ -215,6 +228,7 @@ pub(super) fn empty_save_snapshot(error: String) -> bridge::DocumentSaveSnapshot
         session_generation: 0,
         document_generation: 0,
         recovery_binding_generation: 0,
+        recovery_rebind_pending: false,
         history_state_id: 0,
         bytes: Vec::new(),
         content_digest: String::new(),
@@ -408,16 +422,16 @@ fn json_response(
         Ok(runtime) => operation(runtime.view_mut()),
         Err(error) => Err(error.clone()),
     };
-    if let (Some(before), Ok(session)) = (before_generation, runtime.runtime.as_ref()) {
-        let after = session.document_generation();
-        if after > before {
-            let now = runtime.monotonic_origin.elapsed();
-            let has_recovery = runtime
-                .runtime
-                .as_ref()
-                .is_ok_and(|session| session.recovery_id().is_some());
-            runtime.lifecycle.edited(after, has_recovery, now);
-        }
+    let after_revision = runtime.runtime.as_ref().ok().map(|session| {
+        (
+            session.document_generation(),
+            session.recovery_id().is_some(),
+        )
+    });
+    if let (Some(before), Some((after, has_recovery))) = (before_generation, after_revision)
+        && after != before
+    {
+        document_revision_changed(runtime, before, after, has_recovery);
     }
     if let Ok(session) = &runtime.runtime {
         let pending = session.has_uncommitted_math_source_draft();
@@ -428,6 +442,36 @@ fn json_response(
         }
     }
     result.unwrap_or_else(|error| format!("error:{error}"))
+}
+
+fn document_revision_wrapped(before: u64, after: u64) -> bool {
+    after < before
+}
+
+pub(super) fn document_revision_changed(
+    runtime: &mut DocumentRuntime,
+    before: u64,
+    after: u64,
+    has_recovery: bool,
+) {
+    if document_revision_wrapped(before, after)
+        && let Ok(session) = &mut runtime.runtime
+    {
+        let next_session_generation = session.advance_session_generation();
+        let session_generation = next_session_generation.unwrap_or(session.session_generation());
+        runtime
+            .lifecycle
+            .set_session_generation(session_generation, has_recovery);
+        if has_recovery {
+            // 只原子发布目标 revision；bind_session 在恢复更新 worker 中执行。
+            mark_recovery_rebind_pending(runtime, after);
+        }
+    } else if has_recovery {
+        advance_pending_recovery_revision(runtime, after);
+    }
+    runtime
+        .lifecycle
+        .edited(after, has_recovery, runtime.monotonic_origin.elapsed());
 }
 
 /// 将 Rust 页面布局和 glyph 栅格结果转换为紧凑 CXX 二进制 DTO。
@@ -542,6 +586,116 @@ mod tests {
     use super::*;
 
     #[test]
+    fn document_revision_rollover_is_a_new_lifecycle_epoch() {
+        assert!(document_revision_wrapped(u64::MAX, 0));
+        assert!(!document_revision_wrapped(0, 1));
+        assert!(!document_revision_wrapped(41, 42));
+        assert!(!document_revision_wrapped(42, 42));
+    }
+
+    #[test]
+    fn revision_rollover_restarts_deadline_epoch_and_saves_revision_zero()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut runtime = new_blank_document_runtime();
+        set_document_auto_save_enabled(&mut runtime, true);
+        let old_session_generation = runtime
+            .runtime
+            .as_ref()
+            .map(DocumentSessionService::session_generation)
+            .map_err(|error| std::io::Error::other(error.clone()))?;
+        let history_state_id = runtime
+            .runtime
+            .as_mut()
+            .map(|session| session.view_mut().history_state_id())
+            .map_err(|error| std::io::Error::other(error.clone()))?;
+        let current_document_generation = runtime
+            .runtime
+            .as_ref()
+            .map(DocumentSessionService::document_generation)
+            .map_err(|error| std::io::Error::other(error.clone()))?;
+        runtime
+            .runtime
+            .as_mut()
+            .map(|session| {
+                session.mark_saved(
+                    old_session_generation,
+                    current_document_generation,
+                    history_state_id.wrapping_add(1),
+                    std::path::Path::new("old.cdoc"),
+                    "old-digest",
+                )
+            })
+            .map_err(|error| std::io::Error::other(error.clone()))?;
+        assert!(
+            runtime
+                .runtime
+                .as_ref()
+                .is_ok_and(DocumentSessionService::is_dirty)
+        );
+
+        document_revision_changed(&mut runtime, u64::MAX - 1, 0, false);
+
+        let deadline_json = auto_save_deadline_json(&runtime);
+        let deadline: serde_json::Value = serde_json::from_str(&deadline_json)?;
+        let session_generation = deadline["sessionGeneration"]
+            .as_str()
+            .ok_or("deadline session generation is missing")?
+            .parse::<u64>()?;
+        let generation = deadline["generation"]
+            .as_str()
+            .ok_or("deadline generation is missing")?
+            .parse::<u64>()?;
+        assert_eq!(session_generation, old_session_generation + 1);
+        runtime.monotonic_origin = Instant::now() - std::time::Duration::from_secs(2);
+        assert!(
+            auto_save_deadline_fired(&mut runtime, old_session_generation, generation,)
+                .stale_deadline
+        );
+
+        let snapshot = auto_save_deadline_fired(&mut runtime, session_generation, generation);
+        assert!(snapshot.error.is_empty());
+        assert_eq!(snapshot.document_generation, 0);
+        assert_eq!(snapshot.session_generation, session_generation);
+        assert_eq!(
+            auto_save_write_finished(
+                &mut runtime,
+                old_session_generation,
+                0,
+                history_state_id,
+                "stale.cdoc".to_owned(),
+                "stale-digest".to_owned(),
+                true,
+            ),
+            "error:document.stale_save_completion"
+        );
+
+        let response = auto_save_write_finished(
+            &mut runtime,
+            session_generation,
+            snapshot.document_generation,
+            snapshot.history_state_id,
+            "new.cdoc".to_owned(),
+            "new-digest".to_owned(),
+            true,
+        );
+        let status: serde_json::Value = serde_json::from_str(&response)?;
+        assert_eq!(status["path"], "new.cdoc");
+        assert_eq!(status["savedGeneration"], "0");
+        assert_eq!(status["dirty"], false);
+        let saved_snapshot = runtime
+            .runtime
+            .as_mut()
+            .map_err(|error| std::io::Error::other(error.clone()))?
+            .save_snapshot()
+            .map_err(std::io::Error::other)?;
+        assert_eq!(
+            saved_snapshot.baseline_digest.as_deref(),
+            Some("new-digest")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn committed_revision_schedules_saving_even_when_response_generation_fails() {
         let mut runtime = new_blank_document_runtime();
         set_document_auto_save_enabled(&mut runtime, true);
@@ -562,6 +716,7 @@ mod tests {
             lifecycle: caret_app::document_lifecycle::DocumentLifecycleService::new(0),
             recovery_lease: None,
             recovery_binding_generation: 0,
+            recovery_update_gate: None,
             monotonic_origin: Instant::now(),
         };
         let expected = "error:document.initialization_failed";

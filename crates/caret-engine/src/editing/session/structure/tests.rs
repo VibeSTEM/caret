@@ -60,8 +60,6 @@ fn environment(kind: BlockEnvironmentKind, children: Vec<Block>) -> Block {
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }
@@ -293,6 +291,9 @@ fn composition_preview_at_environment_exit_tracks_each_inserted_line()
                 .unwrap_or_else(|| panic!("preedit focus paragraph must exist in the document"));
             assert_eq!(paragraph_text(paragraph), expected_text);
             assert_eq!(focus.offset, expected_offset);
+            let crate::editing::CompositionRange::Paragraph(range) = range else {
+                panic!("paragraph preedit should return a paragraph range");
+            };
             assert_eq!(range.anchor.paragraph_id, focus.paragraph_id);
             assert_eq!(range.focus.paragraph_id, focus.paragraph_id);
             assert_eq!(range.anchor.offset, 0);

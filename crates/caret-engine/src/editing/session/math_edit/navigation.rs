@@ -10,7 +10,7 @@ use super::{MathEdit, MathEditTarget};
 
 pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
     match &edit.target {
-        MathEditTarget::Block { align: true, .. } => Some(0..edit.source().len()),
+        MathEditTarget::Block { align: true, .. } => Some(0..edit.source()?.len()),
         MathEditTarget::Inline { .. } | MathEditTarget::Block { align: false, .. } => {
             if edit.source_draft_is_pending() {
                 let kind = match &edit.target {
@@ -20,9 +20,9 @@ pub(super) fn math_input_body_range(edit: &MathEdit) -> Option<Range<usize>> {
                     }
                     MathEditTarget::Block { align: true, .. } => unreachable!(),
                 };
-                caret_math::input_body_range_for_edit(edit.source(), kind).ok()
+                caret_math::input_body_range_for_edit(edit.source()?, kind).ok()
             } else {
-                Some(edit.source_projection.body_range())
+                Some(edit.source_projection.as_deref()?.body_range())
             }
         }
     }

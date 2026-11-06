@@ -1,13 +1,14 @@
-//! 将数学 TextFlow 格式命令映射到 LaTeX 源码与 MathTree 事务。
+//! 将数学 TextFlow 格式命令提交为宿主 MathTree 事务。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
 use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
 use super::super::{EditError, Effect};
-use super::text_branch::{MathTextEdit, MathTextFormat, text_source_range_from_map};
+use super::text_branch::apply_math_text_environment_tree_range;
 use super::{
-    MathContent, MathEdit, MathEditBranch, MathTextFlowPath, MathTextFlowPathStep, Session,
+    MathContent, MathEdit, MathEditBranch, MathPositionAffinity, MathTextFlowPath,
+    MathTextFlowPathStep, MathTextPosition, Session,
 };
 use crate::editing::session::history::SessionHistoryState;
 use caret_doc::{InlineEnvironmentKind, MathTree};
@@ -28,24 +29,26 @@ impl Session {
         }
 
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, anchor } = edit.branch.clone() else {
+        let MathEditBranch::Text { path, anchor, .. } = edit.branch.clone() else {
             return Err(EditError::UnsupportedInlineFormat);
         };
+        if anchor.path != path {
+            return Err(EditError::UnsupportedInlineFormat);
+        }
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let (text, text_map) = path
-            .resolve_in_projection(tree, &edit.source_projection)
+        let text = path
+            .resolve_structurally(tree)
             .ok_or(EditError::InvalidPosition)?;
         let display = text
             .runs
             .iter()
             .map(|run| run.text.as_str())
             .collect::<String>();
-        let range = anchor.min(edit.cursor)..anchor.max(edit.cursor);
+        let range = anchor.offset.min(edit.cursor)..anchor.offset.max(edit.cursor);
         if range.end > display.len()
             || !display.is_char_boundary(range.start)
             || !display.is_char_boundary(range.end)
-            || !super::is_grapheme_boundary(&display, range.start)
-            || !super::is_grapheme_boundary(&display, range.end)
+            || !super::math_text_offsets_are_boundaries(tree, &path, &[range.start, range.end])
         {
             return Err(EditError::InvalidPosition);
         }
@@ -58,70 +61,181 @@ impl Session {
             return self.set_pending_math_environment(&edit, &path, kind, enabled);
         }
 
-        let source_base = edit.source_projection.edit_range().start;
-        let local_source_range = text_source_range_from_map(text_map, source_base, range.clone())
-            .and_then(|mapped| {
-                Some(path.source_offset(mapped.start)?..path.source_offset(mapped.end)?)
-            })
-            .ok_or(EditError::InvalidPosition)?;
-        let text_source_start = text_map
-            .range()
-            .ok_or(EditError::InvalidPosition)?
-            .start
-            .checked_sub(source_base)
-            .and_then(|offset| path.source_offset(offset))
-            .ok_or(EditError::InvalidPosition)?;
-        let host_source_range = path
-            .host_offset(local_source_range.start)
-            .and_then(|start| {
-                path.host_offset(local_source_range.end)
-                    .map(|end| start..end)
-            })
-            .ok_or(EditError::InvalidPosition)?;
-        let prefix = environment_command(kind, enabled)?;
-        let selected_source = edit
-            .source()
-            .get(host_source_range.clone())
-            .ok_or(EditError::InvalidPosition)?;
-        let replacement = format!("{prefix}{selected_source}}}");
-        let mut source = edit.source().to_owned();
-        source.replace_range(host_source_range.clone(), &replacement);
-        let format = MathTextFormat {
+        let mut updated_tree = tree.clone();
+        let selected_path = apply_math_text_environment_tree_range(
+            &mut updated_tree,
+            &path,
+            range.clone(),
             kind,
             enabled,
-            selected_source_start: local_source_range
-                .start
-                .checked_sub(text_source_start)
-                .and_then(|start| start.checked_add(prefix.len()))
-                .ok_or(EditError::InvalidPosition)?,
-            selected_source_len: local_source_range.len(),
-            selected_text: display
-                .get(range.clone())
-                .ok_or(EditError::InvalidPosition)?
-                .to_owned(),
-            display_range: range.clone(),
-            selection_reversed: anchor > edit.cursor,
+        )?;
+        updated_tree
+            .validate()
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let selected_len = range.end - range.start;
+        let (next_anchor, next_cursor) = if anchor.offset <= edit.cursor {
+            (0, selected_len)
+        } else {
+            (selected_len, 0)
         };
-        self.write_math_source_with_metadata(
-            source,
-            host_source_range.start + prefix.len() + selected_source.len(),
-            None,
-            host_source_range,
-            Some((path.clone(), range.end)),
-            Some(MathTextEdit {
-                path,
-                range,
-                inserted: String::new(),
-                source_edit: local_source_range,
-                source_replacement_len: replacement.len(),
-                encoded_pieces: Vec::new(),
-                snap_forward: false,
-                removes_entire_flow: false,
-                split_math_entry: false,
-                split_math_contents: None,
-                format: Some(format),
-            }),
+        self.commit_math_text_tree(
+            edit,
+            updated_tree,
+            super::text_branch::MathTextTreeCommit {
+                branch: super::MathEditBranch::Text {
+                    path: selected_path.clone(),
+                    anchor: MathTextPosition::new(
+                        selected_path.clone(),
+                        next_anchor,
+                        MathPositionAffinity::Downstream,
+                    ),
+                    focus_affinity: MathPositionAffinity::Downstream,
+                },
+                align_cell: selected_path.align_cell(),
+                cursor: next_cursor,
+                merge_group: None,
+                pending_style: super::text_branch::PendingStylePolicy::Clear,
+                selection_changed: true,
+            },
         )
+    }
+
+    pub(super) fn set_math_text_font_family(&mut self, family: &str) -> Result<Effect, EditError> {
+        if family.trim().is_empty() {
+            return Err(EditError::InvalidFontFamily);
+        }
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+
+        let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let MathEditBranch::Text { path, anchor, .. } = edit.branch.clone() else {
+            return Err(EditError::UnsupportedInlineFormat);
+        };
+        if anchor.path != path {
+            return Err(EditError::UnsupportedInlineFormat);
+        }
+        let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let text = path
+            .resolve_structurally(tree)
+            .ok_or(EditError::InvalidPosition)?;
+        let display = text
+            .runs
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect::<String>();
+        let range = anchor.offset.min(edit.cursor)..anchor.offset.max(edit.cursor);
+        if range.end > display.len()
+            || !display.is_char_boundary(range.start)
+            || !display.is_char_boundary(range.end)
+            || !super::math_text_offsets_are_boundaries(tree, &path, &[range.start, range.end])
+        {
+            return Err(EditError::InvalidPosition);
+        }
+
+        let inherited =
+            inherited_math_text_font_family(tree, &path).ok_or(EditError::InvalidPosition)?;
+        if range.is_empty() {
+            let current = self
+                .pending_inline_style
+                .active_font_family()
+                .or(inherited.as_deref());
+            if current == Some(family) {
+                return Ok(Effect::default());
+            }
+            return self.set_pending_math_text_font_family(&edit, &path, family);
+        }
+
+        let mut updated_tree = tree.clone();
+        let selected_path = super::text_branch::apply_math_text_font_family_tree_range(
+            &mut updated_tree,
+            &path,
+            range.clone(),
+            family,
+        )?;
+        if updated_tree == *tree {
+            return Ok(Effect::default());
+        }
+        updated_tree
+            .validate()
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let selected_len = range.end - range.start;
+        let (next_anchor, next_cursor) = if anchor.offset <= edit.cursor {
+            (0, selected_len)
+        } else {
+            (selected_len, 0)
+        };
+        self.commit_math_text_tree(
+            edit,
+            updated_tree,
+            super::text_branch::MathTextTreeCommit {
+                branch: super::MathEditBranch::Text {
+                    path: selected_path.clone(),
+                    anchor: MathTextPosition::new(
+                        selected_path.clone(),
+                        next_anchor,
+                        MathPositionAffinity::Downstream,
+                    ),
+                    focus_affinity: MathPositionAffinity::Downstream,
+                },
+                align_cell: selected_path.align_cell(),
+                cursor: next_cursor,
+                merge_group: None,
+                pending_style: super::text_branch::PendingStylePolicy::Clear,
+                selection_changed: true,
+            },
+        )
+    }
+
+    fn set_pending_math_text_font_family(
+        &mut self,
+        edit: &MathEdit,
+        path: &MathTextFlowPath,
+        family: &str,
+    ) -> Result<Effect, EditError> {
+        if self.pending_inline_style.active_font_family() == Some(family) {
+            return Ok(Effect::default());
+        }
+        let before_pending = self.pending_inline_style.clone();
+        let before_selection = self.selection.clone();
+        let before_affinity = self.selection_visual_affinity;
+        let state_id = self.history_state_id;
+        let before_math = super::history_position(edit);
+        self.pending_inline_style.set_font_family(family.to_owned());
+        self.advance_history_merge_epoch();
+        let after_math = MathEditPosition::with_edit_state(
+            edit,
+            edit.cursor,
+            MathEditBranch::Text {
+                path: path.clone(),
+                anchor: MathTextPosition::new(
+                    path.clone(),
+                    edit.cursor,
+                    MathPositionAffinity::Downstream,
+                ),
+                focus_affinity: MathPositionAffinity::Downstream,
+            },
+        );
+        let before = SessionHistoryState::new(
+            before_selection.clone(),
+            before_affinity,
+            before_pending,
+            state_id,
+        )
+        .with_math_edit(Some(before_math));
+        let after = SessionHistoryState::new(
+            before_selection,
+            before_affinity,
+            self.pending_inline_style.clone(),
+            state_id,
+        )
+        .with_math_edit(Some(after_math));
+        self.record_history_edit(SessionHistoryEdit::new(
+            DocumentPatch::PendingStyle,
+            before,
+            after,
+        ));
+        Ok(Effect::default())
     }
 
     fn set_pending_math_environment(
@@ -146,7 +260,12 @@ impl Session {
             edit.cursor,
             MathEditBranch::Text {
                 path: path.clone(),
-                anchor: edit.cursor,
+                anchor: MathTextPosition::new(
+                    path.clone(),
+                    edit.cursor,
+                    MathPositionAffinity::Downstream,
+                ),
+                focus_affinity: MathPositionAffinity::Downstream,
             },
         );
         let before = SessionHistoryState::new(
@@ -172,86 +291,7 @@ impl Session {
     }
 }
 
-pub(super) fn formatted_text_selection(
-    tree: &MathTree,
-    source_projection: &caret_math::MathSourceMap<'_>,
-    previous_path: &MathTextFlowPath,
-    format: &MathTextFormat,
-) -> Option<(MathTextFlowPath, usize, usize)> {
-    let edit_range = source_projection.edit_range();
-    let (source_map, source_offset, source_base, host_base) =
-        if let Some((row, cell)) = previous_path.align_cell() {
-            let align_map = source_projection.align()?;
-            let range = align_map.cell_range(row, cell)?;
-            let local_start = range.start.checked_sub(edit_range.start)?;
-            let source_offset = edit_range
-                .start
-                .checked_add(previous_path.host_source_range().0)?
-                .checked_add(format.selected_source_start)?;
-            (
-                align_map.cell_tree(row, cell)?,
-                source_offset,
-                range.start,
-                Some(local_start),
-            )
-        } else {
-            let source_start = (previous_path.source_range().0 as usize)
-                .checked_add(format.selected_source_start)?;
-            (
-                source_projection.tree()?,
-                edit_range.start.checked_add(source_start)?,
-                edit_range.start,
-                None,
-            )
-        };
-    let mut path = super::path::path_at_source_boundary(
-        source_map,
-        source_offset,
-        true,
-        previous_path.align_cell(),
-        source_base,
-    )?;
-    if let Some(host_base) = host_base {
-        path = path.with_host_source_base(host_base)?;
-    }
-    let (text, _) = path.resolve_in_projection(tree, source_projection)?;
-    let display = text
-        .runs
-        .iter()
-        .map(|run| run.text.as_str())
-        .collect::<String>();
-    if display != format.selected_text
-        || inherited_environment_value(tree, &path, format.kind) != Some(format.enabled)
-    {
-        return None;
-    }
-    let focus = if format.selection_reversed {
-        0
-    } else {
-        display.len()
-    };
-    let anchor = if format.selection_reversed {
-        display.len()
-    } else {
-        0
-    };
-    Some((path, anchor, focus))
-}
-
-fn environment_command(
-    kind: InlineEnvironmentKind,
-    enabled: bool,
-) -> Result<&'static str, EditError> {
-    match (kind, enabled) {
-        (InlineEnvironmentKind::Bold, true) => Ok(r"\textbf{"),
-        (InlineEnvironmentKind::Bold, false) => Ok(r"\textmd{"),
-        (InlineEnvironmentKind::Italic, true) => Ok(r"\textit{"),
-        (InlineEnvironmentKind::Italic, false) => Ok(r"\textup{"),
-        (InlineEnvironmentKind::Font, _) => Err(EditError::UnsupportedInlineFormat),
-    }
-}
-
-fn inherited_environment_value(
+pub(super) fn inherited_environment_value(
     tree: &MathTree,
     path: &MathTextFlowPath,
     kind: InlineEnvironmentKind,
@@ -307,4 +347,55 @@ fn inherited_environment_value(
     }
 
     in_flow(&tree.root, path.steps(), kind, false)
+}
+
+pub(super) fn inherited_math_text_font_family(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+) -> Option<Option<String>> {
+    fn in_flow(
+        flow: &caret_doc::MathFlow,
+        steps: &[MathTextFlowPathStep],
+        inherited: Option<String>,
+    ) -> Option<Option<String>> {
+        let MathTextFlowPathStep::Content(index) = steps.first()? else {
+            return None;
+        };
+        in_content(flow.content.get(*index)?, &steps[1..], inherited)
+    }
+
+    fn in_content(
+        content: &MathContent,
+        steps: &[MathTextFlowPathStep],
+        inherited: Option<String>,
+    ) -> Option<Option<String>> {
+        match content {
+            MathContent::Text(_) if steps.is_empty() => Some(inherited),
+            MathContent::Environment(environment) => {
+                let MathTextFlowPathStep::EnvironmentChild(index) = steps.first()? else {
+                    return None;
+                };
+                let inherited = if environment.kind == InlineEnvironmentKind::Font {
+                    environment
+                        .props
+                        .get("fontFamily")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .or(inherited)
+                } else {
+                    inherited
+                };
+                in_content(environment.children.get(*index)?, &steps[1..], inherited)
+            }
+            MathContent::Math(node) => {
+                let MathTextFlowPathStep::Operand(index) = steps.first()? else {
+                    return None;
+                };
+                in_flow(node.children.get(*index)?, &steps[1..], inherited)
+            }
+            _ => None,
+        }
+    }
+
+    in_flow(&tree.root, path.steps(), None)
 }

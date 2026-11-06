@@ -255,8 +255,6 @@ mod tests {
                 props: Default::default(),
                 extra: Default::default(),
             }],
-            source_range: None,
-            source_map: Vec::new(),
             extra: Default::default(),
         })
     }
@@ -279,15 +277,12 @@ mod tests {
                         extra: Default::default(),
                     },
                 ],
-                source_range: None,
-                source_map: Vec::new(),
                 extra: Default::default(),
             }),
             FlowContent::Environment(InlineEnvironment {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Bold,
                 definition_id: None,
-                source_range: None,
                 props: Default::default(),
                 children: vec![
                     text("\u{301}"),
@@ -300,7 +295,6 @@ mod tests {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Italic,
                 definition_id: None,
-                source_range: None,
                 props: Default::default(),
                 children: Vec::new(),
                 extra: Default::default(),

@@ -5,7 +5,7 @@
 
 use super::super::StoryId;
 use super::Session;
-use crate::editing::command_registry::MATH_INSERT_COMMAND_ID;
+use crate::editing::command_registry::{MATH_INSERT_COMMAND_ID, MATH_SPLIT_INLINE_COMMAND_ID};
 use crate::editing::{
     Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError, Effect,
 };
@@ -133,8 +133,24 @@ impl Session {
                         .is_some_and(|location| !location.is_title)
             }),
             "insert.inline_math" => self.selection.anchor == self.selection.focus,
+            "text.format.bold" | "text.format.italic" | "text.format.underline" => {
+                self.command_line
+                    .as_ref()
+                    .is_some_and(|line| line.mode != CommandLineMode::Math)
+                    || self.math_edit_is_text_branch()
+            }
+            MATH_SPLIT_INLINE_COMMAND_ID => self.math_text_split_is_available(),
             _ => true,
         }
+    }
+
+    fn math_text_split_is_available(&self) -> bool {
+        self.math_edit.as_ref().is_some_and(|edit| {
+            matches!(
+                &edit.branch,
+                super::MathEditBranch::Text { path, anchor, .. } if path == &anchor.path
+            )
+        })
     }
 
     pub(super) fn run_command_line(&mut self, command: Command) -> Result<Effect, EditError> {
@@ -169,12 +185,11 @@ impl Session {
                 });
             }
             Command::TypeCommandLine(text) => {
-                if text == "\\"
-                    && self
-                        .command_line
-                        .as_ref()
-                        .is_none_or(|line| line.mode == CommandLineMode::Command)
-                {
+                let repeats_prefix = self.command_line.as_ref().is_none_or(|line| {
+                    line.mode == CommandLineMode::Command
+                        || (line.mode == CommandLineMode::Math && self.math_edit_is_text_branch())
+                });
+                if text == "\\" && repeats_prefix {
                     return self.repeat_command_line_prefix();
                 }
                 if let Some(command_line) = &mut self.command_line {
@@ -442,6 +457,7 @@ impl Session {
                 Some(template) if self.math_edit.is_some() => self.math_insert_template(&template),
                 _ => return Ok(Effect::default()),
             },
+            MATH_SPLIT_INLINE_COMMAND_ID => self.math_text_enter_math(""),
             _ => return Ok(Effect::default()),
         };
         let effect = match effect {

@@ -101,9 +101,26 @@ impl DocumentSessionService {
         self.session_generation
     }
 
+    /// 文档修订代际回绕时尝试推进会话代际，并返回是否成功推进。
+    ///
+    /// 修订数字基线重置为零，但保留保存路径、摘要和 history 状态；代际耗尽时调用方仍须重置计时器。
+    pub fn advance_session_generation(&mut self) -> Option<u64> {
+        let next = self.session_generation.checked_add(1);
+        self.saved_generation = 0;
+        if let Some(next) = next {
+            self.session_generation = next;
+        }
+        next
+    }
+
     /// 返回当前文档修订，用于拒绝过期的后台打开结果。
     pub fn document_generation(&self) -> u64 {
         self.view.document_generation()
+    }
+
+    /// 返回当前历史状态标识，用于校验异步保存回报是否仍对应当前内容。
+    pub fn history_state_id(&self) -> u64 {
+        self.view.history_state_id()
     }
 
     /// 当前文档内容是否偏离最近一次成功保存点。
@@ -121,6 +138,16 @@ impl DocumentSessionService {
     /// 当前临时恢复会话绑定的恢复项标识。
     pub fn recovery_id(&self) -> Option<&str> {
         self.recovery_id.as_deref()
+    }
+
+    /// 返回当前恢复绑定的原始文档路径。
+    pub fn recovery_original_path(&self) -> Option<&str> {
+        self.recovery_original_path.as_deref()
+    }
+
+    /// 返回当前恢复绑定的外部基线摘要。
+    pub fn recovery_baseline_digest(&self) -> Option<&str> {
+        self.recovery_baseline_digest.as_deref()
     }
 
     /// 比较恢复绑定的完整身份，避免同一条目更换路径或基线后沿用旧异步工作。
@@ -285,14 +312,14 @@ impl DocumentSessionService {
         )
     }
 
-    /// 捕获当前文档修订用于后台写入，不改变当前会话或保存点。
+    /// 捕获可序列化的当前文档修订用于后台写入。
+    ///
+    /// 未提交数学源码草稿或文档序列化失败时返回错误，且不改变撤销合并边界。成功生成
+    /// 快照后会切断连续输入的撤销合并，但不改变文档修订或保存点。
     pub fn save_snapshot(&mut self) -> Result<DocumentSaveSnapshot, String> {
         if self.view.has_uncommitted_math_source_draft() {
             return Err("document.save_incomplete_math_source_draft".to_owned());
         }
-        self.view
-            .begin_save_checkpoint()
-            .map_err(|error| error.to_string())?;
         let file = CdocFile {
             format: self.file.format.clone(),
             version: self.file.version,
@@ -302,6 +329,9 @@ impl DocumentSessionService {
             extra: self.file.extra.clone(),
         };
         let bytes = file.to_bytes().map_err(|error| error.to_string())?;
+        self.view
+            .begin_save_checkpoint()
+            .map_err(|error| error.to_string())?;
         let content_digest = content_digest(&bytes);
         Ok(DocumentSaveSnapshot {
             session_generation: self.session_generation,
@@ -326,6 +356,9 @@ impl DocumentSessionService {
         content_digest: &str,
     ) -> bool {
         if session_generation != self.session_generation {
+            return false;
+        }
+        if document_generation > self.view.document_generation() {
             return false;
         }
         // 旧修订的迟到写入不能回退当前文档路径或外部文件基线。

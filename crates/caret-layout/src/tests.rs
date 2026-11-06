@@ -50,8 +50,6 @@ fn font_catalog_includes_the_embedded_code_font() {
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }
@@ -660,7 +658,6 @@ fn run_language_and_paragraph_environment_styles_reach_parley() {
         id: NodeId::generate(),
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::new(),
         children: vec![text_flow(Run {
             text: "Bold Thai text ภาษาไทย".to_owned(),
@@ -875,7 +872,6 @@ fn font_environment_and_nested_bold_reach_parley_style_ranges() {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Font,
                 definition_id: None,
-                source_range: None,
                 props: BTreeMap::from([(
                     "fontFamily".to_owned(),
                     serde_json::Value::String(family),
@@ -884,7 +880,6 @@ fn font_environment_and_nested_bold_reach_parley_style_ranges() {
                     id: NodeId::generate(),
                     kind: InlineEnvironmentKind::Bold,
                     definition_id: None,
-                    source_range: None,
                     props: BTreeMap::new(),
                     children: vec![text_flow(Run {
                         text: "bold".to_owned(),
@@ -936,7 +931,6 @@ fn font_environment_default_marker_does_not_request_a_literal_font() {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Font,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::from([(
                 "fontFamily".to_owned(),
                 serde_json::Value::String(caret_doc::DEFAULT_FONT_FAMILY.to_owned()),
@@ -1061,7 +1055,6 @@ fn paragraph_empty_line_scan_handles_split_crlf_without_copying_text() {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: vec![text_flow(Run {
                 text: "\nsecond".to_owned(),
@@ -1702,7 +1695,6 @@ fn grapheme_boundaries_cross_run_and_environment_boundaries() {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: vec![text_flow(Run {
                 text: "\u{301}".to_owned(),

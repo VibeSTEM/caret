@@ -1,4 +1,5 @@
 //! 将 InlineMath 根流中的文本提升到宿主 Paragraph，并映射活动位置。
+//
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
@@ -6,10 +7,12 @@ use super::super::super::flow_map::OBJECT_REPLACEMENT;
 use super::super::super::grapheme::GraphemeMap;
 use super::EditError;
 use caret_doc::{
-    FlowContent, InlineEnvironment, InlineMath, MathContent, MathNode, MathSourceRange, MathTree,
-    ParagraphContent, TextFlow,
+    FlowContent, InlineEnvironment, InlineMath, MathContent, MathNodeKind, ParagraphContent,
+    TextFlow,
 };
-use caret_math::MathInputKind;
+use caret_math::{
+    MathContentSourceMap, MathInputKind, MathRangeSourceMap, MathTextSourceMap, MathTreeSourceMap,
+};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +37,9 @@ pub(in crate::editing::session) struct InlineRootSplit {
 }
 
 /// 根层 TextFlow 是 Paragraph 的内容；MathNode 子树仍是数学槽位边界。
-pub(in crate::editing::session) fn split_inline_math_root(
+pub(in crate::editing::session) fn split_inline_math_root_with_map(
     math: &InlineMath,
+    source_map: &MathTreeSourceMap,
     source_anchor: usize,
     source_cursor: usize,
     source: &str,
@@ -46,12 +50,7 @@ pub(in crate::editing::session) fn split_inline_math_root(
     if !math.extra.is_empty()
         || !math.math_tree.extra.is_empty()
         || !math.math_tree.root.extra.is_empty()
-        || math
-            .math_tree
-            .root
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
+        || !source_map.root().range_extra().is_empty()
     {
         return Err(EditError::UnsupportedOpaqueContent);
     }
@@ -73,7 +72,7 @@ pub(in crate::editing::session) fn split_inline_math_root(
         paragraph_offset: 0,
         contents: Vec::new(),
     };
-    context.convert_items(&math.math_tree.root.content)?;
+    context.convert_items(&math.math_tree.root.content, source_map.root().content())?;
 
     let focus = context.resolve_focus()?;
     Ok(Some(InlineRootSplit {
@@ -81,6 +80,25 @@ pub(in crate::editing::session) fn split_inline_math_root(
         focus,
         inserted_len: context.paragraph_offset,
     }))
+}
+
+#[cfg(test)]
+fn split_inline_math_root(
+    math: &InlineMath,
+    source_anchor: usize,
+    source_cursor: usize,
+    source: &str,
+) -> Result<Option<InlineRootSplit>, EditError> {
+    let projection = caret_math::parse_projection(source, MathInputKind::Inline)
+        .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+    let (caret_math::ProjectedMath::Tree(parsed), projection) = projection.into_parts() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let tree_map = projection.tree().ok_or(EditError::InvalidPosition)?;
+    let source_map = tree_map
+        .reconcile_for_tree(&parsed, &math.math_tree, None, source, None)
+        .ok_or(EditError::InvalidPosition)?;
+    split_inline_math_root_with_map(math, &source_map, source_anchor, source_cursor, source)
 }
 
 pub(in crate::editing::session) fn replace_inline_math_with_split(
@@ -118,6 +136,10 @@ fn has_promotable_text(contents: &[MathContent]) -> bool {
     contents.iter().any(|content| match content {
         MathContent::Text(_) => true,
         MathContent::Environment(environment) => has_promotable_text(&environment.children),
+        MathContent::Math(node) if node.kind == MathNodeKind::Row => node
+            .children
+            .iter()
+            .any(|flow| has_promotable_text(&flow.content)),
         MathContent::Math(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => false,
     })
 }
@@ -148,7 +170,7 @@ enum FocusTokenKind {
         source: String,
     },
     Text {
-        source_map: Vec<caret_doc::TextFlowSourceMapEntry>,
+        source_map: MathTextSourceMap,
         display: String,
     },
 }
@@ -254,64 +276,132 @@ impl SplitContext<'_> {
 }
 
 impl SplitContext<'_> {
-    fn convert_items(&mut self, items: &[MathContent]) -> Result<(), EditError> {
+    fn convert_items(
+        &mut self,
+        items: &[MathContent],
+        source_maps: &[MathContentSourceMap],
+    ) -> Result<(), EditError> {
         let mut math_items = Vec::new();
-        for item in items {
-            match item {
-                MathContent::Text(text) => {
-                    self.flush_math(&mut math_items)?;
-                    self.push_text(text)?;
-                }
-                MathContent::Environment(environment)
-                    if has_promotable_text(&environment.children) =>
-                {
-                    self.flush_math(&mut math_items)?;
-                    self.push_environment(environment)?;
-                }
-                MathContent::Math(_) | MathContent::Environment(_) => {
-                    math_items.push(item.clone());
-                }
-                MathContent::SoftBreak(_) | MathContent::Opaque(_) => {
-                    return Err(EditError::UnsupportedOpaqueContent);
-                }
-            }
-        }
+        self.convert_items_into(items, source_maps, &mut math_items)?;
         self.flush_math(&mut math_items)
     }
 
-    fn flush_math(&mut self, items: &mut Vec<MathContent>) -> Result<(), EditError> {
+    fn convert_items_into(
+        &mut self,
+        items: &[MathContent],
+        source_maps: &[MathContentSourceMap],
+        math_items: &mut Vec<(MathContent, MathContentSourceMap)>,
+    ) -> Result<(), EditError> {
+        if items.len() != source_maps.len() {
+            return Err(EditError::InvalidPosition);
+        }
+        for (item, source_map) in items.iter().zip(source_maps) {
+            match (item, source_map) {
+                (MathContent::Text(text), MathContentSourceMap::Text(source_map)) => {
+                    self.flush_math(math_items)?;
+                    self.push_text(text, source_map)?;
+                }
+                (
+                    MathContent::Math(node),
+                    MathContentSourceMap::Math {
+                        range,
+                        operands,
+                        placeholder: false,
+                    },
+                ) if node.kind == MathNodeKind::Row
+                    && node
+                        .children
+                        .iter()
+                        .any(|flow| has_promotable_text(&flow.content)) =>
+                {
+                    if !node.extra.is_empty()
+                        || !node.attributes.is_empty()
+                        || node.text.is_some()
+                        || !range.extra().is_empty()
+                        || node.children.len() != operands.len()
+                    {
+                        return Err(EditError::UnsupportedOpaqueContent);
+                    }
+                    for (flow, map) in node.children.iter().zip(operands) {
+                        if !flow.extra.is_empty() || !map.range_extra().is_empty() {
+                            return Err(EditError::UnsupportedOpaqueContent);
+                        }
+                        self.convert_items_into(&flow.content, map.content(), math_items)?;
+                    }
+                }
+                (
+                    MathContent::Environment(environment),
+                    MathContentSourceMap::Environment { range, children },
+                ) if has_promotable_text(&environment.children) => {
+                    self.flush_math(math_items)?;
+                    self.push_environment(environment, range, children)?;
+                }
+                (
+                    MathContent::Math(_),
+                    MathContentSourceMap::Math { .. } | MathContentSourceMap::Other,
+                )
+                | (
+                    MathContent::Environment(_),
+                    MathContentSourceMap::Environment { .. } | MathContentSourceMap::Other,
+                ) => {
+                    math_items.push((item.clone(), source_map.clone()));
+                }
+                (
+                    MathContent::SoftBreak(_) | MathContent::Opaque(_),
+                    MathContentSourceMap::Other,
+                ) => {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
+                _ => return Err(EditError::InvalidPosition),
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_math(
+        &mut self,
+        items: &mut Vec<(MathContent, MathContentSourceMap)>,
+    ) -> Result<(), EditError> {
         if items.is_empty() {
             return Ok(());
         }
         let start = items
             .first()
-            .and_then(math_content_source_range)
-            .map(|range| range.start as usize)
+            .and_then(|(_, source_map)| source_map.range())
+            .map(|range| range.start)
             .ok_or(EditError::UnsupportedOpaqueContent)?;
         let end = items
             .last()
-            .and_then(math_content_source_range)
-            .map(|range| range.end as usize)
+            .and_then(|(_, source_map)| source_map.range())
+            .map(|range| range.end)
             .ok_or(EditError::UnsupportedOpaqueContent)?;
         let source = self
             .source
             .get(start..end)
             .ok_or(EditError::InvalidPosition)?;
         let mut source = source.to_owned();
-        for item in items.iter() {
+        for (item, source_map) in items.iter() {
             let MathContent::Math(node) = item else {
+                continue;
+            };
+            let MathContentSourceMap::Math {
+                range,
+                placeholder: true,
+                ..
+            } = source_map
+            else {
                 continue;
             };
             if node.kind != caret_doc::MathNodeKind::Placeholder {
                 continue;
             }
-            let Some(range) = node.source_range.as_ref() else {
+            let Some(range) = range.range() else {
                 continue;
             };
-            let Some(local_start) = (range.start as usize).checked_sub(start) else {
+            let Some(local_start) = range.start.checked_sub(start) else {
                 continue;
             };
-            let Some(local_end) = (range.end as usize).checked_sub(start) else {
+            let Some(local_end) = range.end.checked_sub(start) else {
                 continue;
             };
             if source.get(local_start..local_end) == Some("$$") {
@@ -319,24 +409,28 @@ impl SplitContext<'_> {
                 source.replace_range(local_start..local_end, "{}");
             }
         }
-        let caret_math::ParsedMath::Tree(mut parsed) =
-            caret_math::parse(&source, MathInputKind::Inline)
+        let caret_math::ProjectedMath::Tree(mut parsed) =
+            caret_math::parse_projection(&source, MathInputKind::Inline)
                 .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                .into_parts()
+                .0
         else {
             return Err(EditError::InvalidMath("expected inline math".to_owned()));
         };
-        for item in items.iter_mut() {
-            rebase_content_ranges(item, start)?;
+        let mut math_items = Vec::with_capacity(items.len());
+        for (item, _) in items.iter() {
+            math_items.push(item.clone());
         }
-        parsed.root.content = std::mem::take(items);
+        parsed.root.content = math_items;
         if let Some(id) = self.first_root_id.take() {
             parsed.root.id = id;
         }
-        if caret_engine_math_tree_check(&parsed).is_none() {
-            return Err(EditError::InvalidMath(
-                "split math source and tree disagree".to_owned(),
-            ));
-        }
+        let (parsed, _) = crate::math_validation::tree_for_history_projection_with_map(
+            &parsed,
+            &source,
+            MathInputKind::Inline,
+        )
+        .ok_or_else(|| EditError::InvalidMath("split math source and tree disagree".to_owned()))?;
         let math_id = self
             .first_math_id
             .take()
@@ -360,40 +454,42 @@ impl SplitContext<'_> {
             .paragraph_offset
             .checked_add(OBJECT_REPLACEMENT.len_utf8())
             .ok_or(EditError::InvalidPosition)?;
+        items.clear();
         Ok(())
     }
 
-    fn push_text(&mut self, text: &TextFlow) -> Result<(), EditError> {
-        if text
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
-            || text
-                .source_map
+    fn push_text(
+        &mut self,
+        text: &TextFlow,
+        source_map: &MathTextSourceMap,
+    ) -> Result<(), EditError> {
+        if !source_map.range_extra().is_empty()
+            || source_map
+                .segments()
                 .iter()
-                .any(|entry| !entry.extra.is_empty() || !entry.source_range.extra.is_empty())
+                .any(|segment| !segment.extra().is_empty() || !segment.source_extra().is_empty())
         {
             return Err(EditError::UnsupportedOpaqueContent);
         }
-        let mut promoted = text.clone();
+        let promoted = text.clone();
         let display = promoted
             .runs
             .iter()
             .map(|run| run.text.as_str())
             .collect::<String>();
         let display_len = display.len();
-        let source_span = source_span(&promoted).ok_or(EditError::UnsupportedOpaqueContent)?;
+        let source_span = source_map
+            .range()
+            .ok_or(EditError::UnsupportedOpaqueContent)?;
         self.focus_tokens.push(FocusToken {
-            source_start: source_span.0,
-            source_end: source_span.1,
+            source_start: source_span.start,
+            source_end: source_span.end,
             paragraph_offset: self.paragraph_offset,
             kind: FocusTokenKind::Text {
-                source_map: promoted.source_map.clone(),
+                source_map: source_map.clone(),
                 display,
             },
         });
-        promoted.source_range = None;
-        promoted.source_map.clear();
         self.paragraph_offset = self
             .paragraph_offset
             .checked_add(display_len)
@@ -405,12 +501,13 @@ impl SplitContext<'_> {
     fn push_environment(
         &mut self,
         environment: &InlineEnvironment<MathContent>,
+        range: &MathRangeSourceMap,
+        source_maps: &[MathContentSourceMap],
     ) -> Result<(), EditError> {
-        if environment
-            .source_range
-            .as_ref()
-            .is_some_and(|range| !range.extra.is_empty())
-        {
+        if source_maps.len() != environment.children.len() {
+            return Err(EditError::InvalidPosition);
+        }
+        if !range.extra().is_empty() {
             return Err(EditError::UnsupportedOpaqueContent);
         }
         let saved_contents = std::mem::take(&mut self.contents);
@@ -424,7 +521,7 @@ impl SplitContext<'_> {
             paragraph_offset: self.paragraph_offset,
             contents: Vec::new(),
         };
-        child_context.convert_items(&environment.children)?;
+        child_context.convert_items(&environment.children, source_maps)?;
         self.paragraph_offset = child_context.paragraph_offset;
         self.first_math_id = child_context.first_math_id;
         self.first_root_id = child_context.first_root_id;
@@ -435,7 +532,6 @@ impl SplitContext<'_> {
                 id: environment.id.clone(),
                 kind: environment.kind,
                 definition_id: environment.definition_id.clone(),
-                source_range: None,
                 props: environment.props.clone(),
                 children: child_context.contents,
                 extra: environment.extra.clone(),
@@ -444,23 +540,22 @@ impl SplitContext<'_> {
     }
 }
 
-fn math_content_source_range(content: &MathContent) -> Option<&MathSourceRange> {
-    match content {
-        MathContent::Math(node) => node.source_range.as_ref(),
-        MathContent::Environment(environment) => environment.source_range.as_ref(),
-        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => None,
-    }
-}
-
 fn source_to_display_offset_in_map(
-    source_map: &[caret_doc::TextFlowSourceMapEntry],
+    source_map: &MathTextSourceMap,
     source_offset: usize,
 ) -> Option<usize> {
-    source_map.iter().find_map(|entry| {
-        let display_start = entry.text_start as usize;
-        let display_end = entry.text_end as usize;
-        let source_start = entry.source_range.start as usize;
-        let source_end = entry.source_range.end as usize;
+    if source_map.range().as_ref() == Some(&(source_offset..source_offset))
+        && source_map.segments().is_empty()
+    {
+        return Some(0);
+    }
+    source_map.segments().iter().find_map(|segment| {
+        let display = segment.display();
+        let source = segment.source()?;
+        let display_start = display.start;
+        let display_end = display.end;
+        let source_start = source.start;
+        let source_end = source.end;
         if source_offset == source_start {
             Some(display_start)
         } else if source_offset == source_end {
@@ -477,104 +572,58 @@ fn source_to_display_offset_in_map(
 }
 
 fn nearest_source_to_display_in_map(
-    source_map: &[caret_doc::TextFlowSourceMapEntry],
+    source_map: &MathTextSourceMap,
     source_offset: usize,
 ) -> Option<usize> {
     source_map
+        .segments()
         .iter()
-        .flat_map(|entry| {
-            [
-                (entry.source_range.start as usize, entry.text_start as usize),
-                (entry.source_range.end as usize, entry.text_end as usize),
-            ]
+        .flat_map(|segment| {
+            let source = segment.source();
+            let display = segment.display();
+            source.map(|source| [(source.start, display.start), (source.end, display.end)])
         })
+        .flatten()
         .min_by_key(|(source, _)| source.abs_diff(source_offset))
         .map(|(_, display)| display)
-}
-
-fn source_span(text: &TextFlow) -> Option<(usize, usize)> {
-    let start = text
-        .source_map
-        .iter()
-        .map(|entry| entry.source_range.start as usize)
-        .min()?;
-    let end = text
-        .source_map
-        .iter()
-        .map(|entry| entry.source_range.end as usize)
-        .max()?;
-    Some((start, end))
-}
-
-fn rebase_content_ranges(content: &mut MathContent, offset: usize) -> Result<(), EditError> {
-    match content {
-        MathContent::Math(node) => rebase_node_ranges(node, offset),
-        MathContent::Environment(environment) => {
-            rebase_range(&mut environment.source_range, offset)?;
-            for child in &mut environment.children {
-                rebase_content_ranges(child, offset)?;
-            }
-            Ok(())
-        }
-        MathContent::Text(text) => {
-            rebase_range(&mut text.source_range, offset)?;
-            for entry in &mut text.source_map {
-                entry.source_range.start = entry
-                    .source_range
-                    .start
-                    .checked_sub(offset as u32)
-                    .ok_or(EditError::InvalidPosition)?;
-                entry.source_range.end = entry
-                    .source_range
-                    .end
-                    .checked_sub(offset as u32)
-                    .ok_or(EditError::InvalidPosition)?;
-            }
-            Ok(())
-        }
-        MathContent::SoftBreak(_) | MathContent::Opaque(_) => {
-            Err(EditError::UnsupportedOpaqueContent)
-        }
-    }
-}
-
-fn rebase_node_ranges(node: &mut MathNode, offset: usize) -> Result<(), EditError> {
-    rebase_range(&mut node.source_range, offset)?;
-    for child in &mut node.children {
-        rebase_range(&mut child.source_range, offset)?;
-        for content in &mut child.content {
-            rebase_content_ranges(content, offset)?;
-        }
-    }
-    Ok(())
-}
-
-fn rebase_range(range: &mut Option<MathSourceRange>, offset: usize) -> Result<(), EditError> {
-    if let Some(range) = range {
-        range.start = range
-            .start
-            .checked_sub(offset as u32)
-            .ok_or(EditError::InvalidPosition)?;
-        range.end = range
-            .end
-            .checked_sub(offset as u32)
-            .ok_or(EditError::InvalidPosition)?;
-    }
-    Ok(())
-}
-
-fn caret_engine_math_tree_check(tree: &MathTree) -> Option<MathTree> {
-    crate::math_validation::parse_tree_with_same_semantics(tree, MathInputKind::Inline)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn wrap_root_in_row(math: &mut InlineMath, flow_count: usize) {
+        assert!(flow_count > 0);
+        let contents = std::mem::take(&mut math.math_tree.root.content);
+        let mut flows = Vec::with_capacity(flow_count);
+        let mut offset = 0;
+        for index in 0..flow_count {
+            let remaining_flows = flow_count - index;
+            let remaining_contents = contents.len().saturating_sub(offset);
+            let count = remaining_contents.div_ceil(remaining_flows);
+            flows.push(caret_doc::MathFlow {
+                id: caret_doc::NodeId::generate(),
+                content: contents[offset..offset + count].to_vec(),
+                extra: BTreeMap::new(),
+            });
+            offset += count;
+        }
+        math.math_tree.root.content = vec![MathContent::Math(caret_doc::MathNode {
+            id: caret_doc::NodeId::generate(),
+            kind: MathNodeKind::Row,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: flows,
+            extra: BTreeMap::new(),
+        })];
+    }
+
     fn inline_math(source: &str) -> InlineMath {
-        let math_tree = match caret_math::parse(source, MathInputKind::Inline) {
-            Ok(caret_math::ParsedMath::Tree(math_tree)) => math_tree,
-            Ok(caret_math::ParsedMath::Align(_)) => panic!("inline source parsed as Align"),
+        let math_tree = match caret_math::parse_projection(source, MathInputKind::Inline) {
+            Ok(projection) => match projection.into_parts().0 {
+                caret_math::ProjectedMath::Tree(math_tree) => math_tree,
+                caret_math::ProjectedMath::Align(_) => panic!("inline source parsed as Align"),
+            },
             Err(error) => panic!("valid inline source failed to parse: {error}"),
         };
         InlineMath {
@@ -594,6 +643,14 @@ mod tests {
 
     #[test]
     fn empty_inline_math_placeholder_keeps_adjacent_math_source_parseable() {
+        let projection = caret_math::parse_projection("{}x", MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("source map should parse: {error}"));
+        let source_maps = projection
+            .source_map()
+            .tree()
+            .unwrap_or_else(|| panic!("tree source map should exist"))
+            .root()
+            .content();
         let mut context = SplitContext {
             source: "$$x",
             source_anchor: 3,
@@ -605,32 +662,28 @@ mod tests {
             contents: Vec::new(),
         };
         let mut items = vec![
-            MathContent::Math(MathNode {
-                id: caret_doc::NodeId::generate(),
-                kind: caret_doc::MathNodeKind::Placeholder,
-                text: None,
-                attributes: BTreeMap::new(),
-                source_range: Some(MathSourceRange {
-                    start: 0,
-                    end: 2,
+            (
+                MathContent::Math(caret_doc::MathNode {
+                    id: caret_doc::NodeId::generate(),
+                    kind: caret_doc::MathNodeKind::Placeholder,
+                    text: None,
+                    attributes: BTreeMap::new(),
+                    children: Vec::new(),
                     extra: BTreeMap::new(),
                 }),
-                children: Vec::new(),
-                extra: BTreeMap::new(),
-            }),
-            MathContent::Math(MathNode {
-                id: caret_doc::NodeId::generate(),
-                kind: caret_doc::MathNodeKind::Symbol,
-                text: Some("x".to_owned()),
-                attributes: BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
-                source_range: Some(MathSourceRange {
-                    start: 2,
-                    end: 3,
+                source_maps[0].clone(),
+            ),
+            (
+                MathContent::Math(caret_doc::MathNode {
+                    id: caret_doc::NodeId::generate(),
+                    kind: caret_doc::MathNodeKind::Symbol,
+                    text: Some("x".to_owned()),
+                    attributes: BTreeMap::from([("atomClass".to_owned(), "ord".to_owned())]),
+                    children: Vec::new(),
                     extra: BTreeMap::new(),
                 }),
-                children: Vec::new(),
-                extra: BTreeMap::new(),
-            }),
+                source_maps[1].clone(),
+            ),
         ];
 
         if let Err(error) = context.flush_math(&mut items) {
@@ -697,6 +750,72 @@ mod tests {
     }
 
     #[test]
+    fn transparent_root_row_promotes_text_and_preserves_mixed_order() {
+        let source = r"x+\text{T}y";
+        let mut math = inline_math(source);
+        wrap_root_in_row(&mut math, 2);
+        let cursor = source.find('T').unwrap_or_else(|| panic!("text island")) + 1;
+
+        let split = split(&math, source, cursor, cursor);
+        assert!(matches!(
+            split.contents.as_slice(),
+            [
+                ParagraphContent::Math(_),
+                ParagraphContent::Text(_),
+                ParagraphContent::Math(_)
+            ]
+        ));
+        assert_eq!(
+            split.focus,
+            InlineRootFocus::Text {
+                anchor_offset: 4,
+                cursor_offset: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn transparent_root_row_merges_math_across_child_flow_boundaries() {
+        let source = r"x+y+\text{T}";
+        let mut math = inline_math(source);
+        wrap_root_in_row(&mut math, 3);
+        let cursor = source.find('T').unwrap_or_else(|| panic!("text island")) + 1;
+
+        let split = split(&math, source, cursor, cursor);
+        let [ParagraphContent::Math(math), ParagraphContent::Text(_)] = split.contents.as_slice()
+        else {
+            panic!("consecutive math across Row flows should remain one InlineMath");
+        };
+        assert_eq!(caret_math::serialize_tree(&math.math_tree), "x+y+");
+    }
+
+    #[test]
+    fn transparent_root_row_does_not_promote_text_from_fraction_slots() {
+        let source = r"\frac{\text{x}}{1}";
+        let mut math = inline_math(source);
+        wrap_root_in_row(&mut math, 1);
+
+        assert_eq!(split_inline_math_root(&math, 0, 0, source), Ok(None));
+    }
+
+    #[test]
+    fn stale_sidecar_fails_without_changing_the_math_tree() {
+        let source = r"\text{x}";
+        let mut math = inline_math(source);
+        wrap_root_in_row(&mut math, 1);
+        let original = math.math_tree.clone();
+        let projection = caret_math::parse_projection("different", MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("stale source should parse: {error}"));
+        let stale_map = projection
+            .source_map()
+            .tree()
+            .unwrap_or_else(|| panic!("tree sidecar should exist"));
+
+        assert!(split_inline_math_root_with_map(&math, stale_map, 0, 0, source).is_err());
+        assert_eq!(math.math_tree, original);
+    }
+
+    #[test]
     fn root_split_rejects_selection_spanning_different_output_items() {
         let source = r"a\text{x}b";
         let math = inline_math(source);
@@ -714,26 +833,13 @@ mod tests {
 
     #[test]
     fn root_split_keeps_one_format_wrapper_around_mixed_math_and_text_children() {
-        let source = r"a\text{x}b";
-        let mut math = inline_math(source);
-        let environment_id = caret_doc::NodeId::generate();
-        let children = std::mem::take(&mut math.math_tree.root.content);
-        math.math_tree
-            .root
-            .content
-            .push(MathContent::Environment(InlineEnvironment {
-                id: environment_id.clone(),
-                kind: caret_doc::InlineEnvironmentKind::Bold,
-                definition_id: None,
-                source_range: Some(MathSourceRange {
-                    start: 0,
-                    end: source.len() as u32,
-                    extra: BTreeMap::new(),
-                }),
-                props: BTreeMap::new(),
-                children,
-                extra: BTreeMap::new(),
-            }));
+        let source = r"\text{\textbf{$a\text{x}b$}}";
+        let math = inline_math(source);
+        let Some(MathContent::Environment(environment)) = math.math_tree.root.content.first()
+        else {
+            panic!("expected a parsed bold environment");
+        };
+        let environment_id = environment.id.clone();
 
         let cursor = source.find('x').unwrap_or_else(|| panic!("text island")) + 1;
         let split = split(&math, source, cursor, cursor);
@@ -742,7 +848,6 @@ mod tests {
         };
         assert_eq!(environment.id, environment_id);
         assert_eq!(environment.kind, caret_doc::InlineEnvironmentKind::Bold);
-        assert!(environment.source_range.is_none());
         assert!(matches!(
             environment.children.as_slice(),
             [
@@ -869,6 +974,47 @@ mod tests {
             split.contents.get(1),
             Some(ParagraphContent::Text(_))
         ));
+    }
+
+    #[test]
+    fn root_split_rebinds_adjacent_operand_text_flows_to_the_fragment_map() {
+        let source = r"\text{c}\frac{\text{a}\text{b}}{x}";
+        let math = inline_math(source);
+        let split = split(&math, source, r"\text{c}".len(), r"\text{c}".len());
+        let Some(ParagraphContent::Math(fragment)) = split.contents.last() else {
+            panic!("the fraction should remain in an InlineMath fragment");
+        };
+        let Some(MathContent::Math(fraction)) = fragment.math_tree.root.content.first() else {
+            panic!("the retained fragment should start with a fraction");
+        };
+        assert!(fraction.children.iter().any(|flow| {
+            flow.content
+                .iter()
+                .filter(|content| matches!(content, MathContent::Text(_)))
+                .count()
+                == 2
+        }));
+
+        let fragment_source = source
+            .strip_prefix(r"\text{c}")
+            .unwrap_or_else(|| panic!("the fragment source should follow the promoted text"));
+        let projection = caret_math::parse_projection(fragment_source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("fragment should reparse: {error}"));
+        let (caret_math::ProjectedMath::Tree(parsed), mut source_projection) =
+            projection.into_parts()
+        else {
+            panic!("fragment should parse as a tree");
+        };
+        let parsed_map = source_projection
+            .tree()
+            .cloned()
+            .unwrap_or_else(|| panic!("fragment sidecar should exist"));
+        let mapped = parsed_map
+            .reconcile_for_tree(&parsed, &fragment.math_tree, None, fragment_source, None)
+            .unwrap_or_else(|| panic!("fragment sidecar should bind to its tree"));
+        assert!(
+            source_projection.bind_tree_sidecar_after_validated_edit(&fragment.math_tree, mapped)
+        );
     }
 
     #[test]

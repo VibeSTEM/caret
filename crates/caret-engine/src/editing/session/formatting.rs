@@ -78,6 +78,10 @@ impl PendingInlineStyle {
         self.font_family.as_deref()
     }
 
+    pub(super) fn set_font_family(&mut self, family: String) {
+        self.font_family = Some(family);
+    }
+
     pub(super) fn run_property(&self, property: RunPropertyEnvironment) -> Option<bool> {
         self.run_properties.get(property.key).copied()
     }

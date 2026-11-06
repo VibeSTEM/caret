@@ -227,3 +227,52 @@ fn replacing_recovery_binding_invalidates_its_in_flight_revision()
     );
     Ok(())
 }
+
+#[test]
+fn revision_epoch_rollover_accepts_zero_and_rejects_old_session_callbacks()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut policy = AutoSavePolicy::new(4);
+    policy.set_enabled(true);
+    let previous = policy
+        .edited(u64::MAX, Duration::ZERO)
+        .ok_or_else(|| std::io::Error::other("previous-epoch deadline missing"))?;
+
+    policy.set_session_generation(5);
+    let rolled_over = policy
+        .edited(0, Duration::from_secs(2))
+        .ok_or_else(|| std::io::Error::other("zero revision deadline missing"))?;
+    assert_eq!(rolled_over.session_generation, 5);
+    assert_eq!(rolled_over.delay, QUIET_PERIOD);
+    assert_eq!(
+        policy.deadline_fired(4, previous.generation, Duration::from_secs(3)),
+        None
+    );
+    assert_eq!(
+        policy.deadline_fired(4, rolled_over.generation, Duration::from_secs(3)),
+        None
+    );
+    assert_eq!(
+        policy.deadline_fired(5, rolled_over.generation, Duration::from_secs(3)),
+        Some(0)
+    );
+    Ok(())
+}
+
+#[test]
+fn known_dirty_zero_revision_can_be_rescheduled_after_auto_save_is_reenabled()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut policy = AutoSavePolicy::new(6);
+    policy.set_enabled(true);
+    policy.set_enabled(false);
+    policy.set_enabled(true);
+
+    let resumed = policy
+        .resume_dirty_revision(0, Duration::from_secs(4))
+        .ok_or_else(|| std::io::Error::other("zero revision was not rescheduled"))?;
+    assert_eq!(resumed.delay, QUIET_PERIOD);
+    assert_eq!(
+        policy.deadline_fired(6, resumed.generation, Duration::from_secs(5)),
+        Some(0)
+    );
+    Ok(())
+}

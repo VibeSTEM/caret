@@ -18,8 +18,13 @@ impl Session {
             }
             return self.run(Command::RemoveBlockEnvironmentPreservingContent);
         }
-        if self.math_edit().is_some() {
-            return self.handle_math_mod_backspace();
+        if let Some(edit) = self.math_edit() {
+            if edit.source_draft_is_pending() {
+                return Err(EditError::InvalidMath(
+                    "resolve or cancel the incomplete math source draft before leaving".to_owned(),
+                ));
+            }
+            return self.math_mod_backspace();
         }
         if self.selection.anchor == self.selection.focus
             && let Some(environment) = self

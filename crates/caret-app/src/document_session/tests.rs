@@ -1,7 +1,7 @@
 //! 验证文档会话打开、编辑和保存状态。
 
 use super::DocumentSessionService;
-use caret_doc::CdocFile;
+use caret_doc::{Block, CdocFile, OpenedDocument, ParagraphContent, PreviewReason};
 use caret_engine::{Command, Direction};
 use serde_json::Value;
 use serde_json::json;
@@ -17,10 +17,10 @@ fn enter_inline_math(service: &mut DocumentSessionService) -> Result<(), String>
     Ok(())
 }
 
-fn type_incomplete_math_source(service: &mut DocumentSessionService) -> Result<(), String> {
+fn type_math_text(service: &mut DocumentSessionService) -> Result<(), String> {
     let session = service.view_mut().session_mut_for_test();
     session
-        .run(Command::InsertText("\\".to_owned()))
+        .run(Command::InsertText("a".to_owned()))
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -54,6 +54,62 @@ fn failed_open_preserves_the_active_session_and_save_snapshot() -> Result<(), St
 }
 
 #[test]
+fn rejected_snapshot_does_not_split_the_next_typing_undo_group() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    service.view_mut().insert_text_json("a".to_owned())?;
+    service
+        .file
+        .required_features
+        .push("vendor.future".to_owned());
+
+    assert_eq!(
+        service.save_snapshot(),
+        Err("cdoc.safe_preview_read_only".to_owned())
+    );
+    service.view_mut().insert_text_json("b".to_owned())?;
+    let paragraph_text = |document: &caret_doc::Document| {
+        document
+            .body
+            .iter()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(
+                    paragraph
+                        .inlines
+                        .iter()
+                        .filter_map(|content| match content {
+                            ParagraphContent::Text(text) => Some(
+                                text.runs
+                                    .iter()
+                                    .map(|run| run.text.as_str())
+                                    .collect::<String>(),
+                            ),
+                            ParagraphContent::Math(_)
+                            | ParagraphContent::Environment(_)
+                            | ParagraphContent::SoftBreak(_)
+                            | ParagraphContent::Opaque(_) => None,
+                        })
+                        .collect::<String>(),
+                ),
+                Block::Equation(_)
+                | Block::Align(_)
+                | Block::Environment(_)
+                | Block::ExplicitBreak(_)
+                | Block::Opaque(_) => None,
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(paragraph_text(service.view.document()), "ab");
+    service
+        .view_mut()
+        .session_mut_for_test()
+        .run(Command::Undo)
+        .map_err(|error| error.to_string())?;
+
+    assert_eq!(paragraph_text(service.view.document()), "");
+    Ok(())
+}
+
+#[test]
 fn unsupported_required_feature_cannot_replace_the_current_session() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     service.view_mut().insert_text_json("existing".to_owned())?;
@@ -81,21 +137,48 @@ fn math_feature_stays_read_only_until_formula_layout_is_supported() -> Result<()
     let before = service.save_snapshot()?;
     let mut value: Value =
         serde_json::from_slice(&before.bytes).map_err(|error| error.to_string())?;
-    value["document"]["body"][0]["inlines"] = json!([{
+    value["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{
         "type": "inlineMath",
         "id": "inline-math",
         "mathTree": {
-            "schemaVersion": 1,
-            "source": "x",
+            "schemaVersion": 3,
             "root": {
                 "id": "root",
-                "kind": "row",
-                "children": [{"id": "x", "kind": "symbol", "text": "x"}]
+                "content": [{"type": "math", "id": "x", "kind": "symbol", "text": "x"}]
             }
         }
-    }]);
-    value["requiredFeatures"] = json!(["caret.math.inline", "caret.math.syntax.v1"]);
+    }]}]);
+    value["requiredFeatures"] = json!([
+        "caret.math.content-flow.v2",
+        "caret.math.inline",
+        "caret.math.syntax.v1",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size"
+    ]);
     let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
+
+    let opened = caret_doc::open(&bytes).map_err(|error| error.to_string())?;
+    let OpenedDocument::SafePreview(preview) = opened else {
+        return Err("unsupported math layout should remain a safe preview".to_owned());
+    };
+    let Some(Block::Paragraph(paragraph)) = preview.document().body.first() else {
+        return Err("safe preview should retain the paragraph".to_owned());
+    };
+    if !matches!(paragraph.inlines.first(), Some(ParagraphContent::Math(_)))
+        || !preview
+            .reasons
+            .contains(&PreviewReason::UnsupportedRequiredFeature(
+                "caret.math.inline".to_owned(),
+            ))
+    {
+        return Err(
+            "safe preview should retain the known MathTree and explain its capability".to_owned(),
+        );
+    }
 
     let result = DocumentSessionService::prepare_open(
         &bytes,
@@ -103,10 +186,11 @@ fn math_feature_stays_read_only_until_formula_layout_is_supported() -> Result<()
         service.session_generation() + 1,
     );
 
-    assert!(matches!(
-        result,
-        Err(ref error) if error == "cdoc.invalid_document: retired math tree schema is not supported"
-    ));
+    assert!(
+        matches!(result, Err(ref error) if error == "cdoc.safe_preview_read_only"),
+        "unexpected result: {}",
+        result.err().unwrap_or_default()
+    );
     assert_eq!(service.document_generation(), before.document_generation);
     assert_eq!(service.save_snapshot()?, before);
     Ok(())
@@ -176,6 +260,91 @@ fn late_save_completion_cannot_move_the_saved_revision_backwards() -> Result<(),
     );
     assert_eq!(status["path"], "document.cdoc");
     assert_eq!(status["dirty"], false);
+    Ok(())
+}
+
+#[test]
+fn revision_epoch_resets_saved_generation_and_accepts_zero_revision_save() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    service.view_mut().insert_text_json("dirty".to_owned())?;
+    let old_session_generation = service.session_generation();
+    let history_state_id = service.view.history_state_id();
+    service.saved_generation = u64::MAX - 1;
+    service.saved_history_state_id = history_state_id.saturating_sub(1);
+    service.path = Some(std::path::PathBuf::from("old.cdoc"));
+    service.baseline_digest = Some("old-digest".to_owned());
+    service.has_save_point = true;
+    assert!(service.is_dirty());
+    assert_eq!(service.saved_generation, u64::MAX - 1);
+
+    let Some(new_session_generation) = service.advance_session_generation() else {
+        return Err("session generation should advance".to_owned());
+    };
+    assert_eq!(new_session_generation, old_session_generation + 1);
+    assert_eq!(service.saved_generation, 0);
+    assert!(!service.mark_saved(
+        old_session_generation,
+        u64::MAX - 1,
+        history_state_id,
+        std::path::Path::new("stale.cdoc"),
+        "stale-digest",
+    ));
+    assert!(service.mark_saved(
+        new_session_generation,
+        0,
+        history_state_id,
+        std::path::Path::new("new.cdoc"),
+        "new-digest",
+    ));
+
+    let status: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(
+        status["sessionGeneration"],
+        new_session_generation.to_string()
+    );
+    assert_eq!(status["savedGeneration"], "0");
+    assert_eq!(status["path"], "new.cdoc");
+    assert_eq!(status["dirty"], false);
+    assert_eq!(service.baseline_digest.as_deref(), Some("new-digest"));
+    Ok(())
+}
+
+#[test]
+fn exhausted_session_epoch_still_resets_saved_generation_baseline() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    service.session_generation = u64::MAX;
+    service.saved_generation = u64::MAX - 1;
+    service.saved_history_state_id = 7;
+    service.path = Some(std::path::PathBuf::from("existing.cdoc"));
+    service.baseline_digest = Some("existing-digest".to_owned());
+
+    assert_eq!(service.advance_session_generation(), None);
+    assert_eq!(service.session_generation(), u64::MAX);
+    assert_eq!(service.saved_generation, 0);
+    assert_eq!(service.saved_history_state_id, 7);
+    assert_eq!(
+        service.path.as_deref(),
+        Some(std::path::Path::new("existing.cdoc"))
+    );
+    assert_eq!(service.baseline_digest.as_deref(), Some("existing-digest"));
+    Ok(())
+}
+
+#[test]
+fn save_completion_from_a_future_revision_epoch_is_rejected() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    assert!(!service.mark_saved(
+        service.session_generation(),
+        u64::MAX,
+        1,
+        std::path::Path::new("stale.cdoc"),
+        "stale-digest",
+    ));
+    assert_eq!(service.saved_generation, 0);
+    assert!(service.path.is_none());
+    assert!(service.baseline_digest.is_none());
+    assert!(!service.is_dirty());
     Ok(())
 }
 
@@ -274,33 +443,28 @@ fn pending_formatting_does_not_mark_saved_document_dirty() -> Result<(), String>
 }
 
 #[test]
-fn incomplete_math_source_makes_document_dirty_and_blocks_save() -> Result<(), String> {
+fn tree_native_math_text_is_dirty_without_a_source_draft() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     enter_inline_math(&mut service)?;
     mark_current_history_saved_for_test(&mut service);
     let saved_history_state_id = service.view.history_state_id();
-    type_incomplete_math_source(&mut service)?;
+    type_math_text(&mut service)?;
 
     let status: Value =
         serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
     assert_eq!(status["dirty"], true);
-    assert_eq!(status["mathSourceDraftPending"], true);
-    assert!(service.view_mut().has_uncommitted_math_source_draft());
+    assert_eq!(status["mathSourceDraftPending"], false);
+    assert!(!service.view_mut().has_uncommitted_math_source_draft());
+    assert_ne!(status["historyStateId"], saved_history_state_id.to_string());
     assert_eq!(
         service.save_snapshot().err().as_deref(),
-        Some("document.save_incomplete_math_source_draft")
+        Some("cdoc.safe_preview_read_only")
     );
-    assert!(service.view_mut().has_uncommitted_math_source_draft());
-    assert_eq!(status["historyStateId"], saved_history_state_id.to_string());
-    service.view_mut().handle_editor_key_json("escape")?;
-    let resolved_status: Value =
-        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
-    assert_eq!(resolved_status["mathSourceDraftPending"], false);
     Ok(())
 }
 
 #[test]
-fn prepared_open_cannot_discard_a_math_source_draft() -> Result<(), String> {
+fn prepared_open_replaces_tree_native_math_edit_without_a_source_draft() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
     let saved = service.save_snapshot()?;
     let (candidate, layout) = DocumentSessionService::prepare_open(
@@ -310,7 +474,7 @@ fn prepared_open_cannot_discard_a_math_source_draft() -> Result<(), String> {
     )?;
     enter_inline_math(&mut service)?;
     mark_current_history_saved_for_test(&mut service);
-    type_incomplete_math_source(&mut service)?;
+    type_math_text(&mut service)?;
 
     let result = service.install_prepared(
         candidate,
@@ -318,12 +482,7 @@ fn prepared_open_cannot_discard_a_math_source_draft() -> Result<(), String> {
         saved.session_generation,
         service.document_generation(),
     );
-    assert_eq!(
-        result.err().as_deref(),
-        Some("document.math_incomplete_source_draft")
-    );
-    assert!(service.is_dirty());
-    assert!(service.view_mut().handle_editor_key_json("escape").is_ok());
+    assert!(result.is_ok());
     assert!(!service.is_dirty());
     Ok(())
 }

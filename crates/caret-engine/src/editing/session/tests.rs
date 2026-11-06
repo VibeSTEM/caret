@@ -21,8 +21,6 @@ fn paragraph_text(session: &Session, block_index: usize) -> String {
 fn text_flow(run: Run) -> ParagraphContent {
     ParagraphContent::Text(TextFlow {
         runs: vec![run],
-        source_range: None,
-        source_map: Vec::new(),
         extra: Default::default(),
     })
 }
@@ -39,13 +37,11 @@ fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
         id: outer_id,
         kind: InlineEnvironmentKind::Bold,
         definition_id: None,
-        source_range: None,
         props: BTreeMap::new(),
         children: vec![ParagraphContent::Environment(InlineEnvironment {
             id: inner_id.clone(),
             kind: InlineEnvironmentKind::Italic,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: vec![text_flow(Run {
                 text: "inside".to_owned(),
@@ -1333,6 +1329,186 @@ fn first_paragraph_math_count(session: &Session) -> usize {
         .iter()
         .filter(|node| matches!(node, ParagraphContent::Math(_)))
         .count()
+}
+
+fn session_with_inline_math(source: &str) -> Session {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertInlineMath(source.to_owned()));
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    session
+}
+
+fn first_inline_math_source(session: &Session) -> String {
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    let Some(ParagraphContent::Math(math)) = paragraph
+        .inlines
+        .iter()
+        .find(|content| matches!(content, ParagraphContent::Math(_)))
+    else {
+        panic!("paragraph should contain inline math");
+    };
+    caret_math::serialize_tree(&math.math_tree)
+}
+
+fn switch_math_edit_to_source(session: &mut Session) {
+    let source = first_inline_math_source(session);
+    let projection = caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("math source projection failed: {error}"))
+        .into_parts()
+        .1;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .unwrap_or_else(|| panic!("formula should be active"));
+    edit.source_projection = Some(std::sync::Arc::new(projection));
+    edit.cursor = source.len();
+    edit.branch = MathEditBranch::Source;
+}
+
+#[test]
+fn cloning_rebinds_current_tree_math_edit_without_sharing_documents() {
+    let original = session_with_inline_math("x");
+    assert!(matches!(
+        original.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+    let original_document = original.document.clone();
+    let mut cloned = original.clone();
+
+    assert_ne!(original.session_id(), cloned.session_id());
+    assert_eq!(cloned.document_generation(), 0);
+    assert!(cloned.ensure_math_edit_revision_current().is_ok());
+    run_ok(&mut cloned, Command::InsertText("y".to_owned()));
+
+    assert_eq!(first_inline_math_source(&cloned), "xy");
+    assert_eq!(original.document, original_document);
+    assert_eq!(first_inline_math_source(&original), "x");
+    assert!(original.ensure_math_edit_revision_current().is_ok());
+    run_ok(&mut cloned, Command::Undo);
+    assert_eq!(first_inline_math_source(&cloned), "x");
+}
+
+#[test]
+fn cloning_rebinds_current_text_math_edit() {
+    let mut original = session_with_inline_math(r"\frac{\text{abc}}{z}");
+    // 分子 TextFlow 位于根 content[0] 的第一个操作数内。
+    let expected_text_path = [
+        MathTextFlowPathStep::Content(0),
+        MathTextFlowPathStep::Operand(0),
+        MathTextFlowPathStep::Content(0),
+    ];
+    let mut visited_positions = Vec::new();
+    loop {
+        let edit = original
+            .math_edit()
+            .unwrap_or_else(|| panic!("formula ended before reaching the numerator TextFlow"));
+        if matches!(
+            &edit.branch,
+            MathEditBranch::Text { path, .. } if path.steps() == expected_text_path
+        ) {
+            break;
+        }
+        let position = (edit.branch.clone(), edit.cursor);
+        assert!(
+            !visited_positions.contains(&position),
+            "backward navigation cycled before reaching the numerator TextFlow"
+        );
+        visited_positions.push(position);
+        run_ok(&mut original, Command::MoveCaret(Direction::Backward));
+    }
+    let mut cloned = original.clone();
+
+    assert!(matches!(
+        cloned.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    assert!(cloned.ensure_math_edit_revision_current().is_ok());
+    run_ok(&mut cloned, Command::InsertText("Z".to_owned()));
+
+    assert_eq!(first_inline_math_source(&cloned), r"\frac{\text{abcZ}}{z}");
+    assert_eq!(first_inline_math_source(&original), r"\frac{\text{abc}}{z}");
+    assert!(original.ensure_math_edit_revision_current().is_ok());
+}
+
+#[test]
+fn cloning_rebinds_current_source_edit_and_valid_pending_draft() {
+    let mut original = session_with_inline_math("x");
+    switch_math_edit_to_source(&mut original);
+    run_ok(&mut original, Command::InsertText("y".to_owned()));
+    let mut cloned = original.clone();
+
+    assert!(matches!(
+        cloned.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Source)
+    ));
+    assert!(cloned.ensure_math_edit_revision_current().is_ok());
+    run_ok(&mut cloned, Command::InsertText("z".to_owned()));
+    assert_eq!(first_inline_math_source(&cloned), "xyz");
+    assert_eq!(first_inline_math_source(&original), "xy");
+
+    switch_math_edit_to_source(&mut original);
+    run_ok(&mut original, Command::PasteText(r"\frac{".to_owned()));
+    assert!(
+        original
+            .math_edit()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    );
+    let mut pending_clone = original.clone();
+    assert!(
+        pending_clone
+            .math_edit()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    );
+    assert!(pending_clone.ensure_math_edit_revision_current().is_ok());
+    run_ok(&mut pending_clone, Command::Undo);
+    assert_eq!(
+        pending_clone.math_edit().and_then(MathEdit::source),
+        Some("xy")
+    );
+    assert!(
+        original
+            .math_edit()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    );
+}
+
+#[test]
+fn cloning_does_not_rebind_a_stale_pending_math_draft() {
+    let mut original = session_with_inline_math("x");
+    switch_math_edit_to_source(&mut original);
+    run_ok(&mut original, Command::PasteText(r"\frac{".to_owned()));
+    assert!(
+        original
+            .math_edit()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    );
+    let stale_revision = original
+        .math_edit()
+        .unwrap_or_else(|| panic!("formula should remain active"))
+        .revision
+        .clone();
+    original.document_generation += 1;
+
+    let mut cloned = original.clone();
+    assert_eq!(
+        cloned
+            .math_edit()
+            .unwrap_or_else(|| panic!("stale formula state should be retained"))
+            .revision,
+        stale_revision
+    );
+    assert_eq!(
+        cloned.run(Command::InsertText("a".to_owned())),
+        Err(EditError::InvalidPosition)
+    );
+    assert!(
+        cloned
+            .math_edit()
+            .is_some_and(MathEdit::source_draft_is_pending)
+    );
 }
 
 #[test]

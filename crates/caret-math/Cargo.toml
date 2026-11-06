@@ -12,6 +12,7 @@ caret-doc.workspace = true
 read-fonts.workspace = true
 skrifa.workspace = true
 serde_json.workspace = true
+unicode-segmentation.workspace = true
 
 [lints]
 workspace = true

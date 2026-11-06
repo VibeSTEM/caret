@@ -1,6 +1,6 @@
 # 多文字体系字体选择
 
-更新日期：2026-10-30。本文是 Caret 字体目标、`.cdoc` 字段、解析优先级、平台回退和实现职责的唯一权威。文档节点结构见[文档模型](document-model.md)，字体平台映射与统计见[平台字体映射目录](font-defaults/README.md)，资料出处见[字体选择器调查](../../research/007-font-selection.md)。
+更新日期：2026-11-04。本文是 Caret 字体目标、`.cdoc` 字段、解析优先级、平台回退和实现职责的唯一权威。文档节点结构见[文档模型](document-model.md)，字体平台映射与统计见[平台字体映射目录](font-defaults/README.md)，资料出处见[字体选择器调查](../../research/007-font-selection.md)。
 
 ## 设计边界
 
@@ -67,6 +67,8 @@ Run / Paragraph 的语言按 Run → Paragraph → `globalSettings.defaultLangua
 5. 文档 `defaultFontFamily`（Latn 默认族）。
 6. `SystemUi` 通用族。
 7. Fontique/Parley 的平台系统 fallback。
+
+Font Environment 的 `sans-serif`、`monospace` 是通用族请求，不是需要在目录中按字面查找的字体文件名。字体选择适配器将通用族映射为对应的 shaping 通用族，并保留字体后端的覆盖与 fallback 行为；不得把 `monospace` 改写为 Code 角色或固定 JetBrains Mono。JetBrains Mono 是 Code 角色的内置默认字体，正文/数学 TextFlow 的 `\texttt` 仍表达通用等宽族语义。
 
 数学与代码共用 `fonts/{math,code}.rs` 角色适配器；共享默认标记规范化由 `fonts.rs` 提供，Rust shaping 候选优先级由 `font_selection.rs` 唯一管理。数学族名和 MATH 字体数据由 `caret-math` 提供；`caret-layout` 仅消费该稳定常量，不复制字体族名。当前 MathLayoutEngine 仍直接使用内置 STIX Two Math，文档数学字体偏好尚未接入实际公式布局；接入与诊断由 044 完成。候选模型的目标行为是 `<default>` 解析为内嵌 STIX Two Math，未知显式族按[公式规范](math.md#解析排版与字体)回退并报告诊断。代码布局通过 `ShapingStyle.font_role = FontRole::Code` 进入代码字体选择：普通字符先尝试局部显式族、文档显式 `defaultCodeFontFamily`，再尝试内置 JetBrains Mono，最后由 Fontique/system fallback 处理缺字。Emoji presentation 字素仍优先使用 Emoji 通用族。代码角色不继承正文 Script、CJK 或数学字体偏好，并保留所选等宽字体的原生空格 advance，不应用正文的 0.5em 空格校准。Qt 命令输入从同一 `caret-code` 字体族常量投影默认 UI 字体；它不参与 Rust shaping 候选解析。当前文档模型尚无代码块节点，因此代码块节点接入时应设置此角色，不得另写字体解析逻辑。显式族名缺失或缺少字形时保留用户请求并继续候选链及平台 fallback；组合字符和其他 shaping cluster 应尽可能从同一实际字体塑形，不能把组合符从基字符处分开。正文字符的系统 fallback 可能因系统版本、字体安装和语言偏好不同而变化；映射细节见[macOS](font-defaults/macos.md)、[Windows](font-defaults/windows.md)、[Linux](font-defaults/linux.md)。
 

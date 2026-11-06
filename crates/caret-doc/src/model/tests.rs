@@ -226,8 +226,14 @@ fn math_content_flow_declares_its_required_feature() -> Result<(), Box<dyn std::
             "type": "inlineMath", "id": "inline", "mathTree": {
                 "schemaVersion": MATH_TREE_SCHEMA_VERSION,
                 "root": {"id": "root", "content": [{
-                    "type": "text",
-                    "runs": [{"text": "x"}]
+                    "type": "math", "id": "fraction", "kind": "fraction",
+                    "attributes": {"style": "frac"},
+                    "children": [
+                        {"id": "numerator", "content": [{
+                            "type": "text", "runs": [{"text": "x"}]
+                        }]},
+                        {"id": "denominator", "content": []}
+                    ]
                 }]}
             }
         }]
@@ -240,6 +246,84 @@ fn math_content_flow_declares_its_required_feature() -> Result<(), Box<dyn std::
             .iter()
             .any(|feature| feature == "caret.math.content-flow.v2")
     );
+    Ok(())
+}
+
+#[test]
+fn inline_math_root_text_flow_must_be_promoted_to_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    document.body = serde_json::from_value(serde_json::json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": MATH_TREE_SCHEMA_VERSION,
+                "root": {"id": "root", "content": [{
+                    "type": "text", "runs": [{"text": "x"}]
+                }]}
+            }
+        }]
+    }]))?;
+    assert!(matches!(
+        document.validate(),
+        Err(super::ModelError::InvalidDocument(message))
+            if message.contains("promoted to Paragraph")
+    ));
+
+    document.body = serde_json::from_value(serde_json::json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": MATH_TREE_SCHEMA_VERSION,
+                "root": {"id": "root", "content": [{
+                    "type": "math", "id": "transparent-row", "kind": "row",
+                    "children": [{"id": "row-flow", "content": [{
+                        "type": "text", "runs": [{"text": "x"}]
+                    }]}]
+                }]}
+            }
+        }]
+    }]))?;
+    assert!(matches!(
+        document.validate(),
+        Err(super::ModelError::InvalidDocument(message))
+            if message.contains("promoted to Paragraph")
+    ));
+
+    document.body = serde_json::from_value(serde_json::json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": MATH_TREE_SCHEMA_VERSION,
+                "root": {"id": "root", "content": [{
+                    "type": "environment", "scope": "inline", "id": "bold",
+                    "kind": "bold", "children": [{
+                        "type": "text", "runs": [{"text": "x"}]
+                    }]
+                }]}
+            }
+        }]
+    }]))?;
+    assert!(matches!(
+        document.validate(),
+        Err(super::ModelError::InvalidDocument(message))
+            if message.contains("promoted to Paragraph")
+    ));
+
+    document.body = serde_json::from_value(serde_json::json!([{
+        "type": "paragraph", "id": "paragraph", "inlines": [{
+            "type": "inlineMath", "id": "inline", "mathTree": {
+                "schemaVersion": MATH_TREE_SCHEMA_VERSION,
+                "root": {"id": "root", "content": [{
+                    "type": "math", "id": "fraction", "kind": "fraction",
+                    "attributes": {"style": "frac"},
+                    "children": [{
+                        "id": "numerator", "content": [{
+                            "type": "text", "runs": [{"text": "x"}]
+                        }]
+                    }, {"id": "denominator", "content": []}]
+                }]}
+            }
+        }]
+    }]))?;
+    assert!(document.validate().is_ok());
     Ok(())
 }
 
@@ -549,7 +633,6 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
         MathFlow {
             id: NodeId::generate(),
             content: vec![MathContent::Math(node)],
-            source_range: None,
             extra: BTreeMap::new(),
         }
     }
@@ -561,7 +644,6 @@ fn align_validation_rejects_ids_shared_across_rows_and_cells() {
                 kind: MathNodeKind::Symbol,
                 text: Some("x".into()),
                 attributes: BTreeMap::from([("atomClass".into(), "ord".into())]),
-                source_range: None,
                 children: Vec::new(),
                 extra: BTreeMap::new(),
             }),
@@ -594,7 +676,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
         MathFlow {
             id: NodeId::generate(),
             content: vec![MathContent::Math(node)],
-            source_range: None,
             extra: BTreeMap::new(),
         }
     }
@@ -604,7 +685,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
             kind: MathNodeKind::Group,
             text: None,
             attributes: BTreeMap::new(),
-            source_range: None,
             children: Vec::new(),
             extra: BTreeMap::new(),
         };
@@ -614,7 +694,6 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
                 kind: MathNodeKind::Group,
                 text: None,
                 attributes: BTreeMap::new(),
-                source_range: None,
                 children: vec![as_flow(root)],
                 extra: BTreeMap::new(),
             };
@@ -653,11 +732,8 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
                     props: BTreeMap::new(),
                     extra: BTreeMap::new(),
                 }],
-                source_range: None,
-                source_map: Vec::new(),
                 extra: BTreeMap::new(),
             })],
-            source_range: None,
             extra: BTreeMap::new(),
         },
         extra: BTreeMap::new(),
@@ -678,13 +754,11 @@ fn math_validation_enforces_tree_payload_and_shape_limits() {
                     "l".repeat(MAX_MATH_TREE_PAYLOAD_BYTES + 1),
                 ),
             ]),
-            source_range: None,
             children: vec![as_flow(MathNode {
                 id: NodeId::generate(),
                 kind: MathNodeKind::Row,
                 text: None,
                 attributes: BTreeMap::new(),
-                source_range: None,
                 children: Vec::new(),
                 extra: BTreeMap::new(),
             })],
@@ -710,8 +784,6 @@ fn math_inline_environments_obey_math_depth_limit() {
                 props: BTreeMap::new(),
                 extra: BTreeMap::new(),
             }],
-            source_range: None,
-            source_map: Vec::new(),
             extra: BTreeMap::new(),
         });
         for _ in 0..environment_depth {
@@ -719,7 +791,6 @@ fn math_inline_environments_obey_math_depth_limit() {
                 id: NodeId::generate(),
                 kind: InlineEnvironmentKind::Bold,
                 definition_id: None,
-                source_range: None,
                 props: BTreeMap::new(),
                 children: vec![content],
                 extra: BTreeMap::new(),
@@ -730,7 +801,6 @@ fn math_inline_environments_obey_math_depth_limit() {
             root: MathFlow {
                 id: NodeId::generate(),
                 content: vec![content],
-                source_range: None,
                 extra: BTreeMap::new(),
             },
             extra: BTreeMap::new(),
@@ -764,7 +834,6 @@ fn math_inline_environments_obey_math_depth_limit() {
             id: NodeId::generate(),
             kind: InlineEnvironmentKind::Bold,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: Vec::new(),
             extra: BTreeMap::new(),
@@ -773,7 +842,6 @@ fn math_inline_environments_obey_math_depth_limit() {
         let mut deepest_flow = MathFlow {
             id: NodeId::generate(),
             content: vec![leaf],
-            source_range: None,
             extra: BTreeMap::new(),
         };
         for _ in 0..MAX_MATH_TREE_DEPTH {
@@ -784,11 +852,9 @@ fn math_inline_environments_obey_math_depth_limit() {
                     kind: super::MathNodeKind::Group,
                     text: None,
                     attributes: BTreeMap::new(),
-                    source_range: None,
                     children: vec![deepest_flow],
                     extra: BTreeMap::new(),
                 })],
-                source_range: None,
                 extra: BTreeMap::new(),
             };
         }
@@ -822,11 +888,8 @@ fn math_text_runs_count_toward_the_tree_node_limit() {
                     };
                     super::MAX_MATH_TREE_NODES
                 ],
-                source_range: None,
-                source_map: Vec::new(),
                 extra: BTreeMap::new(),
             })],
-            source_range: None,
             extra: BTreeMap::new(),
         },
         extra: BTreeMap::new(),
@@ -926,8 +989,6 @@ fn inline_format_values_and_nesting_are_validated() -> Result<(), Box<dyn std::e
             props: BTreeMap::new(),
             extra: BTreeMap::new(),
         }],
-        source_range: None,
-        source_map: Vec::new(),
         extra: BTreeMap::new(),
     });
     for _ in 0..65 {
@@ -935,7 +996,6 @@ fn inline_format_values_and_nesting_are_validated() -> Result<(), Box<dyn std::e
             id: super::NodeId::generate(),
             kind: super::InlineEnvironmentKind::Bold,
             definition_id: None,
-            source_range: None,
             props: BTreeMap::new(),
             children: vec![inline],
             extra: BTreeMap::new(),
@@ -960,8 +1020,6 @@ fn retired_math_source_fields_are_rejected_but_plain_text_extensions_are_preserv
         .inlines
         .push(super::ParagraphContent::Text(TextFlow {
             runs: Vec::new(),
-            source_range: None,
-            source_map: Vec::new(),
             extra: BTreeMap::from([(
                 "sourceRange".to_owned(),
                 serde_json::json!({"vendor": true}),
@@ -978,11 +1036,8 @@ fn retired_math_source_fields_are_rejected_but_plain_text_extensions_are_preserv
                 id: NodeId::generate(),
                 content: vec![MathContent::Text(TextFlow {
                     runs: Vec::new(),
-                    source_range: None,
-                    source_map: Vec::new(),
                     extra: BTreeMap::from([("sourceMap".to_owned(), serde_json::json!([]))]),
                 })],
-                source_range: None,
                 extra: BTreeMap::new(),
             },
             extra: BTreeMap::new(),
@@ -1008,8 +1063,6 @@ fn math_unknown_fields_are_rejected_only_on_their_retired_schema_node() {
                 content: vec![
                     MathContent::Text(TextFlow {
                         runs: Vec::new(),
-                        source_range: None,
-                        source_map: Vec::new(),
                         extra: BTreeMap::from([("source".to_owned(), serde_json::json!("vendor"))]),
                     }),
                     MathContent::Math(MathNode {
@@ -1017,7 +1070,6 @@ fn math_unknown_fields_are_rejected_only_on_their_retired_schema_node() {
                         kind: super::MathNodeKind::Symbol,
                         text: Some("x".to_owned()),
                         attributes: BTreeMap::new(),
-                        source_range: None,
                         children: Vec::new(),
                         extra: BTreeMap::from([(
                             "sourceMap".to_owned(),
@@ -1025,7 +1077,6 @@ fn math_unknown_fields_are_rejected_only_on_their_retired_schema_node() {
                         )]),
                     }),
                 ],
-                source_range: None,
                 extra: BTreeMap::from([("source".to_owned(), serde_json::json!("vendor"))]),
             },
             extra: BTreeMap::from([(

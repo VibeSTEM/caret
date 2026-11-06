@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod checkpoint;
 mod clipboard;
 mod command_line;
 mod composition;
-pub use composition::CompositionUpdateCandidate;
+pub use checkpoint::SessionCheckpoint;
+pub use composition::{CompositionRange, CompositionUpdateCandidate};
 mod current_environment;
 mod formatting;
 mod history;
@@ -14,7 +16,9 @@ mod inline_content;
 mod keyboards;
 mod math_edit;
 pub use math_edit::{
-    MathEdit, MathEditBranch, MathEditTarget, MathTextFlowPath, MathTextFlowPathStep,
+    MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
+    MathSequencePath, MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep, MathTextPosition,
+    MathTreePosition, MathTreePositionError,
 };
 mod navigation;
 mod paragraph_edit;
@@ -51,6 +55,21 @@ pub struct StructureSelection {
     pub focus: Pos,
 }
 
+/// 数学 TextFlow 提供给输入法查询的文本与宿主端点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathTextInputContext {
+    /// 当前可编辑的数学文本岛。
+    pub surrounding_text: String,
+    /// 文本岛中的选区锚点，以 UTF-16 code unit 计数。
+    pub anchor_utf16: usize,
+    /// 文本岛中的输入焦点，以 UTF-16 code unit 计数。
+    pub focus_utf16: usize,
+    /// 当前公式目标及两端在树中的实际位置。
+    pub target: MathEditTarget,
+    pub anchor: MathTextPosition,
+    pub focus: MathTextPosition,
+}
+
 #[derive(Debug)]
 pub struct Session {
     pub(super) document: Document,
@@ -78,6 +97,33 @@ pub struct Session {
 }
 
 impl Session {
+    fn clone_preserving_identity(&self) -> Self {
+        Self {
+            document: self.document.clone(),
+            selection: self.selection.clone(),
+            selection_visual_affinity: self.selection_visual_affinity,
+            session_id: self.session_id.clone(),
+            document_generation: self.document_generation,
+            composition: self.composition.clone(),
+            pending_inline_style: self.pending_inline_style.clone(),
+            command_line: self.command_line.clone(),
+            math_edit: self.math_edit.clone(),
+            block_environment_exit: self.block_environment_exit.clone(),
+            selected_block_environment: self.selected_block_environment.clone(),
+            selected_block_environments: self.selected_block_environments.clone(),
+            structure_selection: self.structure_selection.clone(),
+            last_committed_composition: self.last_committed_composition,
+            text_map_cache: self.text_map_cache.clone(),
+            paragraph_index: self.paragraph_index.clone(),
+            structure_index: self.structure_index.clone(),
+            edit_history: self.edit_history.clone(),
+            history_state_id: self.history_state_id,
+            next_history_state_id: self.next_history_state_id,
+            history_estimated_bytes: self.history_estimated_bytes,
+            history_merge_epoch: self.history_merge_epoch,
+        }
+    }
+
     pub fn new(document: Document) -> Result<Self, EditError> {
         document
             .validate()
@@ -132,6 +178,37 @@ impl Session {
     /// 文档内容或页面几何每成功变更一次便递增；异步布局结果用它拒绝过时代际。
     pub fn document_generation(&self) -> u64 {
         self.document_generation
+    }
+
+    /// 返回当前数学 TextFlow 的输入法文本、UTF-16 选区和树端点。
+    ///
+    /// 源码/结构分支、过期公式焦点或无法映射到同一文本岛的端点返回 `None`；
+    /// 查询不改变文档、选择、composition 或历史。
+    pub fn math_text_input_context(&self) -> Option<MathTextInputContext> {
+        self.ensure_math_edit_revision_current().ok()?;
+        let edit = self.math_edit.as_ref()?;
+        let MathEditBranch::Text {
+            path,
+            anchor,
+            focus_affinity,
+        } = &edit.branch
+        else {
+            return None;
+        };
+        let (island, anchor_utf8, focus_utf8) = self.math_text_selection_island_offsets()?;
+        let surrounding_text = island.display().to_owned();
+        let anchor_utf16 =
+            super::text_map::utf8_offset_to_utf16(&surrounding_text, anchor_utf8).ok()?;
+        let focus_utf16 =
+            super::text_map::utf8_offset_to_utf16(&surrounding_text, focus_utf8).ok()?;
+        Some(MathTextInputContext {
+            surrounding_text,
+            anchor_utf16,
+            focus_utf16,
+            target: edit.target.clone(),
+            anchor: anchor.clone(),
+            focus: MathTextPosition::new(path.clone(), edit.cursor, *focus_affinity),
+        })
     }
 
     fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {
@@ -838,7 +915,7 @@ impl Session {
         let restored_math_edit = match math_edit_position {
             Some(position) => {
                 let revision = self.current_math_edit_revision();
-                match math_edit::restore_math_edit(&mut self.document, position, revision) {
+                match math_edit::restore_math_edit(&self.document, position, revision) {
                     Some(edit) => Some(edit),
                     None => {
                         let reverted = if redo {
@@ -1005,30 +1082,20 @@ impl Session {
 /// 克隆创建独立编辑会话，异步布局身份与文档代际从新会话重新开始。
 impl Clone for Session {
     fn clone(&self) -> Self {
-        Self {
-            document: self.document.clone(),
-            selection: self.selection.clone(),
-            selection_visual_affinity: self.selection_visual_affinity,
-            session_id: NodeId::generate(),
-            document_generation: 0,
-            composition: self.composition.clone(),
-            pending_inline_style: self.pending_inline_style.clone(),
-            command_line: self.command_line.clone(),
-            math_edit: self.math_edit.clone(),
-            block_environment_exit: self.block_environment_exit.clone(),
-            selected_block_environment: self.selected_block_environment.clone(),
-            selected_block_environments: self.selected_block_environments.clone(),
-            structure_selection: self.structure_selection.clone(),
-            last_committed_composition: self.last_committed_composition,
-            text_map_cache: self.text_map_cache.clone(),
-            paragraph_index: self.paragraph_index.clone(),
-            structure_index: self.structure_index.clone(),
-            edit_history: self.edit_history.clone(),
-            history_state_id: self.history_state_id,
-            next_history_state_id: self.next_history_state_id,
-            history_estimated_bytes: self.history_estimated_bytes,
-            history_merge_epoch: self.history_merge_epoch,
+        let session_id = NodeId::generate();
+        let mut clone = self.clone_preserving_identity();
+        if let Some(edit) = clone.math_edit.as_mut() {
+            // 仅迁移仍有效的公式焦点；过期投影不能借克隆恢复权限。
+            if self.ensure_math_edit_revision_current().is_ok() {
+                edit.revision = math_edit::MathEditRevision {
+                    session_id: session_id.clone(),
+                    document_generation: 0,
+                };
+            }
         }
+        clone.session_id = session_id;
+        clone.document_generation = 0;
+        clone
     }
 }
 
@@ -1066,3 +1133,114 @@ fn position_map_changes_paragraph_structure(position_map: &PositionMap) -> bool 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod math_text_input_context_tests {
+    use super::*;
+
+    fn session_in_math_text() -> Result<Session, EditError> {
+        let mut session = Session::new(Document::blank())?;
+        session.run(Command::InsertInlineMath(
+            r"\frac{1}{\text{A😀B}}".to_owned(),
+        ))?;
+        session.run(Command::EnterMath(Direction::Backward))?;
+        for _ in 0..64 {
+            if session
+                .math_edit()
+                .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Text { .. }))
+            {
+                return Ok(session);
+            }
+            session.run(Command::MoveCaret(Direction::Backward))?;
+        }
+        Err(EditError::InvalidPosition)
+    }
+
+    #[test]
+    fn math_text_input_context_uses_utf16_offsets_for_reverse_selection() -> Result<(), EditError> {
+        let mut session = session_in_math_text()?;
+        session.run(Command::SetMathTextSelection {
+            anchor: 6,
+            focus: 1,
+        })?;
+
+        let context = session
+            .math_text_input_context()
+            .ok_or(EditError::InvalidPosition)?;
+        assert_eq!(context.surrounding_text, "A😀B");
+        assert_eq!(context.anchor_utf16, 4);
+        assert_eq!(context.focus_utf16, 1);
+        assert_eq!(context.anchor.offset, 6);
+        assert_eq!(context.focus.offset, 1);
+        assert!(matches!(context.target, MathEditTarget::Inline { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn math_text_input_context_is_unavailable_for_source_tree_and_stale_edits()
+    -> Result<(), EditError> {
+        let mut source = session_in_math_text()?;
+        source
+            .math_edit
+            .as_mut()
+            .ok_or(EditError::InvalidPosition)?
+            .branch = MathEditBranch::Source;
+        assert!(source.math_text_input_context().is_none());
+
+        let mut tree = Session::new(Document::blank())?;
+        tree.begin_inline_math()?;
+        assert!(matches!(
+            tree.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Tree { .. })
+        ));
+        assert!(tree.math_text_input_context().is_none());
+
+        let mut stale = session_in_math_text()?;
+        stale.document_generation += 1;
+        assert!(stale.math_text_input_context().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn align_math_text_input_context_is_limited_to_the_active_cell() -> Result<(), EditError> {
+        let source = r"\begin{aligned}\text{甲}&\text{乙}\end{aligned}";
+        let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Align)
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let (content, _) = projection.into_parts();
+        let caret_math::ProjectedMath::Align(align) = content else {
+            return Err(EditError::InvalidPosition);
+        };
+        let mut document = Document::blank();
+        document.body = vec![
+            caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+            caret_doc::Block::Align(align),
+        ];
+        let mut session = Session::new(document)?;
+        session.run(Command::EnterMath(Direction::Forward))?;
+        let first = session
+            .math_text_input_context()
+            .ok_or(EditError::InvalidPosition)?;
+        assert_eq!(first.surrounding_text, "甲");
+        assert_eq!(first.focus.path.align_cell(), Some((0, 0)));
+
+        session.run(Command::SetMathTextSelection {
+            anchor: "甲".len(),
+            focus: "甲".len(),
+        })?;
+        for _ in 0..8 {
+            if session
+                .math_text_input_context()
+                .is_some_and(|context| context.focus.path.align_cell() == Some((0, 1)))
+            {
+                break;
+            }
+            session.run(Command::MoveCaret(Direction::Forward))?;
+        }
+        let second = session
+            .math_text_input_context()
+            .ok_or(EditError::InvalidPosition)?;
+        assert_eq!(second.surrounding_text, "乙");
+        assert_eq!(second.focus.path.align_cell(), Some((0, 1)));
+        Ok(())
+    }
+}

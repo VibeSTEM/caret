@@ -161,25 +161,6 @@ fn text_style_resets_preserve_other_emphasis() {
 }
 
 #[test]
-fn run_bold_and_italic_compose_in_math_text() {
-    let mut flow = root(r"\text{x}");
-    let Some(caret_doc::MathContent::Text(text)) = flow.content.first_mut() else {
-        panic!("text command should produce a TextFlow");
-    };
-    let Some(run) = text.runs.first_mut() else {
-        panic!("text command should produce a Run");
-    };
-    run.props
-        .insert("bold".to_owned(), serde_json::Value::Bool(true));
-    run.props
-        .insert("italic".to_owned(), serde_json::Value::Bool(true));
-    let styled = layout_math(font(), &flow, SIZE, MathStyle::Inline)
-        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
-    let expected = inline(r"\text{\textbf{\textit{x}}}");
-    assert_eq!(glyph_ids(&styled), glyph_ids(&expected));
-}
-
-#[test]
 fn superscript_is_raised_and_smaller() {
     let layout = inline("x^2");
     let glyphs = glyphs(&layout);
@@ -310,6 +291,37 @@ fn colors_propagate() {
             ..
         } if color.red == 0xff && color.green == 0
     )));
+}
+
+#[test]
+fn color_and_text_color_preserve_child_atom_spacing() {
+    let ParsedMath::Tree(mut color_tree) = parse(r"\textcolor{red}{a+b}", MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("colored expression should parse: {error}"))
+    else {
+        panic!("expected an equation tree")
+    };
+    let color = color_tree
+        .root
+        .content
+        .first_mut()
+        .and_then(|content| match content {
+            MathContent::Math(node) => Some(node),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a color node"));
+    color.kind = caret_doc::MathNodeKind::Color;
+    let text_color_layout = layout_math(
+        font(),
+        &root(r"\textcolor{red}{a+b}"),
+        SIZE,
+        MathStyle::Display,
+    )
+    .unwrap_or_else(|error| panic!("TextColor layout should succeed: {error}"));
+    let color_layout = layout_math(font(), &color_tree.root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("Color layout should succeed: {error}"));
+
+    assert_eq!(color_layout.items, text_color_layout.items);
+    assert_eq!(color_layout.width, text_color_layout.width);
 }
 
 #[test]

@@ -3,9 +3,10 @@ use caret_app::document_storage::{DocumentStorage, DocumentStorageError};
 use caret_doc::{CdocFile, Document, DocumentError, OpenedDocument, open};
 use serde_json::{Value, json};
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MINIMAL_FIXTURE: &str = include_str!("../fixtures/document/v1-minimal.cdoc");
+static NEXT_TEST_DIRECTORY_ID: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn current_format_fixture_opens_and_round_trips() {
@@ -517,10 +518,11 @@ fn minimal_document_with_language(language: &str) -> String {
 }
 
 fn test_dir() -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    std::env::temp_dir().join(format!("caret-document-storage-{nonce}"))
+    let id = NEXT_TEST_DIRECTORY_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "caret-document-storage-{}-{id}",
+        std::process::id()
+    ))
 }
 
 fn must<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {

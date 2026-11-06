@@ -33,8 +33,6 @@ pub struct MathTree {
 pub struct MathFlow {
     pub id: NodeId,
     pub content: Vec<super::MathContent>,
-    #[serde(skip)]
-    pub source_range: Option<MathSourceRange>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -60,8 +58,6 @@ pub struct MathNode {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub attributes: BTreeMap<String, String>,
-    #[serde(skip)]
-    pub source_range: Option<MathSourceRange>,
     #[serde(default)]
     pub children: Vec<MathFlow>,
     #[serde(flatten)]
@@ -424,16 +420,6 @@ fn valid_css_color(value: &str) -> bool {
     value.strip_prefix('#').is_some_and(|hex| {
         matches!(hex.len(), 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
     })
-}
-
-/// 源码编辑期间使用的 UTF-8 字节范围；只存在于解析投影，不写入 `.cdoc`。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MathSourceRange {
-    pub start: u32,
-    pub end: u32,
-    #[serde(default, flatten)]
-    pub extra: BTreeMap<String, Value>,
 }
 
 /// 行内数学对象，作为段落内联节点保存。

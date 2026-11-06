@@ -6,11 +6,11 @@
 use super::super::super::environment::inline_adapter::{
     RunPropertyEnvironment, run_property_for_key, run_property_for_kind, set_run_property_value,
 };
-use super::super::history::{self, DocumentPatch, MathEditPosition, SessionHistoryEdit};
-use super::super::{Affinity, EditError, Effect};
+use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
+use super::super::{EditError, Effect};
 use super::{
-    MathEdit, MathEditBranch, MathEditTarget, Session, block_list, find_block_path,
-    find_inline_math_mut, history_position,
+    MathEdit, MathEditBranch, MathPositionAffinity, MathTextPosition, Session, history_position,
+    math_text_selection_range,
 };
 use crate::editing::session::history::SessionHistoryState;
 use crate::editing::session::math_edit::path::MathTextFlowPath;
@@ -25,46 +25,82 @@ impl Session {
             .copied()
             .ok_or(EditError::UnsupportedInlineFormat)?;
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, anchor } = edit.branch.clone() else {
+        let MathEditBranch::Text { path, anchor, .. } = edit.branch.clone() else {
             return Err(EditError::UnsupportedInlineFormat);
         };
-        let range = anchor.min(edit.cursor)..anchor.max(edit.cursor);
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
-        let (text, _) = path
-            .resolve_in_projection(tree, &edit.source_projection)
+        let (island, range) = math_text_selection_range(tree, &path, &anchor, edit.cursor)
             .ok_or(EditError::InvalidPosition)?;
-        let text = (*text).clone();
-        let display = text
-            .runs
-            .iter()
-            .map(|run| run.text.as_str())
-            .collect::<String>();
-        if range.end > display.len()
-            || !display.is_char_boundary(range.start)
-            || !display.is_char_boundary(range.end)
-            || !super::is_grapheme_boundary(&display, range.start)
-            || !super::is_grapheme_boundary(&display, range.end)
-        {
-            return Err(EditError::InvalidPosition);
-        }
 
         if range.is_empty() {
+            let text = path
+                .resolve_structurally(tree)
+                .cloned()
+                .ok_or(EditError::InvalidPosition)?;
             return self.set_pending_math_text_property(
                 &edit,
                 &path,
                 descriptor,
                 &text,
-                range.start,
+                edit.cursor,
             );
         }
 
-        let any_disabled = text_range_has_disabled_property(&text, &range, descriptor)?;
-        let mut updated = text.clone();
-        edit_text_flow_property(&mut updated, range, descriptor, Some(any_disabled))?;
-        if updated == text {
-            return Ok(Effect::default());
+        let mut any_disabled = false;
+        for (candidate, flow_range) in island.paths.iter().zip(&island.ranges) {
+            let start = range.start.max(flow_range.start);
+            let end = range.end.min(flow_range.end);
+            if start >= end {
+                continue;
+            }
+            let local_range = start - flow_range.start..end - flow_range.start;
+            let text = candidate
+                .resolve_structurally(tree)
+                .ok_or(EditError::InvalidPosition)?;
+            if text_range_has_disabled_property(text, &local_range, descriptor)? {
+                any_disabled = true;
+                break;
+            }
         }
-        self.commit_math_text_flow(edit, &path, updated)
+        let mut updated_tree = tree.clone();
+        for (candidate, flow_range) in island.paths.iter().zip(&island.ranges).rev() {
+            let start = range.start.max(flow_range.start);
+            let end = range.end.min(flow_range.end);
+            if start >= end {
+                continue;
+            }
+            let local_range = start - flow_range.start..end - flow_range.start;
+            let text = candidate
+                .resolve_structurally(&updated_tree)
+                .cloned()
+                .ok_or(EditError::InvalidPosition)?;
+            let mut updated = text;
+            edit_text_flow_property(&mut updated, local_range, descriptor, Some(any_disabled))?;
+            candidate
+                .resolve_structurally_mut(&mut updated_tree)
+                .ok_or(EditError::InvalidPosition)?
+                .clone_from(&updated);
+        }
+        updated_tree
+            .validate()
+            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
+        let cursor = edit.cursor;
+        self.commit_math_text_tree(
+            edit,
+            updated_tree,
+            super::text_branch::MathTextTreeCommit {
+                branch: super::MathEditBranch::Text {
+                    path: path.clone(),
+                    anchor,
+                    focus_affinity: MathPositionAffinity::Downstream,
+                },
+                align_cell: path.align_cell(),
+                cursor,
+                merge_group: None,
+                pending_style: super::text_branch::PendingStylePolicy::Preserve,
+                selection_changed: false,
+            },
+        )
     }
 
     fn set_pending_math_text_property(
@@ -99,7 +135,12 @@ impl Session {
             edit.cursor,
             MathEditBranch::Text {
                 path: path.clone(),
-                anchor: edit.cursor,
+                anchor: MathTextPosition::new(
+                    path.clone(),
+                    edit.cursor,
+                    MathPositionAffinity::Downstream,
+                ),
+                focus_affinity: MathPositionAffinity::Downstream,
             },
         );
         let before = SessionHistoryState::new(
@@ -122,92 +163,6 @@ impl Session {
             after,
         ));
         Ok(Effect::default())
-    }
-
-    fn commit_math_text_flow(
-        &mut self,
-        edit: MathEdit,
-        path: &MathTextFlowPath,
-        updated: TextFlow,
-    ) -> Result<Effect, EditError> {
-        let before_math = history_position(&edit);
-        match &edit.target {
-            MathEditTarget::Inline {
-                paragraph_id,
-                math_id,
-            } => {
-                let story = self
-                    .story_for_paragraph(paragraph_id)
-                    .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-                let position = super::super::Pos {
-                    story,
-                    paragraph_id: paragraph_id.clone(),
-                    offset: 0,
-                    affinity: Affinity::Downstream,
-                };
-                let mut paragraph = self.paragraph_for(&position)?.clone();
-                let math = find_inline_math_mut(&mut paragraph.inlines, math_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                path.resolve_mut_in_projection(&mut math.math_tree, &edit.source_projection)
-                    .ok_or(EditError::InvalidPosition)?
-                    .clone_from(&updated);
-                let before = history::paragraph_states_for_ids(
-                    &self.document,
-                    &self.paragraph_index,
-                    [paragraph_id.clone()],
-                );
-                self.replace_paragraph(&position, paragraph)?;
-                self.text_map_cache.clear();
-                let after = history::paragraph_states_for_ids(
-                    &self.document,
-                    &self.paragraph_index,
-                    [paragraph_id.clone()],
-                );
-                self.record_math_history(
-                    DocumentPatch::Paragraphs {
-                        before,
-                        after,
-                        merge_group: None,
-                        merge_epoch: self.history_merge_epoch,
-                    },
-                    (self.selection.clone(), self.selection_visual_affinity),
-                    (self.selection.clone(), self.selection_visual_affinity),
-                    Some(before_math),
-                    Some(history_position(&edit)),
-                );
-            }
-            MathEditTarget::Block { block_id: id, .. } => {
-                let (parent_ids, index) =
-                    find_block_path(&self.document.body, id).ok_or(EditError::InvalidPosition)?;
-                let blocks = block_list(&mut self.document.body, &parent_ids)?;
-                let slot = blocks.get_mut(index).ok_or(EditError::InvalidPosition)?;
-                let before = slot.clone();
-                let mut next = before.clone();
-                let tree = block_math_tree_mut(&mut next, path.align_cell())
-                    .ok_or(EditError::InvalidPosition)?;
-                path.resolve_mut_in_projection(tree, &edit.source_projection)
-                    .ok_or(EditError::InvalidPosition)?
-                    .clone_from(&updated);
-                *slot = next.clone();
-                self.text_map_cache.clear();
-                self.record_math_history(
-                    DocumentPatch::BlockRange {
-                        parent_environment_ids: parent_ids,
-                        sibling_index: index,
-                        before: vec![before],
-                        after: vec![next],
-                    },
-                    (self.selection.clone(), self.selection_visual_affinity),
-                    (self.selection.clone(), self.selection_visual_affinity),
-                    Some(before_math),
-                    Some(history_position(&edit)),
-                );
-            }
-        }
-        Ok(Effect {
-            document_changed: true,
-            ..Effect::default()
-        })
     }
 }
 

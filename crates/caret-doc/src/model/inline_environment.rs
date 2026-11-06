@@ -63,7 +63,6 @@ pub struct InlineEnvironment<Child> {
     pub id: NodeId,
     pub kind: InlineEnvironmentKind,
     pub definition_id: Option<String>,
-    pub source_range: Option<super::MathSourceRange>,
     pub props: BTreeMap<String, Value>,
     pub children: Vec<Child>,
     pub extra: BTreeMap<String, Value>,

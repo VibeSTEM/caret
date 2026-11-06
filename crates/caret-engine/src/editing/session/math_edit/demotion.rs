@@ -8,16 +8,38 @@ use super::super::history::{self, DocumentPatch, MathEditPosition};
 use super::super::{Affinity, EditError, Effect, Pos, PositionMap, Selection};
 use super::metadata::can_materialize_source_as_text;
 use super::text_branch::text_source_boundary_from_map;
-use super::{MathEditBranch, MathEditTarget, Session, find_inline_math, inline_math_slots};
-use crate::VisualAffinity;
-use caret_doc::{
-    MathContent, MathFlow, MathSourceRange, MathTree, NodeId, ParagraphContent, Run, TextFlow,
+use super::{
+    MathEditBranch, MathEditTarget, MathPositionAffinity, MathSequenceStep, MathTreePosition,
+    Session, find_inline_math, inline_math_slots,
 };
+use crate::VisualAffinity;
+use caret_doc::{MathContent, MathFlow, MathTree, NodeId, ParagraphContent, Run, TextFlow};
+use caret_math::{MathContentSourceMap, MathFlowSourceMap, MathTreeSourceMap};
 use std::collections::BTreeMap;
 
 impl Session {
     /// 将行内公式原子降级为源码文本，并以单次历史事务保留可撤销性。
-    pub(super) fn math_mod_backspace(&mut self) -> Result<Effect, EditError> {
+    pub(in crate::editing::session) fn math_mod_backspace(&mut self) -> Result<Effect, EditError> {
+        let before_document = self.document.clone();
+        let before_edit = self.math_edit.clone();
+        let result = self.math_mod_backspace_transaction();
+        if result.is_err() {
+            self.document = before_document;
+            self.math_edit = before_edit;
+        }
+        result
+    }
+
+    fn math_mod_backspace_transaction(&mut self) -> Result<Effect, EditError> {
+        let Some(edit) = self.math_edit.clone() else {
+            return Ok(Effect::default());
+        };
+        if !matches!(&edit.target, MathEditTarget::Inline { .. }) {
+            return Ok(Effect::default());
+        }
+        if self.math_edit_is_text_branch() {
+            self.refresh_math_text_projection()?;
+        }
         let Some(edit) = self.math_edit.clone() else {
             return Ok(Effect::default());
         };
@@ -39,77 +61,131 @@ impl Session {
             return Err(EditError::UnsupportedOpaqueContent);
         }
         let source = caret_math::serialize_tree(&math.math_tree);
+        let edit_source = edit.source().unwrap_or(&source);
         if source.contains(['\n', '\r']) {
             return Err(EditError::UnsupportedNewline);
         }
         let current_tree = self.math_tree_for_edit(&edit, None)?;
-        let caret_math::ParsedMath::Tree(projected_tree) =
-            caret_math::parse(&source, caret_math::MathInputKind::Inline)
+        let (caret_math::ProjectedMath::Tree(projected_tree), projected_source_map) =
+            caret_math::parse_projection(&source, caret_math::MathInputKind::Inline)
                 .map_err(|error| EditError::InvalidMath(error.to_string()))?
+                .into_parts()
         else {
             return Err(EditError::InvalidPosition);
         };
+        let reconciled_tree_map = if matches!(edit.branch, MathEditBranch::Tree { .. }) {
+            let parsed_map = projected_source_map
+                .tree()
+                .ok_or(EditError::InvalidPosition)?;
+            Some(
+                parsed_map
+                    .reconcile_for_tree(&projected_tree, current_tree, None, &source, None)
+                    .ok_or(EditError::UnsupportedOpaqueContent)?,
+            )
+        } else {
+            None
+        };
+        let previous_map = match &edit.branch {
+            MathEditBranch::Tree { .. } => reconciled_tree_map
+                .as_ref()
+                .ok_or(EditError::InvalidPosition)?,
+            MathEditBranch::Source | MathEditBranch::Text { .. } => {
+                let previous_projection = edit.required_source_projection()?;
+                if previous_projection.edit_source() != edit_source {
+                    return Err(EditError::InvalidPosition);
+                }
+                previous_projection
+                    .tree()
+                    .ok_or(EditError::InvalidPosition)?
+            }
+        };
+        let previous = TreeProjection {
+            tree: current_tree,
+            map: previous_map,
+            source: edit_source,
+        };
+        if !source_map_can_materialize_as_text(previous.map.root()) {
+            return Err(EditError::UnsupportedOpaqueContent);
+        }
+        let projected = TreeProjection {
+            tree: &projected_tree,
+            map: projected_source_map
+                .tree()
+                .ok_or(EditError::InvalidPosition)?,
+            source: &source,
+        };
         let (source_anchor, source_cursor) = match &edit.branch {
             MathEditBranch::Source => {
-                let cursor = map_source_position(
-                    current_tree,
-                    &projected_tree,
-                    edit.source(),
-                    &source,
-                    edit.cursor,
-                )
-                .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let cursor = map_source_position(previous, projected, edit.cursor)
+                    .ok_or(EditError::UnsupportedOpaqueContent)?;
                 (cursor, cursor)
             }
-            MathEditBranch::Text { path, .. } => {
+            MathEditBranch::Text {
+                path,
+                anchor,
+                focus_affinity,
+            } => {
                 if !trees_correspond_for_position_mapping(current_tree, &projected_tree) {
                     return Err(EditError::UnsupportedOpaqueContent);
                 }
-                let Some((text, text_map)) =
-                    path.resolve_in_projection(current_tree, &edit.source_projection)
+                let Some((anchor_text, anchor_map)) = anchor
+                    .path
+                    .resolve_in_projection(current_tree, edit.required_source_projection()?)
                 else {
                     return Err(EditError::InvalidPosition);
                 };
-                let MathEditBranch::Text { anchor, .. } = &edit.branch else {
-                    unreachable!()
+                let Some((focus_text, focus_map)) =
+                    path.resolve_in_projection(current_tree, edit.required_source_projection()?)
+                else {
+                    return Err(EditError::InvalidPosition);
                 };
-                let source_base = edit.source_projection.edit_range().start;
+                let source_base = edit.required_source_projection()?.edit_range().start;
                 let Some(source_anchor) = text_source_boundary_from_map(
-                    text,
-                    text_map,
+                    anchor_text,
+                    anchor_map,
                     source_base,
-                    *anchor,
-                    Affinity::Downstream,
+                    anchor.offset,
+                    match anchor.affinity {
+                        MathPositionAffinity::Upstream => Affinity::Upstream,
+                        MathPositionAffinity::Downstream => Affinity::Downstream,
+                    },
                 ) else {
                     return Err(EditError::UnsupportedOpaqueContent);
                 };
                 let Some(source_cursor) = text_source_boundary_from_map(
-                    text,
-                    text_map,
+                    focus_text,
+                    focus_map,
                     source_base,
                     edit.cursor,
-                    Affinity::Downstream,
+                    match focus_affinity {
+                        MathPositionAffinity::Upstream => Affinity::Upstream,
+                        MathPositionAffinity::Downstream => Affinity::Downstream,
+                    },
                 ) else {
                     return Err(EditError::UnsupportedOpaqueContent);
                 };
-                let mapped_anchor = map_source_position(
-                    current_tree,
-                    &projected_tree,
-                    edit.source(),
-                    &source,
-                    source_anchor,
-                );
-                let mapped_cursor = map_source_position(
-                    current_tree,
-                    &projected_tree,
-                    edit.source(),
-                    &source,
-                    source_cursor,
-                );
+                let mapped_anchor = map_source_position(previous, projected, source_anchor);
+                let mapped_cursor = map_source_position(previous, projected, source_cursor);
                 (
                     mapped_anchor.ok_or(EditError::UnsupportedOpaqueContent)?,
                     mapped_cursor.ok_or(EditError::UnsupportedOpaqueContent)?,
                 )
+            }
+            MathEditBranch::Tree { path, anchor } => {
+                if anchor.path != *path
+                    || !trees_correspond_for_position_mapping(current_tree, &projected_tree)
+                {
+                    return Err(EditError::UnsupportedOpaqueContent);
+                }
+                let mut focus = anchor.clone();
+                focus.offset = edit.cursor;
+                let source_anchor =
+                    tree_position_source_boundary(current_tree, previous.map, anchor, &source)
+                        .ok_or(EditError::UnsupportedOpaqueContent)?;
+                let source_cursor =
+                    tree_position_source_boundary(current_tree, previous.map, &focus, &source)
+                        .ok_or(EditError::UnsupportedOpaqueContent)?;
+                (source_anchor, source_cursor)
             }
         };
         if source_anchor > source.len()
@@ -131,8 +207,6 @@ impl Session {
                 props: BTreeMap::new(),
                 extra: BTreeMap::new(),
             }],
-            source_range: None,
-            source_map: Vec::new(),
             extra: BTreeMap::new(),
         };
         if !replace_inline_math_with_text(&mut paragraph.inlines, math_id, replacement) {
@@ -230,13 +304,50 @@ impl Session {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TreeProjection<'a> {
+    tree: &'a MathTree,
+    map: &'a MathTreeSourceMap,
+    source: &'a str,
+}
+
+fn source_map_can_materialize_as_text(flow: &MathFlowSourceMap) -> bool {
+    flow.range_extra().is_empty()
+        && flow
+            .content()
+            .iter()
+            .all(source_content_map_can_materialize_as_text)
+}
+
+fn source_content_map_can_materialize_as_text(content: &MathContentSourceMap) -> bool {
+    match content {
+        MathContentSourceMap::Text(text) => {
+            text.range_extra().is_empty()
+                && text
+                    .segments()
+                    .iter()
+                    .all(|segment| segment.extra().is_empty() && segment.source_extra().is_empty())
+        }
+        MathContentSourceMap::Math {
+            range, operands, ..
+        } => range.extra().is_empty() && operands.iter().all(source_map_can_materialize_as_text),
+        MathContentSourceMap::Environment { range, children } => {
+            range.extra().is_empty()
+                && children
+                    .iter()
+                    .all(source_content_map_can_materialize_as_text)
+        }
+        MathContentSourceMap::Other => true,
+    }
+}
+
 fn map_source_position(
-    previous: &MathTree,
-    projected: &MathTree,
-    previous_source: &str,
-    projected_source: &str,
+    previous: TreeProjection<'_>,
+    projected: TreeProjection<'_>,
     position: usize,
 ) -> Option<usize> {
+    let previous_source = previous.source;
+    let projected_source = projected.source;
     if position > previous_source.len() || !previous_source.is_char_boundary(position) {
         return None;
     }
@@ -280,14 +391,20 @@ fn map_source_position(
             .checked_sub(previous_source.len() - position);
     }
 
-    if !trees_correspond_for_position_mapping(previous, projected) {
+    if !trees_correspond_for_position_mapping(previous.tree, projected.tree) {
         return None;
     }
     if let Some(mapped) = map_text_source_position(previous, projected, position) {
         return Some(mapped);
     }
     let mut anchors = Vec::new();
-    collect_flow_anchors(&previous.root, &projected.root, &mut anchors);
+    collect_flow_anchors(
+        &previous.tree.root,
+        previous.map.root(),
+        &projected.tree.root,
+        projected.map.root(),
+        &mut anchors,
+    )?;
     let mut matches = anchors
         .into_iter()
         .filter_map(|(source, destination)| (source == position).then_some(destination));
@@ -300,6 +417,92 @@ fn map_source_position(
 fn trees_correspond_for_position_mapping(previous: &MathTree, projected: &MathTree) -> bool {
     previous.extra == projected.extra
         && flows_correspond_for_position_mapping(&previous.root, &projected.root)
+}
+
+fn tree_position_source_boundary(
+    tree: &MathTree,
+    map: &MathTreeSourceMap,
+    position: &MathTreePosition,
+    source: &str,
+) -> Option<usize> {
+    let mut contents = tree.root.content.as_slice();
+    let mut content_maps = map.root().content();
+    let mut flow_range = map.root().range();
+
+    for step in position.path.steps() {
+        let (child_contents, child_maps, child_range) = match *step {
+            MathSequenceStep::Operand {
+                content_index,
+                operand_index,
+            } => {
+                let MathContent::Math(node) = contents.get(content_index)? else {
+                    return None;
+                };
+                let MathContentSourceMap::Math { operands, .. } =
+                    content_maps.get(content_index)?
+                else {
+                    return None;
+                };
+                let child_flow = node.children.get(operand_index)?;
+                let child_map = operands.get(operand_index)?;
+                (
+                    child_flow.content.as_slice(),
+                    child_map.content(),
+                    child_map.range(),
+                )
+            }
+            MathSequenceStep::EnvironmentChildren { content_index } => {
+                let MathContent::Environment(environment) = contents.get(content_index)? else {
+                    return None;
+                };
+                let MathContentSourceMap::Environment { children, range } =
+                    content_maps.get(content_index)?
+                else {
+                    return None;
+                };
+                (
+                    environment.children.as_slice(),
+                    children.as_slice(),
+                    range.range(),
+                )
+            }
+        };
+        contents = child_contents;
+        content_maps = child_maps;
+        flow_range = child_range;
+    }
+
+    let contents = position.resolve(tree).ok()?;
+    if contents.len() != content_maps.len() || position.offset > contents.len() {
+        return None;
+    }
+    let previous = position
+        .offset
+        .checked_sub(1)
+        .and_then(|index| content_maps.get(index))
+        .and_then(MathContentSourceMap::range);
+    let next = content_maps
+        .get(position.offset)
+        .and_then(MathContentSourceMap::range);
+    let boundary = match position.affinity {
+        MathPositionAffinity::Downstream => next
+            .map(|range| range.start)
+            .or_else(|| previous.map(|range| range.end)),
+        MathPositionAffinity::Upstream => previous
+            .map(|range| range.end)
+            .or_else(|| next.map(|range| range.start)),
+    }
+    .or_else(|| {
+        flow_range.map(|range| {
+            if position.offset == 0 {
+                range.start
+            } else {
+                range.end
+            }
+        })
+    })
+    .or_else(|| (source.is_empty() && contents.is_empty()).then_some(0))?;
+    (boundary <= source.len() && source.is_char_boundary(boundary)).then_some(boundary)
 }
 
 fn flows_correspond_for_position_mapping(previous: &MathFlow, projected: &MathFlow) -> bool {
@@ -397,70 +600,29 @@ fn text_group_extra(contents: &[MathContent]) -> Option<&BTreeMap<String, serde_
 }
 
 fn map_text_source_position(
-    previous: &MathTree,
-    projected: &MathTree,
+    previous: TreeProjection<'_>,
+    projected: TreeProjection<'_>,
     source_position: usize,
 ) -> Option<usize> {
-    map_text_position_in_flow(&previous.root, &projected.root, source_position)
-}
-
-fn map_text_position_in_flow(
-    previous: &MathFlow,
-    projected: &MathFlow,
-    source_position: usize,
-) -> Option<usize> {
-    let mut previous_index = 0;
-    let mut projected_index = 0;
-    while previous_index < previous.content.len() && projected_index < projected.content.len() {
-        let previous_content = &previous.content[previous_index];
-        let projected_content = &projected.content[projected_index];
-        if matches!(previous_content, MathContent::Text(_))
-            && matches!(projected_content, MathContent::Text(_))
-        {
-            let previous_end = text_group_end(&previous.content, previous_index);
-            let projected_end = text_group_end(&projected.content, projected_index);
-            let previous_group = &previous.content[previous_index..previous_end];
-            let projected_group = &projected.content[projected_index..projected_end];
-            if let Some(display_position) =
-                text_group_source_to_display(previous_group, source_position)
-            {
-                return text_group_display_to_source(projected_group, display_position);
-            }
-            previous_index = previous_end;
-            projected_index = projected_end;
-            continue;
-        }
-        let mapped = match (previous_content, projected_content) {
-            (MathContent::Math(previous), MathContent::Math(projected)) => {
-                previous.children.iter().zip(&projected.children).find_map(
-                    |(previous, projected)| {
-                        map_text_position_in_flow(previous, projected, source_position)
-                    },
-                )
-            }
-            (MathContent::Environment(previous), MathContent::Environment(projected)) => {
-                map_text_position_in_contents(
-                    &previous.children,
-                    &projected.children,
-                    source_position,
-                )
-            }
-            _ => None,
-        };
-        if mapped.is_some() {
-            return mapped;
-        }
-        previous_index += 1;
-        projected_index += 1;
-    }
-    None
+    map_text_position_in_contents(
+        &previous.tree.root.content,
+        previous.map.root().content(),
+        &projected.tree.root.content,
+        projected.map.root().content(),
+        source_position,
+    )
 }
 
 fn map_text_position_in_contents(
     previous: &[MathContent],
+    previous_maps: &[MathContentSourceMap],
     projected: &[MathContent],
+    projected_maps: &[MathContentSourceMap],
     source_position: usize,
 ) -> Option<usize> {
+    if previous.len() != previous_maps.len() || projected.len() != projected_maps.len() {
+        return None;
+    }
     let mut previous_index = 0;
     let mut projected_index = 0;
     while previous_index < previous.len() && projected_index < projected.len() {
@@ -471,10 +633,12 @@ fn map_text_position_in_contents(
             let projected_end = text_group_end(projected, projected_index);
             if let Some(display_position) = text_group_source_to_display(
                 &previous[previous_index..previous_end],
+                &previous_maps[previous_index..previous_end],
                 source_position,
             ) {
                 return text_group_display_to_source(
                     &projected[projected_index..projected_end],
+                    &projected_maps[projected_index..projected_end],
                     display_position,
                 );
             }
@@ -482,18 +646,38 @@ fn map_text_position_in_contents(
             projected_index = projected_end;
             continue;
         }
+        let previous_map = &previous_maps[previous_index];
+        let projected_map = &projected_maps[projected_index];
         let mapped = match (&previous[previous_index], &projected[projected_index]) {
             (MathContent::Math(previous), MathContent::Math(projected)) => {
-                previous.children.iter().zip(&projected.children).find_map(
-                    |(previous, projected)| {
-                        map_text_position_in_flow(previous, projected, source_position)
-                    },
-                )
+                let previous_operands = previous_map.operands()?;
+                let projected_operands = projected_map.operands()?;
+                if previous.children.len() != previous_operands.len()
+                    || projected.children.len() != projected_operands.len()
+                {
+                    return None;
+                }
+                previous
+                    .children
+                    .iter()
+                    .zip(previous_operands)
+                    .zip(projected.children.iter().zip(projected_operands))
+                    .find_map(|((previous, previous_map), (projected, projected_map))| {
+                        map_text_position_in_contents(
+                            &previous.content,
+                            previous_map.content(),
+                            &projected.content,
+                            projected_map.content(),
+                            source_position,
+                        )
+                    })
             }
             (MathContent::Environment(previous), MathContent::Environment(projected)) => {
                 map_text_position_in_contents(
                     &previous.children,
+                    previous_map.children()?,
                     &projected.children,
+                    projected_map.children()?,
                     source_position,
                 )
             }
@@ -508,39 +692,48 @@ fn map_text_position_in_contents(
     None
 }
 
-fn text_group_source_to_display(contents: &[MathContent], source_position: usize) -> Option<usize> {
+fn text_group_source_to_display(
+    contents: &[MathContent],
+    maps: &[MathContentSourceMap],
+    source_position: usize,
+) -> Option<usize> {
+    if contents.len() != maps.len() {
+        return None;
+    }
     let mut display_base = 0usize;
     let mut candidates = Vec::new();
-    for content in contents {
+    for (content, map) in contents.iter().zip(maps) {
         let MathContent::Text(flow) = content else {
             return None;
         };
+        let map = map.text()?;
         let text_len = flow
             .runs
             .iter()
             .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
-        if let Some(range) = &flow.source_range {
-            if source_position == range.start as usize {
+        if let Some(range) = map.range() {
+            if source_position == range.start {
                 candidates.push(display_base);
             }
-            if source_position == range.end as usize {
+            if source_position == range.end {
                 candidates.push(display_base.checked_add(text_len)?);
             }
         }
-        for segment in &flow.source_map {
-            let display_start = display_base.checked_add(segment.text_start as usize)?;
-            let display_end = display_base.checked_add(segment.text_end as usize)?;
-            let source_start = segment.source_range.start as usize;
-            let source_end = segment.source_range.end as usize;
-            if source_position == source_start {
+        for segment in map.segments() {
+            let display = segment.display();
+            let source = segment.source()?;
+            let display_start = display_base.checked_add(display.start)?;
+            let display_end = display_base.checked_add(display.end)?;
+            if source_position == source.start {
                 candidates.push(display_start);
-            } else if source_position == source_end {
+            } else if source_position == source.end {
                 candidates.push(display_end);
-            } else if display_end - display_start == source_end - source_start
-                && source_start < source_position
-                && source_position < source_end
+            } else if display_end.checked_sub(display_start)?
+                == source.end.checked_sub(source.start)?
+                && source.start < source_position
+                && source_position < source.end
             {
-                candidates.push(display_start.checked_add(source_position - source_start)?);
+                candidates.push(display_start.checked_add(source_position - source.start)?);
             }
         }
         display_base = display_base.checked_add(text_len)?;
@@ -550,42 +743,47 @@ fn text_group_source_to_display(contents: &[MathContent], source_position: usize
 
 fn text_group_display_to_source(
     contents: &[MathContent],
+    maps: &[MathContentSourceMap],
     display_position: usize,
 ) -> Option<usize> {
+    if contents.len() != maps.len() {
+        return None;
+    }
     let mut display_base = 0usize;
     let mut candidates = Vec::new();
-    for content in contents {
+    for (content, map) in contents.iter().zip(maps) {
         let MathContent::Text(flow) = content else {
             return None;
         };
+        let map = map.text()?;
         let text_len = flow
             .runs
             .iter()
             .try_fold(0usize, |length, run| length.checked_add(run.text.len()))?;
         let group_display_end = display_base.checked_add(text_len)?;
-        if let Some(range) = &flow.source_range {
+        if let Some(range) = map.range() {
             if display_position == display_base {
-                candidates.push(range.start as usize);
+                candidates.push(range.start);
             }
             if display_position == group_display_end {
-                candidates.push(range.end as usize);
+                candidates.push(range.end);
             }
         }
-        for segment in &flow.source_map {
-            let segment_display_start = display_base.checked_add(segment.text_start as usize)?;
-            let segment_display_end = display_base.checked_add(segment.text_end as usize)?;
-            let source_start = segment.source_range.start as usize;
-            let source_end = segment.source_range.end as usize;
-            if display_position == segment_display_start {
-                candidates.push(source_start);
-            } else if display_position == segment_display_end {
-                candidates.push(source_end);
-            } else if segment_display_end - segment_display_start == source_end - source_start
-                && segment_display_start < display_position
-                && display_position < segment_display_end
+        for segment in map.segments() {
+            let display = segment.display();
+            let source = segment.source()?;
+            let display_start = display_base.checked_add(display.start)?;
+            let display_end = display_base.checked_add(display.end)?;
+            if display_position == display_start {
+                candidates.push(source.start);
+            } else if display_position == display_end {
+                candidates.push(source.end);
+            } else if display_end.checked_sub(display_start)?
+                == source.end.checked_sub(source.start)?
+                && display_start < display_position
+                && display_position < display_end
             {
-                candidates
-                    .push(source_start.checked_add(display_position - segment_display_start)?);
+                candidates.push(source.start.checked_add(display_position - display_start)?);
             }
         }
         display_base = group_display_end;
@@ -641,22 +839,31 @@ fn contents_correspond_for_position_mapping(
 
 fn collect_flow_anchors(
     previous: &MathFlow,
+    previous_map: &MathFlowSourceMap,
     projected: &MathFlow,
+    projected_map: &MathFlowSourceMap,
     output: &mut Vec<(usize, usize)>,
-) {
-    push_range_anchors(
-        previous.source_range.as_ref(),
-        projected.source_range.as_ref(),
+) -> Option<()> {
+    push_range_anchors(previous_map.range(), projected_map.range(), output);
+    collect_content_anchors(
+        &previous.content,
+        previous_map.content(),
+        &projected.content,
+        projected_map.content(),
         output,
-    );
-    collect_content_anchors(&previous.content, &projected.content, output);
+    )
 }
 
 fn collect_content_anchors(
     previous: &[MathContent],
+    previous_maps: &[MathContentSourceMap],
     projected: &[MathContent],
+    projected_maps: &[MathContentSourceMap],
     output: &mut Vec<(usize, usize)>,
-) {
+) -> Option<()> {
+    if previous.len() != previous_maps.len() || projected.len() != projected_maps.len() {
+        return None;
+    }
     let mut previous_index = 0;
     let mut projected_index = 0;
     while previous_index < previous.len() && projected_index < projected.len() {
@@ -666,77 +873,82 @@ fn collect_content_anchors(
             let previous_end = text_group_end(previous, previous_index);
             let projected_end = text_group_end(projected, projected_index);
             push_text_group_range_anchors(
-                &previous[previous_index..previous_end],
-                &projected[projected_index..projected_end],
+                &previous_maps[previous_index..previous_end],
+                &projected_maps[projected_index..projected_end],
                 output,
-            );
+            )?;
             previous_index = previous_end;
             projected_index = projected_end;
             continue;
         }
+        let previous_map = &previous_maps[previous_index];
+        let projected_map = &projected_maps[projected_index];
         match (&previous[previous_index], &projected[projected_index]) {
             (MathContent::Math(previous), MathContent::Math(projected)) => {
-                push_range_anchors(
-                    previous.source_range.as_ref(),
-                    projected.source_range.as_ref(),
-                    output,
-                );
-                for (previous, projected) in previous.children.iter().zip(&projected.children) {
-                    collect_flow_anchors(previous, projected, output);
+                let previous_operands = previous_map.operands()?;
+                let projected_operands = projected_map.operands()?;
+                if previous.children.len() != previous_operands.len()
+                    || projected.children.len() != projected_operands.len()
+                {
+                    return None;
+                }
+                push_range_anchors(previous_map.range(), projected_map.range(), output);
+                for ((previous, previous_map), (projected, projected_map)) in previous
+                    .children
+                    .iter()
+                    .zip(previous_operands)
+                    .zip(projected.children.iter().zip(projected_operands))
+                {
+                    collect_flow_anchors(previous, previous_map, projected, projected_map, output)?;
                 }
             }
             (MathContent::Environment(previous), MathContent::Environment(projected)) => {
-                push_range_anchors(
-                    previous.source_range.as_ref(),
-                    projected.source_range.as_ref(),
+                push_range_anchors(previous_map.range(), projected_map.range(), output);
+                collect_content_anchors(
+                    &previous.children,
+                    previous_map.children()?,
+                    &projected.children,
+                    projected_map.children()?,
                     output,
-                );
-                collect_content_anchors(&previous.children, &projected.children, output);
+                )?;
             }
             _ => {}
         }
         previous_index += 1;
         projected_index += 1;
     }
+    (previous_index == previous.len() && projected_index == projected.len()).then_some(())
 }
 
 fn push_text_group_range_anchors(
-    previous: &[MathContent],
-    projected: &[MathContent],
+    previous: &[MathContentSourceMap],
+    projected: &[MathContentSourceMap],
     output: &mut Vec<(usize, usize)>,
-) {
-    let previous_ranges = previous
-        .iter()
-        .filter_map(|content| match content {
-            MathContent::Text(flow) => flow.source_range.as_ref(),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let projected_ranges = projected
-        .iter()
-        .filter_map(|content| match content {
-            MathContent::Text(flow) => flow.source_range.as_ref(),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if let (Some(previous), Some(projected)) = (previous_ranges.first(), projected_ranges.first()) {
-        output.push((previous.start as usize, projected.start as usize));
+) -> Option<()> {
+    if previous.iter().any(|content| content.text().is_none())
+        || projected.iter().any(|content| content.text().is_none())
+    {
+        return None;
     }
-    if let (Some(previous), Some(projected)) = (previous_ranges.last(), projected_ranges.last()) {
-        output.push((previous.end as usize, projected.end as usize));
-    }
+    let previous_start = previous.first()?.range()?;
+    let projected_start = projected.first()?.range()?;
+    let previous_end = previous.last()?.range()?;
+    let projected_end = projected.last()?.range()?;
+    output.push((previous_start.start, projected_start.start));
+    output.push((previous_end.end, projected_end.end));
+    Some(())
 }
 
 fn push_range_anchors(
-    previous: Option<&MathSourceRange>,
-    projected: Option<&MathSourceRange>,
+    previous: Option<std::ops::Range<usize>>,
+    projected: Option<std::ops::Range<usize>>,
     output: &mut Vec<(usize, usize)>,
 ) {
     let (Some(previous), Some(projected)) = (previous, projected) else {
         return;
     };
-    output.push((previous.start as usize, projected.start as usize));
-    output.push((previous.end as usize, projected.end as usize));
+    output.push((previous.start, projected.start));
+    output.push((previous.end, projected.end));
 }
 
 fn replace_inline_math_with_text(
@@ -776,14 +988,45 @@ fn replace_inline_math_with_text_in_place(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_source_position, trees_correspond_for_position_mapping};
-    use caret_math::{MathInputKind, ParsedMath, parse, serialize_tree};
+    use super::{
+        TreeProjection, map_source_position as map_using_sidecars,
+        source_map_can_materialize_as_text, trees_correspond_for_position_mapping,
+    };
+    use caret_math::{MathInputKind, ProjectedMath, parse_projection, serialize_tree};
 
     fn parse_tree(source: &str) -> Result<caret_doc::MathTree, Box<dyn std::error::Error>> {
-        let ParsedMath::Tree(tree) = parse(source, MathInputKind::Inline)? else {
+        let ProjectedMath::Tree(tree) = parse_projection(source, MathInputKind::Inline)?
+            .into_parts()
+            .0
+        else {
             return Err("expected inline math tree".into());
         };
         Ok(tree)
+    }
+
+    fn map_source_position(
+        previous: &caret_doc::MathTree,
+        projected: &caret_doc::MathTree,
+        previous_source: &str,
+        projected_source: &str,
+        position: usize,
+    ) -> Option<usize> {
+        let previous_projection = parse_projection(previous_source, MathInputKind::Inline).ok()?;
+        let projected_projection =
+            parse_projection(projected_source, MathInputKind::Inline).ok()?;
+        map_using_sidecars(
+            TreeProjection {
+                tree: previous,
+                map: previous_projection.source_map().tree()?,
+                source: previous_source,
+            },
+            TreeProjection {
+                tree: projected,
+                map: projected_projection.source_map().tree()?,
+                source: projected_source,
+            },
+            position,
+        )
     }
 
     #[test]
@@ -930,6 +1173,83 @@ mod tests {
         assert!(!trees_correspond_for_position_mapping(
             &original, &projected
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn position_mapping_does_not_require_temporary_ranges_in_document_trees()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = r"\text{a}\text{b}\alpha\text{d}\text{e}";
+        let original = parse_tree(source)?;
+        let canonical = serialize_tree(&original);
+        let projected = parse_tree(&canonical)?;
+        let source_position = source.find("{b}").ok_or("missing second text")? + 1;
+        let expected = canonical.find("{ab}").ok_or("missing merged text")? + 2;
+        let prefix = source
+            .bytes()
+            .zip(canonical.bytes())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let suffix = source
+            .bytes()
+            .rev()
+            .zip(canonical.bytes().rev())
+            .take_while(|(left, right)| left == right)
+            .count();
+        assert!(prefix < source_position && source_position < source.len() - suffix);
+        assert_eq!(
+            map_source_position(&original, &projected, source, &canonical, source_position),
+            Some(expected)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sidecar_maps_nested_math_and_escaped_unicode_without_dto_ranges()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (source, marker) in [
+            (r"\frac {a}{b} + \sqrt {x}", "b"),
+            (r"\text{a}\text{\%é}\alpha\text{d}\text{e}", "é"),
+        ] {
+            let original = parse_tree(source)?;
+            let canonical = serialize_tree(&original);
+            let projected = parse_tree(&canonical)?;
+            let source_position = source.find(marker).ok_or("source marker missing")?;
+            let expected = canonical.find(marker).ok_or("canonical marker missing")?;
+            let prefix = source
+                .bytes()
+                .zip(canonical.bytes())
+                .take_while(|(left, right)| left == right)
+                .count();
+            let suffix = source
+                .bytes()
+                .rev()
+                .zip(canonical.bytes().rev())
+                .take_while(|(left, right)| left == right)
+                .count();
+            assert!(prefix < source_position && source_position < source.len() - suffix);
+            assert_eq!(
+                map_source_position(&original, &projected, source, &canonical, source_position),
+                Some(expected)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parser_sidecar_without_extensions_is_materializable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let projection = parse_projection(r"\text{x}", MathInputKind::Inline)?;
+        let (ProjectedMath::Tree(tree), mut source_map) = projection.into_parts() else {
+            return Err("expected inline math tree".into());
+        };
+        let parsed_map = source_map.tree().cloned().ok_or("sidecar missing")?;
+        let mapped = parsed_map
+            .reconcile_for_tree(&tree, &tree, None, source_map.source(), None)
+            .ok_or("sidecar reconciliation failed")?;
+        assert!(source_map.bind_tree_sidecar_after_validated_edit(&tree, mapped));
+        let map = source_map.tree().ok_or("sidecar missing")?;
+        assert!(source_map_can_materialize_as_text(map.root()));
         Ok(())
     }
 }
