@@ -54,10 +54,11 @@ fn ffi_crash_handler_reports_an_unusable_log_directory() -> std::io::Result<()> 
         path: parent.clone(),
         file: Some(file),
     };
-    std::io::Write::write_all(
-        cleanup.file.as_mut().expect("file guard is initialized"),
-        b"not a directory",
-    )?;
+    let file = cleanup
+        .file
+        .as_mut()
+        .ok_or_else(|| std::io::Error::other("temporary file guard is empty"))?;
+    std::io::Write::write_all(file, b"not a directory")?;
     drop(cleanup.file.take());
     let log_directory = parent.join("log");
     let log_directory = log_directory.to_str().ok_or_else(|| {
@@ -67,8 +68,10 @@ fn ffi_crash_handler_reports_an_unusable_log_directory() -> std::io::Result<()> 
         )
     })?;
 
-    let error = crate::install_crash_handler(log_directory)
-        .expect_err("an unusable log directory must be reported to the FFI caller");
+    let error = match crate::install_crash_handler(log_directory) {
+        Ok(_) => return Err(std::io::Error::other("unusable log directory was accepted")),
+        Err(error) => error,
+    };
 
     assert!(!error.is_empty());
     assert_eq!(std::fs::read(&parent)?, b"not a directory");

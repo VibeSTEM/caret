@@ -3,7 +3,7 @@
 - 状态：in-progress
 - 依赖：004、006
 - 优先级：P1
-- 创建 / 更新：2026-11-06 / 2026-11-06
+- 创建 / 更新：2026-11-06 / 2026-11-08
 
 ## 目标与背景
 
@@ -49,7 +49,7 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 - [x] macOS 构建拒绝低于 14.4 的 `MACOSX_DEPLOYMENT_TARGET` 覆盖。
 - [x] 托管供给、应用构建、相关 native/QML 检查通过；未运行平台明确记录。
 - [ ] sanitizer 规则经 6.12.0 实际报告复查，无未经确认的旧版专用抑制。
-- [x] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
+- [ ] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
 
 ## 验证计划与结果
 
@@ -63,7 +63,9 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 | 2026-11-06 | MacBook Air Mac16,12 / Apple M4 / 24 GB，macOS 27.2 (26B123)，arm64，Release；`MACOSX_DEPLOYMENT_TARGET=14.4 cargo performance qt cpu --samples 10` 两次 | 在 Qt 6.12 下复测 6.11.2 的 400 页跨页滚动场景 | Software renderer，1280×960；6.12 两次 median/P95 为 2.460/4.433 ms 与 1.888/1.943 ms，旧基线为 2.047/2.215 ms（Mac arm64、Apple M4、macOS 27.0.1，10 个样本）。小样本、OS 版本变化不支持稳定比较；数据只作本机诊断，不用于宣称性能优化。 |
 | 2026-11-08 | `MACOSX_DEPLOYMENT_TARGET=14.3 cargo build --locked -p caret-launcher`；Nightly run 42399746940 的三平台 workspace tests、quality 与 sanitizer | 验证低部署目标被拒绝并复核跨平台构建/测试 | 14.3 在 caret-ffi build script 被明确拒绝；macOS/Windows/Ubuntu workspace tests 与 Ubuntu quality 通过。macOS sanitizer 的 `Qml.ShellLoad` 因 LaunchServices/CoreFoundation 泄漏报告失败；Windows/Ubuntu sanitizer 通过。Rust coverage 首次为 84.96%，补测后本地达标，远程待复验。 |
 | 2026-11-08 | `cargo sanitize`；带托管 `llvm-symbolizer` 的单项 `Qml.ShellLoad` CTest（macOS 27.2 / Qt 6.12.0） | 验证 sanitizer 执行并检查系统泄漏栈 | 完整 profile 因 macOS 27.2 `atos` symbolizer 未启动及系统缓存泄漏失败；单项测试断言 49 项通过，但 LSan 仍报 1392 字节 / 33 个 Apple FontRegistry/CoreText 与字形缓存分配。该栈与 Nightly macOS 26.7.2 的 LaunchServices `NotifyToken::RegisterDispatch` 5224 字节报告不同；新增规则尚未在本机复现同一分配，须由 Nightly 确认。 |
-| 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审 | 审查 LSan 单符号范围、风险和任务状态 | 通过；要求保留同栈未来泄漏可能被隐藏的风险，以及 macOS 26 Nightly 复查条件，均已记录。 |
+| 2026-11-08 | Nightly run 42403037844 | 复验三平台 Qt 6.12 workspace tests 与 sanitizer | 三平台 workspace tests 和 sanitizer 全部通过；macOS ASan/UBSan、TSan CTest 均 9/9，`Qml.ShellLoad` 两轮通过。run 尚因 Rust CPU performance job 保持 in-progress，本次未等待该 job。full quality 的 Clippy 失败来自 070 FFI 测试，与 067 sanitizer 结果无关。 |
+| 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审（PR #101） | 审查 LSan 单符号范围、风险和任务状态 | 通过；要求保留同栈未来泄漏可能被隐藏的风险，以及 macOS 26 Nightly 复查条件，均已记录。follow-up 测试代码仍待最终只读复审。 |
+| 2026-11-08 | PR #101 Nightly 和 follow-up `cargo quality` | 复核 sanitizer、三平台构建与完整质量门禁 | macOS/Windows/Ubuntu sanitizer 与 workspace tests 均通过；Mac `Qml.ShellLoad` ASan/UBSan 与 TSan 两轮 9/9。Nightly full quality 因 070 FFI 测试的 `expect` 用法失败；修复后的本机 `cargo quality` 全部通过，包括 lint、依赖审计、workspace 与 native/QML tests。 |
 
 ## 风险与回退
 
@@ -77,7 +79,8 @@ Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步�
 - 2026-11-06：最终复审发现环境变量可将 macOS 部署目标下调至 13.0；已统一通过 `caret-build::macos_deployment_target()` 校验，代码路径会拒绝低于 14.4 的值。负向/边界/非法输入未实测，相关验收项保持未完成。复审要求性能记录包含机器、系统和 Release 配置；已补齐。
 - 2026-11-08：部署目标 14.3 被构建脚本拒绝；Nightly 三平台 workspace tests 与 Ubuntu quality 通过，但 macOS sanitizer 的 Qml.ShellLoad 泄漏检查失败，sanitizer 验收未完成，任务状态维持 in-progress。
 - 2026-11-08：日志两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 系统回调；按经确认的 macOS 系统框架抑制模式增加单符号 LSan 规则。macOS 27.2 本机 Qt 6.12 单项测试仍报告另一类 Apple 字体注册 / CoreText 缓存；因它与 Nightly macOS 26.7.2 栈不同，未扩大抑制。待远程 Nightly 验证原失败是否消失。
+- 2026-11-08：PR #101 的 Nightly run 42403037844 在 macOS 26.7.2 上通过 ASan/UBSan 与 TSan 全部 9 项 CTest，`Qml.ShellLoad` 均通过；Windows/Ubuntu sanitizer 与三平台 workspace tests 也通过。full quality 的失败仅是 070 FFI 测试违反 Clippy `expect_used`，与 067 sanitizer 结论无关；保留独立 macOS 27.2 字体缓存报告。
 
 ## 完成摘要
 
-Qt 6.12.0 供给、最低 macOS 部署版本和三平台 workspace tests 已验证；LaunchServices 系统回调抑制待 Nightly macOS 26 复验，本机 macOS 27 Qt 6.12 仍有独立字体缓存泄漏报告，Rust coverage 的远程复验也未完成，因此保持 in-progress。
+Qt 6.12.0 供给、最低 macOS 部署版本、三平台 workspace tests 和 Nightly macOS 26 sanitizer 已验证；macOS 27.2 本机 Qt 6.12 仍有独立字体缓存泄漏报告。PR #101 上的 067 review 已完成，Nightly full quality 的 Clippy 失败属于 070 测试，修复后的完整质量检查通过；follow-up 最终只读评审和远程复验完成后再收尾。
