@@ -101,5 +101,6 @@
 | 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | in-progress |
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
 | 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044 | L | planned |
+| 070 | CI/测试 | [Nightly 失败修复与布局测试补齐](task/070-nightly-failures-and-layout-coverage.md) | P1 | 006 | S | implemented |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
