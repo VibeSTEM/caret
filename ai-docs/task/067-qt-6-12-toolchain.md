@@ -46,10 +46,10 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 - [ ] macOS、Windows、Linux 使用官方 Qt 6.12.0 归档；各归档 SHA256 来源可复核。
 - [ ] Linux ICU 与 Qt 6.12.0 配套，并由托管供给脚本校验。
 - [ ] 三平台 CMake 要求和技术基线一致；无残留的当前版本锁 6.11.2。
-- [ ] macOS 构建拒绝低于 14.4 的 `MACOSX_DEPLOYMENT_TARGET` 覆盖。
-- [ ] 托管供给、应用构建、相关 native/QML 检查通过；未运行平台明确记录。
+- [x] macOS 构建拒绝低于 14.4 的 `MACOSX_DEPLOYMENT_TARGET` 覆盖。
+- [x] 托管供给、应用构建、相关 native/QML 检查通过；未运行平台明确记录。
 - [ ] sanitizer 规则经 6.12.0 实际报告复查，无未经确认的旧版专用抑制。
-- [ ] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
+- [x] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
 
 ## 验证计划与结果
 
@@ -61,10 +61,13 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 | 2026-11-06 | 托管 Qt 6.12.0 供给器；Mac arm64；`cargo format --check`；`MACOSX_DEPLOYMENT_TARGET=14.4 cargo build --locked -p caret-launcher`；`MACOSX_DEPLOYMENT_TARGET=14.4 cargo lint --check` | 固定摘要的 Qt 供给、应用构建、native/QML 静态检查通过 | 供给器下载、SHA256 校验并解包五个 macOS Qt 归档；重复运行命中完整 kit 指纹并幂等跳过。格式、构建和 lint 均通过。低于 14.4、边界及非法部署目标输入未实测；sanitizer 与 Windows/Linux 构建仍未运行。 |
 | 2026-11-06 | `MACOSX_DEPLOYMENT_TARGET=14.4 CARET_TEST_CTEST_LABELS=qml cargo test --locked -p caret-tests --test native`；Mac arm64、Qt 6.12.0 | QML ShellLoad、无 runtime 偏好和 QML 格式检查通过 | 3/3 通过。首轮 Linux CI 暴露 `ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation` 仍查找已改名的 `window` ID；测试断言已更新为 `rootWindow`。 |
 | 2026-11-06 | MacBook Air Mac16,12 / Apple M4 / 24 GB，macOS 27.2 (26B123)，arm64，Release；`MACOSX_DEPLOYMENT_TARGET=14.4 cargo performance qt cpu --samples 10` 两次 | 在 Qt 6.12 下复测 6.11.2 的 400 页跨页滚动场景 | Software renderer，1280×960；6.12 两次 median/P95 为 2.460/4.433 ms 与 1.888/1.943 ms，旧基线为 2.047/2.215 ms（Mac arm64、Apple M4、macOS 27.0.1，10 个样本）。小样本、OS 版本变化不支持稳定比较；数据只作本机诊断，不用于宣称性能优化。 |
+| 2026-11-08 | `MACOSX_DEPLOYMENT_TARGET=14.3 cargo build --locked -p caret-launcher`；Nightly run 42399746940 的三平台 workspace tests、quality 与 sanitizer | 验证低部署目标被拒绝并复核跨平台构建/测试 | 14.3 在 caret-ffi build script 被明确拒绝；macOS/Windows/Ubuntu workspace tests 与 Ubuntu quality 通过。macOS sanitizer 的 `Qml.ShellLoad` 因 LaunchServices/CoreFoundation 泄漏报告失败；Windows/Ubuntu sanitizer 通过。Rust coverage 首次为 84.96%，补测后本地达标，远程待复验。 |
+| 2026-11-08 | `cargo sanitize`；带托管 `llvm-symbolizer` 的单项 `Qml.ShellLoad` CTest（macOS 27.2 / Qt 6.12.0） | 验证 sanitizer 执行并检查系统泄漏栈 | 完整 profile 因 macOS 27.2 `atos` symbolizer 未启动及系统缓存泄漏失败；单项测试断言 49 项通过，但 LSan 仍报 1392 字节 / 33 个 Apple FontRegistry/CoreText 与字形缓存分配。该栈与 Nightly macOS 26.7.2 的 LaunchServices `NotifyToken::RegisterDispatch` 5224 字节报告不同；新增规则尚未在本机复现同一分配，须由 Nightly 确认。 |
+| 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审 | 审查 LSan 单符号范围、风险和任务状态 | 通过；要求保留同栈未来泄漏可能被隐藏的风险，以及 macOS 26 Nightly 复查条件，均已记录。 |
 
 ## 风险与回退
 
-Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。
+Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。LaunchServices 单符号 LSan 规则会抑制任何经过该通知回调的泄漏栈，包括未来相同栈的新问题；必须在 macOS 26 Nightly 确认原报告消失且没有 Caret 分配栈，若报告变化则按新栈重新审查，不扩展泛匹配。
 
 ## 决策与工作记录
 
@@ -72,7 +75,9 @@ Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步�
 - 2026-11-06：按用户补充，审查 Qt 6.12 与 Caret 当前 QSG 画布相匹配的能力，并运行现有 CPU 软件渲染基准两次。样本方向不一致且与既有记录的 OS 版本不同，证据不足以判断细微升降；本轮不声称性能提升，不为采用新 API 而重写绘制后端。
 - 2026-11-06：新能力审查没有找到能替代现有文档画布的直接方案：Canvas Painter 的 QML Canvas2D 仍为技术预览，且不能复用现有 QSG 节点/字形纹理路径；QRangeModel 与 QML 热重载也不针对当前画布运行时瓶颈。决定不为了追新功能引入额外模块或未经测量的渲染器迁移。Qt 6.12 的 DirectWrite GASP 改进会由 Qt 自动提供给 Windows UI 文本，不需额外调用 API。
 - 2026-11-06：最终复审发现环境变量可将 macOS 部署目标下调至 13.0；已统一通过 `caret-build::macos_deployment_target()` 校验，代码路径会拒绝低于 14.4 的值。负向/边界/非法输入未实测，相关验收项保持未完成。复审要求性能记录包含机器、系统和 Release 配置；已补齐。
+- 2026-11-08：部署目标 14.3 被构建脚本拒绝；Nightly 三平台 workspace tests 与 Ubuntu quality 通过，但 macOS sanitizer 的 Qml.ShellLoad 泄漏检查失败，sanitizer 验收未完成，任务状态维持 in-progress。
+- 2026-11-08：日志两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 系统回调；按经确认的 macOS 系统框架抑制模式增加单符号 LSan 规则。macOS 27.2 本机 Qt 6.12 单项测试仍报告另一类 Apple 字体注册 / CoreText 缓存；因它与 Nightly macOS 26.7.2 栈不同，未扩大抑制。待远程 Nightly 验证原失败是否消失。
 
 ## 完成摘要
 
-进行中。
+Qt 6.12.0 供给、最低 macOS 部署版本和三平台 workspace tests 已验证；LaunchServices 系统回调抑制待 Nightly macOS 26 复验，本机 macOS 27 Qt 6.12 仍有独立字体缓存泄漏报告，Rust coverage 的远程复验也未完成，因此保持 in-progress。

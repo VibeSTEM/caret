@@ -1,6 +1,6 @@
 # 070 — Nightly 失败修复与布局测试补齐
 
-- 状态：implemented
+- 状态：in-progress
 - 依赖：006
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -45,6 +45,7 @@
 - [x] Miri 不再尝试从目标命中测试加载 Fontconfig；该行为仍由完整 workspace 测试验证。
 - [x] advance 回归测试断言 inline object 占用的 30 pt 推进量，与平台字体塑形结果无关。
 - [x] Rust、覆盖率门禁范围和阈值没有被缩减。
+- [x] Rust 全局函数与行覆盖率达到 85%；覆盖率缺口用有行为意义的测试补齐。
 - [x] 相关测试、评审及未执行验证均有事实记录。
 
 ## 验证计划与结果
@@ -52,10 +53,16 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-11-08 | `cargo test --locked -p caret-layout --lib inline_object_uses_parley_advance_and_expands_the_shared_line_box` | advance 回归用例通过 | 通过（1 passed） |
+| 2026-11-08 | `cargo test --locked -p caret-ffi --lib ffi_crash_handler_reports_an_unusable_log_directory` | FFI 错误转发行为通过 | 通过（1 passed） |
 | 2026-11-08 | `cargo fmt --all --check` | Rust 格式通过 | 通过 |
 | 2026-11-08 | `cargo ub-check` | Miri 用例通过 | 通过（macOS arm64：caret-app 83 passed、1 ignored；DSL 4 组通过） |
 | 2026-11-07 | 指定 Nightly run 的 Rust/native coverage jobs | Rust 与 native 门禁保持通过 | 两个覆盖率 job 均成功；本次未重新运行覆盖率报告 |
-| — | Windows workspace tests / 修复后远程 Nightly | 跨平台确认 advance 修复 | 未执行；需要推送后由 Actions 复验 |
+| 2026-11-08 | Nightly run 42399746940 Windows workspace tests | 跨平台确认 advance 修复 | 通过；同轮 CI 已验证该修复 |
+| 2026-11-08 | Nightly run 42399746940 的 Rust coverage gate | Rust 函数与行覆盖率均不低于 85% | 失败：函数 3791/4462（84.96%），行 48951/54892（89.18%）；以 FFI 错误路径的行为测试补充可达覆盖 |
+| 2026-11-08 | 最终 diff 上的 `cargo coverage` | Rust 函数与行覆盖率均不低于 85% | 通过：函数 3794/4462（85.03%），行 48959/54892（89.19%） |
+| 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审 | 覆盖测试行为、FFI 失败原子性、LSan 抑制范围与文档证据 | 通过；抑制风险及 macOS 27.2 未复现原 Nightly 栈的限制均记录。 |
+| 2026-11-08 | `gh run watch 42399746940` | 获取跨平台、Miri、coverage、sanitizer 和质量检查结果 | Windows/macOS/Ubuntu workspace tests、Miri、native coverage、quality、Windows/Ubuntu sanitizer 通过；Rust coverage 低于门槛；macOS sanitizer 的 Qml.ShellLoad 泄漏检查失败；唯一剩余 Rust CPU performance job 按用户要求取消 |
+| — | 修复后远程 Nightly | 跨平台确认 coverage 和两项修复 | 待推送后复验 |
 
 ## 风险与回退
 
@@ -65,7 +72,10 @@
 
 - 2026-11-08：创建任务；日志确认两项失败，覆盖率门禁通过。
 - 2026-11-08：Miri 过滤精确到失败测试名；布局用例使用同文本零宽对象作为基线，避免字体塑形差异。Terra/medium 领域检查与 Sol/medium 最终只读评审均未留下未处理发现；最终评审未复验 Windows 或远程 Nightly。
+- 2026-11-08：合并后 Nightly 验证 Windows 修复通过；coverage 报告为 84.96% 函数覆盖率，故重开任务并寻找有用户可观察行为的覆盖缺口。独立领域检查否决只断言私有 precedence 数字的测试；保留 FFI 错误传播测试并确保临时路径可编码且失败会清理。
+- 2026-11-08：最终保留的 FFI 错误传播行为测试使本地 Rust 函数覆盖率达到 85.03%，行覆盖率为 89.19%；Terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审完成，无遗留发现。等待合并及远程 Nightly 复验。
+- 2026-11-08：macOS Nightly sanitizer 日志确认两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 异步系统回调；LSan 增加仅匹配该符号的规则，等待合并后的 Nightly 复验。
 
 ## 完成摘要
 
-本地修复和验证完成。Rust/native 覆盖率门禁范围未变，指定 Nightly 中两项 coverage job 均通过。修复后的 Windows runner 和远程 Nightly 尚未执行，保留为外部验收项。
+最终 diff 的本地 Rust coverage 已达标；修复后远程 Nightly 需在合并后复跑。macOS sanitizer 的 Qml.ShellLoad 原始 LaunchServices 泄漏修复待 Nightly 确认；Rust CPU performance job 已按用户要求取消。

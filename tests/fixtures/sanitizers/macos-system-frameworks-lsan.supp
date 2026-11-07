@@ -34,3 +34,6 @@ leak:_refreshMenuFontsIfNeeded
 
 # macOS 27 上 Qt 6.11 扫描插件目录产生 URL 分配时最近的导出栈帧。
 leak:qt_apple_urlFromPossiblySecurityScopedURL
+
+# macOS 26 Nightly 的两笔泄漏报告来自 LaunchServices 通知注册回调；等待新 Nightly 复验。
+leak:LaunchServices::notifyd::NotifyToken::RegisterDispatch
