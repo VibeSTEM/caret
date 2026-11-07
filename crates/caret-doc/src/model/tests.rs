@@ -9,6 +9,30 @@ use super::{
 use std::collections::BTreeMap;
 
 #[test]
+fn math_node_kinds_share_optional_placeholder_operand_slots() {
+    assert_eq!(MathNodeKind::Radical.optional_placeholder_operands(), &[0]);
+    assert_eq!(MathNodeKind::Limit.optional_placeholder_operands(), &[0]);
+    assert_eq!(MathNodeKind::Sum.optional_placeholder_operands(), &[0, 1]);
+    assert_eq!(
+        MathNodeKind::Product.optional_placeholder_operands(),
+        &[0, 1]
+    );
+    assert_eq!(
+        MathNodeKind::Integral.optional_placeholder_operands(),
+        &[0, 1]
+    );
+    assert_eq!(
+        MathNodeKind::OverUnder.optional_placeholder_operands(),
+        &[1, 2]
+    );
+    assert!(
+        MathNodeKind::Fraction
+            .optional_placeholder_operands()
+            .is_empty()
+    );
+}
+
+#[test]
 fn document_validation_rejects_empty_font_names_and_malformed_script_keys() {
     let mut document = Document::blank();
     document.global_settings = DocumentSettings {

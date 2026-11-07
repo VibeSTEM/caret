@@ -349,6 +349,17 @@ pub(crate) fn drag_hit_map_json(runtime: &mut DocumentRuntime, page_index: i32) 
     json_response(runtime, |runtime| runtime.drag_hit_map_json(page_index))
 }
 
+pub(crate) fn drag_start_domain_json(
+    runtime: &mut DocumentRuntime,
+    page_index: i32,
+    x_pt: f64,
+    y_pt: f64,
+) -> String {
+    json_response(runtime, |runtime| {
+        runtime.drag_start_domain_json(page_index, x_pt, y_pt)
+    })
+}
+
 pub(crate) fn set_selection_json(runtime: &mut DocumentRuntime, selection: String) -> String {
     json_response(runtime, |runtime| runtime.set_selection_json(&selection))
 }

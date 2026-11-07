@@ -4,7 +4,8 @@
 // 署名：Yuki Lu
 
 use std::{
-    collections::HashSet,
+    borrow::Cow,
+    collections::{HashSet, VecDeque},
     ops::Range,
     sync::{
         Arc,
@@ -116,10 +117,7 @@ pub struct ParagraphLayoutOptions {
 #[derive(Default)]
 pub struct ParagraphLayouter {
     context: LayoutContext<[u8; 4]>,
-    font_generation: Option<u64>,
-    space_adjustments_pt: std::collections::HashMap<SpaceStyleKey, f32>,
-    space_font_preferences: Option<crate::FontPreferenceRules>,
-    space_style_signature: Option<Vec<ShapingStyle>>,
+    shaping_cache: TextShapingCache,
 }
 
 /// 一个连续文本岛的样式范围；边界不会阻断组合字符或连字塑形。
@@ -130,7 +128,7 @@ pub struct TextIslandSpan<'a> {
     pub underline: bool,
 }
 
-/// 单行文本岛的自然字体度量和水平推进，单位为 pt。
+/// 文本岛自然字体度量和最大水平推进，单位为 pt。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextIslandMetrics {
     pub advance_pt: f32,
@@ -138,7 +136,7 @@ pub struct TextIslandMetrics {
     pub descent_pt: f32,
 }
 
-/// Parley 原始单行塑形结果；不包含段落行网格、缩进或分页数据。
+/// Parley 原始文本岛塑形结果；显式 mandatory break 可形成多行，不包含分页数据。
 #[derive(Debug, Clone)]
 pub struct TextIslandLayout {
     pub text: String,
@@ -150,11 +148,10 @@ pub struct TextIslandLayout {
     pub requested_family_missing: bool,
 }
 
-/// 文本岛塑形失败；输入含 mandatory break、字号非法或 Parley 输出不一致时返回错误。
+/// 文本岛塑形失败；字号非法或 Parley 输出不一致时返回错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextIslandError {
     InvalidFontSize,
-    MandatoryBreak,
     InconsistentShaping,
 }
 
@@ -162,7 +159,6 @@ impl std::fmt::Display for TextIslandError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::InvalidFontSize => "layout.invalid_font_size",
-            Self::MandatoryBreak => "layout.text_island_mandatory_break",
             Self::InconsistentShaping => "layout.inconsistent_parley_output",
         })
     }
@@ -170,44 +166,90 @@ impl std::fmt::Display for TextIslandError {
 
 impl std::error::Error for TextIslandError {}
 
-/// 可复用单行文本岛塑形器；字体集合由 `FontCatalog` 持有。
+/// 正文和文本岛共享空格校准缓存与 Parley 上下文。
 #[derive(Default)]
-pub struct TextIslandLayouter {
-    context: LayoutContext<[u8; 4]>,
+struct TextShapingCache {
     font_generation: Option<u64>,
-    space_adjustments_pt: std::collections::HashMap<SpaceStyleKey, f32>,
+    space_adjustments_pt: std::collections::HashMap<
+        SpaceStyleSignature,
+        std::collections::HashMap<SpaceStyleKey, f32>,
+    >,
+    /// 保留正文与公式样式的近期缓存，避免长文档为每个签名无限留存校准数据。
+    space_style_order: VecDeque<SpaceStyleSignature>,
     space_font_preferences: Option<crate::FontPreferenceRules>,
-    space_style_signature: Option<(Vec<ShapingStyle>, Option<u32>)>,
 }
 
-impl TextIslandLayouter {
-    pub fn new() -> Self {
-        Self::default()
+type SpaceStyleSignature = (Vec<ShapingStyle>, Option<u32>);
+const SPACE_STYLE_CACHE_CAPACITY: usize = 8;
+
+impl TextShapingCache {
+    fn prepare(
+        &mut self,
+        catalog: &FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        styles: Vec<ShapingStyle>,
+        font_size_override_pt: Option<f32>,
+        context: &mut LayoutContext<[u8; 4]>,
+    ) -> SpaceStyleSignature {
+        let generation = catalog.generation();
+        if self.font_generation != Some(generation) {
+            *context = LayoutContext::default();
+            self.font_generation = Some(generation);
+            self.space_adjustments_pt.clear();
+            self.space_style_order.clear();
+        }
+        if self.space_font_preferences.as_ref() != Some(settings.font_preferences()) {
+            self.space_font_preferences = Some(settings.font_preferences().clone());
+            self.space_adjustments_pt.clear();
+            self.space_style_order.clear();
+        }
+        (styles, font_size_override_pt.map(f32::to_bits))
     }
 
+    fn space_adjustments_for(
+        &mut self,
+        signature: SpaceStyleSignature,
+    ) -> &mut std::collections::HashMap<SpaceStyleKey, f32> {
+        if let Some(index) = self
+            .space_style_order
+            .iter()
+            .position(|cached| cached == &signature)
+        {
+            self.space_style_order.remove(index);
+        } else if self.space_style_order.len() == SPACE_STYLE_CACHE_CAPACITY
+            && let Some(oldest) = self.space_style_order.pop_front()
+        {
+            self.space_adjustments_pt.remove(&oldest);
+        }
+        self.space_style_order.push_back(signature.clone());
+        self.space_adjustments_pt.entry(signature).or_default()
+    }
+}
+
+impl ParagraphLayouter {
     /// 将连续 spans 拼成一个 UTF-8 文本后整体塑形，跨 span 的 grapheme 与连字保持完整。
-    /// 空输入返回零度量的空布局；mandatory break、零字号或非有限/负的结果度量会失败。
-    pub fn shape(
+    /// 空输入返回零度量的空布局；mandatory break 按正文 shaping 规则形成视觉行。
+    pub fn shape_text_island(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
         spans: &[TextIslandSpan<'_>],
     ) -> Result<TextIslandLayout, TextIslandError> {
-        self.shape_with_font_size_pt(catalog, settings, spans, None)
+        self.shape_text_island_with_font_size_pt(catalog, settings, spans, None)
     }
 
     /// 使用布局派生的 pt 字号塑形；与文档存储字号不同，此值保留脚本缩放的小数精度。
-    pub fn shape_at_font_size_pt(
+    pub fn shape_text_island_at_font_size_pt(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
         spans: &[TextIslandSpan<'_>],
         font_size_pt: f32,
     ) -> Result<TextIslandLayout, TextIslandError> {
-        self.shape_with_font_size_pt(catalog, settings, spans, Some(font_size_pt))
+        self.shape_text_island_with_font_size_pt(catalog, settings, spans, Some(font_size_pt))
     }
 
-    fn shape_with_font_size_pt(
+    fn shape_text_island_with_font_size_pt(
         &mut self,
         catalog: &mut FontCatalog,
         settings: &ResolvedDocumentTextSettings,
@@ -217,20 +259,12 @@ impl TextIslandLayouter {
         if font_size_override_pt.is_some_and(|size| !size.is_finite() || size <= 0.0) {
             return Err(TextIslandError::InvalidFontSize);
         }
-        let mandatory = CodePointMapData::<props::LineBreak>::new();
         for span in spans {
             if font_size_override_pt.is_none()
                 && !span.text.is_empty()
                 && span.style.font_size_centipoints == 0
             {
                 return Err(TextIslandError::InvalidFontSize);
-            }
-            if span
-                .text
-                .chars()
-                .any(|character| is_mandatory_line_break(mandatory.get(character)))
-            {
-                return Err(TextIslandError::MandatoryBreak);
             }
         }
         let text: String = spans.iter().map(|span| span.text).collect();
@@ -256,41 +290,39 @@ impl TextIslandLayouter {
                 underline: span.underline,
             })
             .collect();
-        let signature = (
+        let layout_text = normalize_mandatory_breaks(&text);
+        let space_style_signature = self.shaping_cache.prepare(
+            catalog,
+            settings,
             styled_spans.iter().map(|span| span.style.clone()).collect(),
-            font_size_override_pt.map(f32::to_bits),
+            font_size_override_pt,
+            &mut self.context,
         );
-        let generation = catalog.generation();
-        if self.font_generation != Some(generation) {
-            self.context = LayoutContext::default();
-            self.font_generation = Some(generation);
-            self.space_adjustments_pt.clear();
-        }
-        if self.space_font_preferences.as_ref() != Some(settings.font_preferences()) {
-            self.space_font_preferences = Some(settings.font_preferences().clone());
-            self.space_adjustments_pt.clear();
-        }
-        if self.space_style_signature.as_ref() != Some(&signature) {
-            self.space_style_signature = Some(signature);
-            self.space_adjustments_pt.clear();
-        }
         let base_style = &styled_spans[0].style;
         let prepared = prepare_text_shaping(
-            &text,
+            layout_text.as_ref(),
             &styled_spans,
             settings,
             catalog,
             font_size_override_pt,
         );
-        let grapheme_boundaries = prepared.boundaries.grapheme.clone();
+        // 光标边界始终取自源文本；等长的替换字符不一定有相同的 Unicode 边界。
+        let grapheme_boundaries = if matches!(&layout_text, Cow::Borrowed(_)) {
+            prepared.boundaries.grapheme.clone()
+        } else {
+            boundaries_for_spans(&text, &styled_spans).grapheme
+        };
         let requested_family_missing = prepared.requested_family_missing;
+        let space_adjustments = self
+            .shaping_cache
+            .space_adjustments_for(space_style_signature);
         let layout = build_prepared_layout(
             &mut self.context,
             catalog,
-            &text,
+            layout_text.as_ref(),
             base_style,
             &prepared,
-            &mut self.space_adjustments_pt,
+            space_adjustments,
             PreparedLayoutOptions {
                 width_pt: None,
                 first_line_indent_chars: None,
@@ -298,18 +330,22 @@ impl TextIslandLayouter {
             },
         )
         .map_err(|_| TextIslandError::InconsistentShaping)?;
-        let line = layout
-            .lines()
-            .next()
-            .ok_or(TextIslandError::InconsistentShaping)?;
-        if layout.lines().count() != 1 {
-            return Err(TextIslandError::InconsistentShaping);
+        let mut lines = layout.lines();
+        let first_line = lines.next().ok_or(TextIslandError::InconsistentShaping)?;
+        let first_baseline = first_line.metrics().baseline;
+        let mut min_content_top = first_line.metrics().content_block_min_coord;
+        let mut max_content_bottom = first_line.metrics().content_block_max_coord;
+        let mut max_advance = first_line.metrics().advance;
+        for line in lines {
+            let line_metrics = line.metrics();
+            min_content_top = min_content_top.min(line_metrics.content_block_min_coord);
+            max_content_bottom = max_content_bottom.max(line_metrics.content_block_max_coord);
+            max_advance = max_advance.max(line_metrics.advance);
         }
-        let line_metrics = line.metrics();
         let mut metrics = TextIslandMetrics {
-            advance_pt: line_metrics.advance,
-            ascent_pt: line_metrics.baseline - line_metrics.content_block_min_coord,
-            descent_pt: line_metrics.content_block_max_coord - line_metrics.baseline,
+            advance_pt: max_advance,
+            ascent_pt: first_baseline - min_content_top,
+            descent_pt: max_content_bottom - first_baseline,
         };
         if !metrics.advance_pt.is_finite()
             || metrics.advance_pt < 0.0
@@ -330,6 +366,30 @@ impl TextIslandLayouter {
             requested_family_missing,
         })
     }
+}
+
+/// 将 Parley 不识别的 mandatory break 映射为等字节长度的换行序列，保持所有源范围偏移。
+fn normalize_mandatory_breaks(text: &str) -> Cow<'_, str> {
+    if !text
+        .chars()
+        .any(|character| matches!(character, '\u{000b}' | '\u{000c}' | '\u{0085}'))
+    {
+        return Cow::Borrowed(text);
+    }
+    let mut normalized = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            // 避免源文本中相邻但独立的 CR 和 VT/FF 被替换成单个 CRLF。
+            '\r' if matches!(characters.peek(), Some('\u{000b}' | '\u{000c}')) => {
+                normalized.push('\n');
+            }
+            '\u{000b}' | '\u{000c}' => normalized.push('\n'),
+            '\u{0085}' => normalized.push_str("\r\n"),
+            _ => normalized.push(character),
+        }
+    }
+    Cow::Owned(normalized)
 }
 
 /// ASCII 与显式全字宽空格分别使用可观察的字符语义，但都按实际字体宽度校准。
@@ -381,16 +441,6 @@ impl ParagraphLayouter {
         options: ParagraphLayoutOptions,
         inline_objects: &[InlineObjectLayout],
     ) -> Result<(String, ParleyParagraphLayout), ParagraphLayoutError> {
-        let font_generation = catalog.generation();
-        if self.font_generation != Some(font_generation) {
-            self.context = LayoutContext::default();
-            self.font_generation = Some(font_generation);
-            self.space_adjustments_pt.clear();
-        }
-        if self.space_font_preferences.as_ref() != Some(settings.font_preferences()) {
-            self.space_font_preferences = Some(settings.font_preferences().clone());
-            self.space_adjustments_pt.clear();
-        }
         let ParagraphLayoutOptions {
             width_pt,
             spacing,
@@ -408,12 +458,15 @@ impl ParagraphLayouter {
             return Err(ParagraphLayoutError::InvalidFontSize);
         }
         let spans = paragraph_style_spans(paragraph, settings, base_style);
-        let space_style_signature: Vec<_> = spans.iter().map(|span| span.style.clone()).collect();
-        if self.space_style_signature.as_ref() != Some(&space_style_signature) {
-            self.space_style_signature = Some(space_style_signature);
-            self.space_adjustments_pt.clear();
-        }
+        let space_style_signature = self.shaping_cache.prepare(
+            catalog,
+            settings,
+            spans.iter().map(|span| span.style.clone()).collect(),
+            None,
+            &mut self.context,
+        );
         let text: String = spans.iter().map(|span| span.text).collect();
+        let layout_text = normalize_mandatory_breaks(&text);
         let mut inline_object_ids = HashSet::with_capacity(inline_objects.len());
         let mut inline_object_ranges = Vec::with_capacity(inline_objects.len());
         if inline_objects.iter().any(|object| {
@@ -445,23 +498,37 @@ impl ParagraphLayouter {
             return Err(ParagraphLayoutError::InconsistentShaping);
         }
         let prepared = prepare_text_shaping_with_grapheme_fences(
-            &text,
+            layout_text.as_ref(),
             &spans,
             settings,
             catalog,
             None,
             &inline_object_ranges,
         );
-        let boundaries = prepared.boundaries.clone();
+        let boundaries = if matches!(&layout_text, Cow::Owned(_)) {
+            let mut boundaries = boundaries_for_spans(&text, &spans);
+            for range in &inline_object_ranges {
+                boundaries.grapheme.push(range.start);
+                boundaries.grapheme.push(range.end);
+            }
+            boundaries.grapheme.sort_unstable();
+            boundaries.grapheme.dedup();
+            boundaries
+        } else {
+            prepared.boundaries.clone()
+        };
         let requested_family_missing = prepared.requested_family_missing;
 
+        let space_adjustments = self
+            .shaping_cache
+            .space_adjustments_for(space_style_signature);
         let layout = build_prepared_layout(
             &mut self.context,
             catalog,
-            &text,
+            layout_text.as_ref(),
             base_style,
             &prepared,
-            &mut self.space_adjustments_pt,
+            space_adjustments,
             PreparedLayoutOptions {
                 width_pt: Some(width_pt),
                 first_line_indent_chars,

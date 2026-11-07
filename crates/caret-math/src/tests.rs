@@ -1610,6 +1610,7 @@ const ROUND_TRIP_CASES: &[&str] = &[
     r"\text{a\textbf{b\textmd{c}}}",
     r"\text{a\textit{b\textup{c}}}",
     r"\text{a\textchar{20}\textchar{20}b\textchar{5C}\textchar{7E}\textchar{5E}}",
+    r"\text{first\newline{}second}",
     r"\mathbf{x}+\mathbb{R}+\boldsymbol{\alpha}",
     r"\textcolor{blue}{x}",
     r"\textcolor[HTML]{12AB34}{y}",

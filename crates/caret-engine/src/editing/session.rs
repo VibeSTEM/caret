@@ -220,6 +220,19 @@ impl Session {
         })
     }
 
+    /// 返回当前数学结构序列插入点；源码/TextFlow 分支或过期焦点返回 `None`。
+    pub fn math_tree_input_context(&self) -> Option<(MathEditTarget, MathTreePosition)> {
+        self.ensure_math_edit_revision_current().ok()?;
+        let edit = self.math_edit.as_ref()?;
+        let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+            return None;
+        };
+        let mut focus = anchor.clone();
+        focus.path = path.clone();
+        focus.offset = edit.cursor;
+        Some((edit.target.clone(), focus))
+    }
+
     fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {
         math_edit::MathEditRevision {
             session_id: self.session_id.clone(),

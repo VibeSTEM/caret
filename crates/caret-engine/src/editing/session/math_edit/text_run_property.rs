@@ -4,17 +4,17 @@
 // 署名：Yuki Lu
 
 use super::super::super::environment::inline_adapter::{
-    RunPropertyEnvironment, run_property_for_key, run_property_for_kind, set_run_property_value,
+    RunPropertyEnvironment, run_property_for_key, run_property_for_kind,
 };
+use super::super::super::flow_format::{format_flow_run_property, run_property_range_state};
 use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
-use super::super::{EditError, Effect};
+use super::super::{Affinity, EditError, Effect};
 use super::{
-    MathEdit, MathEditBranch, MathPositionAffinity, MathTextPosition, Session, history_position,
+    MathEdit, MathEditBranch, MathPositionAffinity, Session, history_position,
     math_text_selection_range,
 };
 use crate::editing::session::history::SessionHistoryState;
-use crate::editing::session::math_edit::path::MathTextFlowPath;
-use caret_doc::{Block, MathTree, Run, TextFlow};
+use caret_doc::{Block, FlowContent, MathNode, MathTree, TextFlow};
 
 impl Session {
     pub(super) fn toggle_math_text_run_property(
@@ -25,7 +25,14 @@ impl Session {
             .copied()
             .ok_or(EditError::UnsupportedInlineFormat)?;
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, anchor, .. } = edit.branch.clone() else {
+        let MathEditBranch::Text {
+            path,
+            anchor,
+            focus_affinity,
+            anchor_visual_affinity,
+            visual_affinity,
+        } = edit.branch.clone()
+        else {
             return Err(EditError::UnsupportedInlineFormat);
         };
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
@@ -37,13 +44,7 @@ impl Session {
                 .resolve_structurally(tree)
                 .cloned()
                 .ok_or(EditError::InvalidPosition)?;
-            return self.set_pending_math_text_property(
-                &edit,
-                &path,
-                descriptor,
-                &text,
-                edit.cursor,
-            );
+            return self.set_pending_math_text_property(&edit, descriptor, &text, edit.cursor);
         }
 
         let mut any_disabled = false;
@@ -92,9 +93,9 @@ impl Session {
                 branch: super::MathEditBranch::Text {
                     path: path.clone(),
                     anchor,
-                    focus_affinity: MathPositionAffinity::Downstream,
-                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                    visual_affinity: crate::VisualAffinity::Downstream,
+                    focus_affinity,
+                    anchor_visual_affinity,
+                    visual_affinity,
                 },
                 align_cell: path.align_cell(),
                 cursor,
@@ -108,14 +109,24 @@ impl Session {
     fn set_pending_math_text_property(
         &mut self,
         edit: &MathEdit,
-        path: &MathTextFlowPath,
         descriptor: RunPropertyEnvironment,
         text: &TextFlow,
         offset: usize,
     ) -> Result<Effect, EditError> {
-        let inherited = super::super::super::flow_edit::insertion_template(&text.runs, offset)
-            .and_then(|run| run.props.get(descriptor.key))
-            .is_some_and(|value| (descriptor.is_active)(Some(value)));
+        let affinity = match &edit.branch {
+            MathEditBranch::Text { focus_affinity, .. } => match focus_affinity {
+                MathPositionAffinity::Upstream => Affinity::Upstream,
+                MathPositionAffinity::Downstream => Affinity::Downstream,
+            },
+            MathEditBranch::Source | MathEditBranch::Tree { .. } => {
+                return Err(EditError::InvalidPosition);
+            }
+        };
+        let inherited = super::super::super::flow_edit::insertion_template_with_affinity(
+            &text.runs, offset, affinity,
+        )
+        .and_then(|run| run.props.get(descriptor.key))
+        .is_some_and(|value| (descriptor.is_active)(Some(value)));
         let current = self
             .pending_inline_style
             .run_property(descriptor)
@@ -132,21 +143,7 @@ impl Session {
         self.pending_inline_style
             .set_run_property(descriptor, enabled);
         self.advance_history_merge_epoch();
-        let after_math = MathEditPosition::with_edit_state(
-            edit,
-            edit.cursor,
-            MathEditBranch::Text {
-                path: path.clone(),
-                anchor: MathTextPosition::new(
-                    path.clone(),
-                    edit.cursor,
-                    MathPositionAffinity::Downstream,
-                ),
-                focus_affinity: MathPositionAffinity::Downstream,
-                anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                visual_affinity: crate::VisualAffinity::Downstream,
-            },
-        );
+        let after_math = MathEditPosition::with_edit_state(edit, edit.cursor, edit.branch.clone());
         let before = SessionHistoryState::new(
             before_selection.clone(),
             before_affinity,
@@ -207,20 +204,8 @@ fn text_range_has_disabled_property(
     range: &std::ops::Range<usize>,
     descriptor: RunPropertyEnvironment,
 ) -> Result<bool, EditError> {
-    let mut offset = 0;
-    let mut any_text = false;
-    let mut any_disabled = false;
-    for run in &text.runs {
-        let end = offset + run.text.len();
-        if offset < range.end && end > range.start {
-            any_text = true;
-            any_disabled |= !run
-                .props
-                .get(descriptor.key)
-                .is_some_and(|value| (descriptor.is_active)(Some(value)));
-        }
-        offset = end;
-    }
+    let contents = [FlowContent::<MathNode>::Text(text.clone())];
+    let (any_text, any_disabled) = run_property_range_state(&contents, range.clone(), descriptor)?;
     if !any_text {
         return Err(EditError::InvalidPosition);
     }
@@ -233,81 +218,11 @@ fn edit_text_flow_property(
     descriptor: RunPropertyEnvironment,
     value: Option<bool>,
 ) -> Result<(), EditError> {
-    if range.start >= range.end {
-        return Ok(());
-    }
-    let mut runs = text.runs.clone();
-    split_runs_at(&mut runs, range.start)?;
-    split_runs_at(&mut runs, range.end)?;
-    let mut offset = 0;
-    let mut selected_start = None;
-    let mut selected_end = None;
-    for (index, run) in runs.iter().enumerate() {
-        let end = offset + run.text.len();
-        if offset < range.end && end > range.start {
-            selected_start.get_or_insert(index);
-            selected_end = Some(index + 1);
-        }
-        offset = end;
-    }
-    let start_index = selected_start.ok_or(EditError::InvalidPosition)?;
-    let selected_end = selected_end.ok_or(EditError::InvalidPosition)?;
-    if start_index >= selected_end {
+    let contents = [FlowContent::<MathNode>::Text(text.clone())];
+    let mut updated = format_flow_run_property(&contents, range, descriptor, value)?;
+    let [FlowContent::Text(updated)] = updated.as_mut_slice() else {
         return Err(EditError::InvalidPosition);
-    }
-    for run in &mut runs[start_index..selected_end] {
-        set_run_property_value(run, descriptor, value)?;
-    }
-    let merge_end = (selected_end + 1).min(runs.len());
-    merge_compatible_runs(&mut runs, start_index.saturating_sub(1), merge_end);
-    text.runs = runs;
+    };
+    text.clone_from(updated);
     Ok(())
-}
-
-fn split_runs_at(runs: &mut Vec<Run>, offset: usize) -> Result<usize, EditError> {
-    let mut current = 0usize;
-    for index in 0..runs.len() {
-        let end = current + runs[index].text.len();
-        if offset == current {
-            return Ok(index);
-        }
-        if offset == end {
-            current = end;
-            continue;
-        }
-        if current < offset && offset < end {
-            if !runs[index].extra.is_empty() {
-                return Err(EditError::UnsupportedOpaqueContent);
-            }
-            let local = offset - current;
-            if !runs[index].text.is_char_boundary(local) {
-                return Err(EditError::InvalidPosition);
-            }
-            let mut right = runs[index].clone();
-            right.text = runs[index].text.split_off(local);
-            runs.insert(index + 1, right);
-            return Ok(index + 1);
-        }
-        current = end;
-    }
-    (offset == current)
-        .then_some(runs.len())
-        .ok_or(EditError::InvalidPosition)
-}
-
-fn merge_compatible_runs(runs: &mut Vec<Run>, start: usize, end: usize) {
-    let mut merged: Vec<Run> = Vec::with_capacity(end - start);
-    for run in runs.drain(start..end) {
-        if let Some(previous) = merged.last_mut()
-            && previous.language == run.language
-            && previous.props == run.props
-            && previous.extra.is_empty()
-            && run.extra.is_empty()
-        {
-            previous.text.push_str(&run.text);
-        } else {
-            merged.push(run);
-        }
-    }
-    runs.splice(start..start, merged);
 }

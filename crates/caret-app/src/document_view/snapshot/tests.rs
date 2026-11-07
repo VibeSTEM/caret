@@ -22,7 +22,7 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
 }
 
 #[test]
-fn math_commands_remain_unavailable_in_the_command_line_snapshot() -> Result<(), String> {
+fn math_command_snapshot_enables_supported_inline_math_and_publishes_focus() -> Result<(), String> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;
     runtime.command_line_command_json("type", "math".to_owned())?;
@@ -31,13 +31,76 @@ fn math_commands_remain_unavailable_in_the_command_line_snapshot() -> Result<(),
     let candidate = value["candidates"]
         .as_array()
         .and_then(|candidates| candidates.iter().find(|item| item["alias"] == "\\math"))
-        .ok_or_else(|| "matching math candidate should remain discoverable".to_owned())?;
-    assert_eq!(candidate["available"], false);
+        .ok_or_else(|| "matching math candidate should be present".to_owned())?;
+    assert_eq!(candidate["available"], true);
+    let accepted: Value =
+        serde_json::from_str(&runtime.command_line_command_json("accept", String::new())?)
+            .map_err(|error| error.to_string())?;
+    assert!(runtime.session.math_edit().is_some());
+    assert!(accepted["caretGeometry"].is_object());
+    Ok(())
+}
+
+#[test]
+fn tree_math_visual_movement_keeps_subsequent_text_inside_the_formula() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
     runtime.command_line_command_json("accept", String::new())?;
-    let after_accept: Value = serde_json::from_str(&runtime.command_line_state_json()?)
-        .map_err(|error| error.to_string())?;
-    assert_eq!(after_accept["mode"], "command");
-    assert_eq!(after_accept["query"], "math");
+    runtime.insert_text_json("ab".to_owned())?;
+
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.math_tree_input_context().is_some());
+    runtime.insert_text_json("X".to_owned())?;
+
+    let paragraph = runtime
+        .session
+        .document()
+        .body
+        .iter()
+        .find_map(|block| match block {
+            caret_doc::Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+        .ok_or_else(|| "math insertion should keep the paragraph".to_owned())?;
+    assert!(paragraph.inlines.iter().all(|inline| {
+        !matches!(inline, caret_doc::ParagraphContent::Text(text) if text.runs.iter().any(|run| !run.text.is_empty()))
+    }));
+    assert!(paragraph.inlines.iter().any(|inline| {
+        matches!(inline, caret_doc::ParagraphContent::Math(math) if !math.math_tree.root.content.is_empty())
+    }));
+    assert!(runtime.session.math_tree_input_context().is_some());
+    Ok(())
+}
+
+#[test]
+fn tree_math_shift_movement_keeps_formula_focus_until_selection_geometry_exists()
+-> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
+    runtime.command_line_command_json("accept", String::new())?;
+    runtime.insert_text_json("ab".to_owned())?;
+
+    let focus_before = runtime.session.math_tree_input_context();
+    runtime.move_visual_caret_json(false, true)?;
+    assert_eq!(runtime.session.math_tree_input_context(), focus_before);
+    runtime.insert_text_json("X".to_owned())?;
+
+    let paragraph = runtime
+        .session
+        .document()
+        .body
+        .iter()
+        .find_map(|block| match block {
+            caret_doc::Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+        .ok_or_else(|| "math insertion should keep the paragraph".to_owned())?;
+    assert!(paragraph.inlines.iter().all(|inline| {
+        !matches!(inline, caret_doc::ParagraphContent::Text(text) if text.runs.iter().any(|run| !run.text.is_empty()))
+    }));
+    assert!(runtime.session.math_tree_input_context().is_some());
     Ok(())
 }
 

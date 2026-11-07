@@ -17,6 +17,7 @@ pub struct DocumentLayoutView {
     pub session_id: Option<String>,
     pub document_generation: String,
     pub font_generation: String,
+    pub math_font_diagnostic: Option<MathFontDiagnosticView>,
     pub margins_pt: PageMarginsView,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
@@ -32,11 +33,20 @@ pub struct DocumentLayoutDeltaView {
     pub base_document_generation: String,
     pub document_generation: String,
     pub font_generation: String,
+    pub math_font_diagnostic: Option<MathFontDiagnosticView>,
     pub margins_pt: PageMarginsView,
     pub page_start_index: usize,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
     pub environment_ranges: Vec<EnvironmentRangeView>,
+}
+
+/// 文档请求数学字体不可用时供界面展示的稳定诊断。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MathFontDiagnosticView {
+    pub code: String,
+    pub requested_family: String,
 }
 
 /// 页面边距，单位为 pt。
@@ -172,6 +182,7 @@ impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
             session_id: snapshot.session_id.as_ref().map(ToString::to_string),
             document_generation: snapshot.document_generation.to_string(),
             font_generation: snapshot.font_generation.to_string(),
+            math_font_diagnostic: math_font_diagnostic_view(snapshot),
             margins_pt: margins_view(snapshot),
             pages: page_views(snapshot, 0),
             paragraphs: snapshot.paragraphs.iter().map(paragraph_view).collect(),
@@ -198,6 +209,7 @@ impl DocumentLayoutDeltaView {
             base_document_generation: base_document_generation.to_string(),
             document_generation: snapshot.document_generation.to_string(),
             font_generation: snapshot.font_generation.to_string(),
+            math_font_diagnostic: math_font_diagnostic_view(snapshot),
             margins_pt: margins_view(snapshot),
             page_start_index,
             pages: page_views(snapshot, page_start_index),
@@ -224,6 +236,16 @@ impl DocumentLayoutDeltaView {
             paragraph_page,
         ))
     }
+}
+
+fn math_font_diagnostic_view(snapshot: &DocumentLayoutSnapshot) -> Option<MathFontDiagnosticView> {
+    snapshot
+        .math_font_diagnostic
+        .as_ref()
+        .map(|diagnostic| MathFontDiagnosticView {
+            code: diagnostic.code.to_owned(),
+            requested_family: diagnostic.requested_family.clone(),
+        })
 }
 
 fn page_delta_start_index(

@@ -3,11 +3,12 @@
 use super::text_map::TextMap;
 use super::*;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, FlowContent, InlineEnvironment,
     InlineEnvironmentKind, NodeId, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph,
     ParagraphContent, Run, TextFlow,
 };
 use caret_layout::VisualAffinity;
+use std::collections::BTreeMap;
 
 fn run(text: &str) -> ParagraphContent {
     text_flow(Run {
@@ -1622,6 +1623,68 @@ fn text_edits_preserve_unknown_run_fields() {
         text_run.extra.get("futureHint"),
         Some(&serde_json::json!({"keep": true}))
     );
+}
+
+#[test]
+fn opposite_edge_affinity_inserts_default_run_properties() {
+    for (offset, affinity, expected_text) in [
+        (0, Affinity::Upstream, "Xab"),
+        (2, Affinity::Downstream, "abX"),
+    ] {
+        let run = Run {
+            text: "ab".to_owned(),
+            language: Some("zh-Hans".to_owned()),
+            props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
+            extra: Default::default(),
+        };
+        let mut session = session_with(vec![text_flow(run)]);
+        let caret = Pos {
+            story: StoryId::Body,
+            paragraph_id: session.selection.focus.paragraph_id.clone(),
+            offset,
+            affinity,
+        };
+        assert!(
+            session
+                .run(Command::SetSelection(Some(Selection {
+                    anchor: caret.clone(),
+                    focus: caret,
+                })))
+                .is_ok()
+        );
+        assert!(session.run(Command::InsertText("X".to_owned())).is_ok());
+
+        let Block::Paragraph(paragraph) = &session.document.body[0] else {
+            panic!("document should retain its paragraph");
+        };
+        let inserted = paragraph
+            .inlines
+            .iter()
+            .find_map(|node| match node {
+                FlowContent::Text(flow) => flow.runs.iter().find(|run| run.text.contains('X')),
+                FlowContent::Environment(_)
+                | FlowContent::SoftBreak(_)
+                | FlowContent::Math(_)
+                | FlowContent::Opaque(_) => None,
+            })
+            .unwrap_or_else(|| panic!("inserted run should remain visible"));
+        assert_eq!(inserted.language, None);
+        assert!(!inserted.props.contains_key("underline"));
+        let visible: String = paragraph
+            .inlines
+            .iter()
+            .filter_map(|node| match node {
+                FlowContent::Text(flow) => Some(
+                    flow.runs
+                        .iter()
+                        .map(|run| run.text.as_str())
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(visible, expected_text);
+    }
 }
 
 #[test]

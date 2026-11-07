@@ -211,6 +211,239 @@ fn display_math_text_uses_body_parley_fonts_and_keeps_the_sidecar_in_the_page_sn
 }
 
 #[test]
+fn mandatory_breaks_in_math_textflow_keep_multiline_metrics_and_page_glyphs() {
+    let mut document = document_with_text("");
+    let equation_id = NodeId::generate();
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(TextFlow {
+                runs: ["first\u{0085}", "second"]
+                    .into_iter()
+                    .map(|text| Run {
+                        text: text.to_owned(),
+                        language: None,
+                        props: Default::default(),
+                        extra: Default::default(),
+                    })
+                    .collect(),
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+
+    let snapshot = layout(&document);
+    let text_layout = snapshot.math_block_text_layouts[&equation_id]
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("the equation should retain its text layout"));
+    assert_eq!(text_layout.layout.layout.lines().count(), 2);
+    assert!(text_layout.layout.metrics.ascent_pt > 0.0);
+    assert!(text_layout.layout.metrics.descent_pt > 0.0);
+    let nodes = &snapshot.math_blocks[&equation_id].nodes;
+    let first_run = nodes
+        .iter()
+        .find(|node| node.text_run_index == Some(0))
+        .unwrap_or_else(|| panic!("first Run geometry missing"));
+    let second_run = nodes
+        .iter()
+        .find(|node| node.text_run_index == Some(1))
+        .unwrap_or_else(|| panic!("second Run geometry missing"));
+    assert!(second_run.y > first_run.y);
+    assert!(second_run.y + second_run.height > first_run.y + first_run.height);
+
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("multiline text glyph extraction failed: {error}"));
+    let baselines = page
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.baseline_y_pt))
+        .collect::<Vec<_>>();
+    let min_baseline = baselines
+        .iter()
+        .copied()
+        .reduce(f64::min)
+        .unwrap_or_else(|| panic!("the text island should produce glyphs"));
+    let max_baseline = baselines
+        .iter()
+        .copied()
+        .reduce(f64::max)
+        .unwrap_or_else(|| panic!("the text island should produce glyphs"));
+    assert!(max_baseline - min_baseline > 5.0);
+    let second_glyph = page
+        .runs
+        .iter()
+        .flat_map(|run| &run.glyphs)
+        .find(|glyph| (glyph.baseline_y_pt - max_baseline).abs() < 0.01)
+        .unwrap_or_else(|| panic!("second-line glyph missing"));
+    let hit = snapshot
+        .hit_test_math_text(0, second_glyph.x_pt, second_glyph.baseline_y_pt)
+        .unwrap_or_else(|| panic!("second-line glyph should be hittable"));
+    assert_eq!(
+        Some(hit.caret),
+        snapshot.math_text_caret_geometry(&hit.target, &hit.position, hit.visual_affinity)
+    );
+}
+
+#[test]
+fn multiline_math_text_environment_box_only_covers_its_line() {
+    let text = |value: &str| {
+        caret_doc::MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let environment_id = NodeId::generate();
+    let equation_id = NodeId::generate();
+    let mut document = document_with_text("");
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![
+                    text("first\n"),
+                    caret_doc::MathContent::Environment(caret_doc::InlineEnvironment {
+                        id: environment_id.clone(),
+                        kind: caret_doc::InlineEnvironmentKind::Bold,
+                        definition_id: None,
+                        props: Default::default(),
+                        children: vec![text("second")],
+                        extra: Default::default(),
+                    }),
+                ],
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    }));
+    let snapshot = layout(&document);
+    let nodes = &snapshot.math_blocks[&equation_id].nodes;
+    let first = nodes
+        .iter()
+        .find(|node| {
+            node.text_run_index == Some(0) && node.path == [caret_doc::MathPathStep::Content(0)]
+        })
+        .unwrap_or_else(|| panic!("first line Run box missing"));
+    let environment = nodes
+        .iter()
+        .find(|node| node.id.as_ref() == Some(&environment_id))
+        .unwrap_or_else(|| panic!("environment box missing"));
+    let second = nodes
+        .iter()
+        .find(|node| {
+            node.text_run_index == Some(0)
+                && node.path
+                    == [
+                        caret_doc::MathPathStep::Content(1),
+                        caret_doc::MathPathStep::EnvironmentChild(0),
+                    ]
+        })
+        .unwrap_or_else(|| panic!("second line Run box missing"));
+    assert!(environment.y > first.y);
+    assert!((environment.y - second.y).abs() < 0.01);
+    assert!((environment.height - second.height).abs() < 0.01);
+}
+
+#[test]
+fn math_text_run_and_environment_cover_the_trailing_empty_line_caret() {
+    for text in ["a\n", "\n", "a\n\n", "a\u{0085}"] {
+        let environment_id = NodeId::generate();
+        let equation_id = NodeId::generate();
+        let mut document = document_with_text("");
+        document.body.push(Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree: caret_doc::MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: caret_doc::MathFlow {
+                    id: NodeId::generate(),
+                    content: vec![caret_doc::MathContent::Environment(
+                        caret_doc::InlineEnvironment {
+                            id: environment_id.clone(),
+                            kind: caret_doc::InlineEnvironmentKind::Bold,
+                            definition_id: None,
+                            props: Default::default(),
+                            children: vec![caret_doc::MathContent::Text(TextFlow {
+                                runs: vec![Run {
+                                    text: text.to_owned(),
+                                    language: None,
+                                    props: Default::default(),
+                                    extra: Default::default(),
+                                }],
+                                extra: Default::default(),
+                            })],
+                            extra: Default::default(),
+                        },
+                    )],
+                    extra: Default::default(),
+                },
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        }));
+        let snapshot = layout(&document);
+        let math = &snapshot.math_blocks[&equation_id];
+        let (token, baseline) = math
+            .items
+            .iter()
+            .find_map(|item| match item {
+                caret_math::layout::MathItem::TextIsland {
+                    token, baseline_y, ..
+                } => Some((*token, *baseline_y)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("text island missing: {text:?}"));
+        let sidecar = &snapshot.math_block_text_layouts[&equation_id][&token];
+        let first_baseline = sidecar
+            .layout
+            .layout
+            .lines()
+            .next()
+            .unwrap_or_else(|| panic!("first line missing: {text:?}"))
+            .metrics()
+            .baseline;
+        let caret = sidecar
+            .layout
+            .cursor_geometry_at(text.len(), caret_layout::VisualAffinity::Downstream, 0.0)
+            .unwrap_or_else(|| panic!("trailing caret missing: {text:?}"));
+        let caret_y0 = baseline + caret.y0 - f64::from(first_baseline);
+        let caret_y1 = baseline + caret.y1 - f64::from(first_baseline);
+        for node in [
+            math.nodes
+                .iter()
+                .find(|node| node.id.as_ref() == Some(&environment_id))
+                .unwrap_or_else(|| panic!("environment box missing: {text:?}")),
+            math.nodes
+                .iter()
+                .find(|node| node.text_run_index == Some(0))
+                .unwrap_or_else(|| panic!("run box missing: {text:?}")),
+        ] {
+            assert!(node.y <= caret_y0 + 0.01, "{text:?}: {node:?}");
+            assert!(
+                node.y + node.height >= caret_y1 - 0.01,
+                "{text:?}: {node:?}; caret bottom: {caret_y1}"
+            );
+        }
+    }
+}
+
+#[test]
 fn zero_advance_underlined_math_text_does_not_fail_page_glyph_extraction() {
     let parsed = caret_math::parse("\\text{\u{200b}}", caret_math::MathInputKind::Inline)
         .unwrap_or_else(|error| panic!("zero-width underlined text should parse: {error}"));
@@ -277,6 +510,158 @@ fn inline_math_operand_text_uses_body_parley_shaping() {
             .iter()
             .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
     );
+}
+
+#[test]
+fn math_text_font_and_reset_commands_reach_parley_and_page_glyphs() {
+    let parsed = caret_math::parse(
+        r"\textsf{iiii}\texttt{iiii}\textbf{b\textmd{m}}\textit{i\textup{u}}",
+        caret_math::MathInputKind::Equation,
+    )
+    .unwrap_or_else(|error| panic!("valid text font commands should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("text commands should produce an equation tree");
+    };
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    })];
+
+    let snapshot = layout(&document);
+    let page = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("math text glyph extraction failed: {error}"));
+    let sidecars = snapshot
+        .math_block_text_layouts
+        .get(&equation_id)
+        .unwrap_or_else(|| panic!("equation text should publish Parley sidecars"));
+    let mut signatures = Vec::new();
+    for sidecar in sidecars.values() {
+        for line in sidecar.layout.layout.lines() {
+            for item in line.items() {
+                let PositionedGlyphLayoutItem::GlyphRun(run) = item else {
+                    continue;
+                };
+                let range = run.run().text_range();
+                let text = sidecar
+                    .layout
+                    .text
+                    .get(range.clone())
+                    .unwrap_or_else(|| panic!("Parley run range must be in the text island"));
+                signatures.push((
+                    text.to_owned(),
+                    run.run().font().data.id(),
+                    run.run().font().index,
+                    run.run().synthesis(),
+                ));
+            }
+        }
+    }
+    let signature_for = |text: &str| {
+        signatures
+            .iter()
+            .find(|(run_text, _, _, _)| run_text == text)
+            .unwrap_or_else(|| panic!("expected a Parley glyph run for {text:?}"))
+    };
+    let sans = signature_for("iiii");
+    let mono = signatures
+        .iter()
+        .filter(|(text, _, _, _)| text == "iiii")
+        .nth(1)
+        .unwrap_or_else(|| panic!("textsf and texttt should create separate glyph runs"));
+    assert_ne!((sans.1, sans.2), (mono.1, mono.2));
+    let bold = signature_for("b");
+    let medium = signature_for("m");
+    assert_ne!((bold.1, bold.2, bold.3), (medium.1, medium.2, medium.3));
+    let italic = signatures
+        .iter()
+        .find(|(text, _, _, _)| text == "i")
+        .unwrap_or_else(|| panic!("italic text run should be shaped"));
+    let upright = signature_for("u");
+    assert_ne!(
+        (italic.1, italic.2, italic.3),
+        (upright.1, upright.2, upright.3)
+    );
+    assert!(!page.runs.is_empty());
+    assert!(
+        page.runs
+            .iter()
+            .all(|run| { run.font.data.as_ref() != caret_font_roles::default_math_font() })
+    );
+}
+
+#[test]
+fn math_font_requests_report_fallback_and_keep_stix_glyphs() {
+    for requested in [
+        Some("Caret Missing Test Math Family"),
+        Some(caret_font_roles::DEFAULT_CODE_FONT_FAMILY),
+    ] {
+        let parsed = caret_math::parse("x+\\frac{1}{2}", caret_math::MathInputKind::Equation)
+            .unwrap_or_else(|error| panic!("valid equation should parse: {error}"));
+        let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+            panic!("equation input should produce a tree");
+        };
+        let equation_id = NodeId::generate();
+        let mut document = Document::blank();
+        document.global_settings.default_math_font_family = requested.map(str::to_owned);
+        document.body = vec![Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: Default::default(),
+        })];
+
+        let snapshot = layout(&document);
+        let diagnostic = snapshot
+            .math_font_diagnostic
+            .as_ref()
+            .unwrap_or_else(|| panic!("unsupported math font request should be reported"));
+        assert_eq!(diagnostic.requested_family, requested.unwrap_or_default());
+        assert_eq!(
+            diagnostic.code,
+            if requested == Some(caret_font_roles::DEFAULT_CODE_FONT_FAMILY) {
+                "math.font.unsupported_family"
+            } else {
+                "math.font.family_missing"
+            }
+        );
+        assert_eq!(
+            document.global_settings.default_math_font_family.as_deref(),
+            requested,
+            "fallback must not rewrite the user's document preference"
+        );
+        let page = snapshot
+            .page_glyphs(0)
+            .unwrap_or_else(|error| panic!("fallback equation glyphs failed: {error}"));
+        assert!(
+            page.runs
+                .iter()
+                .any(|run| { run.font.data.as_ref() == caret_font_roles::default_math_font() })
+        );
+        assert!(snapshot.math_blocks.contains_key(&equation_id));
+    }
+
+    for requested in [
+        None,
+        Some(caret_doc::DEFAULT_FONT_FAMILY),
+        Some(caret_font_roles::DEFAULT_MATH_FONT_FAMILY),
+    ] {
+        let parsed = caret_math::parse("x", caret_math::MathInputKind::Equation)
+            .unwrap_or_else(|error| panic!("valid equation should parse: {error}"));
+        let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+            panic!("equation input should produce a tree");
+        };
+        let mut document = Document::blank();
+        document.global_settings.default_math_font_family = requested.map(str::to_owned);
+        document.body = vec![Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        })];
+        assert!(layout(&document).math_font_diagnostic.is_none());
+    }
 }
 
 #[test]

@@ -143,6 +143,11 @@ impl ResolvedDocumentTextSettings {
 }
 
 impl FontPreferenceRules {
+    /// 返回文档显式请求的数学字体族；`<default>` 已解析为 `None`。
+    pub fn math_family(&self) -> Option<&str> {
+        self.math_family.as_deref()
+    }
+
     /// 使用 ICU4X 解析脚本键并规范化语言键，保留原始设置中的请求族名。
     ///
     /// 新的、形状有效的 ISO 15924 标签可编译；不把脚本注册表硬编码进文档模型。

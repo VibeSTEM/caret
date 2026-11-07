@@ -5,7 +5,9 @@
 
 use super::super::StoryId;
 use super::Session;
+use super::math_edit::math_text_split_is_available;
 use crate::editing::command_registry::{MATH_INSERT_COMMAND_ID, MATH_SPLIT_INLINE_COMMAND_ID};
+use crate::editing::text_map::{TextMap, can_split_inline_nodes};
 use crate::editing::{
     Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError, Effect,
 };
@@ -124,33 +126,112 @@ impl Session {
                     && self.selection.anchor == self.selection.focus
                     && self.paragraph_index.contains_key(&line.at.paragraph_id)
             }),
-            "insert.equation" | "insert.align" => self.command_line.as_ref().is_some_and(|line| {
-                line.at.story == StoryId::Body
-                    && self.selection.anchor == self.selection.focus
-                    && self
-                        .paragraph_index
-                        .get(&line.at.paragraph_id)
-                        .is_some_and(|location| !location.is_title)
-            }),
-            "insert.inline_math" => self.selection.anchor == self.selection.focus,
+            "insert.equation" | "insert.align" => self.display_math_insert_is_available(),
+            "insert.inline_math" => self.inline_math_insert_is_available(),
             "text.format.bold" | "text.format.italic" | "text.format.underline" => {
                 self.command_line
                     .as_ref()
                     .is_some_and(|line| line.mode != CommandLineMode::Math)
                     || self.math_edit_is_text_branch()
             }
-            MATH_SPLIT_INLINE_COMMAND_ID => self.math_text_split_is_available(),
+            MATH_SPLIT_INLINE_COMMAND_ID => math_text_split_is_available(self),
             _ => true,
         }
     }
 
-    fn math_text_split_is_available(&self) -> bool {
-        self.math_edit.as_ref().is_some_and(|edit| {
-            matches!(
-                &edit.branch,
-                super::MathEditBranch::Text { path, anchor, .. } if path == &anchor.path
-            )
-        })
+    fn display_math_insert_is_available(&self) -> bool {
+        if self.math_edit.is_some()
+            || self.composition.is_some()
+            || self.selection.anchor != self.selection.focus
+        {
+            return false;
+        }
+        let Some(line) = self.command_line.as_ref() else {
+            return false;
+        };
+        if line.mode != CommandLineMode::Command || line.at.story != StoryId::Body {
+            return false;
+        }
+        let Some(location) = self.paragraph_index.get(&line.at.paragraph_id) else {
+            return false;
+        };
+        if location.is_title {
+            return false;
+        }
+        let Ok(paragraph) = self.paragraph_for(&line.at) else {
+            return false;
+        };
+        let Ok(map) = TextMap::new(paragraph) else {
+            return false;
+        };
+        if map.validate_pos(&line.at).is_err() {
+            return false;
+        }
+        if map.text.is_empty() {
+            return true;
+        }
+        paragraph.extra.is_empty() && can_split_inline_nodes(&paragraph.inlines, line.at.offset)
+    }
+
+    fn inline_math_insert_is_available(&self) -> bool {
+        if self.math_edit.is_some()
+            || self.composition.is_some()
+            || self.selection.anchor != self.selection.focus
+        {
+            return false;
+        }
+        let Some(line) = self.command_line.as_ref() else {
+            return false;
+        };
+        if line.mode != CommandLineMode::Command {
+            return false;
+        }
+        let Ok(paragraph) = self.paragraph_for(&line.at) else {
+            return false;
+        };
+        let Ok(map) = TextMap::new(paragraph) else {
+            return false;
+        };
+        if map.validate_pos(&line.at).is_err() {
+            return false;
+        }
+        let Ok(projection) = caret_math::parse_projection("", caret_math::MathInputKind::Inline)
+        else {
+            return false;
+        };
+        let (projected, _) = projection.into_parts();
+        let caret_math::ProjectedMath::Tree(math_tree) = projected else {
+            return false;
+        };
+        let mut paragraph = paragraph.clone();
+        if TextMap::new(&paragraph)
+            .and_then(|map| {
+                map.insert_atomic(
+                    &mut paragraph,
+                    line.at.offset,
+                    line.at.affinity,
+                    caret_doc::ParagraphContent::Math(caret_doc::InlineMath {
+                        id: caret_doc::NodeId::generate(),
+                        math_tree,
+                        extra: Default::default(),
+                    }),
+                )
+            })
+            .is_err()
+        {
+            return false;
+        }
+        let mut document = self.document.clone();
+        let Some(location) = self.paragraph_index.get(&line.at.paragraph_id) else {
+            return false;
+        };
+        let Some(destination) =
+            super::super::paragraph_ops::paragraph_at_location_mut(&mut document.body, location)
+        else {
+            return false;
+        };
+        *destination = paragraph;
+        document.validate().is_ok()
     }
 
     pub(super) fn run_command_line(&mut self, command: Command) -> Result<Effect, EditError> {

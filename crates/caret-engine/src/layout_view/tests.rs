@@ -93,6 +93,30 @@ fn math_fragment_projection_keeps_content_origin_and_serializes_page_margins()
 }
 
 #[test]
+fn math_font_fallback_diagnostic_reaches_the_layout_view() -> Result<(), Box<dyn std::error::Error>>
+{
+    let session = Session::new(Document::blank())?;
+    let mut runtime = DocumentLayoutRuntime::new_system()?;
+    let mut snapshot = runtime.layout_session(&session)?;
+    snapshot.math_font_diagnostic = Some(crate::layout::MathFontDiagnostic {
+        code: "math.font.family_missing",
+        requested_family: "Unavailable Math Family".to_owned(),
+    });
+
+    let view = DocumentLayoutView::from(&snapshot);
+    let json = serde_json::to_value(view)?;
+    assert_eq!(
+        json["mathFontDiagnostic"]["code"],
+        "math.font.family_missing"
+    );
+    assert_eq!(
+        json["mathFontDiagnostic"]["requestedFamily"],
+        "Unavailable Math Family"
+    );
+    Ok(())
+}
+
+#[test]
 fn paragraph_delta_starts_at_the_first_page_changed_by_reflow() {
     let target = NodeId::generate();
     let predecessor = NodeId::generate();

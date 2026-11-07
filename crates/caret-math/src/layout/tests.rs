@@ -49,6 +49,17 @@ fn height(layout: &MathLayout) -> f64 {
     layout.ascent + layout.descent
 }
 
+fn assert_rendered_slot(layout: &MathLayout, slot: &MathNodeBox) {
+    assert!(slot.width.is_finite() && slot.width > 0.0);
+    assert!(slot.height.is_finite() && slot.height > 0.0);
+    assert!(layout.items.iter().any(|item| matches!(item,
+        MathItem::Rectangle { x, y, width, height, stroke: Some(_), stroke_width, .. }
+        if (x - slot.x).abs() < EPSILON && (y - slot.y).abs() < EPSILON
+            && (width - slot.width).abs() < EPSILON && (height - slot.height).abs() < EPSILON
+            && *stroke_width > 0.0
+    )));
+}
+
 fn glyphs(layout: &MathLayout) -> Vec<(f64, f64, f64)> {
     layout
         .items
@@ -525,6 +536,15 @@ fn empty_math_and_text_flows_emit_stable_position_boxes() {
     assert_eq!(math_slot.id.as_ref(), Some(&empty_math_flow.id));
     assert_eq!(math_slot.scope_id, empty_math_flow.id);
     assert!(!math_slot.is_text_flow);
+    assert!(math_slot.is_flow);
+    assert!(math_slot.path.is_empty());
+    assert_rendered_slot(&empty_math_layout, math_slot);
+    let larger = layout_math(font(), &empty_math_flow, SIZE * 2.0, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let larger_slot = &larger.nodes[0];
+    assert!((larger_slot.width - math_slot.width * 2.0).abs() < EPSILON);
+    assert!((larger_slot.height - math_slot.height * 2.0).abs() < EPSILON);
+    assert!(empty_math_flow.content.is_empty());
 
     let empty_text_flow = MathFlow {
         id: NodeId::generate(),
@@ -570,6 +590,198 @@ fn empty_math_flow_operand_keeps_its_parent_path_box() {
         empty_box.path,
         [MathPathStep::Content(0), MathPathStep::Operand(0)]
     );
+    assert_rendered_slot(&layout, empty_box);
+    let MathContent::Math(fraction) = &root.content[0] else {
+        panic!("expected fraction")
+    };
+    assert!(fraction.children[0].content.is_empty());
+}
+
+#[test]
+fn math_flow_boxes_retain_the_effective_script_font_size() {
+    let root = root(r"x^{\frac{}{}}");
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("script fraction should layout: {error}"));
+    let script_slot = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.is_flow
+                && !node.is_text_flow
+                && node.font_size_pt.is_some_and(|size| size < SIZE)
+                && node.width > 0.0
+                && node.height > 0.0
+        })
+        .unwrap_or_else(|| panic!("script flow should retain its effective font size"));
+
+    assert!(script_slot.font_size_pt.is_some_and(|size| size < SIZE));
+}
+
+#[test]
+fn placeholder_operand_retains_flow_identity_and_single_box() {
+    let root = root(r"\frac{}{x}");
+    let MathContent::Math(fraction) = &root.content[0] else {
+        panic!("expected fraction");
+    };
+    let flow = &fraction.children[0];
+    assert!(
+        matches!(flow.content.as_slice(), [MathContent::Math(node)] if node.kind == MathNodeKind::Placeholder)
+    );
+    let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let slot = layout
+        .nodes
+        .iter()
+        .find(|node| node.id.as_ref() == Some(&flow.id))
+        .unwrap_or_else(|| panic!("missing placeholder flow"));
+    assert!(slot.is_flow);
+    assert_eq!(slot.scope_id, root.id);
+    assert_eq!(
+        slot.path,
+        [MathPathStep::Content(0), MathPathStep::Operand(0)]
+    );
+    assert_rendered_slot(&layout, slot);
+    assert_eq!(
+        layout
+            .items
+            .iter()
+            .filter(|item| matches!(item, MathItem::Rectangle { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn optional_placeholder_flows_keep_identity_without_changing_rendering() {
+    for (source, indices) in [(r"\sqrt{x}", &[0_usize][..]), (r"\sum", &[0, 1][..])] {
+        let root = root(source);
+        let MathContent::Math(node) = &root.content[0] else {
+            panic!("expected a math node: {source}");
+        };
+        let layout = layout_math(font(), &root, SIZE, MathStyle::Display)
+            .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+        let without_positions = super::layout_nodes(
+            font(),
+            crate::backend::flow_nodes(&root),
+            SIZE,
+            MathStyle::Display,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+        assert_eq!(layout.items, without_positions.items, "{source}");
+        assert_eq!(layout.width, without_positions.width, "{source}");
+        assert_eq!(layout.ascent, without_positions.ascent, "{source}");
+        assert_eq!(layout.descent, without_positions.descent, "{source}");
+        for &index in indices {
+            let flow = &node.children[index];
+            assert!(matches!(
+                flow.content.as_slice(),
+                [MathContent::Math(placeholder)] if placeholder.kind == MathNodeKind::Placeholder
+            ));
+            let marker = layout
+                .nodes
+                .iter()
+                .find(|candidate| candidate.id.as_ref() == Some(&flow.id))
+                .unwrap_or_else(|| panic!("missing optional flow marker: {source}, {index}"));
+            assert!(marker.is_flow);
+            assert_eq!(marker.scope_id, root.id);
+            assert_eq!(
+                marker.path,
+                [MathPathStep::Content(0), MathPathStep::Operand(index)]
+            );
+            assert_eq!(marker.width, 0.0);
+            assert_eq!(marker.height, 0.0);
+        }
+    }
+}
+
+#[test]
+fn empty_align_cells_have_visible_scoped_slots() {
+    let mut align = match parse(
+        r"\begin{aligned}x&y\\z&w\end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("valid aligned input should parse: {other:?}"),
+    };
+    for row in &mut align.rows {
+        for cell in &mut row.cells {
+            cell.root.content.clear();
+        }
+    }
+    let layout = layout_align(font(), &align, SIZE)
+        .unwrap_or_else(|error| panic!("valid Align should lay out: {error}"));
+    let mut positions = Vec::new();
+    for row in &align.rows {
+        for cell in &row.cells {
+            let slot = layout
+                .nodes
+                .iter()
+                .find(|node| node.id.as_ref() == Some(&cell.root.id))
+                .unwrap_or_else(|| panic!("missing empty cell slot"));
+            assert_eq!(slot.scope_id, cell.root.id);
+            assert!(slot.path.is_empty() && slot.is_flow);
+            assert_rendered_slot(&layout, slot);
+            assert!(cell.root.content.is_empty());
+            positions.push((slot.x, slot.y));
+        }
+    }
+    assert_eq!(positions.len(), 4);
+    assert_ne!(positions[0].0, positions[1].0);
+    assert_ne!(positions[0].1, positions[2].1);
+}
+
+#[test]
+fn empty_flow_inside_row_keeps_slot_with_or_without_text_shaper() {
+    struct UnexpectedShaper;
+    impl MathTextShaper for UnexpectedShaper {
+        fn shape(&mut self, _: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+            panic!("empty math flow has no text to shape")
+        }
+    }
+    let flow = MathFlow {
+        id: NodeId::generate(),
+        content: Vec::new(),
+        extra: Default::default(),
+    };
+    let flow_id = flow.id.clone();
+    let row = MathNode {
+        id: NodeId::generate(),
+        kind: MathNodeKind::Row,
+        text: None,
+        attributes: Default::default(),
+        children: vec![flow],
+        extra: Default::default(),
+    };
+    let root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::Math(row)],
+        extra: Default::default(),
+    };
+    let plain = layout_math(font(), &root, SIZE, MathStyle::Display)
+        .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    let shaped = layout_math_with_text_shaper(
+        font(),
+        &root,
+        SIZE,
+        MathStyle::Display,
+        &mut UnexpectedShaper,
+    )
+    .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
+    for layout in [&plain, &shaped] {
+        let slot = layout
+            .nodes
+            .iter()
+            .find(|node| node.id.as_ref() == Some(&flow_id))
+            .unwrap_or_else(|| panic!("missing empty flow slot"));
+        assert_eq!(slot.scope_id, root.id);
+        assert_eq!(
+            slot.path,
+            [MathPathStep::Content(0), MathPathStep::Operand(0)]
+        );
+        assert!(slot.is_flow);
+        assert_rendered_slot(layout, slot);
+    }
 }
 
 #[test]
@@ -750,6 +962,19 @@ fn text_island_shaper_replaces_math_glyphs_and_keeps_run_positions() {
 }
 
 #[test]
+fn soft_break_without_text_shaper_is_rejected() {
+    let root = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::SoftBreak(caret_doc::SoftBreak::default())],
+        extra: Default::default(),
+    };
+    let error = layout_math(font(), &root, SIZE, MathStyle::Inline)
+        .err()
+        .unwrap_or_else(|| panic!("SoftBreak without a text shaper must be rejected"));
+    assert_eq!(error, MathLayoutError::TextShapingFailed);
+}
+
+#[test]
 fn text_islands_follow_editable_flow_boundaries() {
     struct RecordingTextShaper {
         requests: Vec<MathTextRequest>,
@@ -906,10 +1131,7 @@ fn text_islands_follow_editable_flow_boundaries() {
         .iter()
         .map(|request| request.runs.iter().map(|run| run.text.as_str()).collect())
         .collect();
-    assert_eq!(
-        request_texts,
-        ["a\u{301}", "zc", " ", "d", "�", "e", "u", "v", ""]
-    );
+    assert_eq!(request_texts, ["a\u{301}", "zc\nd", "�", "e", "u", "v", ""]);
     assert_eq!(shaper.requests[0].runs.len(), 2);
     assert_eq!(shaper.requests[0].runs[0].style.bold, None);
     assert_eq!(shaper.requests[0].runs[1].style.bold, Some(true));
@@ -919,9 +1141,20 @@ fn text_islands_follow_editable_flow_boundaries() {
             .iter()
             .any(|container| container.id.as_ref() == Some(&bold_id))
     );
-    assert!(shaper.requests[8].runs[0].text.is_empty());
-    assert!(shaper.requests[8].runs[0].is_text_flow);
-    assert_eq!(shaper.requests[8].runs[0].run_index, None);
+    let soft_break = &shaper.requests[1].runs[2];
+    assert_eq!(soft_break.text, "\n");
+    assert_eq!(
+        soft_break.path,
+        vec![
+            MathPathStep::Content(0),
+            MathPathStep::Operand(0),
+            MathPathStep::Content(3)
+        ]
+    );
+    assert!(!soft_break.is_text_flow);
+    assert!(shaper.requests[6].runs[0].text.is_empty());
+    assert!(shaper.requests[6].runs[0].is_text_flow);
+    assert_eq!(shaper.requests[6].runs[0].run_index, None);
 
     let space_root = MathFlow {
         id: NodeId::generate(),
@@ -940,6 +1173,7 @@ fn text_islands_follow_editable_flow_boundaries() {
                 is_text_flow: true,
                 is_flow: false,
                 is_container: false,
+                font_size_pt: None,
             }),
             kind: crate::backend::BackendNodeKind::TextSpace,
             text: None,
@@ -1229,6 +1463,7 @@ fn coalescing_container_boxes_preserves_distinct_paths_and_first_occurrence_orde
         width,
         height: 10.0,
         baseline: 8.0,
+        font_size_pt: None,
     };
     let mut nodes = vec![
         make_box(vec![MathPathStep::Content(0)], 0.0, 1.0),

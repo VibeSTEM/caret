@@ -22,7 +22,9 @@ Rectangle {
             "paragraph": qsTranslate("WindowStatusBar", "Paragraph"),
             "heading": qsTranslate("WindowStatusBar", "Heading"),
             "section": qsTranslate("WindowStatusBar", "Section"),
-            "custom": qsTranslate("WindowStatusBar", "Custom environment")
+            "custom": qsTranslate("WindowStatusBar", "Custom environment"),
+            "equation": qsTranslate("WindowStatusBar", "Equation"),
+            "align": qsTranslate("WindowStatusBar", "Align environment")
         })
     readonly property string structureDescription: {
         const entries = LayoutViewModel.currentStructure;
@@ -30,6 +32,16 @@ Rectangle {
         for (let index = 0; index < entries.length; ++index)
             labels.push(structureLabelTranslations[entries[index].kind] || entries[index].kind);
         return labels.join(" › ");
+    }
+    readonly property string mathFontWarning: {
+        const diagnostic = LayoutViewModel.mathFontDiagnostic;
+        if (!diagnostic || !diagnostic.code)
+            return "";
+        if (diagnostic.code === "math.font.family_missing")
+            return qsTranslate("WindowStatusBar", 'Math font "%1" is not installed; using STIX Two Math.').arg(diagnostic.requestedFamily);
+        if (diagnostic.code === "math.font.unsupported_family")
+            return qsTranslate("WindowStatusBar", 'Math font "%1" is unsupported; using STIX Two Math.').arg(diagnostic.requestedFamily);
+        return "";
     }
 
     function zoomOut() {
@@ -88,6 +100,18 @@ Rectangle {
             text: statusBar.structureDescription
             textSize: Theme.fontSmall
             textColor: Theme.colorText
+        }
+
+        ThemedLabel {
+            objectName: "mathFontWarningLabel"
+            visible: statusBar.mathFontWarning.length > 0
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: 220
+            Layout.maximumWidth: 260
+            elide: Text.ElideRight
+            text: statusBar.mathFontWarning
+            textSize: Theme.fontSmall
+            textColor: Theme.colorError
         }
 
         Item {

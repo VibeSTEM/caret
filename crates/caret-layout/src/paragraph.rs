@@ -6,13 +6,13 @@
 use caret_doc::{FlowContent, Paragraph, ParagraphContent, TextFlow};
 use std::ops::Range;
 
-use crate::{LineMetrics, LineMetricsError};
+use crate::{LineMetrics, LineMetricsError, shaping::is_mandatory_break_character};
 
 mod parley;
 pub use parley::{
     HitAffinity, ParagraphHit, ParagraphLayoutOptions, ParagraphLayouter, ParleyParagraphLayout,
-    TextIslandError, TextIslandLayout, TextIslandLayouter, TextIslandMetrics, TextIslandSpan,
-    VisualAffinity, VisualCursor,
+    TextIslandError, TextIslandLayout, TextIslandMetrics, TextIslandSpan, VisualAffinity,
+    VisualCursor,
 };
 
 /// 判断源文本是否会产生需要段落标记度量的空行，包含开头/连续/结尾 mandatory break。
@@ -143,11 +143,4 @@ impl From<LineMetricsError> for ParagraphLayoutError {
     fn from(error: LineMetricsError) -> Self {
         Self::InvalidLineMetrics(error)
     }
-}
-
-fn is_mandatory_break_character(character: char) -> bool {
-    matches!(
-        character,
-        '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
-    )
 }

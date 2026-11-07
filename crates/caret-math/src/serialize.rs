@@ -604,7 +604,10 @@ impl Writer {
                     Some("no_break_space") => self.raw("~"),
                     _ => self.raw(" "),
                 },
-                MathNodeKind::SoftBreak => self.raw(" "),
+                MathNodeKind::SoftBreak => {
+                    self.command("newline");
+                    self.raw("{}");
+                }
                 MathNodeKind::Opaque => self.raw("�"),
                 MathNodeKind::TextSymbol => {
                     self.raw("\\");

@@ -28,8 +28,8 @@ mod generated {
         clear_selection_json, command_line_command_json, configure_document_recovery,
         current_caret_json, delete_backward_json, discard_document_recovery, discard_recovery,
         document_hit_test_json, document_save_snapshot, document_session_generation,
-        document_status_json, drag_hit_map_json, export_recovery, handle_editor_key_json,
-        input_method_event_json, insert_soft_break_json, insert_text_json,
+        document_status_json, drag_hit_map_json, drag_start_domain_json, export_recovery,
+        handle_editor_key_json, input_method_event_json, insert_soft_break_json, insert_text_json,
         install_prepared_document, interaction_state_json, layout_snapshot_json,
         mark_document_saved_json, move_structure_json, move_to_visual_line_edge_json,
         move_vertical_caret_json, move_visual_caret_json, new_blank_document_runtime,
@@ -386,6 +386,13 @@ mod generated {
             ) -> String;
             /// 为一次鼠标拖选请求当前页的 caret 命中缓存。
             fn drag_hit_map_json(runtime: &mut DocumentRuntime, page_index: i32) -> String;
+            /// 按正文点击仲裁规则返回拖选起点域，不修改会话状态。
+            fn drag_start_domain_json(
+                runtime: &mut DocumentRuntime,
+                page_index: i32,
+                x_pt: f64,
+                y_pt: f64,
+            ) -> String;
             /// 在 Rust Session 中提交拖选释放后的稳定位置。
             fn set_selection_json(runtime: &mut DocumentRuntime, selection_json: String) -> String;
             /// 清除当前选区并保留 Rust 会话中的焦点位置。

@@ -35,6 +35,11 @@ pub use text::{
     MathTextShape, MathTextShapeError, MathTextShaper,
 };
 
+/// 可见数学空槽的宽度（em），由命中与 caret 几何共用。
+pub const MATH_PLACEHOLDER_WIDTH_EM: f64 = 0.6;
+/// 可见数学空槽的高度（em），由命中与 caret 几何共用。
+pub const MATH_PLACEHOLDER_HEIGHT_EM: f64 = 0.7;
+
 use crate::backend::{BackendNodeKind, Node, NodePosition, flow_nodes_for_layout};
 use context::{Context, Style};
 use convert::Converter;
@@ -139,6 +144,8 @@ pub struct MathNodeBox {
     pub height: f64,
     /// 节点自身基线相对公式基线的偏移。
     pub baseline: f64,
+    /// 该节点所在数学样式的有效字号（pt），供树原生光标继续继承。
+    pub font_size_pt: Option<f64>,
 }
 
 /// 排版结果。颜色为 `None` 的项使用正文颜色。
@@ -208,6 +215,7 @@ pub fn layout_align(
                 is_text_flow: false,
                 is_flow: false,
                 is_container: false,
+                font_size_pt: None,
             }),
             kind: BackendNodeKind::Row,
             text: None,
@@ -229,6 +237,7 @@ pub fn layout_align(
             is_text_flow: false,
             is_flow: false,
             is_container: false,
+            font_size_pt: None,
         }),
         kind: BackendNodeKind::Matrix,
         text: None,
@@ -259,6 +268,7 @@ pub fn layout_align_with_text_shaper(
                 is_text_flow: false,
                 is_flow: false,
                 is_container: false,
+                font_size_pt: None,
             }),
             kind: BackendNodeKind::Row,
             text: None,
@@ -280,6 +290,7 @@ pub fn layout_align_with_text_shaper(
             is_text_flow: false,
             is_flow: false,
             is_container: false,
+            font_size_pt: None,
         }),
         kind: BackendNodeKind::Matrix,
         text: None,
@@ -410,6 +421,7 @@ fn layout_nodes<'a>(
                         width,
                         height,
                         baseline: y + node_baseline,
+                        font_size_pt: position.font_size_pt,
                     });
                 }
             }

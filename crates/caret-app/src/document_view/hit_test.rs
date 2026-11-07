@@ -9,7 +9,7 @@ use caret_engine::{PageCaretView, RasterizedPageGlyphs, Selection};
 impl DocumentViewRuntime {
     /// 返回当前 Rust 光标位置在最新布局中的页面几何。
     pub fn current_caret_json(&mut self) -> Result<String, String> {
-        let (position, visual_affinity, block_environment_exit, math_context) = {
+        let (position, visual_affinity, block_environment_exit, math_context, math_tree_context) = {
             let display_session = self
                 .composition_preview_session
                 .as_ref()
@@ -19,6 +19,7 @@ impl DocumentViewRuntime {
                 display_session.selection_visual_affinity(),
                 display_session.block_environment_exit(),
                 display_session.math_text_input_context(),
+                display_session.math_tree_input_context(),
             )
         };
         let snapshot = self.current_snapshot()?;
@@ -26,6 +27,10 @@ impl DocumentViewRuntime {
             snapshot
                 .math_text_caret_geometry(&context.target, &context.focus, context.visual_affinity)
                 .map(PageCaretView::from)
+        } else if let Some((target, position)) = math_tree_context {
+            snapshot
+                .math_tree_caret(&target, &position)
+                .map(|(caret, _)| PageCaretView::from(caret))
         } else {
             snapshot
                 .caret_geometry(&position, visual_affinity)
@@ -85,21 +90,21 @@ impl DocumentViewRuntime {
             Err(_) => return Ok("null".to_owned()),
         };
         if self.session.composition().is_none() {
-            let (math_hit, body_text_hit) = {
+            let (math_hit, math_text_hit_loses_to_body, structure_hit) = {
                 let snapshot = self.current_snapshot()?;
                 let math_hit = snapshot.hit_test_math_text(page_index, x_pt, y_pt);
-                let body_text_hit = math_hit.as_ref().is_some_and(|math_hit| {
-                    math_hit.is_zero_width
-                        && snapshot
-                            .hit_test(page_index, x_pt, y_pt)
-                            .as_ref()
-                            .is_some_and(|hit| {
-                                body_text_contains_point(snapshot, hit, page_index, x_pt, y_pt)
-                            })
+                let math_text_wins = math_hit.as_ref().is_some_and(|math_hit| {
+                    math_text_hit_wins_over_body(snapshot, page_index, x_pt, y_pt, math_hit)
                 });
-                (math_hit, body_text_hit)
+                let structure_hit = math_hit
+                    .is_none()
+                    .then(|| snapshot.hit_test_math_structure(page_index, x_pt, y_pt))
+                    .flatten();
+                (math_hit, !math_text_wins, structure_hit)
             };
-            if let Some(hit) = math_hit.filter(|hit| !hit.is_zero_width || !body_text_hit) {
+            if let Some(hit) =
+                math_hit.filter(|hit| !hit.is_zero_width || !math_text_hit_loses_to_body)
+            {
                 let font_generation = self.layout.font_generation();
                 let effect = self
                     .session
@@ -121,6 +126,29 @@ impl DocumentViewRuntime {
                         serde_json::Value::Bool(true),
                     );
                 }
+                return serde_json::to_string(&result)
+                    .map_err(|error| format!("layout.place_caret_serialize: {error}"));
+            }
+            if let Some(hit) = structure_hit {
+                let font_generation = self.layout.font_generation();
+                self.session
+                    .focus_math_structure_hit(&hit, font_generation)
+                    .map_err(|error| format!("selection.math_structure_focus: {error}"))?;
+                self.anchor_visual_affinity = match hit.position.affinity {
+                    caret_engine::MathPositionAffinity::Upstream => {
+                        caret_engine::VisualAffinity::Upstream
+                    }
+                    caret_engine::MathPositionAffinity::Downstream => {
+                        caret_engine::VisualAffinity::Downstream
+                    }
+                };
+                self.preferred_visual_x_pt = None;
+                let result = serde_json::json!({
+                    "valid": true,
+                    "mathTree": true,
+                    "documentGeneration": hit.document_generation.to_string(),
+                    "caret": PageCaretView::from(hit.caret),
+                });
                 return serde_json::to_string(&result)
                     .map_err(|error| format!("layout.place_caret_serialize: {error}"));
             }
@@ -164,6 +192,20 @@ impl DocumentViewRuntime {
         serde_json::to_string(&result)
             .map_err(|error| format!("layout.place_caret_serialize: {error}"))
     }
+}
+
+pub(super) fn math_text_hit_wins_over_body(
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    page_index: usize,
+    x_pt: f64,
+    y_pt: f64,
+    math_hit: &caret_engine::PageMathTextHit,
+) -> bool {
+    !math_hit.is_zero_width
+        || !snapshot
+            .hit_test(page_index, x_pt, y_pt)
+            .as_ref()
+            .is_some_and(|hit| body_text_contains_point(snapshot, hit, page_index, x_pt, y_pt))
 }
 
 fn body_text_contains_point(

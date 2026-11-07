@@ -1,7 +1,7 @@
 //! 验证文档会话打开、编辑和保存状态。
 
 use super::DocumentSessionService;
-use caret_doc::{Block, CdocFile, OpenedDocument, ParagraphContent, PreviewReason};
+use caret_doc::{Block, CdocFile, OpenedDocument, ParagraphContent};
 use caret_engine::{Command, Direction};
 use serde_json::Value;
 use serde_json::json;
@@ -131,68 +131,243 @@ fn unsupported_required_feature_cannot_replace_the_current_session() -> Result<(
 }
 
 #[test]
-fn math_feature_stays_read_only_until_formula_layout_is_supported() -> Result<(), String> {
+fn math_carriers_open_save_and_reopen_through_document_session_and_disk() -> Result<(), String> {
     let mut service = DocumentSessionService::new_blank()?;
-    service.view_mut().insert_text_json("existing".to_owned())?;
-    let before = service.save_snapshot()?;
+    let blank = service.save_snapshot()?;
     let mut value: Value =
-        serde_json::from_slice(&before.bytes).map_err(|error| error.to_string())?;
-    value["document"]["body"] = json!([{
-        "type": "paragraph",
-        "id": "paragraph",
-        "inlines": [{
-        "type": "inlineMath",
-        "id": "inline-math",
-        "mathTree": {
-            "schemaVersion": 3,
-            "root": {
-                "id": "root",
-                "content": [{"type": "math", "id": "x", "kind": "symbol", "text": "x"}]
+        serde_json::from_slice(&blank.bytes).map_err(|error| error.to_string())?;
+    value["futureEnvelopeData"] = json!({"retained": true});
+    value["document"]["body"] = json!([
+        {
+            "type": "paragraph", "id": "paragraph", "vendorParagraph": "kept",
+            "inlines": [{"type": "inlineMath", "id": "inline-math", "mathTree": {
+                "schemaVersion": 3,
+                "vendorTree": "inline-tree-kept",
+                "root": {"id": "inline-root", "content": [
+                    {"type": "environment", "scope": "inline", "id": "inline-environment",
+                     "kind": "bold", "vendorEnvironment": "kept", "children": [
+                        {"type": "math", "id": "inline-x", "kind": "symbol", "text": "x"}
+                    ]}
+                ]}
+            }}]
+        },
+        {
+            "type": "equation", "id": "equation", "vendorEquation": {"kept": true}, "mathTree": {
+                "schemaVersion": 3,
+                "vendorEquationTree": "kept",
+                "root": {"id": "equation-root", "content": [
+                    {"type": "text", "vendorText": "kept", "runs": [
+                        {"text": "f", "language": "en", "props": {"underline": true}, "vendorRun": "kept"}
+                    ]},
+                    {"type": "math", "id": "equation-y", "kind": "symbol", "text": "y", "vendorNode": "kept"}
+                ]}
             }
+        },
+        {
+            "type": "align", "id": "align", "vendorAlign": "kept", "rows": [{
+                "id": "align-row", "vendorRow": "kept", "cells": [{"schemaVersion": 3, "vendorCellTree": "kept", "root": {
+                    "id": "align-cell-root", "content": [
+                        {"type": "text", "runs": [{"text": "g", "props": {"underline": true}}]},
+                        {"type": "math", "id": "align-z", "kind": "symbol", "text": "z", "vendorAlignNode": "kept"}
+                    ]
+                }}]
+            }, {"id": "align-row-2", "cells": [{"schemaVersion": 3, "root": {
+                "id": "align-cell-root-2", "content": [
+                    {"type": "math", "id": "align-w", "kind": "symbol", "text": "w"}
+                ]
+            }}]}]
         }
-    }]}]);
+    ]);
     value["requiredFeatures"] = json!([
+        "caret.env.bold",
+        "caret.math.align",
         "caret.math.content-flow.v2",
+        "caret.math.equation",
         "caret.math.inline",
         "caret.math.syntax.v1",
         "caret.paragraph.content-flow.v1",
         "caret.paragraph.layout-settings",
-        "caret.text.default-font-size"
+        "caret.text.default-font-size",
+        "caret.text.language-tags",
+        "caret.text.underline"
     ]);
     let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
-
     let opened = caret_doc::open(&bytes).map_err(|error| error.to_string())?;
-    let OpenedDocument::SafePreview(preview) = opened else {
-        return Err("unsupported math layout should remain a safe preview".to_owned());
-    };
-    let Some(Block::Paragraph(paragraph)) = preview.document().body.first() else {
-        return Err("safe preview should retain the paragraph".to_owned());
-    };
-    if !matches!(paragraph.inlines.first(), Some(ParagraphContent::Math(_)))
-        || !preview
-            .reasons
-            .contains(&PreviewReason::UnsupportedRequiredFeature(
-                "caret.math.inline".to_owned(),
-            ))
-    {
-        return Err(
-            "safe preview should retain the known MathTree and explain its capability".to_owned(),
-        );
-    }
-
-    let result = DocumentSessionService::prepare_open(
-        &bytes,
-        std::path::Path::new("math.cdoc"),
-        service.session_generation() + 1,
-    );
-
     assert!(
-        matches!(result, Err(ref error) if error == "cdoc.safe_preview_read_only"),
-        "unexpected result: {}",
-        result.err().unwrap_or_default()
+        matches!(&opened, OpenedDocument::Editable(_)),
+        "math carrier fixture should be editable: {opened:?}"
     );
-    assert_eq!(service.document_generation(), before.document_generation);
-    assert_eq!(service.save_snapshot()?, before);
+    let expected_body =
+        serde_json::to_value(opened.document()).map_err(|error| error.to_string())?["body"].clone();
+
+    let root = std::env::temp_dir().join(format!(
+        "caret-math-session-roundtrip-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let path = root.join("math.cdoc");
+    service.open_bytes(
+        &bytes,
+        &path,
+        blank.session_generation,
+        blank.document_generation,
+    )?;
+    assert!(!service.is_dirty());
+
+    let save = service.save_snapshot()?;
+    crate::document_storage::DocumentStorage
+        .save_snapshot(&path, &save.bytes)
+        .map_err(|error| error.to_string())?;
+    assert!(service.mark_saved(
+        save.session_generation,
+        save.document_generation,
+        save.history_state_id,
+        &path,
+        &save.content_digest,
+    ));
+    assert!(!service.is_dirty());
+
+    let disk_file = crate::document_storage::DocumentStorage
+        .open_file(&path)
+        .map_err(|error| error.to_string())?;
+    let OpenedDocument::Editable(disk_file) = disk_file else {
+        return Err("saved math carriers should reopen as editable".to_owned());
+    };
+    assert_eq!(
+        serde_json::to_value(disk_file.document()).map_err(|error| error.to_string())?["body"],
+        expected_body
+    );
+    let saved_envelope: Value = serde_json::from_slice(
+        &crate::document_storage::DocumentStorage
+            .read_file_bytes(&path)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    assert_eq!(
+        saved_envelope["futureEnvelopeData"],
+        json!({"retained": true})
+    );
+
+    let reopened_bytes = crate::document_storage::DocumentStorage
+        .read_file_bytes(&path)
+        .map_err(|error| error.to_string())?;
+    let mut reopened = DocumentSessionService::new_blank()?;
+    reopened.open_bytes(&reopened_bytes, &path, 1, 0)?;
+    assert!(!reopened.is_dirty());
+    assert_eq!(
+        serde_json::to_value(reopened.view.document()).map_err(|error| error.to_string())?["body"],
+        expected_body
+    );
+    let reopened_document =
+        serde_json::to_value(reopened.view.document()).map_err(|error| error.to_string())?;
+    assert_eq!(
+        reopened_document["body"][0]["inlines"][0]["mathTree"]["root"]["content"][0]["id"],
+        "inline-environment"
+    );
+    assert_eq!(
+        reopened_document["body"][1]["mathTree"]["root"]["content"][0]["runs"][0]["props"]["underline"],
+        true
+    );
+    assert_eq!(
+        reopened_document["body"][1]["vendorEquation"],
+        json!({"kept": true})
+    );
+    assert_eq!(reopened_document["body"][2]["rows"][1]["id"], "align-row-2");
+    assert_eq!(
+        reopened_document["body"][2]["rows"][0]["cells"][0]["root"]["id"],
+        "align-cell-root"
+    );
+    assert_eq!(
+        reopened_document["body"][2]["rows"][0]["cells"][0]["vendorCellTree"],
+        "kept"
+    );
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[test]
+fn failed_math_edit_save_preserves_file_session_and_retries_cleanly() -> Result<(), String> {
+    let mut service = DocumentSessionService::new_blank()?;
+    enter_inline_math(&mut service)?;
+
+    let root =
+        std::env::temp_dir().join(format!("caret-math-save-conflict-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let path = root.join("math.cdoc");
+
+    let base = service.save_snapshot()?;
+    crate::document_storage::DocumentStorage
+        .save_snapshot(&path, &base.bytes)
+        .map_err(|error| error.to_string())?;
+    assert!(service.mark_saved(
+        base.session_generation,
+        base.document_generation,
+        base.history_state_id,
+        &path,
+        &base.content_digest,
+    ));
+    assert!(!service.is_dirty());
+
+    type_math_text(&mut service)?;
+    let edited = service.save_snapshot()?;
+    let edited_generation = service.document_generation();
+    let saved_snapshot = service.saved_generation;
+    let saved_history = service.saved_history_state_id;
+    let saved_path = service.path.clone();
+    let saved_baseline = service.baseline_digest.clone();
+    let external_bytes = b"external writer changed this file";
+    std::fs::write(&path, external_bytes).map_err(|error| error.to_string())?;
+
+    let conflict = crate::document_storage::DocumentStorage.save_snapshot_if_unchanged(
+        &path,
+        &edited.bytes,
+        &base.content_digest,
+    );
+    assert!(matches!(
+        conflict,
+        Err(crate::document_storage::DocumentStorageError::ExternalConflict)
+    ));
+    assert_eq!(
+        std::fs::read(&path).map_err(|error| error.to_string())?,
+        external_bytes
+    );
+    assert!(service.is_dirty());
+    assert_eq!(service.document_generation(), edited_generation);
+    assert_eq!(service.saved_generation, saved_snapshot);
+    assert_eq!(service.saved_history_state_id, saved_history);
+    assert_eq!(service.path, saved_path);
+    assert_eq!(service.baseline_digest, saved_baseline);
+
+    let external_digest = super::content_digest(external_bytes);
+    crate::document_storage::DocumentStorage
+        .save_snapshot_if_unchanged(&path, &edited.bytes, &external_digest)
+        .map_err(|error| error.to_string())?;
+    assert!(service.mark_saved(
+        edited.session_generation,
+        edited.document_generation,
+        edited.history_state_id,
+        &path,
+        &edited.content_digest,
+    ));
+    assert!(!service.is_dirty());
+
+    let reopened = crate::document_storage::DocumentStorage
+        .open_file(&path)
+        .map_err(|error| error.to_string())?;
+    let OpenedDocument::Editable(reopened) = reopened else {
+        return Err("retried math save should reopen as editable".to_owned());
+    };
+    let reopened_body = serde_json::to_value(reopened.document())
+        .map_err(|error| error.to_string())?["body"]
+        .clone();
+    let edited_body = serde_json::from_slice::<Value>(&edited.bytes)
+        .map_err(|error| error.to_string())?["document"]["body"]
+        .clone();
+    assert_eq!(reopened_body, edited_body);
+
+    std::fs::remove_dir_all(root).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -456,10 +631,19 @@ fn tree_native_math_text_is_dirty_without_a_source_draft() -> Result<(), String>
     assert_eq!(status["mathSourceDraftPending"], false);
     assert!(!service.view_mut().has_uncommitted_math_source_draft());
     assert_ne!(status["historyStateId"], saved_history_state_id.to_string());
-    assert_eq!(
-        service.save_snapshot().err().as_deref(),
-        Some("cdoc.safe_preview_read_only")
+    let snapshot = service.save_snapshot()?;
+    assert_eq!(snapshot.document_generation, service.document_generation());
+    let saved_file = caret_doc::open(&snapshot.bytes).map_err(|error| error.to_string())?;
+    assert!(matches!(saved_file, OpenedDocument::Editable(_)));
+    assert!(
+        serde_json::from_slice::<Value>(&snapshot.bytes)
+            .map_err(|error| error.to_string())?["requiredFeatures"]
+            .as_array()
+            .is_some_and(|features| features.iter().any(|feature| feature == "caret.math.inline"))
     );
+    let after_snapshot: Value =
+        serde_json::from_str(&service.status_json()).map_err(|error| error.to_string())?;
+    assert_eq!(after_snapshot["dirty"], true);
     Ok(())
 }
 

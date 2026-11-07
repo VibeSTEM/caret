@@ -8,7 +8,7 @@ pub use caret_font_roles::FontRole;
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
-pub(crate) use unicode::is_mandatory_line_break;
+pub(crate) use unicode::{is_mandatory_break_character, is_mandatory_line_break};
 
 /// 传入 Parley 的段落基础样式；格式环境和 Run 语言在行内范围上覆盖它。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -46,6 +46,23 @@ impl ShapingStyle {
             language: None,
         }
     }
+
+    /// 应用 Run 自身支持的 shaping 覆盖；局部字体仍由 Font 环境表达。
+    pub fn with_run(&self, run: &caret_doc::Run) -> Self {
+        let mut style = self.clone();
+        if let Some(language) = &run.language {
+            style.language = Some(language.clone());
+        }
+        style
+    }
+}
+
+/// 返回 Run 声明的下划线样式；正文与数学 TextFlow 使用同一属性解释。
+pub fn run_has_underline(run: &caret_doc::Run) -> bool {
+    run.props
+        .get("underline")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[derive(Debug)]
@@ -177,19 +194,11 @@ fn append_inlines<'a>(
         match node {
             FlowContent::Text(TextFlow { runs, .. }) => {
                 for run in runs {
-                    let mut run_style = style.clone();
-                    if let Some(language) = &run.language {
-                        run_style.language = Some(language.clone());
-                    }
                     if !run.text.is_empty() {
                         output.push(StyledSpan {
                             text: &run.text,
-                            style: run_style,
-                            underline: run
-                                .props
-                                .get("underline")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false),
+                            style: style.with_run(run),
+                            underline: run_has_underline(run),
                         });
                     }
                 }

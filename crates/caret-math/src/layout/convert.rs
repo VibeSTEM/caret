@@ -44,6 +44,16 @@ pub(crate) struct Converter<'a> {
 }
 
 impl Converter<'_> {
+    fn styled_position(
+        &self,
+        position: &Option<NodePosition>,
+        style: Style,
+    ) -> Option<NodePosition> {
+        let mut position = position.clone()?;
+        position.font_size_pt = Some(self.ctx.font_size(style));
+        Some(position)
+    }
+
     /// 排版一个节点，并记录其范围供命中测试。
     pub(crate) fn node(&mut self, node: &MathNode, style: Style) -> Fragment {
         if matches!(
@@ -53,10 +63,32 @@ impl Converter<'_> {
             return self.layout(node, style);
         }
         let mut fragment = self.layout(node, style);
+        // 可选占位符不参与排版，但其 MathFlow 身份仍供结构导航使用。
+        for &index in node.kind.optional_placeholder_operands().iter().rev() {
+            let Some(child) = node.children.get(index) else {
+                continue;
+            };
+            if !is_placeholder_flow(child) {
+                continue;
+            }
+            fragment.frame.items.insert(
+                0,
+                (
+                    Point::new(0.0, fragment.frame.baseline),
+                    Item::Node {
+                        id: child.id.clone(),
+                        position: self.styled_position(&child.position, style),
+                        width: 0.0,
+                        height: 0.0,
+                        baseline: 0.0,
+                    },
+                ),
+            );
+        }
         let frame = &fragment.frame;
         let record = Item::Node {
             id: node.id.clone(),
-            position: node.position.clone(),
+            position: self.styled_position(&node.position, style),
             width: frame.width,
             height: frame.height,
             baseline: frame.baseline,
@@ -154,7 +186,7 @@ impl Converter<'_> {
                     out.push(self.node(child, math_style));
                 }
                 K::TextContent | K::TextSymbol | K::TextSpace | K::SoftBreak | K::Opaque => {
-                    let isolated = matches!(child.kind, K::SoftBreak | K::Opaque);
+                    let isolated = child.kind == K::Opaque;
                     if isolated {
                         self.flush_text_request(
                             std::mem::replace(
@@ -175,7 +207,9 @@ impl Converter<'_> {
                         *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
                         return;
                     };
-                    let text = if matches!(child.kind, K::TextSpace | K::SoftBreak) {
+                    let text = if child.kind == K::SoftBreak {
+                        "\n".to_owned()
+                    } else if child.kind == K::TextSpace {
                         " ".to_owned()
                     } else if child.kind == K::Opaque {
                         "�".to_owned()
@@ -297,12 +331,16 @@ impl Converter<'_> {
                         out,
                     );
                     *byte_offset = 0;
+                    if child.children.is_empty() {
+                        out.push(self.node(child, style));
+                        continue;
+                    }
                     let mut frame = Frame::new(0.0, 0.0, 0.0);
                     frame.push(
                         Point::default(),
                         Item::Node {
                             id: child.id.clone(),
-                            position: child.position.clone(),
+                            position: self.styled_position(&child.position, style),
                             width: 0.0,
                             height: 0.0,
                             baseline: 0.0,
@@ -400,13 +438,22 @@ impl Converter<'_> {
     fn collect(&mut self, children: &[MathNode], style: Style, out: &mut Vec<Fragment>) {
         for child in children {
             match child.kind {
+                K::Row
+                    if child.children.is_empty()
+                        && child
+                            .position
+                            .as_ref()
+                            .is_some_and(|position| position.is_flow) =>
+                {
+                    out.push(self.node(child, style));
+                }
                 K::Row => {
                     let mut frame = Frame::new(0.0, 0.0, 0.0);
                     frame.push(
                         Point::default(),
                         Item::Node {
                             id: child.id.clone(),
-                            position: child.position.clone(),
+                            position: self.styled_position(&child.position, style),
                             width: 0.0,
                             height: 0.0,
                             baseline: 0.0,
@@ -460,7 +507,7 @@ impl Converter<'_> {
                             Point::default(),
                             Item::Node {
                                 id: child.id.clone(),
-                                position: child.position.clone(),
+                                position: self.styled_position(&child.position, style),
                                 width: frame.width,
                                 height: frame.height,
                                 baseline: frame.baseline,
@@ -593,6 +640,7 @@ impl Converter<'_> {
                             is_text_flow: false,
                             is_flow: container.is_flow,
                             is_container: container.is_container,
+                            font_size_pt: Some(request.font_size_pt),
                         }),
                         width: container.width,
                         height: container.height,
@@ -612,6 +660,7 @@ impl Converter<'_> {
                             is_text_flow: run.is_text_flow,
                             is_flow: run.is_flow,
                             is_container: false,
+                            font_size_pt: Some(request.font_size_pt),
                         }),
                         width: run.width,
                         height: run.height,
@@ -641,7 +690,7 @@ impl Converter<'_> {
     fn optional(&mut self, node: &MathNode, index: usize, style: Style) -> Option<Fragment> {
         node.children
             .get(index)
-            .filter(|child| child.kind != K::Placeholder)
+            .filter(|child| child.kind != K::Placeholder && !is_placeholder_flow(child))
             .map(|child| self.node(child, style))
     }
 
@@ -651,6 +700,16 @@ impl Converter<'_> {
 
     fn layout(&mut self, node: &MathNode, style: Style) -> Fragment {
         match node.kind {
+            // 空流仍是可编辑槽位；仅在布局中产生占位几何，不修改 MathFlow。
+            K::Row
+                if node.children.is_empty()
+                    && node
+                        .position
+                        .as_ref()
+                        .is_some_and(|position| position.is_flow) =>
+            {
+                self.placeholder(style)
+            }
             K::Row => self.row(&node.children, style),
             K::Group => {
                 let mut group = self.row(&node.children, style);
@@ -828,7 +887,10 @@ impl Converter<'_> {
 
     fn placeholder(&self, style: Style) -> Fragment {
         let em = self.ctx.font_size(style);
-        let (width, height) = (0.6 * em, 0.7 * em);
+        let (width, height) = (
+            super::MATH_PLACEHOLDER_WIDTH_EM * em,
+            super::MATH_PLACEHOLDER_HEIGHT_EM * em,
+        );
         let mut frame = Frame::new(width, height, height);
         frame.push(
             Point::new(0.0, 0.0),
@@ -1399,8 +1461,11 @@ impl Converter<'_> {
                     .collect();
                 self.joined(fragments, AtomClass::Ord, style)
             }
-            K::TextSpace | K::SoftBreak => {
-                Fragment::new(Frame::new(0.25 * em, 0.0, 0.0), AtomClass::Ord)
+            K::TextSpace => Fragment::new(Frame::new(0.25 * em, 0.0, 0.0), AtomClass::Ord),
+            K::SoftBreak => {
+                // 数学字形回退路径无法排多行；要求调用方提供正文文本塑形器。
+                self.text_shaping_error = Some(super::MathTextShapeError::UnsupportedInput);
+                Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord)
             }
             K::TextStyle => {
                 let variant = match Self::attribute(node, "style") {
@@ -1431,7 +1496,7 @@ impl Converter<'_> {
         };
         let record = Item::Node {
             id: node.id.clone(),
-            position: node.position.clone(),
+            position: self.styled_position(&node.position, style),
             width: fragment.frame.width,
             height: fragment.frame.height,
             baseline: fragment.frame.baseline,
@@ -1480,6 +1545,15 @@ impl Converter<'_> {
         };
         boxed(body, fill, border, style)
     }
+}
+
+fn is_placeholder_flow(node: &MathNode) -> bool {
+    node.kind == K::Row
+        && node
+            .position
+            .as_ref()
+            .is_some_and(|position| position.is_flow)
+        && matches!(node.children.as_slice(), [only] if only.kind == K::Placeholder)
 }
 
 fn has_text_items(node: &MathNode) -> bool {

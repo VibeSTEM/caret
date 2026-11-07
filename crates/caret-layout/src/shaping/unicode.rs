@@ -173,6 +173,12 @@ pub(crate) fn is_mandatory_line_break(value: icu_properties::props::LineBreak) -
     )
 }
 
+/// 判断一个源字符是否具有强制换行语义。
+pub(crate) fn is_mandatory_break_character(character: char) -> bool {
+    use icu_properties::{CodePointMapData, props::LineBreak};
+    is_mandatory_line_break(CodePointMapData::<LineBreak>::new().get(character))
+}
+
 /// 在有序、不重叠的词典语言范围中二分查询断点归属。
 fn is_inside_dictionary_range(boundary: usize, ranges: &[Range<usize>]) -> bool {
     let index = ranges.partition_point(|range| range.end <= boundary);

@@ -376,6 +376,74 @@ fn movement_enters_nested_operands_and_returns_to_the_parent_sequence() {
 }
 
 #[test]
+fn movement_skips_invisible_optional_placeholder_operands() {
+    let radical_tree = tree(vec![node(
+        MathNodeKind::Radical,
+        vec![
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+            flow(vec![text("x")]),
+        ],
+    )]);
+    let start = position(Vec::new(), 0);
+
+    let MathTreeCaretMove::TextFlow(radicand, cursor) =
+        advance_math_tree_position(&radical_tree, &start, true, None)
+            .unwrap_or_else(|_| panic!("movement should enter the visible radicand"))
+    else {
+        panic!("movement must skip the invisible optional index slot");
+    };
+    assert_eq!(cursor, 0);
+    assert_eq!(
+        radicand.steps(),
+        &[
+            MathPathStep::Content(0),
+            MathPathStep::Operand(1),
+            MathPathStep::Content(0),
+        ]
+    );
+
+    let radicand_start = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }],
+        0,
+    );
+    let MathTreeCaretMove::Position(before_radical) =
+        advance_math_tree_position(&radical_tree, &radicand_start, false, None)
+            .unwrap_or_else(|_| panic!("reverse movement should leave the radical"))
+    else {
+        panic!("reverse movement must not enter the hidden radical index");
+    };
+    assert!(before_radical.path.steps().is_empty());
+    assert_eq!(before_radical.offset, 0);
+
+    let sum = tree(vec![node(
+        MathNodeKind::Sum,
+        vec![
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+            flow(vec![text("body")]),
+        ],
+    )]);
+    let body_start = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 2,
+        }],
+        0,
+    );
+    let MathTreeCaretMove::Position(before_sum) =
+        advance_math_tree_position(&sum, &body_start, false, None)
+            .unwrap_or_else(|_| panic!("reverse movement should leave the sum"))
+    else {
+        panic!("reverse movement must skip both hidden sum limits");
+    };
+    assert!(before_sum.path.steps().is_empty());
+    assert_eq!(before_sum.offset, 0);
+}
+
+#[test]
 fn movement_preserves_an_empty_fixed_slot_as_a_structural_caret_stop() {
     let tree = tree(vec![node(
         MathNodeKind::Fraction,

@@ -5,10 +5,8 @@
 
 use super::super::super::EditError;
 use super::super::path::content_slot_mut;
-use super::super::{
-    MathTextFlowPath,
-    text_run_split::{split_text_flow_runs, text_flow_boundary},
-};
+use super::super::{MathTextFlowPath, text_run_split::split_text_flow_for_replacement};
+use crate::editing::flow_edit::text_flow_boundary;
 use caret_doc::{MathContent, MathNode, Run};
 use std::ops::Range;
 
@@ -39,23 +37,20 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_split_tree_edit(
         return Err(EditError::InvalidPosition);
     }
 
-    let (left_runs, right_runs) = split_text_flow_runs(&original, &display_range)
+    let split = split_text_flow_for_replacement(&original, &display_range)
         .ok_or(EditError::UnsupportedOpaqueContent)?;
-    let has_left = !left_runs.is_empty() || display_range.start == 0;
-    let has_right =
-        !right_runs.is_empty() || display_range.end == display_len || display_range.is_empty();
-    let fragment_count = usize::from(has_left) + usize::from(has_right);
-    if fragment_count != 1 && !original.extra.is_empty() {
-        return Err(EditError::UnsupportedOpaqueContent);
-    }
+    let fragment_count = usize::from(split.has_left) + usize::from(split.has_right);
 
     let mut contents = Vec::with_capacity(
         fragment_count
             + inserted_contents.len()
             + usize::from(inserted_contents.is_empty() && replacement == "$$"),
     );
-    if has_left {
-        contents.push(MathContent::Text(text_flow_fragment(&original, left_runs)?));
+    if split.has_left {
+        contents.push(MathContent::Text(text_flow_fragment(
+            &original,
+            split.left_runs,
+        )?));
     }
     contents.extend(inserted_contents.iter().cloned());
     if inserted_contents.is_empty() && replacement == "$$" {
@@ -68,9 +63,10 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_split_tree_edit(
             extra: Default::default(),
         }));
     }
-    if has_right {
+    if split.has_right {
         contents.push(MathContent::Text(text_flow_fragment(
-            &original, right_runs,
+            &original,
+            split.right_runs,
         )?));
     }
 

@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use super::MathTextFlowPathStep;
+use super::optional_placeholder_operand;
 use super::path::MathTextFlowPath;
 use caret_doc::{MathContent, MathTree, NodeId};
 
@@ -259,16 +260,36 @@ pub(super) fn advance_math_tree_position(
                 enter_sequence_edge(position, path, child_contents, forward, align_cell)
             }
             MathContent::Math(node) if !node.children.is_empty() => {
-                let operand_index = if forward { 0 } else { node.children.len() - 1 };
-                let path = child_sequence_path(
-                    position,
-                    MathSequenceStep::Operand {
-                        content_index,
-                        operand_index,
-                    },
-                );
-                let child_contents = node.children[operand_index].content.as_slice();
-                enter_sequence_edge(position, path, child_contents, forward, align_cell)
+                let operand_index = if forward {
+                    (0..node.children.len())
+                        .find(|&index| !optional_placeholder_operand(node, index))
+                } else {
+                    (0..node.children.len())
+                        .rev()
+                        .find(|&index| !optional_placeholder_operand(node, index))
+                };
+                if let Some(operand_index) = operand_index {
+                    let path = child_sequence_path(
+                        position,
+                        MathSequenceStep::Operand {
+                            content_index,
+                            operand_index,
+                        },
+                    );
+                    let child_contents = node.children[operand_index].content.as_slice();
+                    enter_sequence_edge(position, path, child_contents, forward, align_cell)
+                } else {
+                    let offset = if forward {
+                        content_index + 1
+                    } else {
+                        content_index
+                    };
+                    Ok(MathTreeCaretMove::Position(position_at(
+                        position,
+                        position.path.clone(),
+                        offset,
+                    )))
+                }
             }
             MathContent::Math(_)
             | MathContent::Environment(_)
@@ -365,11 +386,12 @@ fn climb_math_tree_position(
                 });
             };
             let sibling = if forward {
-                operand_index
-                    .checked_add(1)
-                    .filter(|next| *next < node.children.len())
+                (operand_index.saturating_add(1)..node.children.len())
+                    .find(|&next| !optional_placeholder_operand(node, next))
             } else {
-                operand_index.checked_sub(1)
+                (0..operand_index)
+                    .rev()
+                    .find(|&previous| !optional_placeholder_operand(node, previous))
             };
             if let Some(operand_index) = sibling {
                 let sibling_path = child_sequence_path(

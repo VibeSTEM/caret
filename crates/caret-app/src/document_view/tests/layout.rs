@@ -2,8 +2,8 @@
 
 use super::*;
 use caret_doc::{
-    BlockEnvironment, BlockEnvironmentKind, InlineEnvironment, InlineEnvironmentKind, NodeId,
-    Paragraph, ParagraphContent, Run,
+    BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment, InlineEnvironmentKind,
+    MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -227,6 +227,591 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
     );
     let resumed: Value = serde_json::from_str(&runtime.paste_text_json("z".to_owned())?)?;
     assert_eq!(resumed["inputMethodContext"]["surroundingText"], "z");
+    Ok(())
+}
+
+#[test]
+fn vertical_math_navigation_moves_between_align_rows_and_edits_the_new_cell()
+-> Result<(), Box<dyn std::error::Error>> {
+    let text_tree = |text: &str| caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: text.to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: vec![
+            caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![text_tree("ab"), text_tree("x")],
+                extra: BTreeMap::new(),
+            },
+            caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![text_tree("cd"), text_tree("y")],
+                extra: BTreeMap::new(),
+            },
+        ],
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let (page_index, x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let mut hit_point = None;
+        'pages: for (page_index, page) in snapshot.pages.iter().enumerate() {
+            for fragment in &page.layout.math_fragments {
+                let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let right = left + f64::from(fragment.width_pt);
+                let bottom = top + f64::from(fragment.height_pt);
+                let mut y = top;
+                while y <= bottom {
+                    let mut x = left;
+                    while x <= right {
+                        if snapshot
+                            .hit_test_math_text(page_index, x, y)
+                            .is_some_and(|hit| hit.position.path.align_cell() == Some((0, 0)))
+                        {
+                            hit_point = Some((page_index, x, y));
+                            break 'pages;
+                        }
+                        x += 0.5;
+                    }
+                    y += 0.5;
+                }
+            }
+        }
+        hit_point.ok_or_else(|| std::io::Error::other("first Align text cell is not hittable"))?
+    };
+    let placed: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(page_index as i32, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathText"], true);
+    runtime.move_vertical_caret_json(1, false)?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("vertical navigation left math text"))?;
+    assert_eq!(context.focus.path.align_cell(), Some((1, 0)));
+    assert!(context.surrounding_text.contains("cd"));
+    runtime.insert_text_json("Z".to_owned())?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("typing left math TextFlow"))?;
+    assert!(context.surrounding_text.contains('Z'));
+    assert!(context.surrounding_text.contains("cd"));
+    Ok(())
+}
+
+#[test]
+fn clicking_empty_math_operand_installs_tree_focus_and_accepts_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let empty_numerator = caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: Vec::new(),
+        extra: BTreeMap::new(),
+    };
+    let denominator = caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: "x".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    };
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                id: NodeId::generate(),
+                kind: caret_doc::MathNodeKind::Fraction,
+                text: None,
+                attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+                children: vec![empty_numerator, denominator],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: NodeId::generate(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let (x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .first()
+            .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+        let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let right = left + f64::from(fragment.width_pt);
+        let bottom = top + f64::from(fragment.height_pt);
+        let mut hit_point = None;
+        let mut y = top;
+        while y <= bottom && hit_point.is_none() {
+            let mut x = left;
+            while x <= right {
+                if snapshot.hit_test_math_structure(0, x, y).is_some() {
+                    hit_point = Some((x, y));
+                    break;
+                }
+                x += 0.5;
+            }
+            y += 0.5;
+        }
+        hit_point.ok_or_else(|| std::io::Error::other("empty fraction operand was not hittable"))?
+    };
+
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
+    assert_eq!(placed["valid"], true);
+    assert_eq!(placed["mathTree"], true);
+    assert!(runtime.session.math_tree_input_context().is_some());
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    assert_eq!(caret["xPt"], placed["caret"]["xPt"]);
+    assert_eq!(caret["y0Pt"], placed["caret"]["y0Pt"]);
+    assert_eq!(interaction["caretGeometry"]["xPt"], caret["xPt"]);
+    assert_eq!(interaction["caretGeometry"]["fontSizeCentipoints"], 1200);
+    assert_eq!(full["caretGeometry"]["xPt"], caret["xPt"]);
+    assert_eq!(full["caretGeometry"]["fontSizeCentipoints"], 1200);
+
+    let generation = runtime.document_generation();
+    let inserted: Value = serde_json::from_str(&runtime.insert_text_json("n".to_owned())?)?;
+    assert_eq!(runtime.document_generation(), generation + 1);
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.branch),
+        Some(caret_engine::MathEditBranch::Tree { .. })
+    ));
+    let updated_caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    let updated_interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let updated_full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert!(updated_caret["xPt"].as_f64().is_some());
+    assert_eq!(inserted["caretGeometry"]["xPt"], updated_caret["xPt"]);
+    assert_eq!(
+        updated_interaction["caretGeometry"]["xPt"],
+        updated_caret["xPt"]
+    );
+    assert_eq!(updated_full["caretGeometry"]["xPt"], updated_caret["xPt"]);
+    Ok(())
+}
+
+#[test]
+fn nonempty_math_structure_can_be_hit_and_focused() -> Result<(), Box<dyn std::error::Error>> {
+    let mut editing_runtime = DocumentViewRuntime::new_blank()?;
+    editing_runtime.command_line_command_json("begin", String::new())?;
+    editing_runtime.command_line_command_json("type", "math".to_owned())?;
+    editing_runtime.command_line_command_json("accept", String::new())?;
+    editing_runtime.insert_text_json("x".to_owned())?;
+    let bytes = caret_doc::CdocFile::new(editing_runtime.session.document().clone())?.to_bytes()?;
+    let opened = caret_doc::open(&bytes)?;
+    let caret_doc::OpenedDocument::Editable(reopened) = opened else {
+        return Err("saved math document should reopen as editable".into());
+    };
+    let mut runtime = DocumentViewRuntime::new(reopened.document().clone())?;
+    runtime.layout_snapshot_json()?;
+
+    let hit_point = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let left = page.margin_left_pt;
+        let top = page.margin_top_pt;
+        let right = left + 120.0;
+        let bottom = top + 100.0;
+        let mut found = None;
+        let mut y = top;
+        while y <= bottom && found.is_none() {
+            let mut x = left;
+            while x <= right {
+                if snapshot.hit_test_math_structure(0, x, y).is_some() {
+                    found = Some((x, y));
+                    break;
+                }
+                x += 1.0;
+            }
+            y += 1.0;
+        }
+        found.ok_or("nonempty math structure should be hittable")?
+    };
+    let placed: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(0, hit_point.0, hit_point.1)?)?;
+    assert_eq!(placed["mathTree"], true);
+    assert!(runtime.session.math_tree_input_context().is_some());
+    Ok(())
+}
+
+#[test]
+fn math_split_inline_publishes_visible_structure_geometry_and_restores_it_in_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation_id = NodeId::generate();
+    let mut document = caret_doc::Document::blank();
+    document.body.push(caret_doc::Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: "ab".to_owned(),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let split_caret = hit_map["stops"]
+        .as_array()
+        .and_then(|stops| {
+            stops.iter().find(|stop| {
+                stop["position"]["kind"] == "math"
+                    && stop["position"]["orderUtf8"] == "1"
+                    && stop["visualAffinity"] == "downstream"
+            })
+        })
+        .ok_or("middle math text caret stop is missing")?;
+    runtime.set_selection_json(
+        &serde_json::json!({
+            "anchor": split_caret["position"],
+            "focus": split_caret["position"],
+        })
+        .to_string(),
+    )?;
+    assert!(runtime.session.math_text_input_context().is_some());
+
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
+    assert!(
+        runtime
+            .session
+            .command_line_candidates()
+            .iter()
+            .any(|candidate| candidate.command_id == "math.split_inline" && candidate.available)
+    );
+    runtime.command_line_command_json("accept", String::new())?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.branch),
+        Some(caret_engine::MathEditBranch::Tree { .. })
+    ));
+
+    let published: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let caret = &published["caretGeometry"];
+    let caret_top = caret["y0Pt"].as_f64().ok_or("tree caret has no top edge")?;
+    let caret_bottom = caret["y1Pt"]
+        .as_f64()
+        .ok_or("tree caret has no bottom edge")?;
+    assert!(
+        caret_bottom > caret_top,
+        "split caret must have visible height"
+    );
+    let snapshot = runtime.current_snapshot()?;
+    let math_layout = snapshot
+        .math_blocks
+        .get(&equation_id)
+        .ok_or("split equation layout is missing")?;
+    assert!(math_layout.width > 0.0 && math_layout.ascent + math_layout.descent > 0.0);
+    assert!(
+        snapshot
+            .hit_test_math_structure(
+                0,
+                caret["xPt"].as_f64().ok_or("tree caret has no x")?,
+                (caret_top + caret_bottom) / 2.0
+            )
+            .is_some(),
+        "split structure caret must remain hittable in the published snapshot"
+    );
+
+    runtime.session.run(caret_engine::Command::Undo)?;
+    let undone: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert!(undone["caretGeometry"]["y1Pt"].as_f64() > undone["caretGeometry"]["y0Pt"].as_f64());
+    runtime.session.run(caret_engine::Command::Redo)?;
+    let redone: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert!(redone["caretGeometry"]["y1Pt"].as_f64() > redone["caretGeometry"]["y0Pt"].as_f64());
+    Ok(())
+}
+
+#[test]
+fn leaving_math_text_inside_environment_publishes_tree_caret_geometry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let text_flow = caret_doc::TextFlow {
+        runs: vec![Run {
+            text: "a\nb".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: equation_id,
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![caret_doc::MathContent::Environment(InlineEnvironment {
+                    id: NodeId::generate(),
+                    kind: InlineEnvironmentKind::Bold,
+                    definition_id: None,
+                    props: BTreeMap::new(),
+                    children: vec![
+                        caret_doc::MathContent::Text(text_flow),
+                        caret_doc::MathContent::Math(caret_doc::MathNode {
+                            id: NodeId::generate(),
+                            kind: caret_doc::MathNodeKind::Symbol,
+                            text: Some("x".to_owned()),
+                            attributes: BTreeMap::new(),
+                            children: Vec::new(),
+                            extra: BTreeMap::new(),
+                        }),
+                    ],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let (x_pt, y_pt, math_height) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .first()
+            .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+        let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let right = left + f64::from(fragment.width_pt);
+        let bottom = top + f64::from(fragment.height_pt);
+        let mut hit_point = None;
+        let mut y = top;
+        while y <= bottom && hit_point.is_none() {
+            let mut x = left;
+            while x <= right {
+                if snapshot.hit_test_math_text(0, x, y).is_some() {
+                    hit_point = Some((x, y));
+                    break;
+                }
+                x += 0.5;
+            }
+            y += 0.5;
+        }
+        let (x_pt, y_pt) = hit_point
+            .ok_or_else(|| std::io::Error::other("environment TextFlow was not hittable"))?;
+        (x_pt, y_pt, f64::from(fragment.height_pt))
+    };
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathText"], true);
+    runtime
+        .session
+        .run(caret_engine::Command::SetMathTextSelection {
+            anchor: 3,
+            focus: 3,
+        })?;
+    let moved: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+    assert!(runtime.session.math_tree_input_context().is_some());
+    let caret_height = moved["caretGeometry"]["y1Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("tree caret has no lower edge"))?
+        - moved["caretGeometry"]["y0Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("tree caret has no upper edge"))?;
+    assert!(caret_height < math_height);
+
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    assert_eq!(interaction["caretGeometry"]["xPt"], caret["xPt"]);
+    assert_eq!(full["caretGeometry"]["xPt"], caret["xPt"]);
+    assert!(caret["y1Pt"].as_f64() > caret["y0Pt"].as_f64());
+    Ok(())
+}
+
+#[test]
+fn space_only_math_tree_keeps_a_published_tree_caret() -> Result<(), Box<dyn std::error::Error>> {
+    for source in [r"\,", r"\!"] {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
+        runtime
+            .session
+            .run(caret_engine::Command::InsertInlineMath(source.to_owned()))?;
+        runtime.session.run(caret_engine::Command::EnterMath(
+            caret_engine::Direction::Backward,
+        ))?;
+
+        let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+        let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+        assert!(runtime.session.math_tree_input_context().is_some());
+        assert!(caret["xPt"].as_f64().is_some(), "{source} has no caret x");
+        let caret_height = caret["y1Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("space-only math caret has no lower edge"))?
+            - caret["y0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("space-only math caret has no upper edge"))?;
+        assert!(caret_height > 0.0, "{source} has no caret height");
+        assert_eq!(full["caretGeometry"]["xPt"], caret["xPt"]);
+        assert_eq!(interaction["caretGeometry"]["xPt"], caret["xPt"]);
+    }
+    Ok(())
+}
+
+#[test]
+fn inserting_mandatory_break_into_math_text_commits_and_publishes_both_lines()
+-> Result<(), Box<dyn std::error::Error>> {
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "ab".to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    let equation_id = NodeId::generate();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let (x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .first()
+            .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+        let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let right = left + f64::from(fragment.width_pt);
+        let bottom = top + f64::from(fragment.height_pt);
+        let mut hit_point = None;
+        let mut y = top;
+        while y <= bottom && hit_point.is_none() {
+            let mut x = left;
+            while x <= right {
+                if snapshot
+                    .hit_test_math_text(0, x, y)
+                    .is_some_and(|hit| hit.position.offset == 1)
+                {
+                    hit_point = Some((x, y));
+                    break;
+                }
+                x += 0.5;
+            }
+            y += 0.5;
+        }
+        hit_point.ok_or_else(|| std::io::Error::other("equation TextFlow was not hittable"))?
+    };
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathText"], true);
+    let generation_before = runtime.document_generation();
+    runtime.insert_text_json("\u{0085}".to_owned())?;
+
+    assert_eq!(runtime.document_generation(), generation_before + 1);
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("mandatory break left the math text branch"))?;
+    assert!(context.surrounding_text.contains('\u{0085}'));
+    let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    assert!(caret["y0Pt"].as_f64() > placed["caret"]["y0Pt"].as_f64());
+    let second_line_hit = runtime
+        .current_snapshot()?
+        .hit_test_math_text(
+            0,
+            caret["xPt"].as_f64().ok_or("caret x is missing")?,
+            (caret["y0Pt"].as_f64().ok_or("caret y0 is missing")?
+                + caret["y1Pt"].as_f64().ok_or("caret y1 is missing")?)
+                / 2.0,
+        )
+        .ok_or_else(|| std::io::Error::other("second line text was not hittable"))?;
+    assert_eq!(second_line_hit.position.offset, 3);
+    let page = runtime
+        .current_snapshot()?
+        .page_glyphs(0)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let baselines = page
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.baseline_y_pt))
+        .collect::<Vec<_>>();
+    let min_baseline = baselines
+        .iter()
+        .copied()
+        .reduce(f64::min)
+        .ok_or_else(|| std::io::Error::other("first-line glyph is missing"))?;
+    let max_baseline = baselines
+        .iter()
+        .copied()
+        .reduce(f64::max)
+        .ok_or_else(|| std::io::Error::other("second-line glyph is missing"))?;
+    assert!(
+        max_baseline - min_baseline > 5.0,
+        "glyph baselines: {baselines:?}; text: {:?}; generation: {}",
+        context.surrounding_text,
+        runtime.document_generation()
+    );
     Ok(())
 }
 

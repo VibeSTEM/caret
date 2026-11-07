@@ -1,4 +1,4 @@
-// 将页面点击转换为 Rust 文档中的插入点。
+// 将页面点击与拖选映射到 Rust 文档插入点和共享选区协议。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -135,6 +135,20 @@ Item {
         if (pageHit.pageIndex < 0)
             return;
 
+        let startDomainId = "";
+        if (start) {
+            const hit = LayoutViewModel.dragStartDomain(pageHit.pageIndex, pageHit.xPt, pageHit.yPt);
+            if (!hit.valid) {
+                console.warn("Document drag start hit failed:", hit.error);
+                return;
+            }
+            if (hit.domainId === "")
+                return;
+            startDomainId = hit.domainId;
+        } else if (dragAnchor === null) {
+            return;
+        }
+
         const key = String(pageHit.pageIndex);
         if (dragMaps[key] === undefined) {
             const anchorPage = dragAnchorPage < 0 ? pageHit.pageIndex : dragAnchorPage;
@@ -145,25 +159,37 @@ Item {
         if (pageMap === undefined)
             return;
 
-        const stops = pageMap.stops;
-        if (!stops || stops.length === 0)
+        const stops = [];
+        const pageMaps = Object.values(dragMaps);
+        for (let mapIndex = 0; mapIndex < pageMaps.length; ++mapIndex) {
+            const pageStops = pageMaps[mapIndex].stops || [];
+            for (let stopIndex = 0; stopIndex < pageStops.length; ++stopIndex) {
+                const stop = pageStops[stopIndex];
+                if ((startDomainId.length > 0 && stop.domainId === startDomainId) || (startDomainId.length === 0 && dragAnchor !== null && stop.domainId === dragAnchor.domainId))
+                    stops.push(stop);
+            }
+        }
+        if (stops.length === 0)
             return;
         let best = null;
+        let bestPageDistance = Number.MAX_VALUE;
         let bestVerticalDistance = Number.MAX_VALUE;
         let bestHorizontalDistance = Number.MAX_VALUE;
         for (let index = 0; index < stops.length; ++index) {
             const stop = stops[index];
+            const pageDistance = Math.abs(stop.pageIndex - pageHit.pageIndex);
             const verticalDistance = distanceToLine(stop, pageHit.yPt);
             const horizontalDistance = Math.abs(stop.xPt - pageHit.xPt);
-            if (verticalDistance < bestVerticalDistance || (verticalDistance === bestVerticalDistance && horizontalDistance < bestHorizontalDistance)) {
+            if (pageDistance < bestPageDistance || (pageDistance === bestPageDistance && verticalDistance < bestVerticalDistance) || (pageDistance === bestPageDistance && verticalDistance === bestVerticalDistance && horizontalDistance < bestHorizontalDistance)) {
                 best = stop;
+                bestPageDistance = pageDistance;
                 bestVerticalDistance = verticalDistance;
                 bestHorizontalDistance = horizontalDistance;
             }
         }
         if (best === null)
             return;
-        if (start || dragAnchor === null) {
+        if (start) {
             dragAnchor = best;
             dragAnchorPage = pageHit.pageIndex;
         }
@@ -193,14 +219,10 @@ Item {
         for (const pageMap of Object.values(dragMaps)) {
             for (let index = 0; index < pageMap.segments.length; ++index) {
                 const segment = pageMap.segments[index];
-                const segmentStart = {
-                    paragraphIndex: segment.paragraphIndex,
-                    offsetUtf8: segment.startUtf8
-                };
-                const segmentEnd = {
-                    paragraphIndex: segment.paragraphIndex,
-                    offsetUtf8: segment.endUtf8
-                };
+                if (segment.domainId !== anchor.domainId)
+                    continue;
+                const segmentStart = segment.startPosition;
+                const segmentEnd = segment.endPosition;
                 if (comparePosition(startPosition, segmentEnd) < 0 && comparePosition(endPosition, segmentStart) > 0)
                     result.push(segment);
             }
@@ -209,10 +231,21 @@ Item {
     }
 
     function comparePosition(left, right) {
-        if (left.paragraphIndex !== right.paragraphIndex)
-            return left.paragraphIndex < right.paragraphIndex ? -1 : 1;
-        const leftOffset = Number(left.offsetUtf8);
-        const rightOffset = Number(right.offsetUtf8);
-        return leftOffset < rightOffset ? -1 : (leftOffset > rightOffset ? 1 : 0);
+        if (left.kind === "body" && right.kind === "body") {
+            if (left.paragraphIndex !== right.paragraphIndex)
+                return left.paragraphIndex < right.paragraphIndex ? -1 : 1;
+            return compareDecimal(left.orderUtf8, right.orderUtf8);
+        }
+        if (left.kind === "math" && right.kind === "math")
+            return compareDecimal(left.orderUtf8, right.orderUtf8);
+        return 0;
+    }
+
+    function compareDecimal(left, right) {
+        const leftValue = String(left);
+        const rightValue = String(right);
+        if (leftValue.length !== rightValue.length)
+            return leftValue.length < rightValue.length ? -1 : 1;
+        return leftValue < rightValue ? -1 : (leftValue > rightValue ? 1 : 0);
     }
 }

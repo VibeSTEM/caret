@@ -50,6 +50,7 @@ class ShellLoadTest : public QObject {
 #endif
 #ifdef CARET_ENABLE_APP
     void documentHitTestReturnsRustPosition();
+    void mathTextDragUsesSharedPreviewAndCommitProtocol();
     void documentInputDeltaKeepsUntouchedPagesAndParagraphs();
     void documentFileFlowPreservesSaveStateAndReopens();
     void autoSaveWritesTheCurrentRevisionAfterTheDeadline();
@@ -63,6 +64,7 @@ class ShellLoadTest : public QObject {
     void documentCaretNavigationUpdatesObservablePosition();
     void confirmedConflictReplacementWritesCurrentDocument();
     void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();
+    void mathFontFallbackDiagnosticProjectsToViewModel();
     void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
 #endif
 };

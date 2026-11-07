@@ -420,6 +420,26 @@ message_077:
   tr: Custom environment
   st: finished
 
+message_158:
+  src: Equation
+  tr: Equation
+  st: finished
+
+message_159:
+  src: Align environment
+  tr: Align environment
+  st: finished
+
+message_160:
+  src: "Math font \"%1\" is not installed; using STIX Two Math."
+  tr: "Math font \"%1\" is not installed; using STIX Two Math."
+  st: finished
+
+message_161:
+  src: "Math font \"%1\" is unsupported; using STIX Two Math."
+  tr: "Math font \"%1\" is unsupported; using STIX Two Math."
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

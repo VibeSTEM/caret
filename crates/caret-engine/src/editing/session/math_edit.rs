@@ -46,6 +46,7 @@ use inline_root_split::{
 pub(super) use path::TextIslandSnapshot;
 pub use path::{MathTextFlowPath, MathTextFlowPathStep, MathTextPosition};
 use source_draft::MathSourceDraft;
+pub(super) use text_branch::math_text_split_is_available;
 use text_branch::{MathTextEdit, apply_math_text_split_tree_edit, is_grapheme_boundary};
 pub use tree_position::{
     MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTreePosition,
@@ -137,6 +138,9 @@ fn first_placeholder_position(
             }
             MathContent::Math(node) => {
                 for (operand_index, flow) in node.children.iter().enumerate() {
+                    if optional_placeholder_operand(node, operand_index) {
+                        continue;
+                    }
                     let mut steps = path.steps().to_vec();
                     steps.push(MathSequenceStep::Operand {
                         content_index,
@@ -162,6 +166,18 @@ fn first_placeholder_position(
         }
     }
     None
+}
+
+pub(super) fn optional_placeholder_operand(
+    node: &caret_doc::MathNode,
+    operand_index: usize,
+) -> bool {
+    node.kind
+        .optional_placeholder_operands()
+        .contains(&operand_index)
+        && node.children.get(operand_index).is_some_and(|flow| {
+            matches!(flow.content.as_slice(), [MathContent::Math(child)] if child.kind == MathNodeKind::Placeholder)
+        })
 }
 
 fn math_content_has_unknown_metadata(content: &MathContent) -> bool {
@@ -838,10 +854,165 @@ fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
     block_list_ref(blocks, &parents).ok()?.get(index)
 }
 
+fn parked_position_for_math_target(
+    session: &Session,
+    target: &MathEditTarget,
+) -> Result<Option<Pos>, EditError> {
+    match target {
+        MathEditTarget::Inline {
+            paragraph_id,
+            math_id,
+        } => {
+            let story = session
+                .story_for_paragraph(paragraph_id)
+                .ok_or(EditError::InvalidPosition)?;
+            let probe = Pos {
+                story,
+                paragraph_id: paragraph_id.clone(),
+                offset: 0,
+                affinity: Affinity::Downstream,
+            };
+            let start = inline_math_slots(session.paragraph_for(&probe)?)?
+                .into_iter()
+                .find(|(_, id)| id == math_id)
+                .map(|(start, _)| start)
+                .ok_or(EditError::InvalidPosition)?;
+            Ok(Some(Pos {
+                offset: start + OBJECT_REPLACEMENT.len_utf8(),
+                affinity: Affinity::Upstream,
+                ..probe
+            }))
+        }
+        MathEditTarget::Block { block_id, .. } => {
+            let forward = session.paragraph_beside_math_chain(block_id, Direction::Forward)?;
+            match forward {
+                Some(position) => Ok(Some(position)),
+                None => session.paragraph_beside_math_chain(block_id, Direction::Backward),
+            }
+        }
+    }
+}
+
 impl Session {
     /// 当前公式编辑状态；为 `None` 时光标在正文中。
     pub fn math_edit(&self) -> Option<&MathEdit> {
         self.math_edit.as_ref()
+    }
+
+    /// 从同一布局代际绘制出的数学结构命中进入树原生编辑。
+    ///
+    /// 命中须属于当前会话、文档和字体代际，并解析到有效的 MathFlow 插入位置；拒绝时
+    /// 不改变文档、选择或编辑状态。
+    pub fn focus_math_structure_hit(
+        &mut self,
+        hit: &crate::PageMathStructureHit,
+        current_font_generation: u64,
+    ) -> Result<Effect, EditError> {
+        if self.composition.is_some() {
+            return Err(EditError::CompositionPending);
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.command_line.is_some() {
+            return Err(EditError::UnknownCommand);
+        }
+        if hit.session_id.as_ref() != Some(&self.session_id)
+            || hit.document_generation != self.document_generation
+            || hit.font_generation != current_font_generation
+            || self.has_uncommitted_math_source_draft()
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        let align_cell = match (&hit.target, &hit.position.host) {
+            (MathEditTarget::Inline { math_id, .. }, MathPositionHost::InlineMath { owner_id })
+                if math_id == owner_id =>
+            {
+                None
+            }
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: false,
+                },
+                MathPositionHost::Equation { owner_id },
+            ) if block_id == owner_id => None,
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: true,
+                },
+                MathPositionHost::AlignCell { row_id, cell_id },
+            ) => {
+                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
+                    .ok_or(EditError::InvalidPosition)?
+                else {
+                    return Err(EditError::InvalidPosition);
+                };
+                let row_index = align
+                    .rows
+                    .iter()
+                    .position(|row| row.id == *row_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let row = align
+                    .rows
+                    .get(row_index)
+                    .ok_or(EditError::InvalidPosition)?;
+                let cell_index = row
+                    .cells
+                    .iter()
+                    .position(|cell| cell.root.id == *cell_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                Some((row_index, cell_index))
+            }
+            _ => return Err(EditError::InvalidPosition),
+        };
+        let tree = math_tree_for_target(&self.document, &hit.target, align_cell)
+            .ok_or(EditError::InvalidPosition)?;
+        let contents = hit
+            .position
+            .resolve(tree)
+            .map_err(|_| EditError::InvalidPosition)?;
+        if hit.position.offset > contents.len() {
+            return Err(EditError::InvalidPosition);
+        }
+        if self.math_edit.as_ref().is_some_and(|edit| {
+            edit.target == hit.target
+                && matches!(&edit.branch, MathEditBranch::Tree { anchor, .. } if anchor == &hit.position)
+                && self.selection.anchor == self.selection.focus
+        }) {
+            return Ok(Effect::default());
+        }
+
+        let parked = parked_position_for_math_target(self, &hit.target)?;
+        let position = parked.unwrap_or_else(|| self.selection.focus.clone());
+        self.selection = Selection {
+            anchor: position.clone(),
+            focus: position.clone(),
+        };
+        self.selection_visual_affinity = match position.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        self.math_edit = Some(MathEdit {
+            target: hit.target.clone(),
+            source_projection: None,
+            source_draft: None,
+            revision: self.current_math_edit_revision(),
+            cursor: hit.position.offset,
+            branch: MathEditBranch::Tree {
+                path: hit.position.path.clone(),
+                anchor: hit.position.clone(),
+            },
+        });
+        self.pending_inline_style.clear();
+        self.selected_block_environment = None;
+        self.selected_block_environments.clear();
+        self.structure_selection = None;
+        self.block_environment_exit = None;
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
     }
 
     /// 从同一当前布局代际的公式文本命中进入树原生编辑。
@@ -960,41 +1131,8 @@ impl Session {
             });
         }
 
-        let parked_position = match &hit.target {
-            MathEditTarget::Inline {
-                paragraph_id,
-                math_id,
-            } => {
-                let story = self
-                    .story_for_paragraph(paragraph_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                let probe = Pos {
-                    story,
-                    paragraph_id: paragraph_id.clone(),
-                    offset: 0,
-                    affinity: Affinity::Downstream,
-                };
-                let start = inline_math_slots(self.paragraph_for(&probe)?)?
-                    .into_iter()
-                    .find(|(_, id)| id == math_id)
-                    .map(|(start, _)| start)
-                    .ok_or(EditError::InvalidPosition)?;
-                Some(Pos {
-                    offset: start + OBJECT_REPLACEMENT.len_utf8(),
-                    affinity: Affinity::Upstream,
-                    ..probe
-                })
-            }
-            MathEditTarget::Block { block_id, .. } => {
-                let forward = self.paragraph_beside_math_chain(block_id, Direction::Forward)?;
-                match forward {
-                    Some(position) => Some(position),
-                    None => self.paragraph_beside_math_chain(block_id, Direction::Backward)?,
-                }
-            }
-        };
-
-        let position = parked_position.unwrap_or_else(|| self.selection.focus.clone());
+        let position = parked_position_for_math_target(self, &hit.target)?
+            .unwrap_or_else(|| self.selection.focus.clone());
         self.selection = Selection {
             anchor: position.clone(),
             focus: position.clone(),
@@ -1027,6 +1165,42 @@ impl Session {
             selection_changed: true,
             ..Effect::default()
         })
+    }
+
+    /// 原子应用公式文本拖选端点，保留当前会话的身份、代际与历史。
+    ///
+    /// 两个端点先在同一候选状态中完成命中和字素边界校验；任一端点无效时，
+    /// 原会话完全不变。候选副本保留身份，避免纯选区操作伪装成会话替换。
+    pub fn set_math_text_selection_from_hits(
+        &mut self,
+        anchor_hit: &crate::PageMathTextHit,
+        focus_hit: &crate::PageMathTextHit,
+        current_font_generation: u64,
+    ) -> Result<Effect, EditError> {
+        if anchor_hit.target != focus_hit.target {
+            return Err(EditError::InvalidPosition);
+        }
+        let mut candidate = self.clone_preserving_identity();
+        let composition_effect =
+            if let Some(composition_id) = candidate.composition.as_ref().map(|c| c.id) {
+                candidate.cancel_composition(composition_id)?
+            } else {
+                Effect::default()
+            };
+        let anchor_effect = candidate.focus_math_text_hit(anchor_hit, current_font_generation)?;
+        let focus_effect = candidate.focus_math_text_hit(focus_hit, current_font_generation)?;
+        let mut effect = candidate.set_math_text_selection_positions_with_visual_affinities(
+            anchor_hit.position.clone(),
+            focus_hit.position.clone(),
+            anchor_hit.visual_affinity,
+            focus_hit.visual_affinity,
+        )?;
+        effect.composition_changed = composition_effect.composition_changed;
+        effect.selection_changed |= composition_effect.selection_changed
+            || anchor_effect.selection_changed
+            || focus_effect.selection_changed;
+        *self = candidate;
+        Ok(effect)
     }
 
     /// 公式编辑期间截获输入；`None` 表示命令由 Session 的常规分派继续处理。
@@ -2019,14 +2193,32 @@ impl Session {
         let original_tree = tree.clone();
         let start = anchor.offset.min(edit.cursor);
         let end = anchor.offset.max(edit.cursor);
+        let boundaries = GraphemeMap::new_with_fences(text, &[]).into_boundaries();
+        let graphemes = boundaries
+            .windows(2)
+            .map(|pair| text.get(pair[0]..pair[1]).ok_or(EditError::InvalidPosition))
+            .collect::<Result<Vec<_>, _>>()?;
+        let has_insertable_grapheme = graphemes.iter().any(|grapheme| {
+            grapheme
+                .chars()
+                .next()
+                .is_some_and(|character| !character.is_whitespace())
+        });
         let contents = tree_position::resolve_sequence_mut(&mut tree, &path)
             .ok_or(EditError::InvalidPosition)?;
         if end > contents.len() {
             return Err(EditError::InvalidPosition);
         }
-        if start == end
-            && matches!(contents.get(start), Some(MathContent::Math(node)) if node.kind == MathNodeKind::Placeholder)
-        {
+        let replaces_placeholder = start == end
+            && has_insertable_grapheme
+            && matches!(contents.get(start), Some(MathContent::Math(node)) if node.kind == MathNodeKind::Placeholder);
+        if replaces_placeholder {
+            if contents
+                .get(start)
+                .is_some_and(math_content_has_unknown_metadata)
+            {
+                return Err(EditError::UnsupportedOpaqueContent);
+            }
             contents.remove(start);
         }
         let selected = contents.drain(start..end).collect::<Vec<_>>();
@@ -2035,11 +2227,7 @@ impl Session {
         let mut position = anchor;
         position.offset = start;
         let mut literal_batch = String::new();
-        let boundaries = GraphemeMap::new_with_fences(text, &[]).into_boundaries();
-        for pair in boundaries.windows(2) {
-            let grapheme = text
-                .get(pair[0]..pair[1])
-                .ok_or(EditError::InvalidPosition)?;
+        for grapheme in graphemes {
             let Some(character) = grapheme.chars().next() else {
                 continue;
             };

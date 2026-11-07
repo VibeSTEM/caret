@@ -567,6 +567,13 @@ fn append_parser_node(
                 text_state,
             )?;
         }
+        MathNodeKind::SoftBreak => {
+            content.push(MathContent::SoftBreak(caret_doc::SoftBreak::default()));
+            if let Some(mapped_content) = mapped_content {
+                mapped_content.push(MathContentSourceMap::Other);
+            }
+            *text_state = None;
+        }
         MathNodeKind::Text
             if node
                 .attributes
@@ -2230,6 +2237,16 @@ impl<'s> Parser<'s> {
                             let node = self.node(
                                 K::TextSymbol,
                                 Some(character.to_string()),
+                                &[],
+                                Some(start..self.pos),
+                                Vec::new(),
+                            );
+                            items.push(node);
+                        }
+                        "newline" => {
+                            let node = self.node(
+                                K::SoftBreak,
+                                None,
                                 &[],
                                 Some(start..self.pos),
                                 Vec::new(),

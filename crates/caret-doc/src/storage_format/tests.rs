@@ -63,15 +63,16 @@ fn math_tree_round_trip_does_not_persist_tex_projections() -> Result<(), Box<dyn
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let OpenedDocument::SafePreview(opened) = open(envelope.to_string().as_bytes())? else {
-        panic!("math remains read-only until layout support is enabled");
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("supported math data should reopen as editable");
     };
-    assert_eq!(opened.to_json_value()?["document"], saved);
+    let reopened: Value = serde_json::from_slice(&opened.to_bytes()?)?;
+    assert_eq!(reopened["document"], saved);
     Ok(())
 }
 
 #[test]
-fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknown_fields()
+fn math_carriers_decode_and_open_as_typed_documents_preserving_ids_and_unknown_fields()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     let inline_math_tree = json!({
@@ -245,8 +246,8 @@ fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknow
     }
     envelope["document"] = saved_document.clone();
     let bytes = serde_json::to_vec(&envelope)?;
-    let OpenedDocument::SafePreview(opened) = open(&bytes)? else {
-        panic!("unsupported math features must open as a read-only preview");
+    let OpenedDocument::Editable(opened) = open(&bytes)? else {
+        panic!("supported math features should open as editable");
     };
     let [
         Block::Paragraph(reopened_paragraph),
@@ -279,7 +280,7 @@ fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknow
     assert_eq!(reopened_inline_math.id.as_str(), "inline-math-id");
     assert_eq!(reopened_equation.id.as_str(), "equation-id");
     assert_eq!(reopened_align.id.as_str(), "align-id");
-    let reopened = opened.to_json_value()?;
+    let reopened: Value = serde_json::from_slice(&opened.to_bytes()?)?;
     assert_eq!(reopened["document"], saved_document);
     assert_eq!(reopened["document"]["body"][0]["id"], "paragraph-id");
     assert_eq!(
@@ -563,10 +564,10 @@ fn unknown_math_projection_names_remain_on_unrelated_nodes()
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("math is held in safe preview until layout support is enabled");
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("supported math should preserve unknown optional fields as editable data");
     };
-    let saved = preview.to_json_value()?;
+    let saved: Value = serde_json::from_slice(&opened.to_bytes()?)?;
     assert_eq!(
         saved["document"]["body"][0]["mathTree"]["sourceRange"]["vendor"],
         "tree"

@@ -99,6 +99,11 @@ impl From<caret_doc::MathNodeKind> for BackendNodeKind {
 }
 
 impl BackendNodeKind {
+    pub(crate) fn optional_placeholder_operands(self) -> &'static [usize] {
+        self.persisted()
+            .map_or(&[], caret_doc::MathNodeKind::optional_placeholder_operands)
+    }
+
     pub(crate) fn persisted(self) -> Option<caret_doc::MathNodeKind> {
         use BackendNodeKind as B;
         use caret_doc::MathNodeKind as M;
@@ -154,6 +159,8 @@ pub(crate) struct NodePosition {
     pub(crate) is_text_flow: bool,
     pub(crate) is_flow: bool,
     pub(crate) is_container: bool,
+    /// 当前数学样式的字号；序列化投影不携带布局字号。
+    pub(crate) font_size_pt: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +207,7 @@ pub(crate) fn flow_nodes_for_layout(flow: &MathFlow) -> Vec<Node> {
         is_text_flow: false,
         is_flow: true,
         is_container: false,
+        font_size_pt: None,
     });
     let children = if flow.content.is_empty() {
         Vec::new()
@@ -317,6 +325,7 @@ fn content_nodes(
                     is_text_flow: false,
                     is_flow: false,
                     is_container: true,
+                    font_size_pt: None,
                 }),
                 kind: MathNodeKind::TextStyle,
                 text: None,
@@ -393,6 +402,7 @@ fn position(
         is_text_flow,
         is_flow,
         is_container: false,
+        font_size_pt: None,
     })
 }
 
@@ -438,10 +448,9 @@ fn contents_nodes_from_flows(
                 [MathContent::Math(node)]
                     if matches!(
                         node.kind,
-                        caret_doc::MathNodeKind::Hline
-                            | caret_doc::MathNodeKind::Intertext
-                            | caret_doc::MathNodeKind::Placeholder
-                    ) =>
+                        caret_doc::MathNodeKind::Hline | caret_doc::MathNodeKind::Intertext
+                    ) || (scope_id.is_none()
+                        && node.kind == caret_doc::MathNodeKind::Placeholder) =>
                 {
                     let path = if scope_id.is_some() {
                         let mut path = operand_path;

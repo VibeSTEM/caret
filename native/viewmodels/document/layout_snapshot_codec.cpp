@@ -266,9 +266,10 @@ bool parse_current_structure_impl(const QJsonValue& value, QVariantList& result,
         const QString kind = entry.value(QStringLiteral("kind")).toString();
         const QJsonValue level = entry.value(QStringLiteral("level"));
         const bool heading = kind == QStringLiteral("heading");
-        const bool known_kind = kind == QStringLiteral("paragraph") || heading ||
-                                kind == QStringLiteral("section") ||
-                                kind == QStringLiteral("custom");
+        const bool known_kind =
+            kind == QStringLiteral("paragraph") || heading || kind == QStringLiteral("section") ||
+            kind == QStringLiteral("custom") || kind == QStringLiteral("equation") ||
+            kind == QStringLiteral("align");
         const int heading_level = level.toInt(-1);
         const bool valid_level = heading
                                      ? level.isDouble() && heading_level >= 1 &&
@@ -343,6 +344,23 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
         return false;
     }
     const QJsonObject root = document.object();
+    QVariantMap parsed_math_font_diagnostic;
+    const QJsonValue math_font_diagnostic_value = root.value(QStringLiteral("mathFontDiagnostic"));
+    if (!math_font_diagnostic_value.isUndefined() && !math_font_diagnostic_value.isNull()) {
+        if (!math_font_diagnostic_value.isObject()) {
+            error = QStringLiteral("layout.invalid_math_font_diagnostic");
+            return false;
+        }
+        const QJsonObject diagnostic = math_font_diagnostic_value.toObject();
+        const QJsonValue code = diagnostic.value(QStringLiteral("code"));
+        const QJsonValue requested_family = diagnostic.value(QStringLiteral("requestedFamily"));
+        if (!code.isString() || code.toString().isEmpty() || !requested_family.isString() ||
+            requested_family.toString().isEmpty()) {
+            error = QStringLiteral("layout.invalid_math_font_diagnostic");
+            return false;
+        }
+        parsed_math_font_diagnostic = diagnostic.toVariantMap();
+    }
     const QJsonValue partial_value = root.value(QStringLiteral("partial"));
     const bool is_partial = partial_value.toBool(false);
     if (!partial_value.isUndefined() && !partial_value.isBool()) {
@@ -667,6 +685,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     parsed_snapshot.input_method_context = context.toVariantMap();
     parsed_snapshot.document_generation = parsed_document_generation;
     parsed_snapshot.font_generation = parsed_font_generation;
+    parsed_snapshot.math_font_diagnostic = std::move(parsed_math_font_diagnostic);
     parsed_snapshot.session_id = parsed_session_id;
     error.clear();
     return true;

@@ -14,6 +14,26 @@ use std::collections::BTreeMap;
 
 use super::{DocumentLayoutError, DocumentLayoutService};
 
+#[test]
+fn math_tree_sequence_caret_uses_affinity_order_at_sibling_boundaries() {
+    assert_eq!(
+        super::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Upstream,),
+        [Some(0), Some(1)]
+    );
+    assert_eq!(
+        super::math_sequence_edge_child_indices(1, 2, MathPositionAffinity::Downstream,),
+        [Some(1), Some(0)]
+    );
+    assert_eq!(
+        super::math_sequence_edge_child_indices(0, 2, MathPositionAffinity::Upstream),
+        [None, Some(0)]
+    );
+    assert_eq!(
+        super::math_sequence_edge_child_indices(2, 2, MathPositionAffinity::Downstream),
+        [None, Some(1)]
+    );
+}
+
 fn paragraph(text: &str) -> Paragraph {
     let mut paragraph = Paragraph::empty(NodeId::generate());
     paragraph.inlines = vec![text_flow(Run {
@@ -23,6 +43,165 @@ fn paragraph(text: &str) -> Paragraph {
         extra: BTreeMap::new(),
     })];
     paragraph
+}
+
+#[test]
+fn math_text_base_language_uses_paragraph_then_document_then_base_priority() {
+    let mut document = Document::blank();
+    document.global_settings.default_language = Some("en".to_owned());
+    let settings = caret_layout::ResolvedDocumentTextSettings::from_document_settings(
+        &document.global_settings,
+    )
+    .unwrap_or_else(|error| panic!("document text settings should resolve: {error}"));
+    let mut base_style = ShapingStyle::new(1200);
+    base_style.language = Some("fr".to_owned());
+
+    assert_eq!(
+        super::resolved_math_base_style(&base_style, &settings, Some("zh")).language,
+        Some("zh".to_owned())
+    );
+    assert_eq!(
+        super::resolved_math_base_style(&base_style, &settings, None).language,
+        Some("en".to_owned())
+    );
+
+    document.global_settings.default_language = None;
+    let settings = caret_layout::ResolvedDocumentTextSettings::from_document_settings(
+        &document.global_settings,
+    )
+    .unwrap_or_else(|error| panic!("document text settings should resolve: {error}"));
+    assert_eq!(
+        super::resolved_math_base_style(&base_style, &settings, None).language,
+        Some("fr".to_owned())
+    );
+}
+
+#[test]
+fn math_run_style_uses_shared_run_properties_and_font_environment() {
+    let document = Document::blank();
+    let settings = caret_layout::ResolvedDocumentTextSettings::from_document_settings(
+        &document.global_settings,
+    )
+    .unwrap_or_else(|error| panic!("document text settings should resolve: {error}"));
+    let mut base = ShapingStyle::new(1200);
+    base.requested_family = Some("Base Family".to_owned());
+    let run = Run {
+        text: "文本".to_owned(),
+        language: Some("zh-Hans".to_owned()),
+        props: BTreeMap::from([
+            (
+                "fontFamily".to_owned(),
+                serde_json::json!("Unsupported Run Font"),
+            ),
+            ("underline".to_owned(), serde_json::json!(true)),
+        ]),
+        extra: BTreeMap::new(),
+    };
+    let mut math_run = caret_math::layout::MathTextRun {
+        run: Some(run),
+        text: "文本".to_owned(),
+        scope_id: NodeId::generate(),
+        path: Vec::new(),
+        run_index: Some(0),
+        is_text_flow: true,
+        style: Default::default(),
+    };
+
+    let span = super::math_text_span(&math_run, &base, &settings);
+    assert_eq!(span.style.requested_family.as_deref(), Some("Base Family"));
+    assert_eq!(span.style.language.as_deref(), Some("zh-Hans"));
+    assert!(span.underline);
+
+    math_run.style.font_family = Some("Environment Font".to_owned());
+    let span = super::math_text_span(&math_run, &base, &settings);
+    assert_eq!(
+        span.style.requested_family.as_deref(),
+        Some("Environment Font")
+    );
+}
+
+#[test]
+fn body_and_equation_textflow_share_run_language_fallback_and_glyphs() {
+    let mut document = Document::blank();
+    document.global_settings.default_language = Some("en".to_owned());
+    let mut body_paragraph = paragraph("");
+    let run = Run {
+        text: "office 中文".to_owned(),
+        language: Some("zh-Hans".to_owned()),
+        props: BTreeMap::from([("underline".to_owned(), serde_json::json!(true))]),
+        extra: BTreeMap::new(),
+    };
+    body_paragraph.inlines = vec![text_flow(run.clone())];
+    let paragraph_id = body_paragraph.id.clone();
+
+    let mut math_tree =
+        match caret_math::parse(r"\text{placeholder}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("formula text should parse: {error}"))
+        {
+            caret_math::ParsedMath::Tree(tree) => tree,
+            caret_math::ParsedMath::Align(_) => panic!("inline input should not parse as Align"),
+        };
+    math_tree.root.content = vec![caret_doc::MathContent::Text(TextFlow {
+        runs: vec![run],
+        extra: BTreeMap::new(),
+    })];
+    let equation_id = NodeId::generate();
+    document.body = vec![
+        Block::Paragraph(body_paragraph),
+        Block::Equation(caret_doc::Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }),
+    ];
+
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = service
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("body and equation should lay out: {error}"));
+    let body = laid_out_paragraph(&snapshot, &paragraph_id);
+    let math_text = snapshot
+        .math_block_text_layouts
+        .get(&equation_id)
+        .and_then(|sidecars| sidecars.values().next())
+        .unwrap_or_else(|| panic!("equation TextFlow should have a Parley sidecar"));
+
+    assert!(!body.layout.requested_family_missing);
+    assert!(
+        !snapshot
+            .math_blocks
+            .get(&equation_id)
+            .unwrap_or_else(|| panic!("equation should be laid out"))
+            .requested_text_family_missing
+    );
+    let mut body_glyphs = Vec::new();
+    for line in body.layout.layout.lines() {
+        for item in line.items() {
+            if let caret_layout::PositionedGlyphLayoutItem::GlyphRun(run) = item {
+                body_glyphs.extend(
+                    run.positioned_glyphs()
+                        .map(|glyph| (glyph.id, glyph.x, glyph.y, glyph.advance)),
+                );
+            }
+        }
+    }
+    let mut math_glyphs = Vec::new();
+    for line in math_text.layout.layout.lines() {
+        for item in line.items() {
+            if let caret_layout::PositionedGlyphLayoutItem::GlyphRun(run) = item {
+                math_glyphs.extend(
+                    run.positioned_glyphs()
+                        .map(|glyph| (glyph.id, glyph.x, glyph.y, glyph.advance)),
+                );
+            }
+        }
+    }
+    assert_eq!(
+        body_glyphs, math_glyphs,
+        "supported Run language and underline properties should preserve identical shaping"
+    );
 }
 
 fn laid_out_paragraph<'a>(
@@ -191,6 +370,177 @@ fn math_softbreak_and_opaque_nodes_require_text_shaping_even_with_empty_text_flo
 
     assert!(snapshot.math_blocks.contains_key(&soft_break_id));
     assert!(snapshot.math_blocks.contains_key(&opaque_id));
+}
+
+#[test]
+fn equation_soft_break_uses_two_lines_and_preserves_text_caret_paths() {
+    let text = |value: &str| {
+        caret_doc::MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let block_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: block_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![
+                    text("a"),
+                    caret_doc::MathContent::SoftBreak(SoftBreak::default()),
+                    text("b"),
+                ],
+                extra: Default::default(),
+            },
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("equation should layout: {error}"));
+    let sidecars = &snapshot.math_block_text_layouts[&block_id];
+    assert_eq!(sidecars.len(), 1);
+    let sidecar = sidecars
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("equation should publish text geometry"));
+    assert_eq!(sidecar.layout.text, "a\nb");
+    assert_eq!(sidecar.layout.layout.lines().count(), 2);
+
+    let target = MathEditTarget::Block {
+        block_id,
+        align: false,
+    };
+    let position = |index, offset, affinity| {
+        MathTextPosition::new(
+            crate::MathTextFlowPath::from_layout_path(
+                vec![caret_doc::MathPathStep::Content(index)],
+                None,
+            ),
+            offset,
+            affinity,
+        )
+    };
+    let before = position(0, 1, MathPositionAffinity::Upstream);
+    let after = position(2, 0, MathPositionAffinity::Downstream);
+    let first = snapshot
+        .math_text_caret_geometry(&target, &before, VisualAffinity::Upstream)
+        .unwrap_or_else(|| panic!("caret before SoftBreak should be published"));
+    let second = snapshot
+        .math_text_caret_geometry(&target, &after, VisualAffinity::Downstream)
+        .unwrap_or_else(|| panic!("caret after SoftBreak should be published"));
+    assert!(second.y0_pt > first.y0_pt);
+    let first_start = snapshot
+        .math_text_caret_geometry(
+            &target,
+            &position(0, 0, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("first line start should be published"));
+    let second_end = snapshot
+        .math_text_caret_geometry(
+            &target,
+            &position(2, 1, MathPositionAffinity::Upstream),
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("second line end should be published"));
+    for (caret, other, path) in [
+        (first, first_start, before.path),
+        (second, second_end, after.path),
+    ] {
+        let hit = snapshot
+            .hit_test_math_text(
+                caret.page_index,
+                (caret.x_pt + other.x_pt) / 2.0,
+                (caret.y0_pt + caret.y1_pt) / 2.0,
+            )
+            .unwrap_or_else(|| panic!("each line should be hittable"));
+        assert_eq!(hit.position.path, path);
+    }
+}
+
+#[test]
+fn align_cell_soft_break_keeps_both_text_caret_paths() {
+    let caret_math::ParsedMath::Align(mut align) = caret_math::parse(
+        r"\begin{aligned}x\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("align should parse: {error}")) else {
+        panic!("source should produce an Align");
+    };
+    let text = |value: &str| {
+        caret_doc::MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: value.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    align.rows[0].cells[0].root.content = vec![
+        text("a"),
+        caret_doc::MathContent::SoftBreak(SoftBreak::default()),
+        text("b"),
+    ];
+    let target = MathEditTarget::Block {
+        block_id: align.id.clone(),
+        align: true,
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 8, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("align should layout: {error}"));
+    let MathEditTarget::Block { block_id, .. } = &target else {
+        unreachable!();
+    };
+    let sidecars = &snapshot.math_block_text_layouts[block_id];
+    let sidecar = sidecars
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("align cell should publish text geometry"));
+    assert_eq!(sidecar.layout.text, "a\nb");
+    assert_eq!(sidecar.layout.layout.lines().count(), 2);
+    let position = |index, offset, affinity| {
+        MathTextPosition::new(
+            crate::MathTextFlowPath::from_layout_path(
+                vec![caret_doc::MathPathStep::Content(index)],
+                Some((0, 0)),
+            ),
+            offset,
+            affinity,
+        )
+    };
+    let first = snapshot
+        .math_text_caret_geometry(
+            &target,
+            &position(0, 1, MathPositionAffinity::Upstream),
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("first line caret should be published"));
+    let second = snapshot
+        .math_text_caret_geometry(
+            &target,
+            &position(2, 0, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("second line caret should be published"));
+    assert!(second.y0_pt > first.y0_pt);
 }
 
 #[test]
@@ -426,6 +776,541 @@ fn equation_text_hit_keeps_block_host_and_text_flow_path() {
 }
 
 #[test]
+fn equation_empty_math_operand_uses_its_published_structure_slot_geometry() {
+    let parsed = caret_math::parse(r"\frac{}{x}", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("equation with empty operand should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("equation source should produce a MathTree");
+    };
+    let math_root = math_tree.root.clone();
+    let block_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: block_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 11, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("equation should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&block_id];
+    let slot = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.is_flow
+                && !node.is_text_flow
+                && super::math_flow_at_layout_path(&math_root, &node.path)
+                    .is_some_and(|flow| {
+                        flow.content.is_empty()
+                            || matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
+                    })
+        })
+        .unwrap_or_else(|| panic!("empty required operand should retain a flow box"));
+    let x_origin_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + slot.x;
+    let y_pt = page.margin_top_pt
+        + f64::from(fragment.y_offset_pt)
+        + layout.ascent
+        + slot.y
+        + (slot.height / 2.0);
+    let x_pt = x_origin_pt + (slot.width / 2.0);
+    let hit = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("empty operand slot should be hittable"));
+
+    assert_eq!(
+        hit.target,
+        MathEditTarget::Block {
+            block_id: block_id.clone(),
+            align: false,
+        }
+    );
+    assert_eq!(
+        hit.position.host,
+        MathPositionHost::Equation { owner_id: block_id }
+    );
+    assert_eq!(
+        hit.position.path.steps(),
+        &[crate::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]
+    );
+    assert_eq!(hit.position.offset, 0);
+    assert!(hit.caret.y1_pt > hit.caret.y0_pt);
+
+    let just_outside_slot = x_origin_pt + slot.width + 0.1;
+    let outside_hit = snapshot
+        .hit_test_math_structure(0, just_outside_slot, y_pt)
+        .unwrap_or_else(|| panic!("operator gap should fall back to its parent sequence"));
+    assert!(outside_hit.position.path.steps().is_empty());
+}
+
+#[test]
+fn optional_placeholder_identity_markers_are_not_structural_hit_targets() {
+    let parsed = caret_math::parse(r"\sqrt{x}", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("radical should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("equation source should produce a MathTree");
+    };
+    let math_root = math_tree.root.clone();
+    let block_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: block_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 12, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("radical should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&block_id];
+    let marker = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.is_flow
+                && !node.is_text_flow
+                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                    matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
+                })
+        })
+        .unwrap_or_else(|| panic!("optional radical slot should retain its identity marker"));
+    assert_eq!(marker.width, 0.0);
+    assert_eq!(marker.height, 0.0);
+    let x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + marker.x;
+    let y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent + marker.y;
+
+    let fallback = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("visible radical geometry should retain a parent hit"));
+    assert!(fallback.position.path.steps().is_empty());
+}
+
+#[test]
+fn replacing_placeholder_with_unknown_metadata_is_rejected_atomically() -> Result<(), EditError> {
+    let parsed = caret_math::parse(r"\frac{}{x}", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("fraction should parse: {error}"));
+    let caret_math::ParsedMath::Tree(mut math_tree) = parsed else {
+        panic!("equation source should produce a MathTree");
+    };
+    let Some(caret_doc::MathContent::Math(fraction)) = math_tree.root.content.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    let Some(caret_doc::MathContent::Math(placeholder)) = fraction.children[0].content.first_mut()
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    placeholder
+        .extra
+        .insert("futureField".to_owned(), serde_json::json!("preserve"));
+    let math_root = math_tree.root.clone();
+    let block_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: block_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut session = Session::new(document)?;
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("fraction should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&block_id];
+    let slot = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.is_flow
+                && !node.is_text_flow
+                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                    matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
+                })
+        })
+        .unwrap_or_else(|| panic!("placeholder should have a visible flow slot"));
+    let x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + slot.x + slot.width / 2.0;
+    let y_pt = page.margin_top_pt
+        + f64::from(fragment.y_offset_pt)
+        + layout.ascent
+        + slot.y
+        + slot.height / 2.0;
+    let hit = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("placeholder should be hittable"));
+    session.focus_math_structure_hit(&hit, catalog.generation())?;
+
+    let document_before = session.document().clone();
+    let selection_before = session.selection().clone();
+    let edit_before = session.math_edit().cloned();
+    let generation_before = session.document_generation();
+    let history_before = session.history_state_id();
+    assert_eq!(
+        session.run(Command::InsertText("n".to_owned())),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(session.math_edit(), edit_before.as_ref());
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), history_before);
+    Ok(())
+}
+
+#[test]
+fn session_focuses_and_edits_only_a_current_empty_math_structure_hit() -> Result<(), EditError> {
+    let parsed = caret_math::parse(r"\frac{}{x}", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("equation with empty operand should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("equation source should produce a MathTree");
+    };
+    let math_root = math_tree.root.clone();
+    let block_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: block_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut session = Session::new(document)?;
+    let original_selection = session.selection().clone();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut service = DocumentLayoutService::new();
+    let snapshot = service
+        .layout_session(&session, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("equation should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&block_id];
+    let slot = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            node.is_flow
+                && !node.is_text_flow
+                && super::math_flow_at_layout_path(&math_root, &node.path).is_some_and(|flow| {
+                    flow.content.is_empty()
+                        || matches!(flow.content.as_slice(), [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder)
+                })
+        })
+        .unwrap_or_else(|| panic!("empty required operand should retain a flow box"));
+    let x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + slot.x + 1.0;
+    let y_pt = page.margin_top_pt
+        + f64::from(fragment.y_offset_pt)
+        + layout.ascent
+        + slot.y
+        + (slot.height.max(8.0) / 2.0);
+    let hit = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("empty operand slot should be hittable"));
+
+    let mut stale_hit = hit.clone();
+    stale_hit.document_generation = stale_hit.document_generation.saturating_add(1);
+    assert!(
+        session
+            .focus_math_structure_hit(&stale_hit, catalog.generation())
+            .is_err()
+    );
+    assert_eq!(session.selection(), &original_selection);
+    assert!(session.math_edit().is_none());
+
+    let effect = session.focus_math_structure_hit(&hit, catalog.generation())?;
+    assert!(effect.selection_changed);
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(crate::MathEditBranch::Tree { path, anchor })
+            if path == &hit.position.path && anchor == &hit.position
+    ));
+    let document_before_ignored_input = session.document().clone();
+    let generation_before_ignored_input = session.document_generation();
+    let history_before_ignored_input = session.history_state_id();
+    session.run(Command::InsertText(" ".to_owned()))?;
+    session.run(Command::InsertText(String::new()))?;
+    session.run(Command::InsertText(" \u{0301}".to_owned()))?;
+    assert_eq!(session.document(), &document_before_ignored_input);
+    assert_eq!(
+        session.document_generation(),
+        generation_before_ignored_input
+    );
+    assert_eq!(session.history_state_id(), history_before_ignored_input);
+    assert!(session.math_tree_input_context().is_some());
+    let generation = session.document_generation();
+    session.run(Command::InsertText("n".to_owned()))?;
+    assert_eq!(session.document_generation(), generation + 1);
+    let equation = session
+        .document()
+        .body
+        .iter()
+        .find_map(|block| match block {
+            Block::Equation(equation) if equation.id == block_id => Some(equation),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("equation should remain in the document"));
+    let caret_doc::MathContent::Math(fraction) = &equation.math_tree.root.content[0] else {
+        panic!("equation should keep its fraction node");
+    };
+    assert!(!matches!(
+        fraction.children[0].content.as_slice(),
+        [caret_doc::MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_tree_caret_uses_inline_environment_children_geometry() {
+    let equation_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let root_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: root_id,
+                content: vec![caret_doc::MathContent::Environment(
+                    caret_doc::InlineEnvironment {
+                        id: environment_id,
+                        kind: caret_doc::InlineEnvironmentKind::Bold,
+                        definition_id: None,
+                        props: BTreeMap::new(),
+                        children: vec![
+                            caret_doc::MathContent::Math(caret_doc::MathNode {
+                                id: NodeId::generate(),
+                                kind: caret_doc::MathNodeKind::Symbol,
+                                text: Some("x".to_owned()),
+                                attributes: BTreeMap::new(),
+                                children: Vec::new(),
+                                extra: BTreeMap::new(),
+                            }),
+                            caret_doc::MathContent::Text(TextFlow {
+                                runs: vec![Run {
+                                    text: "aaaa\nb".to_owned(),
+                                    language: None,
+                                    props: BTreeMap::new(),
+                                    extra: BTreeMap::new(),
+                                }],
+                                extra: BTreeMap::new(),
+                            }),
+                        ],
+                        extra: BTreeMap::new(),
+                    },
+                )],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 17, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("equation should layout: {error}"));
+    let mut position = crate::MathTreePosition {
+        host: MathPositionHost::Equation {
+            owner_id: equation_id.clone(),
+        },
+        path: crate::MathSequencePath::new(vec![crate::MathSequenceStep::EnvironmentChildren {
+            content_index: 0,
+        }]),
+        offset: 1,
+        affinity: MathPositionAffinity::Upstream,
+    };
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let caret = snapshot
+        .math_tree_caret(&target, &position)
+        .unwrap_or_else(|| panic!("environment child insertion point should have caret geometry"));
+    let symbol = snapshot.math_blocks[&equation_id]
+        .nodes
+        .iter()
+        .find(|node| {
+            node.path
+                == [
+                    caret_doc::MathPathStep::Content(0),
+                    caret_doc::MathPathStep::EnvironmentChild(0),
+                ]
+        })
+        .unwrap_or_else(|| panic!("first environment symbol should have a layout box"));
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should have a page projection"));
+    assert!((caret.0.x_pt - (projection.object_x_pt + symbol.x + symbol.width)).abs() < 1e-9);
+    assert!((caret.0.y1_pt - caret.0.y0_pt - symbol.height).abs() < 1e-9);
+
+    position.affinity = MathPositionAffinity::Downstream;
+    let downstream = snapshot
+        .math_tree_caret(&target, &position)
+        .unwrap_or_else(|| panic!("downstream environment boundary should have caret geometry"));
+    let text_path = crate::MathTextFlowPath::from_layout_path(
+        vec![
+            caret_doc::MathPathStep::Content(0),
+            caret_doc::MathPathStep::EnvironmentChild(1),
+        ],
+        None,
+    );
+    let text_start = snapshot
+        .math_text_caret(
+            &target,
+            &MathTextPosition::new(text_path, 0, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+        )
+        .unwrap_or_else(|| panic!("multiline TextFlow start should have caret geometry"));
+    assert_eq!(downstream.0, text_start.0);
+
+    let text_end = snapshot
+        .math_text_caret(
+            &target,
+            &MathTextPosition::new(
+                crate::MathTextFlowPath::from_layout_path(
+                    vec![
+                        caret_doc::MathPathStep::Content(0),
+                        caret_doc::MathPathStep::EnvironmentChild(1),
+                    ],
+                    None,
+                ),
+                "aaaa\nb".len(),
+                MathPositionAffinity::Upstream,
+            ),
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("multiline TextFlow end should have caret geometry"));
+    let outer_boundary = snapshot
+        .math_tree_caret(
+            &target,
+            &crate::MathTreePosition {
+                host: MathPositionHost::Equation {
+                    owner_id: equation_id,
+                },
+                path: crate::MathSequencePath::root(),
+                offset: 1,
+                affinity: MathPositionAffinity::Upstream,
+            },
+        )
+        .unwrap_or_else(|| panic!("outer boundary after environment should have caret geometry"));
+    assert_eq!(outer_boundary.0, text_end.0);
+    assert_eq!(caret.1, 1200);
+}
+
+#[test]
+fn math_structure_hit_enters_bold_environment_child_sequence() {
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![caret_doc::MathContent::Environment(
+                    caret_doc::InlineEnvironment {
+                        id: NodeId::generate(),
+                        kind: caret_doc::InlineEnvironmentKind::Bold,
+                        definition_id: None,
+                        props: BTreeMap::new(),
+                        children: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                            id: NodeId::generate(),
+                            kind: caret_doc::MathNodeKind::Symbol,
+                            text: Some("x".to_owned()),
+                            attributes: BTreeMap::new(),
+                            children: Vec::new(),
+                            extra: BTreeMap::new(),
+                        })],
+                        extra: BTreeMap::new(),
+                    },
+                )],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 19, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("bold equation should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = page
+        .layout
+        .math_fragments
+        .first()
+        .unwrap_or_else(|| panic!("equation fragment should be present"));
+    let x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + 1.0;
+    let y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + 1.0;
+    let hit = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("Bold math child sequence should be hittable"));
+
+    assert_eq!(
+        hit.position.path.steps(),
+        &[crate::MathSequenceStep::EnvironmentChildren { content_index: 0 }]
+    );
+    assert_eq!(
+        hit.position.host,
+        MathPositionHost::Equation {
+            owner_id: equation_id
+        }
+    );
+}
+
+#[test]
+fn math_structure_hit_falls_back_to_parent_sequence_in_operator_gaps() {
+    let parsed = caret_math::parse(r"\frac{a}{b}", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("fraction should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("equation source should produce a MathTree");
+    };
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 20, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("fraction should layout: {error}"));
+    let layout = &snapshot.math_blocks[&equation_id];
+    let fraction = layout
+        .nodes
+        .iter()
+        .find(|node| node.path == [caret_doc::MathPathStep::Content(0)])
+        .unwrap_or_else(|| panic!("fraction should have a layout box"));
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should have a page projection"));
+    let x_pt = projection.object_x_pt + fraction.x + fraction.width / 2.0;
+    let y_pt = projection.baseline_y_pt + fraction.y + fraction.height / 2.0;
+    let hit = snapshot
+        .hit_test_math_structure(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("fraction operator gap should retain a parent hit"));
+
+    assert_eq!(hit.position.path.steps(), &[]);
+}
+
+#[test]
 fn session_accepts_only_current_structurally_valid_math_text_hits() -> Result<(), EditError> {
     let parsed = caret_math::parse(r"x^{\text{ab}}", caret_math::MathInputKind::Equation)
         .unwrap_or_else(|error| panic!("equation text should parse: {error}"));
@@ -520,6 +1405,25 @@ fn session_accepts_only_current_structurally_valid_math_text_hits() -> Result<()
     assert!(session.math_edit().is_none());
     session.run(Command::CancelCommandLine)?;
 
+    let mut candidate = Session::new(session.document().clone())?;
+    let candidate_snapshot = service
+        .layout_session(&candidate, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("equation candidate should layout: {error}"));
+    let candidate_hit = candidate_snapshot
+        .hit_test_math_text(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("candidate equation text should be hittable"));
+    let original_session_id = candidate.session_id().clone();
+    let original_generation = candidate.document_generation();
+    let zero_length_effect = candidate.set_math_text_selection_from_hits(
+        &candidate_hit,
+        &candidate_hit,
+        catalog.generation(),
+    )?;
+    assert!(zero_length_effect.selection_changed);
+    assert_eq!(candidate.session_id(), &original_session_id);
+    assert_eq!(candidate.document_generation(), original_generation);
+    assert!(session.math_edit().is_none());
+
     let effect = session.focus_math_text_hit(&hit, catalog.generation())?;
     assert!(effect.selection_changed);
     let edit = session
@@ -605,6 +1509,106 @@ fn align_cell_text_hit_keeps_stable_row_and_cell_identity() {
     assert_eq!(hit.position, expected_position);
     assert_eq!(hit.position.path.align_cell(), Some((0, 1)));
     assert_eq!(hit.visual_affinity, expected_visual_affinity);
+}
+
+#[test]
+fn vertical_math_text_navigation_enters_the_adjacent_align_row() {
+    let parsed = caret_math::parse(
+        r"\begin{aligned}\text{ab}&=x\\\text{cd}&=y\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("multirow Align text should parse: {error}"));
+    let caret_math::ParsedMath::Align(align) = parsed else {
+        panic!("Align source should produce an Align model");
+    };
+    let expected_next_row_id = align.rows[1].id.clone();
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align.clone()));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 17, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("multirow Align should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&align.id];
+    let sidecars = &snapshot.math_block_text_layouts[&align.id];
+    let (x_pt, y_pt, _, _) = text_hit_point(
+        page.margin_left_pt + f64::from(fragment.x_offset_pt),
+        page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
+        &layout.items,
+        sidecars,
+    );
+    let current = snapshot
+        .hit_test_math_text(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("first Align row should contain hittable text"));
+    let next = snapshot
+        .move_math_text_vertical_target(
+            &current.target,
+            &current.position,
+            current.visual_affinity,
+            1,
+            None,
+        )
+        .unwrap_or_else(|| panic!("vertical movement should find the next Align row"));
+    let crate::MathTextVerticalTarget::DifferentTextIsland(next) = next else {
+        panic!("separate Align rows should use a new text island focus");
+    };
+    assert!(matches!(
+        next.host,
+        MathPositionHost::AlignCell { row_id, .. } if row_id == expected_next_row_id
+    ));
+    assert_eq!(next.position.path.align_cell(), Some((1, 0)));
+}
+
+#[test]
+fn vertical_math_text_navigation_enters_an_empty_align_text_island() {
+    let parsed = caret_math::parse(
+        r"\begin{aligned}\text{ab}&=x\\\text{}&=y\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("Align with an empty text island should parse: {error}"));
+    let caret_math::ParsedMath::Align(align) = parsed else {
+        panic!("Align source should produce an Align model");
+    };
+    let expected_next_row_id = align.rows[1].id.clone();
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align.clone()));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 18, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("empty-text Align should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let fragment = &page.layout.math_fragments[0];
+    let layout = &snapshot.math_blocks[&align.id];
+    let sidecars = &snapshot.math_block_text_layouts[&align.id];
+    let (x_pt, y_pt, _, _) = text_hit_point(
+        page.margin_left_pt + f64::from(fragment.x_offset_pt),
+        page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent,
+        &layout.items,
+        sidecars,
+    );
+    let current = snapshot
+        .hit_test_math_text(0, x_pt, y_pt)
+        .unwrap_or_else(|| panic!("first Align row should contain hittable text"));
+    let next = snapshot
+        .move_math_text_vertical_target(
+            &current.target,
+            &current.position,
+            current.visual_affinity,
+            1,
+            None,
+        )
+        .unwrap_or_else(|| panic!("vertical movement should enter empty Align text"));
+    let crate::MathTextVerticalTarget::DifferentTextIsland(next) = next else {
+        panic!("separate Align rows should enter a new text island");
+    };
+    assert!(matches!(
+        next.host,
+        MathPositionHost::AlignCell { row_id, .. } if row_id == expected_next_row_id
+    ));
+    assert_eq!(next.position.path.align_cell(), Some((1, 0)));
 }
 
 #[test]
@@ -750,6 +1754,221 @@ fn unchanged_paragraph_can_be_reused_across_multiple_document_generations() {
         &laid_out_paragraph(&previous, &first_id).layout,
         &laid_out_paragraph(&snapshot, &first_id).layout,
     ));
+}
+
+#[test]
+fn unchanged_display_math_reuses_layout_and_text_sidecars() {
+    let paragraph = paragraph("first");
+    let paragraph_id = paragraph.id.clone();
+    let equation_id = NodeId::generate();
+    let equation = Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![caret_doc::MathContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: "display text".to_owned(),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let second_equation_id = NodeId::generate();
+    let mut second_equation = equation.clone();
+    second_equation.id = second_equation_id.clone();
+    second_equation.math_tree.root.id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph),
+        Block::Equation(equation),
+        Block::Equation(second_equation),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid session should build: {error}"));
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let base_style = ShapingStyle::new(1200);
+    let previous = service
+        .layout_session(&session, &mut catalog, &base_style)
+        .unwrap_or_else(|error| panic!("initial session layout should succeed: {error}"));
+    let previous_math_and_text = [equation_id.clone(), second_equation_id.clone()].map(|id| {
+        let math = previous
+            .math_blocks
+            .get(&id)
+            .unwrap_or_else(|| panic!("display math {id} should be laid out"));
+        let text = previous
+            .math_block_text_layouts
+            .get(&id)
+            .and_then(|sidecars| sidecars.values().next())
+            .unwrap_or_else(|| panic!("display text sidecar {id} should exist"))
+            .layout
+            .clone();
+        (id, std::sync::Arc::clone(math), text)
+    });
+
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 5,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        })))
+        .unwrap_or_else(|error| panic!("selection should be valid: {error}"));
+    session
+        .run(Command::InsertText(" changed".to_owned()))
+        .unwrap_or_else(|error| panic!("paragraph edit should succeed: {error}"));
+    let updated = service
+        .layout_session_reusing(
+            &session,
+            &previous,
+            &paragraph_id,
+            &mut catalog,
+            &base_style,
+        )
+        .unwrap_or_else(|error| panic!("layout reuse should succeed: {error}"));
+
+    for (id, previous_math, previous_text_layout) in previous_math_and_text {
+        assert!(std::sync::Arc::ptr_eq(
+            &previous_math,
+            updated
+                .math_blocks
+                .get(&id)
+                .unwrap_or_else(|| panic!("display math {id} should remain laid out")),
+        ));
+        let updated_text_layout = updated
+            .math_block_text_layouts
+            .get(&id)
+            .and_then(|sidecars| sidecars.values().next())
+            .unwrap_or_else(|| panic!("display text sidecar {id} should remain available"));
+        assert!(std::sync::Arc::ptr_eq(
+            &previous_text_layout,
+            &updated_text_layout.layout,
+        ));
+    }
+    let full = service
+        .layout_session(&session, &mut catalog, &base_style)
+        .unwrap_or_else(|error| panic!("full layout should succeed: {error}"));
+    assert_eq!(
+        crate::DocumentLayoutView::from(&updated).pages,
+        crate::DocumentLayoutView::from(&full).pages,
+    );
+}
+
+#[test]
+fn unchanged_inline_math_reuses_layout_and_text_sidecars_after_body_reflow() {
+    let mut paragraph = paragraph("body");
+    let first_math =
+        match caret_math::parse(r"\frac{}{\text{first}}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("first inline math should parse: {error}"))
+        {
+            caret_math::ParsedMath::Tree(math_tree) => caret_doc::InlineMath {
+                id: NodeId::generate(),
+                math_tree,
+                extra: BTreeMap::new(),
+            },
+            caret_math::ParsedMath::Align(_) => panic!("inline math should not parse as Align"),
+        };
+    let second_math =
+        match caret_math::parse(r"\frac{}{\text{second}}", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("second inline math should parse: {error}"))
+        {
+            caret_math::ParsedMath::Tree(math_tree) => caret_doc::InlineMath {
+                id: NodeId::generate(),
+                math_tree,
+                extra: BTreeMap::new(),
+            },
+            caret_math::ParsedMath::Align(_) => panic!("inline math should not parse as Align"),
+        };
+    let first_id = first_math.id.clone();
+    let second_id = second_math.id.clone();
+    paragraph.inlines = vec![
+        text_flow(Run {
+            text: "body".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(first_math),
+        ParagraphContent::Math(second_math),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid session should build: {error}"));
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let base_style = ShapingStyle::new(1200);
+    let previous = service
+        .layout_session(&session, &mut catalog, &base_style)
+        .unwrap_or_else(|error| panic!("initial session layout should succeed: {error}"));
+    let previous_paragraph = laid_out_paragraph(&previous, &paragraph_id);
+    let previous_math = [&first_id, &second_id].map(|id| {
+        let index = previous_paragraph
+            .inline_math_ids
+            .iter()
+            .position(|inline_id| inline_id == id)
+            .unwrap_or_else(|| panic!("inline math {id} should be projected"));
+        (
+            std::sync::Arc::clone(&previous_paragraph.inline_math_layouts[index]),
+            previous_paragraph.inline_math_text_layouts[index]
+                .values()
+                .next()
+                .unwrap_or_else(|| panic!("inline math {id} should have a TextFlow sidecar"))
+                .layout
+                .clone(),
+        )
+    });
+
+    session
+        .run(Command::InsertText("prefix ".to_owned()))
+        .unwrap_or_else(|error| panic!("body insertion should succeed: {error}"));
+    let updated = service
+        .layout_session_reusing(
+            &session,
+            &previous,
+            &paragraph_id,
+            &mut catalog,
+            &base_style,
+        )
+        .unwrap_or_else(|error| {
+            panic!("inline math should be reusable after body reflow: {error}")
+        });
+    let updated_paragraph = laid_out_paragraph(&updated, &paragraph_id);
+    for (index, (previous_layout, previous_text)) in previous_math.into_iter().enumerate() {
+        assert!(std::sync::Arc::ptr_eq(
+            &previous_layout,
+            &updated_paragraph.inline_math_layouts[index],
+        ));
+        let updated_text = updated_paragraph.inline_math_text_layouts[index]
+            .values()
+            .next()
+            .unwrap_or_else(|| panic!("inline math sidecar {index} should be reused"));
+        assert!(std::sync::Arc::ptr_eq(&previous_text, &updated_text.layout));
+    }
+    assert_eq!(
+        updated_paragraph.inline_math_source_ranges[0].start,
+        "prefix body".len()
+    );
+    assert_eq!(
+        updated_paragraph.inline_math_source_ranges[1].start,
+        "prefix body".len() + '\u{fffc}'.len_utf8()
+    );
 }
 
 #[test]
@@ -1858,5 +3077,307 @@ fn explicit_breaks_keep_empty_pages_without_inventing_text_hit_targets() {
             .unwrap_or_else(|| panic!("text page has no hit target"));
         assert_eq!(hit.position.paragraph_id, id);
         assert_eq!(hit.position.offset, 0);
+    }
+}
+
+#[test]
+fn empty_formula_projections_keep_hosts_and_match_page_shapes() {
+    let mut inline = inline_math("x");
+    let ParagraphContent::Math(inline_math) = &mut inline else {
+        panic!("expected inline math")
+    };
+    inline_math.math_tree.root.content.clear();
+    let inline_id = inline_math.id.clone();
+    let inline_scope = inline_math.math_tree.root.id.clone();
+    let mut paragraph = paragraph("");
+    paragraph.inlines = vec![inline];
+    let paragraph_id = paragraph.id.clone();
+
+    let caret_math::ParsedMath::Tree(mut tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Equation)
+            .unwrap_or_else(|error| panic!("equation should parse: {error}"))
+    else {
+        panic!("expected tree")
+    };
+    tree.root.content.clear();
+    let equation_scope = tree.root.id.clone();
+    let equation_id = NodeId::generate();
+    let caret_math::ParsedMath::Align(mut align) = caret_math::parse(
+        r"\begin{aligned}x&y\\z&w\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("align should parse: {error}")) else {
+        panic!("expected align")
+    };
+    let align_id = align.id.clone();
+    for row in &mut align.rows {
+        for cell in &mut row.cells {
+            cell.root.content.clear();
+        }
+    }
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph),
+        Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree: tree,
+            extra: BTreeMap::new(),
+        }),
+        Block::Align(align.clone()),
+    ];
+    let mut catalog = FontCatalog::system().unwrap_or_else(|error| panic!("catalog: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("layout: {error}"));
+    let inline_host = snapshot
+        .math_host(&inline_id)
+        .unwrap_or_else(|| panic!("missing inline host"));
+    assert_eq!(
+        inline_host.target,
+        MathEditTarget::Inline {
+            paragraph_id: paragraph_id.clone(),
+            math_id: inline_id.clone()
+        }
+    );
+    assert_eq!(
+        inline_host.scopes[&inline_scope].host,
+        MathPositionHost::InlineMath {
+            owner_id: inline_id.clone()
+        }
+    );
+    let equation_host = snapshot
+        .math_host(&equation_id)
+        .unwrap_or_else(|| panic!("missing equation host"));
+    assert_eq!(
+        equation_host.target,
+        MathEditTarget::Block {
+            block_id: equation_id.clone(),
+            align: false
+        }
+    );
+    assert_eq!(
+        equation_host.scopes[&equation_scope].host,
+        MathPositionHost::Equation {
+            owner_id: equation_id.clone()
+        }
+    );
+    let align_host = snapshot
+        .math_host(&align_id)
+        .unwrap_or_else(|| panic!("missing align host"));
+    assert_eq!(
+        align_host.target,
+        MathEditTarget::Block {
+            block_id: align_id.clone(),
+            align: true
+        }
+    );
+    for (row_index, row) in align.rows.iter().enumerate() {
+        for (cell_index, cell) in row.cells.iter().enumerate() {
+            let host = &align_host.scopes[&cell.root.id];
+            assert_eq!(
+                host.host,
+                MathPositionHost::AlignCell {
+                    row_id: row.id.clone(),
+                    cell_id: cell.root.id.clone()
+                }
+            );
+            assert_eq!(host.align_cell, Some((row_index, cell_index)));
+        }
+    }
+    for id in [&inline_id, &equation_id, &align_id] {
+        let projection = snapshot
+            .math_projections
+            .iter()
+            .find(|projection| &projection.math_id == id)
+            .unwrap_or_else(|| panic!("missing page projection"));
+        let (layout, sidecars) = snapshot
+            .math_projection_items(projection)
+            .unwrap_or_else(|| panic!("missing formula"));
+        assert!(sidecars.is_empty());
+        let shapes = snapshot
+            .page_glyphs(projection.page_index)
+            .unwrap_or_else(|error| panic!("glyphs: {error}"));
+        let slots: Vec<_> = layout
+            .nodes
+            .iter()
+            .filter(|node| node.is_flow && node.width > 0.0 && node.height > 0.0)
+            .collect();
+        assert_eq!(slots.len(), if id == &align_id { 4 } else { 1 });
+        for slot in slots {
+            assert!(shapes.shapes.iter().any(|shape| {
+                (shape.x_pt - (projection.object_x_pt + slot.x)).abs() < 1e-6
+                    && (shape.y_pt - (projection.baseline_y_pt + slot.y)).abs() < 1e-6
+                    && (shape.width_pt - slot.width).abs() < 1e-6
+                    && (shape.height_pt - slot.height).abs() < 1e-6
+                    && shape.line_clip_y_pt == projection.clip_y_pt
+            }));
+        }
+    }
+}
+
+#[test]
+fn clipped_multiline_inline_math_publishes_only_visible_geometry() {
+    let mut first = inline_math(r"\sqrt{x}");
+    let ParagraphContent::Math(math) = &mut first else {
+        panic!("expected inline math")
+    };
+    let caret_doc::MathContent::Math(radical) = &mut math.math_tree.root.content[0] else {
+        panic!("expected radical")
+    };
+    radical.children[1].content = vec![caret_doc::MathContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "first\nsecond".into(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    let math_id = math.id.clone();
+    let second = inline_math(r"\frac{}{x}");
+    let third = inline_math(r"\frac{x}{}");
+    let other_ids: Vec<_> = [&second, &third]
+        .into_iter()
+        .map(|item| match item {
+            ParagraphContent::Math(math) => math.id.clone(),
+            _ => panic!("expected math"),
+        })
+        .collect();
+    let mut paragraph = paragraph("");
+    paragraph.inlines = vec![first, second, third];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 600,
+            extra: BTreeMap::new(),
+        };
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut catalog = FontCatalog::system().unwrap_or_else(|error| panic!("catalog: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("layout: {error}"));
+    let projection = snapshot
+        .math_projection(0, &math_id)
+        .unwrap_or_else(|| panic!("missing projection"));
+    let [top, bottom] = projection
+        .drawing_clip()
+        .unwrap_or_else(|| panic!("Exactly must clip"));
+    let (layout, sidecars) = snapshot
+        .math_projection_items(projection)
+        .unwrap_or_else(|| panic!("missing math"));
+    let sidecar = sidecars
+        .values()
+        .next()
+        .unwrap_or_else(|| panic!("missing text"));
+    assert_eq!(sidecar.layout.layout.lines().count(), 2);
+    let anchor = sidecar
+        .position_at_offset(0, MathPositionAffinity::Downstream)
+        .unwrap_or_else(|| panic!("missing anchor"));
+    let focus = sidecar
+        .position_at_offset("first\nsecond".len(), MathPositionAffinity::Upstream)
+        .unwrap_or_else(|| panic!("missing focus"));
+    let target = MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let raw = super::MathTextItemGeometry {
+        page_index: 0,
+        object_x_pt: projection.object_x_pt,
+        object_baseline_y_pt: projection.baseline_y_pt,
+        items: &layout.items,
+        sidecars,
+    };
+    let mut outside = false;
+    let mut visible = false;
+    let mut clipped = 0;
+    let mut raw_ranges = Vec::new();
+    for offset in [0, 3, 6, 9, 12] {
+        let position = sidecar
+            .position_at_offset(offset, MathPositionAffinity::Downstream)
+            .unwrap_or_else(|| panic!("missing position"));
+        if let Some((caret, _)) =
+            super::math_text_caret_in_items(&raw, &target, &position, VisualAffinity::Downstream)
+        {
+            raw_ranges.push((caret.y0_pt, caret.y1_pt));
+            outside |= caret.y0_pt < top || caret.y1_pt > bottom;
+            if caret.y1_pt <= top || caret.y0_pt >= bottom {
+                clipped += 1;
+            }
+        }
+        let caret = snapshot
+            .math_text_caret_geometry(&target, &position, VisualAffinity::Downstream)
+            .unwrap_or_else(|| panic!("logical caret must remain publishable at offset {offset}"));
+        visible = true;
+        assert!(caret.y0_pt >= top && caret.y1_pt <= bottom && caret.y1_pt > caret.y0_pt);
+    }
+    assert!(
+        outside && visible && clipped > 0,
+        "fixture must exercise fully clipped carets: clip={top}..{bottom}, raw={raw_ranges:?}"
+    );
+    let selection = snapshot
+        .math_text_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("missing selection"));
+    let composition = snapshot
+        .math_text_composition_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("missing composition"));
+    assert!(!selection.is_empty());
+    assert!(!composition.is_empty());
+    for rect in selection.iter().chain(&composition) {
+        assert!(rect.y0_pt >= top && rect.y1_pt <= bottom && rect.y1_pt > rect.y0_pt);
+    }
+    let glyphs = snapshot
+        .page_glyphs(0)
+        .unwrap_or_else(|error| panic!("glyphs: {error}"));
+    assert!(
+        glyphs
+            .runs
+            .iter()
+            .any(|run| run.line_clip_y_pt == Some([top, bottom]))
+    );
+    let text_x = layout
+        .items
+        .iter()
+        .find_map(|item| match item {
+            caret_math::layout::MathItem::TextIsland { x, .. } => Some(projection.object_x_pt + x),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing text island"));
+    let hit = snapshot
+        .hit_test_math_text(0, text_x + 1.0, (top + bottom) / 2.0)
+        .unwrap_or_else(|| panic!("visible island should be hittable"));
+    assert!(hit.caret.y0_pt >= top && hit.caret.y1_pt <= bottom);
+    assert!(
+        snapshot
+            .hit_test_math_text(0, text_x + 1.0, top - 0.1)
+            .is_none()
+    );
+    for id in other_ids {
+        let other = snapshot
+            .math_projection(0, &id)
+            .unwrap_or_else(|| panic!("missing other formula"));
+        let (other_layout, _) = snapshot
+            .math_projection_items(other)
+            .unwrap_or_else(|| panic!("missing other layout"));
+        let paragraph = snapshot
+            .paragraph_by_id(&target_paragraph_id(&target))
+            .unwrap_or_else(|| panic!("paragraph missing"));
+        let index = paragraph
+            .inline_math_ids
+            .iter()
+            .position(|candidate| candidate == &id)
+            .unwrap_or_else(|| panic!("missing id"));
+        assert!(std::ptr::eq(
+            other_layout,
+            paragraph.inline_math_layouts[index].as_ref()
+        ));
+        assert_ne!(other.inline_index, projection.inline_index);
+    }
+}
+
+fn target_paragraph_id(target: &MathEditTarget) -> NodeId {
+    match target {
+        MathEditTarget::Inline { paragraph_id, .. } => paragraph_id.clone(),
+        _ => panic!("expected inline"),
     }
 }

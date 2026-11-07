@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{DocumentViewRuntime, InteractionContext, MathInteractionContext};
+use super::{
+    DocumentViewRuntime, InteractionContext, MathInteractionContext, MathTreeInteractionContext,
+};
 use caret_doc::NodeId;
 use caret_engine::{
     Affinity, CompositionRange, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection,
@@ -423,15 +425,23 @@ impl DocumentViewRuntime {
                 );
         }
         let math_context = self.session.math_text_input_context();
+        let math_tree_context = self.session.math_tree_input_context();
         let math_geometry_context = self
             .composition_preview_session
             .as_ref()
             .and_then(caret_engine::Session::math_text_input_context)
             .or_else(|| math_context.clone());
+        let math_tree_geometry_context = self
+            .composition_preview_session
+            .as_ref()
+            .and_then(caret_engine::Session::math_tree_input_context)
+            .or_else(|| math_tree_context.clone());
         let rectangles = if composing {
             Value::Array(Vec::new())
         } else if let Some(context) = &math_context {
             math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
+        } else if math_tree_context.is_some() {
+            Value::Array(Vec::new())
         } else {
             selection_rectangles_json(
                 &selection,
@@ -449,6 +459,22 @@ impl DocumentViewRuntime {
             let (caret, font_size_centipoints) = snapshot
                 .math_text_caret(&context.target, &context.focus, context.visual_affinity)
                 .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?;
+            view.as_object_mut()
+                .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+                .insert(
+                    "caretGeometry".to_owned(),
+                    json!({
+                        "pageIndex": caret.page_index,
+                        "xPt": caret.x_pt,
+                        "y0Pt": caret.y0_pt,
+                        "y1Pt": caret.y1_pt,
+                        "fontSizeCentipoints": font_size_centipoints,
+                    }),
+                );
+        } else if let Some((target, position)) = &math_tree_geometry_context {
+            let (caret, font_size_centipoints) = snapshot
+                .math_tree_caret(target, position)
+                .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned())?;
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
                 .insert(
@@ -541,11 +567,19 @@ impl DocumentViewRuntime {
             anchor_visual_affinity: context.anchor_visual_affinity,
             visual_affinity: context.visual_affinity,
         });
+        let math_tree_context_key =
+            math_tree_context
+                .as_ref()
+                .map(|(target, position)| MathTreeInteractionContext {
+                    target: target.clone(),
+                    position: position.clone(),
+                });
         self.last_interaction_context = Some(InteractionContext {
             document_generation: snapshot.document_generation,
             focused_paragraph_id: logical_selection.focus.paragraph_id.clone(),
             command_input_active: false,
             math_context: math_context_key,
+            math_tree_context: math_tree_context_key,
         });
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -560,6 +594,7 @@ impl DocumentViewRuntime {
         let visual_affinity = self.session.selection_visual_affinity();
         let command_input_context = self.session.command_line();
         let math_context = self.session.math_text_input_context();
+        let math_tree_context = self.session.math_tree_input_context();
         let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
             surrounding_text: context.surrounding_text.clone(),
             target: context.target.clone(),
@@ -568,11 +603,19 @@ impl DocumentViewRuntime {
             anchor_visual_affinity: context.anchor_visual_affinity,
             visual_affinity: context.visual_affinity,
         });
+        let math_tree_context_key =
+            math_tree_context
+                .as_ref()
+                .map(|(target, position)| MathTreeInteractionContext {
+                    target: target.clone(),
+                    position: position.clone(),
+                });
         let context_key = InteractionContext {
             document_generation: self.session.document_generation(),
             focused_paragraph_id: selection.focus.paragraph_id.clone(),
             command_input_active: command_input_context.is_some(),
             math_context: math_context_key,
+            math_tree_context: math_tree_context_key,
         };
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
@@ -605,6 +648,11 @@ impl DocumentViewRuntime {
             .as_ref()
             .and_then(caret_engine::Session::math_text_input_context)
             .or_else(|| math_context.clone());
+        let math_tree_geometry_context = self
+            .composition_preview_session
+            .as_ref()
+            .and_then(caret_engine::Session::math_tree_input_context)
+            .or_else(|| math_tree_context.clone());
         let block_environment_exit = self.session.block_environment_exit();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
         let structure_selection = self
@@ -624,6 +672,8 @@ impl DocumentViewRuntime {
         );
         let rectangles = if let Some(context) = &math_geometry_context {
             math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
+        } else if math_tree_context.is_some() {
+            Value::Array(Vec::new())
         } else {
             body_rectangles
         };
@@ -686,6 +736,10 @@ impl DocumentViewRuntime {
             snapshot
                 .math_text_caret(&context.target, &context.focus, context.visual_affinity)
                 .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?
+        } else if let Some((target, position)) = &math_tree_geometry_context {
+            snapshot
+                .math_tree_caret(target, position)
+                .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned())?
         } else {
             let caret = snapshot
                 .caret_geometry(focus, visual_affinity)

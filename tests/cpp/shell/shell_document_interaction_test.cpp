@@ -56,7 +56,9 @@
 #include <QtTest/qtestkeyboard.h>
 #include <QtTest/qtestmouse.h>
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <qcontainerfwd.h>
 #include <string>
 #include <string_view>
@@ -95,6 +97,29 @@ struct LayoutViewModelTestProbe final {
     }
 };
 } // namespace caret
+
+void ShellLoadTest::mathFontFallbackDiagnosticProjectsToViewModel() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot_json = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot_json.data(), snapshot_json.size()).starts_with("error:"));
+    QJsonObject snapshot =
+        QJsonDocument::fromJson(
+            QByteArray(snapshot_json.data(), static_cast<qsizetype>(snapshot_json.size())))
+            .object();
+    QVERIFY(!snapshot.isEmpty());
+    snapshot.insert(
+        QStringLiteral("mathFontDiagnostic"),
+        QJsonObject{
+            {QStringLiteral("code"), QStringLiteral("math.font.family_missing")},
+            {QStringLiteral("requestedFamily"), QStringLiteral("Unavailable Math Family")}});
+
+    caret::LayoutViewModel view_model;
+    QVERIFY(caret::LayoutViewModelTestProbe::installSnapshot(view_model, snapshot));
+    QCOMPARE(view_model.mathFontDiagnostic().value(QStringLiteral("code")).toString(),
+             QStringLiteral("math.font.family_missing"));
+    QCOMPARE(view_model.mathFontDiagnostic().value(QStringLiteral("requestedFamily")).toString(),
+             QStringLiteral("Unavailable Math Family"));
+}
 
 void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     auto runtime = caret::ffi::new_blank_document_runtime();
@@ -1184,6 +1209,403 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QTRY_VERIFY_WITH_TIMEOUT(pointer_handler->property("dragFocus").toMap().isEmpty(), 3000);
     QVERIFY(canvas->selectionPreviewRects().isEmpty());
     QVERIFY(canvas->caretPreviewGeometry().isEmpty());
+    delete surface;
+}
+
+void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("math-drag.cdoc"));
+    QFile document_file(path);
+    QVERIFY(document_file.open(QIODevice::WriteOnly | QIODevice::Text));
+    const QByteArray document = QByteArrayLiteral(R"json({
+        "format":"caret","version":1,
+        "requiredFeatures":["caret.math.content-flow.v2","caret.math.equation","caret.math.inline",
+            "caret.math.syntax.v1","caret.paragraph.content-flow.v1",
+            "caret.paragraph.layout-settings","caret.text.default-font-size"],
+        "media":[],"document":{
+            "globalSettings":{},"body":[{"type":"paragraph","id":"paragraph","inlines":[
+                {"type":"text","runs":[{"text":"before "}]},
+                {"type":"inlineMath","id":"inline-text-math","mathTree":{
+                    "schemaVersion":3,"root":{"id":"inline-root","content":[
+                        {"type":"math","id":"inline-fraction","kind":"fraction",
+                         "attributes":{"style":"frac"},"children":[
+                            {"id":"numerator","content":[
+                                {"type":"text","runs":[{"text":"xabcdef"}]}
+                            ]},
+                            {"id":"denominator","content":[]}
+                        ]}
+                    ]}
+                }},
+                {"type":"text","runs":[{"text":" after"}]},
+                {"type":"inlineMath","id":"inline-structure-math","mathTree":{
+                    "schemaVersion":3,"root":{"id":"structure-root","content":[
+                        {"type":"math","id":"empty-fraction","kind":"fraction",
+                         "attributes":{"style":"frac"},"children":[
+                            {"id":"structure-numerator","content":[]},
+                            {"id":"structure-denominator","content":[]}
+                        ]}
+                    ]}
+                }}
+            ]}],
+            "pageSections":[{"id":"page-section","props":{}}]
+        }
+    })json");
+    QCOMPARE(document_file.write(document), document.size());
+    document_file.close();
+
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlApplicationEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(QByteArrayLiteral("import QtQuick\n"
+                                        "import Caret.Shell\n"
+                                        "PageSurface { width: 600; height: 700 }\n"),
+                      QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    auto* surface = qobject_cast<QQuickItem*>(component.create());
+    QVERIFY(surface != nullptr);
+    QQuickWindow window;
+    surface->setParentItem(window.contentItem());
+    surface->setSize(QSizeF(600, 700));
+    window.resize(600, 700);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+
+    auto* view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(view_model != nullptr);
+    QSignalSpy open_finished(view_model, &caret::LayoutViewModel::documentFileOperationFinished);
+    QVERIFY(open_finished.isValid());
+    const QVariantMap open_result = view_model->openDocument(path);
+    QVERIFY2(open_result.value(QStringLiteral("valid")).toBool(),
+             qPrintable(open_result.value(QStringLiteral("error")).toString()));
+    QTRY_COMPARE_WITH_TIMEOUT(open_finished.size(), 1, 5000);
+    QVERIFY2(open_finished.first().at(0).toBool(),
+             qPrintable(open_finished.first().at(1).toString()));
+
+    auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
+    QVERIFY(canvas != nullptr);
+    QObject* selection_drag = surface->findChild<QObject*>(QStringLiteral("documentSelectionDrag"));
+    QObject* pointer_handler =
+        surface->findChild<QObject*>(QStringLiteral("documentCanvasPointerHandler"));
+    QVERIFY(selection_drag != nullptr);
+    QVERIFY(pointer_handler != nullptr);
+
+    const QVariantMap hit_map = view_model->dragHitMap(0);
+    QVERIFY2(hit_map.value(QStringLiteral("valid")).toBool(),
+             qPrintable(hit_map.value(QStringLiteral("error")).toString()));
+    QVariantMap start;
+    QVariantMap end;
+    for (const QVariant& value : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("kind")).toString() != QStringLiteral("math"))
+            continue;
+        const QString order = position.value(QStringLiteral("orderUtf8")).toString();
+        if (order == QStringLiteral("7") &&
+            stop.value(QStringLiteral("visualAffinity")).toString() == QStringLiteral("downstream"))
+            end = stop;
+    }
+    for (const QVariant& value : hit_map.value(QStringLiteral("stops")).toList()) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("kind")).toString() == QStringLiteral("math") &&
+            position.value(QStringLiteral("orderUtf8")).toString() == QStringLiteral("1") &&
+            stop.value(QStringLiteral("domainId")).toString() ==
+                end.value(QStringLiteral("domainId")).toString() &&
+            stop.value(QStringLiteral("visualAffinity")).toString() ==
+                QStringLiteral("downstream")) {
+            start = stop;
+            break;
+        }
+    }
+    QVERIFY(!start.isEmpty());
+    QVERIFY(!end.isEmpty());
+    qreal math_left = std::numeric_limits<qreal>::max();
+    qreal math_right = std::numeric_limits<qreal>::lowest();
+    QVariantMap body_left;
+    QVariantMap body_right;
+    const QVariantList drag_stops = hit_map.value(QStringLiteral("stops")).toList();
+    for (const QVariant& value : drag_stops) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        const qreal x = stop.value(QStringLiteral("xPt")).toReal();
+        if (position.value(QStringLiteral("kind")).toString() == QStringLiteral("math")) {
+            math_left = std::min(math_left, x);
+            math_right = std::max(math_right, x);
+        }
+    }
+    for (const QVariant& value : drag_stops) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        const qreal x = stop.value(QStringLiteral("xPt")).toReal();
+        if (position.value(QStringLiteral("kind")).toString() == QStringLiteral("body")) {
+            if (x < math_left - 3.0 &&
+                (body_left.isEmpty() || x > body_left.value(QStringLiteral("xPt")).toReal())) {
+                body_left = stop;
+            }
+            if (x > math_right + 3.0 &&
+                (body_right.isEmpty() || x < body_right.value(QStringLiteral("xPt")).toReal())) {
+                body_right = stop;
+            }
+        }
+    }
+    QVERIFY(math_right > math_left);
+    QVERIFY(!body_left.isEmpty());
+    QVERIFY(!body_right.isEmpty());
+    qreal math_text_left = std::numeric_limits<qreal>::max();
+    qreal math_text_right = std::numeric_limits<qreal>::lowest();
+    qreal math_top = std::numeric_limits<qreal>::max();
+    qreal math_bottom = std::numeric_limits<qreal>::lowest();
+    for (const QVariant& value : drag_stops) {
+        const QVariantMap stop = value.toMap();
+        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
+        if (position.value(QStringLiteral("kind")).toString() != QStringLiteral("math") ||
+            stop.value(QStringLiteral("domainId")).toString() !=
+                start.value(QStringLiteral("domainId")).toString())
+            continue;
+        math_text_left = std::min(math_text_left, stop.value(QStringLiteral("xPt")).toReal());
+        math_text_right = std::max(math_text_right, stop.value(QStringLiteral("xPt")).toReal());
+        math_top = std::min(math_top, stop.value(QStringLiteral("y0Pt")).toReal());
+        math_bottom = std::max(math_bottom, stop.value(QStringLiteral("y1Pt")).toReal());
+    }
+    QVERIFY(math_text_right > math_text_left);
+    QVERIFY(math_bottom > math_top);
+    const QVariantMap start_domain =
+        view_model->dragStartDomain(0, start.value(QStringLiteral("xPt")).toReal(),
+                                    (start.value(QStringLiteral("y0Pt")).toReal() +
+                                     start.value(QStringLiteral("y1Pt")).toReal()) /
+                                        2.0);
+    QVERIFY2(start_domain.value(QStringLiteral("valid")).toBool(),
+             qPrintable(start_domain.value(QStringLiteral("error")).toString()));
+    QCOMPARE(start_domain.value(QStringLiteral("domainId")).toString(),
+             start.value(QStringLiteral("domainId")).toString());
+    for (const QVariantMap& body_stop : {body_left, body_right}) {
+        const QVariantMap body_domain =
+            view_model->dragStartDomain(0, body_stop.value(QStringLiteral("xPt")).toReal(),
+                                        (body_stop.value(QStringLiteral("y0Pt")).toReal() +
+                                         body_stop.value(QStringLiteral("y1Pt")).toReal()) /
+                                            2.0);
+        QVERIFY2(body_domain.value(QStringLiteral("valid")).toBool(),
+                 qPrintable(body_domain.value(QStringLiteral("error")).toString()));
+        QCOMPARE(body_domain.value(QStringLiteral("domainId")).toString(), QStringLiteral("body"));
+    }
+    const auto stop_point = [canvas](const QVariantMap& stop) {
+        return canvas->documentToContent(stop.value(QStringLiteral("pageIndex")).toInt(),
+                                         QPointF(stop.value(QStringLiteral("xPt")).toReal(),
+                                                 (stop.value(QStringLiteral("y0Pt")).toReal() +
+                                                  stop.value(QStringLiteral("y1Pt")).toReal()) /
+                                                     2.0));
+    };
+    const QString initial_generation = view_model->documentGeneration();
+    for (const qreal zoom : {0.5, 1.0, 2.0}) {
+        canvas->setZoom(zoom);
+        const QPointF end_window = canvas->mapToItem(window.contentItem(), stop_point(end));
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
+        QTRY_VERIFY_WITH_TIMEOUT(
+            view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt() != 1,
+            3000);
+        QVERIFY(canvas->caretGeometry().value(QStringLiteral("xPt")).toReal() !=
+                start.value(QStringLiteral("xPt")).toReal());
+
+        const QPointF click_window = canvas->mapToItem(window.contentItem(), stop_point(start));
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, click_window.toPoint());
+        QTRY_COMPARE_WITH_TIMEOUT(
+            view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 1,
+            3000);
+        const QVariantMap caret = canvas->caretGeometry();
+        QCOMPARE(caret.value(QStringLiteral("xPt")).toReal(),
+                 start.value(QStringLiteral("xPt")).toReal());
+        const QRectF ime_caret = canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
+        QVERIFY(!ime_caret.isEmpty());
+        const QPointF ime_caret_document = canvas->contentToDocument(
+            start.value(QStringLiteral("pageIndex")).toInt(), ime_caret.topLeft());
+        QVERIFY(std::abs(ime_caret_document.x() - start.value(QStringLiteral("xPt")).toReal()) <
+                0.02);
+        QVERIFY(std::abs(ime_caret_document.y() - caret.value(QStringLiteral("y0Pt")).toReal()) <
+                0.02);
+
+        const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
+        QVERIFY(!frame.isNull());
+        const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
+        const qreal scale_y = static_cast<qreal>(frame.height()) / window.height();
+        const QRectF caret_window =
+            canvas->mapRectToItem(window.contentItem(), canvas->caretVisualRect());
+        const QRect caret_pixels(
+            qFloor(caret_window.left() * scale_x) - 2, qFloor(caret_window.top() * scale_y) - 2,
+            qCeil(caret_window.width() * scale_x) + 4, qCeil(caret_window.height() * scale_y) + 4);
+        const int page_index = start.value(QStringLiteral("pageIndex")).toInt();
+        const QPointF origin = canvas->documentToContent(page_index, QPointF(0.0, 0.0));
+        const QPointF unit_x = canvas->documentToContent(page_index, QPointF(1.0, 0.0));
+        const qreal logical_scale = unit_x.x() - origin.x();
+        QVERIFY(logical_scale > 0.0);
+        qsizetype source_ink_pixels = 0;
+        qsizetype rendered_ink_pixels = 0;
+        for (const QVariant& frame_value : canvas->glyphFrames()) {
+            const QVariantMap glyph_frame = frame_value.toMap();
+            if (glyph_frame.value(QStringLiteral("pageIndex")).toInt() != page_index)
+                continue;
+            const qreal image_to_logical_scale =
+                logical_scale / glyph_frame.value(QStringLiteral("rasterPxPerPt")).toReal();
+            const QVariantList images = glyph_frame.value(QStringLiteral("images")).toList();
+            for (const QVariant& placement_value :
+                 glyph_frame.value(QStringLiteral("placements")).toList()) {
+                const QVariantMap placement = placement_value.toMap();
+                const qreal x_pt = placement.value(QStringLiteral("xPt")).toReal();
+                const qreal baseline_y_pt = placement.value(QStringLiteral("baselineYPt")).toReal();
+                if (x_pt < math_text_left - 1.0 || x_pt > math_text_right + 1.0 ||
+                    baseline_y_pt < math_top - 20.0 || baseline_y_pt > math_bottom + 20.0)
+                    continue;
+                const int image_index = placement.value(QStringLiteral("imageIndex")).toInt();
+                QVERIFY(image_index >= 0 && image_index < images.size());
+                const QVariantMap image = images.at(image_index).toMap();
+                const int image_width = image.value(QStringLiteral("width")).toInt();
+                const int image_height = image.value(QStringLiteral("height")).toInt();
+                const QByteArray pixels = image.value(QStringLiteral("pixels")).toByteArray();
+                QCOMPARE(pixels.size(), image_width * image_height * 4);
+                bool source_has_ink = false;
+                for (qsizetype offset = 0; offset + 3 < pixels.size(); offset += 4) {
+                    const auto* rgba = reinterpret_cast<const uchar*>(pixels.constData() + offset);
+                    if (rgba[3] > 0 && rgba[0] < 100 && rgba[1] < 100 && rgba[2] < 100) {
+                        ++source_ink_pixels;
+                        source_has_ink = true;
+                    }
+                }
+                if (!source_has_ink || image_width <= 0 || image_height <= 0)
+                    continue;
+
+                const QPointF baseline =
+                    canvas->documentToContent(page_index, QPointF(x_pt, baseline_y_pt));
+                const bool phase_applied =
+                    placement.value(QStringLiteral("pixelPhaseApplied")).toBool();
+                const QPointF phase =
+                    phase_applied ? QPointF(placement.value(QStringLiteral("pixelPhaseX")).toReal(),
+                                            placement.value(QStringLiteral("pixelPhaseY")).toReal())
+                                  : QPointF{};
+                const QPointF glyph_top_left(
+                    baseline.x() + (image.value(QStringLiteral("left")).toReal() - phase.x()) *
+                                       image_to_logical_scale,
+                    baseline.y() + (-image.value(QStringLiteral("top")).toReal() - phase.y()) *
+                                       image_to_logical_scale);
+                const QPointF window_top_left =
+                    canvas->mapToItem(window.contentItem(), glyph_top_left);
+                const qreal raster_to_frame_x = image_to_logical_scale * scale_x;
+                const qreal raster_to_frame_y = image_to_logical_scale * scale_y;
+                for (int source_y = 0; source_y < image_height; ++source_y) {
+                    for (int source_x = 0; source_x < image_width; ++source_x) {
+                        const qsizetype offset =
+                            (static_cast<qsizetype>(source_y) * image_width + source_x) * 4;
+                        if (static_cast<uchar>(pixels.at(offset + 3)) == 0)
+                            continue;
+                        const int x0 =
+                            qFloor(window_top_left.x() * scale_x + source_x * raster_to_frame_x);
+                        const int x1 = qCeil(window_top_left.x() * scale_x +
+                                             (source_x + 1) * raster_to_frame_x) -
+                                       1;
+                        const int y0 =
+                            qFloor(window_top_left.y() * scale_y + source_y * raster_to_frame_y);
+                        const int y1 = qCeil(window_top_left.y() * scale_y +
+                                             (source_y + 1) * raster_to_frame_y) -
+                                       1;
+                        for (int y = y0; y <= y1; ++y) {
+                            for (int x = x0; x <= x1; ++x) {
+                                if (!frame.rect().contains(x, y) || caret_pixels.contains(x, y))
+                                    continue;
+                                const QColor pixel = frame.pixelColor(x, y);
+                                if (pixel.alpha() > 0 && pixel != QColor(Qt::white))
+                                    ++rendered_ink_pixels;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        QVERIFY2(source_ink_pixels > 0,
+                 "the selected math placements must contain actual rasterized glyph ink");
+        QVERIFY2(rendered_ink_pixels > 0,
+                 "math glyph ink must render outside the current caret at each zoom level");
+        QCOMPARE(view_model->documentGeneration(), initial_generation);
+    }
+    canvas->setZoom(1.0);
+    const QPointF start_window = canvas->mapToItem(window.contentItem(), stop_point(start));
+    const QPointF end_window = canvas->mapToItem(window.contentItem(), stop_point(end));
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, start_window.toPoint());
+    const QPoint end_point = end_window.toPoint();
+    QMouseEvent drag_move(QEvent::MouseMove, end_window, end_window, window.mapToGlobal(end_point),
+                          Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &drag_move);
+    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    const QVariantMap drag_anchor = pointer_handler->property("dragAnchor").toMap();
+    const QVariantMap drag_focus = pointer_handler->property("dragFocus").toMap();
+    QVERIFY(!drag_anchor.isEmpty());
+    QVERIFY(!drag_focus.isEmpty());
+    QCOMPARE(drag_anchor.value(QStringLiteral("domainId")).toString(),
+             start.value(QStringLiteral("domainId")).toString());
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionPreviewRects().isEmpty(), 3000);
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
+    QTRY_VERIFY_WITH_TIMEOUT(!view_model->selectionRects().isEmpty(), 3000);
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
+    const QVariantMap input_context = view_model->inputMethodContext();
+    QCOMPARE(input_context.value(QStringLiteral("surroundingText")).toString(),
+             QStringLiteral("xabcdef"));
+    QCOMPARE(input_context.value(QStringLiteral("anchorPosition")).toInt(), 1);
+    QCOMPARE(input_context.value(QStringLiteral("cursorPosition")).toInt(), 7);
+    QVERIFY(input_context.value(QStringLiteral("enabled")).toBool());
+    QVERIFY(view_model->copySelectionToClipboard().value(QStringLiteral("valid")).toBool());
+    QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("abcdef"));
+
+    QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
+    QVERIFY(view_model->selectionRects().isEmpty());
+    QVariantMap structural_point;
+    const QSizeF page_size = canvas->pageSizesPt().first().toSizeF();
+    for (int y = 40; static_cast<qreal>(y) < std::min<qreal>(260.0, page_size.height()); y += 2) {
+        for (int x = 40; static_cast<qreal>(x) < std::min<qreal>(page_size.width() - 20.0, 580.0);
+             x += 2) {
+            const qreal x_pt = static_cast<qreal>(x);
+            const qreal y_pt = static_cast<qreal>(y);
+            const QVariantMap placed = view_model->placeCaretAtPage(0, x_pt, y_pt);
+            if (placed.value(QStringLiteral("valid")).toBool() &&
+                placed.value(QStringLiteral("mathTree")).toBool()) {
+                structural_point = {{QStringLiteral("xPt"), x_pt}, {QStringLiteral("yPt"), y_pt}};
+                break;
+            }
+        }
+        if (!structural_point.isEmpty()) {
+            break;
+        }
+    }
+    QVERIFY(!structural_point.isEmpty());
+    const QVariantMap structural_domain =
+        view_model->dragStartDomain(0, structural_point.value(QStringLiteral("xPt")).toReal(),
+                                    structural_point.value(QStringLiteral("yPt")).toReal());
+    QVERIFY2(structural_domain.value(QStringLiteral("valid")).toBool(),
+             qPrintable(structural_domain.value(QStringLiteral("error")).toString()));
+    QVERIFY(structural_domain.value(QStringLiteral("domainId")).toString().isEmpty());
+    QVERIFY(view_model->selectionRects().isEmpty());
+
+    const QPointF structural_window =
+        canvas->mapToItem(window.contentItem(),
+                          canvas->documentToContent(
+                              0, QPointF(structural_point.value(QStringLiteral("xPt")).toReal(),
+                                         structural_point.value(QStringLiteral("yPt")).toReal())));
+    QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, structural_window.toPoint());
+    QMouseEvent structural_to_text_move(QEvent::MouseMove, end_window, end_window,
+                                        window.mapToGlobal(end_window.toPoint()), Qt::NoButton,
+                                        Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &structural_to_text_move);
+    QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
+    QVERIFY(pointer_handler->property("dragAnchor").toMap().isEmpty());
+    QVERIFY(canvas->selectionPreviewRects().isEmpty());
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
+    QVERIFY(view_model->selectionRects().isEmpty());
+    QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
     delete surface;
 }
 

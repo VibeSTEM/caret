@@ -6,16 +6,21 @@
 use super::super::environment::inline_adapter::{
     RunPropertyEnvironment, run_property_for_key, run_property_for_kind,
 };
+use super::super::flow_format::{
+    InheritedInlineStyle, inline_format_range_state, run_property_range_state,
+};
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, InlineSpan, Pos};
 use super::Session;
 use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
+#[cfg(test)]
+use inline_tree::format_value;
 use inline_tree::{
     apply_font_family_to_range, apply_formats_to_range, clear_run_property_to_range,
-    effective_format_at, format_spans, format_value, set_run_property_to_range,
-    unwrap_inline_environment, wrap_format_range,
+    effective_format_at, format_spans, set_run_property_to_range, unwrap_inline_environment,
+    wrap_format_range,
 };
 use std::collections::BTreeMap;
 
@@ -303,12 +308,10 @@ impl Session {
                 offset: range_end,
                 ..start.clone()
             })?;
-            for span in format_spans(&paragraph.inlines)?.iter().filter(|span| {
-                span.run_property_target && span.start < range_end && span.end > range_start
-            }) {
-                any_text = true;
-                any_disabled |= !span.properties.get(property.key).copied().unwrap_or(false);
-            }
+            let (contains_run, contains_disabled) =
+                run_property_range_state(&paragraph.inlines, range_start..range_end, property)?;
+            any_text |= contains_run;
+            any_disabled |= contains_disabled;
             ranges.push((
                 paragraph_id.clone(),
                 location.clone(),
@@ -691,14 +694,16 @@ impl Session {
                 offset: range_end,
                 ..start.clone()
             })?;
-            let spans = format_spans(&paragraph.inlines)?;
-            for span in spans
-                .iter()
-                .filter(|span| span.formatable && span.start < range_end && span.end > range_start)
-            {
-                any_content = true;
-                any_disabled |= !format_value(span, kind);
-            }
+            // 正文旧适配器对段落内未知 TextFlow 扩展采取整体拒绝策略，继续保留该边界。
+            format_spans(&paragraph.inlines)?;
+            let (contains_text, contains_disabled) = inline_format_range_state(
+                &paragraph.inlines,
+                range_start..range_end,
+                kind,
+                &InheritedInlineStyle::default(),
+            )?;
+            any_content |= contains_text;
+            any_disabled |= contains_disabled;
             ranges.push((
                 paragraph_id.clone(),
                 location.clone(),

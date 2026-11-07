@@ -664,26 +664,17 @@ fn unavailable_candidates_are_hidden_until_prefix_matches_and_cannot_execute() {
 }
 
 #[test]
-fn math_commands_stay_unavailable_until_the_document_and_canvas_paths_are_ready() {
-    let mut session = Session::new(Document::blank())
-        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
-    session
-        .run(Command::BeginCommandLine)
-        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
-
+fn math_commands_insert_supported_carriers_and_enter_their_edit_focus() {
     for (query, alias) in [
         ("math", "\\math"),
         ("equation", "\\equation"),
         ("align", "\\align"),
     ] {
-        if session.command_line().is_some() {
-            session
-                .run(Command::CancelCommandLine)
-                .unwrap_or_else(|error| panic!("command line did not close: {error}"));
-            session
-                .run(Command::BeginCommandLine)
-                .unwrap_or_else(|error| panic!("command line did not restart: {error}"));
-        }
+        let mut session = Session::new(Document::blank())
+            .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+        session
+            .run(Command::BeginCommandLine)
+            .unwrap_or_else(|error| panic!("command line did not start: {error}"));
         session
             .run(Command::TypeCommandLine(query.to_owned()))
             .unwrap_or_else(|error| panic!("command query failed: {error}"));
@@ -692,14 +683,277 @@ fn math_commands_stay_unavailable_until_the_document_and_canvas_paths_are_ready(
             .and_then(|line| line.selected_candidate())
             .unwrap_or_else(|| panic!("{alias} candidate should remain discoverable"));
         assert_eq!(candidate.alias, alias);
-        assert!(!candidate.available);
+        assert!(candidate.available);
 
         let generation = session.document_generation();
         session
             .run(Command::AcceptCommandLine)
-            .unwrap_or_else(|error| panic!("disabled math command should be ignored: {error}"));
+            .unwrap_or_else(|error| panic!("supported math command should execute: {error}"));
+        assert!(session.command_line().is_none());
+        assert_eq!(session.document_generation(), generation + 1);
+        match query {
+            "math" => assert!(matches!(
+                session.math_edit().map(|edit| &edit.target),
+                Some(MathEditTarget::Inline { .. })
+            )),
+            "equation" => assert!(matches!(
+                session.math_edit().map(|edit| &edit.target),
+                Some(MathEditTarget::Block { align: false, .. })
+            )),
+            "align" => assert!(matches!(
+                session.math_edit().map(|edit| &edit.target),
+                Some(MathEditTarget::Block { align: true, .. })
+            )),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn math_insertion_candidates_are_disabled_for_selection_and_math_mode() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session
+        .run(Command::InsertText("selected".to_owned()))
+        .unwrap_or_else(|error| panic!("fixture text should insert: {error}"));
+    let mut anchor = session.selection().focus.clone();
+    anchor.offset = 0;
+    let mut focus = anchor.clone();
+    focus.offset = "selected".len();
+    session
+        .run(Command::SetSelection(Some(Selection { anchor, focus })))
+        .unwrap_or_else(|error| panic!("fixture selection should be valid: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("math".to_owned()))
+        .unwrap_or_else(|error| panic!("math query should type: {error}"));
+    assert!(
+        !session
+            .command_line_candidates()
+            .into_iter()
+            .find(|candidate| candidate.alias == "\\math")
+            .unwrap_or_else(|| panic!("math candidate should be discoverable"))
+            .available
+    );
+    session
+        .run(Command::CancelCommandLine)
+        .unwrap_or_else(|error| panic!("command line should close: {error}"));
+
+    session
+        .run(Command::SetSelection(None))
+        .unwrap_or_else(|error| panic!("selection should collapse: {error}"));
+    session
+        .run(Command::InsertInlineMath(String::new()))
+        .unwrap_or_else(|error| panic!("inline math fixture should insert: {error}"));
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .unwrap_or_else(|error| panic!("math focus should enter: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("math command line should start: {error}"));
+    session
+        .run(Command::TypeCommandLine("equation".to_owned()))
+        .unwrap_or_else(|error| panic!("equation query should type: {error}"));
+    let generation = session.document_generation();
+    let document = session.document().clone();
+    assert!(
+        session
+            .command_line_candidates()
+            .into_iter()
+            .all(|candidate| candidate.alias != "\\equation")
+    );
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("unlisted display command should be ignored: {error}"));
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.document(), &document);
+}
+
+#[test]
+fn inline_math_candidate_is_disabled_when_atomic_insertion_would_reject_metadata() {
+    for metadata_kind in ["flow", "run"] {
+        let mut document = Document::blank();
+        let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+            panic!("blank document should start with a paragraph");
+        };
+        let mut run = Run {
+            text: "abc".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        };
+        if metadata_kind == "run" {
+            run.extra
+                .insert("futureRunValue".to_owned(), serde_json::json!(1));
+        }
+        let mut flow = match text_flow(run) {
+            ParagraphContent::Text(flow) => flow,
+            _ => unreachable!(),
+        };
+        if metadata_kind == "flow" {
+            flow.extra
+                .insert("futureRunBoundaries".to_owned(), serde_json::json!([1]));
+        }
+        paragraph.inlines = vec![ParagraphContent::Text(flow)];
+        let mut session = Session::new(document)
+            .unwrap_or_else(|error| panic!("metadata fixture rejected: {error}"));
+        let caret = Pos {
+            offset: 1,
+            ..session.selection().focus.clone()
+        };
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            })))
+            .unwrap_or_else(|error| panic!("caret setup failed: {error}"));
+        session
+            .run(Command::BeginCommandLine)
+            .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+        session
+            .run(Command::TypeCommandLine("math".to_owned()))
+            .unwrap_or_else(|error| panic!("math query failed: {error}"));
+
+        let candidate = session
+            .command_line_candidates()
+            .into_iter()
+            .find(|candidate| candidate.alias == "\\math")
+            .unwrap_or_else(|| panic!("math candidate should remain discoverable"));
+        assert!(
+            !candidate.available,
+            "{metadata_kind} metadata blocks insertion"
+        );
+        let document_before = session.document().clone();
+        let selection_before = session.selection().clone();
+        let generation_before = session.document_generation();
+        let edit_before = session.math_edit().cloned();
+        session
+            .run(Command::AcceptCommandLine)
+            .unwrap_or_else(|error| panic!("disabled candidate should be a no-op: {error}"));
+        assert_eq!(session.document(), &document_before);
+        assert_eq!(session.selection(), &selection_before);
+        assert_eq!(session.document_generation(), generation_before);
+        assert_eq!(session.math_edit(), edit_before.as_ref());
         assert!(session.command_line().is_some());
+
+        session
+            .run(Command::CancelCommandLine)
+            .unwrap_or_else(|error| panic!("command line should close: {error}"));
+        assert!(matches!(
+            session.run(Command::InsertInlineMath(String::new())),
+            Err(EditError::UnsupportedOpaqueContent)
+        ));
+        assert_eq!(session.document(), &document_before);
+        assert_eq!(session.selection(), &selection_before);
+        assert_eq!(session.document_generation(), generation_before);
+        assert_eq!(session.math_edit(), edit_before.as_ref());
+    }
+}
+
+#[test]
+fn inline_math_candidate_remains_available_in_section_titles() {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    let title_id = NodeId::generate();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(Paragraph::empty(title_id.clone())),
+        children: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        extra: BTreeMap::new(),
+    })];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("section title document rejected: {error}"));
+    let position = Pos {
+        story: StoryId::EnvironmentTitle(environment_id.clone()),
+        paragraph_id: title_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        })))
+        .unwrap_or_else(|error| panic!("section title caret rejected: {error}"));
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("math".to_owned()))
+        .unwrap_or_else(|error| panic!("math query failed: {error}"));
+
+    let candidate = session
+        .command_line_candidates()
+        .into_iter()
+        .find(|candidate| candidate.alias == "\\math")
+        .unwrap_or_else(|| panic!("math candidate should remain discoverable"));
+    assert!(candidate.available);
+    let generation = session.document_generation();
+    session
+        .run(Command::AcceptCommandLine)
+        .unwrap_or_else(|error| panic!("math insertion in section title failed: {error}"));
+
+    assert_eq!(session.document_generation(), generation + 1);
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Inline { .. })
+    ));
+    assert_eq!(
+        session.selection().focus.story,
+        StoryId::EnvironmentTitle(environment_id)
+    );
+}
+
+#[test]
+fn display_math_candidates_are_disabled_when_paragraph_split_is_unsafe() {
+    for (query, command_id) in [("equation", "insert.equation"), ("align", "insert.align")] {
+        let mut document = Document::blank();
+        let Some(Block::Paragraph(paragraph)) = document.body.first_mut() else {
+            panic!("blank document should start with a paragraph");
+        };
+        paragraph.inlines = vec![text_flow(Run {
+            text: "keep".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        })];
+        paragraph.extra.insert(
+            "futureParagraphField".to_owned(),
+            serde_json::json!({"v": 1}),
+        );
+        let mut session = Session::new(document).unwrap_or_else(|error| {
+            panic!("document with unknown optional data should open: {error}")
+        });
+        session
+            .run(Command::BeginCommandLine)
+            .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+        session
+            .run(Command::TypeCommandLine(query.to_owned()))
+            .unwrap_or_else(|error| panic!("command query failed: {error}"));
+
+        let candidates = session.command_line_candidates();
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.command_id == command_id && !candidate.available),
+            "{command_id} must be visible but unavailable when insertion would reject the paragraph"
+        );
+        let generation = session.document_generation();
+        let focus = session.selection().focus.clone();
+        session
+            .run(Command::AcceptCommandLine)
+            .unwrap_or_else(|error| panic!("unavailable command should be ignored: {error}"));
+
+        assert!(session.command_line().is_some());
+        assert!(session.math_edit().is_none());
         assert_eq!(session.document_generation(), generation);
+        assert_eq!(session.selection().focus, focus);
+        assert_eq!(paragraph_text(&session, 0), "keep");
     }
 }
 
@@ -1431,6 +1685,38 @@ fn cloning_rebinds_current_text_math_edit() {
     assert_eq!(first_inline_math_source(&cloned), r"\frac{\text{abcZ}}{z}");
     assert_eq!(first_inline_math_source(&original), r"\frac{\text{abc}}{z}");
     assert!(original.ensure_math_edit_revision_current().is_ok());
+}
+
+#[test]
+fn stale_math_text_revision_disables_inline_split_candidate() {
+    let mut session = session_with_inline_math(r"\frac{\text{abc}}{z}");
+    let mut visited_positions = Vec::new();
+    while !matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ) {
+        let edit = session
+            .math_edit()
+            .unwrap_or_else(|| panic!("formula edit ended before entering TextFlow"));
+        let position = (edit.branch.clone(), edit.cursor);
+        assert!(
+            !visited_positions.contains(&position),
+            "backward navigation cycled before reaching the TextFlow"
+        );
+        visited_positions.push(position);
+        run_ok(&mut session, Command::MoveCaret(Direction::Backward));
+    }
+    run_ok(&mut session, Command::BeginCommandLine);
+    assert!(super::math_edit::math_text_split_is_available(&session));
+
+    let stale_generation = session.document_generation() + 1;
+    session
+        .math_edit
+        .as_mut()
+        .unwrap_or_else(|| panic!("math edit should remain active"))
+        .revision
+        .document_generation = stale_generation;
+    assert!(!super::math_edit::math_text_split_is_available(&session));
 }
 
 #[test]
