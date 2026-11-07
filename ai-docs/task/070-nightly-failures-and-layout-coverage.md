@@ -1,6 +1,6 @@
 # 070 — Nightly 失败修复与布局测试补齐
 
-- 状态：in-progress
+- 状态：done
 - 依赖：006
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -46,7 +46,7 @@
 - [x] advance 回归测试断言 inline object 占用的 30 pt 推进量，与平台字体塑形结果无关。
 - [x] Rust、覆盖率门禁范围和阈值没有被缩减。
 - [x] Rust 全局函数与行覆盖率达到 85%；覆盖率缺口用有行为意义的测试补齐。
-- [ ] 相关测试、评审及未执行验证均有事实记录。
+- [x] 相关测试、评审及未执行验证均有事实记录。
 
 ## 验证计划与结果
 
@@ -66,7 +66,8 @@
 | 2026-11-08 | `cargo quality`（提升权限，避免用户级 Cargo advisory DB 只读锁限制） | 完整格式、lint、依赖审计和 workspace 测试通过 | 通过；Clippy、9 项 lint、依赖审计、Rust workspace tests 与 native/QML CTest（9/9）均成功。 |
 | 2026-11-08 | follow-up 最终 diff 的 `cargo coverage` | Rust 函数与行覆盖率均不低于 85% | 通过：函数 3794/4462（85.03%），行 48959/54892（89.19%），与 PR #101 结果一致。 |
 | 2026-11-08 | gpt-6.1-terra/medium 领域检查 | 检查显式错误分支、路径安全与清理 | 通过；提前返回时 guard 仍关闭文件并删除夹具。 |
-| — | 修复后远程 Nightly | 跨平台确认 coverage 和两项修复 | 待推送后复验 |
+| 2026-11-08 | Nightly run 42405417514（合并 PR #102 后） | 修复后的完整质量、coverage、跨平台测试及 sanitizer 通过 | full quality、Rust/native coverage、Miri、三平台 workspace tests 和 sanitizer 全部通过；macOS ASan/UBSan、TSan 两个 profile 的 CTest 各 9/9，均包含 `Qml.ShellLoad`。Rust CPU performance 仍运行；本次未等待。 |
+| 2026-11-08 | gpt-6.1-sol/medium 最终只读评审（PR #102 follow-up） | 完整复核最终 diff、测试和文档记录 | 通过；没有遗留发现。 |
 
 ## 风险与回退
 
@@ -77,9 +78,10 @@
 - 2026-11-08：创建任务；日志确认两项失败，覆盖率门禁通过。
 - 2026-11-08：Miri 过滤精确到失败测试名；布局用例使用同文本零宽对象作为基线，避免字体塑形差异。Terra/medium 领域检查与 Sol/medium 最终只读评审均未留下未处理发现；最终评审未复验 Windows 或远程 Nightly。
 - 2026-11-08：合并后 Nightly 验证 Windows 修复通过；coverage 报告为 84.96% 函数覆盖率，故重开任务并寻找有用户可观察行为的覆盖缺口。独立领域检查否决只断言私有 precedence 数字的测试；保留 FFI 错误传播测试并确保临时路径可编码且失败会清理。
-- 2026-11-08：PR #101 Nightly 的 Rust coverage、Miri、三平台 workspace tests 与三平台 sanitizer 通过，`Qml.ShellLoad` macOS ASan/UBSan 与 TSan 均通过；Rust CPU performance job 仍运行且不作为等待条件。full quality 发现 FFI 测试使用 `expect`，follow-up 改为显式错误分支；完整 `cargo quality`、最终 `cargo coverage` 和 Terra 领域检查现已通过，等待最终只读评审及修复后远程 Nightly。
-- 2026-11-08：macOS Nightly sanitizer 日志确认两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 异步系统回调；LSan 增加仅匹配该符号的规则，等待合并后的 Nightly 复验。
+- 2026-11-08：PR #101 Nightly 的 Rust coverage、Miri、三平台 workspace tests 与三平台 sanitizer 通过；full quality 发现 FFI 测试使用 `expect`，follow-up 改为显式错误分支，并通过本机完整 quality/coverage、领域检查和最终评审。
+- 2026-11-08：PR #102 合并后的 Nightly run 42405417514 通过 full quality、Rust/native coverage、Miri、三平台 workspace tests 与 sanitizer；macOS ASan/UBSan、TSan 两个 profile 的 CTest 各 9/9，均包含 Qml.ShellLoad。Rust CPU performance job 仍运行，但不属于任务验收。
+- 2026-11-08：macOS Nightly sanitizer 日志确认两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 异步系统回调；LSan 增加仅匹配该符号的规则。后续 PR #102 合并后的 Nightly 复验通过，详见验证表。
 
 ## 完成摘要
 
-PR #101 Nightly 的 macOS `Qml.ShellLoad` ASan/UBSan 与 TSan、三平台 workspace tests、Miri 和 Rust/native coverage 均通过。full quality 暴露的 FFI Clippy 错误已修正；follow-up 本地完整 `cargo quality`、最终 Rust coverage 和 Terra 领域检查通过。最终只读评审与修复后远程 Nightly 仍待完成；Rust CPU performance job 不作为等待条件。
+PR #102 follow-up 修复了 Nightly full quality 报出的 FFI `clippy::expect_used`。本机完整 `cargo quality`、最终 coverage、领域检查和最终评审通过；合并后 Nightly run 42405417514 的 full quality、coverage、Miri、三平台 workspace tests 与 sanitizer 也全部通过，任务已完成。Rust CPU performance job 仍运行且不作为等待条件。

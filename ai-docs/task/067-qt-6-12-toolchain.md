@@ -43,13 +43,13 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 
 ## 验收标准
 
-- [ ] macOS、Windows、Linux 使用官方 Qt 6.12.0 归档；各归档 SHA256 来源可复核。
-- [ ] Linux ICU 与 Qt 6.12.0 配套，并由托管供给脚本校验。
-- [ ] 三平台 CMake 要求和技术基线一致；无残留的当前版本锁 6.11.2。
+- [x] macOS、Windows、Linux 使用官方 Qt 6.12.0 归档；各归档 SHA256 来源可复核。
+- [x] Linux ICU 与 Qt 6.12.0 配套，并由托管供给脚本校验。
+- [x] 三平台 CMake 要求和技术基线一致；无残留的当前版本锁 6.11.2。
 - [x] macOS 构建拒绝低于 14.4 的 `MACOSX_DEPLOYMENT_TARGET` 覆盖。
 - [x] 托管供给、应用构建、相关 native/QML 检查通过；未运行平台明确记录。
-- [ ] sanitizer 规则经 6.12.0 实际报告复查，无未经确认的旧版专用抑制。
-- [ ] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
+- [ ] sanitizer 规则经 6.12.0 实际报告复查，无未经确认的旧版专用抑制。Nightly macOS 26.7.2 已确认 LaunchServices 单符号规则对应原报告；仍需逐项复核夹具中标注 Qt 6.11 的既有规则。本机 macOS 27.2 的 Qml.ShellLoad 另有 1392 字节 / 33 个泄漏报告，调用栈经过 FontRegistry/CoreText；实际归属与生命周期原因未确认，未扩大抑制。
+- [x] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
 
 ## 验证计划与结果
 
@@ -62,14 +62,16 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 | 2026-11-06 | `MACOSX_DEPLOYMENT_TARGET=14.4 CARET_TEST_CTEST_LABELS=qml cargo test --locked -p caret-tests --test native`；Mac arm64、Qt 6.12.0 | QML ShellLoad、无 runtime 偏好和 QML 格式检查通过 | 3/3 通过。首轮 Linux CI 暴露 `ShellLoadTest::closeFailureDoesNotReopenPendingConfirmation` 仍查找已改名的 `window` ID；测试断言已更新为 `rootWindow`。 |
 | 2026-11-06 | MacBook Air Mac16,12 / Apple M4 / 24 GB，macOS 27.2 (26B123)，arm64，Release；`MACOSX_DEPLOYMENT_TARGET=14.4 cargo performance qt cpu --samples 10` 两次 | 在 Qt 6.12 下复测 6.11.2 的 400 页跨页滚动场景 | Software renderer，1280×960；6.12 两次 median/P95 为 2.460/4.433 ms 与 1.888/1.943 ms，旧基线为 2.047/2.215 ms（Mac arm64、Apple M4、macOS 27.0.1，10 个样本）。小样本、OS 版本变化不支持稳定比较；数据只作本机诊断，不用于宣称性能优化。 |
 | 2026-11-08 | `MACOSX_DEPLOYMENT_TARGET=14.3 cargo build --locked -p caret-launcher`；Nightly run 42399746940 的三平台 workspace tests、quality 与 sanitizer | 验证低部署目标被拒绝并复核跨平台构建/测试 | 14.3 在 caret-ffi build script 被明确拒绝；macOS/Windows/Ubuntu workspace tests 与 Ubuntu quality 通过。macOS sanitizer 的 `Qml.ShellLoad` 因 LaunchServices/CoreFoundation 泄漏报告失败；Windows/Ubuntu sanitizer 通过。Rust coverage 首次为 84.96%，补测后本地达标，远程待复验。 |
-| 2026-11-08 | `cargo sanitize`；带托管 `llvm-symbolizer` 的单项 `Qml.ShellLoad` CTest（macOS 27.2 / Qt 6.12.0） | 验证 sanitizer 执行并检查系统泄漏栈 | 完整 profile 因 macOS 27.2 `atos` symbolizer 未启动及系统缓存泄漏失败；单项测试断言 49 项通过，但 LSan 仍报 1392 字节 / 33 个 Apple FontRegistry/CoreText 与字形缓存分配。该栈与 Nightly macOS 26.7.2 的 LaunchServices `NotifyToken::RegisterDispatch` 5224 字节报告不同；新增规则尚未在本机复现同一分配，须由 Nightly 确认。 |
+| 2026-11-08 | `cargo sanitize`；带托管 `llvm-symbolizer` 的单项 `Qml.ShellLoad` CTest（macOS 27.2 / Qt 6.12.0） | 验证 sanitizer 执行并检查系统泄漏栈 | 完整 profile 因 macOS 27.2 `atos` symbolizer 未启动及泄漏报告失败；单项测试断言 49 项通过，但 LSan 仍报 1392 字节 / 33 个泄漏，调用栈经过 Apple FontRegistry/CoreText 与字形处理代码。实际归属未确认。该栈与 Nightly macOS 26.7.2 的 LaunchServices `NotifyToken::RegisterDispatch` 5224 字节报告不同；新增规则尚未在本机复现同一分配，须由 Nightly 确认。 |
 | 2026-11-08 | Nightly run 42403037844 | 复验三平台 Qt 6.12 workspace tests 与 sanitizer | 三平台 workspace tests 和 sanitizer 全部通过；macOS ASan/UBSan、TSan CTest 均 9/9，`Qml.ShellLoad` 两轮通过。run 尚因 Rust CPU performance job 保持 in-progress，本次未等待该 job。full quality 的 Clippy 失败来自 070 FFI 测试，与 067 sanitizer 结果无关。 |
 | 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审（PR #101） | 审查 LSan 单符号范围、风险和任务状态 | 通过；要求保留同栈未来泄漏可能被隐藏的风险，以及 macOS 26 Nightly 复查条件，均已记录。follow-up 测试代码仍待最终只读复审。 |
 | 2026-11-08 | PR #101 Nightly 和 follow-up `cargo quality` | 复核 sanitizer、三平台构建与完整质量门禁 | macOS/Windows/Ubuntu sanitizer 与 workspace tests 均通过；Mac `Qml.ShellLoad` ASan/UBSan 与 TSan 两轮 9/9。Nightly full quality 因 070 FFI 测试的 `expect` 用法失败；修复后的本机 `cargo quality` 全部通过，包括 lint、依赖审计、workspace 与 native/QML tests。 |
+| 2026-11-08 | `rg -n '6.11.2' native/cmake/qt-provision.cmake native/CMakeLists.txt crates/caret-build/src/qt.rs ai-docs/standards/baseline.md`；Nightly run 42405417514 | 确认版本锁与技术基线，并复验修复后的质量、三平台测试和 sanitizer | 目标配置文件无 6.11.2 残留；run 的 full quality、Rust/native coverage、Miri、三平台 workspace tests 与 sanitizer 均通过。macOS ASan/UBSan、TSan 两个 profile 的 CTest 各 9/9，均包含 Qml.ShellLoad。本机 macOS 27.2 的独立泄漏报告（栈经过 FontRegistry/CoreText）和 Qt 6.11 旧规则审查仍未解决。Rust CPU performance 仍运行，未作为阻塞条件。 |
+| 2026-11-08 | gpt-6.1-terra/medium 领域检查与 gpt-6.1-sol/medium 最终只读评审（PR #102 follow-up） | 复核质量修复、文档证据、LSan 风险与任务收尾 | 通过；LSan 同栈未来泄漏风险已保留，本机 macOS 27.2 独立泄漏报告及其未确认的实际归属已明确标注。 |
 
 ## 风险与回退
 
-Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。LaunchServices 单符号 LSan 规则会抑制任何经过该通知回调的泄漏栈，包括未来相同栈的新问题；必须在 macOS 26 Nightly 确认原报告消失且没有 Caret 分配栈，若报告变化则按新栈重新审查，不扩展泛匹配。
+Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。LaunchServices 单符号 LSan 规则会抑制任何经过该通知回调的泄漏栈，包括未来相同栈的新问题；必须在 macOS 26 Nightly 确认原报告消失且没有 Caret 分配栈，若报告变化则按新栈重新审查，不扩展泛匹配。任务收尾还需逐项审计仍标注 Qt 6.11 的 suppression，并查明 macOS 27.2 泄漏栈所经 FontRegistry/CoreText 分配的实际归属与生命周期。
 
 ## 决策与工作记录
 
@@ -78,9 +80,9 @@ Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步�
 - 2026-11-06：新能力审查没有找到能替代现有文档画布的直接方案：Canvas Painter 的 QML Canvas2D 仍为技术预览，且不能复用现有 QSG 节点/字形纹理路径；QRangeModel 与 QML 热重载也不针对当前画布运行时瓶颈。决定不为了追新功能引入额外模块或未经测量的渲染器迁移。Qt 6.12 的 DirectWrite GASP 改进会由 Qt 自动提供给 Windows UI 文本，不需额外调用 API。
 - 2026-11-06：最终复审发现环境变量可将 macOS 部署目标下调至 13.0；已统一通过 `caret-build::macos_deployment_target()` 校验，代码路径会拒绝低于 14.4 的值。负向/边界/非法输入未实测，相关验收项保持未完成。复审要求性能记录包含机器、系统和 Release 配置；已补齐。
 - 2026-11-08：部署目标 14.3 被构建脚本拒绝；Nightly 三平台 workspace tests 与 Ubuntu quality 通过，但 macOS sanitizer 的 Qml.ShellLoad 泄漏检查失败，sanitizer 验收未完成，任务状态维持 in-progress。
-- 2026-11-08：日志两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 系统回调；按经确认的 macOS 系统框架抑制模式增加单符号 LSan 规则。macOS 27.2 本机 Qt 6.12 单项测试仍报告另一类 Apple 字体注册 / CoreText 缓存；因它与 Nightly macOS 26.7.2 栈不同，未扩大抑制。待远程 Nightly 验证原失败是否消失。
-- 2026-11-08：PR #101 的 Nightly run 42403037844 在 macOS 26.7.2 上通过 ASan/UBSan 与 TSan 全部 9 项 CTest，`Qml.ShellLoad` 均通过；Windows/Ubuntu sanitizer 与三平台 workspace tests 也通过。full quality 的失败仅是 070 FFI 测试违反 Clippy `expect_used`，与 067 sanitizer 结论无关；保留独立 macOS 27.2 字体缓存报告。
+- 2026-11-08：日志两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 系统回调；按经确认的 macOS 系统框架抑制模式增加单符号 LSan 规则。macOS 27.2 本机 Qt 6.12 单项测试仍报告另一组泄漏，调用栈经过 FontRegistry/CoreText；因它与 Nightly macOS 26.7.2 栈不同，未扩大抑制。后续 Nightly 对原报告的复验结果见上表。
+- 2026-11-08：PR #101 的 Nightly run 42403037844 在 macOS 26.7.2 上通过 ASan/UBSan 与 TSan 全部 9 项 CTest，`Qml.ShellLoad` 均通过；Windows/Ubuntu sanitizer 与三平台 workspace tests 也通过。full quality 的失败仅是 070 FFI 测试违反 Clippy `expect_used`，与 067 sanitizer 结论无关；保留 macOS 27.2 独立泄漏报告，实际归属待查。
 
 ## 完成摘要
 
-Qt 6.12.0 供给、最低 macOS 部署版本、三平台 workspace tests 和 Nightly macOS 26 sanitizer 已验证；macOS 27.2 本机 Qt 6.12 仍有独立字体缓存泄漏报告。PR #101 上的 067 review 已完成，Nightly full quality 的 Clippy 失败属于 070 测试，修复后的完整质量检查通过；follow-up 最终只读评审和远程复验完成后再收尾。
+Qt 6.12.0 三平台供给、官方归档与 Linux ICU 校验、基线、最低 macOS 部署版本、三平台测试及 macOS 26 Nightly sanitizer 均通过。任务维持 in-progress：macOS 27.2 本机仍报告与 Nightly macOS 26 LaunchServices 问题不同的泄漏，其栈经过 FontRegistry/CoreText，但实际归属与生命周期原因未确认；夹具内标注 Qt 6.11 的旧 suppression 也尚未逐项确认是否适用于 Qt 6.12。Nightly CPU performance job 仍运行且不属于本任务验收。
