@@ -17,11 +17,62 @@ use crate::settings::{
     settings_load_warning, settings_snapshot, settings_theme_catalog,
 };
 use crate::version;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn ffi_version_matches_package_metadata() {
     assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn ffi_crash_handler_reports_an_unusable_log_directory() -> std::io::Result<()> {
+    struct RemoveOnDrop {
+        path: std::path::PathBuf,
+        file: Option<std::fs::File>,
+    }
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            drop(self.file.take());
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    let parent = std::env::temp_dir().join(format!(
+        "caret-ffi-crash-handler-parent-is-file-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&parent)?;
+    let mut cleanup = RemoveOnDrop {
+        path: parent.clone(),
+        file: Some(file),
+    };
+    std::io::Write::write_all(
+        cleanup.file.as_mut().expect("file guard is initialized"),
+        b"not a directory",
+    )?;
+    drop(cleanup.file.take());
+    let log_directory = parent.join("log");
+    let log_directory = log_directory.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "temporary path cannot be represented as UTF-8",
+        )
+    })?;
+
+    let error = crate::install_crash_handler(log_directory)
+        .expect_err("an unusable log directory must be reported to the FFI caller");
+
+    assert!(!error.is_empty());
+    assert_eq!(std::fs::read(&parent)?, b"not a directory");
+    Ok(())
 }
 
 #[test]
