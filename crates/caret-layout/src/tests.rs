@@ -73,15 +73,22 @@ fn inline_object_uses_parley_advance_and_expands_the_shared_line_box() {
     let base_style = ShapingStyle::new(1200);
     let text = paragraph("a\u{fffc}b", Some("en"));
     let mut layouter = ParagraphLayouter::new();
-    let (_, plain) = layouter
-        .layout(
+    let (_, zero_width_object) = layouter
+        .layout_with_inline_objects(
             &mut catalog,
             &text,
             &settings,
             &base_style,
             layout_options(200.0),
+            &[InlineObjectLayout {
+                id: 41,
+                source_bytes: 1..4,
+                advance_pt: 0.0,
+                ascent_pt: 0.0,
+                descent_pt: 0.0,
+            }],
         )
-        .unwrap_or_else(|error| panic!("plain paragraph should lay out: {error}"));
+        .unwrap_or_else(|error| panic!("zero-width inline object should lay out: {error}"));
     let (_, with_object) = layouter
         .layout_with_inline_objects(
             &mut catalog,
@@ -104,10 +111,15 @@ fn inline_object_uses_parley_advance_and_expands_the_shared_line_box() {
         None => panic!("paragraph layout should have a line"),
     };
     assert!(line.items().any(|item| matches!(item, parley::PositionedLayoutItem::InlineBox(box_item) if box_item.id == 42)));
-    assert!(with_object.paragraph.lines[0].advance_pt > plain.paragraph.lines[0].advance_pt + 20.0);
+    let object_advance =
+        with_object.paragraph.lines[0].advance_pt - zero_width_object.paragraph.lines[0].advance_pt;
+    assert!(
+        (object_advance - 30.0).abs() < 0.5,
+        "the inline object contributes its 30 pt advance, got {object_advance} pt"
+    );
     assert!(
         with_object.paragraph.lines[0].metrics.height_pt
-            > plain.paragraph.lines[0].metrics.height_pt
+            > zero_width_object.paragraph.lines[0].metrics.height_pt
     );
 
     let object = line

@@ -43,6 +43,9 @@ pub(super) fn miri() -> Result<(), Box<dyn Error>> {
         "theme::tests::",
         "--skip",
         "document_view::tests::",
+        // 命中测试构造系统字体目录，会通过 Fontconfig/libloading 调用 Miri 不支持的 dlopen。
+        "--skip",
+        "document_view::hit_test::tests::body_hit_keeps_following_text_after_atomic_inline_math_and_combining_mark",
         // 字体目录快照测试会通过 fontdb/libloading 调用系统 dlopen；该 FFI 不受 Miri 支持。
         "--skip",
         "document_view::snapshot::tests::",
