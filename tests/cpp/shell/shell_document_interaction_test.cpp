@@ -1595,15 +1595,18 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
                           canvas->documentToContent(
                               0, QPointF(structural_point.value(QStringLiteral("xPt")).toReal(),
                                          structural_point.value(QStringLiteral("yPt")).toReal())));
+    const QPointF body_window = canvas->mapToItem(window.contentItem(), stop_point(body_right));
+    QVERIFY(std::abs(body_window.x() - structural_window.x()) > 40.0 ||
+            std::abs(body_window.y() - structural_window.y()) > 40.0);
     QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, structural_window.toPoint());
-    QMouseEvent structural_to_text_move(QEvent::MouseMove, end_window, end_window,
-                                        window.mapToGlobal(end_window.toPoint()), Qt::NoButton,
+    QMouseEvent structural_to_text_move(QEvent::MouseMove, body_window, body_window,
+                                        window.mapToGlobal(body_window.toPoint()), Qt::NoButton,
                                         Qt::LeftButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &structural_to_text_move);
     QTRY_VERIFY_WITH_TIMEOUT(selection_drag->property("active").toBool(), 3000);
     QVERIFY(pointer_handler->property("dragAnchor").toMap().isEmpty());
     QVERIFY(canvas->selectionPreviewRects().isEmpty());
-    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end_window.toPoint());
+    QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, body_window.toPoint());
     QVERIFY(view_model->selectionRects().isEmpty());
     QCOMPARE(view_model->documentGeneration(), QStringLiteral("0"));
     delete surface;
