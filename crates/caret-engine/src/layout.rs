@@ -3941,14 +3941,34 @@ impl InlineMathLayoutBuilder<'_, '_> {
                             ),
                         );
                         let layout = engine
-                            .layout_with_text_shaper(
+                            .layout_with_text_shaper_and_templates(
                                 &math.math_tree.root,
                                 self.font_size_pt,
                                 caret_math::layout::MathStyle::Inline,
+                                self.context.settings.inline_environment_templates(),
                                 &mut shaper,
                             )
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
                         (layout, shaper.into_sidecars())
+                    } else if !self
+                        .context
+                        .settings
+                        .inline_environment_templates()
+                        .is_empty()
+                    {
+                        (
+                            Arc::new(
+                                caret_math::layout::layout_math_with_templates(
+                                    engine.font(),
+                                    &math.math_tree.root,
+                                    self.font_size_pt,
+                                    caret_math::layout::MathStyle::Inline,
+                                    self.context.settings.inline_environment_templates(),
+                                )
+                                .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                            ),
+                            HashMap::new(),
+                        )
                     } else {
                         (
                             engine
@@ -4222,16 +4242,33 @@ fn collect_blocks<'a>(
                         ),
                     );
                     let layout = engine
-                        .layout_with_text_shaper(
+                        .layout_with_text_shaper_and_templates(
                             &equation.math_tree.root,
                             DocumentUnits::centipoints_to_points(u32::from(
                                 context.font_size_centipoints,
                             )),
                             caret_math::layout::MathStyle::Display,
+                            context.settings.inline_environment_templates(),
                             &mut shaper,
                         )
                         .map_err(|error| DocumentLayoutError::Math(error.to_string()))?;
                     (layout, shaper.into_sidecars())
+                } else if !context.settings.inline_environment_templates().is_empty() {
+                    (
+                        Arc::new(
+                            caret_math::layout::layout_math_with_templates(
+                                engine.font(),
+                                &equation.math_tree.root,
+                                DocumentUnits::centipoints_to_points(u32::from(
+                                    context.font_size_centipoints,
+                                )),
+                                caret_math::layout::MathStyle::Display,
+                                context.settings.inline_environment_templates(),
+                            )
+                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                        ),
+                        HashMap::new(),
+                    )
                 } else {
                     (
                         engine
@@ -4281,17 +4318,33 @@ fn collect_blocks<'a>(
                     );
                     (
                         Arc::new(
-                            caret_math::layout::layout_align_with_text_shaper(
+                            caret_math::layout::layout_align_with_text_shaper_and_templates(
                                 engine.font(),
                                 align,
                                 DocumentUnits::centipoints_to_points(u32::from(
                                     context.font_size_centipoints,
                                 )),
+                                context.settings.inline_environment_templates(),
                                 &mut shaper,
                             )
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
                         ),
                         shaper.into_sidecars(),
+                    )
+                } else if !context.settings.inline_environment_templates().is_empty() {
+                    (
+                        Arc::new(
+                            caret_math::layout::layout_align_with_templates(
+                                engine.font(),
+                                align,
+                                DocumentUnits::centipoints_to_points(u32::from(
+                                    context.font_size_centipoints,
+                                )),
+                                context.settings.inline_environment_templates(),
+                            )
+                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
+                        ),
+                        HashMap::new(),
                     )
                 } else {
                     (

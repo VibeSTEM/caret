@@ -4,6 +4,7 @@
 // 署名：Yuki Lu
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use caret_doc::{FlowContent, InlineEnvironment, InlineEnvironmentKind, NodeId, TextFlow};
 use serde_json::Value;
@@ -30,9 +31,26 @@ pub(super) struct InheritedInlineStyle {
     pub(super) bold: Option<bool>,
     pub(super) italic: Option<bool>,
     pub(super) font_family: Option<String>,
+    templates: Option<Arc<caret_doc::InlineEnvironmentTemplates>>,
 }
 
 impl InheritedInlineStyle {
+    pub(super) fn from_theme(
+        theme: Option<&caret_doc::ThemeSnapshot>,
+    ) -> Result<Self, caret_doc::InlineEnvironmentTemplateError> {
+        Ok(Self::default().with_templates(Arc::new(
+            caret_doc::InlineEnvironmentTemplates::from_theme(theme)?,
+        )))
+    }
+
+    pub(super) fn with_templates(
+        mut self,
+        templates: Arc<caret_doc::InlineEnvironmentTemplates>,
+    ) -> Self {
+        self.templates = Some(templates);
+        self
+    }
+
     pub(super) fn state(&self, kind: InlineEnvironmentKind) -> Option<bool> {
         match kind {
             InlineEnvironmentKind::Bold => Some(self.bold.unwrap_or(false)),
@@ -43,7 +61,11 @@ impl InheritedInlineStyle {
 
     pub(super) fn with_environment<T>(&self, environment: &InlineEnvironment<T>) -> Self {
         let mut style = self.clone();
-        let delta = environment.text_style();
+        let delta = self
+            .templates
+            .as_deref()
+            .and_then(|templates| environment.resolved_text_style(templates).ok())
+            .unwrap_or_else(|| environment.text_style());
         if let Some(bold) = delta.bold {
             style.bold = Some(bold);
         }

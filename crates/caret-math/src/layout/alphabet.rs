@@ -18,16 +18,19 @@ pub(crate) fn styled_char(character: char, variant: Variant) -> char {
                 greek(character, None, Some(0x1D6FC))
             }
         }
-        V::Italic => {
+        V::Italic | V::MonospaceItalic => {
             italic_latin(character).or_else(|| greek(character, Some(0x1D6E2), Some(0x1D6FC)))
         }
-        V::Bold => latin(0x1D400, 0x1D41A)
+        V::Bold | V::MonospaceBold => latin(0x1D400, 0x1D41A)
             .or_else(|| digit(character, 0x1D7CE))
             .or_else(|| greek(character, Some(0x1D6A8), Some(0x1D6C2))),
-        V::BoldItalic => latin(0x1D468, 0x1D482)
+        V::BoldItalic | V::MonospaceBoldItalic => latin(0x1D468, 0x1D482)
             .or_else(|| digit(character, 0x1D7CE))
             .or_else(|| greek(character, Some(0x1D71C), Some(0x1D736))),
         V::SansSerif => latin(0x1D5A0, 0x1D5BA).or_else(|| digit(character, 0x1D7E2)),
+        V::SansSerifBold => latin(0x1D5D4, 0x1D5EE).or_else(|| digit(character, 0x1D7EC)),
+        V::SansSerifItalic => latin(0x1D608, 0x1D622),
+        V::SansSerifBoldItalic => latin(0x1D63C, 0x1D656).or_else(|| digit(character, 0x1D7EC)),
         V::Monospace => latin(0x1D670, 0x1D68A).or_else(|| digit(character, 0x1D7F6)),
         V::DoubleStruck => exception(
             character,

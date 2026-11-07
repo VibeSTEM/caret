@@ -25,4 +25,12 @@ Rust suite 只测 CPU：文档模型、Unicode 文本、字体回退、Parley �
 
 2026-11-07 同命令复测：区间为首次布局/快照发布 57.592–57.884 ms；数学 TextFlow 编辑、重排公式段并复用其余段落 1.3589–1.4045 ms；强制完整布局 58.072–58.481 ms；拖选 hit 与预览 1.6971–1.7008 μs；Session 提交 194.20–205.79 μs。Criterion 对照前一条本机记录显示首排版约 +3.01%、缓存复用重排约 -10.47%、完整布局约 +6.27%、拖选预览约 -1.98%、提交约 -20.13%（各比较 p < 0.05）。该对照不是隔离变量的因果测量；不据此将变化归因于单项改动，也不声称整体性能优化完成。
 
+2026-11-08 与 PR 原始提交 `838146f` 同机对照：macOS arm64、`rustc 1.99.0`、Criterion release、每组 10 样本、1 秒 warm-up/2 秒目标 measurement，使用 `--save-baseline 044-original` / `--baseline 044-original`。CPU 型号不可读取。首次布局 61.083 ms → 58.956 ms（约 −3.5%，p < 0.05）；Math TextFlow 段落复用重排 1.6950 ms → 1.7272 ms（p = 0.86，无可检测变化）；强制完整重排 59.876 ms → 62.677 ms（约 +4.7%，p < 0.05）；拖选预览 1.6948 μs → 1.7103 μs（p = 0.10）；Session 选区提交 220.27 μs → 218.59 μs（p = 0.83）。几个慢分组由 Criterion 将采样延长至约 2.4–3.6 秒。强制完整重排的轻微回退需要新 CI/nightly 复测并定位；这些数据不证明因果关系或整体性能提升，也不含真实 Qt/QML、GPU、窗口输入或逐像素拖选。
+
+2026-11-08 强制完整重排跟进：原提交和当前工作树各自单独运行 10 样本、1 秒 warm-up/2 秒目标 measurement。原提交区间 [66.991, 83.180] ms、均值估计 74.676 ms；当前 [62.888, 70.294] ms、均值估计 65.971 ms；Criterion p = 0.09，未检测到显著差异。区间宽且本机多个轮次的耗时波动明显，故首轮约 +4.7% 差异视为不确定信号，不据此定性为性能回退；后续看 CI/nightly 同环境趋势。
+
 2026-11-07 数学命令候选基线：同一 macOS arm64 / Rust 1.99.0 / Criterion release 环境，100k 字符混合文档上重复 `Session::command_line_candidates()` 的内联 `\math` 候选为 264.78–269.62 μs；数学 TextFlow 的 `math.split_inline` 候选为 271.99–282.58 μs。各 10 样本，1 秒 warm-up/measurement；Session 与查询在计时外准备。候选可用性仍需克隆和验证完整文档以守住全局持久化限制，因此单次查询随文档规模付出约 0.27 ms；尚未测更大文档或多 Run 大公式，也未测真正 Qt 鼠标轨迹。这组数据记录当前边界成本，不声称完成全部端到端性能验收。
+
+`rust/math_structured_formula` 补充结构化大公式样本：4×4 `bmatrix` 的每个单元格都是嵌套分数，分子和内层分母各有一个 `\text{...}`，共 32 个独立 TextFlow。`initial_4x4_nested_fraction_matrix_layout` 测每样本新建 Session 与布局服务后的公式首次布局；`textflow_edit_and_full_relayout` 在计时外解析公式、进入可编辑 TextFlow 并完成基线布局，计时内插入一个字符并对公式所在 Equation 执行完整布局。字体目录在两项之间复用。两项均用 `iter_batched`，Session/布局服务准备在计时外，作为闭包参数消费的对象析构计入计时；布局快照作为结果返回。复现命令：`cargo bench --locked -p caret-engine --bench math_edit_criterion -- rust/math_structured_formula --sample-size 10 --warm-up-time 1 --measurement-time 1`。该边界覆盖 Rust Equation 布局和 TextFlow 编辑，不含 Qt 渲染、GPU 或真实逐键事件。
+
+2026-11-07 结构化公式基线：macOS Darwin 27.2.0 arm64，`rustc 1.99.0`，Criterion release profile，10 样本、1 秒 warm-up 和 1 秒 measurement；CPU 型号读取被沙箱拒绝。首次布局区间 650.41–696.34 μs（估计均值 664.73 μs）；TextFlow 插入一个字符并完整重排区间 919.61–958.29 μs（估计均值 934.44 μs）。这是单机当前路径成本记录，无优化前后对照，不构成性能收益结论。

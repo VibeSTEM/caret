@@ -18,6 +18,7 @@ use crate::editing::flow_format::{
     text_flow_offset, text_position_at_offset,
 };
 
+#[cfg(test)]
 pub(in crate::editing::session::math_edit) fn apply_math_text_environment_tree_range(
     tree: &mut MathTree,
     path: &MathTextFlowPath,
@@ -25,16 +26,62 @@ pub(in crate::editing::session::math_edit) fn apply_math_text_environment_tree_r
     kind: InlineEnvironmentKind,
     enabled: bool,
 ) -> Result<MathTextFlowPath, EditError> {
-    apply_single_flow_range(tree, path, range, InlineFormatChange::State(kind, enabled))
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::State(kind, enabled),
+        InheritedInlineStyle::default(),
+    )
 }
 
+pub(in crate::editing::session::math_edit) fn apply_math_text_environment_tree_range_with_style(
+    tree: &mut MathTree,
+    path: &MathTextFlowPath,
+    range: Range<usize>,
+    kind: InlineEnvironmentKind,
+    enabled: bool,
+    inherited: InheritedInlineStyle,
+) -> Result<MathTextFlowPath, EditError> {
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::State(kind, enabled),
+        inherited,
+    )
+}
+
+#[cfg(test)]
 pub(in crate::editing::session::math_edit) fn apply_math_text_font_family_tree_range(
     tree: &mut MathTree,
     path: &MathTextFlowPath,
     range: Range<usize>,
     family: &str,
 ) -> Result<MathTextFlowPath, EditError> {
-    apply_single_flow_range(tree, path, range, InlineFormatChange::FontFamily(family))
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::FontFamily(family),
+        InheritedInlineStyle::default(),
+    )
+}
+
+pub(in crate::editing::session::math_edit) fn apply_math_text_font_family_tree_range_with_style(
+    tree: &mut MathTree,
+    path: &MathTextFlowPath,
+    range: Range<usize>,
+    family: &str,
+    inherited: InheritedInlineStyle,
+) -> Result<MathTextFlowPath, EditError> {
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::FontFamily(family),
+        inherited,
+    )
 }
 
 fn apply_single_flow_range(
@@ -42,22 +89,25 @@ fn apply_single_flow_range(
     path: &MathTextFlowPath,
     range: Range<usize>,
     change: InlineFormatChange<'_>,
+    inherited: InheritedInlineStyle,
 ) -> Result<MathTextFlowPath, EditError> {
     let anchor = MathTextPosition::new(path.clone(), range.start, MathPositionAffinity::Downstream);
     let focus = MathTextPosition::new(path.clone(), range.end, MathPositionAffinity::Upstream);
-    let (_, focus) = apply_math_text_format_range(tree, &anchor, &focus, change)?;
+    let (_, focus) =
+        apply_math_text_format_range_with_style(tree, &anchor, &focus, change, inherited)?;
     Ok(focus.path)
 }
 
 /// 同一 MathFlow 内的文本选择只转换一次，再按未变逻辑偏移重建两端物理路径。
-pub(in crate::editing::session::math_edit) fn apply_math_text_format_range(
+pub(in crate::editing::session::math_edit) fn apply_math_text_format_range_with_style(
     tree: &mut MathTree,
     anchor: &MathTextPosition,
     focus: &MathTextPosition,
     change: InlineFormatChange<'_>,
+    inherited: InheritedInlineStyle,
 ) -> Result<(MathTextPosition, MathTextPosition), EditError> {
-    let (prefix, context) = scope_context(tree, &anchor.path)?;
-    let (focus_prefix, _) = scope_context(tree, &focus.path)?;
+    let (prefix, context) = scope_context(tree, &anchor.path, inherited.clone())?;
+    let (focus_prefix, _) = scope_context(tree, &focus.path, inherited)?;
     if prefix != focus_prefix || anchor.path.align_cell() != focus.path.align_cell() {
         return Err(EditError::InvalidPosition);
     }
@@ -125,6 +175,7 @@ fn local_path(path: &MathTextFlowPath, prefix_len: usize) -> Result<Vec<usize>, 
 fn scope_context(
     tree: &MathTree,
     path: &MathTextFlowPath,
+    mut inherited: InheritedInlineStyle,
 ) -> Result<(Vec<MathTextFlowPathStep>, InlineFormatContext), EditError> {
     enum Target<'a> {
         Flow(&'a MathFlow),
@@ -136,7 +187,6 @@ fn scope_context(
         .rposition(|step| matches!(step, MathTextFlowPathStep::Operand(_)))
         .map_or(0, |index| index + 1);
     let prefix = path.steps()[..prefix_len].to_vec();
-    let mut inherited = InheritedInlineStyle::default();
     let mut depth = 0;
     let mut target = Target::Flow(&tree.root);
     for step in &prefix {

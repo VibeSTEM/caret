@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use caret_doc::{
-    FlowContent, InlineEnvironmentKind, InlineTextStyle, MathContent, MathFlow, MathPathStep,
-    NodeId, Run, TextFlow,
+    FlowContent, InlineEnvironmentKind, InlineEnvironmentTemplates, InlineTextStyle, MathContent,
+    MathFlow, MathPathStep, NodeId, Run, TextFlow,
 };
 
 use BackendNodeKind as MathNodeKind;
@@ -199,10 +199,17 @@ impl Node {
 }
 
 pub(crate) fn flow_nodes(flow: &MathFlow) -> Vec<Node> {
-    contents_nodes_in_scope(&flow.content, None, &[])
+    contents_nodes_in_scope(&flow.content, None, &[], None)
 }
 
 pub(crate) fn flow_nodes_for_layout(flow: &MathFlow) -> Vec<Node> {
+    flow_nodes_for_layout_with_templates(flow, None)
+}
+
+pub(crate) fn flow_nodes_for_layout_with_templates(
+    flow: &MathFlow,
+    templates: Option<&InlineEnvironmentTemplates>,
+) -> Vec<Node> {
     let position = Some(NodePosition {
         scope_id: flow.id.clone(),
         path: Vec::new(),
@@ -215,7 +222,7 @@ pub(crate) fn flow_nodes_for_layout(flow: &MathFlow) -> Vec<Node> {
     let children = if flow.content.is_empty() {
         Vec::new()
     } else {
-        contents_nodes_in_scope(&flow.content, Some(&flow.id), &[])
+        contents_nodes_in_scope(&flow.content, Some(&flow.id), &[], templates)
     };
     vec![Node {
         id: Some(flow.id.clone()),
@@ -233,6 +240,7 @@ fn contents_nodes_in_scope(
     contents: &[MathContent],
     scope_id: Option<&NodeId>,
     parent_path: &[MathPathStep],
+    templates: Option<&InlineEnvironmentTemplates>,
 ) -> Vec<Node> {
     contents
         .iter()
@@ -245,7 +253,7 @@ fn contents_nodes_in_scope(
             } else {
                 Vec::new()
             };
-            content_nodes(content, scope_id, path)
+            content_nodes(content, scope_id, path, templates)
         })
         .collect()
 }
@@ -254,12 +262,15 @@ fn content_nodes(
     content: &MathContent,
     scope_id: Option<&NodeId>,
     path: Vec<MathPathStep>,
+    templates: Option<&InlineEnvironmentTemplates>,
 ) -> Vec<Node> {
     match content {
         FlowContent::Text(text) => text_nodes(text, scope_id, path),
-        FlowContent::Math(node) => vec![math_node(node, scope_id, path)],
+        FlowContent::Math(node) => vec![math_node(node, scope_id, path, templates)],
         FlowContent::Environment(environment) => {
-            let text_style = environment.text_style();
+            let text_style = templates
+                .and_then(|templates| environment.resolved_text_style(templates).ok())
+                .unwrap_or_else(|| environment.text_style());
             let children = environment
                 .children
                 .iter()
@@ -272,7 +283,7 @@ fn content_nodes(
                     } else {
                         Vec::new()
                     };
-                    content_nodes(child, scope_id, child_path)
+                    content_nodes(child, scope_id, child_path, templates)
                 })
                 .collect();
             let style = match environment.kind {
@@ -395,6 +406,7 @@ fn math_node(
     node: &caret_doc::MathNode,
     scope_id: Option<&NodeId>,
     path: Vec<MathPathStep>,
+    templates: Option<&InlineEnvironmentTemplates>,
 ) -> Node {
     Node {
         id: Some(node.id.clone()),
@@ -410,7 +422,7 @@ fn math_node(
         run: None,
         attributes: node.attributes.clone(),
         text_style: None,
-        children: contents_nodes_from_flows(&node.children, scope_id, &path),
+        children: contents_nodes_from_flows(&node.children, scope_id, &path, templates),
     }
 }
 
@@ -418,6 +430,7 @@ fn contents_nodes_from_flows(
     flows: &[MathFlow],
     scope_id: Option<&NodeId>,
     parent_path: &[MathPathStep],
+    templates: Option<&InlineEnvironmentTemplates>,
 ) -> Vec<Node> {
     flows
         .iter()
@@ -445,7 +458,7 @@ fn contents_nodes_from_flows(
                     } else {
                         Vec::new()
                     };
-                    vec![math_node(node, scope_id, path)]
+                    vec![math_node(node, scope_id, path, templates)]
                 }
                 _ => vec![Node {
                     id: Some(flow.id.clone()),
@@ -455,7 +468,12 @@ fn contents_nodes_from_flows(
                     run: None,
                     attributes: BTreeMap::new(),
                     text_style: None,
-                    children: contents_nodes_in_scope(&flow.content, scope_id, &operand_path),
+                    children: contents_nodes_in_scope(
+                        &flow.content,
+                        scope_id,
+                        &operand_path,
+                        templates,
+                    ),
                 }],
             }
         })

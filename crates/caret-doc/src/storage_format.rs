@@ -21,6 +21,7 @@ const KNOWN_FEATURES: &[&str] = &[
     "caret.env.bold",
     "caret.env.explicit-format-state",
     "caret.env.font",
+    "caret.env.inline-text-templates.v1",
     "caret.env.italic",
     "caret.env.section",
     "caret.env.custom",
@@ -43,6 +44,7 @@ fn requires_explicit_feature_declaration(feature: &str) -> bool {
     matches!(
         feature,
         "caret.paragraph.content-flow.v1"
+            | "caret.env.inline-text-templates.v1"
             | "caret.text.underline"
             | "caret.math.inline"
             | "caret.math.equation"
@@ -339,7 +341,29 @@ pub fn open(bytes: &[u8]) -> Result<OpenedDocument, DocumentError> {
     if file.format != "caret" {
         return Err(DocumentError::InvalidFormat(file.format));
     }
-    file.document.validate()?;
+    let missing_inline_template_feature = file
+        .document
+        .required_features()
+        .iter()
+        .any(|feature| feature == "caret.env.inline-text-templates.v1")
+        && !features
+            .iter()
+            .any(|feature| feature == "caret.env.inline-text-templates.v1");
+    let can_validate_template_schema = !features
+        .iter()
+        .any(|feature| !KNOWN_FEATURES.contains(&feature.as_str()))
+        && !missing_inline_template_feature
+        && file
+            .document
+            .global_settings
+            .theme
+            .as_ref()
+            .is_none_or(|theme| theme.format_version == CURRENT_THEME_FORMAT_VERSION);
+    if can_validate_template_schema {
+        file.document.validate()?;
+    } else {
+        file.document.validate_for_safe_preview()?;
+    }
     validate_media(&file.media)?;
     let mut reasons: Vec<PreviewReason> = features
         .iter()

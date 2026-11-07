@@ -25,7 +25,8 @@ use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use caret_doc::{Align, DocumentUnits, MathFlow, MathPathStep, NodeId};
+use caret_doc::InlineEnvironmentTemplates;
+use caret_doc::{Align, DocumentUnits, MathContent, MathFlow, MathPathStep, NodeId};
 
 pub use crate::fonts::{MathFont, MathFontError};
 pub use context::{MathDiagnostic, MathSize};
@@ -58,6 +59,7 @@ pub enum MathStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathLayoutError {
     InvalidSize,
+    InvalidTemplate,
     TextShapingFailed,
 }
 
@@ -65,6 +67,7 @@ impl Display for MathLayoutError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSize => formatter.write_str("math.layout.invalid_size"),
+            Self::InvalidTemplate => formatter.write_str("math.layout.invalid_template"),
             Self::TextShapingFailed => formatter.write_str("math.layout.text_shaping_failed"),
         }
     }
@@ -162,7 +165,11 @@ pub struct MathLayout {
     pub requested_text_family_missing: bool,
 }
 
-/// 以给定字体与字号（pt）排版一棵数学树。
+/// 以给定数学字体与字号（pt）排版一棵数学树。
+///
+/// 此便捷 API 不接入正文字体选择和 shaping：其中的 `TextFlow` / `\\text{...}` 内容会走
+/// 数学字体的降级路径，不能获得正文字体族、脚本/语言偏好或 glyph fallback。需要正文文本
+/// 外观与回退语义时，必须调用 [`layout_math_with_text_shaper`]。
 pub fn layout_math(
     font: &MathFont,
     root: &MathFlow,
@@ -171,6 +178,25 @@ pub fn layout_math(
 ) -> Result<MathLayout, MathLayoutError> {
     validate_size(size)?;
     layout_nodes(font, flow_nodes_for_layout(root), size, style, None)
+}
+
+/// 无正文 shaper 的模板布局入口；TextFlow 仍走数学字体降级路径。
+pub fn layout_math_with_templates(
+    font: &MathFont,
+    root: &MathFlow,
+    size: f64,
+    style: MathStyle,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    validate_flow_templates(root, templates)?;
+    layout_nodes(
+        font,
+        crate::backend::flow_nodes_for_layout_with_templates(root, Some(templates)),
+        size,
+        style,
+        None,
+    )
 }
 
 /// 排版公式并通过调用方提供的正文 shaping 回调处理 TextFlow 文本岛。
@@ -193,7 +219,31 @@ pub fn layout_math_with_text_shaper(
     )
 }
 
+/// 通过正文 shaper 和已解析主题模板排版数学文本岛。
+pub fn layout_math_with_text_shaper_and_templates(
+    font: &MathFont,
+    root: &MathFlow,
+    size: f64,
+    style: MathStyle,
+    templates: &InlineEnvironmentTemplates,
+    text_shaper: &mut dyn MathTextShaper,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    validate_flow_templates(root, templates)?;
+    layout_nodes(
+        font,
+        crate::backend::flow_nodes_for_layout_with_templates(root, Some(templates)),
+        size,
+        style,
+        Some(text_shaper),
+    )
+}
+
 /// 以对齐公式的稳定行/单元格身份进行显示公式排版。
+///
+/// 此便捷 API 不接入正文字体选择和 shaping：单元格中的 `TextFlow` / `\\text{...}` 内容会
+/// 走数学字体的降级路径，不能获得正文字体族、脚本/语言偏好或 glyph fallback。需要正文
+/// 文本外观与回退语义时，必须调用 [`layout_align_with_text_shaper`]。
 ///
 /// `Align` 本身与数学树不是同一种文档结构。此适配只在布局调用期间构造后端矩阵，
 /// 保留 Align、行和单元格根流的 ID，不改写或规范化持久化模型。
@@ -250,6 +300,69 @@ pub fn layout_align(
     layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
 }
 
+/// 无正文 shaper 的 Align 模板布局入口；TextFlow 仍走数学字体降级路径。
+pub fn layout_align_with_templates(
+    font: &MathFont,
+    align: &Align,
+    size: f64,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    for cell in align.rows.iter().flat_map(|row| &row.cells) {
+        validate_flow_templates(&cell.root, templates)?;
+    }
+    let rows = align
+        .rows
+        .iter()
+        .map(|row| Node {
+            id: Some(row.id.clone()),
+            position: Some(NodePosition {
+                scope_id: row.id.clone(),
+                path: Vec::new(),
+                text_run_index: None,
+                is_text_flow: false,
+                is_flow: false,
+                is_container: false,
+                font_size_pt: None,
+            }),
+            kind: BackendNodeKind::Row,
+            text: None,
+            run: None,
+            attributes: Default::default(),
+            text_style: None,
+            children: row
+                .cells
+                .iter()
+                .flat_map(|cell| {
+                    crate::backend::flow_nodes_for_layout_with_templates(
+                        &cell.root,
+                        Some(templates),
+                    )
+                })
+                .collect(),
+        })
+        .collect();
+    let matrix = Node {
+        id: Some(align.id.clone()),
+        position: Some(NodePosition {
+            scope_id: align.id.clone(),
+            path: Vec::new(),
+            text_run_index: None,
+            is_text_flow: false,
+            is_flow: false,
+            is_container: false,
+            font_size_pt: None,
+        }),
+        kind: BackendNodeKind::Matrix,
+        text: None,
+        run: None,
+        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        text_style: None,
+        children: rows,
+    };
+    layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
+}
+
 /// 使用调用方正文 shaping 处理 Align 单元格中的 TextFlow。
 pub fn layout_align_with_text_shaper(
     font: &MathFont,
@@ -281,6 +394,76 @@ pub fn layout_align_with_text_shaper(
                 .cells
                 .iter()
                 .flat_map(|cell| flow_nodes_for_layout(&cell.root))
+                .collect(),
+        })
+        .collect();
+    let matrix = Node {
+        id: Some(align.id.clone()),
+        position: Some(NodePosition {
+            scope_id: align.id.clone(),
+            path: Vec::new(),
+            text_run_index: None,
+            is_text_flow: false,
+            is_flow: false,
+            is_container: false,
+            font_size_pt: None,
+        }),
+        kind: BackendNodeKind::Matrix,
+        text: None,
+        run: None,
+        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        text_style: None,
+        children: rows,
+    };
+    layout_nodes(
+        font,
+        vec![matrix],
+        size,
+        MathStyle::Display,
+        Some(text_shaper),
+    )
+}
+
+/// 使用正文 shaper 和已解析主题模板处理 Align 单元格中的 TextFlow。
+pub fn layout_align_with_text_shaper_and_templates(
+    font: &MathFont,
+    align: &Align,
+    size: f64,
+    templates: &InlineEnvironmentTemplates,
+    text_shaper: &mut dyn MathTextShaper,
+) -> Result<MathLayout, MathLayoutError> {
+    validate_size(size)?;
+    for cell in align.rows.iter().flat_map(|row| &row.cells) {
+        validate_flow_templates(&cell.root, templates)?;
+    }
+    let rows = align
+        .rows
+        .iter()
+        .map(|row| Node {
+            id: Some(row.id.clone()),
+            position: Some(NodePosition {
+                scope_id: row.id.clone(),
+                path: Vec::new(),
+                text_run_index: None,
+                is_text_flow: false,
+                is_flow: false,
+                is_container: false,
+                font_size_pt: None,
+            }),
+            kind: BackendNodeKind::Row,
+            text: None,
+            run: None,
+            attributes: Default::default(),
+            text_style: None,
+            children: row
+                .cells
+                .iter()
+                .flat_map(|cell| {
+                    crate::backend::flow_nodes_for_layout_with_templates(
+                        &cell.root,
+                        Some(templates),
+                    )
+                })
                 .collect(),
         })
         .collect();
@@ -539,6 +722,54 @@ fn validate_size(size: f64) -> Result<(), MathLayoutError> {
     Ok(())
 }
 
+fn validate_flow_templates(
+    flow: &MathFlow,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), MathLayoutError> {
+    for content in &flow.content {
+        match content {
+            MathContent::Environment(environment) => {
+                environment
+                    .resolved_text_style(templates)
+                    .map_err(|_| MathLayoutError::InvalidTemplate)?;
+                for child in &environment.children {
+                    validate_content_templates(child, templates)?;
+                }
+            }
+            MathContent::Math(node) => {
+                for operand in &node.children {
+                    validate_flow_templates(operand, templates)?;
+                }
+            }
+            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_content_templates(
+    content: &MathContent,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), MathLayoutError> {
+    match content {
+        MathContent::Environment(environment) => {
+            environment
+                .resolved_text_style(templates)
+                .map_err(|_| MathLayoutError::InvalidTemplate)?;
+            for child in &environment.children {
+                validate_content_templates(child, templates)?;
+            }
+        }
+        MathContent::Math(node) => {
+            for operand in &node.children {
+                validate_flow_templates(operand, templates)?;
+            }
+        }
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+    }
+    Ok(())
+}
+
 /// 缓存键：内容哈希（含节点 ID）、字号位模式、样式、字体标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CacheKey {
@@ -576,6 +807,10 @@ impl MathLayoutEngine {
     }
 
     /// 排版并缓存；相同内容、字号、样式与字体的重复请求直接返回缓存结果。
+    ///
+    /// 此便捷 API 没有正文 shaper；含 `TextFlow` 的内容使用数学字体降级路径，不具备正文
+    /// 字体选择、脚本/语言偏好或 glyph fallback。需要这些语义时调用
+    /// [`Self::layout_with_text_shaper`]。
     pub fn layout(
         &self,
         root: &MathFlow,
@@ -614,6 +849,25 @@ impl MathLayoutEngine {
             root,
             size,
             style,
+            text_shaper,
+        )?))
+    }
+
+    /// 通过正文 shaping 和主题模板排版；局部 sidecar 不进入内容缓存。
+    pub fn layout_with_text_shaper_and_templates(
+        &self,
+        root: &MathFlow,
+        size: f64,
+        style: MathStyle,
+        templates: &InlineEnvironmentTemplates,
+        text_shaper: &mut dyn MathTextShaper,
+    ) -> Result<Arc<MathLayout>, MathLayoutError> {
+        Ok(Arc::new(layout_math_with_text_shaper_and_templates(
+            self.font,
+            root,
+            size,
+            style,
+            templates,
             text_shaper,
         )?))
     }

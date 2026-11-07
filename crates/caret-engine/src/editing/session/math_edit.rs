@@ -36,6 +36,8 @@ use super::history::{
     self, DocumentPatch, EditGroup, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
 };
 use crate::{StructureIndex, VisualAffinity};
+#[cfg(test)]
+use caret_doc::TextFlow;
 use caret_doc::{
     Align, Block, Equation, InlineMath, MathAlignRow, MathContent, MathFlow, MathNode,
     MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,

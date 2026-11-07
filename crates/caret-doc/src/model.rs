@@ -26,7 +26,10 @@ pub use validation::{MAX_DOCUMENT_NESTING_DEPTH, is_valid_language_tag};
 
 pub use block::{Block, BlockEnvironment, BlockEnvironmentKind, ExplicitBreak};
 pub use inline::{FlowContent, MathContent, ParagraphContent, SoftBreak, TextFlow};
-pub use inline_environment::{InlineEnvironment, InlineEnvironmentKind, InlineTextStyle};
+pub use inline_environment::{
+    InlineEnvironment, InlineEnvironmentKind, InlineEnvironmentTemplateError,
+    InlineEnvironmentTemplates, InlineTextStyle,
+};
 pub use math::{
     Align, Equation, InlineMath, MATH_TREE_SCHEMA_VERSION, MAX_MATH_TREE_DEPTH,
     MAX_MATH_TREE_NODES, MAX_MATH_TREE_PAYLOAD_BYTES, MathAlignRow, MathFlow, MathNode,
@@ -401,6 +404,9 @@ pub struct ThemeSnapshot {
     pub named_styles: BTreeMap<String, Value>,
     #[serde(default)]
     pub environment_templates: BTreeMap<String, Value>,
+    /// 按行内格式 kind 选择该主题默认模板；值引用 `environment_templates` 的键。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub default_inline_environment_templates: BTreeMap<String, Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

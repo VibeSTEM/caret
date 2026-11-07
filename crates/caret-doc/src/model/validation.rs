@@ -10,6 +10,17 @@ pub const MAX_DOCUMENT_NESTING_DEPTH: usize = 64;
 
 impl Document {
     pub fn validate(&self) -> Result<(), ModelError> {
+        self.validate_with_template_semantics(true)
+    }
+
+    pub(crate) fn validate_for_safe_preview(&self) -> Result<(), ModelError> {
+        self.validate_with_template_semantics(false)
+    }
+
+    fn validate_with_template_semantics(
+        &self,
+        validate_template_semantics: bool,
+    ) -> Result<(), ModelError> {
         if self.page_sections.len() != 1 {
             return Err(ModelError::InvalidDocument(format!(
                 "M0 requires exactly one PageSection, got {}",
@@ -70,8 +81,120 @@ impl Document {
         for block in &self.body {
             validate_block(block, 0, &mut ids, &mut count)?;
         }
+        if validate_template_semantics {
+            let templates =
+                InlineEnvironmentTemplates::from_theme(self.global_settings.theme.as_ref())
+                    .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+            for block in &self.body {
+                validate_inline_environment_templates(block, &templates)?;
+            }
+        }
         Ok(())
     }
+}
+
+fn validate_inline_environment_templates(
+    block: &Block,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), ModelError> {
+    match block {
+        Block::Paragraph(paragraph) => {
+            for content in &paragraph.inlines {
+                validate_paragraph_inline_templates(content, templates)?;
+            }
+        }
+        Block::Environment(environment) => {
+            if let Some(title) = &environment.title {
+                for content in &title.inlines {
+                    validate_paragraph_inline_templates(content, templates)?;
+                }
+            }
+            for child in &environment.children {
+                validate_inline_environment_templates(child, templates)?;
+            }
+        }
+        Block::Equation(equation) => {
+            validate_math_flow_inline_templates(&equation.math_tree.root, templates)?;
+        }
+        Block::Align(align) => {
+            for cell in align.rows.iter().flat_map(|row| &row.cells) {
+                validate_math_flow_inline_templates(&cell.root, templates)?;
+            }
+        }
+        Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_paragraph_inline_templates(
+    content: &ParagraphContent,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), ModelError> {
+    match content {
+        ParagraphContent::Environment(environment) => {
+            environment
+                .resolved_text_style(templates)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+            for child in &environment.children {
+                validate_paragraph_inline_templates(child, templates)?;
+            }
+        }
+        ParagraphContent::Math(math) => {
+            validate_math_flow_inline_templates(&math.math_tree.root, templates)?;
+        }
+        ParagraphContent::Text(_)
+        | ParagraphContent::SoftBreak(_)
+        | ParagraphContent::Opaque(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_math_flow_inline_templates(
+    flow: &MathFlow,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), ModelError> {
+    for content in &flow.content {
+        match content {
+            MathContent::Environment(environment) => {
+                environment
+                    .resolved_text_style(templates)
+                    .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+                for child in &environment.children {
+                    validate_math_content_inline_templates(child, templates)?;
+                }
+            }
+            MathContent::Math(node) => {
+                for operand in &node.children {
+                    validate_math_flow_inline_templates(operand, templates)?;
+                }
+            }
+            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_math_content_inline_templates(
+    content: &MathContent,
+    templates: &InlineEnvironmentTemplates,
+) -> Result<(), ModelError> {
+    match content {
+        MathContent::Environment(environment) => {
+            environment
+                .resolved_text_style(templates)
+                .map_err(|error| ModelError::InvalidDocument(error.to_string()))?;
+            for child in &environment.children {
+                validate_math_content_inline_templates(child, templates)?;
+            }
+        }
+        MathContent::Math(node) => {
+            for operand in &node.children {
+                validate_math_flow_inline_templates(operand, templates)?;
+            }
+        }
+        MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+    }
+    Ok(())
 }
 
 impl MathTree {

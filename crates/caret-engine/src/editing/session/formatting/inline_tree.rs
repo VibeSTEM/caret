@@ -34,6 +34,7 @@ pub(in crate::editing::session) fn apply_formats_to_range(
     end: usize,
     formats: &[(InlineEnvironmentKind, bool)],
     inline_depth: usize,
+    inherited: InheritedInlineStyle,
 ) -> Result<(), EditError> {
     let _editable = to_edit_nodes(&paragraph.inlines)?;
     let mut updated = paragraph.inlines.clone();
@@ -42,7 +43,7 @@ pub(in crate::editing::session) fn apply_formats_to_range(
             &updated,
             start..end,
             InlineFormatChange::State(*kind, *enabled),
-            format_context(inline_depth),
+            format_context(inline_depth, inherited.clone()),
         )?;
     }
     paragraph.inlines = updated;
@@ -55,6 +56,7 @@ pub(in crate::editing::session) fn apply_font_family_to_range(
     end: usize,
     family: &str,
     inline_depth: usize,
+    inherited: InheritedInlineStyle,
 ) -> Result<(), EditError> {
     if start >= end {
         return Ok(());
@@ -64,14 +66,14 @@ pub(in crate::editing::session) fn apply_font_family_to_range(
         &paragraph.inlines,
         start..end,
         InlineFormatChange::FontFamily(family),
-        format_context(inline_depth),
+        format_context(inline_depth, inherited),
     )?;
     Ok(())
 }
 
-fn format_context(inline_depth: usize) -> InlineFormatContext {
+fn format_context(inline_depth: usize, inherited: InheritedInlineStyle) -> InlineFormatContext {
     InlineFormatContext {
-        inherited: InheritedInlineStyle::default(),
+        inherited,
         content_depth: inline_depth,
         max_depth: caret_doc::MAX_DOCUMENT_NESTING_DEPTH,
     }
@@ -116,6 +118,13 @@ fn unwrap_editable_environment(nodes: &mut Vec<EditNode>, target: &NodeId) -> bo
 }
 
 pub(super) fn format_spans(nodes: &[ParagraphContent]) -> Result<Vec<FormatSpan>, EditError> {
+    format_spans_with_inherited(nodes, InheritedInlineStyle::default())
+}
+
+pub(super) fn format_spans_with_inherited(
+    nodes: &[ParagraphContent],
+    inherited: InheritedInlineStyle,
+) -> Result<Vec<FormatSpan>, EditError> {
     // 保留正文适配器拒绝未知 TextFlow 扩展的既有兼容边界。
     let _editable = to_edit_nodes(nodes)?;
     fn collect(
@@ -186,7 +195,7 @@ pub(super) fn format_spans(nodes: &[ParagraphContent]) -> Result<Vec<FormatSpan>
         Ok(())
     }
     let mut spans = Vec::new();
-    collect(nodes, &mut 0, InheritedInlineStyle::default(), &mut spans)?;
+    collect(nodes, &mut 0, inherited, &mut spans)?;
     Ok(spans)
 }
 
@@ -226,13 +235,14 @@ pub(super) fn clear_run_property_to_range(
     Ok(())
 }
 
-pub(super) fn effective_format_at(
+pub(super) fn effective_format_at_with_inherited(
     nodes: &[ParagraphContent],
     offset: usize,
     affinity: Affinity,
     kind: InlineEnvironmentKind,
+    inherited: InheritedInlineStyle,
 ) -> Result<bool, EditError> {
-    let spans = format_spans(nodes)?;
+    let spans = format_spans_with_inherited(nodes, inherited)?;
     Ok(spans
         .iter()
         .find(|span| {
@@ -250,12 +260,13 @@ pub(super) fn wrap_format_range(
     kind: InlineEnvironmentKind,
     enabled: bool,
     inline_depth: usize,
+    inherited: InheritedInlineStyle,
 ) -> Result<(), EditError> {
     *nodes = format_flow_range(
         nodes,
         start..end,
         InlineFormatChange::State(kind, enabled),
-        format_context(inline_depth),
+        format_context(inline_depth, inherited),
     )?;
     Ok(())
 }

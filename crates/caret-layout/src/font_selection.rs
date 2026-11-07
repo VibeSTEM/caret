@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use caret_doc::DocumentSettings;
+use caret_doc::{DocumentSettings, InlineEnvironmentTemplates};
 use caret_font_roles::FontRole;
 use icu_locale_core::{Locale, subtags::Script};
 use icu_properties::{
@@ -87,6 +87,7 @@ pub enum FontPreferenceError {
     EmptyFamily,
     DuplicateScriptTag(String),
     DuplicateLanguageTag(String),
+    InvalidEnvironmentTemplates(String),
 }
 
 impl std::fmt::Display for FontPreferenceError {
@@ -97,6 +98,9 @@ impl std::fmt::Display for FontPreferenceError {
             Self::DuplicateScriptTag(tag) => write!(formatter, "font.duplicate_script_tag: {tag}"),
             Self::DuplicateLanguageTag(tag) => {
                 write!(formatter, "font.duplicate_language_tag: {tag}")
+            }
+            Self::InvalidEnvironmentTemplates(reason) => {
+                write!(formatter, "font.invalid_environment_templates: {reason}")
             }
         }
     }
@@ -120,6 +124,7 @@ pub struct FontPreferenceRules {
 pub struct ResolvedDocumentTextSettings {
     default_language: Option<String>,
     font_preferences: FontPreferenceRules,
+    inline_environment_templates: InlineEnvironmentTemplates,
 }
 
 impl ResolvedDocumentTextSettings {
@@ -130,6 +135,10 @@ impl ResolvedDocumentTextSettings {
         Ok(Self {
             default_language: settings.default_language.clone(),
             font_preferences: FontPreferenceRules::from_document_settings(settings)?,
+            inline_environment_templates: InlineEnvironmentTemplates::from_theme(
+                settings.theme.as_ref(),
+            )
+            .map_err(|error| FontPreferenceError::InvalidEnvironmentTemplates(error.to_string()))?,
         })
     }
 
@@ -139,6 +148,10 @@ impl ResolvedDocumentTextSettings {
 
     pub fn font_preferences(&self) -> &FontPreferenceRules {
         &self.font_preferences
+    }
+
+    pub fn inline_environment_templates(&self) -> &InlineEnvironmentTemplates {
+        &self.inline_environment_templates
     }
 }
 

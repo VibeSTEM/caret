@@ -42,7 +42,7 @@
 | 008 | M0 集成 | [M0：基础文本编辑纵向切片](task/008-impl-document.md) | P2 | 021、022、023、024、026、027、030 | M | done |
 | 009 | 命令输入 | [M1：`\` 命令](task/009-impl-commands.md) | P2 | 008 | M | done |
 | 010 | 结构导航 | [M2：结构导航与结构命令](task/010-impl-structure.md) | P2 | 009、020 | M | done |
-| 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044、045、046 | M | planned |
+| 011 | 数学排版 | [M3：公式总体验收](task/011-impl-math.md) | P2 | 010、042、043、044、045、046、069 | M | planned |
 | 012 | 表格排版 | [M3：表格总体验收](task/012-impl-table.md) | P2 | 045、046 | S | planned |
 | 013 | 性能 | [M4：脏段落排版](task/013-impl-layout.md) | P2 | 011、012、027 | M | planned |
 | 014 | CLI | [应用命令行](task/014-impl-cli.md) | P2 | 008 | M | ready |
@@ -63,7 +63,7 @@
 | 029 | 应用偏好 | [Preferences 服务与跨层常量归属](task/029-preferences-and-constants.md) | P2 | 003、027 | M | done |
 | 030 | 输入交互 | [IME、键盘导航与选区交互](task/030-ime-navigation-selection.md) | P2 | 022、027 | L | done |
 | 031 | 画布交互 | [当前环境背景高亮](task/031-environment-highlight.md) | P2 | 010、027、033 | M | done |
-| 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | ready |
+| 032 | 文档兼容 | [未知节点安全预览](task/032-unknown-node-preview.md) | P2 | 021、027 | M | in-progress |
 | 033 | 排版 | [多语言共享行距网格与选区几何](task/033-open-type-baselines.md) | P2 | 024、026、027 | M | done |
 | 034 | 性能 | [Qt / Rust 性能测量与热点优化](task/034-performance-profiling.md) | P2 | 024、026、027、030 | L | done |
 | 035 | 文档模式 | [Editing、Review、View 模式语义与行为](task/035-document-work-modes.md) | P2 | 018 | L | planned |
@@ -100,5 +100,6 @@
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
 | 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | in-progress |
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
+| 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044 | L | planned |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

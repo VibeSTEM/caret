@@ -5,6 +5,7 @@
 
 use super::super::super::flow_edit::insertion_template_with_affinity;
 use super::super::super::flow_edit::{normalize_text_flow_runs_at_offset, replace_text_flow_range};
+use super::super::super::flow_format::InheritedInlineStyle;
 use super::super::super::grapheme::GraphemeMap;
 use super::super::history::{self, DocumentPatch, EditGroup};
 use super::super::{Affinity, Direction, EditError, Effect};
@@ -19,8 +20,13 @@ use caret_doc::{Block, MathContent, MathNodeKind};
 
 pub(super) mod format_tree_edit;
 mod split_tree_edit;
+#[cfg(test)]
 pub(super) use format_tree_edit::{
     apply_math_text_environment_tree_range, apply_math_text_font_family_tree_range,
+};
+pub(super) use format_tree_edit::{
+    apply_math_text_environment_tree_range_with_style,
+    apply_math_text_font_family_tree_range_with_style,
 };
 pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
@@ -570,6 +576,9 @@ impl Session {
             return Ok(Effect::default());
         }
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let inherited_style =
+            InheritedInlineStyle::from_theme(self.document.global_settings.theme.as_ref())
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
         let (island_before, range) = math_text_selection_range(tree, &path, &anchor, edit.cursor)
             .ok_or(EditError::InvalidPosition)?;
         let focus_position = MathTextPosition::new(path.clone(), edit.cursor, focus_affinity);
@@ -716,12 +725,13 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?;
                 let local_range =
                     local_start..global_range.end.min(flow_range.end) - flow_range.start;
-                tracking_path = apply_math_text_environment_tree_range(
+                tracking_path = apply_math_text_environment_tree_range_with_style(
                     &mut target_tree,
                     &candidate,
                     local_range,
                     kind,
                     enabled,
+                    inherited_style.clone(),
                 )?;
                 if global_range.start <= requested_global_cursor
                     && requested_global_cursor <= global_range.end
@@ -745,9 +755,10 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?;
                 let local_range =
                     local_start..global_range.end.min(flow_range.end) - flow_range.start;
-                if super::text_inline_environment::inherited_math_text_font_family(
+                if super::text_inline_environment::inherited_math_text_font_family_with_style(
                     &target_tree,
                     &candidate,
+                    inherited_style.clone(),
                 )
                 .is_some_and(|inherited| inherited.as_deref() == Some(family))
                 {
@@ -758,11 +769,12 @@ impl Session {
                     }
                     continue;
                 }
-                tracking_path = apply_math_text_font_family_tree_range(
+                tracking_path = apply_math_text_font_family_tree_range_with_style(
                     &mut target_tree,
                     &candidate,
                     local_range,
                     family,
+                    inherited_style.clone(),
                 )?;
                 if global_range.start <= requested_global_cursor
                     && requested_global_cursor <= global_range.end

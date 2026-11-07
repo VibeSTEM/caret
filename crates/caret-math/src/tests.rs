@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathContent, MathFlow, MathNode, MathNodeKind as K, MathTree, TextFlow};
+use std::collections::BTreeMap;
+
+use caret_doc::{
+    InlineEnvironment, InlineEnvironmentKind, MathContent, MathFlow, MathNode, MathNodeKind as K,
+    MathTree, NodeId, Run, TextFlow,
+};
 
 use crate::{
     MathInputKind, MathInputStatus, MathParseError, ParsedMath, ProjectedMath, classify_input,
@@ -1642,6 +1647,83 @@ fn serializer_round_trips_parser_output() {
         // 规范形式是不动点。
         assert_eq!(serialize_tree(&again), regenerated, "{source}");
     }
+}
+
+#[test]
+fn document_softbreaks_round_trip_through_equation_and_align_tex() {
+    fn softbreak_tree() -> caret_doc::MathTree {
+        caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Environment(InlineEnvironment {
+                    id: NodeId::generate(),
+                    kind: InlineEnvironmentKind::Font,
+                    definition_id: None,
+                    props: BTreeMap::new(),
+                    children: vec![
+                        MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+                        MathContent::Text(TextFlow {
+                            runs: vec![Run {
+                                text: "first".to_owned(),
+                                language: None,
+                                props: BTreeMap::new(),
+                                extra: BTreeMap::new(),
+                            }],
+                            extra: BTreeMap::new(),
+                        }),
+                        MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+                        MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+                        MathContent::Text(TextFlow {
+                            runs: vec![Run {
+                                text: "second".to_owned(),
+                                language: None,
+                                props: BTreeMap::new(),
+                                extra: BTreeMap::new(),
+                            }],
+                            extra: BTreeMap::new(),
+                        }),
+                        MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+                    ],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }
+    }
+
+    let equation = softbreak_tree();
+    let equation_source = serialize_tree(&equation);
+    assert!(equation_source.contains(r"\newline{}"));
+    let ParsedMath::Tree(reparsed_equation) = parse(&equation_source, MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("softbreak equation should parse: {error}"))
+    else {
+        panic!("equation parser should produce a MathTree");
+    };
+    assert_eq!(shape(&equation.root), shape(&reparsed_equation.root));
+
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: vec![caret_doc::MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![softbreak_tree()],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    let align_source = serialize_align(&align);
+    assert!(align_source.contains(r"\newline{}"));
+    let ParsedMath::Align(reparsed_align) = parse(&align_source, MathInputKind::Align)
+        .unwrap_or_else(|error| panic!("softbreak Align should parse: {error}"))
+    else {
+        panic!("Align parser should produce an Align model");
+    };
+    assert_eq!(reparsed_align.rows.len(), 1);
+    assert_eq!(
+        shape(&align.rows[0].cells[0].root),
+        shape(&reparsed_align.rows[0].cells[0].root)
+    );
 }
 
 #[test]

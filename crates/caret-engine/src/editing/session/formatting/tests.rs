@@ -4,7 +4,7 @@ use super::*;
 use crate::editing::{Affinity, Command, Direction, Selection, StoryId};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow, ThemeSnapshot,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -21,6 +21,55 @@ fn run(text: &str) -> ParagraphContent {
 fn session_with_paragraphs(paragraphs: Vec<Paragraph>) -> Session {
     let mut document = Document::blank();
     document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
+    Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"))
+}
+
+fn session_with_template_paragraphs(paragraphs: Vec<Paragraph>) -> Session {
+    let mut document = Document::blank();
+    document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
+    document.global_settings.theme = Some(ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([
+            (
+                "bold-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "bold",
+                    "props": {"enabled": true},
+                    "variants": {
+                        "template/variant": {"enabled": true},
+                        "enabled-template": {"enabled": true}
+                    }
+                }),
+            ),
+            (
+                "italic-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "italic",
+                    "props": {"enabled": true},
+                    "variants": {
+                        "template/variant": {"enabled": true},
+                        "enabled-template": {"enabled": true}
+                    }
+                }),
+            ),
+            (
+                "font-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "font",
+                    "props": {"fontFamily": "Old"},
+                    "variants": {"template/variant": {"fontFamily": "Old"}}
+                }),
+            ),
+        ]),
+        default_inline_environment_templates: BTreeMap::from([
+            ("bold".to_owned(), serde_json::json!("bold-template")),
+            ("italic".to_owned(), serde_json::json!("italic-template")),
+            ("font".to_owned(), serde_json::json!("font-template")),
+        ]),
+        extra: BTreeMap::new(),
+    });
     Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"))
 }
 
@@ -2182,7 +2231,7 @@ fn inner_format_override_unwrap_restores_ancestor_and_definition() -> Result<(),
         let outer_before = environment.clone();
         let mut model = paragraph("abc");
         model.inlines = vec![outer];
-        let mut session = session_with_paragraphs(vec![model]);
+        let mut session = session_with_template_paragraphs(vec![model]);
         let anchor = Pos {
             offset: 0,
             affinity: Affinity::Downstream,
@@ -2358,7 +2407,7 @@ fn pending_explicit_off_is_written_for_unset_text_and_enabled_ancestors() -> Res
             environment.definition_id = Some("enabled-template".to_owned());
         }
         model.inlines = vec![outer];
-        let mut inherited = session_with_paragraphs(vec![model]);
+        let mut inherited = session_with_template_paragraphs(vec![model]);
         let caret = Pos {
             offset: 1,
             affinity: Affinity::Upstream,
@@ -2374,5 +2423,63 @@ fn pending_explicit_off_is_written_for_unset_text_and_enabled_ancestors() -> Res
         assert!(format_value(&spans[0], kind));
         assert!(!format_value(&spans[1], kind));
     }
+    Ok(())
+}
+
+#[test]
+fn theme_template_variant_controls_body_toggle_and_inserted_text() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let mut model = paragraph("abc");
+    let mut bold = inline_environment(
+        NodeId::generate(),
+        InlineEnvironmentKind::Bold,
+        vec![run("abc")],
+    );
+    let ParagraphContent::Environment(environment) = &mut bold else {
+        return Err(EditError::InvalidPosition);
+    };
+    environment.definition_id = Some("body-bold/quiet".to_owned());
+    environment.props.clear();
+    model.inlines = vec![bold];
+    document.body = vec![Block::Paragraph(model)];
+    document.global_settings.theme = Some(ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([(
+            "body-bold".to_owned(),
+            serde_json::json!({
+                "baseKind": "bold",
+                "props": {"enabled": true},
+                "variants": {"body-bold/quiet": {"enabled": false}}
+            }),
+        )]),
+        default_inline_environment_templates: BTreeMap::from([(
+            "bold".to_owned(),
+            serde_json::json!("body-bold"),
+        )]),
+        extra: BTreeMap::new(),
+    });
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid template session should be accepted: {error}"));
+    let caret = Pos {
+        offset: 1,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    select(&mut session, caret.clone(), caret);
+
+    session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert_eq!(session.pending_inline_style.bold, Some(true));
+    session.run(Command::InsertText("x".to_owned()))?;
+
+    let paragraph = session.paragraph_for(&session.selection.focus)?;
+    assert_eq!(visible_text(&paragraph.inlines), "axbc");
+    let inherited = inherited_inline_style(session.document().global_settings.theme.as_ref())?;
+    let spans = format_spans_with_inherited(&paragraph.inlines, inherited)?;
+    assert_eq!(spans.len(), 3);
+    assert!(!format_value(&spans[0], InlineEnvironmentKind::Bold));
+    assert!(format_value(&spans[1], InlineEnvironmentKind::Bold));
+    assert!(!format_value(&spans[2], InlineEnvironmentKind::Bold));
     Ok(())
 }

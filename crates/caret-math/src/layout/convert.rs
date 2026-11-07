@@ -1422,12 +1422,7 @@ impl Converter<'_> {
     }
 
     fn text_variant(base: Variant, emphasis: &str) -> Variant {
-        let (bold, italic) = match base {
-            Variant::Bold => (true, false),
-            Variant::Italic => (false, true),
-            Variant::BoldItalic => (true, true),
-            _ => (false, false),
-        };
+        let (bold, italic, sans_serif, monospace) = Self::emphasis_state(base);
         let (bold, italic) = match emphasis {
             "bf" => (true, italic),
             "it" => (bold, true),
@@ -1435,11 +1430,60 @@ impl Converter<'_> {
             "up" => (bold, false),
             _ => return base,
         };
-        match (bold, italic) {
-            (true, true) => Variant::BoldItalic,
-            (true, false) => Variant::Bold,
-            (false, true) => Variant::Italic,
-            (false, false) => Variant::Roman,
+        Self::compose_emphasis(bold, italic, sans_serif, monospace)
+    }
+
+    fn text_family_variant(base: Variant, family: Variant) -> Variant {
+        let (bold, italic, _, _) = Self::emphasis_state(base);
+        match (family, bold, italic) {
+            (Variant::SansSerif, true, true) => Variant::SansSerifBoldItalic,
+            (Variant::SansSerif, true, false) => Variant::SansSerifBold,
+            (Variant::SansSerif, false, true) => Variant::SansSerifItalic,
+            (Variant::SansSerif, false, false) => Variant::SansSerif,
+            // 数学等宽字母表没有粗斜体变体；此降级路径优先保留粗斜语义。
+            (Variant::Monospace, true, true) => Variant::MonospaceBoldItalic,
+            (Variant::Monospace, true, false) => Variant::MonospaceBold,
+            (Variant::Monospace, false, true) => Variant::MonospaceItalic,
+            (Variant::Monospace, false, false) => Variant::Monospace,
+            _ => base,
+        }
+    }
+
+    fn emphasis_state(variant: Variant) -> (bool, bool, bool, bool) {
+        match variant {
+            Variant::Bold => (true, false, false, false),
+            Variant::Italic => (false, true, false, false),
+            Variant::BoldItalic => (true, true, false, false),
+            Variant::SansSerif => (false, false, true, false),
+            Variant::SansSerifBold => (true, false, true, false),
+            Variant::SansSerifItalic => (false, true, true, false),
+            Variant::SansSerifBoldItalic => (true, true, true, false),
+            Variant::Monospace => (false, false, false, true),
+            Variant::MonospaceBold => (true, false, false, true),
+            Variant::MonospaceItalic => (false, true, false, true),
+            Variant::MonospaceBoldItalic => (true, true, false, true),
+            _ => (false, false, false, false),
+        }
+    }
+
+    fn compose_emphasis(bold: bool, italic: bool, sans_serif: bool, monospace: bool) -> Variant {
+        if monospace {
+            return match (bold, italic) {
+                (true, true) => Variant::MonospaceBoldItalic,
+                (true, false) => Variant::MonospaceBold,
+                (false, true) => Variant::MonospaceItalic,
+                (false, false) => Variant::Monospace,
+            };
+        }
+        match (sans_serif, bold, italic) {
+            (true, true, true) => Variant::SansSerifBoldItalic,
+            (true, true, false) => Variant::SansSerifBold,
+            (true, false, true) => Variant::SansSerifItalic,
+            (true, false, false) => Variant::SansSerif,
+            (false, true, true) => Variant::BoldItalic,
+            (false, true, false) => Variant::Bold,
+            (false, false, true) => Variant::Italic,
+            (false, false, false) => Variant::Roman,
         }
     }
 
@@ -1481,8 +1525,9 @@ impl Converter<'_> {
                         Self::text_variant(style.variant, Self::attribute(node, "style"))
                     }
                     "bi" => Variant::BoldItalic,
-                    "sf" => Variant::SansSerif,
-                    "tt" => Variant::Monospace,
+                    "sf" => Self::text_family_variant(style.variant, Variant::SansSerif),
+                    "tt" => Self::text_family_variant(style.variant, Variant::Monospace),
+                    "font" => style.variant,
                     _ => Variant::Roman,
                 };
                 let inner = Style { variant, ..style };
@@ -1649,4 +1694,41 @@ fn parse_columns(spec: &str) -> (Vec<Align>, Vec<usize>) {
         }
     }
     (aligns, vlines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Converter, Variant};
+
+    #[test]
+    fn nested_text_emphasis_preserves_font_family_and_boldness() {
+        assert_eq!(
+            Converter::text_family_variant(Variant::Bold, Variant::SansSerif),
+            Variant::SansSerifBold
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::SansSerifBold, "it"),
+            Variant::SansSerifBoldItalic
+        );
+        assert_eq!(
+            Converter::text_family_variant(Variant::SansSerifBold, Variant::SansSerif),
+            Variant::SansSerifBold
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::SansSerifBoldItalic, "md"),
+            Variant::SansSerifItalic
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::Monospace, "md"),
+            Variant::Monospace
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::Monospace, "bf"),
+            Variant::MonospaceBold
+        );
+        assert_eq!(
+            Converter::text_variant(Converter::text_variant(Variant::Monospace, "bf"), "md"),
+            Variant::Monospace
+        );
+    }
 }

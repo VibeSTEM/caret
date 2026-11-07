@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use caret_doc::{
     FlowContent, InlineEnvironment, InlineEnvironmentKind, MathContent, MathFlow, MathNode,
-    MathNodeKind, MathPathStep, NodeId, Run, TextFlow,
+    MathNodeKind, MathPathStep, NodeId, Run, TextFlow, ThemeSnapshot,
 };
 
 use super::{
@@ -1451,6 +1451,267 @@ fn flow_and_text_style_boxes_are_unique_and_cover_math_islands() {
         .count();
     assert_eq!(numerator_flow, 1);
     assert_eq!(denominator_flow, 1);
+}
+
+#[test]
+fn math_backend_resolves_nested_theme_font_templates_like_body_styles() {
+    let theme = ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([(
+            "math-font".to_owned(),
+            serde_json::json!({
+                "baseKind": "font",
+                "props": {"fontFamily": "Theme Sans"},
+                "variants": {"math-font/serif": {"fontFamily": "Theme Serif"}}
+            }),
+        )]),
+        default_inline_environment_templates: BTreeMap::from([(
+            "font".to_owned(),
+            serde_json::json!("math-font"),
+        )]),
+        extra: BTreeMap::new(),
+    };
+    let templates = caret_doc::InlineEnvironmentTemplates::from_theme(Some(&theme))
+        .unwrap_or_else(|error| panic!("valid math font templates should parse: {error}"));
+    let text = || {
+        MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "x".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })
+    };
+    let flow = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Font,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![
+                text(),
+                MathContent::Environment(InlineEnvironment {
+                    id: NodeId::generate(),
+                    kind: InlineEnvironmentKind::Font,
+                    definition_id: Some("math-font/serif".to_owned()),
+                    props: BTreeMap::new(),
+                    children: vec![text()],
+                    extra: BTreeMap::new(),
+                }),
+                text(),
+            ],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    };
+
+    let nodes = crate::backend::flow_nodes_for_layout_with_templates(&flow, Some(&templates));
+    let mut styles = Vec::new();
+    let mut pending = nodes.iter().collect::<Vec<_>>();
+    while let Some(node) = pending.pop() {
+        if let Some(style) = &node.text_style {
+            styles.push(style.font_family.clone());
+        }
+        pending.extend(node.children.iter());
+    }
+
+    assert_eq!(
+        styles,
+        [
+            Some("Theme Sans".to_owned()),
+            Some("Theme Serif".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn math_template_layout_rejects_unresolved_definition_ids() {
+    let flow = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: Some("missing-variant".to_owned()),
+            props: BTreeMap::new(),
+            children: vec![MathContent::Text(TextFlow::default())],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        super::layout_math_with_templates(
+            font(),
+            &flow,
+            SIZE,
+            MathStyle::Inline,
+            &caret_doc::InlineEnvironmentTemplates::default(),
+        ),
+        Err(super::MathLayoutError::InvalidTemplate)
+    );
+}
+
+#[test]
+fn no_shaper_font_environment_preserves_inherited_math_emphasis() {
+    let theme = ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([(
+            "body-font".to_owned(),
+            serde_json::json!({
+                "baseKind": "font",
+                "props": {"fontFamily": "Theme Serif"}
+            }),
+        )]),
+        default_inline_environment_templates: BTreeMap::from([(
+            "font".to_owned(),
+            serde_json::json!("body-font"),
+        )]),
+        extra: BTreeMap::new(),
+    };
+    let templates = caret_doc::InlineEnvironmentTemplates::from_theme(Some(&theme))
+        .unwrap_or_else(|error| panic!("valid math font templates should parse: {error}"));
+    let text = || {
+        MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "x".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })
+    };
+    let styled = MathFlow {
+        id: NodeId::generate(),
+        content: vec![MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::from([("enabled".to_owned(), serde_json::json!(true))]),
+            children: vec![MathContent::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Font,
+                definition_id: None,
+                props: BTreeMap::new(),
+                children: vec![text()],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    };
+    let plain = MathFlow {
+        id: NodeId::generate(),
+        content: vec![text()],
+        extra: BTreeMap::new(),
+    };
+
+    let styled =
+        super::layout_math_with_templates(font(), &styled, SIZE, MathStyle::Inline, &templates)
+            .unwrap_or_else(|error| panic!("valid fallback math text should lay out: {error}"));
+    let plain = layout_math(font(), &plain, SIZE, MathStyle::Inline)
+        .unwrap_or_else(|error| panic!("valid plain math text should lay out: {error}"));
+    let glyphs = |layout: &MathLayout| {
+        layout
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MathItem::Glyph { glyph, .. } => Some(*glyph),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_ne!(glyphs(&styled), glyphs(&plain));
+}
+
+#[test]
+fn no_shaper_nested_font_and_emphasis_layout_matches_tex_style_commands() {
+    let text = || {
+        MathContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "x".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })
+    };
+    let environment = |kind, props, child| {
+        MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind,
+            definition_id: None,
+            props,
+            children: vec![child],
+            extra: BTreeMap::new(),
+        })
+    };
+    let flow = |content| MathFlow {
+        id: NodeId::generate(),
+        content: vec![content],
+        extra: BTreeMap::new(),
+    };
+    let enabled = BTreeMap::from([("enabled".to_owned(), serde_json::json!(true))]);
+    let disabled = BTreeMap::from([("enabled".to_owned(), serde_json::json!(false))]);
+    let cases = [
+        (
+            flow(environment(
+                InlineEnvironmentKind::Bold,
+                enabled.clone(),
+                environment(
+                    InlineEnvironmentKind::Font,
+                    BTreeMap::from([("fontFamily".to_owned(), serde_json::json!("sans-serif"))]),
+                    environment(InlineEnvironmentKind::Italic, enabled.clone(), text()),
+                ),
+            )),
+            r"\textsf{\textbf{\textit{x}}}",
+        ),
+        (
+            flow(environment(
+                InlineEnvironmentKind::Font,
+                BTreeMap::from([("fontFamily".to_owned(), serde_json::json!("monospace"))]),
+                environment(
+                    InlineEnvironmentKind::Bold,
+                    enabled.clone(),
+                    environment(InlineEnvironmentKind::Bold, disabled, text()),
+                ),
+            )),
+            r"\texttt{\textbf{\textmd{x}}}",
+        ),
+    ];
+    let templates = caret_doc::InlineEnvironmentTemplates::default();
+    let glyphs = |layout: &MathLayout| {
+        layout
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MathItem::Glyph { glyph, .. } => Some(*glyph),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for (document_flow, tex) in cases {
+        let document_layout = super::layout_math_with_templates(
+            font(),
+            &document_flow,
+            SIZE,
+            MathStyle::Inline,
+            &templates,
+        )
+        .unwrap_or_else(|error| panic!("nested document font styles should lay out: {error}"));
+        assert_eq!(
+            glyphs(&document_layout),
+            glyphs(&lay(tex, MathStyle::Inline))
+        );
+    }
 }
 
 #[test]

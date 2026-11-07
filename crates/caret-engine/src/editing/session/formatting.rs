@@ -19,10 +19,17 @@ use caret_doc::{DocumentFontTarget, InlineEnvironmentKind, NodeId, Paragraph};
 use inline_tree::format_value;
 use inline_tree::{
     apply_font_family_to_range, apply_formats_to_range, clear_run_property_to_range,
-    effective_format_at, format_spans, set_run_property_to_range, unwrap_inline_environment,
-    wrap_format_range,
+    effective_format_at_with_inherited, format_spans, format_spans_with_inherited,
+    set_run_property_to_range, unwrap_inline_environment, wrap_format_range,
 };
 use std::collections::BTreeMap;
+
+fn inherited_inline_style(
+    theme: Option<&caret_doc::ThemeSnapshot>,
+) -> Result<InheritedInlineStyle, EditError> {
+    InheritedInlineStyle::from_theme(theme)
+        .map_err(|error| EditError::InvalidDocument(error.to_string()))
+}
 
 fn is_collapsed_text_range(anchor: &Pos, focus: &Pos) -> bool {
     anchor.story == focus.story
@@ -418,6 +425,7 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
+        let inherited = inherited_inline_style(self.document.global_settings.theme.as_ref())?;
         let (anchor, focus) = self.edit_range()?;
         if is_collapsed_text_range(&anchor, &focus) {
             let before_pending_style = self.pending_inline_style.clone();
@@ -475,6 +483,7 @@ impl Session {
                 end.offset,
                 family,
                 location.block_path.len() + usize::from(location.is_title),
+                inherited.clone(),
             )?;
             if paragraph == *original {
                 return Ok(Effect::default());
@@ -552,6 +561,7 @@ impl Session {
                 range_end,
                 family,
                 location.block_path.len() + usize::from(location.is_title),
+                inherited.clone(),
             )?;
             if paragraph == *original {
                 continue;
@@ -591,17 +601,22 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
+        let inherited = inherited_inline_style(self.document.global_settings.theme.as_ref())?;
 
         let (anchor, focus) = self.edit_range()?;
         if is_collapsed_text_range(&anchor, &focus) {
             let position = self.selection.focus.clone();
-            let inherited = effective_format_at(
+            let inherited_value = effective_format_at_with_inherited(
                 &self.paragraph_for(&position)?.inlines,
                 position.offset,
                 position.affinity,
                 kind,
+                inherited.clone(),
             )?;
-            let current = self.pending_inline_style.get(kind).unwrap_or(inherited);
+            let current = self
+                .pending_inline_style
+                .get(kind)
+                .unwrap_or(inherited_value);
             let before_pending_style = self.pending_inline_style.clone();
             let before_selection = self.selection.clone();
             let before_visual_affinity = self.selection_visual_affinity;
@@ -695,12 +710,12 @@ impl Session {
                 ..start.clone()
             })?;
             // 正文旧适配器对段落内未知 TextFlow 扩展采取整体拒绝策略，继续保留该边界。
-            format_spans(&paragraph.inlines)?;
+            format_spans_with_inherited(&paragraph.inlines, inherited.clone())?;
             let (contains_text, contains_disabled) = inline_format_range_state(
                 &paragraph.inlines,
                 range_start..range_end,
                 kind,
-                &InheritedInlineStyle::default(),
+                &inherited,
             )?;
             any_content |= contains_text;
             any_disabled |= contains_disabled;
@@ -730,6 +745,7 @@ impl Session {
                 kind,
                 enabled,
                 inline_depth,
+                inherited.clone(),
             )?;
             edits.push((
                 Pos {
@@ -792,6 +808,7 @@ impl Session {
         end: usize,
         inline_depth: usize,
     ) -> Result<(), EditError> {
+        let inherited = inherited_inline_style(self.document.global_settings.theme.as_ref())?;
         let formats: Vec<_> = self.pending_inline_style.active_formats().collect();
         let run_properties: Vec<_> = self
             .pending_inline_style
@@ -819,6 +836,7 @@ impl Session {
             snapped_end,
             &formats,
             inline_depth,
+            inherited.clone(),
         )?;
         for (property, enabled) in run_properties {
             set_run_property_to_range(
@@ -836,6 +854,7 @@ impl Session {
                 snapped_end,
                 &family,
                 inline_depth,
+                inherited,
             )?;
         }
         Ok(())

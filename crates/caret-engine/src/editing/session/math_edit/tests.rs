@@ -7111,6 +7111,144 @@ fn pending_math_text_format_applies_to_inserted_text_and_history()
 }
 
 #[test]
+fn theme_template_variant_controls_math_text_toggle_and_inserted_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let math_tree = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Math(MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Fraction,
+                text: None,
+                attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+                children: vec![
+                    MathFlow {
+                        id: NodeId::generate(),
+                        content: vec![MathContent::Environment(caret_doc::InlineEnvironment {
+                            id: NodeId::generate(),
+                            kind: InlineEnvironmentKind::Bold,
+                            definition_id: Some("math-bold/quiet".to_owned()),
+                            props: BTreeMap::new(),
+                            children: vec![MathContent::Text(TextFlow {
+                                runs: vec![Run {
+                                    text: "abc".to_owned(),
+                                    language: None,
+                                    props: BTreeMap::new(),
+                                    extra: BTreeMap::new(),
+                                }],
+                                extra: BTreeMap::new(),
+                            })],
+                            extra: BTreeMap::new(),
+                        })],
+                        extra: BTreeMap::new(),
+                    },
+                    MathFlow {
+                        id: NodeId::generate(),
+                        content: vec![MathContent::Math(MathNode {
+                            id: NodeId::generate(),
+                            kind: MathNodeKind::Symbol,
+                            text: Some("1".to_owned()),
+                            attributes: BTreeMap::new(),
+                            children: Vec::new(),
+                            extra: BTreeMap::new(),
+                        })],
+                        extra: BTreeMap::new(),
+                    },
+                ],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: BTreeMap::new(),
+    })];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    document.global_settings.theme = Some(caret_doc::ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([(
+            "math-bold".to_owned(),
+            serde_json::json!({
+                "baseKind": "bold",
+                "props": {"enabled": true},
+                "variants": {"math-bold/quiet": {"enabled": false}}
+            }),
+        )]),
+        default_inline_environment_templates: BTreeMap::from([(
+            "bold".to_owned(),
+            serde_json::json!("math-bold"),
+        )]),
+        extra: BTreeMap::new(),
+    });
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid math template session should be accepted: {error}"));
+    let math_end = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: '\u{fffc}'.len_utf8(),
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: math_end.clone(),
+        focus: math_end,
+    })))?;
+    move_into_math_text(&mut session)?;
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+
+    session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert_eq!(
+        session
+            .pending_inline_style
+            .get(InlineEnvironmentKind::Bold),
+        Some(true)
+    );
+    session.run(Command::InsertText("x".to_owned()))?;
+
+    fn has_bold_environment_with_x(nodes: &[MathContent]) -> bool {
+        nodes.iter().any(|content| match content {
+            MathContent::Environment(environment) => {
+                let is_enabled_bold = environment.kind == InlineEnvironmentKind::Bold
+                    && environment.props.get("enabled") == Some(&serde_json::json!(true));
+                (is_enabled_bold
+                    && environment.children.iter().any(|child| match child {
+                        MathContent::Text(flow) => flow.runs.iter().any(|run| run.text == "x"),
+                        _ => false,
+                    }))
+                    || has_bold_environment_with_x(&environment.children)
+            }
+            MathContent::Math(node) => node
+                .children
+                .iter()
+                .any(|flow| has_bold_environment_with_x(&flow.content)),
+            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => false,
+        })
+    }
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert!(has_bold_environment_with_x(
+        &session.math_tree_for_edit(edit, None)?.root.content
+    ));
+    assert!(
+        active_math_text_flow(&session)?
+            .runs
+            .iter()
+            .any(|run| run.text == "x")
+    );
+    Ok(())
+}
+
+#[test]
 fn repeated_math_text_format_toggle_preserves_the_previous_wrapper() -> Result<(), EditError> {
     let caret_math::ParsedMath::Tree(mut tree) =
         caret_math::parse(r"\text{abc}", caret_math::MathInputKind::Inline)

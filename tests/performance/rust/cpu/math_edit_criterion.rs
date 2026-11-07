@@ -16,6 +16,58 @@ const MIXED_CHARS_PER_PARAGRAPH: usize = 200;
 const MIXED_SOURCE: &str = include_str!("../../fixtures/novel-1m-multilingual.txt");
 const MIXED_LANGUAGES: [&str; 7] = ["zh-Hans", "en-US", "fr-FR", "ar", "ru-RU", "el-GR", "ja-JP"];
 
+fn structured_formula_source() -> String {
+    let rows = (0..4)
+        .map(|row| {
+            (0..4)
+                .map(|column| {
+                    format!(
+                        r"\frac{{\text{{row {row} cell {column} numerator}}}}{{\frac{{\text{{denominator {row}-{column}}}}}{{x_{row}+y_{column}}}}}"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" & ")
+        })
+        .collect::<Vec<_>>()
+        .join(r" \\");
+    format!(r"\begin{{bmatrix}}{rows}\end{{bmatrix}}")
+}
+
+fn prepare_structured_formula_session() -> Session {
+    let source = structured_formula_source();
+    let parsed = caret_math::parse(&source, caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("结构化大公式基准源码无效：{error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("结构化大公式基准必须解析为公式块");
+    };
+    let mut document = Document::blank();
+    document.body.insert(
+        0,
+        Block::Equation(Equation {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        }),
+    );
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("无法创建结构化大公式基准会话：{error}"));
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .unwrap_or_else(|error| panic!("无法进入结构化大公式基准公式：{error}"));
+    for _ in 0..256 {
+        if matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Text { .. })
+        ) {
+            return session;
+        }
+        session
+            .run(Command::MoveCaret(Direction::Backward))
+            .unwrap_or_else(|error| panic!("无法进入结构化大公式 TextFlow：{error}"));
+    }
+    panic!("结构化大公式没有可编辑的数学 TextFlow");
+}
+
 fn math_text_source(text: &str) -> String {
     format!(r"\frac{{\text{{{text}}}}}{{\beta}}")
 }
@@ -266,7 +318,70 @@ fn benchmark_math_projection_and_text_edit(criterion: &mut Criterion) {
     edit_group.finish();
 
     benchmark_math_layout_and_document_edit(criterion);
+    benchmark_structured_formula(criterion);
     benchmark_math_command_candidates(criterion);
+}
+
+fn benchmark_structured_formula(criterion: &mut Criterion) {
+    let catalog = RefCell::new(
+        FontCatalog::system()
+            .unwrap_or_else(|error| panic!("无法初始化结构化公式基准字体目录：{error}")),
+    );
+    let mut group = criterion.benchmark_group("rust/math_structured_formula");
+    group.bench_function("initial_4x4_nested_fraction_matrix_layout", |bencher| {
+        bencher.iter_batched(
+            || {
+                (
+                    prepare_structured_formula_session(),
+                    DocumentLayoutService::new(),
+                )
+            },
+            |(session, mut service)| {
+                let base_style = ShapingStyle::new(
+                    session
+                        .document()
+                        .global_settings
+                        .default_font_size_centipoints,
+                );
+                black_box(
+                    service
+                        .layout_session(&session, &mut catalog.borrow_mut(), &base_style)
+                        .unwrap_or_else(|error| panic!("结构化公式首次布局失败：{error}")),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("textflow_edit_and_full_relayout", |bencher| {
+        bencher.iter_batched(
+            || {
+                let session = prepare_structured_formula_session();
+                let mut service = DocumentLayoutService::new();
+                let base_style = ShapingStyle::new(
+                    session
+                        .document()
+                        .global_settings
+                        .default_font_size_centipoints,
+                );
+                service
+                    .layout_session(&session, &mut catalog.borrow_mut(), &base_style)
+                    .unwrap_or_else(|error| panic!("结构化公式编辑前布局失败：{error}"));
+                (session, service, base_style)
+            },
+            |(mut session, mut service, base_style)| {
+                session
+                    .run(Command::InsertText("x".to_owned()))
+                    .unwrap_or_else(|error| panic!("结构化公式 TextFlow 编辑失败：{error}"));
+                black_box(
+                    service
+                        .layout_session(&session, &mut catalog.borrow_mut(), &base_style)
+                        .unwrap_or_else(|error| panic!("结构化公式编辑后重排失败：{error}")),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
 }
 
 fn benchmark_math_command_candidates(criterion: &mut Criterion) {

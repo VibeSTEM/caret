@@ -20,7 +20,7 @@
 
 属性按项解析：Run/Paragraph 局部显式属性（字体族、粗体、斜体除外）→ EnvironmentNode 有效设置 → 文档全局覆盖 → 主题命名样式 → 应用默认值。`unset` 继续向外回退，不等于 `false`。
 
-环境模板来源的值归入 EnvironmentNode 有效设置层。节点内按 kind 默认模板 → 所选变体 → 实例 `props` 逐层覆盖，再由最近内层环境覆盖外层；未提供的属性不遮蔽外层值。
+环境模板来源的值归入 EnvironmentNode 有效设置层。主题快照以 `defaultInlineEnvironmentTemplates` 将 Bold、Italic、Font kind 映射到 `environmentTemplates` 中的模板；模板 `baseKind` 必须匹配，`props` 和命名 `variants` 只接受该 kind 支持的文本属性。节点内按 kind 默认模板 → `definitionId` 所指变体 → 实例 `props` 逐层覆盖，再由最近内层环境覆盖外层；未提供的属性不遮蔽外层值。模型校验会拒绝缺失模板、变体、错误 kind 和不支持的属性。无 shaper 数学便捷 API 对 TextFlow 的字体选择限制仍见数学布局 API 文档。
 
 例如全局字号为 14 pt、Section 默认模板字号为 18 pt、实例未覆盖时，Section 内最终字号为 18 pt。若环境未提供字号，才回退到全局覆盖、主题命名样式和应用默认值。模板引用的命名样式属于环境模板层，不降到普通主题样式回退层。
 

@@ -30,6 +30,9 @@ impl Session {
         }
 
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let inherited_base =
+            InheritedInlineStyle::from_theme(self.document.global_settings.theme.as_ref())
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
         let MathEditBranch::Text {
             path,
             anchor,
@@ -46,7 +49,8 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         if range.is_empty() {
             let inherited =
-                inherited_environment_value(tree, &path, kind).ok_or(EditError::InvalidPosition)?;
+                inherited_environment_value_with_style(tree, &path, kind, inherited_base.clone())
+                    .ok_or(EditError::InvalidPosition)?;
             let current = self.pending_inline_style.get(kind).unwrap_or(inherited);
             return self.set_pending_math_environment(&edit, kind, !current);
         }
@@ -64,7 +68,8 @@ impl Session {
                 .resolve_structurally(tree)
                 .ok_or(EditError::InvalidPosition)?;
             let inherited =
-                inherited_math_text_style(tree, candidate).ok_or(EditError::InvalidPosition)?;
+                inherited_math_text_style_with_style(tree, candidate, inherited_base.clone())
+                    .ok_or(EditError::InvalidPosition)?;
             let (contains_text, contains_disabled) =
                 text_flow_inline_format_state(text, local_range, kind, &inherited)?;
             any_text |= contains_text;
@@ -76,11 +81,12 @@ impl Session {
         let enabled = any_disabled;
         let mut updated_tree = tree.clone();
         let (next_anchor, next_focus) =
-            super::text_branch::format_tree_edit::apply_math_text_format_range(
+            super::text_branch::format_tree_edit::apply_math_text_format_range_with_style(
                 &mut updated_tree,
                 &anchor,
                 &focus,
                 InlineFormatChange::State(kind, enabled),
+                inherited_base,
             )?;
         updated_tree
             .validate()
@@ -115,6 +121,9 @@ impl Session {
         }
 
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
+        let inherited_base =
+            InheritedInlineStyle::from_theme(self.document.global_settings.theme.as_ref())
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
         let MathEditBranch::Text {
             path,
             anchor,
@@ -131,7 +140,9 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         if range.is_empty() {
             let inherited =
-                inherited_math_text_font_family(tree, &path).ok_or(EditError::InvalidPosition)?;
+                inherited_math_text_style_with_style(tree, &path, inherited_base.clone())
+                    .map(|style| style.font_family)
+                    .ok_or(EditError::InvalidPosition)?;
             let current = self
                 .pending_inline_style
                 .active_font_family()
@@ -144,11 +155,12 @@ impl Session {
 
         let mut updated_tree = tree.clone();
         let (next_anchor, next_focus) =
-            super::text_branch::format_tree_edit::apply_math_text_format_range(
+            super::text_branch::format_tree_edit::apply_math_text_format_range_with_style(
                 &mut updated_tree,
                 &anchor,
                 &focus,
                 InlineFormatChange::FontFamily(family),
+                inherited_base,
             )?;
         if updated_tree == *tree {
             return Ok(Effect::default());
@@ -255,6 +267,7 @@ impl Session {
     }
 }
 
+#[cfg(test)]
 pub(super) fn inherited_environment_value(
     tree: &MathTree,
     path: &MathTextFlowPath,
@@ -263,9 +276,27 @@ pub(super) fn inherited_environment_value(
     inherited_math_text_style(tree, path)?.state(kind)
 }
 
+fn inherited_environment_value_with_style(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    kind: InlineEnvironmentKind,
+    inherited: InheritedInlineStyle,
+) -> Option<bool> {
+    inherited_math_text_style_with_style(tree, path, inherited)?.state(kind)
+}
+
+#[cfg(test)]
 pub(super) fn inherited_math_text_style(
     tree: &MathTree,
     path: &MathTextFlowPath,
+) -> Option<InheritedInlineStyle> {
+    inherited_math_text_style_with_style(tree, path, InheritedInlineStyle::default())
+}
+
+fn inherited_math_text_style_with_style(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    inherited: InheritedInlineStyle,
 ) -> Option<InheritedInlineStyle> {
     fn in_flow(
         flow: &caret_doc::MathFlow,
@@ -305,12 +336,21 @@ pub(super) fn inherited_math_text_style(
         }
     }
 
-    in_flow(&tree.root, path.steps(), InheritedInlineStyle::default())
+    in_flow(&tree.root, path.steps(), inherited)
 }
 
+#[cfg(test)]
 pub(super) fn inherited_math_text_font_family(
     tree: &MathTree,
     path: &MathTextFlowPath,
 ) -> Option<Option<String>> {
     Some(inherited_math_text_style(tree, path)?.font_family)
+}
+
+pub(super) fn inherited_math_text_font_family_with_style(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    inherited: InheritedInlineStyle,
+) -> Option<Option<String>> {
+    Some(inherited_math_text_style_with_style(tree, path, inherited)?.font_family)
 }

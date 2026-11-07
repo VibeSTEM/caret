@@ -45,6 +45,152 @@ fn block_text(block: &Block) -> Option<&str> {
     })
 }
 
+fn align_text_tree(text: &str) -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: text.to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+fn align_document(cells: &[&str]) -> Document {
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: cells
+            .iter()
+            .map(|text| caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![align_text_tree(text)],
+                extra: BTreeMap::new(),
+            })
+            .collect(),
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    document
+}
+
+fn place_caret_in_align_cell(
+    runtime: &mut DocumentViewRuntime,
+    row: usize,
+    column: usize,
+    offset: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let point = {
+        let snapshot = runtime.current_snapshot()?;
+        let mut point = None;
+        'pages: for (page_index, page) in snapshot.pages.iter().enumerate() {
+            for fragment in &page.layout.math_fragments {
+                let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let right = left + f64::from(fragment.width_pt);
+                let bottom = top + f64::from(fragment.height_pt);
+                let mut y = top;
+                while y <= bottom {
+                    let mut x = left;
+                    while x <= right {
+                        if snapshot
+                            .hit_test_math_text(page_index, x, y)
+                            .is_some_and(|hit| {
+                                hit.position.path.align_cell() == Some((row, column))
+                                    && hit.position.offset == offset
+                            })
+                        {
+                            point = Some((page_index, x, y));
+                            break 'pages;
+                        }
+                        x += 0.5;
+                    }
+                    y += 0.5;
+                }
+            }
+        }
+        point.ok_or_else(|| {
+            std::io::Error::other(format!(
+                "Align cell ({row}, {column}) offset {offset} is not hittable"
+            ))
+        })?
+    };
+    runtime.place_caret_at_page_json(point.0 as i32, point.1, point.2)?;
+    Ok(())
+}
+
+fn align_caret_x(runtime: &mut DocumentViewRuntime) -> Result<f64, Box<dyn std::error::Error>> {
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Align text focus is unavailable"))?;
+    let snapshot = runtime.current_snapshot()?;
+    snapshot
+        .math_text_caret_geometry(&context.target, &context.focus, context.visual_affinity)
+        .map(|caret| caret.x_pt)
+        .ok_or_else(|| std::io::Error::other("Align caret geometry is unavailable").into())
+}
+
+fn assert_align_caret_is_nearest_to_x(
+    runtime: &mut DocumentViewRuntime,
+    target_x: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Align text focus is unavailable"))?;
+    let snapshot = runtime.current_snapshot()?;
+    let actual = snapshot
+        .math_text_caret_geometry(&context.target, &context.focus, context.visual_affinity)
+        .ok_or_else(|| std::io::Error::other("Align caret geometry is unavailable"))?;
+    let mut candidate_x = context
+        .surrounding_text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(context.surrounding_text.len()))
+        .map(|offset| {
+            let mut position = context.focus.clone();
+            position.offset = offset;
+            snapshot
+                .math_text_caret_geometry(&context.target, &position, context.visual_affinity)
+                .map(|caret| caret.x_pt)
+                .ok_or_else(|| {
+                    std::io::Error::other("Align candidate caret geometry is unavailable")
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    candidate_x.sort_by(f64::total_cmp);
+    candidate_x.dedup_by(|left, right| (*left - *right).abs() < 1e-6);
+    assert!(
+        candidate_x.len() > 1,
+        "Align fixture must have distinct caret positions"
+    );
+    let actual_distance = (actual.x_pt - target_x).abs();
+    let nearest_distance = candidate_x
+        .iter()
+        .map(|x| (x - target_x).abs())
+        .fold(f64::INFINITY, f64::min);
+    assert!((actual_distance - nearest_distance).abs() < 1e-6);
+    let nearest_count = candidate_x
+        .iter()
+        .filter(|x| ((**x - target_x).abs() - nearest_distance).abs() < 1e-6)
+        .count();
+    assert_eq!(
+        nearest_count, 1,
+        "Align fixture must not have tied nearest carets"
+    );
+    Ok(())
+}
+
 #[test]
 fn drag_hit_map_keeps_soft_break_carets_but_omits_its_highlight_geometry()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -185,6 +331,162 @@ fn visual_navigation_crosses_paragraph_boundaries() -> Result<(), Box<dyn std::e
         runtime.session.selection().focus.paragraph_id,
         paragraph_ids[0]
     );
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_moves_back_and_keeps_focus_at_row_edges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["first", "second"]))?;
+    place_caret_in_align_cell(&mut runtime, 1, 0, 3)?;
+    let target_x = align_caret_x(&mut runtime)?;
+    let generation = runtime.session.document_generation();
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Up left Align text focus"))?;
+    assert_eq!(context.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(context.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    assert!(context.surrounding_text.contains("first"));
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let at_top = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("top edge lost Align text focus"))?;
+    assert_eq!(at_top.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(at_top.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let returned = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left Align text focus"))?;
+    assert_eq!(returned.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(returned.focus.offset, 3);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    runtime.move_vertical_caret_json(1, false)?;
+    let at_bottom = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("bottom edge lost Align text focus"))?;
+    assert_eq!(at_bottom.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(at_bottom.focus.offset, 3);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    assert_eq!(runtime.session.document_generation(), generation);
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_preserves_target_x_across_short_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["abcdefghij", "x", "abcdefghij"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 8)?;
+    let target_x = align_caret_x(&mut runtime)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let short_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left Align text focus"))?;
+    assert_eq!(short_row.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(short_row.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let lower_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("second Down left Align text focus"))?;
+    assert_eq!(lower_row.focus.path.align_cell(), Some((2, 0)));
+    assert_eq!(lower_row.focus.offset, 8);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let short_row_again = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Up left Align text focus"))?;
+    assert_eq!(short_row_again.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(short_row_again.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    runtime.move_vertical_caret_json(-1, false)?;
+    let upper_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("second Up left Align text focus"))?;
+    assert_eq!(upper_row.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(upper_row.focus.offset, 8);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_enters_an_empty_cell_and_recovers_text_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["top", "", "bottom"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 2)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let empty_cell = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("empty Align cell did not receive text focus"))?;
+    assert_eq!(empty_cell.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(empty_cell.focus.offset, 0);
+    assert_eq!(empty_cell.surrounding_text, "");
+
+    runtime.insert_text_json("z".to_owned())?;
+    let edited_cell = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("typing left the empty Align cell"))?;
+    assert_eq!(edited_cell.focus.path.align_cell(), Some((1, 0)));
+    assert!(edited_cell.surrounding_text.contains('z'));
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let lower_text = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down from empty cell lost Align text focus"))?;
+    assert_eq!(lower_text.focus.path.align_cell(), Some((2, 0)));
+    assert!(lower_text.surrounding_text.contains("bottom"));
+    Ok(())
+}
+
+#[test]
+fn shift_down_at_an_align_text_island_boundary_keeps_selection_stable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["first", "second"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 2)?;
+
+    runtime.move_vertical_caret_json(1, true)?;
+    let first_attempt = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Shift+Down lost Align text focus"))?;
+    assert_eq!(first_attempt.anchor, first_attempt.focus);
+    assert_eq!(first_attempt.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(first_attempt.focus.offset, 2);
+
+    runtime.move_vertical_caret_json(1, true)?;
+    let repeated_attempt = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("repeated Shift+Down lost Align text focus"))?;
+    assert_eq!(repeated_attempt.anchor, first_attempt.anchor);
+    assert_eq!(repeated_attempt.focus, first_attempt.focus);
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let resumed = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down after Shift+Down lost Align text focus"))?;
+    assert_eq!(resumed.focus.path.align_cell(), Some((1, 0)));
     Ok(())
 }
 
