@@ -1,6 +1,7 @@
 // Qt/QML 画布几何、输入和缩放行为的集成测试。
 #include "canvas_policy.hpp"
 #include "document_canvas.hpp"
+#include "document_canvas/scene_graph_geometry.hpp"
 #include "glyph_frame_adapter.hpp"
 #include "icon_provider.hpp"
 #include "layout_view_model.hpp"
@@ -171,6 +172,14 @@ void ShellLoadTest::glyphFrameAdapterRejectsFramesOutsideCanvasLimits() {
 }
 
 void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
+    const QPointF phase_baseline(10.0, 20.0);
+    const QRectF adjusted_glyph_rect = caret::canvas_detail::glyph_image_rect(
+        phase_baseline, QPointF(3.0, -8.0), QSizeF(7.0, 9.0), 2.0, QPointF(0.25, 0.5), true);
+    const QRectF unadjusted_glyph_rect = caret::canvas_detail::glyph_image_rect(
+        phase_baseline, QPointF(3.0, -8.0), QSizeF(7.0, 9.0), 2.0, QPointF(0.25, 0.5), false);
+    QCOMPARE(adjusted_glyph_rect, QRectF(15.5, 35.0, 14.0, 18.0));
+    QCOMPARE(unadjusted_glyph_rect, QRectF(16.0, 36.0, 14.0, 18.0));
+
     auto runtime = caret::ffi::new_blank_document_runtime();
     const rust::String initial_snapshot = caret::ffi::layout_snapshot_json(*runtime);
     QVERIFY(
@@ -420,7 +429,6 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
                                                    }});
     canvas->setGlyphFrames(QVariantList{ordered_frame});
     QPoint glyph_ink_pixel(-1, -1);
-    QImage phase_applied_render;
     QTRY_VERIFY_WITH_TIMEOUT(
         ([&]() {
             const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
@@ -448,7 +456,6 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             if (!saw_fill || ink_pixel == pixel_end || pixels.width() <= 0) {
                 return false;
             }
-            phase_applied_render = frame;
             const qsizetype ink_index = std::distance(pixel_begin, ink_pixel);
             glyph_ink_pixel =
                 visible_region.topLeft() + QPoint(static_cast<int>(ink_index % pixels.width()),
@@ -456,30 +463,6 @@ void ShellLoadTest::underlinedTextRendersTheRustFfiDecorationInTheQtCanvas() {
             return true;
         }()),
         3000);
-
-    QVariantMap phase_unapplied_placement = first_placement;
-    phase_unapplied_placement.insert(QStringLiteral("pixelPhaseApplied"), false);
-    QVariantMap phase_unapplied_image = first_image;
-    phase_unapplied_image.insert(QStringLiteral("pixelPhaseApplied"), false);
-    QVariantMap phase_unapplied_frame = ordered_frame;
-    phase_unapplied_frame.insert(QStringLiteral("images"), QVariantList{phase_unapplied_image});
-    phase_unapplied_frame.insert(QStringLiteral("placements"),
-                                 QVariantList{phase_unapplied_placement});
-    canvas->setGlyphFrames(QVariantList{phase_unapplied_frame});
-    const QRect phase_region =
-        QRect(glyph_ink_pixel - QPoint(2, 2), QSize(5, 5)).intersected(phase_applied_render.rect());
-    QTRY_VERIFY_WITH_TIMEOUT(
-        ([&]() {
-            const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
-            if (frame.isNull() || phase_region.isEmpty() || phase_region.right() >= frame.width() ||
-                phase_region.bottom() >= frame.height()) {
-                return false;
-            }
-            return phase_applied_render.copy(phase_region) != frame.copy(phase_region);
-        }()),
-        3000);
-
-    canvas->setGlyphFrames(QVariantList{ordered_frame});
 
     QVariantMap overlay_shape =
         ordered_frame.value(QStringLiteral("shapes")).toList().first().toMap();

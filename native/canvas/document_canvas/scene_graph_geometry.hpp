@@ -7,9 +7,20 @@
 
 #include <QPointF>
 #include <QRectF>
+#include <QSizeF>
 #include <QVariantMap>
 
 namespace caret::canvas_detail {
+
+inline QRectF glyph_image_rect(const QPointF& baseline, const QPointF& image_origin_px,
+                               const QSizeF& image_size_px, qreal image_to_logical_scale,
+                               const QPointF& pixel_phase, bool pixel_phase_applied) {
+    const QPointF applied_phase = pixel_phase_applied ? pixel_phase : QPointF{};
+    const QPointF top_left(
+        baseline.x() + (image_origin_px.x() - applied_phase.x()) * image_to_logical_scale,
+        baseline.y() + (-image_origin_px.y() - applied_phase.y()) * image_to_logical_scale);
+    return QRectF(top_left, image_size_px * image_to_logical_scale);
+}
 
 template <typename DocumentToContent, typename PageRect>
 QRectF visible_canvas_rect(int page_index, const QVariantMap& rectangle,
