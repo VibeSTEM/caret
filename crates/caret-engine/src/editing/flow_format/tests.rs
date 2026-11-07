@@ -911,3 +911,36 @@ fn explicit_false_is_not_confused_with_unset_or_enabled_inheritance() -> Result<
     }
     Ok(())
 }
+
+#[test]
+fn inherited_style_uses_shared_environment_delta_and_preserves_outer_font() {
+    let mut outer = InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Font,
+        definition_id: None,
+        props: Default::default(),
+        children: Vec::<FlowContent<InlineMath>>::new(),
+        extra: Default::default(),
+    };
+    outer.props.insert(
+        "fontFamily".to_owned(),
+        Value::String("Outer Family".to_owned()),
+    );
+    let inherited = InheritedInlineStyle::default().with_environment(&outer);
+    assert_eq!(inherited.font_family.as_deref(), Some("Outer Family"));
+
+    outer
+        .props
+        .insert("fontFamily".to_owned(), Value::String("  ".to_owned()));
+    let inherited = inherited.with_environment(&outer);
+    assert_eq!(inherited.font_family.as_deref(), Some("Outer Family"));
+
+    outer.kind = InlineEnvironmentKind::Bold;
+    outer.props.clear();
+    assert!(
+        InheritedInlineStyle::default()
+            .with_environment(&outer)
+            .bold
+            .unwrap_or(false)
+    );
+}

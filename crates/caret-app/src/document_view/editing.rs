@@ -324,8 +324,6 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
     if !line.preedit.is_empty() {
         return false;
     }
-    let candidates = session.command_line_candidates();
-    let selected = candidates.get(line.selected);
     if matches!(
         line.mode,
         caret_engine::CommandLineMode::DefaultFontTarget
@@ -339,21 +337,32 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
         caret_engine::CommandLineMode::FontFamily
             | caret_engine::CommandLineMode::DefaultFontFamily
     ) {
-        return matches!(
+        if !matches!(
             command,
             Command::AcceptCommandLine | Command::TabCommandLine
-        ) && selected.is_some_and(|candidate| {
-            candidate.available
-                && matches!(
-                    candidate.command_id,
-                    "text.format.font_family" | "document.default_font.family"
-                )
-        });
+        ) {
+            return false;
+        }
+        return session
+            .command_line_candidates()
+            .get(line.selected)
+            .is_some_and(|candidate| {
+                candidate.available
+                    && matches!(
+                        candidate.command_id,
+                        "text.format.font_family" | "document.default_font.family"
+                    )
+            });
     }
     match command {
         Command::TypeCommandLine(text) if text == "\\" => {
-            line.query.is_empty()
-                || selected.is_some_and(|candidate| {
+            if line.query.is_empty() {
+                return true;
+            }
+            session
+                .command_line_candidates()
+                .get(line.selected)
+                .is_some_and(|candidate| {
                     candidate.available
                         && !matches!(
                             candidate.command_id,
@@ -362,13 +371,16 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
                 })
         }
         Command::TabCommandLine => line.query.is_empty(),
-        Command::AcceptCommandLine => selected.is_some_and(|candidate| {
-            candidate.available
-                && !matches!(
-                    candidate.command_id,
-                    "text.format.font" | "document.default_font"
-                )
-        }),
+        Command::AcceptCommandLine => session
+            .command_line_candidates()
+            .get(line.selected)
+            .is_some_and(|candidate| {
+                candidate.available
+                    && !matches!(
+                        candidate.command_id,
+                        "text.format.font" | "document.default_font"
+                    )
+            }),
         _ => false,
     }
 }

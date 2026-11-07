@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use caret_doc::{
-    FlowContent, InlineEnvironmentKind, MathContent, MathFlow, MathPathStep, NodeId, Run, TextFlow,
+    FlowContent, InlineEnvironmentKind, InlineTextStyle, MathContent, MathFlow, MathPathStep,
+    NodeId, Run, TextFlow,
 };
 
 use BackendNodeKind as MathNodeKind;
@@ -173,6 +174,7 @@ pub(crate) struct Node {
     /// 布局投影保留完整 Run，以供共享正文 shaping 使用；序列化投影不克隆它。
     pub(crate) run: Option<Run>,
     pub(crate) attributes: BTreeMap<String, String>,
+    pub(crate) text_style: Option<InlineTextStyle>,
     pub(crate) children: Vec<Node>,
 }
 
@@ -190,6 +192,7 @@ impl Node {
             text,
             run: None,
             attributes: BTreeMap::new(),
+            text_style: None,
             children: Vec::new(),
         }
     }
@@ -221,6 +224,7 @@ pub(crate) fn flow_nodes_for_layout(flow: &MathFlow) -> Vec<Node> {
         text: None,
         run: None,
         attributes: BTreeMap::new(),
+        text_style: None,
         children,
     }]
 }
@@ -255,6 +259,7 @@ fn content_nodes(
         FlowContent::Text(text) => text_nodes(text, scope_id, path),
         FlowContent::Math(node) => vec![math_node(node, scope_id, path)],
         FlowContent::Environment(environment) => {
+            let text_style = environment.text_style();
             let children = environment
                 .children
                 .iter()
@@ -271,35 +276,17 @@ fn content_nodes(
                 })
                 .collect();
             let style = match environment.kind {
-                InlineEnvironmentKind::Bold => Some(
-                    if environment
-                        .props
-                        .get("enabled")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(false)
-                    {
-                        "md"
-                    } else {
-                        "bf"
-                    },
-                ),
-                InlineEnvironmentKind::Italic => Some(
-                    if environment
-                        .props
-                        .get("enabled")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(false)
-                    {
-                        "up"
-                    } else {
-                        "it"
-                    },
-                ),
-                InlineEnvironmentKind::Font => match environment
-                    .props
-                    .get("fontFamily")
-                    .and_then(serde_json::Value::as_str)
-                {
+                InlineEnvironmentKind::Bold => Some(if text_style.bold == Some(false) {
+                    "md"
+                } else {
+                    "bf"
+                }),
+                InlineEnvironmentKind::Italic => Some(if text_style.italic == Some(false) {
+                    "up"
+                } else {
+                    "it"
+                }),
+                InlineEnvironmentKind::Font => match text_style.font_family.as_deref() {
                     Some("sans-serif") => Some("sf"),
                     Some("monospace") => Some("tt"),
                     _ if scope_id.is_some() => Some("font"),
@@ -309,10 +296,7 @@ fn content_nodes(
             let mut attributes =
                 BTreeMap::from([("style".to_owned(), style.unwrap_or("rm").to_owned())]);
             if environment.kind == InlineEnvironmentKind::Font
-                && let Some(family) = environment
-                    .props
-                    .get("fontFamily")
-                    .and_then(serde_json::Value::as_str)
+                && let Some(family) = text_style.font_family.as_deref()
             {
                 attributes.insert("fontFamily".to_owned(), family.to_owned());
             }
@@ -331,6 +315,7 @@ fn content_nodes(
                 text: None,
                 run: None,
                 attributes,
+                text_style: Some(text_style),
                 children,
             }]
         }
@@ -424,6 +409,7 @@ fn math_node(
         text: node.text.clone(),
         run: None,
         attributes: node.attributes.clone(),
+        text_style: None,
         children: contents_nodes_from_flows(&node.children, scope_id, &path),
     }
 }
@@ -468,6 +454,7 @@ fn contents_nodes_from_flows(
                     text: None,
                     run: None,
                     attributes: BTreeMap::new(),
+                    text_style: None,
                     children: contents_nodes_in_scope(&flow.content, scope_id, &operand_path),
                 }],
             }

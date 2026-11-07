@@ -96,6 +96,10 @@ pub struct ParleyParagraphLayout {
     pub empty_line_indent_pt: f32,
     /// 文档字体偏好中至少一个候选族未安装。
     pub requested_family_missing: bool,
+    /// 首选候选族缺失时记录其族名，供公式布局诊断精确说明回退对象。
+    pub missing_requested_families: Vec<String>,
+    /// Parley 为至少一个字符发出 `.notdef` 字形；与数学文本岛共用检测逻辑。
+    pub has_missing_glyph: bool,
     /// Parley inline-box ID 与逻辑 U+FFFC 源范围的映射，供命中和选区几何使用。
     inline_object_source_ranges: Vec<(u64, Range<usize>)>,
 }
@@ -146,6 +150,10 @@ pub struct TextIslandLayout {
     pub grapheme_boundaries: Vec<usize>,
     /// 字体偏好首选族未安装；generic family 不会触发此诊断。
     pub requested_family_missing: bool,
+    /// 缺失的非 generic 首选族名。
+    pub missing_requested_families: Vec<String>,
+    /// Parley 为至少一个字符发出 `.notdef` 字形。
+    pub has_missing_glyph: bool,
 }
 
 /// 文本岛塑形失败；字号非法或 Parley 输出不一致时返回错误。
@@ -279,6 +287,8 @@ impl ParagraphLayouter {
                 },
                 grapheme_boundaries: vec![0],
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
             });
         }
         let styled_spans: Vec<_> = spans
@@ -313,6 +323,7 @@ impl ParagraphLayouter {
             boundaries_for_spans(&text, &styled_spans).grapheme
         };
         let requested_family_missing = prepared.requested_family_missing;
+        let missing_requested_families = prepared.missing_requested_families.clone();
         let space_adjustments = self
             .shaping_cache
             .space_adjustments_for(space_style_signature);
@@ -358,14 +369,43 @@ impl ParagraphLayouter {
         }
         // 归一化负零，同时保留自然字形度量。
         metrics.advance_pt = metrics.advance_pt.max(0.0);
+        let has_missing_glyph = layout_has_missing_glyph(&layout);
         Ok(TextIslandLayout {
             text,
             layout,
             metrics,
             grapheme_boundaries,
             requested_family_missing,
+            missing_requested_families,
+            has_missing_glyph,
         })
     }
+}
+
+/// 正文段落和公式文本岛共用同一条 Parley `.notdef` 检查路径。
+fn layout_has_missing_glyph(layout: &Layout<[u8; 4]>) -> bool {
+    layout
+        .lines()
+        .flat_map(|line| line.items())
+        .any(|item| match item {
+            parley::PositionedLayoutItem::GlyphRun(run) => run.glyphs().any(|glyph| glyph.id == 0),
+            parley::PositionedLayoutItem::InlineBox(_) => false,
+        })
+}
+
+fn is_inline_object_boundary(ranges: &[Range<usize>], offset: usize) -> bool {
+    ranges
+        .binary_search_by_key(&offset, |range| range.start)
+        .is_ok()
+        || ranges
+            .binary_search_by_key(&offset, |range| range.end)
+            .is_ok()
+}
+
+fn is_inline_object_range(ranges: &[Range<usize>], candidate: &Range<usize>) -> bool {
+    ranges
+        .binary_search_by_key(&candidate.start, |range| range.start)
+        .is_ok_and(|index| ranges[index] == *candidate)
 }
 
 /// 将 Parley 不识别的 mandatory break 映射为等字节长度的换行序列，保持所有源范围偏移。
@@ -518,6 +558,7 @@ impl ParagraphLayouter {
             prepared.boundaries.clone()
         };
         let requested_family_missing = prepared.requested_family_missing;
+        let missing_requested_families = prepared.missing_requested_families.clone();
 
         let space_adjustments = self
             .shaping_cache
@@ -535,6 +576,7 @@ impl ParagraphLayouter {
                 inline_objects,
             },
         )?;
+        let has_missing_glyph = layout_has_missing_glyph(&layout);
         let ParagraphLineMapping {
             paragraph: paragraph_layout,
             line_top_offsets_pt,
@@ -563,6 +605,8 @@ impl ParagraphLayouter {
                 baseline_adjustments_pt,
                 empty_line_indent_pt,
                 requested_family_missing,
+                missing_requested_families,
+                has_missing_glyph,
                 inline_object_source_ranges: inline_objects
                     .iter()
                     .map(|object| (object.id, object.source_bytes.clone()))
@@ -638,6 +682,7 @@ struct PreparedTextShaping {
     em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)>,
     family_names_by_key: std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
     requested_family_missing: bool,
+    missing_requested_families: Vec<String>,
 }
 
 struct PreparedLayoutOptions<'a> {
@@ -721,18 +766,19 @@ fn prepare_text_shaping_with_grapheme_fences(
     settings: &ResolvedDocumentTextSettings,
     catalog: &FontCatalog,
     font_size_override_pt: Option<f32>,
-    grapheme_fences: &[Range<usize>],
+    inline_object_ranges: &[Range<usize>],
 ) -> PreparedTextShaping {
     let mut boundaries = boundaries_for_spans(text, spans);
-    for fence in grapheme_fences {
-        boundaries.grapheme.push(fence.start);
-        boundaries.grapheme.push(fence.end);
+    for object_range in inline_object_ranges {
+        boundaries.grapheme.push(object_range.start);
+        boundaries.grapheme.push(object_range.end);
     }
     boundaries.grapheme.sort_unstable();
     boundaries.grapheme.dedup();
     let decisions = Arc::new(line_break_decisions(text, &boundaries));
     let available_families = Arc::clone(&catalog.family_names_lowercase);
     let mut requested_family_missing = false;
+    let mut missing_requested_families = std::collections::BTreeSet::new();
     let mut span_ranges = Vec::with_capacity(spans.len());
     let mut span_space_style_indices = Vec::with_capacity(spans.len());
     let mut space_style_font_sizes_pt = Vec::new();
@@ -852,6 +898,7 @@ fn prepare_text_shaping_with_grapheme_fences(
                     previous_font_size_pt,
                 )) = style_ranges.last_mut()
                     && previous.end == fragment.start
+                    && !is_inline_object_boundary(inline_object_ranges, fragment.start)
                     && *previous_style == **style
                     && *previous_script == script
                     && *previous_emoji == emoji
@@ -880,7 +927,10 @@ fn prepare_text_shaping_with_grapheme_fences(
     }
     let mut family_names_by_key =
         std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
-    for (_, style, script, emoji, _, _) in &style_ranges {
+    for (range, style, script, emoji, _, _) in &style_ranges {
+        if is_inline_object_range(inline_object_ranges, range) {
+            continue;
+        }
         let key = (style.clone(), *script, *emoji);
         let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
             let candidates = settings.font_preferences().family_candidates(
@@ -891,10 +941,13 @@ fn prepare_text_shaping_with_grapheme_fences(
                     explicit_family: style.requested_family.as_deref(),
                 },
             );
-            requested_family_missing |= candidates.first().is_some_and(|candidate| {
-                !is_generic_family(candidate.family)
-                    && !available_families.contains(&candidate.family.to_lowercase())
-            });
+            if let Some(candidate) = candidates.first()
+                && !is_generic_family(candidate.family)
+                && !available_families.contains(&candidate.family.to_lowercase())
+            {
+                requested_family_missing = true;
+                missing_requested_families.insert(candidate.family.to_owned());
+            }
             let mut names = Vec::with_capacity(candidates.len());
             for candidate in candidates {
                 names.push(candidate.family.to_owned());
@@ -913,6 +966,7 @@ fn prepare_text_shaping_with_grapheme_fences(
         em_space_ranges,
         family_names_by_key,
         requested_family_missing,
+        missing_requested_families: missing_requested_families.into_iter().collect(),
     }
 }
 

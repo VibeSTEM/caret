@@ -43,6 +43,26 @@ Rectangle {
             return qsTranslate("WindowStatusBar", 'Math font "%1" is unsupported; using STIX Two Math.').arg(diagnostic.requestedFamily);
         return "";
     }
+    readonly property string textWarnings: {
+        const warnings = [];
+        if (mathFontWarning.length > 0)
+            warnings.push(mathFontWarning);
+        const diagnostics = LayoutViewModel.textDiagnostics;
+        const missingTextFamilies = [];
+        let hasMissingGlyph = false;
+        for (let index = 0; index < diagnostics.length; ++index) {
+            const diagnostic = diagnostics[index];
+            if (diagnostic.code === "math.glyph.missing" || diagnostic.code === "text.glyph.missing")
+                hasMissingGlyph = true;
+            else if ((diagnostic.code === "math.text.font.family_missing" || diagnostic.code === "text.font.family_missing") && diagnostic.detail.length > 0 && missingTextFamilies.indexOf(diagnostic.detail) < 0)
+                missingTextFamilies.push(diagnostic.detail);
+        }
+        if (missingTextFamilies.length > 0)
+            warnings.push(qsTranslate("WindowStatusBar", 'Text font "%1" is not installed; using fallback fonts.').arg(missingTextFamilies.join(", ")));
+        if (hasMissingGlyph)
+            warnings.push(qsTranslate("WindowStatusBar", "Text contains characters unavailable in installed fonts."));
+        return warnings.join(" · ");
+    }
 
     function zoomOut() {
         zoomSlider.value = Math.max(zoomSlider.from, zoomSlider.value - zoomSlider.stepSize);
@@ -103,15 +123,22 @@ Rectangle {
         }
 
         ThemedLabel {
-            objectName: "mathFontWarningLabel"
-            visible: statusBar.mathFontWarning.length > 0
+            objectName: "textFontWarningLabel"
+            visible: statusBar.textWarnings.length > 0
             Layout.alignment: Qt.AlignVCenter
             Layout.preferredWidth: 220
             Layout.maximumWidth: 260
             elide: Text.ElideRight
-            text: statusBar.mathFontWarning
+            text: statusBar.textWarnings
             textSize: Theme.fontSmall
             textColor: Theme.colorError
+            Accessible.description: statusBar.textWarnings
+            ToolTip.visible: warningHover.hovered
+            ToolTip.text: statusBar.textWarnings
+
+            HoverHandler {
+                id: warningHover
+            }
         }
 
         Item {

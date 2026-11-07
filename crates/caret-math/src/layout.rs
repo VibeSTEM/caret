@@ -221,6 +221,7 @@ pub fn layout_align(
             text: None,
             run: None,
             attributes: Default::default(),
+            text_style: None,
             children: row
                 .cells
                 .iter()
@@ -243,6 +244,7 @@ pub fn layout_align(
         text: None,
         run: None,
         attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        text_style: None,
         children: rows,
     };
     layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
@@ -274,6 +276,7 @@ pub fn layout_align_with_text_shaper(
             text: None,
             run: None,
             attributes: Default::default(),
+            text_style: None,
             children: row
                 .cells
                 .iter()
@@ -296,6 +299,7 @@ pub fn layout_align_with_text_shaper(
         text: None,
         run: None,
         attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
+        text_style: None,
         children: rows,
     };
     layout_nodes(

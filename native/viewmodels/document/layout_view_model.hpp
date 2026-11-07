@@ -46,6 +46,7 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap mathFontDiagnostic READ mathFontDiagnostic NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList textDiagnostics READ textDiagnostics NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList compositionRects READ compositionRects NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
@@ -83,6 +84,7 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] QVariantList pageLayouts() const { return m_page_layouts.toVariantList(); }
     [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
     [[nodiscard]] const QVariantMap& mathFontDiagnostic() const { return m_math_font_diagnostic; }
+    [[nodiscard]] const QVariantList& textDiagnostics() const { return m_text_diagnostics; }
     [[nodiscard]] const QVariantList& selectionRects() const { return m_selection_rects; }
     [[nodiscard]] const QVariantList& compositionRects() const { return m_composition_rects; }
     [[nodiscard]] QVariantList paragraphLayouts() const {
@@ -238,6 +240,7 @@ class LayoutViewModel final : public QObject {
     QJsonArray m_page_layouts;
     QVariantMap m_page_margins_pt;
     QVariantMap m_math_font_diagnostic;
+    QVariantList m_text_diagnostics;
     QVariantList m_selection_rects;
     QVariantList m_composition_rects;
     QJsonArray m_paragraph_layouts;

@@ -266,6 +266,50 @@ fn benchmark_math_projection_and_text_edit(criterion: &mut Criterion) {
     edit_group.finish();
 
     benchmark_math_layout_and_document_edit(criterion);
+    benchmark_math_command_candidates(criterion);
+}
+
+fn benchmark_math_command_candidates(criterion: &mut Criterion) {
+    let document = mixed_long_document();
+    let mut prose_session = mixed_session(&document);
+    prose_session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("无法准备数学命令候选基准：{error}"));
+    prose_session
+        .run(Command::TypeCommandLine("math".to_owned()))
+        .unwrap_or_else(|error| panic!("无法输入数学命令候选查询：{error}"));
+    let candidates = prose_session.command_line_candidates();
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.alias == r"\math" && candidate.available),
+        "长文档中的行内公式候选必须可用"
+    );
+
+    criterion.bench_function("rust/math_insert_candidate_query_100k_prose", |bencher| {
+        bencher.iter(|| black_box(prose_session.command_line_candidates()));
+    });
+
+    let mut math_session = mixed_math_text_session(&document);
+    math_session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("无法准备数学拆分候选基准：{error}"));
+    math_session
+        .run(Command::TypeCommandLine("math".to_owned()))
+        .unwrap_or_else(|error| panic!("无法输入数学拆分候选查询：{error}"));
+    let candidates = math_session.command_line_candidates();
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.alias == r"\math" && candidate.available),
+        "长文档中的 Math TextFlow 拆分候选必须可用"
+    );
+    criterion.bench_function(
+        "rust/math_split_inline_candidate_query_100k_prose",
+        |bencher| {
+            bencher.iter(|| black_box(math_session.command_line_candidates()));
+        },
+    );
 }
 
 fn benchmark_math_layout_and_document_edit(criterion: &mut Criterion) {

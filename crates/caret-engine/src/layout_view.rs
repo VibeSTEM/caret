@@ -18,6 +18,8 @@ pub struct DocumentLayoutView {
     pub document_generation: String,
     pub font_generation: String,
     pub math_font_diagnostic: Option<MathFontDiagnosticView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub text_diagnostics: Vec<TextLayoutDiagnosticView>,
     pub margins_pt: PageMarginsView,
     pub pages: Vec<PageLayoutView>,
     pub paragraphs: Vec<ParagraphLayoutView>,
@@ -34,6 +36,8 @@ pub struct DocumentLayoutDeltaView {
     pub document_generation: String,
     pub font_generation: String,
     pub math_font_diagnostic: Option<MathFontDiagnosticView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub text_diagnostics: Vec<TextLayoutDiagnosticView>,
     pub margins_pt: PageMarginsView,
     pub page_start_index: usize,
     pub pages: Vec<PageLayoutView>,
@@ -47,6 +51,18 @@ pub struct DocumentLayoutDeltaView {
 pub struct MathFontDiagnosticView {
     pub code: String,
     pub requested_family: String,
+}
+
+/// 正文或公式的文本塑形诊断，附带其宿主节点身份。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextLayoutDiagnosticView {
+    pub node_id: String,
+    pub node_kind: String,
+    /// 稳定诊断键，供界面本地化。
+    pub code: String,
+    /// 公式排版器提供的上下文。
+    pub detail: String,
 }
 
 /// 页面边距，单位为 pt。
@@ -183,6 +199,7 @@ impl From<&DocumentLayoutSnapshot> for DocumentLayoutView {
             document_generation: snapshot.document_generation.to_string(),
             font_generation: snapshot.font_generation.to_string(),
             math_font_diagnostic: math_font_diagnostic_view(snapshot),
+            text_diagnostics: text_layout_diagnostics_view(snapshot),
             margins_pt: margins_view(snapshot),
             pages: page_views(snapshot, 0),
             paragraphs: snapshot.paragraphs.iter().map(paragraph_view).collect(),
@@ -210,6 +227,7 @@ impl DocumentLayoutDeltaView {
             document_generation: snapshot.document_generation.to_string(),
             font_generation: snapshot.font_generation.to_string(),
             math_font_diagnostic: math_font_diagnostic_view(snapshot),
+            text_diagnostics: text_layout_diagnostics_view(snapshot),
             margins_pt: margins_view(snapshot),
             page_start_index,
             pages: page_views(snapshot, page_start_index),
@@ -246,6 +264,21 @@ fn math_font_diagnostic_view(snapshot: &DocumentLayoutSnapshot) -> Option<MathFo
             code: diagnostic.code.to_owned(),
             requested_family: diagnostic.requested_family.clone(),
         })
+}
+
+fn text_layout_diagnostics_view(
+    snapshot: &DocumentLayoutSnapshot,
+) -> Vec<TextLayoutDiagnosticView> {
+    snapshot
+        .text_diagnostics
+        .iter()
+        .map(|diagnostic| TextLayoutDiagnosticView {
+            node_id: diagnostic.node_id.to_string(),
+            node_kind: diagnostic.node_kind.to_owned(),
+            code: diagnostic.code.to_owned(),
+            detail: diagnostic.detail.clone(),
+        })
+        .collect()
 }
 
 fn page_delta_start_index(

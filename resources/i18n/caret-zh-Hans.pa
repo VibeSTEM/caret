@@ -440,6 +440,16 @@ message_161:
   tr: 不支持数学字体“%1”，已改用 STIX Two Math。
   st: finished
 
+message_162:
+  src: Text contains characters unavailable in installed fonts.
+  tr: 文本包含已安装字体无法显示的字符。
+  st: finished
+
+message_163:
+  src: "Text font \"%1\" is not installed; using fallback fonts."
+  tr: 文本字体“%1”未安装，已使用回退字体。
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

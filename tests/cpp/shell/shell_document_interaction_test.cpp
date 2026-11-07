@@ -4,6 +4,7 @@
 #include "keyboard_modifier_policy.hpp"
 #include "layout_view_model.hpp"
 #include "shell_load_test.hpp"
+#include "theme_view_model.hpp"
 #ifdef CARET_ENABLE_APP
 #include "caret_ffi.h"
 #include "document_runtime_bridge.hpp"
@@ -112,13 +113,119 @@ void ShellLoadTest::mathFontFallbackDiagnosticProjectsToViewModel() {
         QJsonObject{
             {QStringLiteral("code"), QStringLiteral("math.font.family_missing")},
             {QStringLiteral("requestedFamily"), QStringLiteral("Unavailable Math Family")}});
+    snapshot.insert(
+        QStringLiteral("textDiagnostics"),
+        QJsonArray{QJsonObject{{QStringLiteral("nodeId"), QStringLiteral("math-test-id")},
+                               {QStringLiteral("nodeKind"), QStringLiteral("math")},
+                               {QStringLiteral("code"), QStringLiteral("math.glyph.missing")},
+                               {QStringLiteral("detail"), QStringLiteral("U+10FFFF")}}});
 
     caret::LayoutViewModel view_model;
+    QSignalSpy layout_changed(&view_model, &caret::LayoutViewModel::layoutChanged);
     QVERIFY(caret::LayoutViewModelTestProbe::installSnapshot(view_model, snapshot));
     QCOMPARE(view_model.mathFontDiagnostic().value(QStringLiteral("code")).toString(),
              QStringLiteral("math.font.family_missing"));
     QCOMPARE(view_model.mathFontDiagnostic().value(QStringLiteral("requestedFamily")).toString(),
              QStringLiteral("Unavailable Math Family"));
+    QCOMPARE(view_model.textDiagnostics().size(), 1);
+    QCOMPARE(view_model.textDiagnostics().front().toMap().value(QStringLiteral("code")).toString(),
+             QStringLiteral("math.glyph.missing"));
+    QJsonObject invalid = snapshot;
+    invalid.insert(
+        QStringLiteral("textDiagnostics"),
+        QJsonArray{QJsonObject{{QStringLiteral("nodeId"), QStringLiteral("bad")},
+                               {QStringLiteral("nodeKind"), QStringLiteral("other")},
+                               {QStringLiteral("code"), QStringLiteral("text.glyph.missing")},
+                               {QStringLiteral("detail"), QString{}}}});
+    QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshot(view_model, invalid));
+    QCOMPARE(view_model.textDiagnostics().size(), 1);
+    const auto install_partial = [&](const rust::String& response,
+                                     const QJsonArray* diagnostics) {
+        const QByteArray response_bytes(response.data(),
+                                        static_cast<qsizetype>(response.size()));
+        QJsonObject partial = QJsonDocument::fromJson(response_bytes).object();
+        if (!partial.value(QStringLiteral("partial")).toBool())
+            return false;
+        if (diagnostics != nullptr)
+            partial.insert(QStringLiteral("textDiagnostics"), *diagnostics);
+        const QString partial_json = QString::fromUtf8(
+            QJsonDocument(partial).toJson(QJsonDocument::Compact));
+        return caret::LayoutViewModelTestProbe::installSnapshotJson(view_model, partial_json,
+                                                                    false);
+    };
+    const QJsonArray updated_diagnostics{
+        QJsonObject{{QStringLiteral("nodeId"), QStringLiteral("paragraph-test-id")},
+                    {QStringLiteral("nodeKind"), QStringLiteral("paragraph")},
+                    {QStringLiteral("code"), QStringLiteral("text.font.family_missing")},
+                    {QStringLiteral("detail"), QStringLiteral("Unavailable Body Family")}}};
+    const rust::String update_response = caret::ffi::insert_text_json(*runtime, rust::String("x"));
+    QVERIFY2(install_partial(update_response, &updated_diagnostics),
+             qPrintable(view_model.error()));
+    QCOMPARE(view_model.textDiagnostics().size(), 1);
+    QCOMPARE(view_model.textDiagnostics().front().toMap().value(QStringLiteral("code")).toString(),
+             QStringLiteral("text.font.family_missing"));
+    const rust::String clear_response = caret::ffi::insert_text_json(*runtime, rust::String("y"));
+    const QByteArray clear_response_bytes(clear_response.data(),
+                                          static_cast<qsizetype>(clear_response.size()));
+    QVERIFY(!QJsonDocument::fromJson(clear_response_bytes)
+                 .object()
+                 .contains(QStringLiteral("textDiagnostics")));
+    QVERIFY2(install_partial(clear_response, nullptr), qPrintable(view_model.error()));
+    QVERIFY(view_model.textDiagnostics().isEmpty());
+    QCOMPARE(layout_changed.count(), 3);
+}
+
+void ShellLoadTest::textFontWarningStatusBarTracksLayoutDiagnostics() {
+    const QString theme_path =
+        QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");
+    QHash<QString, QVariantMap> themes;
+    themes.insert(QStringLiteral("light"), caret::shell_test::snapshot_from_theme_facade(
+                                                 theme_path, QColor(QStringLiteral("#ffffff")), 16));
+    caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
+
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot_json = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot_json.data(), snapshot_json.size()).starts_with("error:"));
+    QJsonObject snapshot =
+        QJsonDocument::fromJson(QByteArray(snapshot_json.data(),
+                                            static_cast<qsizetype>(snapshot_json.size())))
+            .object();
+    snapshot.insert(
+        QStringLiteral("textDiagnostics"),
+        QJsonArray{QJsonObject{{QStringLiteral("nodeId"), QStringLiteral("paragraph-test-id")},
+                               {QStringLiteral("nodeKind"), QStringLiteral("paragraph")},
+                               {QStringLiteral("code"),
+                                QStringLiteral("text.font.family_missing")},
+                               {QStringLiteral("detail"),
+                                QStringLiteral("Unavailable Body Family")}}});
+    const QString snapshot_text = QString::fromUtf8(
+        QJsonDocument(snapshot).toJson(QJsonDocument::Compact));
+    QVERIFY(caret::install_layout_snapshot(snapshot_text));
+
+    QQmlApplicationEngine engine;
+    caret::install_icon_provider(engine);
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(import QtQuick
+import Caret.Shell
+Item { WindowStatusBar { objectName: "statusBar" } }
+)", QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* root = component.create();
+    QVERIFY2(root != nullptr, qPrintable(component.errorString()));
+    QScopeGuard root_guard([root] { delete root; });
+    QObject* warning = root->findChild<QObject*>(QStringLiteral("textFontWarningLabel"));
+    QVERIFY(warning != nullptr);
+    QVERIFY(warning->property("visible").toBool());
+    QVERIFY(warning->property("text").toString().contains(QStringLiteral("Unavailable Body Family")));
+
+    auto* view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(view_model != nullptr);
+    snapshot.insert(QStringLiteral("textDiagnostics"), QJsonArray{});
+    QVERIFY(caret::LayoutViewModelTestProbe::installSnapshot(*view_model, snapshot));
+    QVERIFY(!warning->property("visible").toBool());
+    QVERIFY(warning->property("text").toString().isEmpty());
 }
 
 void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {

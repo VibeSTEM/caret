@@ -295,11 +295,9 @@ impl Converter<'_> {
                         }
                     }
                     let mut nested_style = inherited.clone();
-                    apply_text_style(
-                        &mut nested_style,
-                        Self::attribute(child, "style"),
-                        child.attributes.get("fontFamily").map(String::as_str),
-                    );
+                    if let Some(environment_style) = child.text_style.as_ref() {
+                        apply_inline_environment_style(&mut nested_style, environment_style);
+                    }
                     self.collect_text_sequence_into(
                         &child.children,
                         style,
@@ -591,6 +589,16 @@ impl Converter<'_> {
             return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
         }
         self.requested_text_family_missing |= shaped.requested_family_missing;
+        for family in &shaped.missing_requested_families {
+            self.ctx
+                .diagnostic("math.text.font.family_missing", family.clone());
+        }
+        if shaped.has_missing_glyph {
+            self.ctx.diagnostic(
+                "math.glyph.missing",
+                "formula text island contains an unavailable glyph",
+            );
+        }
         let mut frame = Frame::new(shaped.width, shaped.ascent + shaped.descent, shaped.ascent);
         if !request.runs.is_empty() {
             frame.push(
@@ -1584,6 +1592,22 @@ fn apply_text_style(style: &mut MathTextRunStyle, value: &str, font_family: Opti
     }
     if let Some(font_family) = font_family {
         style.font_family = Some(font_family.to_owned());
+    }
+}
+
+/// 将文档模型的共享环境样式增量应用到数学 TextFlow 的宿主样式。
+fn apply_inline_environment_style(
+    style: &mut MathTextRunStyle,
+    environment_style: &caret_doc::InlineTextStyle,
+) {
+    if let Some(bold) = environment_style.bold {
+        style.bold = Some(bold);
+    }
+    if let Some(italic) = environment_style.italic {
+        style.italic = Some(italic);
+    }
+    if let Some(font_family) = &environment_style.font_family {
+        style.font_family = Some(font_family.clone());
     }
 }
 

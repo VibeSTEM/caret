@@ -902,6 +902,8 @@ fn text_island_shaper_replaces_math_glyphs_and_keeps_run_positions() {
                 ascent: 8.0,
                 descent: 2.0,
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
                 runs,
                 containers: request
                     .containers
@@ -1016,6 +1018,8 @@ fn text_islands_follow_editable_flow_boundaries() {
                 ascent: 8.0,
                 descent: 2.0,
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
                 runs,
                 containers: request
                     .containers
@@ -1179,6 +1183,7 @@ fn text_islands_follow_editable_flow_boundaries() {
             text: None,
             run: None,
             attributes: Default::default(),
+            text_style: None,
             children: Vec::new(),
         },
     );
@@ -1264,6 +1269,8 @@ fn flow_and_text_style_boxes_are_unique_and_cover_math_islands() {
                 ascent: 8.0,
                 descent: 2.0,
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
                 runs,
                 containers,
             })
@@ -1490,6 +1497,8 @@ fn math_alphabet_keeps_its_variant_when_text_islands_are_shaped() {
                 ascent: 8.0,
                 descent: 2.0,
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
                 runs: request
                     .runs
                     .iter()
@@ -1583,6 +1592,8 @@ fn text_shaper_cannot_return_flow_bounds_for_a_run() {
                 ascent: 8.0,
                 descent: 2.0,
                 requested_family_missing: false,
+                missing_requested_families: Vec::new(),
+                has_missing_glyph: false,
                 runs,
                 containers: Vec::new(),
             })
@@ -1780,4 +1791,41 @@ fn align_layout_uses_document_rows_and_cell_roots() {
             .count();
         assert_eq!(count, 1, "expected one node box for {id}");
     }
+}
+
+#[test]
+fn align_columns_share_x_positions_and_rows_share_baselines() {
+    let align = match parse(
+        r"\begin{aligned}x&=\frac{1}{2}\\abcdefgh&=c\end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("Align source should produce an Align document node: {other:?}"),
+    };
+    let layout = layout_align(font(), &align, SIZE)
+        .unwrap_or_else(|error| panic!("valid Align should lay out: {error}"));
+    let cell_box = |row: usize, cell: usize| {
+        let id = &align.rows[row].cells[cell].root.id;
+        layout
+            .nodes
+            .iter()
+            .find(|node| node.id.as_ref() == Some(id))
+            .unwrap_or_else(|| panic!("Align cell {row}:{cell} has no layout box"))
+    };
+    let left_first = cell_box(0, 0);
+    let right_first = cell_box(0, 1);
+    let left_second = cell_box(1, 0);
+    let right_second = cell_box(1, 1);
+
+    assert!((right_first.x - right_second.x).abs() < EPSILON);
+    assert!((left_first.baseline - right_first.baseline).abs() < EPSILON);
+    assert!((left_second.baseline - right_second.baseline).abs() < EPSILON);
+    assert!(right_first.height > right_second.height);
+    assert!((left_second.baseline - left_first.baseline) > SIZE);
+    assert!(
+        layout
+            .items
+            .iter()
+            .any(|item| matches!(item, MathItem::Rule { .. }))
+    );
 }

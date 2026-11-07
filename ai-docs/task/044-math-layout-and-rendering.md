@@ -7,138 +7,70 @@
 
 ## 目标与背景
 
-把 `caret-math` 的数学盒布局呈现到 Caret 页面画布，并在持久化、布局、绘制、命中和光标路径都可处理公式时接通 `\math`、`\equation`、`\align` 命令。绘制、命中测试、光标几何和选区共用同一 Rust 侧布局快照；Qt 只消费快照并绘制。总体验收由 [011 M3 公式](011-impl-math.md)管理。表格模型与表格画布分别由 045、046 负责。
+将 `caret-math` 的数学盒接入 Caret 页面布局、绘制、命中和编辑；在数学结构可保存、可见且可交互后启用 `\math`、`\equation`、`\align`。绘制、命中、光标和选区读取同一 Rust 布局发布版本，Qt 消费快照。总体验收由[011 M3 公式](011-impl-math.md)管理，文档表格模型/画布由 045/046 管理。
 
 ## 必读
 
-- [数学公式](../architecture/editor/math.md)、[字体选择规范](../architecture/editor/font-selection.md)、[内置字体角色](064-builtin-font-roles.md)、[页面画布与命中测试](../task/027-canvas-and-hit-testing.md)
-- [分层](../standards/layering.md)、[数值规范](../standards/numeric-values.md)、[测试规范](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
+- [数学公式](../architecture/editor/math.md)、[字体选择](../architecture/editor/font-selection.md)、[内置字体角色](064-builtin-font-roles.md)、[页面画布与命中测试](027-canvas-and-hit-testing.md)
+- [分层](../standards/layering.md)、[数值](../standards/numeric-values.md)、[测试](../standards/testing.md)、[验证与评审](../standards/validation-and-review.md)
 
-## 范围与非目标
+## 范围与架构决策
 
-实现 MathBox 到 Caret 布局快照的适配；包含 glyph ID/位置、规则线、基线、盒尺寸、文本片段映射及必要的字体资源身份。度量使用项目统一的整数表示。Qt 使用既有字形 atlas/QSG 路线，不把 QML 变为公式布局权威。接通正文/块级公式插入候选（`insert.inline_math`、`insert.equation`、`insert.align`）的可用性、候选状态及插入后焦点迁移；Math TextFlow 内部 `math.split_inline` 的结构事务由 043 提供，044 验证其可见几何与可用条件。 当前 `math.split_inline` 仅在选区两端属于同一 TextFlow 时可用；跨 TextFlow 选区暂禁用，直到树事务支持跨流拆分。
+- 覆盖 `InlineMath`、`Equation`、`Align`，公式 glyph/rule/基线/文本映射、命中与编辑几何、插入候选和数学 `.cdoc` 持久化。采用整数布局坐标、既有字形 atlas/QSG 绘制；不使用 SVG/PNG 作为唯一交互表示。
+- 普通文本和数学文本共用排版及编辑核心。布局层通过同一 `ParagraphLayouter`/Parley shaping 处理正文与数学 TextFlow；引擎以 `FlowContent<T>` 共用 Run 切分、属性范围变换、样式继承、规范化和 no-op 判断。正文 `EditNode` 与数学 `MathTree`/MathPath 只保留寻址、宿主事务和树回写适配。差异必须由模型语义解释并有成对行为测试，不为表面对称强行合并。
+- `caret-layout` 与 `caret-math` 同属 L3，不互相依赖。共享网格几何由无 workspace 依赖的 `caret-grid-layout` 提供；数学 MATH 度量/片段适配留在 `caret-math`。Align 在数学后端内部适配为 aligned 矩阵，文档树保留行、单元格身份。045/046 可复用快照和网格几何，普通表格/列表策略不在本任务实现。
+- `caret-doc::InlineTextStyle` 只表达 InlineEnvironment 实例的 Bold/Italic/Font 样式增量，不解析主题模板/变体，也不决定字体面或合成方式；字体可用性、真/伪粗斜体及 `<default>` 回退属于布局/字体层。模板优先级尚未接入本次共用接口。正文和数学文本诊断统一经 `textDiagnostics` 发布，带宿主类型和 ID。Math/Code 默认字体资源归 `caret-font-roles`，标记与回退语义见字体规范和 064。
+- 不实现编号公式、字体切换 UI、全面段落排版优化，或将数学树强制转换为正文树。`math.split_inline` 的结构事务由 043 提供；044 验证布局/编辑行为，跨 TextFlow 端点目前应禁用。
 
-覆盖正文中的行内公式、独占行 `Equation`、多行 `Align`，公式字体默认 STIX Two Math，并验证文档 `defaultMathFontFamily` 的统一 `<default>` 标记与诊断回退。标记到角色默认字体的映射由[内置字体角色任务](064-builtin-font-roles.md)和[字体选择规范](../architecture/editor/font-selection.md)定义；本任务只消费数学字体接口。公式文本岛的行内 shaping 和宿主边界遵循[数学公式架构](../architecture/editor/math.md#公式中的普通文本)：复用正文 shaping，不获得宿主段落块级布局。
+## 当前进度
 
-页面字形快照现提取 glyph、Rule、Line 和 Rectangle；数学图元携带 paint order、颜色和裁剪范围，经 FFI 传到 Qt 场景图，按原顺序绘制。填色盒中的字形、描边与裁剪边界有像素级回归。TextIsland 已有页面快照命中入口，覆盖 InlineMath、Equation 和 Align；文本焦点、caret、选区及 IME 几何已接入 Session/Qt 交互快照；必需数学结构槽命中也已接入。InlineMath、Equation、Align 的 .cdoc 可编辑打开、真实文件保存/重开和 DocumentSession 往返已通过本机回归，公式插入命令已启用并按上下文门控。已有单公式和长文档 Rust 布局基线及数学拖选 API 基线；仍待三平台验证和桌面端拖选轨迹性能测量。
+已接入公式图元快照、画布绘制、页面命中、焦点/caret/选区/复制、IME 预览、正文与块级公式插入候选，以及 InlineMath/Equation/Align 的真实文件保存重开和 Session 往返。已覆盖旧 generation、防止失败提交污染文档、运行时字体诊断、正文与数学共享文本 shaping/编辑原语；共享逻辑及其宿主差异有回归测试。PR #99 仍开放，最近一次已知 CI 轮次仍有 Ubuntu ShellLoad 测试修订待验证。
 
-数学 .cdoc 的可写能力也归本任务：已启用 InlineMath、Equation、Align 持久化，并覆盖真实编码/解码、文件保存重开及应用 DocumentSession 往返和 dirty/save-point 状态。043 负责模型/schema 与安全预览，不负责该可写门控。
-
-不实现编号公式、字体切换 UI、SVG/PNG-only 可编辑渲染、独立 GPU 基准或大范围段落排版优化。
-
-`Align` 在 `caret-math` 内部临时适配为 `aligned` 矩阵，复用数学后端的列对齐和行距算法；文档模型仍保留 Align 行/单元格身份。Typst 派生的数学 `layout/table.rs` 保留数学片段和 MATH 度量适配，已测量网格的纯几何算法抽取到不依赖 `caret-math` 的 `caret-grid-layout`。045/046 的文档表格布局复用本任务生成的 MathBox 快照，并可在列宽求解与单元格内容重排后复用该几何算法；列表的标记/正文也可用其计算几何，但文档列宽策略、编号、文本重排与分页仍归各自任务。本分支完成 crate 与数学适配器接入；普通表格及列表尚未接入。
-
-## 前置条件与待决策
-
-依赖 043 的稳定公式树、042 的 MathBox API 结论和 027 的画布命中基础；如果后端不能提供编辑命中所需映射，先记录上游最小扩展方案，不用异步 SVG/PNG 绘制绕开契约。
-
-## 实施步骤
-
-1. 定义缓存键和 generation：公式树、字体、字号、语言、缩放/分辨率中哪些影响布局、绘制及 atlas 缓存。
-2. 把数学盒输出映射到 Caret 整数坐标与字形/rule 快照；确认公式文本岛混合正文 shaping 时尺寸与基线一致。
-3. 接入画布绘制、光标几何、命中测试与选择范围；验证输入更新不会重建未受影响的公式/段落快照。
-4. 接通正文/块级 `insert.inline_math`、`insert.equation`、`insert.align` 命令候选和可执行状态；仅在结果可保存、显示、命中与编辑时启用。验证 Math TextFlow 内 `math.split_inline` 的候选只在 Text 分支且两端属于同一 TextFlow 时可用；跨 TextFlow 选区保持禁用。
-5. 启用数学 `.cdoc` 可写能力并覆盖 `InlineMath`、`Equation`、`Align` 的真实保存、关闭后重开与 `DocumentSession` 往返；失败保存不得改变原文件或打开会话。
-6. 补充具有行为断言的布局/渲染/缓存测试，做性能对比；独立架构与代码评审并处理发现。
-
-## 预计改动
-
-`caret-math` 的中立文本岛测量契约、`caret-engine` 对数学与正文塑形器的编排、`caret-layout` 可独立复用的 Parley 文本岛塑形入口，以及公式内部映射/缓存/页面字形快照。`caret-math` 与 `caret-layout` 同为 L3，不得互相依赖；正文 Parley 结果由 engine 按同一布局发布版本持有并供绘制和交互读取。native/FFI 仅在需要传输文本岛真实字体资源或新交互几何时修改，不能在 Qt 重复 shaping 或路径语义。
+仍未完成：真实桌面和 Windows/Linux 验证；跨 Align 行上下导航、混排 bidi 边缘行为及完整拖选轨迹；数学 `SoftBreak` 的布局换行与 TeX 序列化为空格之间的语义差异；环境模板/变体的有效样式合并；长文档/大公式候选和拖选性能的代表性测量。文本岛 caret/选区查询仍扫描已发布快照，未声称已优化。最新 100k 逐键基准为 1.0284–1.1350 ms，高于旧样本 0.9139–0.9418 ms；与紧邻复测差异不显著（p=0.22），须由新 CI/nightly 对照后再判断趋势。
 
 ## 验收标准
 
-- [ ] `InlineMath` 与块级 `Equation`/`Align` 可显示；多行对齐、基线、括号/分数等伸展符号使用数学布局度量。
-- [ ] 绘制、命中、光标几何引用同一 generation/几何快照，旧异步结果不能覆盖新布局。
-- [ ] 正文/块级公式插入命令仅在结果可持久化、布局、绘制、命中和编辑时成为可执行命令；成功插入后焦点正确，失败保持文档与焦点。Math TextFlow 的 `math.split_inline` 与 043 树事务正确连接；跨 TextFlow 端点时命令不可用。
-- [ ] 数学载体在完成布局接入后可由 `CdocFile::to_bytes` 编码、真实写入文件并重新打开；`InlineMath`、`Equation`、`Align`、`MathFlow`、行与单元格的 `NodeId`，以及 TextFlow/Run 属性和未知可选字段往返保持，`DocumentSession` 保存点、dirty 状态及失败原子性正确。当前 schema 没有 TextFlow 自身的 ID；交互映射以公式宿主、MathPathStep 结构路径和布局发布版本作为稳定身份。不能只把数学能力名加入可写列表而跳过布局门控。
-- [ ] 数学 `\text{...}` 英文、中文内容复用正文 TextFlow shaping 与语言行为；已支持的 Run 属性和 InlineEnvironment 生效。Bold/Italic 的嵌套与 `\textmd` / `\textup` 重置分别组合字重、字形，不覆盖另一个样式维度。`\textsf` / `\texttt` 映射到共享 TextFlow 的字体族语义；`sans-serif` / `monospace` 通用族、字体覆盖与 fallback 遵循[字体选择规范](../architecture/editor/font-selection.md)，Math/Code 默认资源遵循[064](064-builtin-font-roles.md)。044 验收这些语义在公式中的 shaping、度量与缺字诊断，不再依赖独立数学文本字体任务。
-- [ ] 同一公式快照在缩放与三平台检查中不依赖临时栅格图；页面内编辑没有显著重复重排，性能结果记录基线和测试输入。
-- [ ] 无 SVG/PNG-only 交互路径；测试、格式、lint、独立评审通过。
+- [x] InlineMath、Equation、Align 的数学布局/绘制接入；多行对齐、基线及伸展符号使用数学度量，Qt 不重复执行领域布局。
+- [x] 绘制和交互消费同一发布快照；主要命中、焦点、caret、选择、复制、IME 与失败回滚路径有行为回归。
+- [x] 插入命令按可保存、可布局和可编辑状态门控；数学 `.cdoc` 真实编码、写入、重开及 Session 保存点/dirty 状态往返通过，公式/行/单元格 ID、TextFlow/Run 属性和未知可选字段有往返保护。
+- [x] 正文和数学 TextFlow 共享 shaping、实例环境样式及可复用编辑核心；粗/斜体分别重置、中文/英文文本与 `sans-serif`/`monospace` 通用族由宿主测试覆盖，模型特有行为保留在适配层。
+- [x] 正文/数学缺字及首选字体缺失已接入统一 `textDiagnostics` 到状态栏。
+- [x] 完整快照及真实 Rust 增量响应的 Qt ViewModel 诊断更新/清除、通知，正文位于公式前后、普通 U+FFFC 与公式占位符的 Rust 回归，以及 QML 状态栏提示出现/清除均有行为测试。
+- [ ] 接入文档主题模板 → 变体 → 实例属性的有效样式合并；空白 `fontFamily` 当前作为未指定解释、编辑命令拒绝新写入，仍需正文/数学嵌套字体成对回归。
+- [ ] 明确公开无 shaper 数学布局 API 对含 TextFlow 的限制，或让它显式拒绝无法按正文字体/fallback 排版的内容。
+- [ ] `math.split_inline`、换行语义和跨 TextFlow 禁用条件与 043/模型契约一致；剩余语义差异有明确决策和回归。
+- [ ] 三平台与真实桌面交互验证完成；复杂 bidi、数学拖选和跨 Align 行导航达到产品要求，或明确拆分为后续任务并更新 011。
+- [ ] 用代表性长文档/大公式测量插入候选、布局重用、拖选和编辑性能；解释相对基线的变化并记录配置。
+- [ ] 当前 PR CI、格式/lint/测试与覆盖率门槛通过；按验证规范完成 Terra/medium 分域检查和未参与实现的 Sol/medium 完整 diff final review。
 
-## 验证计划与结果
+## 验证记录
 
-| 日期 | 环境 / 命令 | 预期 | 实际结果 |
-| --- | --- | --- | --- |
-| 2026-11-06 | 本机 Rust：`cargo test --locked -p caret-layout`；`cargo test --locked -p caret-engine layout_view::tests::math_fragment_projection_keeps_content_origin_and_serializes_page_margins` | 分页边界与版心坐标投影行为正确 | 通过：caret-layout 106 项；定向投影测试 1 项。`cargo test --locked -p caret-layout -p caret-engine` 全包尝试未通过：caret-engine 有 2 项 `layout.rs` 测试失败（U+FFFC glyph run、负 inline math 度量用例索引越界），不属于本次分页/视图文件修复，待对应改动完成后复验。 |
-| 2026-11-06 | 本机 Rust：`cargo clippy --locked -p caret-layout --all-targets -- -D warnings`；`cargo clippy --locked -p caret-layout -p caret-engine --all-targets -- -D warnings` | 分页 crate 与相关 crate 全目标 lint 通过 | caret-layout 单 crate 通过。跨两个 crate 未通过：`page_glyphs.rs` 的 `append_math_items` 参数过多；`layout/tests.rs` 新增用例触发 5 项 `expect_used`。这些诊断在本次任务文件范围外，待相应实现整合后复验。 |
-| 2026-11-06 | 本机 Rust：对本次四个 Rust 文件运行 `rustfmt --edition 2024 --check` | 本次修改格式符合 rustfmt | 通过。仓库级 `cargo fmt --all -- --check` 另报告 `layout/tests.rs` 与 `lib.rs` 的格式差异，未在本次限定范围内修改。 |
-| 2026-11-06 | 本机：`cargo test --workspace --locked --offline`、`cargo lint --check`、`cargo format --check` | 页面图元、行内映射、跨层绘制与仓库检查通过 | 通过；包括 native CTest 9/9，像素用例验证不透明填色下字形可见及裁剪边界内的部分描边可见。`cargo quality` 的 advisory DB 检查因沙箱对宿主锁文件只读未完成，详见 068。 |
-| 2026-11-07 | 本机 C++：`cargo format --changed --check`；`cargo lint clang-tidy --changed --check`；`cargo lint includes --changed --check`；`cargo lint cppcheck --changed --check`；`CARET_TEST_CTEST_LABELS='^(qml)$' cargo test --locked -p caret-tests --test native` | 图元帧尺寸校验一致；更新 paint order 后 QSG 覆盖顺序正确 | 通过：macOS arm64 的 Qt offscreen 环境中，QML/Shell 相关 CTest 3/3；格式及三项 C++ lint 通过；独立 Terra 领域审查与 Sol final review 通过。未验证 Windows 和 macOS 桌面窗口环境。 |
-| 2026-11-07 | 本机 C++ 复核：`cargo format --changed --check`；`cargo lint --check`；`cargo test --locked -p caret-tests --test native` | FFI 图元适配器校验、像素相位补偿和画布绘制通过 | 通过：变更文件格式检查、完整 lint；macOS arm64 Qt offscreen CTest 9/9。测试构造异常 `PageGlyphFrame`，经生产使用的 `to_variant_map` 验证负宽/负高错误键与有效水平线；像素相位用例比较 applied/unapplied 两种实际渲染结果，补偿移除后断言会失败。Terra 分领域审查和 Sol 对 C++ 子集的只读复核未发现确定性运行时问题。Sol 指出用例尚未独立校验补偿方向与精确幅值；未做变异测试。Windows 与 macOS 桌面窗口环境未验证。 |
-| 2026-11-07 | 本机 Rust：`cargo format --changed`；`cargo test --locked -p caret-math`；`cargo check --locked -p caret-engine`；`cargo clippy --locked -p caret-math --all-targets -- -D warnings` | MathFlow/TextFlow、嵌套环境、操作数、矩阵行和 Align cell 均携带可区分稳定路径；透明 Row 范围包含后代 | 通过：caret-math 113 项。覆盖空流 identity box、嵌套 `EnvironmentChild`、操作数/矩阵行路径、Align cell scope、空操作数、零 Run TextFlow 序列化不变，以及双层 Row 在脚标/重音布局中保持绘制几何并聚合非空范围。engine 检查和 clippy 通过。独立 Terra 复查无确定性问题。空流仍是零尺寸锚点，尚未成为可点击命中区域；未测布局性能基线。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo lint --check`；定向测试 catalog identity、TextIslandLayouter 与 caret-engine 小字号/零宽 underline | 字体缓存跨目录代际隔离；公式文本岛保留脚本浮点字号及空格宽度；零推进装饰不阻断页面字形快照 | 通过：格式、差异空白及 9 阶段仓库 lint 通过；跨 catalog identity 1 项、layout 文本岛 5 项、小字号 1 项、zero-advance underline page-glyph 1 项均通过。Run.text 内嵌 mandatory break 尚未处理。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-layout -p caret-engine` | 当前数学文本岛与页面快照全量用例通过 | 通过：caret-layout 119 项、caret-engine 551 项；包括浮点字号和空格缩放、跨 catalog 代际复用、小字号上标与零 advance underline 栅格化。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-layout text_island_hit_and_selection_geometry_stay_on_grapheme_boundaries` | 文本岛复用 Parley 的视觉命中/光标/选区几何并保持组合字素与 RTL 边界 | 通过：组合字素 Latin 与 Arabic RTL 的行首尾命中返回字素边界；光标几何和完整选区矩形有效。该底层接口已接入数学宿主/MathPathStep 与页面快照命中；结构/空槽、Session/Qt 焦点及可见光标仍待完成。 |
-| 2026-11-07 | 本机 C++/Qt 与 Rust：`cargo format --check`、`git diff --check`、`cargo lint --check`、`cargo test --locked -p caret-tests --test native`、`cargo test --locked -p caret-layout selection_geometry` | 字形适配边界与画布可表示域一致；折叠选区保持为空且不能落在扩展字素内部 | 通过：完整 lint 9 阶段通过；Qt offscreen native CTest 9/9；正文与 TextIsland 选区回归 2 项通过。Terra 指出并修复适配器曾接受画布拒绝的超范围页码/图像宽度；Sol final review 指出并修复正文与 TextIsland 折叠空选区错误扩成字素高亮，`0..0` 返回空矩形、组合字素内部 `1..1` 拒绝。独立复审后无其他确定性问题。未验证 Windows 或 macOS 桌面窗口环境。 |
-| 2026-11-07 | 本机：`cargo test --locked -p caret-layout -p caret-engine -p caret-app`；`cargo fmt --all -- --check`；`git diff --check`；`cargo lint --check` | 公式文本焦点、选择与复制、IME 预览、完整快照、失败原子性及受影响 crate 回归 | 通过：app 222 项、engine 555 项、layout 119 项；格式、diff 检查与 lint 9 阶段均通过。回归覆盖 Equation 点击与 caret 几何一致、Shift 选择/复制、完整布局刷新保留选区、删空后继续输入、短预编辑替换时 preview/current/interaction caret 一致、composition 发布失败回滚，以及最小字号上标 shaping。未覆盖数学鼠标拖选、混排双向视觉边缘、跨 Align 行上下导航、相邻空岛命中竞态的专用用例和性能基线。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-layout -p caret-engine -p caret-app`；`cargo fmt --all -- --check`；`git diff --check` | 正文与空行内公式竞争命中；公式选区 anchor 视觉侧历史恢复；行内对象后的组合字素边界 | 通过：新增源范围 grapheme fence、公式/正文可点击性及折叠选区历史回归；Terra 分域复核确认状态同步修复。未覆盖真实 bidi 下的按键折叠、公式鼠标拖选与性能基线。 |
-| 2026-11-07 | 本机 C++/Qt 与 Rust：`cargo format --check`、`git diff --check`、`cargo test --locked -p caret-tests --test native` | 新增 TextIsland 数学页面命中入口可编译；C++ 字形适配边界及 Qt 集成回归通过 | 通过：格式与 diff 检查通过，native CTest 9/9；当前 C++ diff 的 Terra 分域检查未发现确定问题。首次构建发现 `annotate_hit` 闭包误放在相邻的正文命中方法，已移入数学命中方法并由完整 native 构建/测试复验。未运行完整 Rust workspace 测试；Session/Qt 数学焦点尚未接入。 |
-| 2026-11-07 | 本机 Rust/C++：`cargo test --locked -p caret-engine text_hit`、`cargo test --locked -p caret-engine math_softbreak_and_opaque_nodes_require_text_shaping_even_with_empty_text_flow`、`cargo format --check`、`git diff --check`、`cargo lint --check`、`cargo test --locked -p caret-tests --test native` | InlineMath/Equation/Align 数学文本命中使用已发布几何；空 TextFlow 边界节点不会令公式布局失败；全仓检查保持通过 | 通过：数学文本命中 4 项（含 InlineMath、Equation、Align）；SoftBreak/Opaque 真实 Equation 布局回归 1 项；仓库 lint 9 阶段、格式与 diff 检查通过；native CTest 9/9。Terra 的 C++ 分域检查和 Sol 对最终完整 diff 的只读 review 未发现剩余确定性问题。Sol review 发现并修复了无文本流时的 scope 选择失败，以及新增英文解释注释；测试覆盖的桌面环境为本机 offscreen，未验证 Windows/macOS，也未做性能基线。 |
-| 2026-11-07 | 本机 Rust/C++：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-layout -p caret-engine -p caret-app`；`cargo lint --check` | 行内公式零宽热点与正文点击仲裁正确；交互/布局回归、全仓 lint 通过 | 通过：三个 crate 的测试全部通过；格式/diff 检查通过；lint 九阶段通过，包括 Clippy、依赖/分层、native/QML 构建、qmllint、clang-tidy、include-cleaner、cppcheck。Sol/medium 最终复审批准；复审建议的热点优化已完成：普通正文点击和正宽公式命中不再查询正文竞争几何，零宽公式仍进行竞争仲裁。当前 C++ 生产改动已单独严格审查并由 clang-tidy、include-cleaner、cppcheck、native CTest 9/9 验证；本轮无新增 C++ 源码改动。未做长文档性能基线，跨平台桌面与复杂 bidi/拖选仍待验证。 |
-| 2026-11-07 | PR #99 Linux CI 修复：FFI 代际断言、QML 聚合测试及 glyph phase 几何；`cargo format --changed --check`；`git diff --check`；`cargo lint --check`；`CARET_TEST_CTEST_LABELS='^(qml)$' cargo test --locked -p caret-tests --test native` | 动态字体代际、ShellLoad 限时与 glyph phase 数学稳定 | 首轮 CI 发现 FFI 测试固定要求 `fontGeneration == 1`；改为解析根字段并断言非零 `u64`，定向测试和 Clippy 通过。第二轮 CI 发现 Ubuntu ShellLoad 超过通用 20 秒；非 sanitizer 配置单独设 45 秒，保留 sanitizer 的 120 秒。第三轮 CI 中 ShellLoad 在 19.35 秒完成 45 项但 phase 小区域像素差异断言失败；现改为直接断言 QSG 使用的 phase-adjusted glyph rect 几何，并保留绘制可见性/paint order 截图回归。当前格式/diff、九阶段 lint、本机 QML CTest 3/3（ShellLoad 10.52 秒）通过；第四轮 CI 待完成。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-layout -p caret-math -p caret-engine -p caret-app -p caret-doc`；`cargo lint --check` | 正文与数学 TextFlow 共用交互算法，完全裁切 caret 仍可发布；受影响 crate 回归及仓库质量门通过 | 通过：app 225、doc 67、engine 561、layout 122、math 124 项；九阶段 lint 全部通过。新增回归覆盖精确 caret affinity、空 TextFlow offset 0、多行 TextFlow 完全裁切后的快照发布及继续输入。Terra/medium 复审未发现阻断问题；独立 Sol/medium final review 待执行。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-layout -p caret-math -p caret-engine -p caret-app -p caret-doc`；`cargo lint --check` | 正文与数学 TextFlow 的强制换行、IME 几何与快照复用一致 | 通过：app 227、doc 67、engine 562、layout 124、math 124 项；九阶段 lint 通过。新增覆盖 U+000B/U+000C/U+0085 多 Run 换行与源偏移、InlineMath 对象边界 fence、只选换行不绘制 IME 装饰、组合字素选择扩展、连续数学 preedit/commit 完整快照，以及两条未变显示公式布局/sidecar 复用。Terra/medium 分域复核与 Sol/medium 完整 diff final review 均通过。长文档性能基线仍未测量。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-engine`；`cargo test --locked -p caret-layout -p caret-math -p caret-app -p caret-doc`；`cargo lint --check`；格式与 diff 检查 | 正文与数学文本共用 glyph 转换，空 Run 边界行为一致，未变行内公式可按 ID 复用 | 通过：engine 571 项；layout 及其余受影响 crate 测试通过；九阶段仓库 lint、格式和 diff 检查通过。新增共享页面 glyph 转换 helper，并将数学多行基线差值先提升到 f64；修复数学格式在带属性空 Run 边界错误拒绝及跨流 sibling 路径偏移，端到端测试确认首流 offset 0 空 Run 元数据保留且后续 TextFlow 格式正确。未变行内公式复用改为旧段落一次 ID 预索引，双公式用例确认各自布局/sidecar Arc 复用与源偏移更新。Terra/medium 分域复核与 Sol/medium 对完整 diff final review 通过。没有测长文档性能基线。普通正文递归节点包装与数学树路径包装仍分别适配其宿主结构；Run 变换可继续抽取，但须保留未知字段和事务差异。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-engine -p caret-app -p caret-math`；`cargo lint --check` | 正文/数学 TextFlow 共享算法；结构空槽命中、键盘移动、caret 快照、字号与失败原子性正确 | 测试通过：app 229、engine 576、math 125 项；格式、diff 检查通过；九阶段仓库 lint 已启动，结果待完成。新增覆盖可见槽与 optional 零尺寸标记区分、命中范围不外溢、键盘跳过不可见可选槽、空白/空 grapheme 输入无副作用、未来 Placeholder 字段拒绝丢失，以及点击/输入后完整快照、交互快照与 current caret 同几何。Terra/medium 复核仍进行中；未验证 Align/InlineMath 空槽点击、桌面 Qt 手动交互或性能基线。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-doc -p caret-math -p caret-engine -p caret-app --quiet`；`cargo lint --check` | 正文/数学 TextFlow 共用逻辑原语；结构 caret 覆盖 affinity、多行环境及正/负零高间距流 | 通过：app 231、doc 68、engine 582、math 125 项；格式、diff 检查和九阶段 lint 通过。app 回归验证多行 TextFlow 环境退出及 `\,`/`\!` 空树光标的完整/交互/current 快照；engine 回归验证混排兄弟边界两种 affinity、父序列穿过 InlineEnvironment 时递归到多行 TextFlow 端点。Run 拆分/片段/合并兼容性和 UTF-8 边界在正文与数学编辑中共用；可选 Placeholder operand 索引由 caret-doc 模型规则统一提供。Terra/medium 分域复核及 Sol/medium 完整 diff final review 均通过。未测长文档或深嵌套性能；复杂 RTL、多平台桌面与 044 余项仍待验收。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-doc -p caret-engine -p caret-app` | InlineMath、Equation、Align 编码/解码及 DocumentSession/磁盘保存重开 | 通过：文档能力门控、三类载体 ID/未知字段保留、真实文件保存后重新打开、DocumentSession dirty/save-point 往返已覆盖。 |
-| — | Qt 页面画布人工/组件验证 | 呈现、命中和光标位置吻合 | 未执行 |
-| 2026-11-07 | 本机 Rust：`cargo bench --locked --package caret-engine --bench math_edit_criterion -- rust/math_document_layout --sample-size 10 --warm-up-time 1 --measurement-time 1` | Equation 文本岛首次布局及单字符编辑后的布局成本有可复现基线 | 通过：256 字节首次布局 73–74 μs、编辑+完整重排 74–77 μs；4,096 字节分别 685–726 μs、766–768 μs。输入、测量口径和环境限制见 `tests/performance/rust/README.md`；不代表性能提升。 |
-| 2026-11-07 | 本机 Rust：`cargo test -p caret-app --lib --locked failed_math_edit_save_preserves_file_session_and_retries_cleanly` | 数学树编辑后的文件冲突保持原文件、会话修订和保存点，冲突解除后可重试及重开 | 通过：外部文件变化时保存拒绝且字节不变，DocumentSession 保持 dirty/原路径/原 digest/保存历史；用新基线重试后保存成功并重新打开得到数学编辑内容。 |
-| 2026-11-07 | 本机 Rust：`cargo test --locked -p caret-layout -p caret-engine`；`cargo fmt --all -- --check`；`git diff --check`；`cargo lint --check` | 正文与数学 TextFlow 对 Run 样式、缓存失效规则保持一致 | 正文和 Equation 使用同一合法 `TextFlow`/Run 的端到端布局对照通过：语言、下划线、字体族缺失标志和 glyph 几何一致；单元测试另验证数学适配忽略不支持的 `Run.props.fontFamily`，只消费数学 Font 环境样式。两种 layouter 共用 font generation、偏好、样式与浮点字号缓存失效逻辑，Parley 上下文仍分开。布局/engine 126/584 项测试通过；九阶段 lint、格式与 diff 检查通过。Terra/medium 专项复核与 Sol/medium 完整 diff final review 均无阻断；review 未独立重跑测试。数学持久化和命令门控已推进，跨平台和性能基线仍未完成。 |
-| 2026-11-07 | 本机 Rust：`cargo fmt --all -- --check`；`git diff --check`；`cargo test --locked -p caret-doc -p caret-layout -p caret-math -p caret-engine -p caret-app`；`cargo lint --check` | 正文与数学 TextFlow 共用逻辑、数学文档往返、插入后焦点及结构命中回归 | 通过：五个受影响 crate 全量测试、九阶段仓库 lint、格式及 diff 检查通过。新增覆盖普通文本与 Equation 的 Run 样式/glyph 对照、数学载体 DocumentSession/磁盘保存重开、非空公式重开后点击重入、树分支左右键、Bold 环境子序列命中及分数间隙父序列回退。Terra/medium 领域复核和 Sol/medium 独立完整 diff 复审通过。树结构 Shift 选择几何、保存失败原子性、桌面/跨平台与性能基线仍待完成。 |
-| 2026-11-07 | 本机：`cargo test -p caret-engine -p caret-app --lib --locked`；`cargo clippy -p caret-engine -p caret-app --locked --all-targets -- -D warnings`；`cargo lint --check`；`cargo format --changed`；`cargo test -p caret-tests --test native --locked` | 共享拖选 DTO、会话身份、IME 取消/重命中、空 Align 导航及 QML 交互无回归 | 通过：engine 589、app 242 项测试；相关 Clippy、九阶段仓库 lint、变更文件格式通过；macOS 27.2 arm64 Qt 6.12 offscreen native CTest 9/9。native 现有拖拽行为仍是正文用例；真实 Qt Quick 数学拖选和行内边界裁决未单独覆盖。 |
-| 2026-11-07 | 本机：锁定 `.toolchain/qt/staging/bin/lupdate qml native -recursive -no-obsolete`；`cargo test --locked -p caret-app --lib`；`cargo clippy --locked -p caret-app --all-targets -- -D warnings`；`cargo lint --check`；QML/i18n 标签 native CTest | 正文/数学拖选起点使用同一 Rust 命中裁决；验证相邻公式文本岛真实 Qt Quick 拖选和本地化结构标签 | 通过：lupdate 从源码提取 162 条 source、18 个 context，四份 locale 提取结果均包含 WindowStatusBar 的 Equation/Align environment；四个 `.pa` 对应条目为 finished，QM 加载检查 1/1 通过。app 242 项测试、Clippy、九阶段 lint、格式检查通过；Qt Quick 数学拖选检查预览、锚点/焦点、复制文本和 Equation 结构，并使用相邻数学 TextFlow 验证第二文本岛，QML CTest 3/3。起点域由 `PageMathTextHit` 携带 sidecar token，避免局部 TextFlow 偏移与全岛顺序偏移混用。尚无行内公式/正文共享边界与纯结构区拖选空域的 Qt 用例、Windows/Linux runner 或长文档/拖选性能测量。 |
+2026-11-07，本机已完成：
+
+- `cargo test --workspace --locked`：本次通过（engine 640、app 243；native CTest 9/9）。
+- 2026-11-07 后续定向回归：`caret-doc` 样式增量、engine 继承字体、公式占位符误报/漏报以及 `paragraph_delta_projects_and_omits_text_diagnostics` 均通过。Rust 增量视图已直接断言非空诊断投影和空字段省略；Qt ViewModel 另使用实际 Rust 增量响应验证更新和清除。
+- Qt Quick 组件回归 `textFontWarningStatusBarTracksLayoutDiagnostics` 通过：状态栏缺字体提示随 ViewModel 诊断显示，并在完整快照清空后隐藏。
+- `cargo fmt --all -- --check`、`git diff --check`、`cargo lint --check`：通过（lint 九阶段）。native/QML 聚合测试 9/9、QML 子集 3/3；Qt Quick zoom、选区和状态投影有交互回归。
+- `cargo coverage`：Rust functions 85.09%、lines 89.23%；`cargo coverage native`：产品函数 90.41%、行 85.56%。
+- Criterion `inline_math_command_typeahead_and_snapshots_in_100k_document`：当前 1.0284–1.1350 ms；紧邻复测 p=0.22，旧参考样本 0.9139–0.9418 ms。因样本轮次/环境不同，不把差异归因于单项改动；等待 CI/nightly 同环境复测。
+- PR #99 的 CI 曾暴露 Linux 字体代际固定值假设、ShellLoad 超时及渲染器像素相位断言不稳定，均已按实际契约修订；后续拖动距离测试也已改为运行时选择足够远的正文端点。修订后的 CI 结果尚未确认。
+
+未完成的跨平台/桌面检查和本次最终独立评审不得用上述本机结果替代。每次后续验证只需补记新的命令、结果和未覆盖范围，避免重复记录实现过程。
 
 ## 风险与回退
 
-字体缺字、MATH 度量差异、Qt atlas 生命周期或文本 shaping 混排可能造成错位。失败时保留公式源与错误状态，不能退回无法定位和选择的图片对象。性能优化限定在测量证明的热路径。
+- 正文与数学文本必须保持共享核心；若模型差异无法由稳定适配边界表达，先补等价/反例用例再调整抽象，禁止复制第二套通用算法。
+- 性能测量出现回退时，先用同机、同构建和相同输入复测并定位热点；不能以增加缓存或缩短代码宣称优化。
+- 持久化、布局或交互任一阶段失败时，命令保持不可用，文档、焦点和原文件保持原状。
+- `InlineTextStyle` 是可扩展的文档样式增量，不是完整 resolved style；新增字段须由正文、数学、编辑状态及无 shaper API 明确处理，避免消费者逐字段应用时静默漏接。
 
 ## 决策与工作记录
 
-- 2026-10-29：从 011 拆出公式布局与画布渲染。
-- 2026-11-01：表格模型与交互拆到 045，表格布局和画布集成拆到 046；044 不依赖 012，也不负责单元格公式集成。
-- 2026-11-04：明确公式插入命令的候选接入与可用性门控归 044；公式树和内部编辑事务归 043，TeX 源码输入转换由 065 设计。
-- 2026-11-06：数学 `.cdoc` 可写能力、真实文件保存/重开及 `DocumentSession` 往返由 044 在布局、绘制、命中链路接通后统一验收；043 保留模型/schema 和只读安全预览职责。
-- 2026-11-06：架构重构分支从 Typst 数学表格算法抽取不依赖数学和文档模型的 `caret-grid-layout`；当前仅数学适配器接入。046 文档表格与 051 列表可复用测量后几何，具体列宽求解、正文重排、编号和分页仍归各任务，待实际接入验证。此项不改变 044 总体状态，未完成的命中/光标、命令、持久化与平台验收继续保持未完成。
-- 2026-11-06：Line/Rectangle 已加入页面字形快照、FFI 与 QSG 绘制，并按 MathItem paint order 排序；默认前景矩形描边和裁剪边界均有回归。环境页范围现汇总显示公式片段；公式内部命中/光标、插入命令门控、数学 `.cdoc` 可写与三平台验收仍未接入。
-- 2026-11-07：核对 `TextFlow`/`Run` schema 后修正身份契约：二者没有独立 NodeId；公式交互映射使用宿主/流 scope、类型化 MathPathStep、Run 下标和同一布局发布版本。MathLayout 节点盒已输出稳定 scope/path/run 下标，TextFlow/Run 不再伪造 NodeId；Run language/props 已传入共享正文 Parley shaping，页面快照通过 sidecar token 读取同一批字形几何。
-- 2026-11-07：布局适配器递归保留 `Content`、`EnvironmentChild`、`Operand` 结构步骤；TextFlow Run 的盒子以作用域 MathFlow ID、路径和 Run 下标识别，`MathNodeBox.id` 对无持久 ID 的文本片段为空。矩阵行沿用根作用域与操作数路径；Align 每个 cell root 单独作为 scope。透明 Row 输出聚合子盒后的节点范围，空 MathFlow/TextFlow 输出稳定零尺寸锚点，后续命中层仍须为其建立可用的插入位置。
-- 2026-11-07：严格复查修正透明 Row marker：marker 不参与原子属性、间距或斜体修正，按源片段顺序插入节点盒以保留前序遍历；容器范围聚合支持 MathFlow 与透明 Row，并按活动祖先深度遍历。双层非空 Row 回归覆盖脚标与重音，确保盒范围包含后代且包裹不改变 MathItem 几何。该改动降低最坏扫描复杂度，但未建立前后性能基准。
-- 2026-11-07：TextFlow/Parley 分层设计复核建议由 `caret-engine` 编排 `caret-math` 与 `caret-layout`：`caret-math` 提供中立文本塑形请求/结果契约，engine 传入共享字体目录和正文设置并保留 Parley sidecar，数学绘制项以本次布局 token 引用 sidecar，命中/光标/选区反向映射到同一结果。不得建立 L3 同级依赖，也不能退回数学字体逐字符塑形。跨 Run/wrapper 的组合 shaping、RTL/fallback、Run 样式/语言、MathAlphabet 边界、SoftBreak/Opaque 区隔、字体目录代际失效和绘制顺序已有实现与回归。含文本岛的布局缓存只在文档源、样式、宽度、字体目录代际及 session 匹配时复用。仍待实现/验证：公式内部命中、光标和选区；Run 内嵌 mandatory break 的定义与处理；真实数学字体选择与对应栅格资源原子接线。
-- 2026-11-07：共享 backend 为序列化与布局分离身份元数据；LaTeX 序列化不构造 MathPathStep 向量，零 Run TextFlow 的布局占位不进入序列化结果。
-- 2026-11-07：对 #98 C++ 适配器及画布回归做严格复核。将 Rust 帧转换拆为可注入的适配入口，直接验证负尺寸错误键和合法零尺寸线段；paint-order 覆盖像素坐标加入 QSG 对已栅格化字形的 pixel-phase 补偿。
-- 2026-11-07：再次严格检查当前分支 C++ diff，范围包括 glyph-frame 适配器、ViewModel 请求边界、QSG 消费端、CMake 注册和画布测试。Terra 分领域审查与 Sol 独立 final review 均未发现确定的生产回归；格式、clang-tidy、include-cleaner、cppcheck 检查通过，focused Qt 像素用例通过。像素相位回归只证明切换 applied 标记会改变画面，未证明 X/Y 各自的方向和精确幅度；尝试用真实字形质心验证时受亚像素采样影响而不稳定，已撤回该断言。完整 native 聚合曾通过；实验性断言存在期间的后一次聚合因 ShellLoad 总时限失败，不代表最终代码结果。未验证 Windows 或 macOS 桌面窗口环境。
-- 2026-11-07：最终完整 diff 复查发现字体目录 generation 只在单个目录内递增，导致两个新 catalog 都为 1 时可错误复用旧 Parley/数学文本 sidecar；改为进程唯一代际并补跨实例断言。另修复零 advance 下划线 run 将整页字形提取判为无效的问题，并补含 U+200B 的公式页面提取与栅格化回归。脚本浮点字号现在直接沿 TextIslandLayouter 的 Parley 样式范围传递，不再经文档 centipoint 量化；空格校准目标也使用相同派生字号并以字号位值失效。回归验证合法 1 centipoint 正文字号的数学 glyph 与上标文本字号分别保持 0.01 pt 与小于 0.009 pt，普通与全角空格 advance 随 6/6.135 pt 浮点字号缩放。完整 review 还发现 Run.text 中强制换行字符 schema 合法但文本岛拒绝，语义处理仍待决定。
-- 2026-11-07：为公式文本岛交互接通页面命中、Session 焦点安装、caret 投影、同一 Parley 布局中的视觉左右与 Home/End 导航、Shift 选择、选区几何/复制和数学 IME composition underline。完整布局快照与轻量交互快照均读取数学文本几何；空文本岛在删除最后一个字素后保留 caret，允许继续输入。IME preview 发布失败会恢复提交前 Session 与预览状态。视觉边缘按纯逻辑首尾选择退出方向，视觉侧变化会切断撤销合并组。焦点与树位置校验保持 generation、字体代际、宿主、路径及字素边界约束。
-- 2026-11-07：Terra/medium 分域复核发现并推动修复空文本岛选择几何、0.01pt 以下合法数学上标字号投影、纯 RTL 边缘逻辑方向、完整快照的数学选区投影、视觉选区折叠条件、anchor 路径 no-op、IME preview caret 与发布失败原子性，以及数学 anchor 视觉侧历史恢复。行内公式对象源范围现在给正文 Parley grapheme segmentation 增加原子 fences；正文命中只排除真实 InlineMath source range，避免把普通 U+FFFC 当作对象。正文与空公式热点分别有应用层回归。仍未实现数学文本鼠标拖选；文本岛布局目前为单行，上下键跨 Align 行需由公式/页面几何提供目标；混排双向视觉边缘、真实 bidi 的按键折叠和跨 Align 行上下导航仍待实现/验证。数学 caret/选区查找仍遍历已发布快照，缺少代表性长文档基线，未声称性能提升。
-- 2026-11-07：Sol/medium 最终只读复审批准当前完整 diff。按复审建议将正文竞争区域判断延迟到存在零宽数学文本命中时，避免普通正文点击及正宽公式点击复制字素边界并查询选区几何；零宽公式与正文竞争行为保持原样。三 crate 全量测试、仓库格式/diff 检查和九阶段 lint 复验通过。该改动减少了常规点击的额外工作，但未建立长文档基线，也不声称量化性能提升。
-- 2026-11-07：PR #99 的首轮 Linux CI 暴露 FFI 测试固定假设 fontGeneration 从 1 起步，改为解析根级字段并检查非零代际，保留快照稳定性。第二轮 CI 显示 Ubuntu ShellLoad 超过通用 20 秒限时；仅对非 sanitizer 的聚合测试延至 45 秒，sanitizer 保持 120 秒。第三轮 CI 证明限时修复允许 ShellLoad 完整运行，但新增像素相位差异断言在 Ubuntu 渲染器下不稳定；将 phase 位移运算抽为纯几何函数，由集成测试精确断言应用/未应用时的 glyph rect，同时保留实际 glyph 可见性和 paint order 的截图断言。当前格式、diff、九阶段 lint 和本机 QML CTest 3/3 通过；第四轮 CI 待完成。
-- 2026-11-07：按“普通文本与数学 TextFlow 共用一条逻辑链”的架构要求，正文与数学文本岛继续共用 Parley shaping；字素吸附、同位置 affinity 归一化、视觉移动、行首尾移动和基础选区几何提为同一组 layout 纯 helper。正文保留段落行框与 inline object 适配，数学保留 MathPath/宿主坐标投影；数学页面字形仍消费同代 Parley sidecar，不再另算文字字形。显式 mandatory break 以等 UTF-8 长度的换行映射进入相同 Parley 多行布局，源偏移与 grapheme 边界保持不变。另修复 Exactly 行距完全裁切 TextFlow 行时 caret 丢失：逻辑位置仍有效，发布几何钉在最近可见边缘；鼠标拖选、混排 bidi 边缘和跨 Align 上下导航仍待验证。
-- 2026-11-07：数学布局中必需但为空的根流/操作数现在保留 MathPath identity，并产生按字号确定的可见占位盒；可选 Placeholder 子流仍是零尺寸身份标记，不改变其父运算符的绘制和度量。以上只提供占位几何，空槽结构命中与插入焦点仍未接通。
-- 2026-11-07：拆开数学完整响应与正文快照复用：InlineMath TextFlow 编辑只重排宿主段落，Equation/Align TextFlow 编辑复用全部未变正文段落但重算页面几何；数学输入仍返回完整快照响应，不走普通段落 delta。页面 hit 按页取投影连续片段，caret/selection/IME 按数学目标 ID 取投影；普通 TextFlow shaping 在没有特殊 mandatory break 时借用源字符串并复用既有 grapheme 边界。没有建立长文档基线，不声称量化性能收益。
-- 2026-11-07：为保持正文与数学 TextFlow 同一逻辑链，将 VT/FF/NEL 等字节长度不变的 mandatory-break 归一化移到共享 Parley shaping 入口；正文源边界重算时重新加入 inline-object grapheme fences。IME 装饰共用 glyph-run 交集、underline 度量与矩形合并 helper，换行拆分共用源区间逻辑，再分别调用正文行框/InlineMath 适配和数学文本岛局部几何。未改变普通段落对非空字素内选择的扩展语义；数学 preview/commit 保留完整快照，仅复用布局。两个未变显示公式的 MathLayout 与 sidecar 成对复用，复用需 session、字体代际、设置、字号、宽度及完整源块保持一致。未测长文档性能基线。
-- 2026-11-07：按正文/数学 TextFlow 复用要求，将 Parley glyph-run 到页面字形快照的坐标、字体实例、轴向、合成样式及前景选择合入一个内部转换函数；正文仍单独提供分页基线与段落裁切，数学仍负责宿主坐标、数学颜色覆盖和装饰。分域复核另发现数学行格式化在选区边界遇到带元数据的空 Run 会拒绝，而正文可继续；现统一边界归属并保留空 Run 元数据，新增回归。普通正文递归节点包装与数学树路径包装仍需适配不同树形，Run 范围变换有后续抽取空间，尚未宣称整条编辑实现已完全合并。
-- 2026-11-07：继续统一数学 TextFlow 结构槽逻辑：命中只接收实际可见的必需槽盒，路径身份用的零尺寸可选 Placeholder 不参与鼠标或键盘焦点；命中不扩展到绘制盒外。数学树焦点纳入完整/轻量快照及缓存键，页几何/字号统一从 MathNodeBox 发布；布局节点保留当前有效数学样式字号，避免脚本空槽输入后退回正文默认字号。Placeholder 替换复用同一份 grapheme 切分/过滤，未知扩展字段导致原子拒绝。以上接入仍复用正文 Parley shaping、交互 helper、mandatory-break 源映射、IME 几何和页面 glyph-run 转换；MathPath/宿主投影保留树模型适配。Run 编辑/格式化与正文递归树遍历仍有重复部分，待架构专项复核确认安全抽取边界后继续；044 整体仍未完成。
-- 2026-11-07：按正文与数学 TextFlow 逻辑链一致的要求，Run UTF-8 拆分、范围片段、合并兼容性及 TextFlow 字节边界检查共用 `flow_edit` 原语；正文树包装与数学路径包装继续负责各自的结构寻址、空 Run 归属和历史事务。MathTree 环境序列边界 caret 优先使用 affinity 指定一侧的相邻子项：TextFlow 复用同代 Parley caret，数学结构项使用子盒端点和行高，避免多行环境使用聚合容器框。覆盖多行 TextFlow 与数学节点相邻时的两种 affinity；长文档性能基线仍未测量，044 整体未完成。
-- 2026-11-07：纯正/负数学间距的树光标也需要可发布几何。零高度合法流按有效字号和 MathNodeBox 基线合成 caret 高度；允许有限负 advance，但鼠标结构命中仍只接受正面积的真实槽盒。可选 Placeholder 的 operand 索引由 caret-doc 的 MathNodeKind 统一定义，布局和键盘导航共用规则。
-- 2026-11-07：针对普通正文与数学 TextFlow 样式差异，Run 的语言继承与 underline 解释由 `caret-layout` 提供共享 helper；局部字体按既定 schema 只从 Font 环境读取，数学不再额外解释非法的 `Run.props.fontFamily`。正文与 Equation 使用相同 Run 的集成回归比较实际字体族缺失标志和 Parley glyph 几何。两种 layouter 的字体目录代际、字体偏好、样式签名和浮点字号缓存失效收敛到同一个内部缓存状态机；绘制、宿主路径及段落行框继续保留各自必要的适配。
-- 2026-11-07：重新开放数学载体保存和 `\math`/`\equation`/`\align` 插入后，补齐树分支左右键路由与非空公式保存重开后的鼠标重入；页面点击优先采用同代 Parley 数学文本命中，结构命中覆盖数学叶子序列、必需空槽和 InlineEnvironment 子序列。嵌套运算符区域依子流几何进入，不把外层容器框当作子结构命中。树结构 Shift 选区尚无可见几何，因此目前保持焦点和文档状态不变；数学 TextFlow 的 Shift 选区继续使用共享 Parley 逻辑。
-- 2026-11-07：继续收敛正文与数学 TextFlow 的应用层导航：Shift 锚点、折叠选择、visual affinity 和垂直目标 x 的状态提交改由同一泛型流程完成，正文 Pos 与数学路径端点仅保留各自 Session 提交适配；数学复制的 UTF-16 范围也改用 engine 已有转换函数。Parley shaping、字素吸附与视觉交互原语仍是共享实现；页面段落和公式树的几何/路径映射保留宿主适配。应用 crate 234 项测试、`cargo clippy -p caret-app --locked --all-targets -- -D warnings`、格式检查和 diff 检查通过。拖选、跨 Align 行上下导航、真实平台验证和代表性性能基线仍未完成。
-- 2026-11-07：按复用一致性要求，Math TextFlow 鼠标拖选接入正文同一 hit-map、QML 停靠点选择、选区片段预览和 C++ 端点传输协议；MathPath、宿主/字体/布局代际与文本岛几何只留在 Rust 数学适配边界。数学拖选提交在 Session 内克隆并验证后原子替换，使用保留身份的副本，维持 session id、document generation、历史与正文相同；端点携带 session identity，重开文档后拒绝旧 DTO。数学和正文预览片段共用 `startPosition/endPosition` 形状，QML 运行时不支持 `Array.flatMap` 的列表拼接改为显式循环。公式 IME 预编辑拖选按实际页面坐标映射回原文同 MathPath 的停靠点；正文预编辑取消后可迁移到公式。Align 上下移动统一使用页面 x，并可进入空 TextFlow。新增原文拖选、零长度焦点迁移、重开拒绝、正文/数学 IME 预编辑和空 Align 文本回归；caret-engine 589 项、caret-app 242 项通过，仓库九阶段 lint 及 native CTest 9/9 通过。该次记录时本机仅 macOS arm64，尚缺真实 Qt Quick 数学拖选/行内边界裁决用例及 Windows/Linux 平台验证。已记录单公式 Equation 256/4096 字节布局和编辑后重排基线，尚无长文档或拖选性能测量，不声称该路径性能收益。
-- 2026-11-07：继续落实正文/数学文本共用一条交互链：拖选起点通过 Rust `drag_start_domain_json` 复用点击命中的正文/零宽公式边界仲裁，QML 只按返回域 ID 过滤现有共享停靠点；数学命中结果直接携带 sidecar token，避免从视觉位置反查 token，也避免将 TextFlow 局部偏移误比为整个文本岛顺序偏移。现有 Qt `mathTextDragUsesSharedPreviewAndCommitProtocol` 使用行内公式，在公式内部验证一次鼠标拖选的 preview、anchor/focus、输入上下文和复制结果；尚未覆盖正文与公式的精确共享边界、零宽并列命中、连续拖选轨迹及结构状态可视选区。Equation/Align 状态标签补齐 en、ja、zh-Hans、zh-Hant 翻译。
-- 2026-11-07：按“正文与数学文本不保留两套排版流程”的要求，将 `TextIslandLayouter` 移除并把自然尺寸文本岛入口并入 `ParagraphLayouter`；`DocumentLayoutService` 现用同一个 layouter 实例处理普通段落和数学 TextFlow，共享 Parley `LayoutContext`、字体代际/偏好/样式/字号缓存状态机及 shaping/build 管线。数学仍保留文本岛自然几何、MathPath/宿主坐标、公式颜色和结构容器投影；正文仍保留段落换行宽度、行距网格、首行缩进与 InlineMath 对象适配。正文/文本岛字形签名一致性回归改为顺序复用同一 layouter。验证：`cargo format --changed`、`cargo test --locked -p caret-layout`（126 项）、`cargo test --locked -p caret-engine -p caret-app --lib`（engine 589 项、app 243 项）通过，`git diff --check` 通过。尚未复跑整仓测试、lint、覆盖率与最终独立复审。
-- 2026-11-07：继续按正文/数学文本共用逻辑链收敛实现：Run UTF-8 切分、范围片段、合并兼容性、零长度节点边界分类和 TextFlow 字节边界复用 engine 公共原语；已继承目标字体/粗体的部分选区保留原 TextFlow 与局部范围，不产生冗余变更，未继承的选区仍经路径适配事务包装。混合选区回归覆盖端点与后续 TextFlow 路径更新；带元数据空 Run 边界也有回归。`cargo test --workspace --locked` 通过（engine 595、layout 126、math 126；native CTest 9/9），`cargo lint --check`、`cargo format --changed --check`、`git diff --check` 通过。长文档数学基准复测区间见 `tests/performance/rust/README.md`：缓存复用重排比前次记录低约 10.47%，但首次布局和全量布局分别高约 3.01% 与 6.27%；不归因于单项改动，也不声称整体性能优化。专项与独立评审指出正文 `EditNode` 与数学 `MathTree` 的格式范围包装核心仍分开、数学 SoftBreak 布局换行与 TeX 序列化空格仍有语义差异；这两项未解决前，不能宣称格式链路已完全共用，044 继续保持未完成。
-- 2026-11-07：只读架构调研建议下一步不新建 crate，也不把数学树强转为正文 `EditNode`；在 `caret-engine` 内对 `FlowContent<T>` 提取泛型范围格式转换，`T` 作为宿主原子节点，正文与数学只适配范围入口、深度/继承上下文、宿主事务和 MathPath 重建。该核心需统一切分、继承状态、包装、归一化与 no-op 判定，并覆盖未知字段、空 Run、原有 NodeId、正反向选择及深度上限；开始实现前要据此补齐设计与等价性用例。
-- 2026-11-07：按上述设计在 `caret-engine::editing::flow_format` 实现 `FlowContent<T>` 泛型范围格式核心，普通正文 `EditNode` 与数学 `MathTree` 的 Bold/Italic/Font 变换共用切分、边界分类、继承样式、环境包装、归一化和 no-op 逻辑；宿主只保留范围/路径解析、树回写和事务提交适配。回归覆盖未知字段、空 Run、零长度环境、原有身份、显式关闭格式、嵌套格式覆盖、正反向范围及深度上限。完整 `cargo test --workspace --locked` 通过（engine 612、app 243，native CTest 9/9）；`cargo lint --check`、`cargo format --changed --check`、`git diff --check` 均通过。最终 Terra 专项审查和独立 Sol/medium 完整 diff final review 均通过。数学 SoftBreak 当前布局换行与 TeX 序列化空格的差异，以及 Windows/Linux 与真实 macOS 桌面交互验证仍未解决；044 继续未完成。
-- 2026-11-07：继续落实正文/数学文本共用逻辑链。Run 属性范围修改改用同一个 `FlowContent<T>` 切分、写入、状态统计和归一化核心，数学 TextFlow 仅保留 TextFlow 包装与 MathPath 定位；正文字符插入改用数学文本已采用的 `replace_text_flow_range`，两者共享 Run 级插入模板与属性继承原语。新增通用 Run 属性等价测试，覆盖选区内部/边缘携带 language/extra 的零长度 Run。Terra/medium 复核提出的空 Run 风险已通过“仅实际与范围相交的非空 Run 接收属性并参与 toggle 状态”修复并回归。审查也指出正文单行输入拒绝 CR/LF 与数学 TextFlow 支持显式多行内容；两者行为有模型/布局语义依据，保留差异，不抽象成共同拒绝规则。正文多段落粘贴、数学结构/源码路径和各自历史事务仍由宿主适配。最终 `cargo test --workspace --locked` 通过，engine 619、app 243，native CTest 9/9；`cargo lint --check`、`cargo format --changed --check`、`git diff --check` 通过。`cargo coverage` 通过：Rust 全局函数覆盖 85.07%、行覆盖 89.23%；`cargo coverage native` 通过：native 产品函数覆盖 90.41%、行覆盖 85.42%。Terra/medium 共享编辑核心专项复审通过；独立 Sol/medium 完整 diff final review 与跨平台验证待完成。FlowMap/MathPath 映射树形和未知节点语义不同，本次保留宿主适配，需后续有成对行为用例再抽取。044 继续未完成。
-- 2026-11-07：修复 Run 属性共用核心的兼容边界：仅在相交的 TextFlow 内处理选区接缝，合并仅限兼容的非空 Run，带未知 TextFlow 扩展字段时保留原 Run 边界；环境 NodeId、空 Run 元数据及 math TextFlow.extra 保持，math 格式化的 Undo/Redo 都有扩展字段回归。正文适配器单独保留既有策略：选区命中含未知 TextFlow.extra 时拒绝写入，且测试验证 document、selection、generation 不变；数学适配器继续使用同一共用 Run 转换，保留旧有数学行为。验证：`cargo test -p caret-engine --locked` 通过（624 项），`cargo lint --check` 九阶段通过，`cargo fmt --check` 与 `git diff --check` 通过。Terra/medium 针对复用核心与宿主兼容边界复核通过；独立 Sol/medium 对最终完整 diff 未发现确定性阻断项。尚未重跑全 workspace 测试；Windows/Linux 和真实 macOS 桌面拖选/呈现性能仍待验证，044 未完成。
-- 2026-11-07：按维护者对复用性的要求继续收拢正文与数学 TextFlow 逻辑：两侧选区粗体/斜体状态判断现共用 `inline_format_range_state`，环境继承折叠统一由 `InheritedInlineStyle` 提供，数学路径适配器只负责把 MathPath 映射到 TextFlow；数学输入后的 Run 归一化也改走共享入口，并在存在未知 `TextFlow.extra` 时保留 Run 边界。新增正文/数学格式状态等价、正文旧有未知扩展拒绝，以及数学输入与撤销保留扩展字段和 Run 边界的事务回归。`cargo test -p caret-engine --locked` 通过（630 项）。本次只完成引擎范围验证；workspace、lint、覆盖率和独立最终评审仍待重跑，044 未完成。
-- 2026-11-07：继续统一正文与数学 TextFlow 的逻辑链：两侧格式状态、继承样式、行内环境格式化、Run 属性范围修改、Run 拆分/合并归一化及文字替换共用 `caret-engine::editing::{flow_format,flow_edit}` 核心；正文 EditNode 和数学 MathPath 只适配各自树寻址、扩展字段策略及历史事务。线性 Run 合并/归一化补充 20,000 Run 回归；插入数学候选改为真实 InlineMath 原子插入预检，避免深克隆整个 Session/撤销历史，并在实际写回后验证完整 Document，失败恢复原文档。正文 SoftBreak 不再受该数学持久化校验影响。验证：`cargo test --locked --workspace` 通过（engine 633、app 243，native CTest 9/9）；`cargo fmt --all -- --check`、`git diff --check` 通过；`cargo lint --check` 九阶段通过；`cargo coverage` 通过（Rust functions 85.09%、lines 89.23%）；`cargo coverage native` 通过（native product functions 90.41%、lines 85.51%）。Qt Quick 三档 zoom 交互用例按 Rust glyph placement 与截图 alpha 像素映射验证，并排除 caret 区域；QML CTest 3/3。Terra/medium 共享逻辑及性能专项复审未发现确定阻断；候选查询仍克隆并全量校验 Document、数学拆分仍复制公式树，长文档/大公式候选延迟尚无基准。Windows/Linux 和真实桌面拖选/IME 验证也未覆盖，044 仍未完成。
-- 2026-11-07：独立 Sol final review 发现拖选按下点落在数学结构槽/页外时，后续移动可能把移动点误当作新锚点。现在仅在手势开始事件解析起点，无有效起点则整段手势不生成预览/选区；Qt Quick 回归覆盖结构槽按下、拖入 TextFlow、释放并验证 generation 不变。修复后 `cargo format --changed --check`、`git diff --check`、QML CTest 3/3、native CTest 9/9、`cargo coverage native`（产品函数 90.41%、行 85.56%）和 `cargo lint --check` 九阶段通过。Sol/medium 对修复后完整 diff 复审通过，未发现确定性阻断；命令候选长文档延迟、Windows/Linux 和真实桌面交互仍待测，044 继续未完成。
-- 2026-11-07：PR #99 首轮 CI 中 Ubuntu QML `ShellLoad` 因结构槽按下后拖动距离未越过系统阈值，`selectionDrag` 未激活而失败；其余已结束 CI 检查通过。这是测试轨迹未达到拖动阈值，不是产品行为断言失败。终点改为相距超过 40 个逻辑像素的正文 TextFlow 停靠点，仍验证结构槽起点不可重设；本机 QML CTest 3/3、格式和 diff 检查通过，Sol/medium 复审确认测试轨迹覆盖目标条件。修订后的 CI 尚待运行。
-- 2026-11-07：第二轮 Ubuntu CI 显示固定 `body_right` 停靠点仍可能与结构槽距离不足，测试的距离断言先行失败。现从已验证的 `body_left`/`body_right` 正文停靠点选择窗口曼哈顿距离较远者，并在事件前断言距离超过 40 个逻辑像素。macOS QML CTest 3/3、格式/diff 检查及 Sol/medium 只读复审通过；修订后的 CI 尚待运行。
+- 2026-10-29：创建任务，目标为公式页面布局、渲染与交互。
+- 2026-11-06：完成页面图元投影、字体/坐标边界及基础数学文本岛验证；早期失败项已随相关实现修正。
+- 2026-11-07：统一 L3 网格几何边界；接通数学绘制、持久化和主要编辑路径；按维护者要求持续合并正文/数学的文本排版与编辑逻辑。`FlowContent<T>` 承担通用变换，正文与数学保留宿主寻址/事务适配。验证和审查细节以本节“验证记录”及 PR #99 CI 为准。
+- 2026-11-07：共享文本样式和 `textDiagnostics` 跨 Rust/Qt/QML 接通；最新完整实现记录见验证记录。工作树后续改动仍需按标准重新评审。
 
 ## 完成摘要
 
-未完成。
+未完成。跨平台/真实桌面、剩余交互与换行语义、代表性性能复测、修订后 CI 和最终独立评审通过后，再更新状态及 011 索引。

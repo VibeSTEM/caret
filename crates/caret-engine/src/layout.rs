@@ -509,6 +509,8 @@ pub struct DocumentLayoutSnapshot {
     pub font_generation: u64,
     /// 文档显式请求的数学字体不可用时，保留请求并回退到内置 STIX Two Math。
     pub math_font_diagnostic: Option<MathFontDiagnostic>,
+    /// 正文与公式文本共享塑形后诊断通道，保留宿主节点 ID 和类型。
+    pub text_diagnostics: Vec<TextLayoutDiagnostic>,
     default_font_size_centipoints: u16,
     content_width_pt: f32,
     resolved_text_settings: ResolvedDocumentTextSettings,
@@ -535,6 +537,19 @@ pub struct MathFontDiagnostic {
     pub code: &'static str,
     /// `.cdoc` 中保留的原始请求族名。
     pub requested_family: String,
+}
+
+/// 单个文本塑形诊断及其文档宿主身份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextLayoutDiagnostic {
+    /// 产生诊断的段落或公式节点。
+    pub node_id: NodeId,
+    /// `paragraph` 或 `math`。
+    pub node_kind: &'static str,
+    /// 稳定诊断键，供界面本地化。
+    pub code: &'static str,
+    /// 用于定位缺失内容的诊断细节。
+    pub detail: String,
 }
 
 /// 同一代公式布局到页面坐标的投影；裁切与正文行使用相同规则。
@@ -2628,6 +2643,7 @@ impl DocumentLayoutService {
             .enumerate()
             .map(|(index, projection)| ((projection.page_index, projection.math_id.clone()), index))
             .collect();
+        let text_diagnostics = collect_text_layout_diagnostics(&paragraphs, &math_blocks);
         let mut math_projections_by_id: HashMap<NodeId, Vec<usize>> = HashMap::new();
         for (index, projection) in math_projections.iter().enumerate() {
             math_projections_by_id
@@ -2640,6 +2656,7 @@ impl DocumentLayoutService {
             document_generation,
             font_generation: catalog.generation(),
             math_font_diagnostic,
+            text_diagnostics,
             default_font_size_centipoints: base_style.font_size_centipoints,
             content_width_pt: content_width_pt as f32,
             resolved_text_settings: text_settings,
@@ -3390,6 +3407,8 @@ impl caret_math::layout::MathTextShaper for EngineMathTextShaper<'_> {
             })?;
         let metrics = layout.metrics;
         let requested_family_missing = layout.requested_family_missing;
+        let missing_requested_families = layout.missing_requested_families.clone();
+        let has_missing_glyph = layout.has_missing_glyph;
         let empty_caret_metrics = if layout.text.is_empty() {
             let style = spans
                 .first()
@@ -3467,6 +3486,8 @@ impl caret_math::layout::MathTextShaper for EngineMathTextShaper<'_> {
             ascent: f64::from(metrics.ascent_pt),
             descent: f64::from(metrics.descent_pt),
             requested_family_missing,
+            missing_requested_families,
+            has_missing_glyph,
             runs,
             containers,
         })
@@ -3772,6 +3793,68 @@ fn math_text_source_spans(
         byte_offset = end;
     }
     Ok(spans)
+}
+
+fn collect_text_layout_diagnostics(
+    paragraphs: &[LaidOutParagraph],
+    math_blocks: &HashMap<NodeId, Arc<caret_math::layout::MathLayout>>,
+) -> Vec<TextLayoutDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for paragraph in paragraphs {
+        for family in &paragraph.layout.missing_requested_families {
+            diagnostics.push(TextLayoutDiagnostic {
+                node_id: paragraph.id.clone(),
+                node_kind: "paragraph",
+                code: "text.font.family_missing",
+                detail: family.clone(),
+            });
+        }
+        if paragraph.layout.has_missing_glyph {
+            diagnostics.push(TextLayoutDiagnostic {
+                node_id: paragraph.id.clone(),
+                node_kind: "paragraph",
+                code: "text.glyph.missing",
+                detail: "paragraph contains an unavailable glyph".to_owned(),
+            });
+        }
+        for (math_id, layout) in paragraph
+            .inline_math_ids
+            .iter()
+            .zip(paragraph.inline_math_layouts.iter())
+        {
+            diagnostics.extend(
+                layout
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| TextLayoutDiagnostic {
+                        node_id: math_id.clone(),
+                        node_kind: "math",
+                        code: diagnostic.code,
+                        detail: diagnostic.detail.clone(),
+                    }),
+            );
+        }
+    }
+    diagnostics.extend(math_blocks.iter().flat_map(|(math_id, layout)| {
+        layout
+            .diagnostics
+            .iter()
+            .map(|diagnostic| TextLayoutDiagnostic {
+                node_id: math_id.clone(),
+                node_kind: "math",
+                code: diagnostic.code,
+                detail: diagnostic.detail.clone(),
+            })
+    }));
+    diagnostics.sort_by(|left, right| {
+        left.node_id
+            .to_string()
+            .cmp(&right.node_id.to_string())
+            .then_with(|| left.node_kind.cmp(right.node_kind))
+            .then_with(|| left.code.cmp(right.code))
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+    diagnostics
 }
 
 fn document_contains_math(blocks: &[Block]) -> bool {

@@ -62,6 +62,17 @@ enum MathTextCaretStep {
 
 type MathTreeTextBoundary<'a> = (&'a MathTree, MathTreePosition, Option<(usize, usize)>);
 
+struct DisplayMathInsertPlan {
+    parent_environment_ids: Vec<NodeId>,
+    sibling_index: usize,
+    before: Block,
+    after: Vec<Block>,
+    next_position: Pos,
+    target: MathEditTarget,
+    cursor: usize,
+    branch: MathEditBranch,
+}
+
 fn empty_math_tree() -> MathTree {
     MathTree {
         schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
@@ -1455,6 +1466,52 @@ impl Session {
     /// `\equation` / `\align`：在当前正文段落之后插入空显示公式块并进入编辑。
     /// 当前段落为空时公式插在它之前，空段落留作公式后的续写位置。
     pub(super) fn insert_display_math(&mut self, align: bool) -> Result<Effect, EditError> {
+        let plan = self.prepare_display_math_insert(align)?;
+        let before_selection = self.selection.clone();
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_state_id = self.history_state_id;
+        let blocks = block_list(&mut self.document.body, &plan.parent_environment_ids)?;
+        blocks.splice(
+            plan.sibling_index..=plan.sibling_index,
+            plan.after.iter().cloned(),
+        );
+        self.selection = Selection {
+            anchor: plan.next_position.clone(),
+            focus: plan.next_position,
+        };
+        self.math_edit = Some(MathEdit {
+            target: plan.target,
+            source_projection: None,
+            source_draft: None,
+            revision: self.current_math_edit_revision(),
+            cursor: plan.cursor,
+            branch: plan.branch,
+        });
+        let index = build_paragraph_index(&self.document.body);
+        self.finalize_structure_edit(
+            index,
+            DocumentPatch::BlockRange {
+                parent_environment_ids: plan.parent_environment_ids,
+                sibling_index: plan.sibling_index,
+                before: vec![plan.before],
+                after: plan.after,
+            },
+            before_selection,
+            before_visual_affinity,
+            before_state_id,
+        );
+        Ok(Effect {
+            document_changed: true,
+            selection_changed: true,
+            ..Effect::default()
+        })
+    }
+
+    pub(super) fn can_insert_display_math(&self, align: bool) -> bool {
+        self.prepare_display_math_insert(align).is_ok()
+    }
+
+    fn prepare_display_math_insert(&self, align: bool) -> Result<DisplayMathInsertPlan, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -1548,41 +1605,20 @@ impl Session {
                 position,
             )
         };
-        let before_selection = self.selection.clone();
-        let before_visual_affinity = self.selection_visual_affinity;
-        let before_state_id = self.history_state_id;
-        let blocks = block_list(&mut self.document.body, &parent_ids)?;
+        let mut candidate_document = self.document.clone();
+        let blocks = block_list(&mut candidate_document.body, &parent_ids)?;
         blocks.splice(sibling_index..=sibling_index, after.iter().cloned());
-        let target = MathEditTarget::Block { block_id, align };
-        self.selection = Selection {
-            anchor: next_position.clone(),
-            focus: next_position,
-        };
-        self.math_edit = Some(MathEdit {
-            target: target.clone(),
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
+        caret_doc::CdocFile::new(candidate_document)
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        Ok(DisplayMathInsertPlan {
+            parent_environment_ids: parent_ids,
+            sibling_index,
+            before: current,
+            after,
+            next_position,
+            target: MathEditTarget::Block { block_id, align },
             cursor,
             branch,
-        });
-        let index = build_paragraph_index(&self.document.body);
-        self.finalize_structure_edit(
-            index,
-            DocumentPatch::BlockRange {
-                parent_environment_ids: parent_ids,
-                sibling_index,
-                before: vec![current],
-                after,
-            },
-            before_selection,
-            before_visual_affinity,
-            before_state_id,
-        );
-        Ok(Effect {
-            document_changed: true,
-            selection_changed: true,
-            ..Effect::default()
         })
     }
 

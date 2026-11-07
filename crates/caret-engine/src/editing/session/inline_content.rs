@@ -426,7 +426,7 @@ impl Session {
         }
         let document_before = self.document.clone();
         self.replace_paragraph(&anchor, paragraph)?;
-        if let Err(error) = self.document.validate() {
+        if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
             self.document = document_before;
             self.text_map_cache.clear();
             return Err(EditError::InvalidDocument(error.to_string()));

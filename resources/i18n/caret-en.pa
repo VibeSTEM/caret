@@ -440,6 +440,16 @@ message_161:
   tr: "Math font \"%1\" is unsupported; using STIX Two Math."
   st: finished
 
+message_162:
+  src: Text contains characters unavailable in installed fonts.
+  tr: Text contains characters unavailable in installed fonts.
+  st: finished
+
+message_163:
+  src: "Text font \"%1\" is not installed; using fallback fonts."
+  tr: "Text font \"%1\" is not installed; using fallback fonts."
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

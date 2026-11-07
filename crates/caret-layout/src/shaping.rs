@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{FlowContent, InlineEnvironmentKind, Paragraph, ParagraphContent, TextFlow};
+use caret_doc::{FlowContent, Paragraph, ParagraphContent, TextFlow};
 pub use caret_font_roles::FontRole;
 
 mod unicode;
@@ -205,30 +205,15 @@ fn append_inlines<'a>(
             }
             FlowContent::Environment(environment) => {
                 let mut nested = style.clone();
-                match environment.kind {
-                    InlineEnvironmentKind::Bold => {
-                        nested.bold = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Italic => {
-                        nested.italic = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Font => {
-                        if let Some(family) = environment
-                            .props
-                            .get("fontFamily")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            nested.requested_family = Some(family.to_owned());
-                        }
-                    }
+                let text_style = environment.text_style();
+                if let Some(bold) = text_style.bold {
+                    nested.bold = bold;
+                }
+                if let Some(italic) = text_style.italic {
+                    nested.italic = italic;
+                }
+                if let Some(font_family) = text_style.font_family {
+                    nested.requested_family = Some(font_family);
                 }
                 append_inlines(&environment.children, &nested, output);
             }
@@ -251,8 +236,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use caret_doc::{
-        DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, ParagraphContent, Run, SoftBreak,
-        TextFlow,
+        DocumentSettings, InlineEnvironment, InlineEnvironmentKind, NodeId, OpaqueNode,
+        ParagraphContent, Run, SoftBreak, TextFlow,
     };
 
     use super::*;

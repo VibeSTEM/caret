@@ -22,6 +22,7 @@ struct ParsedLayoutSnapshot {
     QVariantList page_glyph_revisions;
     QVariantMap page_margins;
     QVariantMap math_font_diagnostic;
+    QVariantList text_diagnostics;
     QJsonArray paragraph_layouts;
     QHash<QString, qsizetype> paragraph_line_counts;
     QVariantList selection_rects;

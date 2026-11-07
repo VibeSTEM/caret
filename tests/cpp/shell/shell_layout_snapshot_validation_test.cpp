@@ -122,6 +122,10 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
     QJsonObject invalid_math_font_warning = root;
     invalid_math_font_warning.insert(QStringLiteral("mathFontDiagnostic"), QStringLiteral("bad"));
     QVERIFY(reject(invalid_math_font_warning));
+    QJsonObject invalid_text_diagnostics = root;
+    invalid_text_diagnostics.insert(QStringLiteral("textDiagnostics"),
+                                    QJsonArray{QJsonObject{{QStringLiteral("nodeId"), 1}}});
+    QVERIFY(reject(invalid_text_diagnostics));
 
     QJsonObject invalid_margins = root;
     QJsonObject margins = root.value(QStringLiteral("marginsPt")).toObject();

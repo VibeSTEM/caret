@@ -779,10 +779,6 @@ pub(super) fn split_inline_nodes(
     Ok((from_edit_nodes(left), from_edit_nodes(right)))
 }
 
-pub(super) fn can_split_inline_nodes(nodes: &[ParagraphContent], offset: usize) -> bool {
-    split_inline_nodes(nodes.to_vec(), offset).is_ok()
-}
-
 fn edit_inline_length(node: &EditNode) -> Result<usize, EditError> {
     match node {
         EditNode::Run(run) => Ok(run.text.len()),

@@ -113,6 +113,61 @@ fn math_font_fallback_diagnostic_reaches_the_layout_view() -> Result<(), Box<dyn
         json["mathFontDiagnostic"]["requestedFamily"],
         "Unavailable Math Family"
     );
+
+    let math_id = NodeId::generate();
+    snapshot
+        .text_diagnostics
+        .push(crate::layout::TextLayoutDiagnostic {
+            node_id: math_id.clone(),
+            node_kind: "math",
+            code: "math.glyph.missing",
+            detail: "formula text island contains an unavailable glyph".to_owned(),
+        });
+    let view = DocumentLayoutView::from(&snapshot);
+    let json = serde_json::to_value(view)?;
+    assert_eq!(json["textDiagnostics"][0]["nodeId"], math_id.to_string());
+    assert_eq!(json["textDiagnostics"][0]["nodeKind"], "math");
+    assert_eq!(json["textDiagnostics"][0]["code"], "math.glyph.missing");
+    Ok(())
+}
+
+#[test]
+fn paragraph_delta_projects_and_omits_text_diagnostics() -> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(Document::blank())?;
+    let mut runtime = DocumentLayoutRuntime::new_system()?;
+    let mut snapshot = runtime.layout_session(&session)?;
+    let paragraph_id = snapshot
+        .paragraphs
+        .first()
+        .map(|paragraph| paragraph.id.clone())
+        .ok_or("blank document must contain a paragraph")?;
+    snapshot
+        .text_diagnostics
+        .push(crate::layout::TextLayoutDiagnostic {
+            node_id: paragraph_id.clone(),
+            node_kind: "paragraph",
+            code: "text.font.family_missing",
+            detail: "Unavailable Body Family".to_owned(),
+        });
+
+    let delta = DocumentLayoutDeltaView::for_paragraph(&snapshot, &paragraph_id, 0, 0)
+        .ok_or("the edited paragraph should be present in the delta")?;
+    let json = serde_json::to_value(delta)?;
+    assert_eq!(
+        json["textDiagnostics"][0]["nodeId"],
+        paragraph_id.to_string()
+    );
+    assert_eq!(json["textDiagnostics"][0]["nodeKind"], "paragraph");
+    assert_eq!(
+        json["textDiagnostics"][0]["code"],
+        "text.font.family_missing"
+    );
+
+    snapshot.text_diagnostics.clear();
+    let delta = DocumentLayoutDeltaView::for_paragraph(&snapshot, &paragraph_id, 0, 0)
+        .ok_or("the edited paragraph should be present in the delta")?;
+    let json = serde_json::to_value(delta)?;
+    assert!(json.get("textDiagnostics").is_none());
     Ok(())
 }
 

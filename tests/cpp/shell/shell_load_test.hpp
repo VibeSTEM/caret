@@ -65,6 +65,7 @@ class ShellLoadTest : public QObject {
     void confirmedConflictReplacementWritesCurrentDocument();
     void invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPages();
     void mathFontFallbackDiagnosticProjectsToViewModel();
+    void textFontWarningStatusBarTracksLayoutDiagnostics();
     void missingRecoveryEntryFailsWithoutReplacingTheOpenDocument();
 #endif
 };

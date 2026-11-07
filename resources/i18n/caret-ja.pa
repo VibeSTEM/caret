@@ -440,6 +440,16 @@ message_161:
   tr: "数式フォント \"%1\" はサポートされていません。STIX Two Math を使用します。"
   st: finished
 
+message_162:
+  src: Text contains characters unavailable in installed fonts.
+  tr: テキストに、インストール済みフォントで表示できない文字が含まれています。
+  st: finished
+
+message_163:
+  src: "Text font \"%1\" is not installed; using fallback fonts."
+  tr: テキストフォント「%1」がインストールされていないため、代替フォントを使用します。
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

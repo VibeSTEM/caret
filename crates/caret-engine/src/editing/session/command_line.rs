@@ -7,7 +7,7 @@ use super::super::StoryId;
 use super::Session;
 use super::math_edit::math_text_split_is_available;
 use crate::editing::command_registry::{MATH_INSERT_COMMAND_ID, MATH_SPLIT_INLINE_COMMAND_ID};
-use crate::editing::text_map::{TextMap, can_split_inline_nodes};
+use crate::editing::text_map::TextMap;
 use crate::editing::{
     Command, CommandCandidate, CommandLine, CommandLineMode, Direction, EditError, Effect,
 };
@@ -126,7 +126,8 @@ impl Session {
                     && self.selection.anchor == self.selection.focus
                     && self.paragraph_index.contains_key(&line.at.paragraph_id)
             }),
-            "insert.equation" | "insert.align" => self.display_math_insert_is_available(),
+            "insert.equation" => self.can_insert_display_math(false),
+            "insert.align" => self.can_insert_display_math(true),
             "insert.inline_math" => self.inline_math_insert_is_available(),
             "text.format.bold" | "text.format.italic" | "text.format.underline" => {
                 self.command_line
@@ -137,40 +138,6 @@ impl Session {
             MATH_SPLIT_INLINE_COMMAND_ID => math_text_split_is_available(self),
             _ => true,
         }
-    }
-
-    fn display_math_insert_is_available(&self) -> bool {
-        if self.math_edit.is_some()
-            || self.composition.is_some()
-            || self.selection.anchor != self.selection.focus
-        {
-            return false;
-        }
-        let Some(line) = self.command_line.as_ref() else {
-            return false;
-        };
-        if line.mode != CommandLineMode::Command || line.at.story != StoryId::Body {
-            return false;
-        }
-        let Some(location) = self.paragraph_index.get(&line.at.paragraph_id) else {
-            return false;
-        };
-        if location.is_title {
-            return false;
-        }
-        let Ok(paragraph) = self.paragraph_for(&line.at) else {
-            return false;
-        };
-        let Ok(map) = TextMap::new(paragraph) else {
-            return false;
-        };
-        if map.validate_pos(&line.at).is_err() {
-            return false;
-        }
-        if map.text.is_empty() {
-            return true;
-        }
-        paragraph.extra.is_empty() && can_split_inline_nodes(&paragraph.inlines, line.at.offset)
     }
 
     fn inline_math_insert_is_available(&self) -> bool {
@@ -231,7 +198,7 @@ impl Session {
             return false;
         };
         *destination = paragraph;
-        document.validate().is_ok()
+        caret_doc::CdocFile::new(document).is_ok()
     }
 
     pub(super) fn run_command_line(&mut self, command: Command) -> Result<Effect, EditError> {

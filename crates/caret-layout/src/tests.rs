@@ -2020,6 +2020,38 @@ fn generic_font_families_are_not_reported_as_missing_paragraph_requests() {
 }
 
 #[test]
+fn paragraphs_and_math_text_islands_share_missing_glyph_detection() {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let style = ShapingStyle::new(1200);
+    let text = "A\u{10ffff}e\u{301}";
+    let mut paragraph_layouter = ParagraphLayouter::new();
+    let (_, paragraph_layout) = paragraph_layouter
+        .layout(
+            &mut catalog,
+            &paragraph(text, Some("en")),
+            &settings,
+            &style,
+            layout_options(240.0),
+        )
+        .unwrap_or_else(|error| panic!("paragraph shaping failed: {error}"));
+    let mut island_layouter = ParagraphLayouter::new();
+    let island = island_layouter
+        .shape_text_island(
+            &mut catalog,
+            &settings,
+            &[TextIslandSpan {
+                text,
+                style,
+                underline: false,
+            }],
+        )
+        .unwrap_or_else(|error| panic!("text island shaping failed: {error}"));
+
+    assert_eq!(paragraph_layout.has_missing_glyph, island.has_missing_glyph);
+}
+
+#[test]
 fn text_island_rebuilds_font_fallback_after_catalog_refresh() {
     let mut catalog = font_catalog();
     let settings = document_settings();

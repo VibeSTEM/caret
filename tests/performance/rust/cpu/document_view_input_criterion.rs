@@ -65,6 +65,72 @@ fn prepare_formatting_runtime(text: &str) -> DocumentViewRuntime {
     runtime
 }
 
+fn prepare_math_candidate_runtime(text: &str) -> DocumentViewRuntime {
+    let mut runtime = prepare_runtime(text).0;
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &runtime
+            .layout_snapshot_json()
+            .unwrap_or_else(|error| panic!("无法读取公式候选基准文档快照：{error}")),
+    )
+    .unwrap_or_else(|error| panic!("无法解析公式候选基准文档快照：{error}"));
+    let paragraphs = snapshot["paragraphs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("公式候选基准文档没有段落：{snapshot}"));
+    let paragraph = paragraphs
+        .get(paragraphs.len() / 2)
+        .unwrap_or_else(|| panic!("公式候选基准中间段落不存在：{}", paragraphs.len()));
+    let paragraph_id = paragraph["paragraphId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("公式候选基准段落缺少 ID：{paragraph}"));
+    let position = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": "0",
+        "affinity": "downstream",
+        "visualAffinity": "downstream"
+    });
+    runtime
+        .set_selection_json(&serde_json::json!({"anchor": position, "focus": position}).to_string())
+        .unwrap_or_else(|error| panic!("无法定位公式候选基准光标：{error}"));
+    runtime
+}
+
+fn verify_math_candidate_probe(text: &str) {
+    let mut runtime = prepare_math_candidate_runtime(text);
+    let before: serde_json::Value = serde_json::from_str(
+        &runtime
+            .layout_snapshot_json()
+            .unwrap_or_else(|error| panic!("无法读取公式候选探针初始快照：{error}")),
+    )
+    .unwrap_or_else(|error| panic!("无法解析公式候选探针初始快照：{error}"));
+    runtime
+        .command_line_command_json("begin", String::new())
+        .unwrap_or_else(|error| panic!("无法打开行内公式候选探针：{error}"));
+    let mut response = String::new();
+    for character in ["m", "a", "t", "h"] {
+        response = runtime
+            .command_line_command_json("type", character.to_owned())
+            .unwrap_or_else(|error| panic!("行内公式候选探针查询失败：{error}"));
+    }
+    let state: serde_json::Value = serde_json::from_str(&response)
+        .unwrap_or_else(|error| panic!("无法解析行内公式候选探针状态：{error}"));
+    let candidate = state["commandLine"]["candidates"]
+        .as_array()
+        .and_then(|candidates| {
+            candidates
+                .iter()
+                .find(|candidate| candidate["commandId"] == "insert.inline_math")
+        })
+        .unwrap_or_else(|| panic!(r"公式候选探针没有 \math 候选：{state}"));
+    assert_eq!(candidate["available"], true);
+    let after: serde_json::Value = serde_json::from_str(
+        &runtime
+            .layout_snapshot_json()
+            .unwrap_or_else(|error| panic!("无法读取公式候选探针最终快照：{error}")),
+    )
+    .unwrap_or_else(|error| panic!("无法解析公式候选探针最终快照：{error}"));
+    assert_eq!(before["documentGeneration"], after["documentGeneration"]);
+}
+
 fn prepare_ime_runtime(text: &str) -> DocumentViewRuntime {
     let mut runtime = prepare_runtime(text).0;
     let page_index = current_caret_page_index(&mut runtime);
@@ -101,6 +167,7 @@ fn current_caret_page_index(runtime: &mut DocumentViewRuntime) -> usize {
 
 fn long_document_input(criterion: &mut Criterion) {
     let text = novel_excerpt();
+    verify_math_candidate_probe(&text);
     let (mut response_probe, full_snapshot_bytes) = prepare_runtime(&text);
     let delta_snapshot_bytes = response_probe
         .insert_text_delta_json("x".to_owned())
@@ -262,6 +329,28 @@ fn long_document_input(criterion: &mut Criterion) {
             BatchSize::LargeInput,
         );
     });
+    group.bench_function(
+        "inline_math_command_typeahead_and_snapshots_in_100k_document",
+        |b| {
+            b.iter_batched_ref(
+                || prepare_math_candidate_runtime(&text),
+                |runtime| {
+                    let mut bytes = runtime
+                        .command_line_command_json("begin", String::new())
+                        .unwrap_or_else(|error| panic!("无法打开行内公式候选命令：{error}"))
+                        .len();
+                    for character in ["m", "a", "t", "h"] {
+                        bytes += runtime
+                            .command_line_command_json("type", character.to_owned())
+                            .unwrap_or_else(|error| panic!("行内公式候选查询失败：{error}"))
+                            .len();
+                    }
+                    black_box(bytes)
+                },
+                BatchSize::LargeInput,
+            );
+        },
+    );
     group.finish();
 }
 

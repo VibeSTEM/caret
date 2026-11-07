@@ -87,7 +87,7 @@ split/merge 操作接收强类型有序流和宿主路径，由宿主适配器�
 
 根流提升时，`InlineEnvironment<MathContent>` 转为 `InlineEnvironment<ParagraphContent>`，输入包装仍对应一个输出包装，不因子项类型转换复制节点。只有编辑范围使同一包装包含多个不连续输出范围时，才拆成多个包装；原 ID 留在首个存活的同 kind/同语义包装，其余新节点使用新 ID。InlineMath 宿主 ID 留给首个仍存在的 Math 输出项；没有 Math 输出时移除该 ID。MathNode 内部 ID 原样保留，无 ID 节点不生成身份。Run 与环境未知字段按实际归属保留；不能证明安全复制或唯一归属时整笔编辑原子拒绝。合并仅在属性、未知字段和身份可无损处理时进行。
 
-文本岛复用正文 shaping 的字体回退、语言、Run 属性与 InlineEnvironment，但不获得段落块布局、段落前后距或分页语义。数学文本不维护专属字体规则：`\textsf` / `\texttt` 映射为 TextFlow 的通用 Font 环境；`sans-serif` / `monospace` 遵循[字体选择规范](font-selection.md)中的通用族语义，和 Math/Code 字体角色相互独立。公式文本与正文采用相同的 shaping、字体度量和缺字回退行为。
+文本岛复用正文 shaping 的字体回退、语言、Run 属性与 InlineEnvironment，但不获得段落块布局、段落前后距或分页语义。Bold、Italic、Font 的 `enabled` / `fontFamily` 语义由 `caret-doc::InlineTextStyle` 统一解析，正文 shaping 和数学布局适配器都消费同一份增量；数学 backend 只负责把它投影到 TeX 命令，布局侧直接使用结构化样式，不再往返解析 `bf/md/it/up` 字符串。数学文本不维护专属字体规则：`\textsf` / `\texttt` 映射为 TextFlow 的通用 Font 环境；`sans-serif` / `monospace` 遵循[字体选择规范](font-selection.md)中的通用族语义，和 Math/Code 字体角色相互独立。公式文本与正文采用相同的 shaping、字体度量和缺字回退行为；布局快照 `textDiagnostics` 使用同一诊断结构报告正文与公式的缺字/缺失字体族，并附带段落或公式宿主 ID。
 
 | 内容 | 数学源码表示 | 编辑/导出规则 |
 | --- | --- | --- |

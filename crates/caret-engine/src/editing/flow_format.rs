@@ -43,18 +43,15 @@ impl InheritedInlineStyle {
 
     pub(super) fn with_environment<T>(&self, environment: &InlineEnvironment<T>) -> Self {
         let mut style = self.clone();
-        match environment.kind {
-            InlineEnvironmentKind::Bold => {
-                style.bold = Some(enabled(environment));
-            }
-            InlineEnvironmentKind::Italic => {
-                style.italic = Some(enabled(environment));
-            }
-            InlineEnvironmentKind::Font => {
-                if let Some(family) = environment.props.get("fontFamily").and_then(Value::as_str) {
-                    style.font_family = Some(family.to_owned());
-                }
-            }
+        let delta = environment.text_style();
+        if let Some(bold) = delta.bold {
+            style.bold = Some(bold);
+        }
+        if let Some(italic) = delta.italic {
+            style.italic = Some(italic);
+        }
+        if let Some(font_family) = delta.font_family {
+            style.font_family = Some(font_family);
         }
         style
     }
@@ -451,14 +448,6 @@ pub(super) fn text_flow_inline_format_state(
         offset = end;
     }
     Ok(state)
-}
-
-fn enabled<T>(environment: &InlineEnvironment<T>) -> bool {
-    environment
-        .props
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
 }
 
 fn content_len<T>(content: &FlowContent<T>) -> Result<usize, EditError> {

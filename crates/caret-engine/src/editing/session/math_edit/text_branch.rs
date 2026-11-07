@@ -101,7 +101,7 @@ pub(in crate::editing::session) fn math_text_split_is_available(session: &Sessio
             }
         }
     }
-    document.validate().is_ok()
+    caret_doc::CdocFile::new(document).is_ok()
 }
 
 pub(super) fn text_source_boundary_from_map(
@@ -321,7 +321,7 @@ impl Session {
                 let document_before = self.document.clone();
                 let paragraph_index_before = self.paragraph_index.clone();
                 self.replace_paragraph(&position, paragraph)?;
-                if let Err(error) = self.document.validate() {
+                if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
                     self.document = document_before;
                     self.paragraph_index = paragraph_index_before;
                     self.text_map_cache.clear();
@@ -374,7 +374,7 @@ impl Session {
                     _ => return Err(EditError::InvalidPosition),
                 }
                 *slot = after.clone();
-                if let Err(error) = self.document.validate() {
+                if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
                     self.document = document_before;
                     return Err(EditError::InvalidDocument(error.to_string()));
                 }

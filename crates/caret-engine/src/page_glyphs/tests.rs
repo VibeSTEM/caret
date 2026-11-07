@@ -692,6 +692,12 @@ fn missing_formula_text_font_family_is_reported_after_body_fallback() {
     let snapshot = layout(&document);
     let math_layout = &snapshot.math_blocks[&equation_id];
     assert!(math_layout.requested_text_family_missing);
+    assert!(snapshot.text_diagnostics.iter().any(|diagnostic| {
+        diagnostic.node_id == equation_id
+            && diagnostic.node_kind == "math"
+            && diagnostic.code == "math.text.font.family_missing"
+            && diagnostic.detail == "Caret Missing Test Font Family"
+    }));
     assert!(
         !snapshot
             .page_glyphs(0)
@@ -699,6 +705,145 @@ fn missing_formula_text_font_family_is_reported_after_body_fallback() {
             .runs
             .is_empty()
     );
+}
+
+#[test]
+fn inline_math_placeholder_does_not_report_missing_body_font() {
+    let parsed = caret_math::parse(r"x+1", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    document.global_settings.default_font_family =
+        Some("Caret Missing Body Test Font Family".to_owned());
+    let paragraph_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: Default::default(),
+    })];
+    document.body.push(Block::Paragraph(paragraph));
+
+    let snapshot = layout(&document);
+    assert!(!snapshot.text_diagnostics.iter().any(|diagnostic| {
+        diagnostic.node_id == paragraph_id && diagnostic.node_kind == "paragraph"
+    }));
+}
+
+#[test]
+fn inline_math_and_literal_object_character_keep_body_font_diagnostics() {
+    let parsed = caret_math::parse(r"x+1", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let parsed_after = caret_math::parse(r"x+1", caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("valid inline formula should parse: {error}"));
+    let caret_math::ParsedMath::Tree(after_math_tree) = parsed_after else {
+        panic!("inline formula should produce a MathTree");
+    };
+    let mut document = document_with_text("");
+    document.global_settings.default_font_family =
+        Some("Caret Missing Body Test Font Family".to_owned());
+    let before_formula_id = NodeId::generate();
+    let after_formula_id = NodeId::generate();
+    let literal_paragraph_id = NodeId::generate();
+    let mut before_formula = Paragraph::empty(before_formula_id.clone());
+    before_formula.inlines = vec![
+        text_run("before", Some("en")),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree,
+            extra: Default::default(),
+        }),
+    ];
+    let mut after_formula = Paragraph::empty(after_formula_id.clone());
+    after_formula.inlines = vec![
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: after_math_tree,
+            extra: Default::default(),
+        }),
+        text_run("after", Some("en")),
+    ];
+    let mut literal_paragraph = Paragraph::empty(literal_paragraph_id.clone());
+    literal_paragraph.inlines = vec![text_run("\u{fffc}", Some("en"))];
+    document.body.extend([
+        Block::Paragraph(before_formula),
+        Block::Paragraph(after_formula),
+        Block::Paragraph(literal_paragraph),
+    ]);
+
+    let snapshot = layout(&document);
+    for paragraph_id in [before_formula_id, after_formula_id, literal_paragraph_id] {
+        assert!(snapshot.text_diagnostics.iter().any(|diagnostic| {
+            diagnostic.node_id == paragraph_id
+                && diagnostic.node_kind == "paragraph"
+                && diagnostic.code == "text.font.family_missing"
+        }));
+    }
+}
+
+#[test]
+fn formula_text_without_a_supported_glyph_reports_missing_glyph() {
+    let parsed = caret_math::parse(
+        "\\frac{\\text{\u{10ffff}}}{x}",
+        caret_math::MathInputKind::Inline,
+    )
+    .unwrap_or_else(|error| panic!("formula text with a noncharacter should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("inline input should produce a MathTree");
+    };
+    let math_id = NodeId::generate();
+    let mut document = document_with_text("");
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![ParagraphContent::Math(InlineMath {
+        id: math_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    })];
+    document.body.push(Block::Paragraph(paragraph));
+
+    let snapshot = layout(&document);
+    assert!(snapshot.paragraphs.iter().any(|paragraph| {
+        paragraph.inline_math_layouts.iter().any(|math| {
+            math.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "math.glyph.missing")
+        })
+    }));
+    assert!(snapshot.text_diagnostics.iter().any(|diagnostic| {
+        diagnostic.node_id == math_id
+            && diagnostic.node_kind == "math"
+            && diagnostic.code == "math.glyph.missing"
+    }));
+    assert!(snapshot.page_glyphs(0).is_ok());
+}
+
+#[test]
+fn paragraph_text_diagnostics_use_the_shared_shaping_results() {
+    let mut document = document_with_text("");
+    let paragraph_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph.inlines = vec![ParagraphContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "body \u{10ffff} text".to_owned(),
+            language: Some("en".to_owned()),
+            props: Default::default(),
+            extra: Default::default(),
+        }],
+        extra: Default::default(),
+    })];
+    document.body.push(Block::Paragraph(paragraph));
+
+    let snapshot = layout(&document);
+    assert!(snapshot.text_diagnostics.iter().any(|diagnostic| {
+        diagnostic.node_id == paragraph_id
+            && diagnostic.node_kind == "paragraph"
+            && diagnostic.code == "text.glyph.missing"
+    }));
 }
 
 #[test]

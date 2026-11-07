@@ -1157,6 +1157,152 @@ fn mod_backspace_rejects_unpreservable_math_metadata_atomically() -> Result<(), 
 }
 
 #[test]
+fn align_candidate_is_disabled_when_insertion_would_exceed_document_depth() -> Result<(), EditError>
+{
+    let paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    let mut block = Block::Paragraph(paragraph);
+    for _ in 0..caret_doc::MAX_DOCUMENT_NESTING_DEPTH {
+        block = Block::Environment(caret_doc::BlockEnvironment {
+            id: NodeId::generate(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![block],
+            extra: Default::default(),
+        });
+    }
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![block];
+    assert!(document.validate().is_ok());
+
+    let mut session = Session::new(document)?;
+    assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+    assert_eq!(
+        session
+            .paragraph_index
+            .get(&paragraph_id)
+            .map(|location| location.block_path.len()),
+        Some(caret_doc::MAX_DOCUMENT_NESTING_DEPTH + 1)
+    );
+    assert!(!session.can_insert_display_math(true));
+    session.run(Command::BeginCommandLine)?;
+    session.run(Command::TypeCommandLine("align".to_owned()))?;
+    let candidate = session
+        .command_line_candidates()
+        .into_iter()
+        .find(|candidate| candidate.alias == r"\align")
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(!candidate.available);
+
+    let document_before = session.document().clone();
+    let selection_before = session.selection().clone();
+    let generation_before = session.document_generation();
+    let history_before = session.history_state_id();
+    session.run(Command::AcceptCommandLine)?;
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.selection(), &selection_before);
+    assert!(session.command_line().is_some());
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), history_before);
+    assert!(caret_doc::CdocFile::new(session.document().clone()).is_ok());
+
+    session.run(Command::CancelCommandLine)?;
+    assert!(session.insert_display_math(true).is_err());
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), history_before);
+    assert!(session.math_edit().is_none());
+
+    let mut equation_session = Session::new(session.document().clone())?;
+    equation_session.run(Command::BeginCommandLine)?;
+    equation_session.run(Command::TypeCommandLine("equation".to_owned()))?;
+    assert!(
+        equation_session
+            .command_line_candidates()
+            .iter()
+            .any(|candidate| { candidate.alias == r"\equation" && candidate.available })
+    );
+    equation_session.run(Command::AcceptCommandLine)?;
+    assert!(caret_doc::CdocFile::new(equation_session.document().clone()).is_ok());
+    Ok(())
+}
+
+#[test]
+fn math_insert_and_split_candidates_are_disabled_for_non_writable_documents()
+-> Result<(), EditError> {
+    let mut document = caret_doc::Document::blank();
+    document.body.push(Block::Opaque(caret_doc::OpaqueNode {
+        raw: serde_json::json!({"type": "future"}),
+    }));
+    assert!(document.validate().is_ok());
+    assert!(caret_doc::CdocFile::new(document.clone()).is_err());
+
+    let mut insert_session = Session::new(document)?;
+    insert_session.run(Command::BeginCommandLine)?;
+    insert_session.run(Command::TypeCommandLine("math".to_owned()))?;
+    let candidate = insert_session
+        .command_line_candidates()
+        .into_iter()
+        .find(|candidate| candidate.alias == r"\math")
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(!candidate.available);
+    let document_before = insert_session.document().clone();
+    let selection_before = insert_session.selection().clone();
+    let generation_before = insert_session.document_generation();
+    let history_before = insert_session.history_state_id();
+    insert_session.run(Command::AcceptCommandLine)?;
+    assert_eq!(insert_session.document(), &document_before);
+    assert_eq!(insert_session.selection(), &selection_before);
+    assert_eq!(insert_session.document_generation(), generation_before);
+    assert_eq!(insert_session.history_state_id(), history_before);
+    assert!(insert_session.command_line().is_some());
+    insert_session.run(Command::CancelCommandLine)?;
+    assert!(matches!(
+        insert_session.run(Command::InsertInlineMath("x".to_owned())),
+        Err(EditError::InvalidDocument(_))
+    ));
+    assert_eq!(insert_session.document(), &document_before);
+    assert_eq!(insert_session.selection(), &selection_before);
+    assert_eq!(insert_session.document_generation(), generation_before);
+    assert_eq!(insert_session.history_state_id(), history_before);
+
+    let mut split_session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    split_session.run(Command::InsertInlineMath(r"\text{abc}".to_owned()))?;
+    split_session.run(Command::EnterMath(Direction::Backward))?;
+    split_session
+        .document
+        .body
+        .push(Block::Opaque(caret_doc::OpaqueNode {
+            raw: serde_json::json!({"type": "future"}),
+        }));
+    split_session.run(Command::BeginCommandLine)?;
+    split_session.run(Command::TypeCommandLine("math".to_owned()))?;
+    let candidate = split_session
+        .command_line_candidates()
+        .into_iter()
+        .find(|candidate| candidate.alias == r"\math")
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(!candidate.available);
+    let document_before = split_session.document().clone();
+    let selection_before = split_session.selection().clone();
+    let edit_before = split_session.math_edit().cloned();
+    let generation_before = split_session.document_generation();
+    let history_before = split_session.history_state_id();
+    split_session.run(Command::AcceptCommandLine)?;
+    assert_eq!(split_session.document(), &document_before);
+    assert_eq!(split_session.selection(), &selection_before);
+    assert_eq!(split_session.math_edit(), edit_before.as_ref());
+    assert_eq!(split_session.document_generation(), generation_before);
+    assert_eq!(split_session.history_state_id(), history_before);
+    assert!(split_session.command_line().is_some());
+    Ok(())
+}
+
+#[test]
 fn mod_backspace_rejects_math_trees_whose_tex_projection_exceeds_the_source_budget_atomically()
 -> Result<(), EditError> {
     let max_source_bytes = caret_math::MAX_MATH_SOURCE_BYTES;

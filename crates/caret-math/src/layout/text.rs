@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{MathPathStep, NodeId, Run};
+use caret_doc::{InlineTextStyle, MathPathStep, NodeId, Run};
 
 use super::MathColor;
 
@@ -21,13 +21,8 @@ pub struct MathTextRun {
     pub style: MathTextRunStyle,
 }
 
-/// 经过数学行内格式环境继承后的正文样式；`None` 表示继承相邻环境值。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MathTextRunStyle {
-    pub bold: Option<bool>,
-    pub italic: Option<bool>,
-    pub font_family: Option<String>,
-}
+/// 数学 TextFlow 使用与正文相同的行内环境样式增量。
+pub type MathTextRunStyle = InlineTextStyle;
 
 /// 整个连续文本岛作为一个请求提交，以保留跨 Run 的组合字符和双向排版。
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +71,10 @@ pub struct MathTextShape {
     pub ascent: f64,
     pub descent: f64,
     pub requested_family_missing: bool,
+    /// 缺失的首选字体族名；由共享正文 shaping 适配器提供。
+    pub missing_requested_families: Vec<String>,
+    /// 正文塑形器报告至少一个 `.notdef` 字形。
+    pub has_missing_glyph: bool,
     pub runs: Vec<MathTextRunBox>,
     pub containers: Vec<MathTextRunBox>,
 }
