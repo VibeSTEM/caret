@@ -701,15 +701,11 @@ fn matrix_flows_with_rows_and_markers_round_trip_through_cdoc() {
         Ok(opened) => opened,
         Err(error) => panic!("matrix document should reopen: {error}"),
     };
-    let OpenedDocument::SafePreview(preview) = opened else {
-        panic!("math remains a safe preview until 044 is integrated");
+    let OpenedDocument::Editable(file) = opened else {
+        panic!("supported matrix math should reopen as editable");
     };
-    assert!(
-        !preview
-            .reasons
-            .contains(&caret_doc::PreviewReason::UnsupportedNodeKind)
-    );
-    assert!(matches!(preview.document().body[0], Block::Paragraph(_)));
+    assert!(matches!(file.document().body[0], Block::Paragraph(_)));
+    assert_eq!(file.document(), &document);
 }
 
 #[test]

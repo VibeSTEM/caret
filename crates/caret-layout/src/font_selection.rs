@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use caret_doc::DocumentSettings;
+use caret_doc::{DocumentSettings, InlineEnvironmentTemplates};
 use caret_font_roles::FontRole;
 use icu_locale_core::{Locale, subtags::Script};
 use icu_properties::{
@@ -87,6 +87,7 @@ pub enum FontPreferenceError {
     EmptyFamily,
     DuplicateScriptTag(String),
     DuplicateLanguageTag(String),
+    InvalidEnvironmentTemplates(String),
 }
 
 impl std::fmt::Display for FontPreferenceError {
@@ -97,6 +98,9 @@ impl std::fmt::Display for FontPreferenceError {
             Self::DuplicateScriptTag(tag) => write!(formatter, "font.duplicate_script_tag: {tag}"),
             Self::DuplicateLanguageTag(tag) => {
                 write!(formatter, "font.duplicate_language_tag: {tag}")
+            }
+            Self::InvalidEnvironmentTemplates(reason) => {
+                write!(formatter, "font.invalid_environment_templates: {reason}")
             }
         }
     }
@@ -120,6 +124,7 @@ pub struct FontPreferenceRules {
 pub struct ResolvedDocumentTextSettings {
     default_language: Option<String>,
     font_preferences: FontPreferenceRules,
+    inline_environment_templates: InlineEnvironmentTemplates,
 }
 
 impl ResolvedDocumentTextSettings {
@@ -130,6 +135,10 @@ impl ResolvedDocumentTextSettings {
         Ok(Self {
             default_language: settings.default_language.clone(),
             font_preferences: FontPreferenceRules::from_document_settings(settings)?,
+            inline_environment_templates: InlineEnvironmentTemplates::from_theme(
+                settings.theme.as_ref(),
+            )
+            .map_err(|error| FontPreferenceError::InvalidEnvironmentTemplates(error.to_string()))?,
         })
     }
 
@@ -140,9 +149,18 @@ impl ResolvedDocumentTextSettings {
     pub fn font_preferences(&self) -> &FontPreferenceRules {
         &self.font_preferences
     }
+
+    pub fn inline_environment_templates(&self) -> &InlineEnvironmentTemplates {
+        &self.inline_environment_templates
+    }
 }
 
 impl FontPreferenceRules {
+    /// 返回文档显式请求的数学字体族；`<default>` 已解析为 `None`。
+    pub fn math_family(&self) -> Option<&str> {
+        self.math_family.as_deref()
+    }
+
     /// 使用 ICU4X 解析脚本键并规范化语言键，保留原始设置中的请求族名。
     ///
     /// 新的、形状有效的 ISO 15924 标签可编译；不把脚本注册表硬编码进文档模型。

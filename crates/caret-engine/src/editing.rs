@@ -9,6 +9,7 @@ mod command_registry;
 mod environment;
 mod error;
 mod flow_edit;
+mod flow_format;
 mod flow_map;
 mod grapheme;
 mod paragraph_ops;

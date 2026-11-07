@@ -27,6 +27,22 @@ impl MathTextFlowPath {
         Self { steps, align_cell }
     }
 
+    /// 将同代 MathLayout 的稳定结构路径转成可由 Session 校验的文本路径。
+    pub(crate) fn from_layout_path(
+        steps: Vec<MathTextFlowPathStep>,
+        align_cell: Option<(usize, usize)>,
+    ) -> Self {
+        Self { steps, align_cell }
+    }
+
+    /// 从界面提交的类型化路径构造候选；Session 在修改前会重新校验路径和文本边界。
+    pub fn from_interaction_path(
+        steps: Vec<MathTextFlowPathStep>,
+        align_cell: Option<(usize, usize)>,
+    ) -> Self {
+        Self { steps, align_cell }
+    }
+
     pub(super) fn with_structural_steps(&self, steps: Vec<MathTextFlowPathStep>) -> Self {
         Self::new(steps, self.align_cell)
     }
@@ -507,7 +523,7 @@ fn resolve_content_path<'a>(
     }
 }
 
-fn resolve_flow_path<'a>(
+pub(super) fn resolve_flow_path<'a>(
     root: &'a MathFlow,
     steps: &[MathTextFlowPathStep],
 ) -> Option<&'a MathFlow> {
@@ -545,6 +561,26 @@ pub(super) fn resolve_content_path_mut<'a>(
     root: &'a mut MathFlow,
     steps: &[MathTextFlowPathStep],
 ) -> Option<&'a mut MathContent> {
+    match resolve_path_target_mut(root, steps)? {
+        PathTargetMut::Content(content) => Some(content),
+        PathTargetMut::Flow(_) => None,
+    }
+}
+
+pub(super) fn resolve_flow_path_mut<'a>(
+    root: &'a mut MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<&'a mut MathFlow> {
+    match resolve_path_target_mut(root, steps)? {
+        PathTargetMut::Flow(flow) => Some(flow),
+        PathTargetMut::Content(_) => None,
+    }
+}
+
+fn resolve_path_target_mut<'a>(
+    root: &'a mut MathFlow,
+    steps: &[MathTextFlowPathStep],
+) -> Option<PathTargetMut<'a>> {
     let mut target = PathTargetMut::Flow(root);
     for step in steps {
         target = match (target, step) {
@@ -562,10 +598,7 @@ pub(super) fn resolve_content_path_mut<'a>(
             _ => return None,
         };
     }
-    match target {
-        PathTargetMut::Content(content) => Some(content),
-        PathTargetMut::Flow(_) => None,
-    }
+    Some(target)
 }
 
 /// 返回路径末端内容所在的宿主列表与槽位，用于以同级节点替换该内容。

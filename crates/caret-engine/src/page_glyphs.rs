@@ -371,7 +371,7 @@ impl DocumentLayoutSnapshot {
                     next_paint_order += 1;
                 }
                 for item in line.items() {
-                    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
+                    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = &item else {
                         let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
                             return Err(PageGlyphError::UnsupportedInlineBox);
                         };
@@ -382,21 +382,34 @@ impl DocumentLayoutSnapshot {
                                     .map_err(|_| PageGlyphError::UnsupportedInlineBox)?,
                             )
                             .ok_or(PageGlyphError::UnsupportedInlineBox)?;
-                        let object_baseline_y_pt = page_line_top_pt
-                            + f64::from(inline_box.y)
-                            + f64::from(inline_box.baseline.unwrap_or(inline_box.height))
-                            - raw_top_pt
-                            + baseline_adjustment_pt;
-                        let object_x_pt = page.margin_left_pt + f64::from(inline_box.x);
+                        let math_text_layouts = paragraph
+                            .inline_math_text_layouts
+                            .get(
+                                usize::try_from(inline_box.id)
+                                    .map_err(|_| PageGlyphError::UnsupportedInlineBox)?,
+                            )
+                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                        let index = usize::try_from(inline_box.id)
+                            .map_err(|_| PageGlyphError::UnsupportedInlineBox)?;
+                        let math_id = paragraph
+                            .inline_math_ids
+                            .get(index)
+                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                        let projection = self
+                            .math_projection(page_index, math_id)
+                            .ok_or(PageGlyphError::UnsupportedInlineBox)?;
+                        let object_baseline_y_pt = projection.baseline_y_pt;
+                        let object_x_pt = projection.object_x_pt;
                         if !object_baseline_y_pt.is_finite() || !object_x_pt.is_finite() {
                             return Err(PageGlyphError::InvalidGlyphSource);
                         }
                         append_math_items(
                             &math_layout.items,
+                            math_text_layouts,
                             MathItemHost {
                                 paragraph_id: &paragraph.id,
                                 line_index,
-                                line_clip_y_pt,
+                                line_clip_y_pt: projection.drawing_clip(),
                                 object_x_pt,
                                 baseline_y_pt: object_baseline_y_pt,
                             },
@@ -409,52 +422,24 @@ impl DocumentLayoutSnapshot {
                         )?;
                         continue;
                     };
-                    let run = glyph_run.run();
-                    let font_size_pt = run.font_size();
-                    if !font_size_pt.is_finite()
-                        || font_size_pt <= 0.0
-                        || run.font().data.is_empty()
-                    {
-                        return Err(PageGlyphError::InvalidGlyphSource);
-                    }
-                    let mut glyphs = Vec::new();
                     // 先消去 Parley 全局行顶，再在 f64 中加入局部 glyph y；避免超长段落
                     // 的全局 f32 baseline 吞掉组合附标的局部偏移。
                     let run_baseline_y_pt = page_line_top_pt + f64::from(glyph_run.baseline())
                         - raw_top_pt
                         + baseline_adjustment_pt;
-                    for (glyph, local_glyph) in
-                        glyph_run.positioned_glyphs().zip(glyph_run.glyphs())
-                    {
-                        let x_pt = page.margin_left_pt + f64::from(glyph.x);
-                        let baseline_y_pt = run_baseline_y_pt + f64::from(local_glyph.y);
-                        if !x_pt.is_finite() || !baseline_y_pt.is_finite() {
-                            return Err(PageGlyphError::InvalidGlyphSource);
-                        }
-                        glyphs.push(PageGlyph {
-                            glyph_id: glyph.id,
-                            x_pt,
-                            baseline_y_pt,
-                        });
-                    }
-                    if !glyphs.is_empty() {
-                        runs.push(PageGlyphRun {
+                    if let Some(run) = page_run_from_positioned_glyphs(
+                        &item,
+                        PageGlyphRunOrigin {
+                            x_pt: page.margin_left_pt,
+                            baseline_y_pt: run_baseline_y_pt,
                             paint_order: next_paint_order,
-                            paragraph_id: paragraph.id.clone(),
+                            paragraph_id: &paragraph.id,
                             line_index,
                             line_clip_y_pt,
-                            font: run.font().clone(),
-                            font_size_pt,
-                            normalized_coords: run
-                                .normalized_coords()
-                                .iter()
-                                .map(|coordinate| coordinate.to_bits())
-                                .collect(),
-                            synthesis: run.synthesis(),
-                            foreground: (glyph_run.style().brush != [0, 0, 0, 0])
-                                .then_some(glyph_run.style().brush),
-                            glyphs,
-                        });
+                            foreground: None,
+                        },
+                    )? {
+                        runs.push(run);
                         next_paint_order += 1;
                     }
                 }
@@ -466,9 +451,15 @@ impl DocumentLayoutSnapshot {
                 .math_blocks
                 .get(&fragment.math_id)
                 .ok_or(PageGlyphError::MissingMathBlock)?;
-            let object_x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt);
-            let baseline_y_pt =
-                page.margin_top_pt + f64::from(fragment.y_offset_pt) + layout.ascent;
+            let text_layouts = self
+                .math_block_text_layouts
+                .get(&fragment.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let projection = self
+                .math_projection(page_index, &fragment.math_id)
+                .ok_or(PageGlyphError::MissingMathBlock)?;
+            let object_x_pt = projection.object_x_pt;
+            let baseline_y_pt = projection.baseline_y_pt;
             if !object_x_pt.is_finite()
                 || !baseline_y_pt.is_finite()
                 || !fragment.width_pt.is_finite()
@@ -478,10 +469,11 @@ impl DocumentLayoutSnapshot {
             }
             append_math_items(
                 &layout.items,
+                text_layouts,
                 MathItemHost {
                     paragraph_id: &fragment.math_id,
                     line_index: 0,
-                    line_clip_y_pt: None,
+                    line_clip_y_pt: projection.drawing_clip(),
                     object_x_pt,
                     baseline_y_pt,
                 },
@@ -521,6 +513,7 @@ struct MathItemOutput<'a> {
 
 fn append_math_items(
     items: &[caret_math::layout::MathItem],
+    text_layouts: &HashMap<u64, crate::layout::MathTextSidecar>,
     host: MathItemHost<'_>,
     output: MathItemOutput<'_>,
     next_paint_order: &mut u64,
@@ -667,9 +660,161 @@ fn append_math_items(
                 });
                 *next_paint_order += 1;
             }
+            caret_math::layout::MathItem::TextIsland {
+                token,
+                x,
+                baseline_y,
+                color,
+                ..
+            } => {
+                let sidecar = text_layouts
+                    .get(token)
+                    .ok_or(PageGlyphError::InvalidGlyphSource)?;
+                if sidecar.layout.text.is_empty() {
+                    continue;
+                }
+                let mut lines = sidecar.layout.layout.lines();
+                let first_line = lines.next().ok_or(PageGlyphError::InvalidGlyphSource)?;
+                let first_baseline = first_line.metrics().baseline;
+                let island_baseline = host.baseline_y_pt + baseline_y;
+                let math_color = color_bytes(*color).or_else(|| color_bytes(sidecar.color));
+                for line in std::iter::once(first_line).chain(lines) {
+                    for positioned in line.items() {
+                        let caret_layout::PositionedGlyphLayoutItem::GlyphRun(glyph_run) =
+                            &positioned
+                        else {
+                            continue;
+                        };
+                        let baseline_y_pt = island_baseline + f64::from(glyph_run.baseline())
+                            - f64::from(first_baseline);
+                        let run = glyph_run.run();
+                        let foreground = math_color.or_else(|| {
+                            (glyph_run.style().brush != [0, 0, 0, 0])
+                                .then_some(glyph_run.style().brush)
+                        });
+                        if let Some(decoration) = glyph_run.style().underline.as_ref() {
+                            let font_metrics = run.font_metrics();
+                            let offset = decoration.offset.unwrap_or(font_metrics.underline_offset);
+                            let font_size = run.font_size();
+                            let thickness = decoration
+                                .size
+                                .unwrap_or(font_metrics.underline_size)
+                                .is_finite()
+                                .then_some(decoration.size.unwrap_or(font_metrics.underline_size))
+                                .filter(|value| *value > 0.0)
+                                .unwrap_or(font_size / 18.0);
+                            let x_pt = host.object_x_pt + x + f64::from(glyph_run.offset());
+                            let y_pt = baseline_y_pt - f64::from(offset);
+                            let width_pt = f64::from(glyph_run.advance());
+                            if !width_pt.is_finite() || width_pt < 0.0 {
+                                return Err(PageGlyphError::InvalidGlyphSource);
+                            }
+                            if width_pt > 0.0 {
+                                if !offset.is_finite()
+                                    || !thickness.is_finite()
+                                    || !x_pt.is_finite()
+                                    || !y_pt.is_finite()
+                                    || thickness <= 0.0
+                                {
+                                    return Err(PageGlyphError::InvalidGlyphSource);
+                                }
+                                output.decorations.push(PageGlyphDecoration {
+                                    paint_order: *next_paint_order,
+                                    x_pt,
+                                    y_pt,
+                                    width_pt,
+                                    height_pt: f64::from(thickness),
+                                    color: math_color.or_else(|| {
+                                        (decoration.brush != [0, 0, 0, 0])
+                                            .then_some(decoration.brush)
+                                    }),
+                                    line_clip_y_pt: host.line_clip_y_pt,
+                                });
+                                *next_paint_order += 1;
+                            }
+                        }
+                        if let Some(run) = page_run_from_positioned_glyphs(
+                            &positioned,
+                            PageGlyphRunOrigin {
+                                x_pt: host.object_x_pt + x,
+                                baseline_y_pt,
+                                paint_order: *next_paint_order,
+                                paragraph_id: host.paragraph_id,
+                                line_index: host.line_index,
+                                line_clip_y_pt: host.line_clip_y_pt,
+                                foreground,
+                            },
+                        )? {
+                            output.runs.push(run);
+                            *next_paint_order += 1;
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
+}
+
+struct PageGlyphRunOrigin<'a> {
+    x_pt: f64,
+    baseline_y_pt: f64,
+    paint_order: u64,
+    paragraph_id: &'a NodeId,
+    line_index: usize,
+    line_clip_y_pt: Option<[f64; 2]>,
+    foreground: Option<[u8; 4]>,
+}
+
+/// 将正文或数学文本岛的同类 Parley glyph run 转为页面快照。
+fn page_run_from_positioned_glyphs(
+    item: &PositionedGlyphLayoutItem<'_, [u8; 4]>,
+    origin: PageGlyphRunOrigin<'_>,
+) -> Result<Option<PageGlyphRun>, PageGlyphError> {
+    let PositionedGlyphLayoutItem::GlyphRun(glyph_run) = item else {
+        return Err(PageGlyphError::UnsupportedInlineBox);
+    };
+    let run = glyph_run.run();
+    let font_size_pt = run.font_size();
+    if !font_size_pt.is_finite() || font_size_pt <= 0.0 || run.font().data.is_empty() {
+        return Err(PageGlyphError::InvalidGlyphSource);
+    }
+    let glyphs = glyph_run
+        .positioned_glyphs()
+        .zip(glyph_run.glyphs())
+        .map(|(positioned_glyph, local_glyph)| PageGlyph {
+            glyph_id: positioned_glyph.id,
+            x_pt: origin.x_pt + f64::from(positioned_glyph.x),
+            baseline_y_pt: origin.baseline_y_pt + f64::from(local_glyph.y),
+        })
+        .collect::<Vec<_>>();
+    if glyphs
+        .iter()
+        .any(|glyph| !glyph.x_pt.is_finite() || !glyph.baseline_y_pt.is_finite())
+    {
+        return Err(PageGlyphError::InvalidGlyphSource);
+    }
+    if glyphs.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PageGlyphRun {
+        paint_order: origin.paint_order,
+        paragraph_id: origin.paragraph_id.clone(),
+        line_index: origin.line_index,
+        line_clip_y_pt: origin.line_clip_y_pt,
+        font: run.font().clone(),
+        font_size_pt,
+        normalized_coords: run
+            .normalized_coords()
+            .iter()
+            .map(|coordinate| coordinate.to_bits())
+            .collect(),
+        synthesis: run.synthesis(),
+        foreground: origin.foreground.or_else(|| {
+            (glyph_run.style().brush != [0, 0, 0, 0]).then_some(glyph_run.style().brush)
+        }),
+        glyphs,
+    }))
 }
 
 fn math_font_data() -> GlyphFontData {

@@ -83,20 +83,19 @@ const CANDIDATES: &[RegisteredCandidate] = &[
         alias: "\\math",
         command_id: "insert.inline_math",
         label: "Inline math",
-        // 持久化、页面布局与数学光标投影接入后再启用。
-        available: false,
+        available: true,
     },
     RegisteredCandidate {
         alias: "\\equation",
         command_id: "insert.equation",
         label: "Single-line equation",
-        available: false,
+        available: true,
     },
     RegisteredCandidate {
         alias: "\\align",
         command_id: "insert.align",
         label: "Multiline equation",
-        available: false,
+        available: true,
     },
     RegisteredCandidate {
         alias: "\\table",

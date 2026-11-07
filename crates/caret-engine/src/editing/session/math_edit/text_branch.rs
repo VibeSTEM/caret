@@ -3,24 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::super::flow_edit::insertion_template;
-use super::super::super::flow_edit::replace_text_flow_range;
+use super::super::super::flow_edit::insertion_template_with_affinity;
+use super::super::super::flow_edit::{normalize_text_flow_runs_at_offset, replace_text_flow_range};
+use super::super::super::flow_format::InheritedInlineStyle;
 use super::super::super::grapheme::GraphemeMap;
 use super::super::history::{self, DocumentPatch, EditGroup};
 use super::super::{Affinity, Direction, EditError, Effect};
-use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{
     MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
     MathSequencePath, MathSequenceStep, MathTextFlowPath, MathTextPosition, MathTreePosition,
     history_position, math_text_selection_range,
 };
+use super::{Session, optional_placeholder_operand};
 use caret_doc::{Block, MathContent, MathNodeKind};
 
-mod format_tree_edit;
+pub(super) mod format_tree_edit;
 mod split_tree_edit;
+#[cfg(test)]
 pub(super) use format_tree_edit::{
     apply_math_text_environment_tree_range, apply_math_text_font_family_tree_range,
+};
+pub(super) use format_tree_edit::{
+    apply_math_text_environment_tree_range_with_style,
+    apply_math_text_font_family_tree_range_with_style,
 };
 pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
@@ -45,6 +51,63 @@ pub(super) struct MathTextTreeCommit {
     pub(super) merge_group: Option<EditGroup>,
     pub(super) pending_style: PendingStylePolicy,
     pub(super) selection_changed: bool,
+}
+
+pub(in crate::editing::session) fn math_text_split_is_available(session: &Session) -> bool {
+    if session.ensure_math_edit_revision_current().is_err() {
+        return false;
+    }
+    let Ok((edit, tree, commit)) = session.prepare_math_text_enter_math_at("", 0) else {
+        return false;
+    };
+    let mut document = session.document.clone();
+    match edit.target {
+        MathEditTarget::Inline {
+            paragraph_id,
+            math_id,
+        } => {
+            let Some(location) = session.paragraph_index.get(&paragraph_id) else {
+                return false;
+            };
+            let Some(paragraph) = super::super::super::paragraph_ops::paragraph_at_location_mut(
+                &mut document.body,
+                location,
+            ) else {
+                return false;
+            };
+            let Some(math) = super::find_inline_math_mut(&mut paragraph.inlines, &math_id) else {
+                return false;
+            };
+            math.math_tree = tree;
+        }
+        MathEditTarget::Block { block_id, .. } => {
+            let Some((parents, sibling_index)) = super::find_block_path(&document.body, &block_id)
+            else {
+                return false;
+            };
+            let Ok(blocks) = super::block_list(&mut document.body, &parents) else {
+                return false;
+            };
+            let Some(block) = blocks.get_mut(sibling_index) else {
+                return false;
+            };
+            match (&mut *block, commit.align_cell) {
+                (Block::Equation(equation), None) => equation.math_tree = tree,
+                (Block::Align(align), Some((row, column))) => {
+                    let Some(cell) = align
+                        .rows
+                        .get_mut(row)
+                        .and_then(|row| row.cells.get_mut(column))
+                    else {
+                        return false;
+                    };
+                    *cell = tree;
+                }
+                _ => return false,
+            }
+        }
+    }
+    caret_doc::CdocFile::new(document).is_ok()
 }
 
 pub(super) fn text_source_boundary_from_map(
@@ -176,6 +239,7 @@ pub(super) fn validate_text_flow_edit(
     text: &caret_doc::TextFlow,
     source_map: Option<&caret_math::MathTextSourceMap>,
     range: Range<usize>,
+    affinity: Affinity,
     inserts: bool,
 ) -> Result<(), EditError> {
     if source_map.is_some_and(|map| {
@@ -187,6 +251,9 @@ pub(super) fn validate_text_flow_edit(
     }) {
         return Err(EditError::UnsupportedOpaqueContent);
     }
+    let insertion_run = inserts
+        .then(|| insertion_template_with_affinity(&text.runs, range.start, affinity))
+        .flatten();
     let mut offset = 0;
     for run in &text.runs {
         let end = offset + run.text.len();
@@ -198,14 +265,14 @@ pub(super) fn validate_text_flow_edit(
             && range.start <= offset
             && offset <= range.end
             && !run.extra.is_empty()
+            && (!range.is_empty()
+                || insertion_run.is_some_and(|candidate| std::ptr::eq(candidate, run)))
         {
             return Err(EditError::UnsupportedOpaqueContent);
         }
         offset = end;
     }
-    if inserts
-        && insertion_template(&text.runs, range.start).is_some_and(|run| !run.extra.is_empty())
-    {
+    if !range.is_empty() && insertion_run.is_some_and(|run| !run.extra.is_empty()) {
         return Err(EditError::UnsupportedOpaqueContent);
     }
     Ok(())
@@ -260,7 +327,7 @@ impl Session {
                 let document_before = self.document.clone();
                 let paragraph_index_before = self.paragraph_index.clone();
                 self.replace_paragraph(&position, paragraph)?;
-                if let Err(error) = self.document.validate() {
+                if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
                     self.document = document_before;
                     self.paragraph_index = paragraph_index_before;
                     self.text_map_cache.clear();
@@ -313,7 +380,7 @@ impl Session {
                     _ => return Err(EditError::InvalidPosition),
                 }
                 *slot = after.clone();
-                if let Err(error) = self.document.validate() {
+                if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
                     self.document = document_before;
                     return Err(EditError::InvalidDocument(error.to_string()));
                 }
@@ -376,6 +443,16 @@ impl Session {
         initial_source: &str,
         cursor_in_body: usize,
     ) -> Result<Effect, EditError> {
+        let (edit, target_tree, commit) =
+            self.prepare_math_text_enter_math_at(initial_source, cursor_in_body)?;
+        self.commit_math_text_tree(edit, target_tree, commit)
+    }
+
+    fn prepare_math_text_enter_math_at(
+        &self,
+        initial_source: &str,
+        cursor_in_body: usize,
+    ) -> Result<(MathEdit, caret_doc::MathTree, MathTextTreeCommit), EditError> {
         let body = caret_math::input_body_range(initial_source, caret_math::MathInputKind::Inline)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
         if cursor_in_body > body.len()
@@ -463,7 +540,7 @@ impl Session {
             .resolve(&target_tree)
             .map_err(|_| EditError::InvalidPosition)?;
         let align_cell = path.align_cell();
-        self.commit_math_text_tree(
+        Ok((
             edit,
             target_tree,
             MathTextTreeCommit {
@@ -477,7 +554,7 @@ impl Session {
                 pending_style: PendingStylePolicy::Clear,
                 selection_changed: true,
             },
-        )
+        ))
     }
 
     /// 在当前 TextFlow 上直接提交树事务，不经源码编码或重新解析。
@@ -486,23 +563,25 @@ impl Session {
         inserted: &str,
     ) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
-        let MathEditBranch::Text { path, anchor, .. } = edit.branch.clone() else {
+        let MathEditBranch::Text {
+            path,
+            anchor,
+            focus_affinity,
+            ..
+        } = edit.branch.clone()
+        else {
             return Err(EditError::InvalidPosition);
         };
         if inserted.is_empty() && anchor.path == path && anchor.offset == edit.cursor {
             return Ok(Effect::default());
         }
-        if inserted
-            .chars()
-            .any(|character| matches!(character, '\n' | '\r'))
-        {
-            return Err(EditError::UnsupportedNewline);
-        }
         let tree = self.math_tree_for_edit(&edit, path.align_cell())?;
+        let inherited_style =
+            InheritedInlineStyle::from_theme(self.document.global_settings.theme.as_ref())
+                .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
         let (island_before, range) = math_text_selection_range(tree, &path, &anchor, edit.cursor)
             .ok_or(EditError::InvalidPosition)?;
-        let focus_position =
-            MathTextPosition::new(path.clone(), edit.cursor, MathPositionAffinity::Downstream);
+        let focus_position = MathTextPosition::new(path.clone(), edit.cursor, focus_affinity);
         let anchor_global = island_before
             .global_offset(&anchor)
             .ok_or(EditError::InvalidPosition)?;
@@ -513,6 +592,10 @@ impl Session {
             anchor
         } else {
             focus_position
+        };
+        let insertion_affinity = match insertion_position.affinity {
+            MathPositionAffinity::Upstream => Affinity::Upstream,
+            MathPositionAffinity::Downstream => Affinity::Downstream,
         };
         let insertion_global = range.start;
         let requested_global_cursor = insertion_global
@@ -545,14 +628,21 @@ impl Session {
                 &text,
                 source_map,
                 local_range.clone(),
+                if candidate_is_insertion {
+                    insertion_affinity
+                } else {
+                    Affinity::Downstream
+                },
                 candidate_is_insertion && !inserted.is_empty(),
             )?;
             let mut updated = text;
             replace_text_flow_range(
                 &mut updated,
                 local_range,
+                insertion_affinity,
                 if candidate_is_insertion { inserted } else { "" },
             )?;
+            normalize_text_flow_runs_at_offset(&mut updated, local_start);
             candidate
                 .resolve_structurally_mut(&mut target_tree)
                 .ok_or(EditError::InvalidPosition)?
@@ -595,7 +685,13 @@ impl Session {
                     .resolve_in_projection(tree, projection)
                     .map(|(_, source_map)| source_map)
             });
-            validate_text_flow_edit(&text, source_map, local_range.clone(), true)?;
+            validate_text_flow_edit(
+                &text,
+                source_map,
+                local_range.clone(),
+                insertion_affinity,
+                true,
+            )?;
             let mut text = text;
             super::text_run_property::apply_pending_run_properties(
                 &mut text,
@@ -629,25 +725,13 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?;
                 let local_range =
                     local_start..global_range.end.min(flow_range.end) - flow_range.start;
-                if super::text_inline_environment::inherited_environment_value(
-                    &target_tree,
-                    &candidate,
-                    kind,
-                ) == Some(enabled)
-                {
-                    if global_range.start <= requested_global_cursor
-                        && requested_global_cursor <= global_range.end
-                    {
-                        preferred_cursor_path = candidate;
-                    }
-                    continue;
-                }
-                tracking_path = apply_math_text_environment_tree_range(
+                tracking_path = apply_math_text_environment_tree_range_with_style(
                     &mut target_tree,
                     &candidate,
                     local_range,
                     kind,
                     enabled,
+                    inherited_style.clone(),
                 )?;
                 if global_range.start <= requested_global_cursor
                     && requested_global_cursor <= global_range.end
@@ -671,9 +755,10 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?;
                 let local_range =
                     local_start..global_range.end.min(flow_range.end) - flow_range.start;
-                if super::text_inline_environment::inherited_math_text_font_family(
+                if super::text_inline_environment::inherited_math_text_font_family_with_style(
                     &target_tree,
                     &candidate,
+                    inherited_style.clone(),
                 )
                 .is_some_and(|inherited| inherited.as_deref() == Some(family))
                 {
@@ -684,11 +769,12 @@ impl Session {
                     }
                     continue;
                 }
-                tracking_path = apply_math_text_font_family_tree_range(
+                tracking_path = apply_math_text_font_family_tree_range_with_style(
                     &mut target_tree,
                     &candidate,
                     local_range,
                     family,
+                    inherited_style.clone(),
                 )?;
                 if global_range.start <= requested_global_cursor
                     && requested_global_cursor <= global_range.end
@@ -734,6 +820,8 @@ impl Session {
                     path: next_path.clone(),
                     anchor: next_position,
                     focus_affinity: MathPositionAffinity::Downstream,
+                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                    visual_affinity: crate::VisualAffinity::Downstream,
                 },
                 align_cell: next_path.align_cell(),
                 cursor: local_cursor,
@@ -802,9 +890,15 @@ impl Session {
                     .resolve_in_projection(tree, projection)
                     .map(|(_, source_map)| source_map)
             });
-            validate_text_flow_edit(&text, source_map, local_range.clone(), false)?;
+            validate_text_flow_edit(
+                &text,
+                source_map,
+                local_range.clone(),
+                Affinity::Downstream,
+                false,
+            )?;
             let mut updated = text;
-            replace_text_flow_range(&mut updated, local_range, "")?;
+            replace_text_flow_range(&mut updated, local_range, Affinity::Downstream, "")?;
             candidate
                 .resolve_structurally_mut(&mut target_tree)
                 .ok_or(EditError::InvalidPosition)?
@@ -855,6 +949,8 @@ impl Session {
                     path: next_path.clone(),
                     anchor: next_position,
                     focus_affinity: MathPositionAffinity::Downstream,
+                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
+                    visual_affinity: crate::VisualAffinity::Downstream,
                 },
                 align_cell: edit_path.align_cell(),
                 cursor: next_cursor,
@@ -946,6 +1042,9 @@ fn first_placeholder_position(
             }
             MathContent::Math(node) => {
                 for (operand_index, flow) in node.children.iter().enumerate() {
+                    if optional_placeholder_operand(node, operand_index) {
+                        continue;
+                    }
                     let mut steps = path.steps().to_vec();
                     steps.push(MathSequenceStep::Operand {
                         content_index,

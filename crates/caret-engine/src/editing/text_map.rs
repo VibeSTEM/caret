@@ -7,8 +7,8 @@ use super::environment::inline_adapter::{
     INLINE_MATH_ADAPTER, RUN_PROPERTY_ENVIRONMENTS, for_inline_environment,
 };
 use super::flow_edit::{
-    content_at_path, normalize_text_flow_neighborhood, replace_text_flow_range,
-    siblings_at_path_mut, text_flow_at_path_mut, text_flow_run_at_path_mut,
+    RangeSplit, classify_range_split, content_at_path, normalize_text_flow_neighborhood,
+    replace_text_flow_range, siblings_at_path_mut, split_run_at, text_flow_at_path_mut,
 };
 pub(crate) use super::flow_map::OBJECT_REPLACEMENT;
 use super::flow_map::{FlowPath, FlowPathOptions, FlowSpanKind, build_flow_map_with_spans};
@@ -398,25 +398,23 @@ impl TextMap {
                         !span.is_soft_break && span.start == offset && span.end == offset
                     }),
                 });
-        if let Some(span) = candidate {
+        if let Some(span) = candidate
+            && let Some(run_index) = span.flow_path.run_index
+        {
             let local = offset.saturating_sub(span.start);
-            if span.flow_path.run_index.is_some() {
-                {
-                    let run = text_flow_run_at_path_mut(&mut paragraph.inlines, &span.flow_path)
-                        .ok_or(EditError::InvalidPosition)?;
-                    run.text.insert_str(local, text);
-                }
-                let mut flow_path = span.flow_path.clone();
-                flow_path.run_index = None;
-                let (siblings, index) = siblings_at_path_mut(&mut paragraph.inlines, &flow_path)
-                    .ok_or(EditError::InvalidPosition)?;
-                normalize_text_flow_neighborhood(
-                    siblings,
-                    index,
-                    span.flow_path.run_index.ok_or(EditError::InvalidPosition)?,
-                );
-                return Ok(());
-            }
+            let mut flow_path = span.flow_path.clone();
+            flow_path.run_index = None;
+            let text_flow = text_flow_at_path_mut(&mut paragraph.inlines, &flow_path)
+                .ok_or(EditError::InvalidPosition)?;
+            let local = text_flow.runs[..run_index]
+                .iter()
+                .try_fold(local, |offset, run| offset.checked_add(run.text.len()))
+                .ok_or(EditError::InvalidPosition)?;
+            replace_text_flow_range(text_flow, local..local, affinity, text)?;
+            let (siblings, index) = siblings_at_path_mut(&mut paragraph.inlines, &flow_path)
+                .ok_or(EditError::InvalidPosition)?;
+            normalize_text_flow_neighborhood(siblings, index, run_index);
+            return Ok(());
         }
         let soft_break = self.soft_break_at_boundary(offset, affinity);
         if let Some(span) = soft_break {
@@ -621,7 +619,7 @@ impl TextMap {
             };
             let text_flow = text_flow_at_path_mut(&mut paragraph.inlines, &flow_path)
                 .ok_or(EditError::InvalidPosition)?;
-            replace_text_flow_range(text_flow, range, "")?;
+            replace_text_flow_range(text_flow, range, Affinity::Downstream, "")?;
         }
         removals.sort_by(|left, right| right.content_indices.cmp(&left.content_indices));
         for path in removals {
@@ -818,17 +816,17 @@ pub(super) fn split_edit_nodes(
     for node in nodes {
         let length = edit_inline_length(&node)?;
         let end = consumed + length;
-        if end <= offset {
-            left.push(node);
-        } else if consumed >= offset {
-            right.push(node);
-        } else {
-            let (left_node, right_node) = split_edit_node(node, offset - consumed)?;
-            if let Some(left_node) = left_node {
-                left.push(left_node);
-            }
-            if let Some(right_node) = right_node {
-                right.push(right_node);
+        match classify_range_split(consumed, end, offset) {
+            RangeSplit::Left => left.push(node),
+            RangeSplit::Right => right.push(node),
+            RangeSplit::Inside(local_offset) => {
+                let (left_node, right_node) = split_edit_node(node, local_offset)?;
+                if let Some(left_node) = left_node {
+                    left.push(left_node);
+                }
+                if let Some(right_node) = right_node {
+                    right.push(right_node);
+                }
             }
         }
         consumed = end;
@@ -852,21 +850,10 @@ fn split_edit_node(
     }
     match node {
         EditNode::Run(run) => {
-            if !run.extra.is_empty() || !run.text.is_char_boundary(offset) {
-                return Err(EditError::UnsupportedOpaqueContent);
-            }
-            let left = Run {
-                text: run.text[..offset].to_owned(),
-                language: run.language.clone(),
-                props: run.props.clone(),
-                extra: Default::default(),
-            };
-            let right = Run {
-                text: run.text[offset..].to_owned(),
-                language: run.language,
-                props: run.props,
-                extra: Default::default(),
-            };
+            let (left, right) = split_run_at(&run, offset).map_err(|error| match error {
+                EditError::InvalidPosition => EditError::UnsupportedOpaqueContent,
+                other => other,
+            })?;
             Ok((Some(EditNode::Run(left)), Some(EditNode::Run(right))))
         }
         EditNode::Environment(mut environment) => {

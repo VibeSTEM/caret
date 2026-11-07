@@ -113,6 +113,20 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
     invalid_font_generation.insert(QStringLiteral("fontGeneration"), QStringLiteral("invalid"));
     QVERIFY(reject(invalid_font_generation));
 
+    QJsonObject math_font_warning = root;
+    math_font_warning.insert(
+        QStringLiteral("mathFontDiagnostic"),
+        QJsonObject{
+            {QStringLiteral("code"), QStringLiteral("math.font.family_missing")},
+            {QStringLiteral("requestedFamily"), QStringLiteral("Unavailable Math Family")}});
+    QJsonObject invalid_math_font_warning = root;
+    invalid_math_font_warning.insert(QStringLiteral("mathFontDiagnostic"), QStringLiteral("bad"));
+    QVERIFY(reject(invalid_math_font_warning));
+    QJsonObject invalid_text_diagnostics = root;
+    invalid_text_diagnostics.insert(QStringLiteral("textDiagnostics"),
+                                    QJsonArray{QJsonObject{{QStringLiteral("nodeId"), 1}}});
+    QVERIFY(reject(invalid_text_diagnostics));
+
     QJsonObject invalid_margins = root;
     QJsonObject margins = root.value(QStringLiteral("marginsPt")).toObject();
     margins.insert(QStringLiteral("top"), -1.0);

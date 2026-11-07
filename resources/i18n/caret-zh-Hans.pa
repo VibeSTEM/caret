@@ -420,6 +420,36 @@ message_077:
   tr: 自定义环境
   st: finished
 
+message_158:
+  src: Equation
+  tr: 方程
+  st: finished
+
+message_159:
+  src: Align environment
+  tr: 对齐环境
+  st: finished
+
+message_160:
+  src: "Math font \"%1\" is not installed; using STIX Two Math."
+  tr: 数学字体“%1”未安装，已改用 STIX Two Math。
+  st: finished
+
+message_161:
+  src: "Math font \"%1\" is unsupported; using STIX Two Math."
+  tr: 不支持数学字体“%1”，已改用 STIX Two Math。
+  st: finished
+
+message_162:
+  src: Text contains characters unavailable in installed fonts.
+  tr: 文本包含已安装字体无法显示的字符。
+  st: finished
+
+message_163:
+  src: "Text font \"%1\" is not installed; using fallback fonts."
+  tr: 文本字体“%1”未安装，已使用回退字体。
+  st: finished
+
 [WindowTitleBar]
 message_078:
   src: Untitled

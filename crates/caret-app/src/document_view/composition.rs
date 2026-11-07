@@ -61,6 +61,7 @@ impl ImeCommitCheckpoint {
 thread_local! {
     static FAIL_NEXT_IME_RELAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_IME_FULL_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_NEXT_IME_PREVIEW_PUBLISH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -71,6 +72,11 @@ pub(super) fn fail_next_ime_relayout_for_test() {
 #[cfg(test)]
 pub(super) fn fail_next_ime_full_layout_for_test() {
     FAIL_NEXT_IME_FULL_LAYOUT.with(|fail| fail.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn fail_next_ime_preview_publish_for_test() {
+    FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.set(true));
 }
 
 impl DocumentViewRuntime {
@@ -159,28 +165,42 @@ impl DocumentViewRuntime {
         let selection_is_single_paragraph =
             selection_before.anchor.paragraph_id == selection_before.focus.paragraph_id;
         let outside_environment = self.session.block_environment_exit().is_some();
-        let reusable_paragraph_id = if self.session.math_text_input_context().is_some() {
-            None
-        } else {
-            (selection_is_single_paragraph && !outside_environment).then(|| {
-                composition_range_before
-                    .as_ref()
-                    .and_then(|range| match range {
-                        caret_engine::CompositionRange::Paragraph(range)
-                            if range.anchor.paragraph_id == range.focus.paragraph_id =>
-                        {
-                            Some(range.anchor.paragraph_id.clone())
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| selection_before.focus.paragraph_id.clone())
-            })
+        let math_text_target = self
+            .session
+            .math_text_input_context()
+            .map(|context| context.target);
+        let (reusable_paragraph_id, reuse_all_paragraphs) = match math_text_target.as_ref() {
+            Some(caret_engine::MathEditTarget::Inline { paragraph_id, .. }) => {
+                (Some(paragraph_id.clone()), false)
+            }
+            Some(caret_engine::MathEditTarget::Block { .. }) => (None, true),
+            None => (
+                (selection_is_single_paragraph && !outside_environment).then(|| {
+                    composition_range_before
+                        .as_ref()
+                        .and_then(|range| match range {
+                            caret_engine::CompositionRange::Paragraph(range)
+                                if range.anchor.paragraph_id == range.focus.paragraph_id =>
+                            {
+                                Some(range.anchor.paragraph_id.clone())
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| selection_before.focus.paragraph_id.clone())
+                }),
+                false,
+            ),
         };
-        let previous_preview_page_start = previous_layout.as_ref().and_then(|previous| {
-            let preview = self.composition_snapshot.as_ref()?;
-            let paragraph_id = reusable_paragraph_id.as_ref()?;
-            super::layout::first_changed_page_index(previous, preview, paragraph_id)
-        });
+        let previous_preview_page_start = math_text_target
+            .is_none()
+            .then(|| {
+                previous_layout.as_ref().and_then(|previous| {
+                    let preview = self.composition_snapshot.as_ref()?;
+                    let paragraph_id = reusable_paragraph_id.as_ref()?;
+                    super::layout::first_changed_page_index(previous, preview, paragraph_id)
+                })
+            })
+            .flatten();
         let mut committed_delta = None;
 
         if commit_current {
@@ -206,6 +226,14 @@ impl DocumentViewRuntime {
             self.preferred_visual_x_pt = None;
         }
 
+        #[cfg(test)]
+        if commit_current
+            && math_text_target.is_some()
+            && FAIL_NEXT_IME_FULL_LAYOUT.with(|fail| fail.replace(false))
+        {
+            return Err("layout.injected_ime_full_layout_failure".to_owned());
+        }
+
         if let (Some(previous), Some(paragraph_id)) =
             (previous_layout.as_ref(), reusable_paragraph_id.as_ref())
         {
@@ -214,25 +242,39 @@ impl DocumentViewRuntime {
                 return Err("layout.injected_ime_relayout_failure".to_owned());
             }
             self.relayout_reusing_paragraph(previous, paragraph_id)?;
-            let updated = self
-                .last_snapshot
-                .as_ref()
-                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
-            let page_start_index =
-                super::layout::first_changed_page_index(previous, updated, paragraph_id).map(
-                    |page_start_index| {
-                        previous_preview_page_start.map_or(page_start_index, |preview_start| {
-                            page_start_index.min(preview_start)
-                        })
-                    },
-                );
-            if let Some(page_start_index) = page_start_index {
-                committed_delta = Some((
-                    paragraph_id.clone(),
-                    page_start_index,
-                    previous.document_generation,
-                ));
+            if math_text_target.is_none() {
+                let updated = self
+                    .last_snapshot
+                    .as_ref()
+                    .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+                let page_start_index =
+                    super::layout::first_changed_page_index(previous, updated, paragraph_id).map(
+                        |page_start_index| {
+                            previous_preview_page_start.map_or(page_start_index, |preview_start| {
+                                page_start_index.min(preview_start)
+                            })
+                        },
+                    );
+                if let Some(page_start_index) = page_start_index {
+                    committed_delta = Some((
+                        paragraph_id.clone(),
+                        page_start_index,
+                        previous.document_generation,
+                    ));
+                }
             }
+        } else if let Some(previous) = previous_layout.as_ref()
+            && reuse_all_paragraphs
+        {
+            #[cfg(test)]
+            if FAIL_NEXT_IME_RELAYOUT.with(|fail| fail.replace(false)) {
+                return Err("layout.injected_ime_relayout_failure".to_owned());
+            }
+            self.last_snapshot = Some(
+                self.layout
+                    .layout_session_reusing_all_paragraphs(&self.session, previous)
+                    .map_err(|error| error.to_string())?,
+            );
         }
 
         if !preedit.is_empty() {
@@ -317,6 +359,26 @@ impl DocumentViewRuntime {
         replacement_range: Option<(i32, i32)>,
         cursor_position_utf16: usize,
     ) -> Result<String, String> {
+        let checkpoint = ImeCommitCheckpoint::capture(self);
+        let result = self.install_composition_update_inner(
+            id,
+            preedit,
+            replacement_range,
+            cursor_position_utf16,
+        );
+        if result.is_err() {
+            checkpoint.restore(self);
+        }
+        result
+    }
+
+    fn install_composition_update_inner(
+        &mut self,
+        id: u64,
+        preedit: String,
+        replacement_range: Option<(i32, i32)>,
+        cursor_position_utf16: usize,
+    ) -> Result<String, String> {
         let (candidate, preview, range) = self
             .session
             .composition_update_candidate(id, preedit, replacement_range, cursor_position_utf16)
@@ -334,6 +396,10 @@ impl DocumentViewRuntime {
         self.composition_snapshot = Some(snapshot);
         self.composition_range = Some(range);
         self.preedit_cursor_position_utf16 = cursor_position_utf16;
+        #[cfg(test)]
+        if FAIL_NEXT_IME_PREVIEW_PUBLISH.with(|fail| fail.replace(false)) {
+            return Err("layout.injected_ime_preview_publish_failure".to_owned());
+        }
         match delta {
             Some((paragraph_id, page_start_index, base_generation)) => self
                 .layout_snapshot_json_with_delta(Some((

@@ -4,7 +4,7 @@ use super::*;
 use crate::editing::{Affinity, Command, Direction, Selection, StoryId};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow, ThemeSnapshot,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -21,6 +21,55 @@ fn run(text: &str) -> ParagraphContent {
 fn session_with_paragraphs(paragraphs: Vec<Paragraph>) -> Session {
     let mut document = Document::blank();
     document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
+    Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"))
+}
+
+fn session_with_template_paragraphs(paragraphs: Vec<Paragraph>) -> Session {
+    let mut document = Document::blank();
+    document.body = paragraphs.into_iter().map(Block::Paragraph).collect();
+    document.global_settings.theme = Some(ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([
+            (
+                "bold-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "bold",
+                    "props": {"enabled": true},
+                    "variants": {
+                        "template/variant": {"enabled": true},
+                        "enabled-template": {"enabled": true}
+                    }
+                }),
+            ),
+            (
+                "italic-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "italic",
+                    "props": {"enabled": true},
+                    "variants": {
+                        "template/variant": {"enabled": true},
+                        "enabled-template": {"enabled": true}
+                    }
+                }),
+            ),
+            (
+                "font-template".to_owned(),
+                serde_json::json!({
+                    "baseKind": "font",
+                    "props": {"fontFamily": "Old"},
+                    "variants": {"template/variant": {"fontFamily": "Old"}}
+                }),
+            ),
+        ]),
+        default_inline_environment_templates: BTreeMap::from([
+            ("bold".to_owned(), serde_json::json!("bold-template")),
+            ("italic".to_owned(), serde_json::json!("italic-template")),
+            ("font".to_owned(), serde_json::json!("font-template")),
+        ]),
+        extra: BTreeMap::new(),
+    });
     Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"))
 }
 
@@ -395,13 +444,7 @@ fn text_formatting_only_changes_text_around_inline_math() {
     assert_eq!(visible_text(&paragraph.inlines), "ab");
     let text_spans = format_spans(&paragraph.inlines)
         .unwrap_or_else(|error| panic!("format resolution failed: {error}"));
-    assert!(
-        text_spans
-            .iter()
-            .filter(|span| span.formatable)
-            .all(|span| span.bold)
-    );
-    assert!(text_spans.iter().any(|span| !span.formatable));
+    assert!(text_spans.iter().any(|span| span.run_property_target));
 }
 
 #[test]
@@ -1073,6 +1116,73 @@ fn formatting_does_not_merge_environments_with_unknown_extra_fields() {
     assert_eq!(first.extra, second.extra);
 }
 
+#[test]
+fn body_inline_format_keeps_rejecting_unknown_text_flow_extensions() {
+    let mut session = session_with_paragraphs(vec![paragraph("ab")]);
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 2,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first_mut() else {
+        panic!("body paragraph is missing");
+    };
+    let Some(ParagraphContent::Text(text)) = paragraph.inlines.first_mut() else {
+        panic!("paragraph text is missing");
+    };
+    text.extra
+        .insert("vendorTextFlow".to_owned(), Value::Bool(true));
+    let before = session.document().clone();
+    let selection = session.selection.clone();
+    let generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold)),
+        Err(EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.selection, selection);
+    assert_eq!(session.document_generation(), generation);
+    assert!(matches!(
+        session.run(Command::SetInlineFontFamily("Noto Serif".to_owned())),
+        Err(EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.selection, selection);
+    assert_eq!(session.document_generation(), generation);
+}
+
+#[test]
+fn run_property_format_rejects_body_text_flow_extensions_atomically() {
+    let mut paragraph = paragraph("abc");
+    let ParagraphContent::Text(text) = &mut paragraph.inlines[0] else {
+        panic!("expected paragraph text flow");
+    };
+    text.extra
+        .insert("futureRunBoundaries".to_owned(), serde_json::json!([1]));
+    let mut session = session_with_paragraphs(vec![paragraph]);
+    let start = session.selection.focus.clone();
+    let end = Pos {
+        offset: 2,
+        affinity: Affinity::Upstream,
+        ..start.clone()
+    };
+    select(&mut session, start, end);
+    let document = session.document().clone();
+    let selection = session.selection.clone();
+    let generation = session.document_generation();
+
+    assert!(matches!(
+        session.run(Command::ToggleRunUnderline),
+        Err(EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document(), &document);
+    assert_eq!(session.selection, selection);
+    assert_eq!(session.document_generation(), generation);
+}
+
 fn collect_font_segments(nodes: &[ParagraphContent]) -> Vec<(String, Option<String>)> {
     fn collect(
         nodes: &[ParagraphContent],
@@ -1692,7 +1802,8 @@ fn inline_format_rejects_nesting_overflow_without_mutating_the_document() {
 }
 
 #[test]
-fn toggling_inline_format_updates_the_selected_environment_without_growing_depth() {
+fn repeated_inline_overrides_preserve_ancestors_and_fail_atomically_at_depth_limit()
+-> Result<(), EditError> {
     let mut session = session_with_paragraphs(vec![paragraph("x")]);
     let start = session.selection.focus.clone();
     let end = Pos {
@@ -1701,7 +1812,6 @@ fn toggling_inline_format_updates_the_selected_environment_without_growing_depth
         ..start.clone()
     };
     select(&mut session, start, end);
-
     fn environment_count(nodes: &[ParagraphContent]) -> usize {
         nodes
             .iter()
@@ -1709,26 +1819,28 @@ fn toggling_inline_format_updates_the_selected_environment_without_growing_depth
                 ParagraphContent::Environment(environment) => {
                     1 + environment_count(&environment.children)
                 }
-                ParagraphContent::Text(_)
-                | ParagraphContent::SoftBreak(_)
-                | ParagraphContent::Opaque(_)
-                | ParagraphContent::Math(_) => 0,
+                _ => 0,
             })
             .sum()
     }
-
-    for index in 0..128 {
-        session
-            .run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))
-            .unwrap_or_else(|error| panic!("bold toggle failed: {error}"));
+    let mut first_id = None;
+    for index in 0..caret_doc::MAX_DOCUMENT_NESTING_DEPTH - 1 {
+        session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
         session
             .document()
             .validate()
-            .unwrap_or_else(|error| panic!("toggle produced invalid document: {error}"));
-        let paragraph = session
-            .paragraph_for(&session.selection.focus)
-            .unwrap_or_else(|error| panic!("paragraph lookup failed: {error}"));
-        assert_eq!(environment_count(&paragraph.inlines), 1);
+            .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+        let paragraph = session.paragraph_for(&session.selection.focus)?;
+        assert_eq!(environment_count(&paragraph.inlines), index + 1);
+        let Some(ParagraphContent::Environment(outer)) = paragraph.inlines.first() else {
+            return Err(EditError::InvalidPosition);
+        };
+        if let Some(id) = &first_id {
+            assert_eq!(&outer.id, id);
+        } else {
+            first_id = Some(outer.id.clone());
+        }
+        assert_eq!(outer.props.get("enabled"), Some(&Value::Bool(true)));
         assert_all_format(
             &session,
             &session.selection.focus.paragraph_id,
@@ -1736,6 +1848,17 @@ fn toggling_inline_format_updates_the_selected_environment_without_growing_depth
             index % 2 == 0,
         );
     }
+    let before = session.document().clone();
+    let generation = session.document_generation();
+    let history = session.history_state_id();
+    assert_eq!(
+        session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold)),
+        Err(EditError::NestingLimit)
+    );
+    assert_eq!(session.document(), &before);
+    assert_eq!(session.document_generation(), generation);
+    assert_eq!(session.history_state_id(), history);
+    Ok(())
 }
 
 #[test]
@@ -1986,4 +2109,377 @@ fn pending_style_toggle_is_undoable_without_changing_document_generation() {
         .run(Command::Redo)
         .unwrap_or_else(|error| panic!("pending italic redo failed: {error}"));
     assert_eq!(session.pending_inline_style.italic, Some(true));
+}
+
+#[test]
+fn text_format_commands_preserve_same_kind_shell_around_inline_math() -> Result<(), EditError> {
+    for (kind, command) in [
+        (
+            InlineEnvironmentKind::Bold,
+            Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+        ),
+        (
+            InlineEnvironmentKind::Italic,
+            Command::ToggleInlineFormat(InlineEnvironmentKind::Italic),
+        ),
+        (
+            InlineEnvironmentKind::Font,
+            Command::SetInlineFontFamily("New".to_owned()),
+        ),
+    ] {
+        let caret_math::ParsedMath::Tree(tree) =
+            caret_math::parse("x", caret_math::MathInputKind::Inline)
+                .map_err(|error| EditError::InvalidMath(error.to_string()))?
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let math = caret_doc::InlineMath {
+            id: NodeId::generate(),
+            math_tree: tree,
+            extra: Default::default(),
+        };
+        let old_props = if kind == InlineEnvironmentKind::Font {
+            BTreeMap::from([("fontFamily".to_owned(), Value::String("Old".to_owned()))])
+        } else {
+            BTreeMap::from([("enabled".to_owned(), Value::Bool(false))])
+        };
+        let shell_id = NodeId::generate();
+        let shell_extra =
+            BTreeMap::from([("futureHint".to_owned(), serde_json::json!({"keep": true}))]);
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+            id: shell_id.clone(),
+            kind,
+            definition_id: None,
+            props: old_props.clone(),
+            children: vec![run("a"), ParagraphContent::Math(math.clone())],
+            extra: shell_extra.clone(),
+        })];
+        let mut session = session_with_paragraphs(vec![paragraph]);
+        let anchor = Pos {
+            offset: 0,
+            affinity: Affinity::Downstream,
+            ..session.selection.focus.clone()
+        };
+        let focus = Pos {
+            offset: 4,
+            affinity: Affinity::Upstream,
+            ..anchor.clone()
+        };
+        select(&mut session, anchor, focus);
+        let original = session.document().clone();
+        assert!(session.run(command)?.document_changed);
+        let updated = session.paragraph_for(&session.selection.focus)?;
+        let [ParagraphContent::Environment(shell)] = updated.inlines.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert_eq!(shell.id, shell_id);
+        assert_eq!(shell.props, old_props);
+        assert_eq!(shell.extra, shell_extra);
+        let [
+            ParagraphContent::Environment(text),
+            ParagraphContent::Math(atom),
+        ] = shell.children.as_slice()
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert_eq!(atom, &math);
+        assert_eq!(text.kind, kind);
+        assert_eq!(visible_text(&text.children), "a");
+        if kind == InlineEnvironmentKind::Font {
+            assert_eq!(
+                text.props.get("fontFamily"),
+                Some(&Value::String("New".to_owned()))
+            );
+        } else {
+            assert_eq!(text.props.get("enabled"), Some(&Value::Bool(true)));
+        }
+        session.run(Command::Undo)?;
+        assert_eq!(session.document(), &original);
+    }
+    Ok(())
+}
+
+#[test]
+fn inner_format_override_unwrap_restores_ancestor_and_definition() -> Result<(), EditError> {
+    for (kind, command) in [
+        (
+            InlineEnvironmentKind::Bold,
+            Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+        ),
+        (
+            InlineEnvironmentKind::Italic,
+            Command::ToggleInlineFormat(InlineEnvironmentKind::Italic),
+        ),
+        (
+            InlineEnvironmentKind::Font,
+            Command::SetInlineFontFamily("New".to_owned()),
+        ),
+    ] {
+        let mut outer = inline_environment(NodeId::generate(), kind, vec![run("abc")]);
+        let ParagraphContent::Environment(environment) = &mut outer else {
+            return Err(EditError::InvalidPosition);
+        };
+        environment.definition_id = Some("template/variant".to_owned());
+        environment
+            .extra
+            .insert("futureHint".to_owned(), serde_json::json!({"keep": true}));
+        if kind == InlineEnvironmentKind::Font {
+            environment.props =
+                BTreeMap::from([("fontFamily".to_owned(), Value::String("Old".to_owned()))]);
+        }
+        let outer_before = environment.clone();
+        let mut model = paragraph("abc");
+        model.inlines = vec![outer];
+        let mut session = session_with_template_paragraphs(vec![model]);
+        let anchor = Pos {
+            offset: 0,
+            affinity: Affinity::Downstream,
+            ..session.selection.focus.clone()
+        };
+        let focus = Pos {
+            offset: 3,
+            affinity: Affinity::Upstream,
+            ..anchor.clone()
+        };
+        select(&mut session, anchor, focus);
+        let original = session.document().clone();
+        session.run(command)?;
+        let model = session.paragraph_for(&session.selection.focus)?;
+        let [ParagraphContent::Environment(outer)] = model.inlines.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert_eq!(outer.id, outer_before.id);
+        assert_eq!(outer.definition_id, outer_before.definition_id);
+        assert_eq!(outer.props, outer_before.props);
+        assert_eq!(outer.extra, outer_before.extra);
+        let [ParagraphContent::Environment(inner)] = outer.children.as_slice() else {
+            return Err(EditError::InvalidPosition);
+        };
+        assert_eq!(inner.kind, kind);
+        if kind == InlineEnvironmentKind::Font {
+            assert_eq!(
+                inner.props.get("fontFamily"),
+                Some(&Value::String("New".to_owned()))
+            );
+        } else {
+            assert_eq!(inner.props.get("enabled"), Some(&Value::Bool(false)));
+        }
+        let caret = Pos {
+            offset: 1,
+            affinity: Affinity::Downstream,
+            ..session.selection.focus.clone()
+        };
+        select(&mut session, caret.clone(), caret);
+        session.run(Command::EditorKey(crate::editing::EditorKey::ModBackspace))?;
+        assert_eq!(session.document(), &original);
+        if kind == InlineEnvironmentKind::Font {
+            assert_eq!(
+                collect_font_segments(&session.paragraph_for(&session.selection.focus)?.inlines),
+                vec![("abc".to_owned(), Some("Old".to_owned()))]
+            );
+        } else {
+            assert_all_format(&session, &session.selection.focus.paragraph_id, kind, true);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn formatting_depth_boundary_succeeds_at_64_and_rejects_65_atomically_across_paragraphs()
+-> Result<(), EditError> {
+    fn nested(mut child: Block, count: usize) -> Block {
+        for _ in 0..count {
+            child = Block::Environment(BlockEnvironment {
+                id: NodeId::generate(),
+                kind: BlockEnvironmentKind::Custom,
+                definition_id: None,
+                props: Default::default(),
+                title: None,
+                children: vec![child],
+                extra: Default::default(),
+            });
+        }
+        child
+    }
+    for depth in [62, 63] {
+        for (kind, command) in [
+            (
+                InlineEnvironmentKind::Bold,
+                Command::ToggleInlineFormat(InlineEnvironmentKind::Bold),
+            ),
+            (
+                InlineEnvironmentKind::Italic,
+                Command::ToggleInlineFormat(InlineEnvironmentKind::Italic),
+            ),
+            (
+                InlineEnvironmentKind::Font,
+                Command::SetInlineFontFamily("New".to_owned()),
+            ),
+        ] {
+            let first = paragraph("a");
+            let second = paragraph("b");
+            let first_id = first.id.clone();
+            let second_id = second.id.clone();
+            let mut document = Document::blank();
+            document.body = vec![
+                Block::Paragraph(first),
+                nested(Block::Paragraph(second), depth),
+            ];
+            let mut session = Session::new(document)?;
+            let anchor = Pos {
+                story: StoryId::Body,
+                paragraph_id: first_id.clone(),
+                offset: 0,
+                affinity: Affinity::Downstream,
+            };
+            let focus = Pos {
+                story: StoryId::Body,
+                paragraph_id: second_id.clone(),
+                offset: 1,
+                affinity: Affinity::Upstream,
+            };
+            select(&mut session, anchor, focus);
+            let original = session.document().clone();
+            let generation = session.document_generation();
+            let history = session.history_state_id();
+            let result = session.run(command);
+            if depth == 62 {
+                assert!(result?.document_changed);
+                session
+                    .document()
+                    .validate()
+                    .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+                for id in [first_id, second_id] {
+                    if kind == InlineEnvironmentKind::Font {
+                        let position = Pos {
+                            story: StoryId::Body,
+                            paragraph_id: id,
+                            offset: 0,
+                            affinity: Affinity::Downstream,
+                        };
+                        assert!(
+                            collect_font_segments(&session.paragraph_for(&position)?.inlines)
+                                .iter()
+                                .all(|(_, family)| family.as_deref() == Some("New"))
+                        );
+                    } else {
+                        assert_all_format(&session, &id, kind, true);
+                    }
+                }
+                session.run(Command::Undo)?;
+                assert_eq!(session.document(), &original);
+            } else {
+                assert_eq!(result, Err(EditError::NestingLimit));
+                assert_eq!(session.document(), &original);
+                assert_eq!(session.document_generation(), generation);
+                assert_eq!(session.history_state_id(), history);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn pending_explicit_off_is_written_for_unset_text_and_enabled_ancestors() -> Result<(), EditError> {
+    fn has_off(nodes: &[ParagraphContent], kind: InlineEnvironmentKind) -> bool {
+        nodes.iter().any(|node| match node {
+            ParagraphContent::Environment(environment) => {
+                (environment.kind == kind
+                    && environment.props.get("enabled") == Some(&Value::Bool(false)))
+                    || has_off(&environment.children, kind)
+            }
+            _ => false,
+        })
+    }
+    for kind in [InlineEnvironmentKind::Bold, InlineEnvironmentKind::Italic] {
+        let mut bare = session_with_paragraphs(vec![Paragraph::empty(NodeId::generate())]);
+        bare.run(Command::ToggleInlineFormat(kind))?;
+        bare.run(Command::ToggleInlineFormat(kind))?;
+        bare.run(Command::InsertText("x".to_owned()))?;
+        assert!(has_off(
+            &bare.paragraph_for(&bare.selection.focus)?.inlines,
+            kind
+        ));
+        let mut model = paragraph("a");
+        let mut outer = inline_environment(NodeId::generate(), kind, vec![run("a")]);
+        if let ParagraphContent::Environment(environment) = &mut outer {
+            environment.definition_id = Some("enabled-template".to_owned());
+        }
+        model.inlines = vec![outer];
+        let mut inherited = session_with_template_paragraphs(vec![model]);
+        let caret = Pos {
+            offset: 1,
+            affinity: Affinity::Upstream,
+            ..inherited.selection.focus.clone()
+        };
+        select(&mut inherited, caret.clone(), caret);
+        inherited.run(Command::ToggleInlineFormat(kind))?;
+        inherited.run(Command::InsertText("b".to_owned()))?;
+        let nodes = &inherited.paragraph_for(&inherited.selection.focus)?.inlines;
+        assert!(has_off(nodes, kind));
+        let spans = format_spans(nodes)?;
+        assert_eq!(spans.len(), 2);
+        assert!(format_value(&spans[0], kind));
+        assert!(!format_value(&spans[1], kind));
+    }
+    Ok(())
+}
+
+#[test]
+fn theme_template_variant_controls_body_toggle_and_inserted_text() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let mut model = paragraph("abc");
+    let mut bold = inline_environment(
+        NodeId::generate(),
+        InlineEnvironmentKind::Bold,
+        vec![run("abc")],
+    );
+    let ParagraphContent::Environment(environment) = &mut bold else {
+        return Err(EditError::InvalidPosition);
+    };
+    environment.definition_id = Some("body-bold/quiet".to_owned());
+    environment.props.clear();
+    model.inlines = vec![bold];
+    document.body = vec![Block::Paragraph(model)];
+    document.global_settings.theme = Some(ThemeSnapshot {
+        format_version: 1,
+        source_id: None,
+        named_styles: BTreeMap::new(),
+        environment_templates: BTreeMap::from([(
+            "body-bold".to_owned(),
+            serde_json::json!({
+                "baseKind": "bold",
+                "props": {"enabled": true},
+                "variants": {"body-bold/quiet": {"enabled": false}}
+            }),
+        )]),
+        default_inline_environment_templates: BTreeMap::from([(
+            "bold".to_owned(),
+            serde_json::json!("body-bold"),
+        )]),
+        extra: BTreeMap::new(),
+    });
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("valid template session should be accepted: {error}"));
+    let caret = Pos {
+        offset: 1,
+        affinity: Affinity::Downstream,
+        ..session.selection.focus.clone()
+    };
+    select(&mut session, caret.clone(), caret);
+
+    session.run(Command::ToggleInlineFormat(InlineEnvironmentKind::Bold))?;
+    assert_eq!(session.pending_inline_style.bold, Some(true));
+    session.run(Command::InsertText("x".to_owned()))?;
+
+    let paragraph = session.paragraph_for(&session.selection.focus)?;
+    assert_eq!(visible_text(&paragraph.inlines), "axbc");
+    let inherited = inherited_inline_style(session.document().global_settings.theme.as_ref())?;
+    let spans = format_spans_with_inherited(&paragraph.inlines, inherited)?;
+    assert_eq!(spans.len(), 3);
+    assert!(!format_value(&spans[0], InlineEnvironmentKind::Bold));
+    assert!(format_value(&spans[1], InlineEnvironmentKind::Bold));
+    assert!(!format_value(&spans[2], InlineEnvironmentKind::Bold));
+    Ok(())
 }

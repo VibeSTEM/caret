@@ -402,12 +402,9 @@ void build_glyph_frame(PageGlyphNode* group, QQuickWindow* window, const QVarian
         const qreal height_px = image.value(QStringLiteral("height")).toReal();
         const bool phase_applied = placement.value(QStringLiteral("pixelPhaseApplied")).toBool();
         const QPointF baseline = document_to_content(page_index, QPointF(x_pt, baseline_y_pt));
-        const qreal phase_x_adjustment = phase_applied ? phase_x : 0.0;
-        const qreal phase_y_adjustment = phase_applied ? phase_y : 0.0;
-        const QRectF glyph_rect(
-            baseline.x() + (image_left - phase_x_adjustment) * image_to_logical_scale,
-            baseline.y() + (-image_top - phase_y_adjustment) * image_to_logical_scale,
-            width_px * image_to_logical_scale, height_px * image_to_logical_scale);
+        const QRectF glyph_rect = canvas_detail::glyph_image_rect(
+            baseline, QPointF(image_left, image_top), QSizeF(width_px, height_px),
+            image_to_logical_scale, QPointF(phase_x, phase_y), phase_applied);
         QRectF clip_rect = page_clip_rect;
         if (placement.value(QStringLiteral("clipEnabled")).toBool()) {
             const qreal clip_y0 = placement.value(QStringLiteral("clipY0Pt")).toReal();

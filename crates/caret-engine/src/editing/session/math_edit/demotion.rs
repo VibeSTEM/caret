@@ -124,6 +124,7 @@ impl Session {
                 path,
                 anchor,
                 focus_affinity,
+                ..
             } => {
                 if !trees_correspond_for_position_mapping(current_tree, &projected_tree) {
                     return Err(EditError::UnsupportedOpaqueContent);

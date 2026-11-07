@@ -162,10 +162,25 @@ impl DocumentViewRuntime {
     ) -> Result<String, String> {
         self.base_snapshot()?;
         let selection = self.session.selection();
-        let reusable_paragraph_id = (self.session.block_environment_exit().is_none()
-            && self.session.selected_block_environment().is_none()
-            && selection.anchor.paragraph_id == selection.focus.paragraph_id)
-            .then(|| selection.focus.paragraph_id.clone());
+        let math_text_target = self
+            .session
+            .math_text_input_context()
+            .map(|context| context.target);
+        let math_edit_active = self.session.math_edit().is_some();
+        let (reusable_paragraph_id, reuse_all_paragraphs) = match math_text_target.as_ref() {
+            Some(caret_engine::MathEditTarget::Inline { paragraph_id, .. }) => {
+                (Some(paragraph_id.clone()), false)
+            }
+            Some(caret_engine::MathEditTarget::Block { .. }) => (None, true),
+            None if !math_edit_active
+                && self.session.block_environment_exit().is_none()
+                && self.session.selected_block_environment().is_none()
+                && selection.anchor.paragraph_id == selection.focus.paragraph_id =>
+            {
+                (Some(selection.focus.paragraph_id.clone()), false)
+            }
+            None => (None, false),
+        };
         self.session
             .run(Command::InsertText(text))
             .map_err(|error| format!("text.insert: {error}"))?;
@@ -192,10 +207,23 @@ impl DocumentViewRuntime {
                 return Err("layout.changed_paragraph_page_unavailable".to_owned());
             }
             self.last_snapshot = Some(updated);
+        } else if reuse_all_paragraphs {
+            let previous = self
+                .last_snapshot
+                .as_ref()
+                .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?;
+            let updated = self
+                .layout
+                .layout_session_reusing_all_paragraphs(&self.session, previous)
+                .map_err(|error| error.to_string())?;
+            self.last_snapshot = Some(updated);
         } else {
             self.last_snapshot = None;
         }
-        match reusable_paragraph_id.as_ref().filter(|_| allow_delta) {
+        match reusable_paragraph_id
+            .as_ref()
+            .filter(|_| allow_delta && !math_edit_active)
+        {
             Some(paragraph_id) => self.layout_snapshot_json_with_delta(Some((
                 paragraph_id,
                 page_start_index.ok_or_else(|| "layout.changed_page_unavailable".to_owned())?,
@@ -232,7 +260,9 @@ impl DocumentViewRuntime {
         error_context: &str,
     ) -> Result<String, String> {
         let selection = self.session.selection();
-        let reusable_paragraph_id = (self.session.selected_block_environment().is_none()
+        let math_edit_active = self.session.math_edit().is_some();
+        let reusable_paragraph_id = (!math_edit_active
+            && self.session.selected_block_environment().is_none()
             && selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
         let delete_is_paragraph_local = matches!(&command, Command::Delete(Direction::Backward))
@@ -294,8 +324,6 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
     if !line.preedit.is_empty() {
         return false;
     }
-    let candidates = session.command_line_candidates();
-    let selected = candidates.get(line.selected);
     if matches!(
         line.mode,
         caret_engine::CommandLineMode::DefaultFontTarget
@@ -309,21 +337,32 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
         caret_engine::CommandLineMode::FontFamily
             | caret_engine::CommandLineMode::DefaultFontFamily
     ) {
-        return matches!(
+        if !matches!(
             command,
             Command::AcceptCommandLine | Command::TabCommandLine
-        ) && selected.is_some_and(|candidate| {
-            candidate.available
-                && matches!(
-                    candidate.command_id,
-                    "text.format.font_family" | "document.default_font.family"
-                )
-        });
+        ) {
+            return false;
+        }
+        return session
+            .command_line_candidates()
+            .get(line.selected)
+            .is_some_and(|candidate| {
+                candidate.available
+                    && matches!(
+                        candidate.command_id,
+                        "text.format.font_family" | "document.default_font.family"
+                    )
+            });
     }
     match command {
         Command::TypeCommandLine(text) if text == "\\" => {
-            line.query.is_empty()
-                || selected.is_some_and(|candidate| {
+            if line.query.is_empty() {
+                return true;
+            }
+            session
+                .command_line_candidates()
+                .get(line.selected)
+                .is_some_and(|candidate| {
                     candidate.available
                         && !matches!(
                             candidate.command_id,
@@ -332,13 +371,16 @@ fn is_command_line_document_edit(session: &caret_engine::Session, command: &Comm
                 })
         }
         Command::TabCommandLine => line.query.is_empty(),
-        Command::AcceptCommandLine => selected.is_some_and(|candidate| {
-            candidate.available
-                && !matches!(
-                    candidate.command_id,
-                    "text.format.font" | "document.default_font"
-                )
-        }),
+        Command::AcceptCommandLine => session
+            .command_line_candidates()
+            .get(line.selected)
+            .is_some_and(|candidate| {
+                candidate.available
+                    && !matches!(
+                        candidate.command_id,
+                        "text.format.font" | "document.default_font"
+                    )
+            }),
         _ => false,
     }
 }

@@ -108,6 +108,23 @@ QVariantMap LayoutViewModel::dragHitMap(int page_index) {
 #endif
 }
 
+QVariantMap LayoutViewModel::dragStartDomain(int page_index, qreal x_pt, qreal y_pt) {
+#ifdef CARET_ENABLE_APP
+    ffi::DocumentRuntime* runtime = nullptr;
+    if (auto error = layout_view_model_support::runtime_error(
+            runtime, QStringLiteral("selection.wrong_thread"))) {
+        return *error;
+    }
+    return hit_result_from_json(ffi::drag_start_domain_json(*runtime, page_index, x_pt, y_pt));
+#else
+    Q_UNUSED(page_index)
+    Q_UNUSED(x_pt)
+    Q_UNUSED(y_pt)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
 QVariantMap LayoutViewModel::setSelection(const QVariantMap& anchor, const QVariantMap& focus) {
 #ifdef CARET_ENABLE_APP
     ffi::DocumentRuntime* runtime = nullptr;
@@ -116,14 +133,11 @@ QVariantMap LayoutViewModel::setSelection(const QVariantMap& anchor, const QVari
         return *error;
     }
     const auto position_object = [](const QVariantMap& stop) {
-        const QVariantMap position = stop.value(QStringLiteral("position")).toMap();
-        return QJsonObject{
-            {QStringLiteral("paragraphId"),
-             position.value(QStringLiteral("paragraphId")).toString()},
-            {QStringLiteral("offsetUtf8"), position.value(QStringLiteral("offsetUtf8")).toString()},
-            {QStringLiteral("affinity"), position.value(QStringLiteral("affinity")).toString()},
-            {QStringLiteral("visualAffinity"),
-             stop.value(QStringLiteral("visualAffinity")).toString()}};
+        QJsonObject position =
+            QJsonObject::fromVariantMap(stop.value(QStringLiteral("position")).toMap());
+        position.insert(QStringLiteral("visualAffinity"),
+                        stop.value(QStringLiteral("visualAffinity")).toString());
+        return position;
     };
     const QJsonObject selection{{QStringLiteral("anchor"), position_object(anchor)},
                                 {QStringLiteral("focus"), position_object(focus)}};

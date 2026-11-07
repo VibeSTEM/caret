@@ -45,6 +45,152 @@ fn block_text(block: &Block) -> Option<&str> {
     })
 }
 
+fn align_text_tree(text: &str) -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: text.to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+fn align_document(cells: &[&str]) -> Document {
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: cells
+            .iter()
+            .map(|text| caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![align_text_tree(text)],
+                extra: BTreeMap::new(),
+            })
+            .collect(),
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align));
+    document
+}
+
+fn place_caret_in_align_cell(
+    runtime: &mut DocumentViewRuntime,
+    row: usize,
+    column: usize,
+    offset: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let point = {
+        let snapshot = runtime.current_snapshot()?;
+        let mut point = None;
+        'pages: for (page_index, page) in snapshot.pages.iter().enumerate() {
+            for fragment in &page.layout.math_fragments {
+                let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+                let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+                let right = left + f64::from(fragment.width_pt);
+                let bottom = top + f64::from(fragment.height_pt);
+                let mut y = top;
+                while y <= bottom {
+                    let mut x = left;
+                    while x <= right {
+                        if snapshot
+                            .hit_test_math_text(page_index, x, y)
+                            .is_some_and(|hit| {
+                                hit.position.path.align_cell() == Some((row, column))
+                                    && hit.position.offset == offset
+                            })
+                        {
+                            point = Some((page_index, x, y));
+                            break 'pages;
+                        }
+                        x += 0.5;
+                    }
+                    y += 0.5;
+                }
+            }
+        }
+        point.ok_or_else(|| {
+            std::io::Error::other(format!(
+                "Align cell ({row}, {column}) offset {offset} is not hittable"
+            ))
+        })?
+    };
+    runtime.place_caret_at_page_json(point.0 as i32, point.1, point.2)?;
+    Ok(())
+}
+
+fn align_caret_x(runtime: &mut DocumentViewRuntime) -> Result<f64, Box<dyn std::error::Error>> {
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Align text focus is unavailable"))?;
+    let snapshot = runtime.current_snapshot()?;
+    snapshot
+        .math_text_caret_geometry(&context.target, &context.focus, context.visual_affinity)
+        .map(|caret| caret.x_pt)
+        .ok_or_else(|| std::io::Error::other("Align caret geometry is unavailable").into())
+}
+
+fn assert_align_caret_is_nearest_to_x(
+    runtime: &mut DocumentViewRuntime,
+    target_x: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Align text focus is unavailable"))?;
+    let snapshot = runtime.current_snapshot()?;
+    let actual = snapshot
+        .math_text_caret_geometry(&context.target, &context.focus, context.visual_affinity)
+        .ok_or_else(|| std::io::Error::other("Align caret geometry is unavailable"))?;
+    let mut candidate_x = context
+        .surrounding_text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(context.surrounding_text.len()))
+        .map(|offset| {
+            let mut position = context.focus.clone();
+            position.offset = offset;
+            snapshot
+                .math_text_caret_geometry(&context.target, &position, context.visual_affinity)
+                .map(|caret| caret.x_pt)
+                .ok_or_else(|| {
+                    std::io::Error::other("Align candidate caret geometry is unavailable")
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    candidate_x.sort_by(f64::total_cmp);
+    candidate_x.dedup_by(|left, right| (*left - *right).abs() < 1e-6);
+    assert!(
+        candidate_x.len() > 1,
+        "Align fixture must have distinct caret positions"
+    );
+    let actual_distance = (actual.x_pt - target_x).abs();
+    let nearest_distance = candidate_x
+        .iter()
+        .map(|x| (x - target_x).abs())
+        .fold(f64::INFINITY, f64::min);
+    assert!((actual_distance - nearest_distance).abs() < 1e-6);
+    let nearest_count = candidate_x
+        .iter()
+        .filter(|x| ((**x - target_x).abs() - nearest_distance).abs() < 1e-6)
+        .count();
+    assert_eq!(
+        nearest_count, 1,
+        "Align fixture must not have tied nearest carets"
+    );
+    Ok(())
+}
+
 #[test]
 fn drag_hit_map_keeps_soft_break_carets_but_omits_its_highlight_geometry()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -185,6 +331,162 @@ fn visual_navigation_crosses_paragraph_boundaries() -> Result<(), Box<dyn std::e
         runtime.session.selection().focus.paragraph_id,
         paragraph_ids[0]
     );
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_moves_back_and_keeps_focus_at_row_edges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["first", "second"]))?;
+    place_caret_in_align_cell(&mut runtime, 1, 0, 3)?;
+    let target_x = align_caret_x(&mut runtime)?;
+    let generation = runtime.session.document_generation();
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Up left Align text focus"))?;
+    assert_eq!(context.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(context.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    assert!(context.surrounding_text.contains("first"));
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let at_top = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("top edge lost Align text focus"))?;
+    assert_eq!(at_top.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(at_top.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let returned = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left Align text focus"))?;
+    assert_eq!(returned.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(returned.focus.offset, 3);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    runtime.move_vertical_caret_json(1, false)?;
+    let at_bottom = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("bottom edge lost Align text focus"))?;
+    assert_eq!(at_bottom.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(at_bottom.focus.offset, 3);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    assert_eq!(runtime.session.document_generation(), generation);
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_preserves_target_x_across_short_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["abcdefghij", "x", "abcdefghij"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 8)?;
+    let target_x = align_caret_x(&mut runtime)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let short_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left Align text focus"))?;
+    assert_eq!(short_row.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(short_row.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let lower_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("second Down left Align text focus"))?;
+    assert_eq!(lower_row.focus.path.align_cell(), Some((2, 0)));
+    assert_eq!(lower_row.focus.offset, 8);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let short_row_again = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Up left Align text focus"))?;
+    assert_eq!(short_row_again.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(short_row_again.focus.offset, 0);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    runtime.move_vertical_caret_json(-1, false)?;
+    let upper_row = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("second Up left Align text focus"))?;
+    assert_eq!(upper_row.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(upper_row.focus.offset, 8);
+    assert_align_caret_is_nearest_to_x(&mut runtime, target_x)?;
+    Ok(())
+}
+
+#[test]
+fn align_vertical_navigation_enters_an_empty_cell_and_recovers_text_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["top", "", "bottom"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 2)?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let empty_cell = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("empty Align cell did not receive text focus"))?;
+    assert_eq!(empty_cell.focus.path.align_cell(), Some((1, 0)));
+    assert_eq!(empty_cell.focus.offset, 0);
+    assert_eq!(empty_cell.surrounding_text, "");
+
+    runtime.insert_text_json("z".to_owned())?;
+    let edited_cell = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("typing left the empty Align cell"))?;
+    assert_eq!(edited_cell.focus.path.align_cell(), Some((1, 0)));
+    assert!(edited_cell.surrounding_text.contains('z'));
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let lower_text = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down from empty cell lost Align text focus"))?;
+    assert_eq!(lower_text.focus.path.align_cell(), Some((2, 0)));
+    assert!(lower_text.surrounding_text.contains("bottom"));
+    Ok(())
+}
+
+#[test]
+fn shift_down_at_an_align_text_island_boundary_keeps_selection_stable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new(align_document(&["first", "second"]))?;
+    place_caret_in_align_cell(&mut runtime, 0, 0, 2)?;
+
+    runtime.move_vertical_caret_json(1, true)?;
+    let first_attempt = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Shift+Down lost Align text focus"))?;
+    assert_eq!(first_attempt.anchor, first_attempt.focus);
+    assert_eq!(first_attempt.focus.path.align_cell(), Some((0, 0)));
+    assert_eq!(first_attempt.focus.offset, 2);
+
+    runtime.move_vertical_caret_json(1, true)?;
+    let repeated_attempt = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("repeated Shift+Down lost Align text focus"))?;
+    assert_eq!(repeated_attempt.anchor, first_attempt.anchor);
+    assert_eq!(repeated_attempt.focus, first_attempt.focus);
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let resumed = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down after Shift+Down lost Align text focus"))?;
+    assert_eq!(resumed.focus.path.align_cell(), Some((1, 0)));
     Ok(())
 }
 
@@ -1670,6 +1972,268 @@ fn drag_hit_map_is_page_local_and_release_commits_one_selection()
     assert_eq!(runtime.session.selection().focus.offset, "ab😀cd".len());
     let selected_text: Value = serde_json::from_str(&runtime.selected_text_json()?)?;
     assert_eq!(selected_text["text"], "ab😀cd");
+    Ok(())
+}
+
+fn math_text_drag_runtime() -> Result<DocumentViewRuntime, String> {
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "ab".to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: NodeId::generate(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    DocumentViewRuntime::new(document)
+}
+
+#[test]
+fn math_text_drag_reuses_the_shared_hit_map_and_replaces_the_selected_grapheme()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = math_text_drag_runtime()?;
+    runtime.insert_text_json("q".to_owned())?;
+    runtime.layout_snapshot_json()?;
+    let session_id = runtime.session.session_id().clone();
+    let generation = runtime.document_generation();
+    assert!(generation > 0);
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag map omitted stops"))?;
+    let anchor = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "0"
+                && stop["visualAffinity"] == "downstream"
+        })
+        .ok_or_else(|| std::io::Error::other("math start stop is missing"))?;
+    let focus = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["kind"] == "math"
+                && stop["position"]["orderUtf8"] == "1"
+                && stop["visualAffinity"] == "downstream"
+                && stop["domainId"] == anchor["domainId"]
+        })
+        .ok_or_else(|| std::io::Error::other("math focus stop is missing"))?;
+    let math_segment = hit_map["segments"]
+        .as_array()
+        .and_then(|segments| {
+            segments
+                .iter()
+                .find(|segment| segment["domainId"] == anchor["domainId"])
+        })
+        .ok_or_else(|| std::io::Error::other("math drag segment is missing"))?;
+    assert_eq!(math_segment["startPosition"]["kind"], "math");
+    assert!(math_segment["endPosition"]["orderUtf8"].is_string());
+    let selection = serde_json::json!({
+        "anchor": anchor["position"],
+        "focus": focus["position"],
+    });
+    let snapshot: Value =
+        serde_json::from_str(&runtime.set_selection_json(&selection.to_string())?)?;
+    assert_eq!(runtime.session.session_id(), &session_id);
+    assert_eq!(runtime.document_generation(), generation);
+    assert!(
+        snapshot["selectionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    let copied: Value = serde_json::from_str(&runtime.selected_text_json()?)?;
+    assert_eq!(copied["text"], "a");
+    runtime.insert_text_json("Z".to_owned())?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("math drag lost formula focus"))?;
+    assert_eq!(context.surrounding_text, "Zb");
+    Ok(())
+}
+
+#[test]
+fn stale_math_drag_stops_do_not_change_the_session() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = math_text_drag_runtime()?;
+    runtime.layout_snapshot_json()?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stop = hit_map["stops"]
+        .as_array()
+        .and_then(|stops| stops.iter().find(|stop| stop["position"]["kind"] == "math"))
+        .ok_or_else(|| std::io::Error::other("math drag stop is missing"))?
+        .clone();
+    runtime.insert_text_json("body".to_owned())?;
+    let before = runtime.session.document().clone();
+    let generation = runtime.document_generation();
+    let selection = serde_json::json!({
+        "anchor": stop["position"],
+        "focus": stop["position"],
+    });
+    assert_eq!(
+        runtime
+            .set_selection_json(&selection.to_string())
+            .err()
+            .as_deref(),
+        Some("selection.stale_math_hit")
+    );
+    assert_eq!(runtime.document_generation(), generation);
+    assert_eq!(runtime.session.document(), &before);
+    assert!(runtime.session.math_text_input_context().is_none());
+    Ok(())
+}
+
+#[test]
+fn math_drag_stops_from_a_reopened_session_are_rejected() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut original = math_text_drag_runtime()?;
+    original.layout_snapshot_json()?;
+    let map: Value = serde_json::from_str(&original.drag_hit_map_json(0)?)?;
+    let math_stops = map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag map omitted stops"))?
+        .iter()
+        .filter(|stop| stop["position"]["kind"] == "math")
+        .collect::<Vec<_>>();
+    let selection = serde_json::json!({
+        "anchor": math_stops[0]["position"],
+        "focus": math_stops[1]["position"],
+    });
+    let mut reopened = DocumentViewRuntime::new(original.session.document().clone())?;
+    reopened.layout_snapshot_json()?;
+    let before = reopened.session.document().clone();
+    let result = reopened.set_selection_json(&selection.to_string());
+    assert!(matches!(result, Err(error) if error == "selection.stale_math_hit"));
+    assert_eq!(reopened.session.document(), &before);
+    assert!(reopened.session.math_text_input_context().is_none());
+    Ok(())
+}
+
+#[test]
+fn math_drag_cancels_body_preedit_and_moves_focus_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = math_text_drag_runtime()?;
+    runtime.input_method_event_json("候補".to_owned(), String::new(), 0, 0, 2)?;
+    assert!(runtime.composition_id.is_some());
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag map omitted stops"))?;
+    let math_stops = stops
+        .iter()
+        .filter(|stop| stop["position"]["kind"] == "math")
+        .collect::<Vec<_>>();
+    let selection = serde_json::json!({
+        "anchor": math_stops[0]["position"],
+        "focus": math_stops[1]["position"],
+    });
+    let generation = runtime.document_generation();
+    runtime.set_selection_json(&selection.to_string())?;
+    assert!(runtime.composition_id.is_none());
+    assert_eq!(runtime.document_generation(), generation);
+    assert_eq!(
+        runtime
+            .session
+            .math_text_input_context()
+            .map(|context| context.surrounding_text),
+        Some("ab".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn zero_length_math_drag_enters_formula_text_without_changing_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = math_text_drag_runtime()?;
+    runtime.layout_snapshot_json()?;
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stop = hit_map["stops"]
+        .as_array()
+        .and_then(|stops| stops.iter().find(|stop| stop["position"]["kind"] == "math"))
+        .ok_or_else(|| std::io::Error::other("math drag stop is missing"))?;
+    let position = stop["position"].clone();
+    let generation = runtime.document_generation();
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": position, "focus": position }).to_string(),
+    )?;
+    assert!(runtime.session.math_text_input_context().is_some());
+    assert_eq!(runtime.document_generation(), generation);
+    Ok(())
+}
+
+#[test]
+fn math_drag_during_math_preedit_rehits_original_text_positions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = math_text_drag_runtime()?;
+    runtime.layout_snapshot_json()?;
+    let initial_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let initial_stop = initial_map["stops"]
+        .as_array()
+        .and_then(|stops| {
+            stops.iter().find(|stop| {
+                stop["position"]["kind"] == "math" && stop["position"]["orderUtf8"] == "1"
+            })
+        })
+        .ok_or_else(|| std::io::Error::other("middle math drag stop is missing"))?;
+    let position = initial_stop["position"].clone();
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": position, "focus": position }).to_string(),
+    )?;
+    runtime.input_method_event_json("X".to_owned(), String::new(), 0, 0, 1)?;
+    assert!(runtime.composition_id.is_some());
+    let preview_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let math_stops = preview_map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("preview drag map omitted stops"))?
+        .iter()
+        .filter(|stop| stop["position"]["kind"] == "math")
+        .collect::<Vec<_>>();
+    let first = math_stops
+        .iter()
+        .find(|stop| stop["position"]["orderUtf8"] == "0")
+        .ok_or_else(|| std::io::Error::other("preview start stop is missing"))?;
+    let last = math_stops
+        .iter()
+        .max_by_key(|stop| {
+            stop["position"]["orderUtf8"]
+                .as_str()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0)
+        })
+        .ok_or_else(|| std::io::Error::other("preview end stop is missing"))?;
+    let mut selection = serde_json::json!({
+        "anchor": first["position"],
+        "focus": last["position"],
+    });
+    // Preedit 文本可能将整块公式推到相邻页；原文重命中按 MathPath 和页面几何定位。
+    selection["anchor"]["pageIndex"] =
+        serde_json::json!(first["position"]["pageIndex"].as_u64().unwrap_or(0) + 1);
+    selection["focus"]["pageIndex"] =
+        serde_json::json!(last["position"]["pageIndex"].as_u64().unwrap_or(0) + 1);
+    runtime.set_selection_json(&selection.to_string())?;
+    assert!(runtime.composition_id.is_none());
+    assert_eq!(
+        runtime
+            .session
+            .math_text_input_context()
+            .map(|context| context.surrounding_text),
+        Some("ab".to_owned())
+    );
+    let selected: Value = serde_json::from_str(&runtime.selected_text_json()?)?;
+    assert_eq!(selected["text"], "ab");
     Ok(())
 }
 

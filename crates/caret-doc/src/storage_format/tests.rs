@@ -14,6 +14,197 @@ fn blank_envelope() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn inline_text_template_feature_is_required_and_validated() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["globalSettings"]["theme"] = json!({
+        "formatVersion": 1,
+        "namedStyles": {},
+        "environmentTemplates": {
+            "body-bold": {
+                "baseKind": "bold",
+                "props": {"enabled": false},
+                "variants": {"body-bold/strong": {"enabled": true}}
+            }
+        },
+        "defaultInlineEnvironmentTemplates": {"bold": "body-bold"}
+    });
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{
+            "type": "environment",
+            "scope": "inline",
+            "id": "bold-node",
+            "kind": "bold",
+            "definitionId": "body-bold/strong",
+            "props": {},
+            "children": [{"type": "text", "runs": [{"text": "strong"}]}]
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.env.bold",
+        "caret.env.inline-text-templates.v1",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size",
+        "caret.theme.snapshot"
+    ]);
+
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("declared supported template data should be editable");
+    };
+    assert!(
+        opened
+            .required_features()
+            .iter()
+            .any(|feature| feature == "caret.env.inline-text-templates.v1")
+    );
+
+    envelope["requiredFeatures"] = json!([
+        "caret.env.bold",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size",
+        "caret.theme.snapshot"
+    ]);
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("template semantics without explicit declaration must be read-only");
+    };
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::MissingRequiredFeature(
+                "caret.env.inline-text-templates.v1".to_owned()
+            ))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn legacy_inline_template_reference_opens_as_safe_preview() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["globalSettings"]["theme"] = json!({
+        "formatVersion": 1,
+        "namedStyles": {},
+        "environmentTemplates": {
+            "body-bold": {
+                "baseKind": "bold",
+                "props": {"enabled": false},
+                "variants": {"body-bold/strong": {"enabled": true}}
+            }
+        }
+    });
+    envelope["document"]["body"] = json!([{
+        "type": "paragraph",
+        "id": "paragraph",
+        "inlines": [{
+            "type": "environment",
+            "scope": "inline",
+            "id": "bold-node",
+            "kind": "bold",
+            "definitionId": "body-bold/strong",
+            "props": {},
+            "children": [{"type": "text", "runs": [{"text": "strong"}]}]
+        }]
+    }]);
+    envelope["requiredFeatures"] = json!([
+        "caret.env.bold",
+        "caret.env.templates",
+        "caret.paragraph.content-flow.v1",
+        "caret.paragraph.layout-settings",
+        "caret.text.default-font-size",
+        "caret.theme.snapshot"
+    ]);
+
+    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+        panic!("legacy template data missing the new capability should be read-only");
+    };
+    assert!(
+        preview
+            .reasons
+            .contains(&PreviewReason::MissingRequiredFeature(
+                "caret.env.inline-text-templates.v1".to_owned()
+            ))
+    );
+    assert!(!preview.can_save());
+    assert_eq!(
+        preview.to_json_value()?["document"]["body"][0]["inlines"][0]["definitionId"],
+        "body-bold/strong"
+    );
+
+    envelope["requiredFeatures"]
+        .as_array_mut()
+        .ok_or("requiredFeatures should be an array")?
+        .insert(1, json!("caret.env.inline-text-templates.v1"));
+    let declared_feature_result = open(envelope.to_string().as_bytes());
+    assert!(
+        matches!(
+            declared_feature_result,
+            Err(DocumentError::InvalidDocument(_))
+        ),
+        "declaring a schema without its required mapping must be rejected: {declared_feature_result:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn unsupported_theme_or_feature_keeps_unknown_template_schema_in_safe_preview()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (theme_version, extra_feature) in [(2, None), (1, Some("caret.env.future-style.v1"))] {
+        let mut envelope = blank_envelope()?;
+        let future_mapping = if theme_version == 2 {
+            json!({"future": {"template": "future"}})
+        } else {
+            json!({"future": "future"})
+        };
+        envelope["document"]["globalSettings"]["theme"] = json!({
+            "formatVersion": theme_version,
+            "namedStyles": {},
+            "environmentTemplates": {"future": {"baseKind": "future"}},
+            "defaultInlineEnvironmentTemplates": future_mapping
+        });
+        if let Some(feature) = extra_feature {
+            envelope["requiredFeatures"]
+                .as_array_mut()
+                .ok_or("requiredFeatures should be an array")?
+                .insert(0, json!(feature));
+        }
+
+        let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
+            panic!("unknown theme/template schema should remain a safe preview");
+        };
+        assert_eq!(
+            preview
+                .document()
+                .global_settings
+                .theme
+                .as_ref()
+                .and_then(|theme| theme.default_inline_environment_templates.get("future")),
+            Some(&future_mapping["future"])
+        );
+        if theme_version != 1 {
+            assert!(
+                preview
+                    .reasons
+                    .contains(&PreviewReason::UnsupportedThemeVersion(theme_version))
+            );
+        } else {
+            assert!(
+                preview
+                    .reasons
+                    .contains(&PreviewReason::UnsupportedRequiredFeature(
+                        extra_feature.unwrap_or_default().to_owned()
+                    ))
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn math_tree_round_trip_does_not_persist_tex_projections() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut envelope = blank_envelope()?;
@@ -63,15 +254,16 @@ fn math_tree_round_trip_does_not_persist_tex_projections() -> Result<(), Box<dyn
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let OpenedDocument::SafePreview(opened) = open(envelope.to_string().as_bytes())? else {
-        panic!("math remains read-only until layout support is enabled");
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("supported math data should reopen as editable");
     };
-    assert_eq!(opened.to_json_value()?["document"], saved);
+    let reopened: Value = serde_json::from_slice(&opened.to_bytes()?)?;
+    assert_eq!(reopened["document"], saved);
     Ok(())
 }
 
 #[test]
-fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknown_fields()
+fn math_carriers_decode_and_open_as_typed_documents_preserving_ids_and_unknown_fields()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut envelope = blank_envelope()?;
     let inline_math_tree = json!({
@@ -245,8 +437,8 @@ fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknow
     }
     envelope["document"] = saved_document.clone();
     let bytes = serde_json::to_vec(&envelope)?;
-    let OpenedDocument::SafePreview(opened) = open(&bytes)? else {
-        panic!("unsupported math features must open as a read-only preview");
+    let OpenedDocument::Editable(opened) = open(&bytes)? else {
+        panic!("supported math features should open as editable");
     };
     let [
         Block::Paragraph(reopened_paragraph),
@@ -279,7 +471,7 @@ fn math_carriers_decode_and_open_as_typed_safe_preview_preserving_ids_and_unknow
     assert_eq!(reopened_inline_math.id.as_str(), "inline-math-id");
     assert_eq!(reopened_equation.id.as_str(), "equation-id");
     assert_eq!(reopened_align.id.as_str(), "align-id");
-    let reopened = opened.to_json_value()?;
+    let reopened: Value = serde_json::from_slice(&opened.to_bytes()?)?;
     assert_eq!(reopened["document"], saved_document);
     assert_eq!(reopened["document"]["body"][0]["id"], "paragraph-id");
     assert_eq!(
@@ -563,10 +755,10 @@ fn unknown_math_projection_names_remain_on_unrelated_nodes()
         "caret.paragraph.layout-settings",
         "caret.text.default-font-size"
     ]);
-    let OpenedDocument::SafePreview(preview) = open(envelope.to_string().as_bytes())? else {
-        panic!("math is held in safe preview until layout support is enabled");
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("supported math should preserve unknown optional fields as editable data");
     };
-    let saved = preview.to_json_value()?;
+    let saved: Value = serde_json::from_slice(&opened.to_bytes()?)?;
     assert_eq!(
         saved["document"]["body"][0]["mathTree"]["sourceRange"]["vendor"],
         "tree"

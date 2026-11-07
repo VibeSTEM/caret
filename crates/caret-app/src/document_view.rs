@@ -6,7 +6,7 @@
 use caret_doc::Document;
 use caret_engine::{
     CompositionRange, DocumentLayoutRuntime, DocumentLayoutSnapshot, EditError, MathEditTarget,
-    MathTextPosition, PageGlyphRasterizer, Session, VisualAffinity,
+    MathTextPosition, MathTreePosition, PageGlyphRasterizer, Session, VisualAffinity,
 };
 
 mod composition;
@@ -21,9 +21,18 @@ mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MathInteractionContext {
+    surrounding_text: String,
     target: MathEditTarget,
     anchor: MathTextPosition,
     focus: MathTextPosition,
+    anchor_visual_affinity: caret_engine::VisualAffinity,
+    visual_affinity: caret_engine::VisualAffinity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MathTreeInteractionContext {
+    target: MathEditTarget,
+    position: MathTreePosition,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +41,7 @@ struct InteractionContext {
     focused_paragraph_id: caret_doc::NodeId,
     command_input_active: bool,
     math_context: Option<MathInteractionContext>,
+    math_tree_context: Option<MathTreeInteractionContext>,
 }
 
 /// 当前文档会话与可复用的字体/布局运行时。

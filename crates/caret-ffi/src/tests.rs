@@ -96,7 +96,16 @@ fn ffi_layout_snapshot_contains_rust_page_and_paragraph_layout() {
     assert!(snapshot.contains("\"widthPt\":595."));
     assert!(snapshot.contains("\"heightPt\":841."));
     assert!(snapshot.contains("\"paragraphs\":["));
-    assert!(snapshot.contains("\"fontGeneration\":\"1\""));
+    let font_generation = serde_json::from_str::<serde_json::Value>(&snapshot)
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .get("fontGeneration")?
+                .as_str()?
+                .parse::<u64>()
+                .ok()
+        });
+    assert!(font_generation.is_some_and(|generation| generation > 0));
     assert_eq!(layout_snapshot_json(&mut runtime), snapshot);
     let hit = document_hit_test_json(&mut runtime, 0, 73.0, 73.0);
     assert!(hit.contains("\"offsetUtf8\":\"0\""));
@@ -249,7 +258,7 @@ fn ffi_glyph_frame_uses_binary_pixels_and_reports_invalid_geometry() {
     assert!(frame.error.is_empty());
     assert_eq!(frame.page_index, 0);
     assert_eq!(frame.document_generation, 1);
-    assert_eq!(frame.font_generation, 1);
+    assert!(frame.font_generation > 0);
     assert!(!frame.images.is_empty());
     assert!(!frame.placements.is_empty());
     assert!(

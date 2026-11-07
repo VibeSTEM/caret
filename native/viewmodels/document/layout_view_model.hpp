@@ -45,6 +45,8 @@ class LayoutViewModel final : public QObject {
     Q_PROPERTY(QVariantList pageGlyphRevisions READ pageGlyphRevisions NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList pageLayouts READ pageLayouts NOTIFY layoutChanged)
     Q_PROPERTY(QVariantMap pageMarginsPt READ pageMarginsPt NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantMap mathFontDiagnostic READ mathFontDiagnostic NOTIFY layoutChanged)
+    Q_PROPERTY(QVariantList textDiagnostics READ textDiagnostics NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList selectionRects READ selectionRects NOTIFY interactionChanged)
     Q_PROPERTY(QVariantList compositionRects READ compositionRects NOTIFY layoutChanged)
     Q_PROPERTY(QVariantList paragraphLayouts READ paragraphLayouts NOTIFY layoutChanged)
@@ -81,6 +83,8 @@ class LayoutViewModel final : public QObject {
     [[nodiscard]] const QVariantList& pageGlyphRevisions() const { return m_page_glyph_revisions; }
     [[nodiscard]] QVariantList pageLayouts() const { return m_page_layouts.toVariantList(); }
     [[nodiscard]] const QVariantMap& pageMarginsPt() const { return m_page_margins_pt; }
+    [[nodiscard]] const QVariantMap& mathFontDiagnostic() const { return m_math_font_diagnostic; }
+    [[nodiscard]] const QVariantList& textDiagnostics() const { return m_text_diagnostics; }
     [[nodiscard]] const QVariantList& selectionRects() const { return m_selection_rects; }
     [[nodiscard]] const QVariantList& compositionRects() const { return m_composition_rects; }
     [[nodiscard]] QVariantList paragraphLayouts() const {
@@ -161,6 +165,8 @@ class LayoutViewModel final : public QObject {
                                              int cursor_position_utf16);
     /// 按需提供当前页拖选缓存；指针移动过程只在 Qt/QML 内部命中。
     Q_INVOKABLE QVariantMap dragHitMap(int page_index);
+    /// 按 Rust 页面命中规则解析拖选起点的文本域，不修改会话状态。
+    Q_INVOKABLE QVariantMap dragStartDomain(int page_index, qreal x_pt, qreal y_pt);
     /// 鼠标释放时一次性提交本地预览锚点与焦点。
     Q_INVOKABLE QVariantMap setSelection(const QVariantMap& anchor, const QVariantMap& focus);
     /// 清除选区并保留现有焦点位置。
@@ -233,6 +239,8 @@ class LayoutViewModel final : public QObject {
     QVariantList m_page_glyph_revisions;
     QJsonArray m_page_layouts;
     QVariantMap m_page_margins_pt;
+    QVariantMap m_math_font_diagnostic;
+    QVariantList m_text_diagnostics;
     QVariantList m_selection_rects;
     QVariantList m_composition_rects;
     QJsonArray m_paragraph_layouts;

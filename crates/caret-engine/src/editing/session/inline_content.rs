@@ -424,7 +424,13 @@ impl Session {
             next_math_edit = None;
             next_visual_affinity = crate::VisualAffinity::Upstream;
         }
+        let document_before = self.document.clone();
         self.replace_paragraph(&anchor, paragraph)?;
+        if let Err(error) = caret_doc::CdocFile::new(self.document.clone()) {
+            self.document = document_before;
+            self.text_map_cache.clear();
+            return Err(EditError::InvalidDocument(error.to_string()));
+        }
         self.text_map_cache.clear();
         self.selection = next_selection;
         self.math_edit = next_math_edit;

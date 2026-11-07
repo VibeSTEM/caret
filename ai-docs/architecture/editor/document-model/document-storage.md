@@ -19,6 +19,7 @@
 | `caret.env.section` | 块级章节、层级计数和生成标签 |
 | `caret.env.custom` | 块级可嵌套、可命名自定义容器 |
 | `caret.env.templates` | 主题中的声明式环境模板、同 kind 变体和实例选择 |
+| `caret.env.inline-text-templates.v1` | 行内文本环境主题模板的 kind 映射、默认属性、命名变体和实例覆盖解析 |
 | `caret.math.align` | 多行对齐公式 |
 | `caret.math.equation` | 单行显示公式 |
 | `caret.math.inline` | 行内公式 |
@@ -31,6 +32,12 @@
 `requiredFeatures` 按字节序去重排序；除编码器始终声明的基础能力外，只列文档实际使用的能力。读取器发现未知能力时只读打开；能力 ID 的语义在发布后不可变，语义不兼容时使用新 ID 或提升 `.cdoc` 主版本。
 
 Page 与 Inline 自定义环境分别使用 scope 专属的必需能力标识；`caret.env.custom` 的语义限定为块级自定义容器。
+
+### 行内文本环境模板
+
+主题快照中的 `defaultInlineEnvironmentTemplates` 是 kind 到模板 ID 的映射，例如 `{"bold":"body-bold"}`。映射所指的 `environmentTemplates[templateId]` 必须是对象，且含与映射 kind 相同的 `baseKind`；可选 `props` 提供该 kind 的默认属性，`variants` 是以稳定 variant ID 为键、以属性对象为值的映射。Bold/Italic 只接受布尔 `enabled`，Font 只接受非空字符串 `fontFamily`。模板顶层只接受 `baseKind`、`props`、`variants`；不支持的字段、错误类型、缺失模板或不匹配的 `baseKind` 都使当前版本文档校验失败。
+
+行内环境实例的 `definitionId` 指向其 kind 默认模板中的 variant ID；解析顺序为 kind 默认模板 `props` → variant `props` → 实例 `props`。未设置的字段继续继承外层环境。Bold/Italic 最终仍未设置时默认为启用；空白实例 `fontFamily` 作为未指定处理。该契约由 `caret.env.inline-text-templates.v1` 标识，读取器要求显式声明此能力；不识别它的旧程序必须按未知必需能力进入只读安全预览。Caret 初期不实现旧 `caret.env.templates` 行内语义兼容；未声明新版能力但含旧行内 `definitionId` 引用的文档会保留为 `SafePreview`，不可编辑或保存；声明了新版能力但模板无效时则拒绝打开。
 
 ### 内容流能力
 

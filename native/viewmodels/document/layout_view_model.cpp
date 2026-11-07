@@ -53,6 +53,8 @@ LayoutViewModel::LayoutViewModel(QObject* parent) : QObject(parent) {
     m_page_glyph_revisions = parsed_snapshot.page_glyph_revisions;
     m_page_layouts = parsed_snapshot.page_layouts;
     m_page_margins_pt = parsed_snapshot.page_margins;
+    m_math_font_diagnostic = parsed_snapshot.math_font_diagnostic;
+    m_text_diagnostics = parsed_snapshot.text_diagnostics;
     m_selection_rects = parsed_snapshot.selection_rects;
     m_composition_rects = parsed_snapshot.composition_rects;
     m_paragraph_layouts = parsed_snapshot.paragraph_layouts;
@@ -113,6 +115,8 @@ bool LayoutViewModel::installSnapshot(layout_snapshot::ParsedLayoutSnapshot pars
     m_page_glyph_revisions = std::move(parsed_snapshot.page_glyph_revisions);
     m_page_layouts = std::move(parsed_snapshot.page_layouts);
     m_page_margins_pt = std::move(parsed_snapshot.page_margins);
+    m_math_font_diagnostic = std::move(parsed_snapshot.math_font_diagnostic);
+    m_text_diagnostics = std::move(parsed_snapshot.text_diagnostics);
     m_selection_rects = std::move(parsed_snapshot.selection_rects);
     m_composition_rects = std::move(parsed_snapshot.composition_rects);
     m_paragraph_layouts = std::move(parsed_snapshot.paragraph_layouts);

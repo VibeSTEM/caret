@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{FlowContent, InlineEnvironmentKind, Paragraph, ParagraphContent, TextFlow};
+use caret_doc::{FlowContent, Paragraph, ParagraphContent, TextFlow};
 pub use caret_font_roles::FontRole;
 
 mod unicode;
 pub use unicode::UnicodeBoundaries;
-pub(crate) use unicode::is_mandatory_line_break;
+pub(crate) use unicode::{is_mandatory_break_character, is_mandatory_line_break};
 
 /// 传入 Parley 的段落基础样式；格式环境和 Run 语言在行内范围上覆盖它。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -46,6 +46,23 @@ impl ShapingStyle {
             language: None,
         }
     }
+
+    /// 应用 Run 自身支持的 shaping 覆盖；局部字体仍由 Font 环境表达。
+    pub fn with_run(&self, run: &caret_doc::Run) -> Self {
+        let mut style = self.clone();
+        if let Some(language) = &run.language {
+            style.language = Some(language.clone());
+        }
+        style
+    }
+}
+
+/// 返回 Run 声明的下划线样式；正文与数学 TextFlow 使用同一属性解释。
+pub fn run_has_underline(run: &caret_doc::Run) -> bool {
+    run.props
+        .get("underline")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[derive(Debug)]
@@ -68,7 +85,12 @@ pub(crate) fn paragraph_style_spans<'a>(
             .or_else(|| base_style.language.clone())
     });
     let mut spans = Vec::new();
-    append_inlines(&paragraph.inlines, &base, &mut spans);
+    append_inlines(
+        &paragraph.inlines,
+        &base,
+        settings.inline_environment_templates(),
+        &mut spans,
+    );
     spans
 }
 
@@ -171,57 +193,37 @@ pub fn paragraph_text(paragraph: &Paragraph) -> String {
 fn append_inlines<'a>(
     nodes: &'a [ParagraphContent],
     style: &ShapingStyle,
+    templates: &caret_doc::InlineEnvironmentTemplates,
     output: &mut Vec<StyledSpan<'a>>,
 ) {
     for node in nodes {
         match node {
             FlowContent::Text(TextFlow { runs, .. }) => {
                 for run in runs {
-                    let mut run_style = style.clone();
-                    if let Some(language) = &run.language {
-                        run_style.language = Some(language.clone());
-                    }
                     if !run.text.is_empty() {
                         output.push(StyledSpan {
                             text: &run.text,
-                            style: run_style,
-                            underline: run
-                                .props
-                                .get("underline")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false),
+                            style: style.with_run(run),
+                            underline: run_has_underline(run),
                         });
                     }
                 }
             }
             FlowContent::Environment(environment) => {
                 let mut nested = style.clone();
-                match environment.kind {
-                    InlineEnvironmentKind::Bold => {
-                        nested.bold = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Italic => {
-                        nested.italic = environment
-                            .props
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(true);
-                    }
-                    InlineEnvironmentKind::Font => {
-                        if let Some(family) = environment
-                            .props
-                            .get("fontFamily")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            nested.requested_family = Some(family.to_owned());
-                        }
-                    }
+                let text_style = environment
+                    .resolved_text_style(templates)
+                    .unwrap_or_else(|_| environment.text_style());
+                if let Some(bold) = text_style.bold {
+                    nested.bold = bold;
                 }
-                append_inlines(&environment.children, &nested, output);
+                if let Some(italic) = text_style.italic {
+                    nested.italic = italic;
+                }
+                if let Some(font_family) = text_style.font_family {
+                    nested.requested_family = Some(font_family);
+                }
+                append_inlines(&environment.children, &nested, templates, output);
             }
             FlowContent::SoftBreak(_) => output.push(StyledSpan {
                 text: "\n",
@@ -242,8 +244,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use caret_doc::{
-        DocumentSettings, InlineEnvironment, NodeId, OpaqueNode, ParagraphContent, Run, SoftBreak,
-        TextFlow,
+        DocumentSettings, InlineEnvironment, InlineEnvironmentKind, NodeId, OpaqueNode,
+        ParagraphContent, Run, SoftBreak, TextFlow, ThemeSnapshot,
     };
 
     use super::*;
@@ -325,6 +327,87 @@ mod tests {
         assert_eq!(spans[0].style.language.as_deref(), Some("zh-Hant"));
         assert_eq!(spans[1].style.language.as_deref(), Some("en-GB"));
         assert_eq!(spans[2].style.language.as_deref(), Some("zh-Hant"));
+    }
+
+    #[test]
+    fn theme_font_template_variant_and_instance_override_reach_body_shaping() {
+        let settings = ResolvedDocumentTextSettings::from_document_settings(&DocumentSettings {
+            theme: Some(ThemeSnapshot {
+                format_version: 1,
+                source_id: None,
+                named_styles: BTreeMap::new(),
+                environment_templates: BTreeMap::from([(
+                    "body-font".to_owned(),
+                    serde_json::json!({
+                        "baseKind": "font",
+                        "props": {"fontFamily": "Theme Sans"},
+                        "variants": {
+                            "body-font/serif": {"fontFamily": "Theme Serif"}
+                        }
+                    }),
+                )]),
+                default_inline_environment_templates: BTreeMap::from([(
+                    "font".to_owned(),
+                    serde_json::json!("body-font"),
+                )]),
+                extra: BTreeMap::new(),
+            }),
+            ..DocumentSettings::default()
+        })
+        .unwrap_or_else(|error| panic!("settings rejected: {error}"));
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines = vec![
+            ParagraphContent::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Font,
+                definition_id: None,
+                props: BTreeMap::new(),
+                children: vec![
+                    run("outer", None),
+                    ParagraphContent::Environment(InlineEnvironment {
+                        id: NodeId::generate(),
+                        kind: InlineEnvironmentKind::Font,
+                        definition_id: Some("body-font/serif".to_owned()),
+                        props: BTreeMap::new(),
+                        children: vec![run("variant", None)],
+                        extra: BTreeMap::new(),
+                    }),
+                    run("tail", None),
+                ],
+                extra: BTreeMap::new(),
+            }),
+            ParagraphContent::Environment(InlineEnvironment {
+                id: NodeId::generate(),
+                kind: InlineEnvironmentKind::Font,
+                definition_id: Some("body-font/serif".to_owned()),
+                props: BTreeMap::from([(
+                    "fontFamily".to_owned(),
+                    serde_json::json!("Instance Mono"),
+                )]),
+                children: vec![run("instance", None)],
+                extra: BTreeMap::new(),
+            }),
+        ];
+
+        let spans = paragraph_style_spans(&paragraph, &settings, &ShapingStyle::new(1200));
+
+        assert_eq!(spans.len(), 4);
+        assert_eq!(
+            spans[0].style.requested_family.as_deref(),
+            Some("Theme Sans")
+        );
+        assert_eq!(
+            spans[1].style.requested_family.as_deref(),
+            Some("Theme Serif")
+        );
+        assert_eq!(
+            spans[2].style.requested_family.as_deref(),
+            Some("Theme Sans")
+        );
+        assert_eq!(
+            spans[3].style.requested_family.as_deref(),
+            Some("Instance Mono")
+        );
     }
 
     #[test]

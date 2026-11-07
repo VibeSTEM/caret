@@ -27,13 +27,14 @@ pub use editing::{
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
-    LaidOutParagraph, PageCaretGeometry, PageEnvironmentRange, PageHit, PageLayoutSnapshot,
-    PageSelectionRect,
+    LaidOutParagraph, MathTextVerticalTarget, PageCaretGeometry, PageEnvironmentRange, PageHit,
+    PageLayoutSnapshot, PageMathStructureHit, PageMathTextDragStop, PageMathTextHit,
+    PageSelectionRect, TextLayoutDiagnostic,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,
     LayoutLineView, PageCaretView, PageFragmentView, PageHitView, PageLayoutView, PageMarginsView,
-    ParagraphLayoutView, StoryView,
+    ParagraphLayoutView, StoryView, TextLayoutDiagnosticView,
 };
 pub use page_glyphs::{
     PageGlyph, PageGlyphDecoration, PageGlyphError, PageGlyphImage, PageGlyphPlacement,

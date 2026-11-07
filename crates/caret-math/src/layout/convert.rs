@@ -16,8 +16,9 @@ use super::radical::layout_radical;
 use super::run::layout_row;
 use super::scripts::{Attachments, layout_attachments};
 use super::table::{Align, TableRow, TableSpec, layout_table};
+use super::text::{MathTextContainer, MathTextRequest, MathTextRun, MathTextRunStyle};
 use crate::backend::BackendNodeKind as K;
-use crate::backend::Node as MathNode;
+use crate::backend::{Node as MathNode, NodePosition};
 use crate::fonts::Axis;
 use crate::symbols::{AtomClass, accent_char, delimiter_char, literal_display_char, named_symbol};
 
@@ -35,15 +36,59 @@ const BOX_STROKE: f64 = 0.4;
 
 pub(crate) struct Converter<'a> {
     pub ctx: Context<'a>,
+    pub text_shaper: Option<&'a mut dyn super::MathTextShaper>,
+    pub text_shaping_error: Option<super::MathTextShapeError>,
+    pub requested_text_family_missing: bool,
+    pub(crate) text_tokens: std::collections::HashSet<u64>,
+    pub math_text_style: MathTextRunStyle,
 }
 
 impl Converter<'_> {
+    fn styled_position(
+        &self,
+        position: &Option<NodePosition>,
+        style: Style,
+    ) -> Option<NodePosition> {
+        let mut position = position.clone()?;
+        position.font_size_pt = Some(self.ctx.font_size(style));
+        Some(position)
+    }
+
     /// 排版一个节点，并记录其范围供命中测试。
     pub(crate) fn node(&mut self, node: &MathNode, style: Style) -> Fragment {
+        if matches!(
+            node.kind,
+            K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle | K::SoftBreak | K::Opaque
+        ) {
+            return self.layout(node, style);
+        }
         let mut fragment = self.layout(node, style);
+        // 可选占位符不参与排版，但其 MathFlow 身份仍供结构导航使用。
+        for &index in node.kind.optional_placeholder_operands().iter().rev() {
+            let Some(child) = node.children.get(index) else {
+                continue;
+            };
+            if !is_placeholder_flow(child) {
+                continue;
+            }
+            fragment.frame.items.insert(
+                0,
+                (
+                    Point::new(0.0, fragment.frame.baseline),
+                    Item::Node {
+                        id: child.id.clone(),
+                        position: self.styled_position(&child.position, style),
+                        width: 0.0,
+                        height: 0.0,
+                        baseline: 0.0,
+                    },
+                ),
+            );
+        }
         let frame = &fragment.frame;
         let record = Item::Node {
             id: node.id.clone(),
+            position: self.styled_position(&node.position, style),
             width: frame.width,
             height: frame.height,
             baseline: frame.baseline,
@@ -58,21 +103,588 @@ impl Converter<'_> {
     /// 把子节点序列排成一行；嵌套 Row 与 `\color` 展开到同一行参与间距计算。
     pub(crate) fn row(&mut self, children: &[MathNode], style: Style) -> Fragment {
         let mut fragments = Vec::with_capacity(children.len());
-        self.collect(children, style, &mut fragments);
+        if self.text_shaper.is_some() {
+            let inherited = self.math_text_style.clone();
+            self.collect_text_sequence(children, style, inherited, &[], &mut fragments);
+        } else {
+            self.collect(children, style, &mut fragments);
+        }
         if fragments.is_empty() {
             return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
         }
         layout_row(&self.ctx, style, fragments)
     }
 
+    fn collect_text_sequence(
+        &mut self,
+        children: &[MathNode],
+        style: Style,
+        inherited: MathTextRunStyle,
+        active_containers: &[MathTextContainer],
+        out: &mut Vec<Fragment>,
+    ) {
+        let mut request = MathTextRequest {
+            font_size_pt: self.ctx.font_size(style),
+            color: style.color,
+            runs: Vec::new(),
+            containers: Vec::new(),
+        };
+        let mut byte_offset = 0;
+        let mut stream_error = None;
+        self.collect_text_sequence_into(
+            children,
+            style,
+            &inherited,
+            active_containers,
+            &mut request,
+            &mut byte_offset,
+            out,
+            &mut stream_error,
+        );
+        self.flush_text_request(request, style, out);
+        if let Some(error) = stream_error {
+            self.text_shaping_error = Some(error);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_text_sequence_into(
+        &mut self,
+        children: &[MathNode],
+        style: Style,
+        inherited: &MathTextRunStyle,
+        active_containers: &[MathTextContainer],
+        request: &mut MathTextRequest,
+        byte_offset: &mut usize,
+        out: &mut Vec<Fragment>,
+        stream_error: &mut Option<super::MathTextShapeError>,
+    ) {
+        for child in children {
+            if stream_error.is_some() {
+                return;
+            }
+            match child.kind {
+                K::Text if Self::attribute(child, "style") != "text" => {
+                    self.flush_text_request(
+                        std::mem::replace(
+                            request,
+                            MathTextRequest {
+                                font_size_pt: self.ctx.font_size(style),
+                                color: style.color,
+                                runs: Vec::new(),
+                                containers: Vec::new(),
+                            },
+                        ),
+                        style,
+                        out,
+                    );
+                    *byte_offset = 0;
+                    let math_style = Style {
+                        text_mode: false,
+                        ..style
+                    };
+                    out.push(self.node(child, math_style));
+                }
+                K::TextContent | K::TextSymbol | K::TextSpace | K::SoftBreak | K::Opaque => {
+                    let isolated = child.kind == K::Opaque;
+                    if isolated {
+                        self.flush_text_request(
+                            std::mem::replace(
+                                request,
+                                MathTextRequest {
+                                    font_size_pt: self.ctx.font_size(style),
+                                    color: style.color,
+                                    runs: Vec::new(),
+                                    containers: Vec::new(),
+                                },
+                            ),
+                            style,
+                            out,
+                        );
+                        *byte_offset = 0;
+                    }
+                    let Some(position) = child.position.as_ref() else {
+                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        return;
+                    };
+                    let text = if child.kind == K::SoftBreak {
+                        "\n".to_owned()
+                    } else if child.kind == K::TextSpace {
+                        " ".to_owned()
+                    } else if child.kind == K::Opaque {
+                        "�".to_owned()
+                    } else {
+                        child
+                            .run
+                            .as_ref()
+                            .map(|run| run.text.clone())
+                            .or_else(|| child.text.clone())
+                            .unwrap_or_default()
+                    };
+                    let Some(end) = byte_offset.checked_add(text.len()) else {
+                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        return;
+                    };
+                    for container in active_containers {
+                        if let Some(existing) = request.containers.iter_mut().find(|existing| {
+                            existing.scope_id == container.scope_id
+                                && existing.path == container.path
+                        }) {
+                            existing.end_byte = end;
+                        } else {
+                            request.containers.push(MathTextContainer {
+                                start_byte: *byte_offset,
+                                end_byte: end,
+                                ..container.clone()
+                            });
+                        }
+                    }
+                    request.runs.push(MathTextRun {
+                        run: child.run.clone(),
+                        text,
+                        scope_id: position.scope_id.clone(),
+                        path: position.path.clone(),
+                        run_index: position.text_run_index,
+                        is_text_flow: position.is_text_flow,
+                        style: inherited.clone(),
+                    });
+                    *byte_offset = end;
+                    if isolated {
+                        self.flush_text_request(
+                            std::mem::replace(
+                                request,
+                                MathTextRequest {
+                                    font_size_pt: self.ctx.font_size(style),
+                                    color: style.color,
+                                    runs: Vec::new(),
+                                    containers: Vec::new(),
+                                },
+                            ),
+                            style,
+                            out,
+                        );
+                        *byte_offset = 0;
+                    }
+                }
+                K::Text | K::TextStyle => {
+                    let Some(position) = child.position.as_ref() else {
+                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        return;
+                    };
+                    let container = MathTextContainer {
+                        id: child.id.clone(),
+                        scope_id: position.scope_id.clone(),
+                        path: position.path.clone(),
+                        start_byte: *byte_offset,
+                        end_byte: *byte_offset,
+                        is_flow: position.is_flow,
+                        is_container: position.is_container,
+                    };
+                    let mut nested_containers = active_containers.to_vec();
+                    nested_containers.push(container);
+                    for container in &nested_containers {
+                        if !request.containers.iter().any(|existing| {
+                            existing.scope_id == container.scope_id
+                                && existing.path == container.path
+                        }) {
+                            request.containers.push(MathTextContainer {
+                                start_byte: *byte_offset,
+                                end_byte: *byte_offset,
+                                ..container.clone()
+                            });
+                        }
+                    }
+                    let mut nested_style = inherited.clone();
+                    if let Some(environment_style) = child.text_style.as_ref() {
+                        apply_inline_environment_style(&mut nested_style, environment_style);
+                    }
+                    self.collect_text_sequence_into(
+                        &child.children,
+                        style,
+                        &nested_style,
+                        &nested_containers,
+                        request,
+                        byte_offset,
+                        out,
+                        stream_error,
+                    );
+                }
+                K::Row
+                    if child
+                        .position
+                        .as_ref()
+                        .is_some_and(|position| position.is_flow) =>
+                {
+                    self.flush_text_request(
+                        std::mem::replace(
+                            request,
+                            MathTextRequest {
+                                font_size_pt: self.ctx.font_size(style),
+                                color: style.color,
+                                runs: Vec::new(),
+                                containers: Vec::new(),
+                            },
+                        ),
+                        style,
+                        out,
+                    );
+                    *byte_offset = 0;
+                    if child.children.is_empty() {
+                        out.push(self.node(child, style));
+                        continue;
+                    }
+                    let mut frame = Frame::new(0.0, 0.0, 0.0);
+                    frame.push(
+                        Point::default(),
+                        Item::Node {
+                            id: child.id.clone(),
+                            position: self.styled_position(&child.position, style),
+                            width: 0.0,
+                            height: 0.0,
+                            baseline: 0.0,
+                        },
+                    );
+                    let mut marker = Fragment::new(frame, AtomClass::Ord);
+                    marker.position_marker = true;
+                    out.push(marker);
+                    let Some(_position) = child.position.as_ref() else {
+                        *stream_error = Some(super::MathTextShapeError::UnsupportedInput);
+                        return;
+                    };
+                    let nested_containers = active_containers.to_vec();
+                    let mut nested_request = MathTextRequest {
+                        font_size_pt: self.ctx.font_size(style),
+                        color: style.color,
+                        runs: Vec::new(),
+                        containers: Vec::new(),
+                    };
+                    let mut nested_byte_offset = 0;
+                    self.collect_text_sequence_into(
+                        &child.children,
+                        style,
+                        inherited,
+                        &nested_containers,
+                        &mut nested_request,
+                        &mut nested_byte_offset,
+                        out,
+                        stream_error,
+                    );
+                    self.flush_text_request(nested_request, style, out);
+                }
+                K::Hline | K::Intertext => {
+                    self.flush_text_request(
+                        std::mem::replace(
+                            request,
+                            MathTextRequest {
+                                font_size_pt: self.ctx.font_size(style),
+                                color: style.color,
+                                runs: Vec::new(),
+                                containers: Vec::new(),
+                            },
+                        ),
+                        style,
+                        out,
+                    );
+                    *byte_offset = 0;
+                }
+                _ => {
+                    self.flush_text_request(
+                        std::mem::replace(
+                            request,
+                            MathTextRequest {
+                                font_size_pt: self.ctx.font_size(style),
+                                color: style.color,
+                                runs: Vec::new(),
+                                containers: Vec::new(),
+                            },
+                        ),
+                        style,
+                        out,
+                    );
+                    *byte_offset = 0;
+                    let math_style = if style.text_mode {
+                        Style {
+                            text_mode: false,
+                            variant: Variant::Normal,
+                            ..style
+                        }
+                    } else {
+                        style
+                    };
+                    let previous_text_style =
+                        std::mem::replace(&mut self.math_text_style, inherited.clone());
+                    let fragment = self.node(child, math_style);
+                    self.math_text_style = previous_text_style;
+                    out.push(fragment);
+                }
+            }
+        }
+    }
+
+    fn flush_text_request(
+        &mut self,
+        request: MathTextRequest,
+        _style: Style,
+        out: &mut Vec<Fragment>,
+    ) {
+        if request.runs.is_empty() && request.containers.is_empty() {
+            return;
+        }
+        out.push(self.shape_text_request(request));
+    }
+
     fn collect(&mut self, children: &[MathNode], style: Style, out: &mut Vec<Fragment>) {
         for child in children {
             match child.kind {
-                K::Row => self.collect(&child.children, style, out),
+                K::Row
+                    if child.children.is_empty()
+                        && child
+                            .position
+                            .as_ref()
+                            .is_some_and(|position| position.is_flow) =>
+                {
+                    out.push(self.node(child, style));
+                }
+                K::Row => {
+                    let mut frame = Frame::new(0.0, 0.0, 0.0);
+                    frame.push(
+                        Point::default(),
+                        Item::Node {
+                            id: child.id.clone(),
+                            position: self.styled_position(&child.position, style),
+                            width: 0.0,
+                            height: 0.0,
+                            baseline: 0.0,
+                        },
+                    );
+                    let mut marker = Fragment::new(frame, AtomClass::Ord);
+                    marker.position_marker = true;
+                    out.push(marker);
+                    self.collect(&child.children, style, out);
+                }
                 K::Hline | K::Intertext => {}
                 _ => out.push(self.node(child, style)),
             }
         }
+    }
+
+    fn text_segments(
+        &mut self,
+        children: &[MathNode],
+        style: Style,
+        inherited: MathTextRunStyle,
+    ) -> Vec<Fragment> {
+        if self.text_shaper.is_some() {
+            let mut fragments = Vec::new();
+            self.collect_text_sequence(children, style, inherited, &[], &mut fragments);
+            return fragments;
+        }
+        let mut fragments = Vec::new();
+        let mut index = 0;
+        while index < children.len() {
+            let child = &children[index];
+            match child.kind {
+                K::TextStyle => {
+                    let mut text_style = inherited.clone();
+                    apply_text_style(
+                        &mut text_style,
+                        Self::attribute(child, "style"),
+                        child.attributes.get("fontFamily").map(String::as_str),
+                    );
+                    let nested_style = Style {
+                        variant: Variant::Roman,
+                        text_mode: true,
+                        ..style
+                    };
+                    let nested = self.text_segments(&child.children, nested_style, text_style);
+                    let mut fragment = self.joined(nested, AtomClass::Ord, nested_style);
+                    let frame = &fragment.frame;
+                    fragment.frame.items.insert(
+                        0,
+                        (
+                            Point::default(),
+                            Item::Node {
+                                id: child.id.clone(),
+                                position: self.styled_position(&child.position, style),
+                                width: frame.width,
+                                height: frame.height,
+                                baseline: frame.baseline,
+                            },
+                        ),
+                    );
+                    fragments.push(fragment);
+                }
+                _ => {
+                    let math_style = Style {
+                        text_mode: false,
+                        variant: Variant::Normal,
+                        ..style
+                    };
+                    fragments.push(self.node(child, math_style));
+                }
+            }
+            index += 1;
+        }
+        fragments
+    }
+
+    fn shape_text_request(&mut self, request: MathTextRequest) -> Fragment {
+        let shaped = match self.text_shaper.as_deref_mut() {
+            Some(shaper) => shaper.shape(request.clone()),
+            None => return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord),
+        };
+        let shaped = match shaped {
+            Ok(shaped) => shaped,
+            Err(error) => {
+                self.text_shaping_error = Some(error);
+                return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
+            }
+        };
+        if !self.text_tokens.insert(shaped.token)
+            || !shaped.width.is_finite()
+            || shaped.width < 0.0
+            || !shaped.ascent.is_finite()
+            || shaped.ascent < 0.0
+            || !shaped.descent.is_finite()
+            || shaped.descent < 0.0
+            || shaped.runs.len() != request.runs.len()
+            || shaped.containers.len() != request.containers.len()
+            || shaped.runs.iter().zip(&request.runs).any(|(bounds, run)| {
+                bounds.id.is_some()
+                    || bounds.is_flow
+                    || bounds.is_container
+                    || bounds.scope_id != run.scope_id
+                    || bounds.path != run.path
+                    || bounds.run_index != run.run_index
+                    || bounds.is_text_flow != run.is_text_flow
+                    || !bounds.x.is_finite()
+                    || !bounds.y.is_finite()
+                    || !bounds.width.is_finite()
+                    || bounds.width < 0.0
+                    || !bounds.height.is_finite()
+                    || bounds.height < 0.0
+                    || !bounds.baseline.is_finite()
+            })
+            || shaped
+                .containers
+                .iter()
+                .zip(&request.containers)
+                .any(|(bounds, container)| {
+                    bounds.id.as_ref() != container.id.as_ref()
+                        || bounds.scope_id != container.scope_id
+                        || bounds.path != container.path
+                        || bounds.run_index.is_some()
+                        || bounds.is_flow != container.is_flow
+                        || bounds.is_container != container.is_container
+                        || !bounds.x.is_finite()
+                        || !bounds.y.is_finite()
+                        || !bounds.width.is_finite()
+                        || bounds.width < 0.0
+                        || !bounds.height.is_finite()
+                        || bounds.height < 0.0
+                        || !bounds.baseline.is_finite()
+                })
+        {
+            self.text_shaping_error = Some(super::MathTextShapeError::InvalidMetrics);
+            return Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord);
+        }
+        self.requested_text_family_missing |= shaped.requested_family_missing;
+        for family in &shaped.missing_requested_families {
+            self.ctx
+                .diagnostic("math.text.font.family_missing", family.clone());
+        }
+        if shaped.has_missing_glyph {
+            self.ctx.diagnostic(
+                "math.glyph.missing",
+                "formula text island contains an unavailable glyph",
+            );
+        }
+        let mut frame = Frame::new(shaped.width, shaped.ascent + shaped.descent, shaped.ascent);
+        if !request.runs.is_empty() {
+            frame.push(
+                Point::default(),
+                Item::TextIsland {
+                    token: shaped.token,
+                    width: shaped.width,
+                    baseline: shaped.ascent,
+                    color: request.color,
+                },
+            );
+        }
+        let mut text_node_order = Vec::with_capacity(shaped.runs.len() + shaped.containers.len());
+        let mut byte_offset: usize = 0;
+        for (index, run) in request.runs.iter().enumerate() {
+            let end = byte_offset.saturating_add(run.text.len());
+            text_node_order.push((
+                byte_offset,
+                std::cmp::Reverse(end),
+                run.path.len(),
+                1_u8,
+                index,
+            ));
+            byte_offset = end;
+        }
+        for (index, container) in request.containers.iter().enumerate() {
+            text_node_order.push((
+                container.start_byte,
+                std::cmp::Reverse(container.end_byte),
+                container.path.len(),
+                0_u8,
+                index,
+            ));
+        }
+        text_node_order.sort_by_key(|order| (order.0, order.1, order.2, order.3));
+        for (_, _, _, kind, index) in text_node_order {
+            let (point, node) = if kind == 0 {
+                let container = shaped.containers[index].clone();
+                (
+                    Point::new(container.x, container.y),
+                    Item::Node {
+                        id: container.id,
+                        position: Some(NodePosition {
+                            scope_id: container.scope_id,
+                            path: container.path,
+                            text_run_index: None,
+                            is_text_flow: false,
+                            is_flow: container.is_flow,
+                            is_container: container.is_container,
+                            font_size_pt: Some(request.font_size_pt),
+                        }),
+                        width: container.width,
+                        height: container.height,
+                        baseline: container.baseline,
+                    },
+                )
+            } else {
+                let run = shaped.runs[index].clone();
+                (
+                    Point::new(run.x, run.y),
+                    Item::Node {
+                        id: None,
+                        position: Some(NodePosition {
+                            scope_id: run.scope_id,
+                            path: run.path,
+                            text_run_index: run.run_index,
+                            is_text_flow: run.is_text_flow,
+                            is_flow: run.is_flow,
+                            is_container: false,
+                            font_size_pt: Some(request.font_size_pt),
+                        }),
+                        width: run.width,
+                        height: run.height,
+                        baseline: run.baseline,
+                    },
+                )
+            };
+            frame.push(point, node);
+        }
+        let mut fragment = Fragment::new(frame, AtomClass::Ord);
+        if request.runs.is_empty() {
+            fragment.position_marker = true;
+        } else {
+            fragment.text_like = true;
+        }
+        fragment
     }
 
     fn child(&mut self, node: &MathNode, index: usize, style: Style) -> Fragment {
@@ -86,7 +698,7 @@ impl Converter<'_> {
     fn optional(&mut self, node: &MathNode, index: usize, style: Style) -> Option<Fragment> {
         node.children
             .get(index)
-            .filter(|child| child.kind != K::Placeholder)
+            .filter(|child| child.kind != K::Placeholder && !is_placeholder_flow(child))
             .map(|child| self.node(child, style))
     }
 
@@ -96,6 +708,16 @@ impl Converter<'_> {
 
     fn layout(&mut self, node: &MathNode, style: Style) -> Fragment {
         match node.kind {
+            // 空流仍是可编辑槽位；仅在布局中产生占位几何，不修改 MathFlow。
+            K::Row
+                if node.children.is_empty()
+                    && node
+                        .position
+                        .as_ref()
+                        .is_some_and(|position| position.is_flow) =>
+            {
+                self.placeholder(style)
+            }
             K::Row => self.row(&node.children, style),
             K::Group => {
                 let mut group = self.row(&node.children, style);
@@ -133,6 +755,7 @@ impl Converter<'_> {
                     .iter()
                     .map(|line| TableRow::Cells {
                         id: None,
+                        position: line.position.clone(),
                         cells: vec![self.node(line, style)],
                     })
                     .collect();
@@ -173,7 +796,12 @@ impl Converter<'_> {
             K::Accent => self.accent(node, style),
             K::Space => self.space(node, style),
             K::Text | K::MathAlphabet => self.text(node, style),
-            K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle => {
+            K::TextContent
+            | K::TextSpace
+            | K::TextSymbol
+            | K::TextStyle
+            | K::SoftBreak
+            | K::Opaque => {
                 let text_style = Style {
                     text_mode: true,
                     variant: Variant::Roman,
@@ -267,7 +895,10 @@ impl Converter<'_> {
 
     fn placeholder(&self, style: Style) -> Fragment {
         let em = self.ctx.font_size(style);
-        let (width, height) = (0.6 * em, 0.7 * em);
+        let (width, height) = (
+            super::MATH_PLACEHOLDER_WIDTH_EM * em,
+            super::MATH_PLACEHOLDER_HEIGHT_EM * em,
+        );
         let mut frame = Frame::new(width, height, height);
         frame.push(
             Point::new(0.0, 0.0),
@@ -569,7 +1200,8 @@ impl Converter<'_> {
                         .map(|cell| self.node(cell, cell_style))
                         .collect();
                     rows.push(TableRow::Cells {
-                        id: Some(child.id.clone()),
+                        id: child.id.clone(),
+                        position: child.position.clone(),
                         cells,
                     });
                 }
@@ -577,6 +1209,7 @@ impl Converter<'_> {
                 K::Intertext => rows.push(TableRow::Full(self.node(child, cell_style))),
                 _ => rows.push(TableRow::Cells {
                     id: None,
+                    position: child.position.clone(),
                     cells: vec![self.node(child, cell_style)],
                 }),
             }
@@ -740,12 +1373,7 @@ impl Converter<'_> {
 
     fn text(&mut self, node: &MathNode, style: Style) -> Fragment {
         let kind = Self::attribute(node, "style");
-        let has_text_items = node.children.iter().any(|child| {
-            matches!(
-                child.kind,
-                K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle
-            )
-        });
+        let has_text_items = node.children.iter().any(has_text_items);
         let text_mode = kind == "text" || has_text_items;
         let variant = match kind {
             "rm" | "text" => Variant::Roman,
@@ -771,6 +1399,18 @@ impl Converter<'_> {
             }
             return fragment;
         }
+        if self.text_shaper.is_some() {
+            let mut text_style = MathTextRunStyle::default();
+            apply_text_style(
+                &mut text_style,
+                kind,
+                node.attributes.get("fontFamily").map(String::as_str),
+            );
+            let fragments = self.text_segments(&node.children, inner, text_style);
+            let mut fragment = self.joined(fragments, AtomClass::Ord, inner);
+            fragment.text_like = true;
+            return fragment;
+        }
         let fragments: Vec<Fragment> = node
             .children
             .iter()
@@ -782,12 +1422,7 @@ impl Converter<'_> {
     }
 
     fn text_variant(base: Variant, emphasis: &str) -> Variant {
-        let (bold, italic) = match base {
-            Variant::Bold => (true, false),
-            Variant::Italic => (false, true),
-            Variant::BoldItalic => (true, true),
-            _ => (false, false),
-        };
+        let (bold, italic, sans_serif, monospace) = Self::emphasis_state(base);
         let (bold, italic) = match emphasis {
             "bf" => (true, italic),
             "it" => (bold, true),
@@ -795,11 +1430,60 @@ impl Converter<'_> {
             "up" => (bold, false),
             _ => return base,
         };
-        match (bold, italic) {
-            (true, true) => Variant::BoldItalic,
-            (true, false) => Variant::Bold,
-            (false, true) => Variant::Italic,
-            (false, false) => Variant::Roman,
+        Self::compose_emphasis(bold, italic, sans_serif, monospace)
+    }
+
+    fn text_family_variant(base: Variant, family: Variant) -> Variant {
+        let (bold, italic, _, _) = Self::emphasis_state(base);
+        match (family, bold, italic) {
+            (Variant::SansSerif, true, true) => Variant::SansSerifBoldItalic,
+            (Variant::SansSerif, true, false) => Variant::SansSerifBold,
+            (Variant::SansSerif, false, true) => Variant::SansSerifItalic,
+            (Variant::SansSerif, false, false) => Variant::SansSerif,
+            // 数学等宽字母表没有粗斜体变体；此降级路径优先保留粗斜语义。
+            (Variant::Monospace, true, true) => Variant::MonospaceBoldItalic,
+            (Variant::Monospace, true, false) => Variant::MonospaceBold,
+            (Variant::Monospace, false, true) => Variant::MonospaceItalic,
+            (Variant::Monospace, false, false) => Variant::Monospace,
+            _ => base,
+        }
+    }
+
+    fn emphasis_state(variant: Variant) -> (bool, bool, bool, bool) {
+        match variant {
+            Variant::Bold => (true, false, false, false),
+            Variant::Italic => (false, true, false, false),
+            Variant::BoldItalic => (true, true, false, false),
+            Variant::SansSerif => (false, false, true, false),
+            Variant::SansSerifBold => (true, false, true, false),
+            Variant::SansSerifItalic => (false, true, true, false),
+            Variant::SansSerifBoldItalic => (true, true, true, false),
+            Variant::Monospace => (false, false, false, true),
+            Variant::MonospaceBold => (true, false, false, true),
+            Variant::MonospaceItalic => (false, true, false, true),
+            Variant::MonospaceBoldItalic => (true, true, false, true),
+            _ => (false, false, false, false),
+        }
+    }
+
+    fn compose_emphasis(bold: bool, italic: bool, sans_serif: bool, monospace: bool) -> Variant {
+        if monospace {
+            return match (bold, italic) {
+                (true, true) => Variant::MonospaceBoldItalic,
+                (true, false) => Variant::MonospaceBold,
+                (false, true) => Variant::MonospaceItalic,
+                (false, false) => Variant::Monospace,
+            };
+        }
+        match (sans_serif, bold, italic) {
+            (true, true, true) => Variant::SansSerifBoldItalic,
+            (true, true, false) => Variant::SansSerifBold,
+            (true, false, true) => Variant::SansSerifItalic,
+            (true, false, false) => Variant::SansSerif,
+            (false, true, true) => Variant::BoldItalic,
+            (false, true, false) => Variant::Bold,
+            (false, false, true) => Variant::Italic,
+            (false, false, false) => Variant::Roman,
         }
     }
 
@@ -807,8 +1491,16 @@ impl Converter<'_> {
     fn text_item(&mut self, node: &MathNode, style: Style) -> Fragment {
         let em = self.ctx.font_size(style);
         let mut fragment = match node.kind {
-            K::TextContent | K::TextSymbol => {
-                let text = node.text.as_deref().unwrap_or_default();
+            K::TextContent | K::TextSymbol | K::Opaque => {
+                let text = if node.kind == K::Opaque {
+                    "�"
+                } else {
+                    node.run
+                        .as_ref()
+                        .map(|run| run.text.as_str())
+                        .or(node.text.as_deref())
+                        .unwrap_or_default()
+                };
                 let fragments = text
                     .chars()
                     .map(|character| {
@@ -822,14 +1514,20 @@ impl Converter<'_> {
                 self.joined(fragments, AtomClass::Ord, style)
             }
             K::TextSpace => Fragment::new(Frame::new(0.25 * em, 0.0, 0.0), AtomClass::Ord),
+            K::SoftBreak => {
+                // 数学字形回退路径无法排多行；要求调用方提供正文文本塑形器。
+                self.text_shaping_error = Some(super::MathTextShapeError::UnsupportedInput);
+                Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord)
+            }
             K::TextStyle => {
                 let variant = match Self::attribute(node, "style") {
                     "bf" | "it" | "md" | "up" => {
                         Self::text_variant(style.variant, Self::attribute(node, "style"))
                     }
                     "bi" => Variant::BoldItalic,
-                    "sf" => Variant::SansSerif,
-                    "tt" => Variant::Monospace,
+                    "sf" => Self::text_family_variant(style.variant, Variant::SansSerif),
+                    "tt" => Self::text_family_variant(style.variant, Variant::Monospace),
+                    "font" => style.variant,
                     _ => Variant::Roman,
                 };
                 let inner = Style { variant, ..style };
@@ -851,6 +1549,7 @@ impl Converter<'_> {
         };
         let record = Item::Node {
             id: node.id.clone(),
+            position: self.styled_position(&node.position, style),
             width: fragment.frame.width,
             height: fragment.frame.height,
             baseline: fragment.frame.baseline,
@@ -878,17 +1577,82 @@ impl Converter<'_> {
                     variant: Variant::Roman,
                     ..style
                 };
-                let fragments = child
-                    .children
-                    .iter()
-                    .map(|item| self.text_item(item, text_style))
-                    .collect();
-                self.joined(fragments, AtomClass::Ord, text_style)
+                if self.text_shaper.is_some() {
+                    let fragments = self.text_segments(
+                        &child.children,
+                        text_style,
+                        MathTextRunStyle::default(),
+                    );
+                    self.joined(fragments, AtomClass::Ord, text_style)
+                } else {
+                    let fragments = child
+                        .children
+                        .iter()
+                        .map(|item| self.text_item(item, text_style))
+                        .collect();
+                    self.joined(fragments, AtomClass::Ord, text_style)
+                }
             }
             Some(child) => self.node(child, style),
             None => Fragment::new(Frame::new(0.0, 0.0, 0.0), AtomClass::Ord),
         };
         boxed(body, fill, border, style)
+    }
+}
+
+fn is_placeholder_flow(node: &MathNode) -> bool {
+    node.kind == K::Row
+        && node
+            .position
+            .as_ref()
+            .is_some_and(|position| position.is_flow)
+        && matches!(node.children.as_slice(), [only] if only.kind == K::Placeholder)
+}
+
+fn has_text_items(node: &MathNode) -> bool {
+    matches!(
+        node.kind,
+        K::TextContent | K::TextSpace | K::TextSymbol | K::TextStyle | K::SoftBreak | K::Opaque
+    ) || (node.kind == K::Row && node.children.iter().any(has_text_items))
+}
+
+fn apply_text_style(style: &mut MathTextRunStyle, value: &str, font_family: Option<&str>) {
+    match value {
+        "bf" => style.bold = Some(true),
+        "md" => style.bold = Some(false),
+        "it" => style.italic = Some(true),
+        "up" => style.italic = Some(false),
+        "bi" => {
+            style.bold = Some(true);
+            style.italic = Some(true);
+        }
+        "rm" => {
+            style.bold = Some(false);
+            style.italic = Some(false);
+            style.font_family = Some("serif".to_owned());
+        }
+        "sf" => style.font_family = Some("sans-serif".to_owned()),
+        "tt" => style.font_family = Some("monospace".to_owned()),
+        _ => {}
+    }
+    if let Some(font_family) = font_family {
+        style.font_family = Some(font_family.to_owned());
+    }
+}
+
+/// 将文档模型的共享环境样式增量应用到数学 TextFlow 的宿主样式。
+fn apply_inline_environment_style(
+    style: &mut MathTextRunStyle,
+    environment_style: &caret_doc::InlineTextStyle,
+) {
+    if let Some(bold) = environment_style.bold {
+        style.bold = Some(bold);
+    }
+    if let Some(italic) = environment_style.italic {
+        style.italic = Some(italic);
+    }
+    if let Some(font_family) = &environment_style.font_family {
+        style.font_family = Some(font_family.clone());
     }
 }
 
@@ -930,4 +1694,41 @@ fn parse_columns(spec: &str) -> (Vec<Align>, Vec<usize>) {
         }
     }
     (aligns, vlines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Converter, Variant};
+
+    #[test]
+    fn nested_text_emphasis_preserves_font_family_and_boldness() {
+        assert_eq!(
+            Converter::text_family_variant(Variant::Bold, Variant::SansSerif),
+            Variant::SansSerifBold
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::SansSerifBold, "it"),
+            Variant::SansSerifBoldItalic
+        );
+        assert_eq!(
+            Converter::text_family_variant(Variant::SansSerifBold, Variant::SansSerif),
+            Variant::SansSerifBold
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::SansSerifBoldItalic, "md"),
+            Variant::SansSerifItalic
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::Monospace, "md"),
+            Variant::Monospace
+        );
+        assert_eq!(
+            Converter::text_variant(Variant::Monospace, "bf"),
+            Variant::MonospaceBold
+        );
+        assert_eq!(
+            Converter::text_variant(Converter::text_variant(Variant::Monospace, "bf"), "md"),
+            Variant::Monospace
+        );
+    }
 }

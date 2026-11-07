@@ -64,6 +64,10 @@ pub struct MathTextInputContext {
     pub anchor_utf16: usize,
     /// 文本岛中的输入焦点，以 UTF-16 code unit 计数。
     pub focus_utf16: usize,
+    /// 选区锚点的 Parley 视觉侧，可能与焦点侧不同。
+    pub anchor_visual_affinity: VisualAffinity,
+    /// 数学文本光标的 Parley 视觉侧，用于恢复双向文本中的同偏移插入点。
+    pub visual_affinity: VisualAffinity,
     /// 当前公式目标及两端在树中的实际位置。
     pub target: MathEditTarget,
     pub anchor: MathTextPosition,
@@ -191,6 +195,9 @@ impl Session {
             path,
             anchor,
             focus_affinity,
+            anchor_visual_affinity,
+            visual_affinity,
+            ..
         } = &edit.branch
         else {
             return None;
@@ -205,10 +212,25 @@ impl Session {
             surrounding_text,
             anchor_utf16,
             focus_utf16,
+            anchor_visual_affinity: *anchor_visual_affinity,
+            visual_affinity: *visual_affinity,
             target: edit.target.clone(),
             anchor: anchor.clone(),
             focus: MathTextPosition::new(path.clone(), edit.cursor, *focus_affinity),
         })
+    }
+
+    /// 返回当前数学结构序列插入点；源码/TextFlow 分支或过期焦点返回 `None`。
+    pub fn math_tree_input_context(&self) -> Option<(MathEditTarget, MathTreePosition)> {
+        self.ensure_math_edit_revision_current().ok()?;
+        let edit = self.math_edit.as_ref()?;
+        let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+            return None;
+        };
+        let mut focus = anchor.clone();
+        focus.path = path.clone();
+        focus.offset = edit.cursor;
+        Some((edit.target.clone(), focus))
     }
 
     fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {

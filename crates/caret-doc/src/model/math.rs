@@ -102,6 +102,18 @@ pub enum MathNodeKind {
     Placeholder,
 }
 
+impl MathNodeKind {
+    /// 返回在键盘插入和布局中视为可选占位的操作数索引。
+    pub fn optional_placeholder_operands(self) -> &'static [usize] {
+        match self {
+            Self::Radical | Self::Limit => &[0],
+            Self::Sum | Self::Product | Self::Integral => &[0, 1],
+            Self::OverUnder => &[1, 2],
+            _ => &[],
+        }
+    }
+}
+
 pub(crate) fn math_node_attributes_supported(
     kind: MathNodeKind,
     text: Option<&str>,

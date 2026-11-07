@@ -81,10 +81,21 @@ impl DocumentViewRuntime {
         composition_range: &CompositionRange,
     ) -> Result<DocumentLayoutSnapshot, String> {
         if matches!(composition_range, CompositionRange::MathText { .. }) {
-            let mut snapshot = self
-                .layout
-                .layout_session(preview_session)
-                .map_err(|error| error.to_string())?;
+            let previous = self.base_snapshot()?.clone();
+            let target = preview_session
+                .math_text_input_context()
+                .ok_or_else(|| "ime.math_text_context_unavailable".to_owned())?
+                .target;
+            let mut snapshot = match target {
+                caret_engine::MathEditTarget::Inline { paragraph_id, .. } => self
+                    .layout
+                    .layout_session_reusing(preview_session, &previous, &paragraph_id)
+                    .map_err(|error| error.to_string())?,
+                caret_engine::MathEditTarget::Block { .. } => self
+                    .layout
+                    .layout_session_reusing_all_paragraphs(preview_session, &previous)
+                    .map_err(|error| error.to_string())?,
+            };
             snapshot.session_id = Some(self.session.session_id().clone());
             snapshot.document_generation = self.session.document_generation();
             return Ok(snapshot);

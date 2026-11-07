@@ -22,7 +22,9 @@ Rectangle {
             "paragraph": qsTranslate("WindowStatusBar", "Paragraph"),
             "heading": qsTranslate("WindowStatusBar", "Heading"),
             "section": qsTranslate("WindowStatusBar", "Section"),
-            "custom": qsTranslate("WindowStatusBar", "Custom environment")
+            "custom": qsTranslate("WindowStatusBar", "Custom environment"),
+            "equation": qsTranslate("WindowStatusBar", "Equation"),
+            "align": qsTranslate("WindowStatusBar", "Align environment")
         })
     readonly property string structureDescription: {
         const entries = LayoutViewModel.currentStructure;
@@ -30,6 +32,36 @@ Rectangle {
         for (let index = 0; index < entries.length; ++index)
             labels.push(structureLabelTranslations[entries[index].kind] || entries[index].kind);
         return labels.join(" › ");
+    }
+    readonly property string mathFontWarning: {
+        const diagnostic = LayoutViewModel.mathFontDiagnostic;
+        if (!diagnostic || !diagnostic.code)
+            return "";
+        if (diagnostic.code === "math.font.family_missing")
+            return qsTranslate("WindowStatusBar", 'Math font "%1" is not installed; using STIX Two Math.').arg(diagnostic.requestedFamily);
+        if (diagnostic.code === "math.font.unsupported_family")
+            return qsTranslate("WindowStatusBar", 'Math font "%1" is unsupported; using STIX Two Math.').arg(diagnostic.requestedFamily);
+        return "";
+    }
+    readonly property string textWarnings: {
+        const warnings = [];
+        if (mathFontWarning.length > 0)
+            warnings.push(mathFontWarning);
+        const diagnostics = LayoutViewModel.textDiagnostics;
+        const missingTextFamilies = [];
+        let hasMissingGlyph = false;
+        for (let index = 0; index < diagnostics.length; ++index) {
+            const diagnostic = diagnostics[index];
+            if (diagnostic.code === "math.glyph.missing" || diagnostic.code === "text.glyph.missing")
+                hasMissingGlyph = true;
+            else if ((diagnostic.code === "math.text.font.family_missing" || diagnostic.code === "text.font.family_missing") && diagnostic.detail.length > 0 && missingTextFamilies.indexOf(diagnostic.detail) < 0)
+                missingTextFamilies.push(diagnostic.detail);
+        }
+        if (missingTextFamilies.length > 0)
+            warnings.push(qsTranslate("WindowStatusBar", 'Text font "%1" is not installed; using fallback fonts.').arg(missingTextFamilies.join(", ")));
+        if (hasMissingGlyph)
+            warnings.push(qsTranslate("WindowStatusBar", "Text contains characters unavailable in installed fonts."));
+        return warnings.join(" · ");
     }
 
     function zoomOut() {
@@ -88,6 +120,25 @@ Rectangle {
             text: statusBar.structureDescription
             textSize: Theme.fontSmall
             textColor: Theme.colorText
+        }
+
+        ThemedLabel {
+            objectName: "textFontWarningLabel"
+            visible: statusBar.textWarnings.length > 0
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: 220
+            Layout.maximumWidth: 260
+            elide: Text.ElideRight
+            text: statusBar.textWarnings
+            textSize: Theme.fontSmall
+            textColor: Theme.colorError
+            Accessible.description: statusBar.textWarnings
+            ToolTip.visible: warningHover.hovered
+            ToolTip.text: statusBar.textWarnings
+
+            HoverHandler {
+                id: warningHover
+            }
         }
 
         Item {

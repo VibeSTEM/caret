@@ -31,16 +31,21 @@ fn enter_math_text(runtime: &mut DocumentViewRuntime, source: &str) -> Result<()
 }
 
 fn inline_math_text(runtime: &DocumentViewRuntime) -> Result<String, String> {
-    let Some(Block::Paragraph(paragraph)) = runtime.session.document().body.first() else {
-        return Err("expected host paragraph".to_owned());
-    };
-    let Some(ParagraphContent::Math(math)) = paragraph
-        .inlines
+    let math = runtime
+        .session
+        .document()
+        .body
         .iter()
-        .find(|inline| matches!(inline, ParagraphContent::Math(_)))
-    else {
-        return Err("expected inline formula".to_owned());
-    };
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(&paragraph.inlines),
+            _ => None,
+        })
+        .flatten()
+        .find_map(|inline| match inline {
+            ParagraphContent::Math(math) => Some(math),
+            _ => None,
+        })
+        .ok_or_else(|| "expected inline formula".to_owned())?;
     let Some(MathContent::Math(fraction)) = math.math_tree.root.content.first() else {
         return Err("expected fraction".to_owned());
     };
@@ -53,6 +58,93 @@ fn inline_math_text(runtime: &DocumentViewRuntime) -> Result<String, String> {
         return Err("expected denominator TextFlow".to_owned());
     };
     Ok(text.runs.iter().map(|run| run.text.as_str()).collect())
+}
+
+#[test]
+fn clipped_math_text_line_keeps_publishable_caret_and_accepts_input() -> Result<(), String> {
+    let mut document = Document::blank();
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 600,
+            extra: Default::default(),
+        };
+    let mut runtime = DocumentViewRuntime::new(document).map_err(|error| error.to_string())?;
+    enter_math_text(&mut runtime, r"\frac{}{\text{first}}")?;
+
+    for _ in 0..16 {
+        let context = runtime
+            .session
+            .math_text_input_context()
+            .ok_or_else(|| "math text focus is missing".to_owned())?;
+        if context.focus.offset == context.surrounding_text.len() {
+            break;
+        }
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    runtime.insert_text_json("\nsecond".to_owned())?;
+    let caret: serde_json::Value = serde_json::from_str(
+        &runtime
+            .current_caret_json()
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let interaction: serde_json::Value = serde_json::from_str(
+        &runtime
+            .interaction_state_json()
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    assert_eq!(interaction["caretGeometry"]["y0Pt"], caret["y0Pt"]);
+    assert!(caret["y1Pt"].as_f64() > caret["y0Pt"].as_f64());
+
+    runtime.insert_text_json("X".to_owned())?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| "input lost math text focus".to_owned())?;
+    assert!(context.surrounding_text.contains("secondX"));
+    Ok(())
+}
+
+#[test]
+fn clipped_math_text_selection_collapses_by_unclipped_visual_line_order() -> Result<(), String> {
+    let mut document = Document::blank();
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 600,
+            extra: Default::default(),
+        };
+    let mut runtime = DocumentViewRuntime::new(document).map_err(|error| error.to_string())?;
+    enter_math_text(&mut runtime, r"\sqrt{\text{first}}")?;
+    runtime.insert_text_json("\nsecond".to_owned())?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| "math text focus is missing".to_owned())?;
+    let path = context.focus.path.clone();
+    runtime
+        .session
+        .set_math_text_selection_positions(
+            caret_engine::MathTextPosition::new(
+                path.clone(),
+                5,
+                caret_engine::MathPositionAffinity::Downstream,
+            ),
+            caret_engine::MathTextPosition::new(
+                path,
+                6,
+                caret_engine::MathPositionAffinity::Downstream,
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+
+    runtime.move_visual_caret_json(true, false)?;
+    let collapsed = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| "collapsed selection lost math text focus".to_owned())?;
+    assert_eq!(collapsed.focus.offset, 6);
+    Ok(())
 }
 
 fn paragraph_with_text(text: &str) -> Paragraph {
@@ -81,6 +173,153 @@ fn section_with_body(title: &str, body: &str) -> (Block, NodeId) {
         }),
         id,
     )
+}
+
+#[test]
+fn inline_math_text_edit_reuses_unrelated_paragraph_layouts() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank().map_err(|error| error.to_string())?;
+    runtime.insert_text_json("unchanged".to_owned())?;
+    runtime.split_paragraph_json()?;
+    runtime.insert_text_json("host".to_owned())?;
+    let unchanged_id = match runtime.session.document().body.first() {
+        Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
+        _ => return Err("expected first paragraph".to_owned()),
+    };
+    enter_math_text(&mut runtime, r"\frac{}{\text{word}}")?;
+    runtime.layout_snapshot_json()?;
+    let before_layout = std::sync::Arc::clone(
+        &runtime
+            .current_snapshot()
+            .map_err(|error| error.to_string())?
+            .paragraph_by_id(&unchanged_id)
+            .ok_or_else(|| "unchanged paragraph is missing".to_owned())?
+            .layout,
+    );
+    let response: Value = serde_json::from_str(&runtime.insert_text_delta_json("X".to_owned())?)
+        .map_err(|error| error.to_string())?;
+    assert!(response.get("partial").is_none());
+    assert_eq!(inline_math_text(&runtime)?, "wordX");
+
+    let updated = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or_else(|| "math edit did not publish a layout snapshot".to_owned())?;
+    let after = updated
+        .paragraph_by_id(&unchanged_id)
+        .ok_or_else(|| "unchanged paragraph disappeared".to_owned())?;
+    assert!(std::sync::Arc::ptr_eq(&before_layout, &after.layout));
+    Ok(())
+}
+
+#[test]
+fn block_math_text_edit_reuses_all_paragraph_layouts() -> Result<(), String> {
+    let paragraph_before = paragraph_with_text("before");
+    let paragraph_after = paragraph_with_text("after");
+    let before_id = paragraph_before.id.clone();
+    let after_id = paragraph_after.id.clone();
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "ab".to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_before),
+        Block::Equation(caret_doc::Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(paragraph_after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document).map_err(|error| error.to_string())?;
+    runtime.layout_snapshot_json()?;
+    let (before_layouts, before_math) = {
+        let snapshot = runtime
+            .current_snapshot()
+            .map_err(|error| error.to_string())?;
+        let before = snapshot
+            .paragraph_by_id(&before_id)
+            .ok_or_else(|| "preceding paragraph is missing".to_owned())?;
+        let after = snapshot
+            .paragraph_by_id(&after_id)
+            .ok_or_else(|| "following paragraph is missing".to_owned())?;
+        let math = std::sync::Arc::clone(
+            snapshot
+                .math_blocks
+                .get(&equation_id)
+                .ok_or_else(|| "equation layout is missing".to_owned())?,
+        );
+        (
+            [
+                std::sync::Arc::clone(&before.layout),
+                std::sync::Arc::clone(&after.layout),
+            ],
+            math,
+        )
+    };
+    let (x_pt, y_pt) = {
+        let snapshot = runtime
+            .current_snapshot()
+            .map_err(|error| error.to_string())?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .first()
+            .ok_or_else(|| "equation fragment is missing".to_owned())?;
+        let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let right = left + f64::from(fragment.width_pt);
+        let bottom = top + f64::from(fragment.height_pt);
+        let mut hit = None;
+        let mut y = top;
+        while y <= bottom && hit.is_none() {
+            let mut x = left;
+            while x <= right {
+                if snapshot.hit_test_math_text(0, x, y).is_some() {
+                    hit = Some((x, y));
+                    break;
+                }
+                x += 0.5;
+            }
+            y += 0.5;
+        }
+        hit.ok_or_else(|| "equation TextFlow was not hittable".to_owned())?
+    };
+    runtime.place_caret_at_page_json(0, x_pt, y_pt)?;
+    runtime.insert_text_json("X".to_owned())?;
+    let updated = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or_else(|| "math edit did not publish a layout snapshot".to_owned())?;
+    for (id, old_layout) in [before_id, after_id].into_iter().zip(before_layouts) {
+        let paragraph = updated
+            .paragraph_by_id(&id)
+            .ok_or_else(|| "unchanged paragraph disappeared".to_owned())?;
+        assert!(std::sync::Arc::ptr_eq(&old_layout, &paragraph.layout));
+    }
+    assert!(!std::sync::Arc::ptr_eq(
+        &before_math,
+        updated
+            .math_blocks
+            .get(&equation_id)
+            .ok_or_else(|| "updated equation layout is missing".to_owned())?,
+    ));
+    Ok(())
 }
 
 #[test]
@@ -227,7 +466,22 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
 fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result<(), String> {
     let source = r"\frac{1}{\text{A😀B}}";
     let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.insert_text_json("unchanged paragraph".to_owned())?;
+    runtime.split_paragraph_json()?;
     enter_math_text(&mut runtime, source)?;
+    runtime.layout_snapshot_json()?;
+    let unchanged_id = match runtime.session.document().body.first() {
+        Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
+        _ => return Err("expected unchanged paragraph".to_owned()),
+    };
+    let unchanged_layout = std::sync::Arc::clone(
+        &runtime
+            .current_snapshot()
+            .map_err(|error| error.to_string())?
+            .paragraph_by_id(&unchanged_id)
+            .ok_or_else(|| "unchanged paragraph is missing".to_owned())?
+            .layout,
+    );
     runtime
         .session_mut_for_test()
         .run(Command::SetMathTextSelection {
@@ -243,25 +497,65 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     assert_eq!(preview["inputMethodContext"]["surroundingText"], "A😀B");
     assert_eq!(preview["inputMethodContext"]["cursorPosition"], 1);
     assert_eq!(preview["inputMethodContext"]["anchorPosition"], 1);
+    assert!(
+        preview["compositionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
     assert_eq!(runtime.session.document_generation(), initial_generation);
     assert_eq!(inline_math_text(&runtime)?, "A😀B");
+    let preview_snapshot = runtime
+        .composition_snapshot
+        .as_ref()
+        .ok_or_else(|| "math composition snapshot was not installed".to_owned())?;
+    assert!(std::sync::Arc::ptr_eq(
+        &unchanged_layout,
+        &preview_snapshot
+            .paragraph_by_id(&unchanged_id)
+            .ok_or_else(|| "unchanged paragraph is missing from preview".to_owned())?
+            .layout,
+    ));
+    let updated_preview =
+        runtime.input_method_event_json("にほ".to_owned(), String::new(), 0, 0, 2)?;
+    let updated_preview: Value =
+        serde_json::from_str(&updated_preview).map_err(|error| error.to_string())?;
+    assert!(updated_preview.get("partial").is_none());
+    assert!(std::sync::Arc::ptr_eq(
+        &unchanged_layout,
+        &runtime
+            .composition_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.paragraph_by_id(&unchanged_id))
+            .ok_or_else(|| "unchanged paragraph is missing from updated preview".to_owned())?
+            .layout,
+    ));
     assert_eq!(
         runtime
             .session
             .composition()
             .map(|value| value.preedit.as_str()),
-        Some("に")
+        Some("にほ")
     );
 
-    let committed = runtime.input_method_event_json(String::new(), "に".to_owned(), 0, 0, 0)?;
+    let committed = runtime.input_method_event_json(String::new(), "にほ".to_owned(), 0, 0, 0)?;
     let committed: Value = serde_json::from_str(&committed).map_err(|error| error.to_string())?;
+    assert!(committed.get("partial").is_none());
     assert_eq!(committed["inputMethodContext"]["enabled"], true);
-    assert_eq!(inline_math_text(&runtime)?, "Aに😀B");
+    assert_eq!(inline_math_text(&runtime)?, "Aにほ😀B");
     assert!(runtime.session.composition().is_none());
     assert_eq!(
         runtime.session.document_generation(),
         initial_generation + 1
     );
+    assert!(std::sync::Arc::ptr_eq(
+        &unchanged_layout,
+        &runtime
+            .last_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.paragraph_by_id(&unchanged_id))
+            .ok_or_else(|| "unchanged paragraph is missing after commit".to_owned())?
+            .layout,
+    ));
 
     runtime
         .session_mut_for_test()
@@ -279,6 +573,77 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     assert_eq!(
         runtime.session.document_generation(),
         before_cancel_generation
+    );
+    Ok(())
+}
+
+#[test]
+fn math_textflow_short_preedit_replacement_publishes_preview_caret_and_underline()
+-> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{abcdef}}")?;
+    runtime
+        .session_mut_for_test()
+        .run(Command::SetMathTextSelection {
+            anchor: 0,
+            focus: 6,
+        })
+        .map_err(|error| error.to_string())?;
+
+    let preview = runtime.input_method_event_json("xy".to_owned(), String::new(), 0, 0, 1)?;
+    let preview: Value = serde_json::from_str(&preview).map_err(|error| error.to_string())?;
+    assert_eq!(preview["inputMethodContext"]["surroundingText"], "abcdef");
+    assert!(preview["caretGeometry"]["xPt"].as_f64().is_some());
+    assert!(
+        preview["compositionRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    let current_caret: Value =
+        serde_json::from_str(&runtime.current_caret_json()?).map_err(|error| error.to_string())?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(preview["caretGeometry"]["xPt"], current_caret["xPt"]);
+    assert_eq!(preview["caretGeometry"]["y0Pt"], current_caret["y0Pt"]);
+    assert_eq!(interaction["caretGeometry"]["xPt"], current_caret["xPt"]);
+    assert_eq!(interaction["caretGeometry"]["y0Pt"], current_caret["y0Pt"]);
+    assert_eq!(inline_math_text(&runtime)?, "abcdef");
+    Ok(())
+}
+
+#[test]
+fn failed_math_text_preedit_publication_restores_the_committed_session() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{abcdef}}")?;
+    let document_before = runtime.session.document().clone();
+    let context_before = runtime.session.math_text_input_context();
+    let edit_before = runtime.session.math_edit().cloned();
+    let last_snapshot_before = runtime.last_snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.pages.len(),
+        )
+    });
+
+    super::super::composition::fail_next_ime_preview_publish_for_test();
+    let result = runtime.input_method_event_json("preedit".to_owned(), String::new(), 0, 0, 4);
+
+    assert!(result.is_err());
+    assert_eq!(runtime.session.document(), &document_before);
+    assert_eq!(runtime.session.math_text_input_context(), context_before);
+    assert_eq!(runtime.session.math_edit().cloned(), edit_before);
+    assert!(runtime.session.composition().is_none());
+    assert!(runtime.composition_preview_session.is_none());
+    assert!(runtime.composition_snapshot.is_none());
+    assert!(runtime.composition_range.is_none());
+    assert_eq!(
+        runtime.last_snapshot.as_ref().map(|snapshot| (
+            snapshot.session_id.clone(),
+            snapshot.document_generation,
+            snapshot.pages.len(),
+        )),
+        last_snapshot_before
     );
     Ok(())
 }

@@ -27,11 +27,12 @@ pub use pagination::{
 pub use paragraph::{
     HitAffinity, InlineObjectLayout, ParagraphHit, ParagraphLayout, ParagraphLayoutError,
     ParagraphLayoutOptions, ParagraphLayouter, ParagraphLine, ParleyParagraphLayout,
-    VisualAffinity, VisualCursor, has_empty_line, paragraph_has_empty_line,
+    TextIslandError, TextIslandLayout, TextIslandMetrics, TextIslandSpan, VisualAffinity,
+    VisualCursor, has_empty_line, paragraph_has_empty_line,
 };
 pub use paragraph_style::{ParagraphStyleError, ResolvedParagraphStyle, resolve_paragraph_style};
 pub use parley::{FontData as GlyphFontData, PositionedLayoutItem as PositionedGlyphLayoutItem};
-pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text};
+pub use shaping::{FontRole, ShapingStyle, UnicodeBoundaries, paragraph_text, run_has_underline};
 
 #[cfg(test)]
 mod tests;

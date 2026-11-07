@@ -43,6 +43,14 @@ impl Document {
         {
             features.insert("caret.env.templates".to_owned());
         }
+        if self
+            .global_settings
+            .theme
+            .as_ref()
+            .is_some_and(|theme| !theme.default_inline_environment_templates.is_empty())
+        {
+            features.insert("caret.env.inline-text-templates.v1".to_owned());
+        }
         for block in &self.body {
             collect_block_features(block, &mut features);
         }
@@ -253,6 +261,7 @@ fn collect_environment_features(
     features.insert(environment.kind.required_feature().to_owned());
     if environment.definition_id.is_some() {
         features.insert("caret.env.templates".to_owned());
+        features.insert("caret.env.inline-text-templates.v1".to_owned());
     }
     if environment.kind.supports_enabled() && environment.props.contains_key("enabled") {
         features.insert("caret.env.explicit-format-state".to_owned());

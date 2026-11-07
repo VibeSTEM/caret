@@ -1,151 +1,232 @@
-//! 数学 TextFlow 行内格式的直接树事务。
+//! 将共享内容流格式转换适配到数学槽位、路径与端点。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::super::EditError;
-use super::super::path::{content_slot_mut, resolve_content_path_mut};
-use super::super::{MathTextFlowPath, text_run_split::split_text_flow_runs_for_format};
-use caret_doc::{InlineEnvironment, InlineEnvironmentKind, MathContent, NodeId};
-use serde_json::Value;
-use std::collections::BTreeMap;
 use std::ops::Range;
 
-/// 按显示字节范围把 TextFlow 拆为普通文本与行内环境，完全不读写源码映射。
+use caret_doc::{InlineEnvironmentKind, MathContent, MathFlow, MathTree};
+
+use super::super::super::EditError;
+use super::super::path::{resolve_flow_path, resolve_flow_path_mut};
+use super::super::{
+    MathPositionAffinity, MathTextFlowPath, MathTextFlowPathStep, MathTextPosition,
+};
+use crate::editing::Affinity;
+use crate::editing::flow_format::{
+    InheritedInlineStyle, InlineFormatChange, InlineFormatContext, format_flow_range,
+    text_flow_offset, text_position_at_offset,
+};
+
+#[cfg(test)]
 pub(in crate::editing::session::math_edit) fn apply_math_text_environment_tree_range(
-    tree: &mut caret_doc::MathTree,
+    tree: &mut MathTree,
     path: &MathTextFlowPath,
     range: Range<usize>,
     kind: InlineEnvironmentKind,
     enabled: bool,
 ) -> Result<MathTextFlowPath, EditError> {
-    let mut props = BTreeMap::new();
-    if !enabled {
-        props.insert("enabled".to_owned(), Value::Bool(false));
-    }
-    apply_math_text_inline_environment_tree_range(tree, path, range, kind, props)
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::State(kind, enabled),
+        InheritedInlineStyle::default(),
+    )
 }
 
+pub(in crate::editing::session::math_edit) fn apply_math_text_environment_tree_range_with_style(
+    tree: &mut MathTree,
+    path: &MathTextFlowPath,
+    range: Range<usize>,
+    kind: InlineEnvironmentKind,
+    enabled: bool,
+    inherited: InheritedInlineStyle,
+) -> Result<MathTextFlowPath, EditError> {
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::State(kind, enabled),
+        inherited,
+    )
+}
+
+#[cfg(test)]
 pub(in crate::editing::session::math_edit) fn apply_math_text_font_family_tree_range(
-    tree: &mut caret_doc::MathTree,
+    tree: &mut MathTree,
     path: &MathTextFlowPath,
     range: Range<usize>,
     family: &str,
 ) -> Result<MathTextFlowPath, EditError> {
-    if family.trim().is_empty() {
-        return Err(EditError::InvalidFontFamily);
-    }
-    apply_math_text_inline_environment_tree_range(
+    apply_single_flow_range(
         tree,
         path,
         range,
-        InlineEnvironmentKind::Font,
-        BTreeMap::from([("fontFamily".to_owned(), Value::String(family.to_owned()))]),
+        InlineFormatChange::FontFamily(family),
+        InheritedInlineStyle::default(),
     )
 }
 
-fn apply_math_text_inline_environment_tree_range(
-    tree: &mut caret_doc::MathTree,
+pub(in crate::editing::session::math_edit) fn apply_math_text_font_family_tree_range_with_style(
+    tree: &mut MathTree,
     path: &MathTextFlowPath,
     range: Range<usize>,
-    kind: InlineEnvironmentKind,
-    props: BTreeMap<String, Value>,
+    family: &str,
+    inherited: InheritedInlineStyle,
 ) -> Result<MathTextFlowPath, EditError> {
-    let original = path
-        .resolve_structurally(tree)
-        .cloned()
-        .ok_or(EditError::InvalidPosition)?;
-    let display = original
-        .runs
-        .iter()
-        .map(|run| run.text.as_str())
-        .collect::<String>();
-    if range == (0..display.len())
-        && let Some(super::super::MathTextFlowPathStep::EnvironmentChild(0)) = path.steps().last()
-    {
-        let parent_steps = &path.steps()[..path.steps().len() - 1];
-        if let Some(MathContent::Environment(environment)) =
-            resolve_content_path_mut(&mut tree.root, parent_steps)
-            && environment.kind == kind
-            && environment.children.len() == 1
-            && matches!(environment.children.first(), Some(MathContent::Text(_)))
-        {
-            if kind == InlineEnvironmentKind::Font {
-                let family = props
-                    .get("fontFamily")
-                    .ok_or(EditError::InvalidFontFamily)?;
-                environment
-                    .props
-                    .insert("fontFamily".to_owned(), family.clone());
-            } else if let Some(enabled) = props.get("enabled").and_then(Value::as_bool) {
-                if enabled {
-                    environment.props.remove("enabled");
-                } else {
-                    environment
-                        .props
-                        .insert("enabled".to_owned(), Value::Bool(false));
-                }
+    apply_single_flow_range(
+        tree,
+        path,
+        range,
+        InlineFormatChange::FontFamily(family),
+        inherited,
+    )
+}
+
+fn apply_single_flow_range(
+    tree: &mut MathTree,
+    path: &MathTextFlowPath,
+    range: Range<usize>,
+    change: InlineFormatChange<'_>,
+    inherited: InheritedInlineStyle,
+) -> Result<MathTextFlowPath, EditError> {
+    let anchor = MathTextPosition::new(path.clone(), range.start, MathPositionAffinity::Downstream);
+    let focus = MathTextPosition::new(path.clone(), range.end, MathPositionAffinity::Upstream);
+    let (_, focus) =
+        apply_math_text_format_range_with_style(tree, &anchor, &focus, change, inherited)?;
+    Ok(focus.path)
+}
+
+/// 同一 MathFlow 内的文本选择只转换一次，再按未变逻辑偏移重建两端物理路径。
+pub(in crate::editing::session::math_edit) fn apply_math_text_format_range_with_style(
+    tree: &mut MathTree,
+    anchor: &MathTextPosition,
+    focus: &MathTextPosition,
+    change: InlineFormatChange<'_>,
+    inherited: InheritedInlineStyle,
+) -> Result<(MathTextPosition, MathTextPosition), EditError> {
+    let (prefix, context) = scope_context(tree, &anchor.path, inherited.clone())?;
+    let (focus_prefix, _) = scope_context(tree, &focus.path, inherited)?;
+    if prefix != focus_prefix || anchor.path.align_cell() != focus.path.align_cell() {
+        return Err(EditError::InvalidPosition);
+    }
+    let scope = resolve_flow_path(&tree.root, &prefix).ok_or(EditError::InvalidPosition)?;
+    let anchor_offset = text_flow_offset(
+        &scope.content,
+        &local_path(&anchor.path, prefix.len())?,
+        anchor.offset,
+    )?;
+    let focus_offset = text_flow_offset(
+        &scope.content,
+        &local_path(&focus.path, prefix.len())?,
+        focus.offset,
+    )?;
+    let updated = format_flow_range(
+        &scope.content,
+        anchor_offset.min(focus_offset)..anchor_offset.max(focus_offset),
+        change,
+        context,
+    )?;
+    if updated == scope.content {
+        return Ok((anchor.clone(), focus.clone()));
+    }
+    let rebuild = |old: &MathTextPosition, offset| {
+        let affinity = if offset == anchor_offset.min(focus_offset) {
+            Affinity::Downstream
+        } else {
+            Affinity::Upstream
+        };
+        let (local_path, offset) = text_position_at_offset(&updated, offset, affinity)?;
+        let mut steps = prefix.clone();
+        steps.extend(local_path.into_iter().enumerate().map(|(depth, index)| {
+            if depth == 0 {
+                MathTextFlowPathStep::Content(index)
             } else {
-                environment.props.remove("enabled");
+                MathTextFlowPathStep::EnvironmentChild(index)
             }
-            return Ok(path.clone());
-        }
-    }
-    let (left_runs, selected_runs, right_runs) = split_text_flow_runs_for_format(&original, &range)
-        .ok_or(EditError::UnsupportedOpaqueContent)?;
-    let has_left = !left_runs.is_empty();
-    let has_right = !right_runs.is_empty();
-    let fragment_count = usize::from(has_left) + 1 + usize::from(has_right);
-    if fragment_count > 1 && !original.extra.is_empty() {
-        return Err(EditError::UnsupportedOpaqueContent);
-    }
-
-    let mut replacement = Vec::with_capacity(fragment_count);
-    if has_left {
-        replacement.push(MathContent::Text(caret_doc::TextFlow {
-            runs: left_runs,
-            ..Default::default()
         }));
-    }
-    let mut selected = caret_doc::TextFlow {
-        runs: selected_runs,
-        ..Default::default()
+        Ok(MathTextPosition::new(
+            old.path.with_structural_steps(steps),
+            offset,
+            old.affinity,
+        ))
     };
-    if fragment_count == 1 {
-        selected.extra = original.extra;
-    }
-    replacement.push(MathContent::Environment(InlineEnvironment {
-        id: NodeId::generate(),
-        kind,
-        definition_id: None,
-        props,
-        children: vec![MathContent::Text(selected)],
-        extra: BTreeMap::new(),
-    }));
-    if has_right {
-        replacement.push(MathContent::Text(caret_doc::TextFlow {
-            runs: right_runs,
-            ..Default::default()
-        }));
-    }
+    let next_anchor = rebuild(anchor, anchor_offset)?;
+    let next_focus = rebuild(focus, focus_offset)?;
+    resolve_flow_path_mut(&mut tree.root, &prefix)
+        .ok_or(EditError::InvalidPosition)?
+        .content = updated;
+    Ok((next_anchor, next_focus))
+}
 
-    let (contents, index) =
-        content_slot_mut(&mut tree.root, path.steps()).ok_or(EditError::InvalidPosition)?;
-    let environment_index = index + usize::from(has_left);
-    let mut selected_path = path.steps()[..path.steps().len() - 1].to_vec();
-    let environment_step = match *path.steps().last().ok_or(EditError::InvalidPosition)? {
-        super::super::MathTextFlowPathStep::Content(_) => {
-            super::super::MathTextFlowPathStep::Content(environment_index)
-        }
-        super::super::MathTextFlowPathStep::EnvironmentChild(_) => {
-            super::super::MathTextFlowPathStep::EnvironmentChild(environment_index)
-        }
-        super::super::MathTextFlowPathStep::Operand(_) => {
-            return Err(EditError::InvalidPosition);
-        }
-    };
-    contents.splice(index..index + 1, replacement);
-    selected_path.push(environment_step);
-    selected_path.push(super::super::MathTextFlowPathStep::EnvironmentChild(0));
-    Ok(path.with_structural_steps(selected_path))
+fn local_path(path: &MathTextFlowPath, prefix_len: usize) -> Result<Vec<usize>, EditError> {
+    path.steps()[prefix_len..]
+        .iter()
+        .enumerate()
+        .map(|(depth, step)| match (depth, step) {
+            (0, MathTextFlowPathStep::Content(index)) => Ok(*index),
+            (_, MathTextFlowPathStep::EnvironmentChild(index)) if depth > 0 => Ok(*index),
+            _ => Err(EditError::InvalidPosition),
+        })
+        .collect()
+}
+
+fn scope_context(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    mut inherited: InheritedInlineStyle,
+) -> Result<(Vec<MathTextFlowPathStep>, InlineFormatContext), EditError> {
+    enum Target<'a> {
+        Flow(&'a MathFlow),
+        Content(&'a MathContent),
+    }
+    let prefix_len = path
+        .steps()
+        .iter()
+        .rposition(|step| matches!(step, MathTextFlowPathStep::Operand(_)))
+        .map_or(0, |index| index + 1);
+    let prefix = path.steps()[..prefix_len].to_vec();
+    let mut depth = 0;
+    let mut target = Target::Flow(&tree.root);
+    for step in &prefix {
+        target = match (target, step) {
+            (Target::Flow(flow), MathTextFlowPathStep::Content(index)) => {
+                depth += 1;
+                Target::Content(flow.content.get(*index).ok_or(EditError::InvalidPosition)?)
+            }
+            (
+                Target::Content(MathContent::Environment(environment)),
+                MathTextFlowPathStep::EnvironmentChild(index),
+            ) => {
+                inherited = inherited.with_environment(environment);
+                depth += 1;
+                Target::Content(
+                    environment
+                        .children
+                        .get(*index)
+                        .ok_or(EditError::InvalidPosition)?,
+                )
+            }
+            (Target::Content(MathContent::Math(node)), MathTextFlowPathStep::Operand(index)) => {
+                Target::Flow(
+                    node.children
+                        .get(*index)
+                        .ok_or(EditError::InvalidPosition)?,
+                )
+            }
+            _ => return Err(EditError::InvalidPosition),
+        };
+    }
+    if !matches!(target, Target::Flow(_)) {
+        return Err(EditError::InvalidPosition);
+    }
+    Ok((
+        prefix,
+        InlineFormatContext {
+            inherited,
+            content_depth: depth + 1,
+            max_depth: caret_doc::MAX_MATH_TREE_DEPTH,
+        },
+    ))
 }
