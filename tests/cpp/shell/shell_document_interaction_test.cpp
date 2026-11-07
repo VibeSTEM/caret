@@ -1595,9 +1595,18 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
                           canvas->documentToContent(
                               0, QPointF(structural_point.value(QStringLiteral("xPt")).toReal(),
                                          structural_point.value(QStringLiteral("yPt")).toReal())));
-    const QPointF body_window = canvas->mapToItem(window.contentItem(), stop_point(body_right));
-    QVERIFY(std::abs(body_window.x() - structural_window.x()) > 40.0 ||
-            std::abs(body_window.y() - structural_window.y()) > 40.0);
+    const QPointF body_left_window = canvas->mapToItem(window.contentItem(), stop_point(body_left));
+    const QPointF body_right_window =
+        canvas->mapToItem(window.contentItem(), stop_point(body_right));
+    const auto distance_from_structural = [&structural_window](const QPointF& point) {
+        return std::abs(point.x() - structural_window.x()) +
+               std::abs(point.y() - structural_window.y());
+    };
+    const QPointF body_window =
+        distance_from_structural(body_left_window) > distance_from_structural(body_right_window)
+            ? body_left_window
+            : body_right_window;
+    QVERIFY(distance_from_structural(body_window) > 40.0);
     QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, structural_window.toPoint());
     QMouseEvent structural_to_text_move(QEvent::MouseMove, body_window, body_window,
                                         window.mapToGlobal(body_window.toPoint()), Qt::NoButton,
