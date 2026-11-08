@@ -3,8 +3,9 @@
 use super::*;
 use crate::editing::EditorKey;
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph, ParagraphContent,
-    Run, TextFlow,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathAlignRow,
+    MathContent, MathFlow, MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
+    Run, SoftBreak, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -55,6 +56,55 @@ fn environment(kind: BlockEnvironmentKind, children: Vec<Block>) -> Block {
         children,
         extra: BTreeMap::new(),
     })
+}
+
+fn math_tree(text: Option<&str>) -> MathTree {
+    MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: text
+                .map(|text| {
+                    vec![MathContent::Math(MathNode {
+                        id: NodeId::generate(),
+                        kind: MathNodeKind::Symbol,
+                        text: Some(text.to_owned()),
+                        attributes: BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: BTreeMap::new(),
+                    })]
+                })
+                .unwrap_or_default(),
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+fn formula_environment(empty_formula: bool, use_align: bool) -> Block {
+    let text = (!empty_formula).then_some("x");
+    let equation = Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: math_tree(text),
+        extra: BTreeMap::new(),
+    });
+    let align = Block::Align(Align {
+        id: NodeId::generate(),
+        rows: vec![MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![math_tree(text)],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    });
+    let formula = if use_align { align } else { equation };
+    let nested = environment(BlockEnvironmentKind::Custom, vec![formula]);
+    let mut outer = match environment(BlockEnvironmentKind::Section, vec![nested]) {
+        Block::Environment(environment) => environment,
+        _ => unreachable!(),
+    };
+    outer.title = Some(paragraph());
+    Block::Environment(outer)
 }
 
 fn text_flow(run: Run) -> ParagraphContent {
@@ -691,7 +741,10 @@ fn deleting_last_environment_preserves_breaks_and_restores_inserted_fallback()
             },
             VisualAffinity::Downstream,
         )?;
-        assert_eq!(session.selected_block_environments(), &[environment_id]);
+        assert_eq!(
+            session.selected_block_environments(),
+            std::slice::from_ref(&environment_id)
+        );
 
         session.run(Command::Delete(Direction::Backward))?;
         assert!(
@@ -879,6 +932,222 @@ fn backspace_during_composition_does_not_unwrap_empty_environment()
 }
 
 #[test]
+fn formulas_keep_empty_block_environments_from_backspace_cleanup()
+-> Result<(), Box<dyn std::error::Error>> {
+    for empty_formula in [false, true] {
+        for use_align in [false, true] {
+            let environment = formula_environment(empty_formula, use_align);
+            let mut document = Document::blank();
+            document.body = vec![environment.clone()];
+
+            // Backspace at an empty environment title may unwrap only a truly empty shell.
+            let mut session = Session::new(document.clone())?;
+            let selection = session.selection().clone();
+            let generation = session.document_generation();
+            let effect = session.run(Command::Delete(Direction::Backward))?;
+            assert!(!effect.document_changed);
+            assert_eq!(session.document, document);
+            assert_eq!(*session.selection(), selection);
+            assert_eq!(session.document_generation(), generation);
+
+            // Backspace at the following paragraph start uses the same content rule.
+            let outside = paragraph();
+            let outside_id = outside.id.clone();
+            let mut adjacent_document = document.clone();
+            adjacent_document.body.push(Block::Paragraph(outside));
+            let mut adjacent_session = Session::new(adjacent_document.clone())?;
+            let position = Pos {
+                story: StoryId::Body,
+                paragraph_id: outside_id,
+                offset: 0,
+                affinity: Affinity::Downstream,
+            };
+            adjacent_session.run(Command::SetSelection(Some(Selection {
+                anchor: position.clone(),
+                focus: position,
+            })))?;
+            let selection = adjacent_session.selection().clone();
+            let generation = adjacent_session.document_generation();
+            let effect = adjacent_session.run(Command::Delete(Direction::Backward))?;
+            assert!(!effect.document_changed);
+            assert_eq!(adjacent_session.document, adjacent_document);
+            assert_eq!(*adjacent_session.selection(), selection);
+            assert_eq!(adjacent_session.document_generation(), generation);
+
+            // A virtual stop outside the environment must not delete its formula subtree.
+            let mut exit_session = Session::new(document.clone())?;
+            exit_session.run(Command::ExitBlockEnvironment(Direction::Backward))?;
+            let exit = exit_session.block_environment_exit();
+            assert!(exit.is_some());
+            let selection = exit_session.selection().clone();
+            let generation = exit_session.document_generation();
+            let effect = exit_session.run(Command::Delete(Direction::Forward))?;
+            assert!(!effect.document_changed);
+            assert_eq!(exit_session.document, document);
+            assert_eq!(*exit_session.selection(), selection);
+            assert_eq!(exit_session.block_environment_exit(), exit);
+            assert_eq!(exit_session.document_generation(), generation);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn deleting_formula_environment_undo_redo_restores_exact_tree_and_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    for use_align in [false, true] {
+        let mut original = Document::blank();
+        let environment = formula_environment(false, use_align);
+        let Block::Environment(block_environment) = &environment else {
+            unreachable!();
+        };
+        let environment_id = block_environment.id.clone();
+        original.body = vec![environment];
+
+        let mut session = Session::new(original.clone())?;
+        session.select_block_environment(environment_id.clone())?;
+        let selection = session.selection().clone();
+        assert_eq!(
+            session.selected_block_environments(),
+            std::slice::from_ref(&environment_id)
+        );
+
+        let deleted = session.run(Command::Delete(Direction::Backward))?;
+        assert!(deleted.document_changed);
+        assert_ne!(session.document(), &original);
+        let deleted_document = session.document().clone();
+
+        session.run(Command::Undo)?;
+        assert_eq!(session.document(), &original);
+        assert_eq!(session.selection(), &selection);
+
+        session.run(Command::Redo)?;
+        assert_eq!(session.document(), &deleted_document);
+        session.run(Command::Undo)?;
+        assert_eq!(session.document(), &original);
+        assert_eq!(session.selection(), &selection);
+    }
+    Ok(())
+}
+
+#[test]
+fn environment_content_classifies_each_block_variant_conservatively()
+-> Result<(), Box<dyn std::error::Error>> {
+    let empty_tree = math_tree(None);
+    let cases = [
+        (Block::Paragraph(paragraph()), false),
+        (
+            Block::Paragraph({
+                let mut paragraph = paragraph();
+                paragraph
+                    .inlines
+                    .push(ParagraphContent::SoftBreak(SoftBreak::default()));
+                paragraph
+            }),
+            true,
+        ),
+        (
+            Block::Equation(Equation {
+                id: NodeId::generate(),
+                math_tree: empty_tree.clone(),
+                extra: BTreeMap::new(),
+            }),
+            true,
+        ),
+        (
+            Block::Align(Align {
+                id: NodeId::generate(),
+                rows: vec![MathAlignRow {
+                    id: NodeId::generate(),
+                    cells: vec![empty_tree],
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            }),
+            true,
+        ),
+        (environment(BlockEnvironmentKind::Custom, Vec::new()), false),
+        (
+            environment(
+                BlockEnvironmentKind::Custom,
+                vec![Block::Paragraph(paragraph_with_text("nested"))],
+            ),
+            true,
+        ),
+        (
+            Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+            true,
+        ),
+        (
+            Block::Opaque(caret_doc::OpaqueNode {
+                raw: serde_json::json!({"type": "future_block"}),
+            }),
+            true,
+        ),
+    ];
+
+    for (block, expected) in cases {
+        let mut container = match environment(BlockEnvironmentKind::Custom, Vec::new()) {
+            Block::Environment(environment) => environment,
+            _ => unreachable!(),
+        };
+        container.children.push(block);
+        assert_eq!(super::environment_has_content(&container)?, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn unsupported_inline_content_keeps_backspace_failure_atomic()
+-> Result<(), Box<dyn std::error::Error>> {
+    let content_paragraph = paragraph();
+    let mut section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![
+            Block::Paragraph(content_paragraph),
+            Block::Equation(Equation {
+                id: NodeId::generate(),
+                math_tree: math_tree(Some("x")),
+                extra: BTreeMap::new(),
+            }),
+        ],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    section.title = Some(paragraph());
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(section)];
+    let mut session = Session::new(document)?;
+
+    // Inject content unsupported by TextMap after Session built its position indexes, so
+    // the failure occurs inside the cleanup transaction rather than during initialization.
+    let Block::Environment(section) = &mut session.document.body[0] else {
+        unreachable!();
+    };
+    let Block::Paragraph(paragraph) = &mut section.children[0] else {
+        unreachable!();
+    };
+    paragraph
+        .inlines
+        .push(ParagraphContent::Opaque(caret_doc::OpaqueNode {
+            raw: serde_json::json!({"type": "future_inline"}),
+        }));
+
+    let document = session.document.clone();
+    let selection = session.selection().clone();
+    let generation = session.document_generation();
+    assert!(matches!(
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document, document);
+    assert_eq!(*session.selection(), selection);
+    assert_eq!(session.document_generation(), generation);
+    Ok(())
+}
+
+#[test]
 fn backspace_removes_only_an_empty_environment_at_its_start()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut empty_section = match environment(BlockEnvironmentKind::Section, Vec::new()) {
@@ -900,6 +1169,11 @@ fn backspace_removes_only_an_empty_environment_at_its_start()
     assert!(matches!(
         empty_session.document.body[0],
         Block::Environment(_)
+    ));
+    empty_session.run(Command::Redo)?;
+    assert!(matches!(
+        empty_session.document.body[0],
+        Block::Paragraph(_)
     ));
 
     let mut nonempty_section = match environment(BlockEnvironmentKind::Section, Vec::new()) {

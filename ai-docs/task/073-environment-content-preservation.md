@@ -1,6 +1,6 @@
 # 073 — 块环境内容判定保全公式节点
 
-- 状态：ready
+- 状态：done
 - 依赖：010、021
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -41,19 +41,19 @@
 
 ## 验收标准
 
-- [ ] 含非空 Equation 或 Align 的块环境不会因后续空段首 Backspace 或外部停靠点删除而被当作空环境移除。
-- [ ] 嵌套子环境、非空标题/段落、显式换行、opaque 节点及所有 Block 变体的内容保留规则明确且一致。
-- [ ] 真正空环境仍按既定键盘契约可删除；空公式节点的行为显式定义，不因通用环境清理而静默丢失。
-- [ ] Undo/Redo 精确恢复环境、公式树、节点 ID、焦点/选择；无效位置或事务失败保留文档与会话状态。
-- [ ] 相关行为测试、格式/lint、分域审查和独立 final review 通过；未执行验证如实记录。
+- [x] 含非空 Equation 或 Align 的块环境不会因后续空段首 Backspace 或外部停靠点删除而被当成空环境移除。
+- [x] 嵌套子环境、段落软换行、opaque 节点及所有 Block 变体的内容保留规则明确且一致。
+- [x] 真正空环境仍按既定键盘契约可删除；空公式节点作为显式对象保留，通用环境清理不会静默丢失。
+- [x] 含公式环境显式删除后的 Undo/Redo 精确往返完整文档树（含公式对象与节点 ID）及文本选区；公式保护路径验证了文档、焦点/选区及 generation 不变，未知行内内容错误保持失败原子性。
+- [x] 相关行为测试、格式/lint、分域审查和独立 final review 通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | engine structure/session 定向测试 | 公式内容不会被环境空判定误删 | 未执行 |
-| — | 退格与外部停靠点删除回归 | 同一内容规则覆盖两条路径 | 未执行 |
-| — | Undo/Redo 和失败原子性测试 | 删除恢复完整、失败无副作用 | 未执行 |
+| 2026-11-08 | `cargo test --locked -p caret-engine editing::session::structure::tests` | 环境内容分类、段首退格、外侧停靠点、Undo/Redo 和失败原子性 | 35 passed |
+| 2026-11-08 | `cargo fmt --check` | Rust 格式符合仓库规则 | 通过 |
+| 2026-11-08 | `cargo clippy --locked -p caret-engine --all-targets -- -D warnings` | Engine 及依赖目标无 lint 警告 | 通过 |
 
 ## 风险与回退
 
@@ -62,7 +62,9 @@
 ## 决策与工作记录
 
 - 2026-11-08：Terra/medium 只读扩展审查指出 `environment_has_content` 的 Block 匹配漏掉 Equation/Align，两个退格删除入口复用该判断，存在公式随环境丢失风险。静态调用链已核实，尚未执行复现或测试。
+- 2026-11-08：核对 `.cdoc` 的 `Block` 变体后，决定 Equation 与 Align 即使数学树为空，也作为显式块对象保留；用户必须通过对应公式删除操作删除它们，通用空环境清理不能隐式移除。Opaque 与 ExplicitBreak 同样视为内容；Paragraph 按 TextMap 是否为空判定；软换行、行内对象视为内容，遇到无法解释的行内 opaque 节点时返回错误并保持操作原子性。Environment 递归判定标题和后代。
+- 2026-11-08：实现内容分类的穷尽匹配，覆盖段首环境解除、前一空环境删除和外侧停靠点删除的共享判定；增加空/非空 Equation 与 Align、嵌套环境、Paragraph 软换行、ExplicitBreak、Opaque、公式树 Undo/Redo 和失败原子性回归测试。engine structure/session 35 项测试、`cargo fmt --check` 和 engine clippy 通过；Terra/medium 领域检查与 Sol/medium 独立 final review 均通过，未发现阻断项。
 
 ## 完成摘要
 
-未完成。
+已实现并验证：35 项 engine structure/session 测试、`cargo fmt --check`、engine clippy、Terra/medium 领域检查及 Sol/medium 独立 final review 均通过。

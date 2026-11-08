@@ -18,6 +18,8 @@ Section 首个正文 Paragraph 的段首 Backspace 删除标题与正文之间�
 
 普通 Backspace 在折叠光标位于空环境起点，或从环境末尾外侧停靠点向回删除时可移除空环境；在空 Section 后继外部段落的段首按 Backspace 时，将该段内容合并到 Section 标题末尾并移除外部段落。非空环境不会因普通 Backspace 被删除。若用户通过 Shift+方向键或指针拖选选中整个环境，Backspace 删除该环境及标题、全部后代节点，并作为一个撤销单元；删除后光标落到前一段末尾，若没有前段则落到后一段开头，若文档没有其他段落则留下一个空 Paragraph 供继续编辑。段落内部 Backspace 仍按字素删除，不能因结构选区状态或环境导航状态被吞掉。第一次 Escape 收起整个环境选区，第二次才离开当前结构。撤销或重做后清除不再对应当前文档的虚拟环境外侧停靠状态。
 
+环境是否为空按完整块树判定：标题和 Paragraph 中的 TextMap 内容、非空后代环境、Equation、Align、ExplicitBreak 与 Opaque 都使环境有内容。Equation/Align 即使数学树为空也视为显式对象；只能通过公式对象自身的删除操作移除，环境清理不能隐式删除。Opaque 按有内容保留，以兼容无法解释的未来块。真正空的环境仍可由上述 Backspace 契约移除。
+
 Mod+Backspace 在键盘上下文允许且当前焦点位于块环境时，解除当前块环境并保留标题和正文。行内候选的优先级、Run 属性解除以及行内/块级命令仲裁见[行内与块级环境适配](inline-and-block-environments.md)。块环境编辑由 Rust 事务维护位置映射与撤销状态；索引和导航几何的消费方式见[结构导航](../structure-navigation.md)。
 
 环境区分内置语义 kind 和可组合定义。内置 kind 固定 scope、合法子项和结构行为；Custom 是可跨 scope 选择的定义族，具体实例的 scope 必须与其 `definitionId` 指向的定义一致。主题快照提供内置 kind 默认模板、命名变体和自定义环境定义，实例 `props` 保存局部覆盖。`definitionId` 缺省表示使用 Custom 的通用默认模板；存在时必须能在当前文档嵌入的快照中解析到同 scope 定义。模板仅用声明式数据组合格式环境、命名样式和属性值，不能改写结构语义，也不执行脚本或通用宏。首版内置 kind 如下：

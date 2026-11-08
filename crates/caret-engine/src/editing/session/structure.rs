@@ -710,8 +710,10 @@ fn environment_has_content(environment: &BlockEnvironment) -> Result<bool, EditE
                 return Ok(true);
             }
             Block::Environment(child) if environment_has_content(child)? => return Ok(true),
-            Block::ExplicitBreak(_) | Block::Opaque(_) => return Ok(true),
-            _ => {}
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {
+                return Ok(true);
+            }
+            Block::Paragraph(_) | Block::Environment(_) => {}
         }
     }
     Ok(false)
