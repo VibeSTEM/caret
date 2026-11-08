@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-06。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-08。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -76,13 +76,13 @@
 | 042 | 数学排版 | [M3：数学后端选型与验证](task/042-math-backend.md) | P2 | — | M | done |
 | 043 | 数学排版 | [M3：公式模型与编辑](task/043-math-model-and-editing.md) | P2 | 010、042 | L | done |
 | 044 | 数学排版 | [M3：公式布局与画布渲染](task/044-math-layout-and-rendering.md) | P2 | 027、043 | L | done |
-| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043 | M | planned |
+| 045 | 表格 | [M3：表格模型与交互](task/045-table-model-and-editing.md) | P2 | 010、021、043、071 | M | planned |
 | 046 | 表格 | [M3：表格布局与画布](task/046-table-layout-and-canvas.md) | P2 | 027、043、044、045 | M | planned |
 | 047 | 文档交换 | [Markdown 导入导出与转换框架](task/047-markdown-interchange.md) | P2 | 008、010–012、018、021、023–027、029、050–053 | L | planned |
 | 048 | 文档交换 | [DOCX 导入导出适配器](task/048-docx-interchange.md) | P2 | 047 | L | planned |
 | 049 | 文档交换 | [TeX 文档导入导出适配器](task/049-tex-interchange.md) | P2 | 047 | L | planned |
 | 050 | 文档模型 | [代码、引用与链接语义节点及编辑](task/050-document-code-links-quotes.md) | P2 | 010、021、025 | L | planned |
-| 051 | 画布 | [代码、引用、链接与列表的布局和画布呈现](task/051-code-links-quotes-layout.md) | P2 | 024、027、050 | L | planned |
+| 051 | 画布 | [代码、引用、链接与列表的布局和画布呈现](task/051-code-links-quotes-layout.md) | P2 | 024、027、050、071 | L | planned |
 | 052 | 文档模型 | [图片节点、媒体资源与编辑](task/052-image-model-and-editing.md) | P2 | 021 | M | planned |
 | 053 | 画布 | [图片布局与画布呈现](task/053-image-layout-and-canvas.md) | P2 | 024、027、052 | M | planned |
 | 054 | 结构命令 | [APA 标题层级命令与默认样式](task/054-apa-heading-commands.md) | P2 | 010、024、025、026、027 | M | planned |
@@ -100,7 +100,10 @@
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
 | 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | done |
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
-| 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044 | L | planned |
+| 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044、071、072 | L | planned |
 | 070 | CI/测试 | [Nightly 失败修复与布局测试补齐](task/070-nightly-failures-and-layout-coverage.md) | P1 | 006 | S | done |
+| 071 | 架构 | [宿主焦点协议与键盘意图路由](task/071-host-focus-and-key-routing.md) | P1 | 010、021、027、030、043、044、073 | L | planned |
+| 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | ready |
+| 073 | 文档结构 | [块环境内容判定保全公式节点](task/073-environment-content-preservation.md) | P1 | 010、021 | S | ready |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
