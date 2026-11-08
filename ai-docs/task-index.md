@@ -98,7 +98,7 @@
 | 064 | 字体 | [内置字体角色与统一默认标记](task/064-builtin-font-roles.md) | P2 | 024、025、042 | M | implemented |
 | 065 | 数学编辑 | [TeX 源码输入与结构化公式转换](task/065-tex-math-input-conversion.md) | P2 | 043、044、037 | M | planned |
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
-| 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | in-progress |
+| 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | done |
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
 | 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044 | L | planned |
 | 070 | CI/测试 | [Nightly 失败修复与布局测试补齐](task/070-nightly-failures-and-layout-coverage.md) | P1 | 006 | S | done |

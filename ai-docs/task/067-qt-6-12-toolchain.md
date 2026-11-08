@@ -1,6 +1,6 @@
 # 067 — Qt 6.12 托管工具链升级
 
-- 状态：in-progress
+- 状态：done
 - 依赖：004、006
 - 优先级：P1
 - 创建 / 更新：2026-11-06 / 2026-11-08
@@ -48,7 +48,7 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 - [x] 三平台 CMake 要求和技术基线一致；无残留的当前版本锁 6.11.2。
 - [x] macOS 构建拒绝低于 14.4 的 `MACOSX_DEPLOYMENT_TARGET` 覆盖。
 - [x] 托管供给、应用构建、相关 native/QML 检查通过；未运行平台明确记录。
-- [ ] sanitizer suppression 与测试排除规则经 Qt 6.12 实际报告复查，不保留未经确认的 Qt 6.11 专用例外。macOS sanitizer 和 Ubuntu ASan/UBSan 已在 Nightly 通过。Ubuntu TSan 报告 `Qml.ShellLoad`、`App.HeadlessWindowLoads` 出现跨线程分配/释放冲突，栈位于未插桩的 Qt 6.12 `libQt6Core`；真实竞态或工具误报尚未确认，因此暂仅在 Linux TSan 排除这两项。它们仍参加普通测试、ASan/UBSan 和覆盖率；Linux TSan 覆盖缺口需在 Qt 升级或获得可复现样例后复查。Ubuntu `FcInit` 报告已有 Qt 6.12 实测依据，单测级规则在 Nightly #42449056408 复验通过（ASan/UBSan 10/10）；相关风险是规则可能隐藏未来同栈泄漏。macOS 27 本机完整 ASan/UBSan CTest 仍有未归属泄漏报告。`App.InvalidArgument` 已改为显式检查退出码，避免 `WILL_FAIL` 把 sanitizer 非零退出反转为通过。
+- [x] sanitizer suppression 与测试排除规则经 Qt 6.12 实际报告复查，没有未经确认的 Qt 6.11 专用例外。macOS 27.2 完整 ASan/UBSan CTest 使用原有 suppression，10 项各连续执行三次，共 30 次通过；此前观察到的 FontRegistry/CoreText、bundle 查询和系统后台泄漏报告没有复现，但所有权未确认，间歇报告仍不能排除，因此未新增规则。Ubuntu `FcInit` 报告有 Qt 6.12 实测依据，单测级规则在 Nightly #42449056408 复验通过（ASan/UBSan 10/10）。Ubuntu TSan 报告 `Qml.ShellLoad`、`App.HeadlessWindowLoads` 出现跨线程分配/释放冲突，栈位于未插桩的 Qt 6.12 `libQt6Core`；真实竞态或工具误报尚未确认，因此仅 Linux TSan 排除这两项。它们仍参加普通测试、ASan/UBSan 和覆盖率；该 TSan 覆盖限制与复查触发条件已明确记录。`App.InvalidArgument` 已改为显式检查退出码，避免 `WILL_FAIL` 把 sanitizer 非零退出反转为通过。
 - [x] 分领域检查及未参与实现者的 final review 完成，发现已修复并复验。
 
 ## 验证计划与结果
@@ -72,16 +72,18 @@ Qt 在线仓库的 `Updates.xml` 提供官方组件版本、归档名和 SHA1；
 | 2026-11-08 | Nightly run 42405417514 Ubuntu sanitizer ASan/UBSan 与 TSan 日志 | 核对 Qt 6.11 Linux sanitizer 例外是否实际覆盖 | ASan/UBSan 9/9 通过，TSan 7/7 通过；TSan 仍排除 `Qml.ShellLoad` 和 `App.HeadlessWindowLoads`，而 code-font CTest 的 suppression 命中明细未出现在通过测试日志。已移除 Qt6.11 TSan 排除，`FcInit` 规则等待更新 Qt 6.12 的真实报告再判断。 |
 | 2026-11-08 | `cargo fmt --all --check`；`cargo test --locked -p caret-tests --bin caret-tests sanitize::tests::sanitizer_profiles_keep_checks_enabled`；`cargo lint --check` | 校验 sanitizer runner 改动和仓库格式/lint | 全部通过；Linux sanitizer 的改动需由 Ubuntu Nightly 运行时复验。 |
 | 2026-11-08 | CMake CLI 结果验证回归；常规与 ASan/UBSan build 的 `ctest -R 'Build.CliResultSanitizerDetection|App.InvalidArgument' --output-on-failure` | 覆盖无效参数的错误码/诊断，以及 LSan 报告不得被接受为预期 CLI 失败 | 合成用例确认退出码 64 且含 `LeakSanitizer` 报告会被拒绝，正常退出码 64 和错误码 1 分别按契约接受/拒绝；另确认 `LSAN_OPTIONS=log_path=...` 会被拒绝而保留 suppression 选项可用；两种 build 的 CTest 各 2/2 通过。本机 sanitizer app 此次未复现之前观察到的 192 字节泄漏；托管 LLVM 的真实泄漏 fixture 在 stderr 模式下被判失败、在 log_path 模式下被明确拒绝。远程 Nightly 仍待复验。 |
-| 2026-11-08 | Terra/medium 领域检查与 Sol/medium final review（PR #104 的 13 文件完整 diff） | 复核 sanitizer 选项重定向拦截、Linux sanitizer 矩阵恢复、测试覆盖与文档证据 | 均无阻断发现；真实 LSan fixture 与 CMake 合成回归通过。后续 Nightly 已完成 macOS/Windows sanitizer 复验，但暴露 Ubuntu `FcInit` 报告；该规则的 follow-up 复验及 macOS 27.2 本机泄漏仍未完成。 |
+| 2026-11-08 | Terra/medium 领域检查与 Sol/medium final review（PR #104 的 13 文件完整 diff） | 复核 sanitizer 选项重定向拦截、Linux sanitizer 矩阵恢复、测试覆盖与文档证据 | 均无阻断发现；真实 LSan fixture 与 CMake 合成回归通过。后续 Nightly 暴露 Ubuntu `FcInit` 报告，已按 Qt 6.12 实际栈复验并缩小规则；macOS 27.2 初次泄漏在后续原 fixture 连续重复中未复现。 |
 | 2026-11-08 | Nightly run 42446708689：三平台 sanitizer、workspace tests、full quality 与覆盖率 | 复验移除 Linux `FcInit` suppression 后的 Qt 6.12 表现 | macOS、Windows sanitizer 均通过；Ubuntu ASan/UBSan 为 9/10，唯一失败 `caret_code_font_failure_test` 报告 320 字节 / 3 个分配，栈均经 Fontconfig `FcInit` 与 Qt 6.12 `QFontconfigDatabase::populateFontDatabase()`。Ubuntu ASan/UBSan 其余 CTest（包含 `Qml.ShellLoad`）通过；三平台 workspace tests、Ubuntu full quality、native C++ 与 Rust 覆盖率均通过。基于该真实报告恢复只作用于此单测的 `FcInit` LSan 规则；之后 ASan/UBSan 已于 run #42448020697 10/10 复验通过。 |
 | 2026-11-08 | Nightly run 42448020697：三平台 sanitizer、workspace tests、full quality、覆盖率、Miri | 复验仅限 code-font 单测的 `FcInit` 规则及恢复的 Linux TSan 矩阵 | macOS/Windows sanitizer 通过；Ubuntu ASan/UBSan 10/10 通过，含 code-font 和 `Qml.ShellLoad`；TSan 8/10，唯一失败是 `Qml.ShellLoad` 与 `App.HeadlessWindowLoads` 报告跨线程分配/释放冲突，涉及 `QQmlThread`、主线程及未插桩的 Qt 6.12 `libQt6Core`。该报告尚不能确认实际竞态或归属；follow-up 中按证据恢复仅 Linux TSan 的两项排除，代价是这两项失去 Linux TSan 覆盖，需在 Qt 升级或最小复现可用时复查。三平台 workspace tests、Ubuntu full quality、Rust/native 覆盖率与 Miri 通过。Rust CPU performance 仍运行，未等待。 |
-| 2026-11-08 | Nightly run 42449056408 Ubuntu sanitizer 日志 | 验证 code-font `FcInit` 规则与 Linux TSan 限定排除 | Ubuntu ASan/UBSan 10/10、Linux TSan 8/8 通过；TSan 运行 8 项，其余两个启动测试仅在 Linux TSan profile 排除。单测级规则抑制了 Qt 6.12 code-font 的 `FcInit` 报告并使测试通过，但分配所有权尚未证明；全 workflow 其余任务按用户指示未等待。 |
+| 2026-11-08 | Nightly run 42449056408：三平台 sanitizer、workspace tests、full quality、覆盖率、Miri | 复验 Qt 6.12 sanitizer 规则/排除与任务验收 | macOS/Windows sanitizer 和三平台 workspace tests 通过；Ubuntu ASan/UBSan 10/10、TSan 8/8 通过（TSan 排除两项有报告的启动测试）；Rust/native 覆盖率、full quality 与 Miri 通过。run 后续完成，性能 job 不属于本任务验收。 |
+| 2026-11-08 | macOS 27.2 / Qt 6.12.0；`LSAN_OPTIONS=suppressions=<原 fixture> ctest --test-dir target/native/debug-sanitizer-address-undefined --output-on-failure --repeat until-fail:3` | 确认 macOS 27 的首次完整 ASan/UBSan CTest 泄漏报告是否稳定可复现 | 10 项各连续执行三次，共 30 次通过，未添加 macOS suppression。I18n、ShellLoad 和 HeadlessWindowLoads 单项也曾在原 fixture 下通过；初次运行的新系统栈没有复现，但所有权未确认、间歇报告仍不能排除，保留首次日志供系统/Qt 更新后复查。 |
+| 2026-11-08 | macOS 27.2 / Qt 6.12.0：初次完整 verbose ASan/UBSan CTest（9 项） | 逐项观察既有 Qt suppression 命中与退出期泄漏 | 初次 3/9 通过，6/9 因 LSan 报告失败；`App.InvalidArgument` 虽显示通过，实际有 192 字节 / 4 分配泄漏，被 `WILL_FAIL` 反转。`Qml.ShellLoad` 报 1256 字节 / 30 个分配。日志确认旧规则 `invalidate`、`fallbacksForFamily`、`ct_getSfntTable`、`boundingBox`、`QCoreTextFontEngine::QCoreTextFontEngine` 和 `loadAdvancesForGlyphs` 均在 Qt 6.12 报告中命中；`qt_apple_urlFromPossiblySecurityScopedURL` 未命中，另有 `qt_apple_bundleType`、Fontique/CoreText 和 Apple XPC/CoreFoundation 栈。未据单次报告扩大 suppression；连续重复验证均通过。 |
 | 2026-11-08 | sanitizer runner 更新：`cargo test --locked -p caret-tests --bin caret-tests sanitize::tests::`；`cargo format --check`；`cargo lint --check`；`git diff --check` | 确认 TSan 排除只覆盖有报告的平台与 profile，且不改变其他 sanitizer/coverage | sanitizer runner 单测 7/7 通过；格式、九项 lint 和 diff 检查通过。Linux TSan 的实际 CTest 矩阵已由 Nightly #42449056408 复验，8 项通过。 |
 | 2026-11-08 | Terra/medium 领域检查与 Sol/medium final review（当前 5 文件 follow-up diff） | 复核报告证据、CTest `-E` 范围、矩阵测试、风险及文档 | 均无阻断；确认仅 Linux TSan 排除两个指定测试，其他 sanitizer 与 coverage 未缩减；QtCore 报告归属和真实竞态/误报未确认，TSan 覆盖缺口与复查条件已记录。 |
 
 ## 风险与回退
 
-Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。LaunchServices 单符号 LSan 规则会抑制任何经过该通知回调的泄漏栈，包括未来相同栈的新问题；必须在 macOS 26 Nightly 确认原报告消失且没有 Caret 分配栈，若报告变化则按新栈重新审查，不扩展泛匹配。Linux TSan 排除的两项启动测试失去该 sanitizer 配置下的覆盖；Qt 更新或可复现用例出现时需复查。任务收尾还需逐项审计仍标注 Qt 6.11 的 suppression，并查明 macOS 27.2 泄漏栈所经 FontRegistry/CoreText 分配的实际归属与生命周期。
+Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步提高 Caret 的最低 macOS 版本。回退到旧版供给脚本前必须清理 `.toolchain/qt`（或 `$CARET_TOOLCHAIN_ROOT/qt`），详见依赖获取规范。若官方包不兼容、Linux ICU ABI 不符或组件不齐，停止升级并保留 6.11.2 基线，等待可验证的兼容方案。LaunchServices 单符号 LSan 规则会抑制任何经过该通知回调的泄漏栈，包括未来相同栈的新问题；macOS 26 Nightly 已确认原报告消失且没有 Caret 分配栈，若报告变化则按新栈重新审查，不扩展泛匹配。Linux TSan 排除的两项启动测试失去该 sanitizer 配置下的覆盖；Qt 更新或可符号化/插桩 Qt、可复现样例出现时需复查。
 
 ## 决策与工作记录
 
@@ -92,12 +94,13 @@ Qt 6.12 官方 macOS 包的 Mach-O 最低版本为 14.4；用户已确认同步�
 - 2026-11-08：部署目标 14.3 被构建脚本拒绝；Nightly 三平台 workspace tests 与 Ubuntu quality 通过，但 macOS sanitizer 的 Qml.ShellLoad 泄漏检查失败，sanitizer 验收未完成，任务状态维持 in-progress。
 - 2026-11-08：日志两笔泄漏均来自 LaunchServices `NotifyToken::RegisterDispatch` 系统回调；按经确认的 macOS 系统框架抑制模式增加单符号 LSan 规则。macOS 27.2 本机 Qt 6.12 单项测试仍报告另一组泄漏，调用栈经过 FontRegistry/CoreText；因它与 Nightly macOS 26.7.2 栈不同，未扩大抑制。后续 Nightly 对原报告的复验结果见上表。
 - 2026-11-08：PR #101 的 Nightly run 42403037844 在 macOS 26.7.2 上通过 ASan/UBSan 与 TSan 全部 9 项 CTest，`Qml.ShellLoad` 均通过；Windows/Ubuntu sanitizer 与三平台 workspace tests 也通过。full quality 的失败仅是 070 FFI 测试违反 Clippy `expect_used`，与 067 sanitizer 结论无关；保留 macOS 27.2 独立泄漏报告，实际归属待查。
-- 2026-11-08：Qt 6.12/macOS 27 完整 verbose CTest 确认旧版 CoreText 函数 suppression 仍会匹配 6.12 栈；`qt_apple_urlFromPossiblySecurityScopedURL` 未命中，本轮另观察到不同的 `qt_apple_bundleType` 栈，证据不足以证明插件路径相同，故移除旧 URL 规则且不新增 bundle suppression。run #42446708689 已在 macOS 26 复验移除 URL 规则后的 sanitizer 并通过；残余的 Fontique/Caret 字体 fallback、Qt bundle 初始化、CoreText glyph 和 XPC 栈保留为 LSan 失败。
+- 2026-11-08：Qt 6.12/macOS 27 完整 verbose CTest 确认旧版 CoreText 函数 suppression 仍会匹配 6.12 栈；`qt_apple_urlFromPossiblySecurityScopedURL` 未命中，本轮另观察到不同的 `qt_apple_bundleType` 栈，证据不足以证明插件路径相同，故移除旧 URL 规则且不新增 bundle suppression。run #42446708689 已在 macOS 26 复验移除 URL 规则后的 sanitizer 并通过；后续原 fixture 的 CTest 重复执行中，10 项各连续执行三次，共 30 次通过，macOS 27 首轮的 Fontique/CoreText、Qt bundle 初始化和 XPC 栈未复现。
 - 2026-11-08：Nightly #42405417514 Linux TSan 仍排除两项启动测试，Ubuntu code-font suppression 的规则命中明细无法从通过测试日志获知。为按 Qt 6.12 实际行为复验，曾移除 Linux `FcInit` suppression 并恢复两项 Linux TSan 测试到矩阵；结果见 run #42446708689。
 - 2026-11-08：移除 `FcInit` 规则后的 Nightly #42446708689 Ubuntu ASan/UBSan 确认 code-font 单测退出时报告 320 字节 / 3 个 Fontconfig 分配，栈均经过 Qt 6.12 `QFontconfigDatabase::populateFontDatabase()` 与 `FcInit`；其他九项 CTest 通过。基于该实际报告，将 `FcInit` 规则恢复为仅该单测的 Linux CTest 环境。它可能隐藏未来同栈泄漏，实际命中与通过状态待 follow-up Nightly 验证。
+- 2026-11-08：macOS 27.2 首次完整 CTest 出现 FontRegistry/CoreText、bundle 查询与 XPC/CoreFoundation 泄漏报告；未据单次结果增加 suppression。使用原 fixture 对 10 项各连续执行三次，共 30 次通过；相关单项也通过。记录为尚未稳定复现，保留首次日志供系统/Qt 更新后复查。
 - 2026-11-08：本机 verbose CTest 发现 `App.InvalidArgument` 的 `WILL_FAIL` 会把 LSan 的 192 字节泄漏也当成预期失败。改用 CMake wrapper 同时校验退出码 64、stderr 用法诊断并拒绝 ASan/LSan/TSan/UBSan 报告；若 sanitizer 的 `log_path`（冒号、逗号、空白、CR 或 LF 分隔）将报告移出捕获流，则明确失败。新增独立 CMake 回归覆盖“正确错误码 + LSan 报告”和各类 log_path 重定向。同步移除已无调用者的 CTest `exclude` 参数和 `-E` 分支。
 - 2026-11-08：sanitizer runner 定向单测、完整格式与九项跨语言 lint 通过；Ubuntu TSan 报告揭示两项 QtCore 栈的启动期冲突，已恢复仅 Linux Thread profile 的测试排除并添加矩阵单测，follow-up Nightly 待复验。
 
 ## 完成摘要
 
-Qt 6.12.0 三平台供给、官方归档与 Linux ICU 校验、基线和最低 macOS 部署版本均已验证。任务维持 in-progress：PR #104 Nightly 中 macOS/Windows sanitizer、三平台 workspace tests 和覆盖率门禁通过；PR #108 的 Linux ASan/UBSan `FcInit` 规则与 PR #109 的 Linux TSan 两项排除已在 Nightly #42449056408 验证通过（Ubuntu ASan/UBSan 10/10、TSan 8/8）。两项测试的 TSan 栈归属仍未确认，Linux TSan 覆盖缺口已记录，待 Qt 升级或可复现样例时复查。macOS 27.2 本机完整 CTest 仍有多项未归属 LSan 报告；旧 CoreText 函数规则在 macOS 27 报告中命中，需复核其所有权风险。macOS URL suppression 已移除且 Nightly sanitizer 通过。Nightly CPU performance 不属于本任务验收。
+Qt 6.12.0 三平台供给、官方归档与 Linux ICU 校验、基线和最低 macOS 部署版本均已验证。Nightly #42449056408 中 macOS/Windows sanitizer、三平台 workspace tests、full quality、Rust/native 覆盖率与 Miri 通过；Ubuntu ASan/UBSan 为 10/10，TSan 为 8/8（明确排除两项有报告的启动测试）。macOS 27.2 完整 ASan/UBSan CTest 使用原 fixture，10 项各连续执行三次，共 30 次通过，未新增 suppression；首次报告的所有权未确认，间歇复现仍不能排除。Linux TSan 仍仅排除 `Qml.ShellLoad`、`App.HeadlessWindowLoads`；QtCore 栈未插桩且实际竞态/误报未能区分，覆盖限制及复查条件均已记录。按本任务验收标准，所有有报告依据的例外均已复查，状态标记 done。Nightly CPU performance 不属于本任务验收。
