@@ -25,7 +25,7 @@ fn profiles_preserve_platform_matrix() {
 }
 
 #[test]
-fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_tests() {
+fn sanitizer_profiles_keep_checks_enabled() {
     let root = Path::new("repository root");
     for platform in [
         SanitizerPlatform::Linux,
@@ -58,11 +58,6 @@ fn sanitizer_profiles_keep_checks_enabled_and_exclude_only_the_known_qt_tsan_tes
             } else {
                 assert!(options.contains(&("ASAN_OPTIONS".into(), "detect_leaks=1".into())));
             }
-            assert_eq!(
-                ctest_exclusion(*profile, platform),
-                (platform == SanitizerPlatform::Linux && *profile == SanitizerProfile::Thread)
-                    .then_some("^(Qml\\.ShellLoad|App\\.HeadlessWindowLoads)$")
-            );
         }
     }
 }

@@ -36,6 +36,10 @@ if(BUILD_TESTING)
            COMMAND "${CMAKE_COMMAND}" "-DCARET_SDK_FIXTURE_ROOT=${CMAKE_BINARY_DIR}/sdk-fixtures"
                    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/check-sdk-provision.cmake")
   set_tests_properties(Build.SdkProvision PROPERTIES LABELS "build" TIMEOUT 120)
+  add_test(NAME Build.CliResultSanitizerDetection
+           COMMAND "${CMAKE_COMMAND}" -P
+                   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/test-cli-result-validation.cmake")
+  set_tests_properties(Build.CliResultSanitizerDetection PROPERTIES LABELS "build" TIMEOUT 10)
 endif()
 
 include(cmake/qt-provision.cmake)

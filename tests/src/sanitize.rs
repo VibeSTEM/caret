@@ -88,17 +88,10 @@ fn sanitize_profile(profile: SanitizerProfile) -> Result<(), Box<dyn Error>> {
         run("Windows ASan app import-order probe build", probe)?;
         verify_windows_asan_import_order(&native, &caret_build::resolve_llvm_compilers()?.root)?;
     }
-    // Linux Qt 6.11 的预编译 QML loader 在 TSan 下报告 QtCore 内部的分配/释放竞态：
-    // App.HeadlessWindowLoads（run 40803486240）和 Qml.ShellLoad（run 40809784984）。
-    // 仅 Linux TSan 排除这两个启动窗口的测试；升级托管 Qt 后复查。
-    // 其他 sanitizer、平台和常规测试仍完整运行。
     run_ctest_in(
         &native,
         sanitizer_test_env(profile)?,
         &format!("sanitizer {} ctest", profile.name()),
-        None,
-        None,
-        ctest_exclusion(profile, sanitizer_platform()),
     )
 }
 
@@ -191,13 +184,8 @@ fn validate_windows_asan_imports(imports: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn ctest_exclusion(profile: SanitizerProfile, platform: SanitizerPlatform) -> Option<&'static str> {
-    (profile == SanitizerProfile::Thread && platform == SanitizerPlatform::Linux)
-        .then_some("^(Qml\\.ShellLoad|App\\.HeadlessWindowLoads)$")
-}
-
 /// 托管 LLVM 的符号器和 Windows ASan 运行库加入 PATH；所有问题默认阻断。
-/// Unix 显式开启泄漏检查；macOS 系统缓存使用进程级抑制，Linux 由单项测试限定抑制。
+/// Unix 显式开启泄漏检查；macOS 已确认的系统路径使用进程级抑制。
 fn sanitizer_test_env(
     profile: SanitizerProfile,
 ) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, Box<dyn Error>> {

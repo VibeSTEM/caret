@@ -28,14 +28,11 @@ pub(super) fn test_native() -> Result<(), Box<dyn Error>> {
 }
 
 /// 在指定 CMake 树执行完整 CTest；环境由调用方准备（常规树、覆盖率或
-/// sanitizer 各有差异），参数与 `cargo coverage native` 保持一致。
+/// sanitizer 各有差异）。
 pub(super) fn run_ctest_in(
     native_dir: &Path,
     envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     description: &str,
-    configuration: Option<&str>,
-    regex: Option<&str>,
-    exclude: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let cmake = caret_build::resolve_cmake()?;
     let ctest = cmake.with_file_name(caret_build::exe_name("ctest"));
@@ -46,15 +43,6 @@ pub(super) fn run_ctest_in(
     test.envs(envs);
     test.current_dir(native_dir)
         .args(["--output-on-failure", "--no-tests=error"]);
-    if let Some(configuration) = configuration {
-        test.args(["-C", configuration]);
-    }
-    if let Some(regex) = regex {
-        test.args(["-R", regex]);
-    }
-    if let Some(exclude) = exclude {
-        test.args(["-E", exclude]);
-    }
     run(description, test)
 }
 

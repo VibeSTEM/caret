@@ -1,2 +1,0 @@
-# Qt 6.11 Linux 运行的 Fontconfig 初始化栈被 LSan 报告；升级 Qt/Fontconfig 后复查。
-leak:FcInit
