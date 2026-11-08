@@ -33,6 +33,7 @@ pub(super) fn run_ctest_in(
     native_dir: &Path,
     envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     description: &str,
+    exclude: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let cmake = caret_build::resolve_cmake()?;
     let ctest = cmake.with_file_name(caret_build::exe_name("ctest"));
@@ -43,6 +44,9 @@ pub(super) fn run_ctest_in(
     test.envs(envs);
     test.current_dir(native_dir)
         .args(["--output-on-failure", "--no-tests=error"]);
+    if let Some(exclude) = exclude {
+        test.args(["-E", exclude]);
+    }
     run(description, test)
 }
 

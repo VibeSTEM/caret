@@ -63,6 +63,24 @@ fn sanitizer_profiles_keep_checks_enabled() {
 }
 
 #[test]
+fn ctest_exclusions_are_limited_to_reported_linux_qt_thread_conflicts() {
+    let expected = Some(r"^(Qml\.ShellLoad|App\.HeadlessWindowLoads)$");
+    assert_eq!(
+        ctest_exclusion(SanitizerProfile::Thread, SanitizerPlatform::Linux),
+        expected
+    );
+    for profile in [
+        SanitizerProfile::Address,
+        SanitizerProfile::AddressUndefined,
+    ] {
+        assert_eq!(ctest_exclusion(profile, SanitizerPlatform::Linux), None);
+    }
+    for platform in [SanitizerPlatform::MacOs, SanitizerPlatform::Windows] {
+        assert_eq!(ctest_exclusion(SanitizerProfile::Thread, platform), None);
+    }
+}
+
+#[test]
 fn build_command_preserves_locked_target_and_sanitizer_flags() {
     let root = Path::new("repository with spaces");
     let target = Path::new("target with spaces");

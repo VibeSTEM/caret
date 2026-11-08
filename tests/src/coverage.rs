@@ -429,7 +429,7 @@ pub(super) fn native_coverage() -> Result<(), Box<dyn Error>> {
         std::ffi::OsString::from("LLVM_PROFILE_FILE"),
         profile_file.into_os_string(),
     ));
-    run_ctest_in(&native, envs, "native coverage tests")?;
+    run_ctest_in(&native, envs, "native coverage tests", None)?;
     let llvm = caret_build::resolve_llvm_compilers()?;
     let raw = fs::read_dir(&profiles)?
         .collect::<Result<Vec<_>, _>>()?
