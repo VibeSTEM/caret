@@ -537,7 +537,7 @@ impl Session {
         {
             return self.insert_text_at_environment_exit(text);
         }
-        if matches!(&command, Command::Delete(Direction::Backward))
+        if matches!(&command, Command::Delete(_))
             && !self.selected_block_environments.is_empty()
             && (self.selected_block_environments.len() > 1
                 || self
@@ -549,15 +549,8 @@ impl Session {
                 .delete_selected_structure_range()?
                 .ok_or(EditError::InvalidPosition);
         }
-        if matches!(&command, Command::Delete(Direction::Backward))
-            && self.selected_block_environments.len() == 1
-        {
+        if matches!(&command, Command::Delete(_)) && self.selected_block_environments.len() == 1 {
             return self.delete_selected_block_environment();
-        }
-        if matches!(&command, Command::Delete(Direction::Backward))
-            && self.selected_block_environments.len() > 1
-        {
-            return Ok(Effect::default());
         }
         if let Command::CommitComposition { id, text } = &command
             && self.block_environment_exit.is_some()
@@ -572,6 +565,16 @@ impl Session {
                 Command::InsertSoftBreak => return self.insert_break_at_environment_exit(true),
                 _ => {}
             }
+        }
+        if command == Command::Undo {
+            let effect = self.restore_history(false)?;
+            self.command_line = None;
+            return Ok(effect);
+        }
+        if command == Command::Redo {
+            let effect = self.restore_history(true)?;
+            self.command_line = None;
+            return Ok(effect);
         }
         if !matches!(&command, Command::SetSelection(_)) {
             self.selected_block_environment = None;
@@ -639,16 +642,6 @@ impl Session {
                 | Command::CancelCommandLine
         ) {
             return self.run_command_line(command);
-        }
-        if command == Command::Undo {
-            let effect = self.restore_history(false)?;
-            self.command_line = None;
-            return Ok(effect);
-        }
-        if command == Command::Redo {
-            let effect = self.restore_history(true)?;
-            self.command_line = None;
-            return Ok(effect);
         }
         let before_selection = self.selection.clone();
         let cancels_command_line_preedit = self
@@ -971,13 +964,16 @@ impl Session {
             }
             None => None,
         };
-        let selection_changed =
-            self.selection != selection || previous_math_edit != restored_math_edit;
+        let selection_changed = self.selection != selection
+            || self.selection_visual_affinity != visual_affinity
+            || previous_math_edit != restored_math_edit;
         self.selection = selection;
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
         self.math_edit = restored_math_edit;
         self.selected_block_environment = None;
+        self.selected_block_environments.clear();
+        self.structure_selection = None;
         self.block_environment_exit = None;
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();

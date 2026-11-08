@@ -9,6 +9,10 @@ use crate::editing::{Command, EditError, Effect, EnvironmentSource};
 impl Session {
     /// 优先处理 IME/命令行和数学焦点，再解除光标所在最内层可解除环境。
     pub(super) fn handle_mod_backspace(&mut self) -> Result<Effect, EditError> {
+        // 结构选区由退格/删除作为整体处理，不得把保留的文字光标解释为解除其他块环境。
+        if !self.selected_block_environments.is_empty() {
+            return Ok(Effect::default());
+        }
         if self.composition.is_some() {
             return self.run(Command::RemoveBlockEnvironmentPreservingContent);
         }

@@ -471,6 +471,7 @@ fn backspace_on_selected_section_deletes_nested_subtree_and_undo_redo_restore_it
     document.body = vec![Block::Paragraph(before), section, Block::Paragraph(after)];
     let mut session = Session::new(document)?;
     session.select_block_environment(section_id.clone())?;
+    let selection_before_delete = session.selection().clone();
 
     let deleted = session.run(Command::Delete(Direction::Backward))?;
 
@@ -493,15 +494,137 @@ fn backspace_on_selected_section_deletes_nested_subtree_and_undo_redo_restore_it
         restored_section.children[1],
         Block::Environment(_)
     ));
-    assert_eq!(
-        session.selection().focus.paragraph_id,
-        session.selection().anchor.paragraph_id
-    );
+    assert_eq!(session.selection(), &selection_before_delete);
+    assert!(session.selected_block_environment().is_none());
 
     session.run(Command::Redo)?;
     assert_eq!(session.document.body.len(), 2);
     assert!(matches!(session.document.body[0], Block::Paragraph(_)));
     assert!(matches!(session.document.body[1], Block::Paragraph(_)));
+    Ok(())
+}
+
+#[test]
+fn delete_key_deletes_selected_environment_and_mod_backspace_keeps_structure_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first_body = paragraph_with_text("first");
+    let first_body_id = first_body.id.clone();
+    let first_environment = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(first_body)],
+    ) {
+        Block::Environment(mut environment) => {
+            environment.title = Some(paragraph_with_text("First"));
+            Block::Environment(environment)
+        }
+        _ => unreachable!(),
+    };
+    let first_environment_id = match &first_environment {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => unreachable!(),
+    };
+    let second_environment = environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph_with_text("second"))],
+    );
+    let second_environment_id = match &second_environment {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut document = Document::blank();
+    document.body = vec![first_environment, second_environment];
+    let mut session = Session::new(document)?;
+    let first_body_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_body_id,
+        offset: 2,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: first_body_position.clone(),
+        focus: first_body_position.clone(),
+    })))?;
+    session.select_block_environment(second_environment_id.clone())?;
+
+    let empty_undo = session.run(Command::Undo)?;
+    assert!(!empty_undo.document_changed);
+    assert_eq!(
+        session.selected_block_environment(),
+        Some(&second_environment_id)
+    );
+
+    let unchanged = session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+
+    assert!(!unchanged.document_changed);
+    assert_eq!(session.document.body.len(), 2);
+    assert_eq!(
+        session.selected_block_environment(),
+        Some(&second_environment_id)
+    );
+    assert_eq!(session.selection().focus, first_body_position);
+    assert_eq!(
+        session.structure_selection().ok_or("结构选区应保留")?.0,
+        &first_body_position
+    );
+
+    let deleted = session.run(Command::Delete(Direction::Forward))?;
+
+    assert!(deleted.document_changed);
+    assert_eq!(session.document.body.len(), 1);
+    assert!(matches!(
+        &session.document.body[0],
+        Block::Environment(environment) if environment.id == first_environment_id
+    ));
+    session.run(Command::Undo)?;
+    assert_eq!(session.document.body.len(), 2);
+    assert_eq!(session.selection().focus, first_body_position);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document.body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn undo_notifies_when_only_visual_affinity_changes() -> Result<(), Box<dyn std::error::Error>> {
+    let environment = environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph_with_text("inside"))],
+    );
+    let environment_id = match &environment {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => unreachable!(),
+    };
+    let following = paragraph_with_text("after");
+    let following_id = following.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![environment, Block::Paragraph(following)];
+    let mut session = Session::new(document)?;
+    let following_start = Pos {
+        story: StoryId::Body,
+        paragraph_id: following_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: following_start.clone(),
+        focus: following_start.clone(),
+    })))?;
+    session.selection_visual_affinity = crate::VisualAffinity::Upstream;
+    session.select_block_environment(environment_id)?;
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(session.selection().focus, following_start);
+    assert_eq!(
+        session.selection_visual_affinity(),
+        crate::VisualAffinity::Downstream
+    );
+
+    let undone = session.run(Command::Undo)?;
+
+    assert!(undone.selection_changed);
+    assert_eq!(session.selection().focus, following_start);
+    assert_eq!(
+        session.selection_visual_affinity(),
+        crate::VisualAffinity::Upstream
+    );
     Ok(())
 }
 
