@@ -851,3 +851,8 @@ message_157:
   src: Greek capital Omega
   tr: Greek capital Omega
   st: finished
+
+message_158:
+  src: Text
+  tr: Text
+  st: finished

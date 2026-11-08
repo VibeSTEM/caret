@@ -28,9 +28,9 @@ pub use editing::{
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,
-    LaidOutParagraph, MathTextVerticalTarget, PageCaretGeometry, PageEnvironmentRange, PageHit,
-    PageLayoutSnapshot, PageMathStructureHit, PageMathTextDragStop, PageMathTextHit,
-    PageSelectionRect, TextLayoutDiagnostic,
+    LaidOutParagraph, MathTextVerticalTarget, MathTreeVerticalTarget, PageCaretGeometry,
+    PageEnvironmentRange, PageHit, PageLayoutSnapshot, PageMathStructureHit, PageMathTextDragStop,
+    PageMathTextHit, PageSelectionRect, TextLayoutDiagnostic,
 };
 pub use layout_view::{
     DocumentLayoutDeltaView, DocumentLayoutView, DocumentPositionView, EnvironmentRangeView,

@@ -80,27 +80,10 @@ pub struct MathTreePosition {
 }
 
 impl MathTreePosition {
-    /// 将 TextFlow 起止边界转换为其父 MathFlow 中的结构边界。
-    ///
-    /// 输入路径必须是 `MathTextFlowPath::steps()` 的完整路径；Align 宿主必须与
-    /// 路径携带的 cell 坐标成对传入。失败时不产生可部分安装的位置。
-    pub fn from_text_flow_boundary(
-        tree: &MathTree,
-        host: MathPositionHost,
+    /// 将完整的 TextFlow 路径解析为所属 MathFlow 与文本内容索引。
+    pub(crate) fn sequence_boundary_from_text_path(
         text_path: &[MathTextFlowPathStep],
-        align_cell: Option<(usize, usize)>,
-        boundary: MathTextFlowBoundary,
-        affinity: MathPositionAffinity,
-    ) -> Result<Self, MathTreePositionError> {
-        let host_matches_cell = match (&host, align_cell) {
-            (MathPositionHost::AlignCell { cell_id, .. }, Some(_)) => *cell_id == tree.root.id,
-            (MathPositionHost::InlineMath { .. } | MathPositionHost::Equation { .. }, None) => true,
-            _ => false,
-        };
-        if !host_matches_cell {
-            return Err(MathTreePositionError::HostMismatch);
-        }
-
+    ) -> Result<(MathSequencePath, usize), MathTreePositionError> {
         let mut sequence_steps = Vec::with_capacity(text_path.len() / 2);
         let mut content_index = None;
         for (depth, step) in text_path.iter().enumerate() {
@@ -135,7 +118,31 @@ impl MathTreePosition {
                 depth: text_path.len(),
             });
         };
-        let path = MathSequencePath::new(sequence_steps);
+        Ok((MathSequencePath::new(sequence_steps), text_index))
+    }
+
+    /// 将 TextFlow 起止边界转换为其父 MathFlow 中的结构边界。
+    ///
+    /// 输入路径必须是 `MathTextFlowPath::steps()` 的完整路径；Align 宿主必须与
+    /// 路径携带的 cell 坐标成对传入。失败时不产生可部分安装的位置。
+    pub fn from_text_flow_boundary(
+        tree: &MathTree,
+        host: MathPositionHost,
+        text_path: &[MathTextFlowPathStep],
+        align_cell: Option<(usize, usize)>,
+        boundary: MathTextFlowBoundary,
+        affinity: MathPositionAffinity,
+    ) -> Result<Self, MathTreePositionError> {
+        let host_matches_cell = match (&host, align_cell) {
+            (MathPositionHost::AlignCell { cell_id, .. }, Some(_)) => *cell_id == tree.root.id,
+            (MathPositionHost::InlineMath { .. } | MathPositionHost::Equation { .. }, None) => true,
+            _ => false,
+        };
+        if !host_matches_cell {
+            return Err(MathTreePositionError::HostMismatch);
+        }
+
+        let (path, text_index) = Self::sequence_boundary_from_text_path(text_path)?;
         let offset = match boundary {
             MathTextFlowBoundary::Start => text_index,
             MathTextFlowBoundary::End => {
@@ -291,6 +298,37 @@ pub(super) fn advance_math_tree_position(
                     )))
                 }
             }
+            MathContent::Math(node) if node.kind == caret_doc::MathNodeKind::Placeholder => {
+                let next = (content_index + 1..contents.len()).find(|index| {
+                    !matches!(
+                        contents.get(*index),
+                        Some(MathContent::Math(node))
+                            if node.kind == caret_doc::MathNodeKind::Placeholder
+                    )
+                });
+                let previous = (0..content_index).rev().find(|index| {
+                    !matches!(
+                        contents.get(*index),
+                        Some(MathContent::Math(node))
+                            if node.kind == caret_doc::MathNodeKind::Placeholder
+                    )
+                });
+                if forward {
+                    if let Some(index) = next {
+                        let next_content_position =
+                            position_at(position, position.path.clone(), index);
+                        advance_math_tree_position(tree, &next_content_position, true, align_cell)
+                    } else {
+                        climb_math_tree_position(tree, position, forward, align_cell)
+                    }
+                } else if let Some(index) = previous {
+                    let previous_content_position =
+                        position_at(position, position.path.clone(), index + 1);
+                    advance_math_tree_position(tree, &previous_content_position, false, align_cell)
+                } else {
+                    climb_math_tree_position(tree, position, forward, align_cell)
+                }
+            }
             MathContent::Math(_)
             | MathContent::Environment(_)
             | MathContent::SoftBreak(_)
@@ -303,7 +341,7 @@ pub(super) fn advance_math_tree_position(
                 Ok(MathTreeCaretMove::Position(position_at(
                     position,
                     position.path.clone(),
-                    offset,
+                    normalize_placeholder_boundary(contents, offset),
                 )))
             }
         };
@@ -344,7 +382,7 @@ fn enter_sequence_edge(
     forward: bool,
     align_cell: Option<(usize, usize)>,
 ) -> Result<MathTreeCaretMove, MathTreePositionError> {
-    let offset = if forward { 0 } else { contents.len() };
+    let offset = normalize_placeholder_boundary(contents, if forward { 0 } else { contents.len() });
     let child_position = position_at(position, path, offset);
     if let Some(content_index) = if forward {
         (offset < contents.len()).then_some(offset)
@@ -361,6 +399,29 @@ fn enter_sequence_edge(
         return Ok(MathTreeCaretMove::TextFlow(path, cursor));
     }
     Ok(MathTreeCaretMove::Position(child_position))
+}
+
+fn normalize_placeholder_boundary(contents: &[MathContent], offset: usize) -> usize {
+    placeholder_run_start(contents, offset).unwrap_or(offset)
+}
+
+pub(super) fn placeholder_run_start(contents: &[MathContent], offset: usize) -> Option<usize> {
+    let mut index = offset.checked_sub(1)?;
+    if !matches!(
+        contents.get(index),
+        Some(MathContent::Math(node)) if node.kind == caret_doc::MathNodeKind::Placeholder
+    ) {
+        return None;
+    }
+    while index > 0
+        && matches!(
+            contents.get(index - 1),
+            Some(MathContent::Math(node)) if node.kind == caret_doc::MathNodeKind::Placeholder
+        )
+    {
+        index -= 1;
+    }
+    Some(index)
 }
 
 fn climb_math_tree_position(

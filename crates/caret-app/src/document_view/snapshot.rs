@@ -83,6 +83,10 @@ fn math_input_method_enabled(session: &caret_engine::Session) -> bool {
     session.math_edit().is_none() || session.math_text_input_context().is_some()
 }
 
+fn math_input_method_prefers_latin(session: &caret_engine::Session) -> bool {
+    session.math_text_input_context().is_some()
+}
+
 pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
     if session.block_environment_exit().is_some() {
         return Value::Array(Vec::new());
@@ -558,6 +562,7 @@ impl DocumentViewRuntime {
             "cursorPosition": cursor_position,
             "anchorPosition": anchor_position,
             "enabled": math_input_method_enabled(&self.session),
+            "preferLatin": math_input_method_prefers_latin(&self.session),
         });
         let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
             surrounding_text: context.surrounding_text.clone(),
@@ -629,6 +634,7 @@ impl DocumentViewRuntime {
             )
         });
         let current_structure = current_structure_state(&self.session);
+        let input_method_prefer_latin = math_input_method_prefers_latin(&self.session);
         let environment_view = self
             .composition_preview_session
             .as_mut()
@@ -717,6 +723,10 @@ impl DocumentViewRuntime {
         input_method_context.insert(
             "enabled".to_owned(),
             serde_json::Value::from(input_method_enabled),
+        );
+        input_method_context.insert(
+            "preferLatin".to_owned(),
+            serde_json::Value::from(input_method_prefer_latin),
         );
         if let Some((query, cursor_utf16)) = command_input_context {
             input_method_context.insert(

@@ -165,6 +165,14 @@ pub(super) struct TextMap {
     pub(super) grapheme_boundaries: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MergedInlineMathFocus {
+    pub paragraph_id: NodeId,
+    pub math_id: NodeId,
+    pub root_offset: usize,
+    pub delete_end: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct EnvironmentSpan {
     pub(super) id: Option<NodeId>,
@@ -556,10 +564,36 @@ impl TextMap {
         start: usize,
         end: usize,
     ) -> Result<(), EditError> {
+        self.delete_range_inner(paragraph, start, end, false)
+            .map(|_| ())
+    }
+
+    /// 删除完整的空文本岛时安全合并相邻公式，并返回应恢复到 MathTree 的接缝位置。
+    pub(super) fn delete_range_and_merge_inline_math(
+        &self,
+        paragraph: &mut Paragraph,
+        start: usize,
+        end: usize,
+    ) -> Result<Option<MergedInlineMathFocus>, EditError> {
+        self.delete_range_inner(paragraph, start, end, true)
+    }
+
+    fn delete_range_inner(
+        &self,
+        paragraph: &mut Paragraph,
+        start: usize,
+        end: usize,
+        merge_inline_math: bool,
+    ) -> Result<Option<MergedInlineMathFocus>, EditError> {
         validate_paragraph_text_flows(&paragraph.inlines)?;
         if start >= end || end > self.text.len() {
             return Err(EditError::InvalidPosition);
         }
+        let selected_text_paths = if merge_inline_math {
+            fully_selected_text_flow_paths(&self.spans, start, end)
+        } else {
+            Vec::new()
+        };
         let mut run_edits = BTreeMap::<Vec<usize>, Range<usize>>::new();
         let mut removals = Vec::<FlowPath>::new();
         for span in &self.spans {
@@ -621,6 +655,7 @@ impl TextMap {
                 .ok_or(EditError::InvalidPosition)?;
             replace_text_flow_range(text_flow, range, Affinity::Downstream, "")?;
         }
+        let removed_math_or_break = !removals.is_empty();
         removals.sort_by(|left, right| right.content_indices.cmp(&left.content_indices));
         for path in removals {
             let (siblings, index) = siblings_at_path_mut(&mut paragraph.inlines, &path)
@@ -630,8 +665,110 @@ impl TextMap {
             }
             siblings.remove(index);
         }
-        Ok(())
+        let merged_focus = if !removed_math_or_break {
+            selected_text_paths
+                .into_iter()
+                .find_map(|path| merge_math_at_empty_text_flow(paragraph, &path, &self.spans))
+        } else {
+            None
+        };
+        Ok(merged_focus)
     }
+}
+
+fn fully_selected_text_flow_paths(spans: &[Span], start: usize, end: usize) -> Vec<Vec<usize>> {
+    let mut ranges = BTreeMap::<Vec<usize>, Range<usize>>::new();
+    for span in spans.iter().filter(|span| !span.is_soft_break) {
+        ranges
+            .entry(span.flow_path.content_indices.clone())
+            .and_modify(|range| {
+                range.start = range.start.min(span.start);
+                range.end = range.end.max(span.end);
+            })
+            .or_insert(span.start..span.end);
+    }
+    ranges
+        .into_iter()
+        .filter_map(|(path, range)| {
+            (range.start < range.end && start <= range.start && range.end <= end).then_some(path)
+        })
+        .collect()
+}
+
+fn merge_math_at_empty_text_flow(
+    paragraph: &mut Paragraph,
+    path: &[usize],
+    spans: &[Span],
+) -> Option<MergedInlineMathFocus> {
+    let (siblings, index) = siblings_at_path_mut(
+        &mut paragraph.inlines,
+        &FlowPath {
+            content_indices: path.to_vec(),
+            run_index: None,
+        },
+    )?;
+    let left_index = index.checked_sub(1)?;
+    let (left, text, right) = (
+        siblings.get(left_index)?,
+        siblings.get(index)?,
+        siblings.get(index + 1)?,
+    );
+    let (FlowContent::Math(left), FlowContent::Text(text), FlowContent::Math(right)) =
+        (left, text, right)
+    else {
+        return None;
+    };
+    if !empty_unstyled_text_flow(text) || !mergeable_inline_math_pair(left, right) {
+        return None;
+    }
+    let mut right_path = path.to_vec();
+    let right_index = right_path.last_mut()?;
+    *right_index = right_index.checked_add(1)?;
+    let delete_end = spans
+        .iter()
+        .filter(|span| span.flow_path.content_indices == right_path)
+        .map(|span| span.end)
+        .max()?;
+    let left_id = left.id.clone();
+    let root_offset = left.math_tree.root.content.len();
+    let right = siblings.remove(index + 1);
+    siblings.remove(index);
+    let FlowContent::Math(right) = right else {
+        unreachable!("a mergeable math pair has a math right-hand sibling");
+    };
+    let FlowContent::Math(left) = &mut siblings[left_index] else {
+        unreachable!("a mergeable math pair has a math left-hand sibling");
+    };
+    left.math_tree
+        .root
+        .content
+        .extend(right.math_tree.root.content);
+    Some(MergedInlineMathFocus {
+        paragraph_id: paragraph.id.clone(),
+        math_id: left_id,
+        root_offset,
+        delete_end,
+    })
+}
+
+fn empty_unstyled_text_flow(text: &TextFlow) -> bool {
+    text.extra.is_empty()
+        && text.runs.iter().all(|run| {
+            run.text.is_empty()
+                && run.language.is_none()
+                && run.props.is_empty()
+                && run.extra.is_empty()
+        })
+}
+
+fn mergeable_inline_math_pair(left: &InlineMath, right: &InlineMath) -> bool {
+    left.extra.is_empty()
+        && right.extra.is_empty()
+        && left.math_tree.schema_version == right.math_tree.schema_version
+        && left.math_tree.extra.is_empty()
+        && right.math_tree.extra.is_empty()
+        && left.math_tree.root.extra.is_empty()
+        && right.math_tree.root.extra.is_empty()
 }
 
 fn single_run_text_flow(text: &str) -> TextFlow {

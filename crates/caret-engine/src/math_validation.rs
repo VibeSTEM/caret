@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use caret_doc::{Align, MathContent, MathFlow, MathNode, MathTree};
+use caret_doc::{Align, MathContent, MathFlow, MathNode, MathNodeKind, MathTree};
 #[cfg(test)]
 use caret_doc::{Block, Document, FlowContent, InlineEnvironment, ParagraphContent};
 use caret_math::MathInputKind;
@@ -458,7 +458,27 @@ fn same_flow_semantics(left: &MathFlow, right: &MathFlow) -> bool {
 }
 
 fn same_flow_structure(left: &MathFlow, right: &MathFlow) -> bool {
-    same_content_sequence_projection(&left.content, &right.content)
+    empty_tree_flow_matches_parsed_placeholder(&left.content, &right.content)
+        || same_content_sequence_projection(&left.content, &right.content)
+}
+
+pub(crate) fn empty_tree_flow_matches_parsed_placeholder(
+    left: &[MathContent],
+    right: &[MathContent],
+) -> bool {
+    fn is_plain_placeholder(content: &[MathContent]) -> bool {
+        matches!(
+            content,
+            [MathContent::Math(node)]
+                if node.kind == MathNodeKind::Placeholder
+                    && node.text.is_none()
+                    && node.attributes.is_empty()
+                    && node.children.is_empty()
+                    && node.extra.is_empty()
+        )
+    }
+
+    left.is_empty() && is_plain_placeholder(right)
 }
 
 fn same_content_sequence_projection(left: &[MathContent], right: &[MathContent]) -> bool {

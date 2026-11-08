@@ -417,9 +417,11 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(snapshot["inputMethodContext"]["enabled"], false);
+    assert_eq!(snapshot["inputMethodContext"]["preferLatin"], false);
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(interaction["inputMethodContext"]["enabled"], false);
+    assert_eq!(interaction["inputMethodContext"]["preferLatin"], false);
     assert!(
         runtime
             .input_method_event_json("に".to_owned(), String::new(), 0, 0, 1)
@@ -442,6 +444,10 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
     let command_line_state: Value = serde_json::from_str(&runtime.interaction_state_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(command_line_state["inputMethodContext"]["enabled"], false);
+    assert_eq!(
+        command_line_state["inputMethodContext"]["preferLatin"],
+        false
+    );
     assert!(
         runtime
             .input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)
@@ -459,6 +465,7 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
     let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
         .map_err(|error| error.to_string())?;
     assert_eq!(snapshot["inputMethodContext"]["enabled"], true);
+    assert_eq!(snapshot["inputMethodContext"]["preferLatin"], false);
     Ok(())
 }
 
@@ -494,6 +501,7 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     let preview = runtime.input_method_event_json("に".to_owned(), String::new(), 0, 0, 1)?;
     let preview: Value = serde_json::from_str(&preview).map_err(|error| error.to_string())?;
     assert_eq!(preview["inputMethodContext"]["enabled"], true);
+    assert_eq!(preview["inputMethodContext"]["preferLatin"], true);
     assert_eq!(preview["inputMethodContext"]["surroundingText"], "A😀B");
     assert_eq!(preview["inputMethodContext"]["cursorPosition"], 1);
     assert_eq!(preview["inputMethodContext"]["anchorPosition"], 1);
@@ -541,6 +549,7 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     let committed: Value = serde_json::from_str(&committed).map_err(|error| error.to_string())?;
     assert!(committed.get("partial").is_none());
     assert_eq!(committed["inputMethodContext"]["enabled"], true);
+    assert_eq!(committed["inputMethodContext"]["preferLatin"], true);
     assert_eq!(inline_math_text(&runtime)?, "Aにほ😀B");
     assert!(runtime.session.composition().is_none());
     assert_eq!(
@@ -568,6 +577,7 @@ fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result
     let cancelled = runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
     let cancelled: Value = serde_json::from_str(&cancelled).map_err(|error| error.to_string())?;
     assert_eq!(cancelled["inputMethodContext"]["enabled"], true);
+    assert_eq!(cancelled["inputMethodContext"]["preferLatin"], true);
     assert_eq!(inline_math_text(&runtime)?, "A😀B");
     assert!(runtime.session.composition().is_none());
     assert_eq!(

@@ -11,6 +11,7 @@ mod down_arrow;
 mod end;
 mod enter;
 mod escape;
+mod helpers;
 mod home;
 mod left_arrow;
 mod mod_backspace;
@@ -48,13 +49,11 @@ impl Session {
                     let _ = extend;
                     Command::MoveCommandLineCursor(direction)
                 }
-                NavigationIntent::Vertical => {
-                    Command::MoveCommandLineSelection(direction.ok_or(EditError::InvalidPosition)?)
-                }
                 NavigationIntent::VisualLineEdge => {
                     let _ = (direction, extend);
                     return Ok(Effect::default());
                 }
+                NavigationIntent::Vertical => return Err(EditError::InvalidPosition),
             };
             return self.run(command);
         }
@@ -82,13 +81,6 @@ impl Session {
                             visual_affinity,
                         )
                     }
-                    Some(NavigationCandidate::MathTextHit { hit, generation }) => {
-                        self.validate_navigation_generation(&generation)?;
-                        if extend || intent != NavigationIntent::Vertical {
-                            return Err(EditError::InvalidPosition);
-                        }
-                        self.focus_math_text_hit(&hit, generation.font_generation)
-                    }
                     None if intent == NavigationIntent::Horizontal && !extend => {
                         let context = self
                             .math_text_input_context()
@@ -106,7 +98,11 @@ impl Session {
                         }
                     }
                     None => Ok(Effect::default()),
-                    Some(NavigationCandidate::Document { .. }) => Err(EditError::InvalidPosition),
+                    Some(
+                        NavigationCandidate::Document { .. }
+                        | NavigationCandidate::MathTextHit { .. }
+                        | NavigationCandidate::MathTreeHit { .. },
+                    ) => Err(EditError::InvalidPosition),
                 },
                 MathEditBranch::Tree { .. } | MathEditBranch::Source => {
                     match candidate {
@@ -114,7 +110,8 @@ impl Session {
                             self.validate_navigation_generation(&generation)?;
                         }
                         Some(NavigationCandidate::MathText { .. })
-                        | Some(NavigationCandidate::MathTextHit { .. }) => {
+                        | Some(NavigationCandidate::MathTextHit { .. })
+                        | Some(NavigationCandidate::MathTreeHit { .. }) => {
                             return Err(EditError::InvalidPosition);
                         }
                         None => {}
@@ -156,7 +153,8 @@ impl Session {
                 );
             }
             Some(NavigationCandidate::MathText { .. })
-            | Some(NavigationCandidate::MathTextHit { .. }) => {
+            | Some(NavigationCandidate::MathTextHit { .. })
+            | Some(NavigationCandidate::MathTreeHit { .. }) => {
                 return Err(EditError::InvalidPosition);
             }
             None => {}

@@ -14,7 +14,7 @@
 | 应用窗口 | `qml/App.qml` 的 `Shortcut` | 打开、保存、撤销/重做、缩放等窗口级动作；跨平台键位使用 Qt `StandardKey` |
 | 正文画布 | `DocumentCanvas` 的 `document_canvas/keyboard.cpp` | 把 Qt `QKeyEvent` 和平台修饰键映射为编辑意图；不改文档，也不替 Rust 判断命令、IME、选区或结构状态 |
 | IME | `document_canvas/input.cpp` 与 QML 输入法事件桥 | Qt 保存用于绘制的预编辑投影并处理提交/光标查询；Rust Session 持有编辑会话 composition 的权威状态。Rust 通过 Escape 实际取消 composition 后，在布局响应中返回 `compositionCancelled`；QML 仅在该标志为真时清除 Qt 预编辑投影并同步空输入法事件 |
-| 编辑会话 | `caret-engine::editing::session::keyboards` | 持有编辑上下文的权威状态并裁决有冲突的编辑意图；每种按键行为单独维护 |
+| 编辑会话 | `caret-engine::editing::session::keyboards` | 持有编辑上下文的权威状态；由具体键 handler 仲裁本键的状态优先级，少数布局候选校验可使用 `keyboards/helpers/` 中的共享操作 |
 
 窗口级 `Shortcut`、控件本地按键和画布按键属于不同焦点作用域，不要求集中成一个大型全局路由器。每个作用域内部只保留一个事件入口；最内层焦点所有者处理后接受事件，不让同一次按键继续触发外层动作。Qt 在 macOS 上把 `ControlModifier` 映射到物理 Command、`MetaModifier` 映射到物理 Control；需要物理修饰键语义的画布快捷键统一通过 `native/canvas/keyboard_modifier_policy.hpp` 映射，避免每个快捷键各自处理平台差异。QML 控件的简单关闭行为使用 Qt 的 Popup/Window 焦点和关闭策略；多阶段 UI 流程按 [Qt 规范](../../standards/qt.md)使用 C++ `QStateMachine`。
 
@@ -22,7 +22,7 @@
 
 本文只定义跨层边界。画布按键的单键优先级、状态迁移和各处理器职责以[快捷键管理架构](keyboard-shortcut-architecture.md)为唯一权威；用户可见键位清单以[快捷键](keyboard-shortcuts.md)为唯一权威。本页不重复按键行为表。
 
-当前所有已支持的画布编辑器快捷键都通过 `Session::run_editor_key` 分派到 `session/keyboards/` 的具体处理器。方向键、Home/End 的布局候选由 app 计算后随意图交回 Session；Qt `commandMode` 只投影光标显示，不改变编辑器键语义。窗口和控件作用域不并入编辑器 Session。尚未实现的表格快捷键只在键位规划中标注，不宣称已接入。
+当前所有已支持的画布编辑器快捷键都通过 `Session::run_editor_key` 分派到 `session/keyboards/` 的具体处理器，但统一入口不代表状态优先级已全部归属具体键文件：Up/Down 在各自 handler 中选择 composition、命令行、数学编辑和正文路径；Left/Right/Home/End 仍将主要仲裁交给共享 `route_navigation_key`。逐键差异和迁移范围由[快捷键管理架构](keyboard-shortcut-architecture.md)与[076](../../task/076-per-key-state-arbitration.md)记录。方向键、Home/End 的布局候选由 app 计算后交回 Session；Qt `commandMode` 只投影光标显示，不改变编辑器键语义。窗口和控件作用域不并入编辑器 Session。尚未实现的表格快捷键只在键位规划中标注，不宣称已接入。
 
 平台 IME 候选界面可先消费 Escape；画布 IME 预编辑的物理事件由 Qt 输入适配处理。除这些平台输入例外外，Qt 不根据命令、公式、结构选择等编辑状态自行仲裁按键。当前 Rust 按键集合没有 `ShiftTab`；表格导航须在功能实现时定义并进入对应键处理器，不能把键位表中的目标行为读作已支持。
 

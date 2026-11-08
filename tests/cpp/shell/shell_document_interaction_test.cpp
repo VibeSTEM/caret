@@ -542,6 +542,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
         {QStringLiteral("cursorPosition"), 5},
         {QStringLiteral("anchorPosition"), 0},
         {QStringLiteral("enabled"), true},
+        {QStringLiteral("preferLatin"), true},
     };
     canvas->setInputMethodContext(input_method_context);
     QCOMPARE(canvas->inputMethodContext(), input_method_context);
@@ -549,7 +550,9 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorPosition).toInt(), 5);
     QCOMPARE(canvas->inputMethodQuery(Qt::ImAnchorPosition).toInt(), 0);
     QCOMPARE(canvas->inputMethodQuery(Qt::ImCurrentSelection).toString(), QStringLiteral("caret"));
-    QVERIFY(!canvas->inputMethodQuery(Qt::ImHints).isValid());
+    QVERIFY(canvas->inputMethodQuery(Qt::ImHints)
+                .value<Qt::InputMethodHints>()
+                .testFlag(Qt::ImhPreferLatin));
 
     canvas->setCommandMode(true);
     QTest::keyClick(&window, Qt::Key_A);

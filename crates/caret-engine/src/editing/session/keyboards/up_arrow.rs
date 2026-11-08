@@ -1,12 +1,10 @@
-//! 管理 Up 及 Shift+Up 的上下文分派和导航候选提交。
+//! 管理 Up 及 Shift+Up 在输入、命令行、公式结构和正文中的状态优先级。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
 use super::super::Session;
-use crate::editing::{
-    Command, Direction, EditError, Effect, NavigationCandidate, NavigationIntent,
-};
+use crate::editing::{Command, Direction, EditError, Effect, NavigationCandidate};
 
 impl Session {
     pub(super) fn handle_up_arrow(
@@ -22,11 +20,16 @@ impl Session {
             }
             return self.run(Command::MoveStructure(Direction::Backward));
         }
-        self.route_navigation_key(
-            NavigationIntent::Vertical,
-            Some(Direction::Backward),
-            candidate,
-            extend,
-        )
+        if self.composition.is_some() {
+            return Ok(Effect::default());
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.command_line.is_some() {
+            return self.run(Command::MoveCommandLineSelection(Direction::Backward));
+        }
+        if self.math_edit.is_some() {
+            return self.commit_math_vertical_navigation_candidate(candidate, extend);
+        }
+        self.commit_document_vertical_navigation_candidate(candidate, extend)
     }
 }

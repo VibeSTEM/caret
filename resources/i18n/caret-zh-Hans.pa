@@ -851,3 +851,8 @@ message_157:
   src: Greek capital Omega
   tr: 大写希腊字母 Ω
   st: finished
+
+message_158:
+  src: Text
+  tr: 文本
+  st: finished
