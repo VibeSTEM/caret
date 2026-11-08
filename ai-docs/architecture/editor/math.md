@@ -51,7 +51,7 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 
 - **解析与导出**：LaTeX 子集解析器将输入转换为 `MathTree` / `Align`；导出器将文档树转换为规范 TeX。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
 - **排版**：`layout/` 移植自 Typst v0.15.1 的数学排版，度量来自 OpenType MATH 表，经 `read-fonts` / `skrifa` 读取。`Align` 的显示布局在调用期间适配成数学后端的 `aligned` 矩阵，由数学表格适配器计算对齐列与行距；持久模型仍为 `Align → rows → cells`，不会转存为 Caret 文档表格。网格纯几何定位已抽取到无 workspace 依赖的 `caret-grid-layout`；移植文件的来源与修改记录在文件头，见[源码署名](../../standards/source-attribution.md)。
-- **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。SVG/PNG 不是文档模型，也不是交互路径。
+- **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：`MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；页面布局服务负责组合和复用。
 
 数学 `aligned` / `matrix` 的适配器处理 MathFlow 片段、数学字号与 OpenType MATH 度量，并把已测量网格交给 `caret-grid-layout` 定位。Caret 文档表格由 [045](../../task/045-table-model-and-editing.md) / [046](../../task/046-table-layout-and-canvas.md) 定义，处理单元格块序列、可用宽度下的列宽求解、内容重排、分页裁剪与命中；其几何适配器可复用 `caret-grid-layout`，但不依赖 `caret-math`。列表布局同样可以把标记列与正文列作为几何输入；编号、缩进、嵌套和跨页连续性仍归 [051](../../task/051-code-links-quotes-layout.md)。截至本记录，生产消费者只有 `caret-math`；046/051 的接入仍待各自任务实现和验证。

@@ -100,10 +100,12 @@
 | 066 | 架构文档 | [`.pa` DSL 架构页与进程崩溃处理器接入](task/066-dsl-architecture-page.md) | P2 | — | M | done |
 | 067 | Qt 工具链 | [Qt 6.12 托管工具链升级](task/067-qt-6-12-toolchain.md) | P1 | 004、006 | M | done |
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
-| 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044、071、072 | L | planned |
+| 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044、071、072、074、075 | L | planned |
 | 070 | CI/测试 | [Nightly 失败修复与布局测试补齐](task/070-nightly-failures-and-layout-coverage.md) | P1 | 006 | S | done |
 | 071 | 架构 | [宿主焦点协议与键盘意图路由](task/071-host-focus-and-key-routing.md) | P1 | 010、021、027、030、043、044、073 | L | done |
-| 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | ready |
+| 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | in-progress |
 | 073 | 文档结构 | [块环境内容判定保全公式节点](task/073-environment-content-preservation.md) | P1 | 010、021 | S | done |
+| 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | planned |
+| 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | planned |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

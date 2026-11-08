@@ -1093,7 +1093,7 @@ impl DocumentLayoutSnapshot {
         None
     }
 
-    /// 命中页面内绘制出的数学树序列，并返回同代树插入位置。
+    /// 命中同代布局中的数学树序列，并返回其插入位置。
     pub fn hit_test_math_structure(
         &self,
         page_index: usize,

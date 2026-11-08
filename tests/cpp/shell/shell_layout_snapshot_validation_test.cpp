@@ -89,6 +89,17 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
                                            {QStringLiteral("candidates"), QJsonArray{}}};
     QVERIFY(caret::layout_snapshot::parse_command_line_state(
         unicode_command_line, parsed_command_line, command_line_error));
+    const QJsonObject math_command_line{{QStringLiteral("active"), true},
+                                        {QStringLiteral("mode"), QStringLiteral("math")},
+                                        {QStringLiteral("prefix"), QStringLiteral("\\")},
+                                        {QStringLiteral("query"), QStringLiteral("alpha")},
+                                        {QStringLiteral("cursor"), 5},
+                                        {QStringLiteral("cursorUtf16"), 6},
+                                        {QStringLiteral("selected"), 0},
+                                        {QStringLiteral("candidates"), QJsonArray{}}};
+    QVERIFY(caret::layout_snapshot::parse_command_line_state(math_command_line, parsed_command_line,
+                                                             command_line_error));
+    QCOMPARE(parsed_command_line.value(QStringLiteral("mode")).toString(), QStringLiteral("math"));
     QJsonObject invalid_command_prefix = unicode_command_line;
     invalid_command_prefix.insert(QStringLiteral("prefix"), QStringLiteral("\\"));
     QVERIFY(!caret::layout_snapshot::parse_command_line_state(

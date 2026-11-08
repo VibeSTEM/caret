@@ -39,6 +39,23 @@ impl DocumentViewRuntime {
         forward: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if self.session.command_line().is_some() {
+            return dispatch_navigation_key(
+                self,
+                if forward {
+                    EditorKey::RightArrow {
+                        candidate: None,
+                        extend,
+                    }
+                } else {
+                    EditorKey::LeftArrow {
+                        candidate: None,
+                        extend,
+                    }
+                },
+                "navigation.command_line",
+            );
+        }
         if self.session.math_text_input_context().is_some() {
             return move_math_visual(self, forward, extend)
                 .unwrap_or_else(|| self.interaction_state_json());
@@ -204,6 +221,25 @@ impl DocumentViewRuntime {
         line_delta: isize,
         extend: bool,
     ) -> Result<String, String> {
+        if self.session.command_line().is_some() {
+            return dispatch_navigation_key(
+                self,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                },
+                "navigation.command_line",
+            );
+        }
         if self.session.math_text_input_context().is_some()
             && let Some(result) = move_math_vertical(self, line_delta, extend)
         {
@@ -337,6 +373,23 @@ impl DocumentViewRuntime {
         end: bool,
         extend: bool,
     ) -> Result<String, String> {
+        if self.session.command_line().is_some() {
+            return dispatch_navigation_key(
+                self,
+                if end {
+                    EditorKey::End {
+                        candidate: None,
+                        extend,
+                    }
+                } else {
+                    EditorKey::Home {
+                        candidate: None,
+                        extend,
+                    }
+                },
+                "navigation.command_line",
+            );
+        }
         if self.session.math_text_input_context().is_some()
             && let Some(result) = move_math_line_edge(self, end, extend)
         {

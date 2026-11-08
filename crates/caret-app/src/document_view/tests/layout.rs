@@ -227,6 +227,32 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
     );
     let resumed: Value = serde_json::from_str(&runtime.paste_text_json("z".to_owned())?)?;
     assert_eq!(resumed["inputMethodContext"]["surroundingText"], "z");
+
+    runtime.insert_text_json("\\".to_owned())?;
+    assert_eq!(
+        runtime.session.command_line().map(|line| line.mode),
+        Some(caret_engine::CommandLineMode::Math)
+    );
+    runtime.insert_text_json("alpha".to_owned())?;
+    let cursor_before_navigation = runtime
+        .session
+        .command_line()
+        .ok_or_else(|| std::io::Error::other("math command line was not retained"))?
+        .cursor;
+    runtime.move_visual_caret_json(false, false)?;
+    let cursor_after_navigation = runtime
+        .session
+        .command_line()
+        .ok_or_else(|| std::io::Error::other("math command line was lost by navigation"))?
+        .cursor;
+    assert_eq!(cursor_after_navigation, cursor_before_navigation - 1);
+    runtime.move_vertical_caret_json(1, false)?;
+    runtime.move_to_visual_line_edge_json(false, false)?;
+    runtime.move_to_visual_line_edge_json(true, false)?;
+    assert_eq!(
+        runtime.session.command_line().map(|line| line.mode),
+        Some(caret_engine::CommandLineMode::Math)
+    );
     Ok(())
 }
 
@@ -316,6 +342,87 @@ fn vertical_math_navigation_moves_between_align_rows_and_edits_the_new_cell()
         .ok_or_else(|| std::io::Error::other("typing left math TextFlow"))?;
     assert!(context.surrounding_text.contains('Z'));
     assert!(context.surrounding_text.contains("cd"));
+    Ok(())
+}
+
+#[test]
+fn empty_equation_host_keeps_hit_caret_edit_and_history_without_placeholder_box()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation_id = NodeId::generate();
+    let math_tree = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        Block::Equation(caret_doc::Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+
+    let (x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .iter()
+            .find(|fragment| fragment.math_id == equation_id)
+            .ok_or_else(|| std::io::Error::other("empty Equation fragment is missing"))?;
+        let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        assert!(fragment.width_pt > 0.0 && fragment.height_pt > 0.0);
+        let glyphs = snapshot
+            .page_glyphs(0)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        assert!(
+            !glyphs
+                .shapes
+                .iter()
+                .any(|shape| shape.kind == caret_engine::PageMathShapeKind::Rectangle)
+        );
+        (
+            left + f64::from(fragment.width_pt) / 2.0,
+            top + f64::from(fragment.height_pt) / 2.0,
+        )
+    };
+
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathTree"], true);
+    let focus_before_edit = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("empty Equation did not receive tree focus"))?;
+    assert_eq!(focus_before_edit.1.offset, 0);
+    let caret: Value = serde_json::from_str(&runtime.current_caret_json()?)?;
+    assert!(caret["y1Pt"].as_f64() > caret["y0Pt"].as_f64());
+
+    runtime.insert_text_json("x".to_owned())?;
+    assert!(matches!(
+        &runtime.document().body[1],
+        Block::Equation(equation) if !equation.math_tree.root.content.is_empty()
+    ));
+    runtime.undo_json()?;
+    assert!(matches!(
+        &runtime.document().body[1],
+        Block::Equation(equation) if equation.math_tree.root.content.is_empty()
+    ));
+    assert!(runtime.session.math_tree_input_context().is_some());
+    runtime.redo_json()?;
+    assert!(matches!(
+        &runtime.document().body[1],
+        Block::Equation(equation) if !equation.math_tree.root.content.is_empty()
+    ));
     Ok(())
 }
 

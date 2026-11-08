@@ -466,6 +466,29 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
     QCOMPARE(
         view_model->paragraphLayouts().first().toMap().value(QStringLiteral("text")).toString(),
         QStringLiteral("\n\\"));
+
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("begin"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    QVERIFY(view_model->commandLineCommand(QStringLiteral("type"), QStringLiteral("math"))
+                .value(QStringLiteral("valid"))
+                .toBool());
+    const QVariantMap enter_math = view_model->commandLineCommand(QStringLiteral("accept"));
+    QVERIFY2(enter_math.value(QStringLiteral("valid")).toBool(),
+             qPrintable(enter_math.value(QStringLiteral("error")).toString()));
+    const QVariantMap open_math_query = view_model->insertText(QStringLiteral("\\"));
+    QVERIFY2(open_math_query.value(QStringLiteral("valid")).toBool(),
+             qPrintable(open_math_query.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model->commandLine().value(QStringLiteral("mode")).toString(),
+             QStringLiteral("math"));
+    const QVariantMap math_query = view_model->insertText(QStringLiteral("alpha"));
+    QVERIFY2(math_query.value(QStringLiteral("valid")).toBool(),
+             qPrintable(math_query.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model->commandLine().value(QStringLiteral("cursor")).toInt(), 5);
+    const QVariantMap math_navigation = view_model->moveVisualCaret(false, false);
+    QVERIFY2(math_navigation.value(QStringLiteral("valid")).toBool(),
+             qPrintable(math_navigation.value(QStringLiteral("error")).toString()));
+    QCOMPARE(view_model->commandLine().value(QStringLiteral("cursor")).toInt(), 4);
     delete probe;
 }
 

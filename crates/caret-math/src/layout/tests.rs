@@ -41,6 +41,14 @@ fn display(source: &str) -> MathLayout {
     lay(source, MathStyle::Display)
 }
 
+struct UnexpectedTextShaper;
+
+impl MathTextShaper for UnexpectedTextShaper {
+    fn shape(&mut self, _: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
+        panic!("empty math flows contain no text to shape")
+    }
+}
+
 fn inline(source: &str) -> MathLayout {
     lay(source, MathStyle::Inline)
 }
@@ -538,13 +546,65 @@ fn empty_math_and_text_flows_emit_stable_position_boxes() {
     assert!(!math_slot.is_text_flow);
     assert!(math_slot.is_flow);
     assert!(math_slot.path.is_empty());
-    assert_rendered_slot(&empty_math_layout, math_slot);
+    assert!(math_slot.width > 0.0 && math_slot.height > 0.0);
+    assert!(
+        empty_math_layout
+            .items
+            .iter()
+            .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+    );
     let larger = layout_math(font(), &empty_math_flow, SIZE * 2.0, MathStyle::Display)
         .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     let larger_slot = &larger.nodes[0];
     assert!((larger_slot.width - math_slot.width * 2.0).abs() < EPSILON);
     assert!((larger_slot.height - math_slot.height * 2.0).abs() < EPSILON);
     assert!(empty_math_flow.content.is_empty());
+
+    for style in [MathStyle::Inline, MathStyle::Display] {
+        let empty = layout_math(font(), &empty_math_flow, SIZE, style)
+            .unwrap_or_else(|error| panic!("宿主空流应合法：{error}"));
+        assert!(
+            empty
+                .items
+                .iter()
+                .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+        );
+        assert!(empty.nodes[0].width > 0.0 && empty.nodes[0].height > 0.0);
+
+        let placeholder_id = NodeId::generate();
+        let placeholder_root = MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Math(MathNode {
+                id: placeholder_id.clone(),
+                kind: MathNodeKind::Placeholder,
+                text: None,
+                attributes: Default::default(),
+                children: Vec::new(),
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        };
+        let layout = layout_math(font(), &placeholder_root, SIZE, style)
+            .unwrap_or_else(|error| panic!("单 Placeholder 宿主根应合法：{error}"));
+        let root_slot = layout
+            .nodes
+            .iter()
+            .find(|node| node.id.as_ref() == Some(&placeholder_root.id))
+            .unwrap_or_else(|| panic!("宿主根节点盒应保留"));
+        assert!(root_slot.width > 0.0 && root_slot.height > 0.0);
+        assert!(
+            layout
+                .nodes
+                .iter()
+                .any(|node| node.id.as_ref() == Some(&placeholder_id))
+        );
+        assert!(
+            layout
+                .items
+                .iter()
+                .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+        );
+    }
 
     let empty_text_flow = MathFlow {
         id: NodeId::generate(),
@@ -696,7 +756,7 @@ fn optional_placeholder_flows_keep_identity_without_changing_rendering() {
 }
 
 #[test]
-fn empty_align_cells_have_visible_scoped_slots() {
+fn empty_align_cells_keep_nonzero_scoped_slots_without_placeholder_rectangles() {
     let mut align = match parse(
         r"\begin{aligned}x&y\\z&w\end{aligned}",
         MathInputKind::Align,
@@ -721,7 +781,11 @@ fn empty_align_cells_have_visible_scoped_slots() {
                 .unwrap_or_else(|| panic!("missing empty cell slot"));
             assert_eq!(slot.scope_id, cell.root.id);
             assert!(slot.path.is_empty() && slot.is_flow);
-            assert_rendered_slot(&layout, slot);
+            assert!(slot.width > 0.0 && slot.height > 0.0);
+            assert!(layout.items.iter().all(|item| !matches!(item,
+                MathItem::Rectangle { x, y, .. }
+                if (*x - slot.x).abs() < EPSILON && (*y - slot.y).abs() < EPSILON
+            )));
             assert!(cell.root.content.is_empty());
             positions.push((slot.x, slot.y));
         }
@@ -729,16 +793,62 @@ fn empty_align_cells_have_visible_scoped_slots() {
     assert_eq!(positions.len(), 4);
     assert_ne!(positions[0].0, positions[1].0);
     assert_ne!(positions[0].1, positions[2].1);
+
+    let mut shaper = UnexpectedTextShaper;
+    let shaped = super::layout_align_with_text_shaper(font(), &align, SIZE, &mut shaper)
+        .unwrap_or_else(|error| panic!("empty shaped Align should lay out: {error}"));
+    assert!(
+        shaped
+            .items
+            .iter()
+            .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+    );
+    for row in &align.rows {
+        for cell in &row.cells {
+            assert!(shaped.nodes.iter().any(|node| {
+                node.id.as_ref() == Some(&cell.root.id) && node.width > 0.0 && node.height > 0.0
+            }));
+        }
+    }
+}
+
+#[test]
+fn single_placeholder_align_host_keeps_its_tree_box_without_drawing_a_rectangle() {
+    let align = match parse(r"\begin{aligned}\end{aligned}", MathInputKind::Align) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("empty aligned input should parse: {other:?}"),
+    };
+    let cell = &align.rows[0].cells[0];
+    let MathContent::Math(placeholder) = &cell.root.content[0] else {
+        panic!("empty Align cell should retain its parser Placeholder")
+    };
+    assert_eq!(placeholder.kind, MathNodeKind::Placeholder);
+
+    let layout = layout_align(font(), &align, SIZE)
+        .unwrap_or_else(|error| panic!("empty Align host should lay out: {error}"));
+
+    let root_box = layout
+        .nodes
+        .iter()
+        .find(|node| node.id.as_ref() == Some(&cell.root.id))
+        .unwrap_or_else(|| panic!("Align cell root box should be retained"));
+    assert!(root_box.width > 0.0 && root_box.height > 0.0);
+    assert!(
+        layout
+            .nodes
+            .iter()
+            .any(|node| node.id.as_ref() == Some(&placeholder.id))
+    );
+    assert!(
+        layout
+            .items
+            .iter()
+            .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+    );
 }
 
 #[test]
 fn empty_flow_inside_row_keeps_slot_with_or_without_text_shaper() {
-    struct UnexpectedShaper;
-    impl MathTextShaper for UnexpectedShaper {
-        fn shape(&mut self, _: MathTextRequest) -> Result<MathTextShape, MathTextShapeError> {
-            panic!("empty math flow has no text to shape")
-        }
-    }
     let flow = MathFlow {
         id: NodeId::generate(),
         content: Vec::new(),
@@ -765,7 +875,7 @@ fn empty_flow_inside_row_keeps_slot_with_or_without_text_shaper() {
         &root,
         SIZE,
         MathStyle::Display,
-        &mut UnexpectedShaper,
+        &mut UnexpectedTextShaper,
     )
     .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
     for layout in [&plain, &shaped] {
@@ -782,6 +892,26 @@ fn empty_flow_inside_row_keeps_slot_with_or_without_text_shaper() {
         assert!(slot.is_flow);
         assert_rendered_slot(layout, slot);
     }
+
+    let empty_host = MathFlow {
+        id: NodeId::generate(),
+        content: Vec::new(),
+        extra: Default::default(),
+    };
+    let mut host_shaper = UnexpectedTextShaper;
+    let host = layout_math_with_text_shaper(
+        font(),
+        &empty_host,
+        SIZE,
+        MathStyle::Inline,
+        &mut host_shaper,
+    )
+    .unwrap_or_else(|error| panic!("empty shaped host should lay out: {error}"));
+    assert!(
+        host.items
+            .iter()
+            .all(|item| !matches!(item, MathItem::Rectangle { .. }))
+    );
 }
 
 #[test]
