@@ -1,6 +1,6 @@
 # 结构导航
 
-更新日期：2026-10-30。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
+更新日期：2026-11-08。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
 
 ## 结构语义与界面类别
 
@@ -77,7 +77,7 @@ qml/Canvas/                         # 画布组合与 Theme 绑定
 
 当前环境采用语义视图设计，不要求每项都对应同类持久化节点。目标适配器按 Inline 与 Block 分层，具体来源和操作见[行内与块级环境适配](document-model/inline-and-block-environments.md)。目标快照保留来源类型与逻辑范围，真实节点使用持久化 ID，Run 属性范围不生成 ID。
 
-044 尚未完成数学焦点到环境几何的适配。完成后，Rust 再用同代布局快照把候选映射为块范围、行内文本选区或公式盒；Qt 消费 `environmentHighlights` 绘制，不推导语义或范围。能力须区分宿主原子边界与公式内部可编辑性。
+数学焦点到环境几何的适配已由 044 接入：Rust 使用同代布局快照把候选映射为块范围、行内文本选区或公式盒；Qt 消费 `environmentHighlights` 绘制，不推导语义或范围。能力区分宿主原子边界与公式内部可编辑性。
 
 画布按层级着色：块级为奶油黄，行内级为粉色，两组可以同时绘制且不画轮廓框。颜色来自 QML Theme 的 GUI token，不写入文档或排版主题；滚动和缩放只改变绘制坐标。Qt 只绘制快照给出的矩形，不遍历文档树；光标离开某个环境时只清空对应层级，布局、分页或字体度量变化时改用新快照。分层规则见[画布与交互背景](../interface/canvas-highlighting.md)。
 

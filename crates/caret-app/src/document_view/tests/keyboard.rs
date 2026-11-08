@@ -625,14 +625,22 @@ fn backspace_on_keyboard_selected_environment_deletes_and_restores_its_subtree()
         runtime.session.selected_block_environment(),
         Some(&section_id)
     );
-    let deleted: Value = serde_json::from_str(&runtime.delete_backward_json()?)?;
+    let focus_before_delete = runtime.session.selection().clone();
+    let deleted: Value = serde_json::from_str(&runtime.handle_editor_key_json("backspace")?)?;
     assert_eq!(runtime.document().body.len(), 2);
     assert!(matches!(runtime.document().body[0], Block::Paragraph(_)));
     assert!(matches!(runtime.document().body[1], Block::Paragraph(_)));
     assert_eq!(deleted["documentGeneration"], "1");
+    let deleted_interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert!(deleted_interaction["caretGeometry"].is_object());
+    let focus_after_delete = runtime.session.selection().clone();
 
-    runtime.undo_json()?;
+    runtime.handle_editor_key_json("mod-z")?;
+    let undone: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
     assert_eq!(runtime.document().body.len(), 3);
+    assert_eq!(runtime.session.selection(), &focus_before_delete);
+    assert!(undone["selectionRects"].is_array());
+    assert!(undone["caretGeometry"].is_object());
     let Block::Environment(restored) = &runtime.document().body[1] else {
         return Err("撤销后应恢复 Section".into());
     };
@@ -642,8 +650,12 @@ fn backspace_on_keyboard_selected_environment_deletes_and_restores_its_subtree()
     };
     assert_eq!(restored_nested.id, nested_id);
 
-    runtime.redo_json()?;
+    runtime.handle_editor_key_json("mod-shift-z")?;
+    let redone: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
     assert_eq!(runtime.document().body.len(), 2);
+    assert_eq!(runtime.session.selection(), &focus_after_delete);
+    assert!(redone["selectionRects"].is_array());
+    assert!(redone["caretGeometry"].is_object());
     assert!(matches!(runtime.document().body[1], Block::Paragraph(_)));
     Ok(())
 }

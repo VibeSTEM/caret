@@ -1,6 +1,6 @@
 # 071 — 宿主焦点协议与键盘意图路由
 
-- 状态：in-progress
+- 状态：done
 - 依赖：010、021、027、030、043、044、073
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -60,7 +60,7 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 - [x] Escape、Enter 等按键优先级有单一权威分派；公式上下文下不再由前置拦截绕过共享意图路由。
 - [x] app 只负责布局候选、快照及 effect 投影，不再承担环境退出或相邻结构语义判断；Qt 不实现业务路由；engine 不重算 Parley 页面几何。
 - [x] 公式内部 MathTree/源码导航语义仍独立；IME 与 command line 等正交状态未被错误合并，失败事务保留有效焦点、选区与文档。
-- [ ] 空对象退格、Mod+Backspace、结构选区删除和撤销焦点恢复均有逐类明确的产品契约；不强制不同对象视觉/删除语义完全一致。
+- [x] 空对象退格按 InlineMath、Equation、Align cell、MathText 文本岛、空构造参数、块环境和普通段落分别仲裁；Mod+Backspace、结构选区 Backspace/Delete 与撤销/重做焦点恢复有明确契约和回归用例，不强制不同对象视觉/删除语义完全一致。
 - [x] 嵌套块环境中的非空 Equation/Align 不会被误判为空而随整个环境删除；相关修复和回归由 073 完成并通过。
 - [x] 契约相同的重复块路径/边界定位合并或记录保留原因；未引入无消费者抽象、L3 同级依赖或只为拆分文件的新 crate。
 - [x] `caret-grid-layout` 仍只做已测量网格的纯几何；如尚无第二个生产消费者，不新增其 API 或依赖。
@@ -70,7 +70,7 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-11-08 | `cargo test --locked -p caret-engine` | 导航/键盘状态、失败原子性及公式焦点语义 | 652 passed |
+| 2026-11-08 | `cargo test --locked -p caret-engine` | 导航/键盘状态、失败原子性及公式焦点语义 | 654 passed |
 | 2026-11-08 | `cargo test --locked -p caret-app` | app 候选生成、宿主焦点进入/离开及响应投影 | 255 passed |
 | 2026-11-08 | `cargo test --locked --workspace` | 全部 Rust crate、公开消费者、native/QML 聚合 | passed；CTest 10/10，QML 格式通过 |
 | 2026-11-08 | `cargo format`、`cargo lint` | Rust/C++/QML 格式、Clippy、依赖/分层、native 静态检查和 qmllint | format passed；lint 9/9 阶段通过，包括 Clippy、unused dependencies、CMake、分层、Qt/QML/clang-tidy/include-cleaner/cppcheck |
@@ -78,6 +78,11 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 | 2026-11-08 | `cargo deny check bans licenses sources`（临时 `CARGO_HOME`） | 非 advisory 依赖策略 | 通过；配置中未遇到的 license allowlist 有既存 warning |
 | 2026-11-08 | `cargo quality` advisory 阶段 | RustSec 数据库漏洞检查 | 未能完成：沙箱不能写宿主 `~/.cargo/advisory-dbs/db.lock`；临时 Cargo home 下数据库需要联网更新，但环境无法解析 github.com |
 | 2026-11-08 | 分域复审与 Sol/medium 最终只读评审 | 领域边界审查及完整 diff 复核 | 分域发现已修复；最终只读复审未发现阻断问题 |
+| 2026-11-08 | `cargo test --locked -p caret-engine editing::session::structure::tests` | 结构选区两种删除键、Mod+Backspace 不误操作、撤销恢复焦点 | 37 passed |
+| 2026-11-08 | `cargo test --locked -p caret-app backspace_on_keyboard_selected_environment_deletes_and_restores_its_subtree` | Qt 编辑器按键入口的 Backspace、Mod+Z/Redo 与 caret/selection 投影 | 1 passed |
+| 2026-11-08 | `cargo test --locked -p caret-app` | app 全部直接消费者与生产键盘入口 | 255 passed |
+| 2026-11-08 | `cargo clippy --locked -p caret-engine -p caret-app --all-targets -- -D warnings`、`cargo fmt --check`、`git diff --check` | 受影响 crate lint 与格式/空白检查 | 通过 |
+| 2026-11-08 | `gpt-6.1-sol` / medium 独立只读 final review，main 到本分支最终工作区完整 diff | 状态迁移、边界分层、回归覆盖和文档一致性 | 未发现需修复问题；未运行验证，实际窗口绘制及平台实体键未覆盖 |
 
 ## 风险与回退
 
@@ -88,9 +93,11 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 - 2026-11-08：依赖 010、021、027、030、043、044、073 均已完成；从更新后的 main 新建 `yuki/task-071-host-focus-key-routing` 开始核对当前代码与行为。
 - 2026-11-08：通过 `gh issue view` 审查 #105/#107；确认宿主路由的 app/engine 重复边界仍在 HEAD，task 040 已完成的 AutoSave/FFI 与 QML 清理不重开。确认 068 已建立的 grid 几何边界正确，数学 table adapter 已使用共享网格线坐标；不因“偏薄”增加 crate 职责，也不将“两个消费者”提升为通用 crate 规则。
 - 2026-11-08：分域静态审查发现 `environment_has_content` 忽略 Equation/Align，可能造成含公式块环境被退格整体删除；安全修复拆为 073，并置于本架构重构前。
+- 2026-11-08：结构删除明确支持 Backspace/Delete；结构选区期间 Mod+Backspace 保持无操作，避免使用其保存的普通文字光标解除其他环境。Undo 恢复操作前的普通选择和视觉 affinity，并清除失效结构高亮；Redo 恢复删除后焦点。逐类契约已补到环境模型与数学架构文档。
+- 2026-11-08：全量 engine 验证发现 Undo/Redo 原先在历史查询前清理结构选区；把历史命令移到该清理之前，无历史时现可保留选区与文档状态。
 - 2026-11-08：创建任务承接共享焦点和键盘意图边界；数学文本岛的 bidi/拖选和平台验收继续由 069 负责。
 - 2026-11-08：维护者明确所有当前支持的编辑器快捷键须统一按实体键或语义独立快捷键家族在 `session/keyboards/` 管理；覆盖四向键、Home/End、Delete/Backspace、Mod+C/V、Mod+Z/Redo、命令前缀和结构修饰键。表格快捷键仍按 045/046 计划状态记录，不提前实现。新增 `$` 输入行为在正文创建并进入空行内公式，以 `dollar.rs` 管理；`、` / `¥` / `￥` 保持普通文本。普通文本通过 `Command::TextInput` 交给 Session 选定命令行、前缀或正文目标；QML 不检查命令行活动状态。文档权威分工为键位清单 `keyboard-shortcuts.md`、管理架构 `keyboard-shortcut-architecture.md`、路由入口 `keyboard-routing.md`。架构文档先单独提交，再进行代码迁移。
 
 ## 完成摘要
 
-未完成。
+宿主焦点目标、键盘意图与快捷键状态在 Rust Session 中统一仲裁；app 只传递布局候选并发布交互投影，Qt/QML 不复制编辑业务规则。块环境、数学对象、结构选区及撤销焦点契约已分别记录在权威架构文档，相关行为测试、独立评审和受影响 crate 验证通过。
