@@ -13,45 +13,16 @@ Item {
 
     required property var canvas
 
-    function sendCommand(action, text) {
-        const result = LayoutViewModel.commandLineCommand(action, text || "");
-        if (!result.valid)
-            console.warn("Document command input failed:", result.error);
-        else if (result.compositionCancelled === true)
-            root.canvas.cancelPreedit();
-        return result;
-    }
-
     function handleTextInput(text) {
-        const commandLine = LayoutViewModel.commandLine;
-        if (commandLine.active === true) {
-            sendCommand("type", text);
-            return;
-        }
-        if (text === "\\" && root.canvas.preeditText.length === 0) {
-            sendCommand("begin", "");
-            return;
-        }
         const result = LayoutViewModel.insertText(text);
         if (!result.valid)
             console.warn("Document text input failed:", result.error);
-    }
-
-    function handleCommandKey(key) {
-        if (key === "space") {
-            sendCommand("type", " ");
-            return;
-        }
-        sendCommand(key === "tab" ? "tab" : key, "");
     }
 
     Connections {
         target: root.canvas
         function onTextInputRequested(text) {
             root.handleTextInput(text);
-        }
-        function onCommandLineKeyRequested(key) {
-            root.handleCommandKey(key);
         }
     }
 }

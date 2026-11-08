@@ -4,36 +4,25 @@
 // 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
-use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey};
+use caret_engine::{Command, Direction, DocumentLayoutDeltaView, EditorKey, Effect};
 
 impl DocumentViewRuntime {
-    /// 将 Qt 编辑器按键意图交给 Session 裁决，并按结果发布布局或交互快照。
-    pub fn handle_editor_key_json(&mut self, key: &str) -> Result<String, String> {
-        let key = match key {
-            "escape" => EditorKey::Escape,
-            "enter" => EditorKey::Enter,
-            "tab" => EditorKey::Tab,
-            "shift-enter" => EditorKey::ShiftEnter,
-            "mod-backspace" => EditorKey::ModBackspace,
-            _ => return Err("interaction.unknown_editor_key".to_owned()),
-        };
-        if key == EditorKey::Enter
-            && is_font_picker_request(&self.session, &Command::AcceptCommandLine)
-        {
-            self.command_line_command_json("accept", String::new())?;
-            return self.interaction_state_json();
+    /// 按 Session 效果统一更新交互状态并选择布局或交互快照。
+    pub(super) fn publish_editor_effect_json(
+        &mut self,
+        effect: Effect,
+        error_context: &str,
+    ) -> Result<String, String> {
+        if let Some(action) = effect.clipboard_action {
+            let mut state: serde_json::Value =
+                serde_json::from_str(&self.interaction_state_json()?)
+                    .map_err(|error| format!("{error_context}: {error}"))?;
+            state["clipboardAction"] = serde_json::json!(match action {
+                caret_engine::ClipboardAction::Copy => "copy",
+                caret_engine::ClipboardAction::Paste => "paste",
+            });
+            return Ok(state.to_string());
         }
-        let command = Command::EditorKey(key);
-        if is_editor_key_document_edit(&self.session, key) {
-            let error_context = command.id();
-            return self.run_edit_command(command, error_context);
-        }
-
-        let error_context = command.id();
-        let effect = self
-            .session
-            .run(command)
-            .map_err(|error| format!("{error_context}: {error}"))?;
         if effect.composition_changed {
             self.composition_id = None;
             self.composition_preview_session = None;
@@ -46,9 +35,54 @@ impl DocumentViewRuntime {
             self.preferred_visual_x_pt = None;
         }
         if effect.document_changed {
-            return self.layout_snapshot_json();
+            self.layout_snapshot_json()
+        } else {
+            self.interaction_state_json()
         }
-        self.interaction_state_json()
+    }
+
+    /// 将 Qt 编辑器按键意图交给 Session 裁决，并按结果发布布局或交互快照。
+    pub fn handle_editor_key_json(&mut self, key: &str) -> Result<String, String> {
+        let key = match key {
+            "escape" => EditorKey::Escape,
+            "enter" => EditorKey::Enter,
+            "tab" => EditorKey::Tab,
+            "shift-enter" => EditorKey::ShiftEnter,
+            "backspace" => EditorKey::Backspace,
+            "delete" => EditorKey::Delete,
+            "backslash" => EditorKey::Backslash,
+            "dollar" => EditorKey::Dollar,
+            "mod-c" => EditorKey::ModC,
+            "mod-v" => EditorKey::ModV,
+            "mod-z" => EditorKey::ModZ { redo: false },
+            "mod-shift-z" => EditorKey::ModZ { redo: true },
+            "expand-structure" => EditorKey::ModSpace,
+            "structure-previous" => EditorKey::UpArrow {
+                candidate: None,
+                extend: false,
+                structure: true,
+            },
+            "structure-next" => EditorKey::DownArrow {
+                candidate: None,
+                extend: false,
+                structure: true,
+            },
+            "mod-backspace" => EditorKey::ModBackspace,
+            _ => return Err("interaction.unknown_editor_key".to_owned()),
+        };
+        let command = Command::EditorKey(key);
+        let error_context = command.id();
+        let layout = &self.layout;
+        let effect = self
+            .session
+            .run_command_line_with_font_choices_lazy(command, || {
+                (
+                    layout.font_family_names(),
+                    font_target_choices(layout.font_script_choices()),
+                )
+            })
+            .map_err(|error| format!("{error_context}: {error}"))?;
+        self.publish_editor_effect_json(effect, "interaction.editor_key")
     }
 
     /// 更新 Rust 命令查询；只有确认可执行候选时才生成文档布局快照。
@@ -74,29 +108,17 @@ impl DocumentViewRuntime {
             "accept" => Command::AcceptCommandLine,
             _ => return Err("cmdline.unknown_action".to_owned()),
         };
-        if is_font_picker_request(&self.session, &command) {
-            let font_families = self.layout.font_family_names();
-            let font_targets = font_target_choices(self.layout.font_script_choices());
-            self.session
-                .run_command_line_with_font_choices(command, font_families, font_targets)
-                .map_err(|error| format!("cmdline.{action}: {error}"))?;
-            return self.interaction_state_json();
-        }
-        if is_command_line_document_edit(&self.session, &command) {
-            return self.run_edit_command(command, &format!("cmdline.{action}"));
-        }
+        let layout = &self.layout;
         let effect = self
             .session
-            .run(command)
+            .run_command_line_with_font_choices_lazy(command, || {
+                (
+                    layout.font_family_names(),
+                    font_target_choices(layout.font_script_choices()),
+                )
+            })
             .map_err(|error| format!("cmdline.{action}: {error}"))?;
-        if effect.composition_changed {
-            self.composition_id = None;
-            self.composition_preview_session = None;
-            self.composition_snapshot = None;
-            self.composition_range = None;
-            return self.layout_snapshot_json_after_composition_cancel();
-        }
-        self.interaction_state_json()
+        self.publish_editor_effect_json(effect, &format!("cmdline.{action}"))
     }
 
     /// 在 Rust Session 中撤销最近一次可撤销编辑并发布更新后的布局。
@@ -181,8 +203,14 @@ impl DocumentViewRuntime {
             }
             None => (None, false),
         };
+        let layout = &self.layout;
         self.session
-            .run(Command::InsertText(text))
+            .run_command_line_with_font_choices_lazy(Command::TextInput(text), || {
+                (
+                    layout.font_family_names(),
+                    font_target_choices(layout.font_script_choices()),
+                )
+            })
             .map_err(|error| format!("text.insert: {error}"))?;
         self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
@@ -273,9 +301,7 @@ impl DocumentViewRuntime {
             Command::InsertParagraphBreak | Command::InsertSoftBreak
         ) || matches!(&command, Command::PasteText(_))
             && reusable_paragraph_id.is_some()
-            || delete_is_paragraph_local
-            || is_command_line_document_edit(&self.session, &command)
-            || matches!(&command, Command::EditorKey(key) if is_editor_key_document_edit(&self.session, *key));
+            || delete_is_paragraph_local;
         if can_reuse_layout {
             self.base_snapshot()?;
         }
@@ -317,95 +343,6 @@ impl DocumentViewRuntime {
     }
 }
 
-fn is_command_line_document_edit(session: &caret_engine::Session, command: &Command) -> bool {
-    let Some(line) = session.command_line() else {
-        return false;
-    };
-    if !line.preedit.is_empty() {
-        return false;
-    }
-    if matches!(
-        line.mode,
-        caret_engine::CommandLineMode::DefaultFontTarget
-            | caret_engine::CommandLineMode::DefaultFontScope
-            | caret_engine::CommandLineMode::DefaultFontLanguage
-    ) {
-        return false;
-    }
-    if matches!(
-        line.mode,
-        caret_engine::CommandLineMode::FontFamily
-            | caret_engine::CommandLineMode::DefaultFontFamily
-    ) {
-        if !matches!(
-            command,
-            Command::AcceptCommandLine | Command::TabCommandLine
-        ) {
-            return false;
-        }
-        return session
-            .command_line_candidates()
-            .get(line.selected)
-            .is_some_and(|candidate| {
-                candidate.available
-                    && matches!(
-                        candidate.command_id,
-                        "text.format.font_family" | "document.default_font.family"
-                    )
-            });
-    }
-    match command {
-        Command::TypeCommandLine(text) if text == "\\" => {
-            if line.query.is_empty() {
-                return true;
-            }
-            session
-                .command_line_candidates()
-                .get(line.selected)
-                .is_some_and(|candidate| {
-                    candidate.available
-                        && !matches!(
-                            candidate.command_id,
-                            "text.format.font" | "document.default_font"
-                        )
-                })
-        }
-        Command::TabCommandLine => line.query.is_empty(),
-        Command::AcceptCommandLine => session
-            .command_line_candidates()
-            .get(line.selected)
-            .is_some_and(|candidate| {
-                candidate.available
-                    && !matches!(
-                        candidate.command_id,
-                        "text.format.font" | "document.default_font"
-                    )
-            }),
-        _ => false,
-    }
-}
-
-fn is_font_picker_request(session: &caret_engine::Session, command: &Command) -> bool {
-    let Some(line) = session.command_line() else {
-        return false;
-    };
-    let accepts_candidate = matches!(command, Command::AcceptCommandLine)
-        || matches!(command, Command::TypeCommandLine(text) if text == "\\" && !line.query.is_empty());
-    if line.mode != caret_engine::CommandLineMode::Command || !accepts_candidate {
-        return false;
-    }
-    session
-        .command_line_candidates()
-        .get(line.selected)
-        .is_some_and(|candidate| {
-            candidate.available
-                && matches!(
-                    candidate.command_id,
-                    "text.format.font" | "document.default_font"
-                )
-        })
-}
-
 fn font_target_choices(
     scripts: Vec<(String, String)>,
 ) -> Vec<(String, caret_doc::DocumentFontTarget)> {
@@ -420,20 +357,4 @@ fn font_target_choices(
             )
         })
         .collect()
-}
-
-fn is_editor_key_document_edit(session: &caret_engine::Session, key: EditorKey) -> bool {
-    match key {
-        EditorKey::Enter if session.command_line().is_some() => {
-            is_command_line_document_edit(session, &Command::AcceptCommandLine)
-        }
-        EditorKey::Tab => {
-            session.command_line().is_none()
-                || is_command_line_document_edit(session, &Command::TabCommandLine)
-        }
-        EditorKey::Enter => true,
-        EditorKey::ShiftEnter => session.command_line().is_none(),
-        EditorKey::ModBackspace => session.command_line().is_none(),
-        EditorKey::Escape => false,
-    }
 }

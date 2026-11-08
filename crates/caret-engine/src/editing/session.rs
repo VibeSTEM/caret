@@ -466,6 +466,21 @@ impl Session {
         command: Command,
         focus_inserted_inline_math: bool,
     ) -> Result<Effect, EditError> {
+        let command = match command {
+            Command::TextInput(text) => {
+                if self.command_line.is_some() {
+                    return self.run_command_line(Command::TypeCommandLine(text));
+                }
+                if text == "\\" {
+                    return self.run_editor_key(super::EditorKey::Backslash);
+                }
+                if text == "$" && self.math_edit.is_none() {
+                    return self.run_editor_key(super::EditorKey::Dollar);
+                }
+                Command::InsertText(text)
+            }
+            command => command,
+        };
         if self.math_edit.is_some()
             && self.command_line.is_none()
             && matches!(command, Command::Undo | Command::Redo)
@@ -494,6 +509,9 @@ impl Session {
             let effect = self.restore_history(command == Command::Redo)?;
             self.command_line = None;
             return Ok(effect);
+        }
+        if let Command::EditorKey(key) = command {
+            return self.run_editor_key(key);
         }
         if let Some(effect) = self.run_math_edit(&command)? {
             return Ok(effect);
@@ -540,9 +558,6 @@ impl Session {
             && self.selected_block_environments.len() > 1
         {
             return Ok(Effect::default());
-        }
-        if let Command::EditorKey(key) = &command {
-            return self.run_editor_key(*key);
         }
         if let Command::CommitComposition { id, text } = &command
             && self.block_environment_exit.is_some()
@@ -704,6 +719,7 @@ impl Session {
             _ => None,
         };
         let mut effect = match command {
+            Command::TextInput(_) => unreachable!("text input is resolved before command dispatch"),
             Command::InsertText(text) => self.insert_text(&text),
             Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
             Command::InsertTwoCharacterWidthSpace => self.insert_text("\u{2003}\u{2003}"),

@@ -4,10 +4,9 @@
 // 署名：Yuki Lu
 
 use super::DocumentViewRuntime;
-use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, Command, Direction, DocumentLayoutSnapshot, HitAffinity, Pos, Selection,
-    StructureIndex, VisualAffinity,
+    Affinity, Command, Direction, DocumentLayoutSnapshot, EditorKey, Effect, HitAffinity,
+    NavigationCandidate, Pos, VisualAffinity,
 };
 
 impl DocumentViewRuntime {
@@ -40,8 +39,9 @@ impl DocumentViewRuntime {
         forward: bool,
         extend: bool,
     ) -> Result<String, String> {
-        if let Some(result) = move_math_visual(self, forward, extend) {
-            return result;
+        if self.session.math_text_input_context().is_some() {
+            return move_math_visual(self, forward, extend)
+                .unwrap_or_else(|| self.interaction_state_json());
         }
         let current = self.session.selection().clone();
         let selection_anchor = self
@@ -147,76 +147,24 @@ impl DocumentViewRuntime {
             }
         };
         let Some((focus, visual_affinity, collapsed_selection)) = target else {
-            if extend
-                && let Some(environment_id) =
-                    block_environment_at(self.session.structure_index(), &current.focus)
-            {
-                self.session
-                    .select_block_environment(environment_id)
-                    .map_err(|error| format!("selection.environment: {error}"))?;
-                return self.interaction_state_json();
-            }
-            if extend || current.anchor != current.focus {
-                return self.interaction_state_json();
-            }
-            let Some(paragraph) = self
-                .current_snapshot()?
-                .paragraph_by_id(&current.focus.paragraph_id)
-            else {
-                return Err("navigation.unknown_paragraph".to_owned());
-            };
-            let exit_direction = if paragraph.text.is_empty() {
+            return dispatch_navigation_key(
+                self,
                 if forward {
-                    Direction::Forward
+                    EditorKey::RightArrow {
+                        candidate: None,
+                        extend,
+                    }
                 } else {
-                    Direction::Backward
-                }
-            } else if current.focus.offset == paragraph.text.len() {
-                Direction::Forward
-            } else if current.focus.offset == 0 {
-                Direction::Backward
-            } else {
-                return self.interaction_state_json();
-            };
-            let effect = self
-                .session
-                .run(Command::ExitBlockEnvironment(exit_direction))
-                .map_err(|error| format!("navigation.exit_block: {error}"))?;
-            if effect.document_changed {
-                self.anchor_visual_affinity = self.session.selection_visual_affinity();
-                self.preferred_visual_x_pt = None;
-                return self.layout_snapshot_json();
-            }
-            return self.interaction_state_json();
+                    EditorKey::LeftArrow {
+                        candidate: None,
+                        extend,
+                    }
+                },
+                "navigation.horizontal",
+            );
         };
-        if !extend
-            && current.anchor == current.focus
-            && focus.paragraph_id != current.focus.paragraph_id
-        {
-            let paragraph = self
-                .current_snapshot()?
-                .paragraph_by_id(&current.focus.paragraph_id)
-                .ok_or_else(|| "navigation.unknown_paragraph".to_owned())?;
-            let current_text_len = paragraph.text.len();
-            if let Some(direction) = environment_exit_direction(
-                self.session.structure_index(),
-                &current.focus,
-                &focus,
-                current_text_len,
-                forward,
-            ) {
-                let effect = self
-                    .session
-                    .run(Command::ExitBlockEnvironment(direction))
-                    .map_err(|error| format!("navigation.exit_block: {error}"))?;
-                if effect.document_changed {
-                    self.anchor_visual_affinity = self.session.selection_visual_affinity();
-                    self.preferred_visual_x_pt = None;
-                    return self.layout_snapshot_json();
-                }
-                return self.interaction_state_json();
-            }
-        }
+        let extend_selection = extend && !collapsed_selection;
+        let generation = navigation_generation(self)?;
         commit_text_navigation(
             self,
             selection_anchor,
@@ -227,10 +175,24 @@ impl DocumentViewRuntime {
                 extend: extend && !collapsed_selection,
                 preferred_x: None,
             },
-            |session, anchor, focus, _, focus_visual| {
+            |session, _, focus, _, focus_visual| {
+                let candidate = Some(NavigationCandidate::Document {
+                    focus,
+                    visual_affinity: focus_visual,
+                    generation: generation.clone(),
+                });
                 session
-                    .set_navigation_selection(Selection { anchor, focus }, focus_visual)
-                    .map(|_| ())
+                    .run(Command::EditorKey(if forward {
+                        EditorKey::RightArrow {
+                            candidate,
+                            extend: extend_selection,
+                        }
+                    } else {
+                        EditorKey::LeftArrow {
+                            candidate,
+                            extend: extend_selection,
+                        }
+                    }))
                     .map_err(|error| format!("selection.set: {error}"))
             },
         )
@@ -242,7 +204,9 @@ impl DocumentViewRuntime {
         line_delta: isize,
         extend: bool,
     ) -> Result<String, String> {
-        if let Some(result) = move_math_vertical(self, line_delta, extend) {
+        if self.session.math_text_input_context().is_some()
+            && let Some(result) = move_math_vertical(self, line_delta, extend)
+        {
             return result;
         }
         let current = self.session.selection().clone();
@@ -313,8 +277,25 @@ impl DocumentViewRuntime {
                 })
         };
         let Some((focus, visual_affinity, preferred_x)) = target else {
-            return self.interaction_state_json();
+            return dispatch_navigation_key(
+                self,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                },
+                "navigation.vertical",
+            );
         };
+        let generation = navigation_generation(self)?;
         commit_text_navigation(
             self,
             selection_anchor,
@@ -325,10 +306,26 @@ impl DocumentViewRuntime {
                 extend,
                 preferred_x: Some(preferred_x),
             },
-            |session, anchor, focus, _, focus_visual| {
+            |session, _, focus, _, focus_visual| {
+                let candidate = Some(NavigationCandidate::Document {
+                    focus,
+                    visual_affinity: focus_visual,
+                    generation: generation.clone(),
+                });
                 session
-                    .set_navigation_selection(Selection { anchor, focus }, focus_visual)
-                    .map(|_| ())
+                    .run(Command::EditorKey(if line_delta < 0 {
+                        EditorKey::UpArrow {
+                            candidate,
+                            extend,
+                            structure: false,
+                        }
+                    } else {
+                        EditorKey::DownArrow {
+                            candidate,
+                            extend,
+                            structure: false,
+                        }
+                    }))
                     .map_err(|error| format!("selection.set: {error}"))
             },
         )
@@ -340,7 +337,9 @@ impl DocumentViewRuntime {
         end: bool,
         extend: bool,
     ) -> Result<String, String> {
-        if let Some(result) = move_math_line_edge(self, end, extend) {
+        if self.session.math_text_input_context().is_some()
+            && let Some(result) = move_math_line_edge(self, end, extend)
+        {
             return result;
         }
         let current = self.session.selection().clone();
@@ -370,8 +369,23 @@ impl DocumentViewRuntime {
                 })
         };
         let Some((focus, visual_affinity)) = target else {
-            return self.interaction_state_json();
+            return dispatch_navigation_key(
+                self,
+                if end {
+                    EditorKey::End {
+                        candidate: None,
+                        extend,
+                    }
+                } else {
+                    EditorKey::Home {
+                        candidate: None,
+                        extend,
+                    }
+                },
+                "navigation.line_edge",
+            );
         };
+        let generation = navigation_generation(self)?;
         commit_text_navigation(
             self,
             current.anchor,
@@ -382,14 +396,54 @@ impl DocumentViewRuntime {
                 extend,
                 preferred_x: None,
             },
-            |session, anchor, focus, _, focus_visual| {
+            |session, _, focus, _, focus_visual| {
+                let candidate = Some(NavigationCandidate::Document {
+                    focus,
+                    visual_affinity: focus_visual,
+                    generation: generation.clone(),
+                });
                 session
-                    .set_navigation_selection(Selection { anchor, focus }, focus_visual)
-                    .map(|_| ())
+                    .run(Command::EditorKey(if end {
+                        EditorKey::End { candidate, extend }
+                    } else {
+                        EditorKey::Home { candidate, extend }
+                    }))
                     .map_err(|error| format!("selection.set: {error}"))
             },
         )
     }
+}
+
+/// 将无布局候选或 UI 已计算的候选交给统一按键入口处理。
+fn dispatch_navigation_key(
+    runtime: &mut DocumentViewRuntime,
+    key: EditorKey,
+    error_context: &str,
+) -> Result<String, String> {
+    let effect = runtime
+        .session
+        .run(Command::EditorKey(key))
+        .map_err(|error| format!("{error_context}: {error}"))?;
+    runtime.publish_editor_effect_json(effect, error_context)
+}
+
+/// 确认几何候选仍来自当前会话、文档和字体代际。
+fn navigation_generation(
+    runtime: &mut DocumentViewRuntime,
+) -> Result<caret_engine::NavigationGeneration, String> {
+    let snapshot = runtime.current_snapshot()?.clone();
+    let session_id = runtime.session.session_id().clone();
+    if snapshot.session_id.as_ref() != Some(&session_id)
+        || snapshot.document_generation != runtime.session.document_generation()
+        || snapshot.font_generation != runtime.layout.font_generation()
+    {
+        return Err("navigation.stale_snapshot".to_owned());
+    }
+    Ok(caret_engine::NavigationGeneration {
+        session_id,
+        document_generation: snapshot.document_generation,
+        font_generation: snapshot.font_generation,
+    })
 }
 
 fn move_math_visual(
@@ -397,105 +451,83 @@ fn move_math_visual(
     forward: bool,
     extend: bool,
 ) -> Option<Result<String, String>> {
-    if runtime.session.math_tree_input_context().is_some() {
-        let direction = if forward {
-            Direction::Forward
-        } else {
-            Direction::Backward
-        };
-        let result = if extend {
-            Ok(caret_engine::Effect::default())
-        } else {
-            runtime
-                .session
-                .run(Command::MoveCaret(direction))
-                .map_err(|error| format!("navigation.math_tree: {error}"))
-        };
-        return Some(result.and_then(|effect| {
-            if effect.selection_changed {
-                runtime.anchor_visual_affinity = runtime.session.selection_visual_affinity();
-                runtime.preferred_visual_x_pt = None;
-            }
-            runtime.interaction_state_json()
-        }));
-    }
     let context = runtime.session.math_text_input_context()?;
     let anchor_visual_affinity = context.anchor_visual_affinity;
-    let (position, visual_affinity, collapsed_selection) = if !extend
-        && context.anchor_utf16 != context.focus_utf16
-    {
-        let snapshot = match runtime.current_snapshot() {
-            Ok(snapshot) => snapshot,
-            Err(error) => return Some(Err(error)),
-        };
-        let anchor_key = snapshot.math_text_caret_geometry_for_visual_order(
-            &context.target,
-            &context.anchor,
-            anchor_visual_affinity,
-        );
-        let focus_key = snapshot.math_text_caret_geometry_for_visual_order(
-            &context.target,
-            &context.focus,
-            context.visual_affinity,
-        );
-        match (anchor_key, focus_key) {
-            (Some(anchor), Some(focus)) => {
-                let anchor_key = (anchor.page_index, anchor.y0_pt, anchor.x_pt);
-                let focus_key = (focus.page_index, focus.y0_pt, focus.x_pt);
-                let pick_anchor = if forward {
-                    anchor_key > focus_key
-                } else {
-                    anchor_key < focus_key
-                };
-                if pick_anchor {
-                    (context.anchor.clone(), anchor_visual_affinity, true)
-                } else {
-                    (context.focus.clone(), context.visual_affinity, true)
+    let (position, visual_affinity, collapsed_selection) =
+        if !extend && context.anchor_utf16 != context.focus_utf16 {
+            let snapshot = match runtime.current_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Some(Err(error)),
+            };
+            let anchor_key = snapshot.math_text_caret_geometry_for_visual_order(
+                &context.target,
+                &context.anchor,
+                anchor_visual_affinity,
+            );
+            let focus_key = snapshot.math_text_caret_geometry_for_visual_order(
+                &context.target,
+                &context.focus,
+                context.visual_affinity,
+            );
+            match (anchor_key, focus_key) {
+                (Some(anchor), Some(focus)) => {
+                    let anchor_key = (anchor.page_index, anchor.y0_pt, anchor.x_pt);
+                    let focus_key = (focus.page_index, focus.y0_pt, focus.x_pt);
+                    let pick_anchor = if forward {
+                        anchor_key > focus_key
+                    } else {
+                        anchor_key < focus_key
+                    };
+                    if pick_anchor {
+                        (context.anchor.clone(), anchor_visual_affinity, true)
+                    } else {
+                        (context.focus.clone(), context.visual_affinity, true)
+                    }
                 }
+                _ => return Some(Err("navigation.invalid_math_caret".to_owned())),
             }
-            _ => return Some(Err("navigation.invalid_math_caret".to_owned())),
-        }
-    } else {
-        let movement = runtime.current_snapshot().and_then(|snapshot| {
-            snapshot
-                .move_math_text_visual(
-                    &context.target,
-                    &context.focus,
-                    context.visual_affinity,
-                    forward,
-                )
-                .ok_or_else(|| "navigation.math_text_edge".to_owned())
-        });
-        match movement {
-            Ok((position, visual_affinity)) => (position, visual_affinity, false),
-            Err(error) if error == "navigation.math_text_edge" && !extend => {
-                let direction = if context.focus_utf16 == 0 {
-                    Direction::Backward
-                } else if context.focus_utf16 == context.surrounding_text.encode_utf16().count() {
-                    Direction::Forward
-                } else {
-                    return Some(runtime.interaction_state_json());
-                };
-                return Some(
-                    runtime
-                        .session
-                        .run(Command::MoveCaret(direction))
-                        .map_err(|error| format!("navigation.math_text: {error}"))
-                        .and_then(|effect| {
-                            if effect.selection_changed {
-                                runtime.anchor_visual_affinity =
-                                    runtime.session.selection_visual_affinity();
-                                runtime.preferred_visual_x_pt = None;
+        } else {
+            let movement = runtime.current_snapshot().and_then(|snapshot| {
+                snapshot
+                    .move_math_text_visual(
+                        &context.target,
+                        &context.focus,
+                        context.visual_affinity,
+                        forward,
+                    )
+                    .ok_or_else(|| "navigation.math_text_edge".to_owned())
+            });
+            match movement {
+                Ok((position, visual_affinity)) => (position, visual_affinity, false),
+                Err(error) if error == "navigation.math_text_edge" => {
+                    if !extend
+                        && context.focus_utf16 != 0
+                        && context.focus_utf16 != context.surrounding_text.encode_utf16().count()
+                    {
+                        return Some(runtime.interaction_state_json());
+                    }
+                    return Some(dispatch_navigation_key(
+                        runtime,
+                        if forward {
+                            EditorKey::RightArrow {
+                                candidate: None,
+                                extend,
                             }
-                            runtime.interaction_state_json()
-                        }),
-                );
+                        } else {
+                            EditorKey::LeftArrow {
+                                candidate: None,
+                                extend,
+                            }
+                        },
+                        "navigation.math_text",
+                    ));
+                }
+                Err(error) => return Some(Err(error)),
             }
-            Err(error) if error == "navigation.math_text_edge" => {
-                return Some(runtime.interaction_state_json());
-            }
-            Err(error) => return Some(Err(error)),
-        }
+        };
+    let generation = match navigation_generation(runtime) {
+        Ok(generation) => generation,
+        Err(error) => return Some(Err(error)),
     };
     Some(commit_text_navigation(
         runtime,
@@ -507,15 +539,18 @@ fn move_math_visual(
             extend: extend && !collapsed_selection,
             preferred_x: None,
         },
-        |session, anchor, focus, anchor_visual, focus_visual| {
+        |session, _, focus, _, focus_visual| {
+            let candidate = Some(NavigationCandidate::MathText {
+                focus,
+                visual_affinity: focus_visual,
+                generation: generation.clone(),
+            });
             session
-                .set_math_text_selection_positions_with_visual_affinities(
-                    anchor,
-                    focus,
-                    anchor_visual,
-                    focus_visual,
-                )
-                .map(|_| ())
+                .run(Command::EditorKey(if forward {
+                    EditorKey::RightArrow { candidate, extend }
+                } else {
+                    EditorKey::LeftArrow { candidate, extend }
+                }))
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
@@ -543,7 +578,23 @@ fn move_math_vertical(
     let moved = match moved {
         Ok(moved) => moved,
         Err(error) if error == "navigation.math_text_edge" => {
-            return Some(runtime.interaction_state_json());
+            return Some(dispatch_navigation_key(
+                runtime,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                },
+                "navigation.math_text",
+            ));
         }
         Err(error) => return Some(Err(error)),
     };
@@ -568,19 +619,69 @@ fn move_math_vertical(
                     .map(|caret| caret.x_pt as f32)
                     .unwrap_or(hit.caret.x_pt as f32)
             });
-            let focused = runtime
+            let generation = match navigation_generation(runtime) {
+                Ok(generation) => generation,
+                Err(error) => return Some(Err(error)),
+            };
+            let old_context = runtime.session.math_text_input_context();
+            let result = dispatch_navigation_key(
+                runtime,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: Some(NavigationCandidate::MathTextHit {
+                            hit: hit.clone(),
+                            generation,
+                        }),
+                        extend: false,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: Some(NavigationCandidate::MathTextHit {
+                            hit: hit.clone(),
+                            generation,
+                        }),
+                        extend: false,
+                        structure: false,
+                    }
+                },
+                "navigation.math_text_focus",
+            );
+            if runtime
                 .session
-                .focus_math_text_hit(&hit, hit.font_generation)
-                .map_err(|error| format!("navigation.math_text_focus: {error}"));
-            return Some(focused.and_then(|_| {
-                runtime.anchor_visual_affinity = hit.visual_affinity;
+                .math_text_input_context()
+                .is_some_and(|context| {
+                    context.target == hit.target && context.focus == hit.position
+                })
+                && old_context.is_none_or(|context| context.focus != hit.position)
+            {
                 runtime.preferred_visual_x_pt = Some(preferred_x);
-                runtime.interaction_state_json()
-            }));
+            }
+            return Some(result);
         }
         caret_engine::MathTextVerticalTarget::DifferentTextIsland(_) => {
-            return Some(runtime.interaction_state_json());
+            return Some(dispatch_navigation_key(
+                runtime,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: None,
+                        extend,
+                        structure: false,
+                    }
+                },
+                "navigation.math_text",
+            ));
         }
+    };
+    let generation = match navigation_generation(runtime) {
+        Ok(generation) => generation,
+        Err(error) => return Some(Err(error)),
     };
     Some(commit_text_navigation(
         runtime,
@@ -592,15 +693,26 @@ fn move_math_vertical(
             extend,
             preferred_x: Some(preferred_x),
         },
-        |session, anchor, focus, anchor_visual, focus_visual| {
+        |session, _, focus, _, focus_visual| {
+            let candidate = Some(NavigationCandidate::MathText {
+                focus,
+                visual_affinity: focus_visual,
+                generation: generation.clone(),
+            });
             session
-                .set_math_text_selection_positions_with_visual_affinities(
-                    anchor,
-                    focus,
-                    anchor_visual,
-                    focus_visual,
-                )
-                .map(|_| ())
+                .run(Command::EditorKey(if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate,
+                        extend,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate,
+                        extend,
+                        structure: false,
+                    }
+                }))
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
@@ -626,8 +738,26 @@ fn move_math_line_edge(
     let (position, visual_affinity) = match moved {
         Ok(moved) => moved,
         Err(error) if error == "navigation.math_text_edge" => {
-            return Some(runtime.interaction_state_json());
+            return Some(dispatch_navigation_key(
+                runtime,
+                if end {
+                    EditorKey::End {
+                        candidate: None,
+                        extend,
+                    }
+                } else {
+                    EditorKey::Home {
+                        candidate: None,
+                        extend,
+                    }
+                },
+                "navigation.math_text",
+            ));
         }
+        Err(error) => return Some(Err(error)),
+    };
+    let generation = match navigation_generation(runtime) {
+        Ok(generation) => generation,
         Err(error) => return Some(Err(error)),
     };
     Some(commit_text_navigation(
@@ -640,15 +770,18 @@ fn move_math_line_edge(
             extend,
             preferred_x: None,
         },
-        |session, anchor, focus, anchor_visual, focus_visual| {
+        |session, _, focus, _, focus_visual| {
+            let candidate = Some(NavigationCandidate::MathText {
+                focus,
+                visual_affinity: focus_visual,
+                generation: generation.clone(),
+            });
             session
-                .set_math_text_selection_positions_with_visual_affinities(
-                    anchor,
-                    focus,
-                    anchor_visual,
-                    focus_visual,
-                )
-                .map(|_| ())
+                .run(Command::EditorKey(if end {
+                    EditorKey::End { candidate, extend }
+                } else {
+                    EditorKey::Home { candidate, extend }
+                }))
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
@@ -673,98 +806,34 @@ fn commit_text_navigation<T: Clone>(
         T,
         VisualAffinity,
         VisualAffinity,
-    ) -> Result<(), String>,
+    ) -> Result<Effect, String>,
 ) -> Result<String, String> {
     let (anchor, anchor_visual) = if state.extend {
         (current_anchor, state.current_anchor_visual)
     } else {
         (focus.clone(), state.focus_visual)
     };
-    commit(
+    let effect = commit(
         &mut runtime.session,
         anchor,
         focus,
         anchor_visual,
         state.focus_visual,
     )?;
-    runtime.anchor_visual_affinity = anchor_visual;
-    runtime.preferred_visual_x_pt = state.preferred_x;
-    runtime.interaction_state_json()
-}
-
-pub(super) fn block_environment_at(
-    structure_index: &StructureIndex,
-    position: &Pos,
-) -> Option<NodeId> {
-    let ordinal = structure_index.paragraph_ordinal(&position.paragraph_id)?;
-    structure_index
-        .at(&caret_engine::StructurePosition {
-            paragraph_id: position.paragraph_id.clone(),
-            offset_utf8: position.offset,
-        })
-        .into_iter()
-        .rev()
-        .find(|entry| {
-            entry.kind.is_block_environment() && entry.range.paragraph_ordinals.contains(&ordinal)
-        })
-        .map(|entry| entry.id.clone())
-}
-
-fn logical_boundary_direction(
-    offset: usize,
-    text_len: usize,
-    visual_forward: bool,
-) -> Option<Direction> {
-    if text_len == 0 {
-        Some(if visual_forward {
-            Direction::Forward
+    if effect.selection_changed {
+        runtime.anchor_visual_affinity = if state.extend {
+            anchor_visual
         } else {
-            Direction::Backward
-        })
-    } else if offset == text_len {
-        Some(Direction::Forward)
-    } else if offset == 0 {
-        Some(Direction::Backward)
-    } else {
-        None
+            runtime.session.selection_visual_affinity()
+        };
     }
-}
-
-fn environment_exit_direction(
-    structure_index: &StructureIndex,
-    current: &Pos,
-    target: &Pos,
-    current_text_len: usize,
-    visual_forward: bool,
-) -> Option<Direction> {
-    let current_environment_ids = structure_index
-        .at(&caret_engine::StructurePosition {
-            paragraph_id: current.paragraph_id.clone(),
-            offset_utf8: current.offset,
-        })
-        .into_iter()
-        .filter(|entry| entry.kind.is_block_environment())
-        .map(|entry| &entry.id)
-        .collect::<Vec<_>>();
-    if current_environment_ids.is_empty() {
-        return None;
+    if effect.selection_changed {
+        runtime.preferred_visual_x_pt = state.preferred_x;
     }
-    let target_environment_ids = structure_index
-        .at(&caret_engine::StructurePosition {
-            paragraph_id: target.paragraph_id.clone(),
-            offset_utf8: target.offset,
-        })
-        .into_iter()
-        .filter(|entry| entry.kind.is_block_environment())
-        .map(|entry| &entry.id)
-        .collect::<Vec<_>>();
-    let leaves_environment = current_environment_ids
-        .iter()
-        .any(|current_id| !target_environment_ids.contains(current_id));
-    if !leaves_environment {
-        return None;
+    if effect.document_changed {
+        return runtime.layout_snapshot_json();
     }
-    logical_boundary_direction(current.offset, current_text_len, visual_forward)
+    runtime.interaction_state_json()
 }
 
 fn visual_caret_key(

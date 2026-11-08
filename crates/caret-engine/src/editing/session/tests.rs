@@ -26,6 +26,42 @@ fn text_flow(run: Run) -> ParagraphContent {
 }
 
 #[test]
+fn dollar_text_enters_inline_math_but_remains_query_text_in_command_line() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+
+    session
+        .run(crate::editing::Command::TextInput("、¥￥".to_owned()))
+        .unwrap_or_else(|error| panic!("punctuation insertion failed: {error}"));
+    assert_eq!(paragraph_text(&session, 0), "、¥￥");
+
+    session
+        .run(crate::editing::Command::TextInput("$".to_owned()))
+        .unwrap_or_else(|error| panic!("dollar input failed: {error}"));
+    assert!(session.math_edit().is_some());
+    assert!(matches!(
+        session.document().body[0],
+        Block::Paragraph(ref paragraph)
+            if paragraph.inlines.iter().any(|inline| matches!(inline, ParagraphContent::Math(_)))
+    ));
+
+    let mut command_session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("command session creation failed: {error}"));
+    command_session
+        .run(crate::editing::Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    command_session
+        .run(crate::editing::Command::TextInput("$".to_owned()))
+        .unwrap_or_else(|error| panic!("command line dollar input failed: {error}"));
+    assert_eq!(
+        command_session
+            .command_line()
+            .map(|line| line.query.as_str()),
+        Some("$")
+    );
+}
+
+#[test]
 fn current_inline_environment_respects_nested_scope_and_boundary_affinity() {
     let mut document = Document::blank();
     let outer_id = NodeId::generate();

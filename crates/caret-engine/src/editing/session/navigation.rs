@@ -7,6 +7,10 @@ use super::super::paragraph_ops::compare_positions;
 use super::super::{Affinity, Direction, EditError, Effect, Pos, Selection};
 use super::Session;
 
+#[cfg(test)]
+#[path = "navigation/tests.rs"]
+mod tests;
+
 impl Session {
     pub(super) fn move_caret(&mut self, direction: Direction) -> Result<Effect, EditError> {
         if self.composition.is_some() {

@@ -29,17 +29,44 @@ impl Session {
         font_families: Vec<String>,
         font_targets: Vec<(String, caret_doc::DocumentFontTarget)>,
     ) -> Result<Effect, EditError> {
+        self.run_command_line_with_font_choices_lazy(command, || (font_families, font_targets))
+    }
+
+    /// 仅在命令行接受字体候选时构造字体目录，避免普通按键复制完整目录。
+    pub fn run_command_line_with_font_choices_lazy(
+        &mut self,
+        command: Command,
+        font_choices: impl FnOnce() -> (Vec<String>, Vec<(String, caret_doc::DocumentFontTarget)>),
+    ) -> Result<Effect, EditError> {
         if self.ensure_math_edit_revision_current().is_err() {
             return self.run(command);
         }
-        let accepts_candidate = command == Command::AcceptCommandLine
-            || matches!(&command, Command::TypeCommandLine(text) if text == "\\");
+        let command_line_action = match &command {
+            Command::TypeCommandLine(_) | Command::AcceptCommandLine | Command::TabCommandLine => {
+                Some(command.clone())
+            }
+            Command::TextInput(text) if self.command_line.is_some() => {
+                Some(Command::TypeCommandLine(text.clone()))
+            }
+            Command::EditorKey(crate::editing::EditorKey::Enter) if self.command_line.is_some() => {
+                Some(Command::AcceptCommandLine)
+            }
+            Command::EditorKey(crate::editing::EditorKey::Tab) if self.command_line.is_some() => {
+                Some(Command::TabCommandLine)
+            }
+            _ => None,
+        };
+        let accepts_candidate = command_line_action.as_ref().is_some_and(|action| {
+            *action == Command::AcceptCommandLine
+                || matches!(action, Command::TypeCommandLine(text) if text == "\\")
+        });
         let opens_font_picker = self.command_line.as_ref().is_some_and(|line| {
             let command_line_has_query = !line.query.is_empty();
             accepts_candidate
                 && line.mode == CommandLineMode::Command
                 && line.preedit.is_empty()
-                && (!matches!(&command, Command::TypeCommandLine(_)) || command_line_has_query)
+                && (!matches!(command_line_action, Some(Command::TypeCommandLine(_)))
+                    || command_line_has_query)
                 && line
                     .selected_candidate_with(|candidate| {
                         self.command_candidate_available(candidate)
@@ -53,6 +80,7 @@ impl Session {
         });
 
         if opens_font_picker {
+            let (font_families, font_targets) = font_choices();
             if let Some(command_line) = &self.command_line {
                 let selected = command_line.selected_candidate_with(|candidate| {
                     self.command_candidate_available(candidate)

@@ -5803,6 +5803,60 @@ fn empty_text_island_is_an_editable_caret_target() -> Result<(), EditError> {
     assert_eq!(inline_source(&session).as_deref(), Some(r"\text{x}"));
     Ok(())
 }
+
+#[test]
+fn empty_math_text_horizontal_navigation_uses_the_pressed_arrow() -> Result<(), EditError> {
+    for (key, direction) in [
+        (
+            EditorKey::LeftArrow {
+                candidate: None,
+                extend: false,
+            },
+            Direction::Backward,
+        ),
+        (
+            EditorKey::RightArrow {
+                candidate: None,
+                extend: false,
+            },
+            Direction::Forward,
+        ),
+    ] {
+        let make_session = || -> Result<Session, EditError> {
+            let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+            insert_equation_text(&mut session, r"\text{}")?;
+            session.run(Command::EnterMath(Direction::Backward))?;
+            session.run(Command::MoveCaret(Direction::Backward))?;
+            Ok(session)
+        };
+        let mut routed = make_session()?;
+        let mut expected = make_session()?;
+        let before = routed
+            .math_text_input_context()
+            .ok_or(EditError::InvalidPosition)?;
+        assert!(before.surrounding_text.is_empty());
+
+        routed.run(Command::EditorKey(key))?;
+        expected.run(Command::MoveCaret(direction))?;
+
+        let edit_signature = |session: &Session| {
+            session
+                .math_edit()
+                .map(|edit| (edit.branch.clone(), edit.cursor))
+        };
+        assert_eq!(edit_signature(&routed), edit_signature(&expected));
+        assert_eq!(
+            routed.selection().focus.offset,
+            expected.selection().focus.offset
+        );
+        assert_eq!(
+            routed.selection().focus.affinity,
+            expected.selection().focus.affinity
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn empty_text_island_at_formula_edge_exits_without_reentry_trap() -> Result<(), EditError> {
     let mut forward = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
@@ -10277,6 +10331,7 @@ fn stale_math_edit_rejects_public_block_selection_without_losing_projection()
         session.set_navigation_selection(
             Selection { anchor, focus },
             caret_layout::VisualAffinity::Downstream,
+            crate::editing::NavigationIntent::Horizontal,
         ),
         Err(EditError::InvalidPosition)
     ));

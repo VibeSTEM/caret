@@ -804,8 +804,6 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
     QSignalSpy text_input_spy(canvas, &caret::DocumentCanvas::textInputRequested);
     QVERIFY(text_input_spy.isValid());
-    QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
-    QVERIFY(editing_command_spy.isValid());
     QSignalSpy editor_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
     QVERIFY(editor_key_spy.isValid());
     QSignalSpy visual_navigation_spy(canvas, &caret::DocumentCanvas::visualNavigationRequested);

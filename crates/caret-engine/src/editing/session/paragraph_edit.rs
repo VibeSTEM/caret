@@ -162,6 +162,7 @@ impl Session {
             selection_changed: true,
             composition_changed: false,
             changed_paragraph_id: None,
+            clipboard_action: None,
             position_map: Some(if replaced_start == replaced_end {
                 PositionMap::ParagraphSplit {
                     source_id,

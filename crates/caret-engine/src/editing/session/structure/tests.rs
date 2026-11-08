@@ -539,6 +539,7 @@ fn failed_navigation_selection_preserves_the_current_structure_selection()
                 focus: invalid_position,
             },
             VisualAffinity::Downstream,
+            crate::editing::NavigationIntent::Horizontal,
         ),
         Err(EditError::InvalidPosition)
     ));
@@ -1576,7 +1577,7 @@ fn enter_at_virtual_environment_exit_materializes_outside_paragraphs()
 
             session.run(Command::ExitBlockEnvironment(direction))?;
             assert!(session.block_environment_exit().is_some());
-            let effect = session.run(Command::EditorKey(key))?;
+            let effect = session.run(Command::EditorKey(key.clone()))?;
 
             assert!(effect.document_changed);
             assert!(session.block_environment_exit().is_none());

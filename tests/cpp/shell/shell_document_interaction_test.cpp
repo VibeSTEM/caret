@@ -502,24 +502,16 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
 
-    QSignalSpy command_keys(canvas, &caret::DocumentCanvas::commandLineKeyRequested);
     QSignalSpy editor_keys(canvas, &caret::DocumentCanvas::editorKeyRequested);
     QSignalSpy text_input(canvas, &caret::DocumentCanvas::textInputRequested);
     QSignalSpy navigation(canvas, &caret::DocumentCanvas::visualNavigationRequested);
     QSignalSpy vertical_navigation(canvas, &caret::DocumentCanvas::verticalNavigationRequested);
     QSignalSpy edge_navigation(canvas, &caret::DocumentCanvas::lineEdgeNavigationRequested);
-    QSignalSpy editing_commands(canvas, &caret::DocumentCanvas::editingCommandRequested);
-    QSignalSpy clipboard_commands(canvas, &caret::DocumentCanvas::clipboardCommandRequested);
-    QSignalSpy structure_navigation(canvas, &caret::DocumentCanvas::structureNavigationRequested);
-    QVERIFY(command_keys.isValid());
     QVERIFY(editor_keys.isValid());
     QVERIFY(text_input.isValid());
     QVERIFY(navigation.isValid());
     QVERIFY(vertical_navigation.isValid());
     QVERIFY(edge_navigation.isValid());
-    QVERIFY(editing_commands.isValid());
-    QVERIFY(clipboard_commands.isValid());
-    QVERIFY(structure_navigation.isValid());
     QCOMPARE(canvas->inputMethodContext(), QVariantMap{});
     QVERIFY(!canvas->inputMethodQuery(Qt::ImEnabled).toBool());
     const QVariantMap input_method_context{
@@ -542,23 +534,15 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral("a"));
     const QList<QPair<Qt::Key, QString>> command_key_cases = {
         {Qt::Key_Tab, QStringLiteral("tab")},
-        {Qt::Key_Backspace, QStringLiteral("backspace")},
-        {Qt::Key_Left, QStringLiteral("cursor-left")},
-        {Qt::Key_Right, QStringLiteral("cursor-right")},
-        {Qt::Key_Space, QStringLiteral("space")},
-        {Qt::Key_Up, QStringLiteral("previous")},
-        {Qt::Key_Down, QStringLiteral("next")},
     };
     for (const auto& [key, expected] : command_key_cases) {
         QTest::keyClick(&window, key);
-        if (key == Qt::Key_Tab) {
-            QCOMPARE(editor_keys.size(), 1);
-            QCOMPARE(editor_keys.takeFirst().at(0).toString(), expected);
-        } else {
-            QCOMPARE(command_keys.size(), 1);
-            QCOMPARE(command_keys.takeFirst().at(0).toString(), expected);
-        }
+        QCOMPARE(editor_keys.size(), 1);
+        QCOMPARE(editor_keys.takeFirst().at(0).toString(), expected);
     }
+    QTest::keyClick(&window, Qt::Key_Space);
+    QCOMPARE(text_input.size(), 1);
+    QCOMPARE(text_input.takeFirst().at(0).toString(), QStringLiteral(" "));
     QTest::keyClick(&window, Qt::Key_Escape);
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("escape"));
@@ -568,6 +552,24 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QTest::keyClick(&window, Qt::Key_Enter, Qt::ShiftModifier);
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
+    QTest::keyClick(&window, Qt::Key_Backspace);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("backspace"));
+    QTest::keyClick(&window, Qt::Key_Delete);
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("delete"));
+    QTest::keyClick(&window, Qt::Key_Left);
+    QCOMPARE(navigation.size(), 1);
+    QCOMPARE(navigation.takeFirst(), (QList<QVariant>{false, false}));
+    QTest::keyClick(&window, Qt::Key_Right);
+    QCOMPARE(navigation.size(), 1);
+    QCOMPARE(navigation.takeFirst(), (QList<QVariant>{true, false}));
+    QTest::keyClick(&window, Qt::Key_Up);
+    QCOMPARE(vertical_navigation.size(), 1);
+    QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{-1, false}));
+    QTest::keyClick(&window, Qt::Key_Down);
+    QCOMPARE(vertical_navigation.size(), 1);
+    QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{1, false}));
     canvas->setCommandMode(false);
     QTest::keyClick(&window, Qt::Key_Tab);
     QCOMPARE(editor_keys.size(), 1);
@@ -580,9 +582,7 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     canvas->setCommandMode(true);
     QTest::keyClick(&window, Qt::Key_Left);
     QTest::keyClick(&window, Qt::Key_Backspace);
-    QVERIFY2(command_keys.isEmpty(), "IME preedit keys must not move or edit the command query");
     QVERIFY2(navigation.isEmpty(), "IME preedit keys must not move the document caret");
-    QVERIFY2(editing_commands.isEmpty(), "IME preedit keys must not edit document text");
     QVERIFY2(text_input.isEmpty(), "IME preedit keys must not commit fallback key text");
     canvas->setCommandMode(false);
     QInputMethodEvent cancel_preedit;
@@ -598,14 +598,14 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(navigation.size(), 1);
     QCOMPARE(navigation.takeFirst(), (QList<QVariant>{true, true}));
     QTest::keyClick(&window, Qt::Key_Space, caret::keyboard::physicalControlModifier());
-    QCOMPARE(structure_navigation.size(), 1);
-    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("expand-selection"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("expand-structure"));
     QTest::keyClick(&window, Qt::Key_Up, caret::keyboard::structureNavigationModifier());
-    QCOMPARE(structure_navigation.size(), 1);
-    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("previous"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("structure-previous"));
     QTest::keyClick(&window, Qt::Key_Space, caret::keyboard::physicalControlModifier());
-    QCOMPARE(structure_navigation.size(), 1);
-    QCOMPARE(structure_navigation.takeFirst().at(0).toString(), QStringLiteral("expand-selection"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("expand-structure"));
     QTest::keyClick(&window, Qt::Key_Up);
     QCOMPARE(vertical_navigation.size(), 1);
     QCOMPARE(vertical_navigation.takeFirst(), (QList<QVariant>{-1, false}));
@@ -625,17 +625,17 @@ void ShellLoadTest::documentCanvasRoutesCommandKeysAndKeepsNormalEditingBehavior
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("shift-enter"));
     QTest::keyClick(&window, Qt::Key_Backspace);
-    QCOMPARE(editing_commands.size(), 1);
-    QCOMPARE(editing_commands.takeFirst().at(0).toString(), QStringLiteral("text.delete_backward"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("backspace"));
     QTest::keyClick(&window, Qt::Key_Backspace, caret::keyboard::modModifier());
     QCOMPARE(editor_keys.size(), 1);
     QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("mod-backspace"));
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
-    QCOMPARE(clipboard_commands.size(), 1);
-    QCOMPARE(clipboard_commands.takeFirst().at(0).toString(), QStringLiteral("copy"));
-    QTest::keyClick(&window, Qt::Key_V, Qt::MetaModifier);
-    QCOMPARE(clipboard_commands.size(), 1);
-    QCOMPARE(clipboard_commands.takeFirst().at(0).toString(), QStringLiteral("paste"));
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("mod-c"));
+    QTest::keyClick(&window, Qt::Key_V, caret::keyboard::modModifier());
+    QCOMPARE(editor_keys.size(), 1);
+    QCOMPARE(editor_keys.takeFirst().at(0).toString(), QStringLiteral("mod-v"));
     QKeyEvent altgr_event(QEvent::KeyPress, Qt::Key_2, Qt::ControlModifier | Qt::AltModifier,
                           QStringLiteral("@"));
     QCoreApplication::sendEvent(canvas, &altgr_event);
@@ -728,8 +728,6 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QVERIFY(text_input_spy.isValid());
     QSignalSpy editor_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
     QVERIFY(editor_key_spy.isValid());
-    QSignalSpy editing_command_spy(canvas, &caret::DocumentCanvas::editingCommandRequested);
-    QVERIFY(editing_command_spy.isValid());
     QTest::keyClick(&window, Qt::Key_X);
     QTRY_COMPARE_WITH_TIMEOUT(text_input_spy.size(), 1, 3000);
     QCOMPARE(text_input_spy.takeFirst().at(0).toString(), QStringLiteral("x"));
@@ -978,9 +976,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
         QString(), 3000);
 
     QTest::keyClick(&window, Qt::Key_Backspace);
-    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
-             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("4"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts().size(), 1);
     QCOMPARE(layout_view_model->paragraphLayouts()
@@ -991,9 +988,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              QStringLiteral("x！"));
 
     QTest::keyClick(&window, Qt::Key_Backspace);
-    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
-             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("5"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .first()
@@ -1003,9 +999,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              QStringLiteral("x"));
 
     QTest::keyClick(&window, Qt::Key_Backspace);
-    QTRY_COMPARE_WITH_TIMEOUT(editing_command_spy.size(), 1, 3000);
-    QCOMPARE(editing_command_spy.takeFirst().at(0).toString(),
-             QStringLiteral("text.delete_backward"));
+    QTRY_COMPARE_WITH_TIMEOUT(editor_key_spy.size(), 1, 3000);
+    QCOMPARE(editor_key_spy.takeFirst().at(0).toString(), QStringLiteral("backspace"));
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("6"), 3000);
     QCOMPARE(layout_view_model->paragraphLayouts()
                  .first()
@@ -1162,12 +1157,18 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCOMPARE(canvas->caretGeometry().value(QStringLiteral("xPt")).toReal(),
              reverse_focus.value(QStringLiteral("xPt")).toReal());
 
+    QSignalSpy copy_key_spy(canvas, &caret::DocumentCanvas::editorKeyRequested);
+    QVERIFY(copy_key_spy.isValid());
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(copy_key_spy.size(), 1, 3000);
+    QCOMPARE(copy_key_spy.takeFirst().at(0).toString(), QStringLiteral("mod-c"));
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("\nabc"));
     QVERIFY(layout_view_model->setSelection(drag_start, drag_end)
                 .value(QStringLiteral("valid"))
                 .toBool());
     QTest::keyClick(&window, Qt::Key_C, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(copy_key_spy.size(), 1, 3000);
+    QCOMPARE(copy_key_spy.takeFirst().at(0).toString(), QStringLiteral("mod-c"));
     QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("abc"));
     QTest::keyClick(&window, Qt::Key_V, Qt::ControlModifier);
     QTRY_COMPARE_WITH_TIMEOUT(layout_view_model->documentGeneration(), QStringLiteral("9"), 3000);

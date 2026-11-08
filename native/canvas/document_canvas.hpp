@@ -156,14 +156,10 @@ class DocumentCanvas : public QQuickItem {
 
   signals:
     void textInputRequested(const QString& text);
-    void commandLineKeyRequested(const QString& key);
-    void editingCommandRequested(const QString& command_id);
     void visualNavigationRequested(bool forward, bool extend);
     void verticalNavigationRequested(int line_delta, bool extend);
     void lineEdgeNavigationRequested(bool end, bool extend);
-    void structureNavigationRequested(const QString& action);
     void editorKeyRequested(const QString& key);
-    void clipboardCommandRequested(const QString& command);
     void inputMethodEventRequested(const QString& preedit, const QString& commit,
                                    int replacement_start, int replacement_length,
                                    int cursor_position_utf16);

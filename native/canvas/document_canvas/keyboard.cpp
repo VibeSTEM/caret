@@ -28,13 +28,10 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
-    const Qt::KeyboardModifiers command_modifiers =
-        semantic_modifiers & (Qt::ControlModifier | Qt::MetaModifier);
-    if (command_modifiers != Qt::NoModifier &&
-        (semantic_modifiers & ~(Qt::ControlModifier | Qt::MetaModifier)) == Qt::NoModifier) {
+    if (keyboard::isModOnly(semantic_modifiers)) {
         if (event->key() == Qt::Key_C || event->key() == Qt::Key_V) {
-            emit clipboardCommandRequested(event->key() == Qt::Key_C ? QStringLiteral("copy")
-                                                                     : QStringLiteral("paste"));
+            emit editorKeyRequested(event->key() == Qt::Key_C ? QStringLiteral("mod-c")
+                                                              : QStringLiteral("mod-v"));
             event->accept();
             return;
         }
@@ -46,7 +43,7 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (keyboard::isPhysicalControlOnly(semantic_modifiers) && event->key() == Qt::Key_Space) {
-        emit structureNavigationRequested(QStringLiteral("expand-selection"));
+        emit editorKeyRequested(QStringLiteral("expand-structure"));
         event->accept();
         return;
     }
@@ -60,36 +57,6 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
-    if (m_command_mode && semantic_modifiers == Qt::NoModifier) {
-        QString command_key;
-        switch (event->key()) {
-        case Qt::Key_Backspace:
-            command_key = QStringLiteral("backspace");
-            break;
-        case Qt::Key_Left:
-            command_key = QStringLiteral("cursor-left");
-            break;
-        case Qt::Key_Right:
-            command_key = QStringLiteral("cursor-right");
-            break;
-        case Qt::Key_Space:
-            command_key = QStringLiteral("space");
-            break;
-        case Qt::Key_Up:
-            command_key = QStringLiteral("previous");
-            break;
-        case Qt::Key_Down:
-            command_key = QStringLiteral("next");
-            break;
-        default:
-            break;
-        }
-        if (!command_key.isEmpty()) {
-            emit commandLineKeyRequested(command_key);
-            event->accept();
-            return;
-        }
-    }
     if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
         if (semantic_modifiers == Qt::NoModifier || semantic_modifiers == Qt::ShiftModifier) {
             emit editorKeyRequested(semantic_modifiers == Qt::ShiftModifier
@@ -100,8 +67,8 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
         }
     }
     if (keyboard::isStructureBlockNavigation(semantic_modifiers, event->key())) {
-        emit structureNavigationRequested(event->key() == Qt::Key_Up ? QStringLiteral("previous")
-                                                                     : QStringLiteral("next"));
+        emit editorKeyRequested(event->key() == Qt::Key_Up ? QStringLiteral("structure-previous")
+                                                           : QStringLiteral("structure-next"));
         event->accept();
         return;
     }
@@ -136,8 +103,13 @@ void DocumentCanvas::keyPressEvent(QKeyEvent* event) {
             break;
         }
     }
-    if (event->key() == Qt::Key_Backspace && modifiers == Qt::NoModifier) {
-        emit editingCommandRequested(QStringLiteral("text.delete_backward"));
+    if (event->key() == Qt::Key_Backspace && semantic_modifiers == Qt::NoModifier) {
+        emit editorKeyRequested(QStringLiteral("backspace"));
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_Delete && semantic_modifiers == Qt::NoModifier) {
+        emit editorKeyRequested(QStringLiteral("delete"));
         event->accept();
         return;
     }

@@ -7,7 +7,8 @@ use caret_doc::{
     BlockEnvironmentKind, DocumentFontTarget, InlineEnvironmentKind, NodeId, PageGeometry,
 };
 
-use super::{EnvironmentKind, Selection};
+use super::{EnvironmentKind, MathTextPosition, Pos, Selection};
+use caret_layout::VisualAffinity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -15,17 +16,82 @@ pub enum Direction {
     Forward,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EditorKey {
     Escape,
     Enter,
     Tab,
     ShiftEnter,
+    Backspace,
+    Backslash,
+    Dollar,
+    Delete,
     ModBackspace,
+    ModC,
+    ModV,
+    ModZ {
+        redo: bool,
+    },
+    ModSpace,
+    LeftArrow {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+    },
+    RightArrow {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+    },
+    UpArrow {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+        structure: bool,
+    },
+    DownArrow {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+        structure: bool,
+    },
+    Home {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+    },
+    End {
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+    },
+}
+
+/// app 从同代布局快照算出的单次导航候选；不持有页面布局模型。
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavigationCandidate {
+    Document {
+        focus: Pos,
+        visual_affinity: VisualAffinity,
+        generation: NavigationGeneration,
+    },
+    MathText {
+        focus: MathTextPosition,
+        visual_affinity: VisualAffinity,
+        generation: NavigationGeneration,
+    },
+    MathTextHit {
+        hit: crate::PageMathTextHit,
+        generation: NavigationGeneration,
+    },
+}
+
+/// 单次视觉候选来源布局快照的身份与代际。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NavigationGeneration {
+    pub session_id: NodeId,
+    pub document_generation: u64,
+    pub font_generation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// 将宿主提交的字符按当前 Session 焦点送往命令输入、快捷键前缀或文本编辑。
+    TextInput(String),
     InsertText(String),
     InsertOneCharacterWidthSpace,
     InsertTwoCharacterWidthSpace,
@@ -90,6 +156,7 @@ pub enum Command {
 impl Command {
     pub const fn id(&self) -> &'static str {
         match self {
+            Self::TextInput(_) => "text.input",
             Self::InsertText(_) => "text.insert",
             Self::InsertOneCharacterWidthSpace => "text.insert.one_character_width_space",
             Self::InsertTwoCharacterWidthSpace => "text.insert.two_character_width_space",
@@ -129,6 +196,27 @@ impl Command {
             Self::EditorKey(EditorKey::Tab) => "interaction.tab",
             Self::EditorKey(EditorKey::ShiftEnter) => "interaction.shift_enter",
             Self::EditorKey(EditorKey::ModBackspace) => "interaction.mod_backspace",
+            Self::EditorKey(EditorKey::LeftArrow { .. }) => "navigation.left",
+            Self::EditorKey(EditorKey::RightArrow { .. }) => "navigation.right",
+            Self::EditorKey(EditorKey::Backspace) => "text.delete_backward",
+            Self::EditorKey(EditorKey::Delete) => "text.delete_forward",
+            Self::EditorKey(EditorKey::Backslash) => "cmdline.begin",
+            Self::EditorKey(EditorKey::Dollar) => "math.begin_inline",
+            Self::EditorKey(EditorKey::ModC) => "clipboard.copy",
+            Self::EditorKey(EditorKey::ModV) => "clipboard.paste",
+            Self::EditorKey(EditorKey::ModZ { redo: false }) => "history.undo",
+            Self::EditorKey(EditorKey::ModZ { redo: true }) => "history.redo",
+            Self::EditorKey(EditorKey::ModSpace) => "selection.expand_structure",
+            Self::EditorKey(EditorKey::UpArrow {
+                structure: true, ..
+            }) => "struct.prev",
+            Self::EditorKey(EditorKey::DownArrow {
+                structure: true, ..
+            }) => "struct.next",
+            Self::EditorKey(EditorKey::UpArrow { .. }) => "navigation.up",
+            Self::EditorKey(EditorKey::DownArrow { .. }) => "navigation.down",
+            Self::EditorKey(EditorKey::Home { .. }) => "navigation.home",
+            Self::EditorKey(EditorKey::End { .. }) => "navigation.end",
             Self::SetSelection(_) => "selection.set",
             Self::UpdateComposition { .. } => "ime.update",
             Self::CommitComposition { .. } => "ime.commit",
