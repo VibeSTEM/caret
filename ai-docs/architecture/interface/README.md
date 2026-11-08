@@ -7,4 +7,4 @@
 | 窗口、画布、补全 | [界面外壳](ui-shell.md) |
 | 文稿光标、选区与职责 | [文稿光标与选区](caret.md) |
 | 画布背景与环境高亮 | [画布与交互背景](canvas-highlighting.md) |
-| 已定键位与键盘路由 | [快捷键](keyboard-shortcuts.md)、[键盘路由](keyboard-routing.md) |
+| 已定键位与键盘路由 | [快捷键](keyboard-shortcuts.md)、[键盘路由](keyboard-routing.md)、[快捷键管理架构](keyboard-shortcut-architecture.md) |

@@ -102,7 +102,7 @@
 | 068 | 架构 | [共享网格几何与数学页面适配架构优化](task/068-shared-grid-layout-and-math-page-architecture.md) | P2 | 042、043 | L | done |
 | 069 | 数学交互 | [数学交互与跨平台验收](task/069-math-interaction-and-platform-acceptance.md) | P2 | 043、044、071、072 | L | planned |
 | 070 | CI/测试 | [Nightly 失败修复与布局测试补齐](task/070-nightly-failures-and-layout-coverage.md) | P1 | 006 | S | done |
-| 071 | 架构 | [宿主焦点协议与键盘意图路由](task/071-host-focus-and-key-routing.md) | P1 | 010、021、027、030、043、044、073 | L | planned |
+| 071 | 架构 | [宿主焦点协议与键盘意图路由](task/071-host-focus-and-key-routing.md) | P1 | 010、021、027、030、043、044、073 | L | in-progress |
 | 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | ready |
 | 073 | 文档结构 | [块环境内容判定保全公式节点](task/073-environment-content-preservation.md) | P1 | 010、021 | S | done |
 

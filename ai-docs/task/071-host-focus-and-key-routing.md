@@ -1,6 +1,6 @@
 # 071 — 宿主焦点协议与键盘意图路由
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：010、021、027、030、043、044、073
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -20,13 +20,14 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 ## 范围与非目标
 
 - 先以当前代码和可复现行为确认不同焦点状态、导航入口、公式边界、块环境停靠、结构选区、删除与撤销恢复之间的真实差异；issue #105/#107 记录的是较早基线，不能直接视为现状。
-- 不把焦点字段机械合成互斥状态：composition、command line 与 math edit 在当前实现中可共存；先建模合法状态组合、宿主锚点和迁移，再选择表示方式。
+- 不把焦点字段机械合成互斥状态：已确认 MathEdit 可与 MathText composition 共存，也可与 command line 共存；其他状态组合逐项确认允许/拒绝契约，不推断为任意组合均可共存。先建模合法状态组合、宿主锚点和迁移，再选择表示方式。
 - 定义稳定的宿主层可进入对象/焦点目标契约，让 Rust 会话权威决定焦点目标分派、进入/离开、边界停靠、空对象删除与结构选择。实现可用 enum、显式命令结果或其他合适的 Rust 机制；不预设动态 trait 或把所有状态塞进单个 enum。
 - 将 app 视觉导航缩为快照/几何查询、意图转交与交互状态投影。视觉移动几何仍由布局快照提供；Qt 只映射实体按键及修饰键，不持有环境语义。
-- 在 engine session 层建立键盘意图路由的合适边界，覆盖方向键、Home/End、Shift 扩选、preferred x、视觉 affinity、Escape、Enter 等有焦点优先级的意图；正文与 MathTree 的内部移动算法留在各自领域模块。`session/keyboards/` 目前仅处理 `EditorKey`，是否扩展或使用相邻模块须等几何接口确定后再决定。IME 预编辑、generation/font-generation 校验仍要正确传播。
+- `keyboard-shortcuts.md` 中所有当前已支持的画布/编辑器快捷键都由 `crates/caret-engine/src/editing/session/keyboards/` 管理，包括命令前缀、Backspace、方向键、Home/End、Tab/Enter/Escape、结构快捷键、Mod+C/V、Mod+Z/Redo 和新增 `$` 数学模式入口。按实体键或语义独立快捷键家族拆文件：只改变扩选/修饰状态的变体留在基础键文件，Mod+Backspace、Mod+Z 等独立语义可有单独文件；共享入口只做按键分派。新编辑器快捷键按相同规则扩展。窗口级打开/保存/缩放仍由窗口焦点作用域处理，不进入编辑器 Session。不要新建按上下文命名的 `math.rs` 路由模块，也不要让 `math_edit.rs`、app、QML 各自仲裁编辑器快捷键。
+- app 持有并计算页面布局模型及视觉几何，只把单次视觉候选、preferred x 或 visual affinity 等必要标量作为意图数据交给具体键处理器；Session 校验候选、裁决当前层级焦点并提交状态迁移。页面布局模型、几何计算及其持久状态不进入 engine。IME 预编辑、generation/font-generation 校验仍要正确传播；剪贴板 IO 仍由 app 适配，Mod+C/Mod+V 的会话语义和上下文判断由对应按键模块负责。
 - 审核并合并重复的块路径、相邻对象和宿主边界查找；`structure` 与 `math_edit` 的现有查找支持不同节点类型和返回契约，只有统一类型、嵌套遍历和失败语义兼容后才合并，不为缩短大文件而迁移代码。
 - 保留与 IME composition、command line 等正交的交互状态；只有证明确属互斥的编辑焦点才收敛为单一权威状态。消除冗余投影时保留可恢复的选择、撤销与焦点历史。
-- 不将整套方向键算法搬进 keyboards，不把几何或平台映射放入 engine，也不为目录整洁新建 crate。
+- 不将整套方向键几何算法搬进 keyboards；页面布局模型、几何计算和持久化状态归 app，单次几何候选与必要标量可作为意图输入 engine。平台键映射归 Qt；不为目录整洁新建 crate。
 - 不扩展 `caret-grid-layout` 的职责；本任务只记录真实第二消费者出现时的评估触发条件，不把未来表格/列表接入算作已实现。
 
 ## 前置条件与待决策
@@ -51,6 +52,10 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 ## 验收标准
 
 - [ ] 对应 issue 证据在当前 HEAD 上已确认或注明过时；关键行为有可复现的成功、边界、拒绝和撤销恢复用例。
+- [ ] 对照唯一键位清单迁移所有当前已支持的画布快捷键；对应处理器按实体键或语义独立快捷键家族放在 `session/keyboards/`，包括必要的修饰变体；不在 `math_edit.rs`、app 或 Qt 留编辑器快捷键优先级分支。尚未实现的表格键只登记目标文件，实际功能留给 045/046。
+- [ ] `$` 字符进入数学模式，处理器按语义字符命名为 `dollar.rs`，不绑定 `Shift+4` 等物理键位；`、` 和 `¥` 保持普通文本输入。
+- [ ] `keyboard-shortcuts.md` 是实际键位清单的唯一权威；`keyboard-shortcut-architecture.md` 是逐键模块和优先级架构的唯一权威；`keyboard-routing.md` 仅作入口，不复制清单或行为矩阵。
+- [ ] 逐键文件能独立表达不同上下文层级；命令输入、IME composition、结构选区、MathTree/MathText/MathSource、块环境退出和正文根据各键规则优先处理，正交状态不被误合并。
 - [ ] 从相邻正文用方向键可进入 InlineMath、Equation、Align；在对象边界再按一次可返回正确宿主位置，扩选和视觉方向对称。
 - [ ] Escape、Enter 等按键优先级有单一权威分派；公式上下文下不再由前置拦截绕过共享意图路由。
 - [ ] app 不再承担环境退出、焦点类型选择或相邻结构语义判断；Qt 不实现业务路由；engine 不重算 Parley 页面几何。
@@ -75,9 +80,11 @@ Issue：[#105 宿主焦点与环境协议](https://github.com/VibeSTEM/caret/iss
 
 ## 决策与工作记录
 
+- 2026-11-08：依赖 010、021、027、030、043、044、073 均已完成；从更新后的 main 新建 `yuki/task-071-host-focus-key-routing` 开始核对当前代码与行为。
 - 2026-11-08：通过 `gh issue view` 审查 #105/#107；确认宿主路由的 app/engine 重复边界仍在 HEAD，task 040 已完成的 AutoSave/FFI 与 QML 清理不重开。确认 068 已建立的 grid 几何边界正确，数学 table adapter 已使用共享网格线坐标；不因“偏薄”增加 crate 职责，也不将“两个消费者”提升为通用 crate 规则。
 - 2026-11-08：分域静态审查发现 `environment_has_content` 忽略 Equation/Align，可能造成含公式块环境被退格整体删除；安全修复拆为 073，并置于本架构重构前。
 - 2026-11-08：创建任务承接共享焦点和键盘意图边界；数学文本岛的 bidi/拖选和平台验收继续由 069 负责。
+- 2026-11-08：维护者明确所有当前支持的编辑器快捷键须统一按实体键或语义独立快捷键家族在 `session/keyboards/` 管理；覆盖四向键、Home/End、Backspace、Mod+C/V、Mod+Z/Redo、命令前缀和结构修饰键。表格快捷键仍按 045/046 计划状态记录，不提前实现。新增长按键字符 `$` 进入数学模式，以语义命名 `dollar.rs`，`、` / `¥` 保持普通文本。快捷键优先级按键组织，不按编辑上下文组织 `math.rs`。文档权威分工为键位清单 `keyboard-shortcuts.md`、管理架构 `keyboard-shortcut-architecture.md`、路由入口 `keyboard-routing.md`。此架构决策先由独立审查确认并单独提交文档，再继续代码迁移。
 
 ## 完成摘要
 
