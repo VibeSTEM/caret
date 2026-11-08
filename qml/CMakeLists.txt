@@ -125,16 +125,6 @@ if(BUILD_TESTING)
   add_test(NAME caret_code_font_failure_test COMMAND caret_code_font_failure_test)
   set(_caret_code_font_failure_test_environment
       "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${QT_STAGING}/plugins;QT_FORCE_STDERR_LOGGING=1")
-  if(UNIX
-     AND NOT APPLE
-     AND "address" IN_LIST _caret_sanitizers)
-    # 只抑制这个字体注册测试中 Qt/Fontconfig 初始化栈的系统分配报告。
-    list(
-      APPEND
-      _caret_code_font_failure_test_environment
-      "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/sanitizers/linux-fontconfig-lsan.supp"
-    )
-  endif()
   set_tests_properties(caret_code_font_failure_test
                        PROPERTIES ENVIRONMENT "${_caret_code_font_failure_test_environment}")
 

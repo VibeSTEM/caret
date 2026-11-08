@@ -21,7 +21,8 @@ leak:TCGFontCache::CopyFontWithOpticalSizeVariation
 leak:XTCopyPropertiesForFontsMatchingRequest
 leak:XTCopyPropertiesForFont
 
-# 较新 macOS 版本上的 Qt 6.11 会经过这些 CoreText 缓存路径。
+# Qt 6.12.0 / macOS 27 的完整 ASan/UBSan CTest 仍命中以下 CoreText 路径；
+# 未抑制报告保留在 task 067 中，作为剩余生命周期调查项。
 leak:QCoreTextFontDatabase::invalidate
 leak:QCoreTextFontDatabase::fallbacksForFamily
 leak:QCoreTextFontEngine::boundingBox
@@ -32,8 +33,5 @@ leak:QCoreTextFontEngine::ct_getSfntTable
 # macOS 系统菜单字体初始化期间，CoreText 保留进程生命周期内的字体缓存。
 leak:_refreshMenuFontsIfNeeded
 
-# macOS 27 上 Qt 6.11 扫描插件目录产生 URL 分配时最近的导出栈帧。
-leak:qt_apple_urlFromPossiblySecurityScopedURL
-
-# macOS 26 Nightly 的两笔泄漏报告来自 LaunchServices 通知注册回调；等待新 Nightly 复验。
+# macOS 26 Nightly 的两笔泄漏报告来自 LaunchServices 通知注册回调。
 leak:LaunchServices::notifyd::NotifyToken::RegisterDispatch

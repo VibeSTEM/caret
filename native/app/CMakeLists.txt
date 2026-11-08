@@ -54,8 +54,10 @@ qt_finalize_executable(caret_native_app)
 
 if(BUILD_TESTING)
   add_test(NAME App.Version COMMAND "$<TARGET_FILE:caret_native_app>" --version)
-  add_test(NAME App.InvalidArgument COMMAND "$<TARGET_FILE:caret_native_app>" --invalid-argument)
-  set_tests_properties(App.InvalidArgument PROPERTIES LABELS "cpp;app" WILL_FAIL TRUE)
+  add_test(NAME App.InvalidArgument
+           COMMAND "${CMAKE_COMMAND}" "-DCARET_APP_EXECUTABLE=$<TARGET_FILE:caret_native_app>" -P
+                   "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/tests/check-invalid-cli-argument.cmake")
+  set_tests_properties(App.InvalidArgument PROPERTIES LABELS "cpp;app" TIMEOUT 10)
   add_test(
     NAME App.HeadlessWindowLoads
     COMMAND
