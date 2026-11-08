@@ -28,8 +28,8 @@ mod text_run_split;
 mod tree_position;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
-    Affinity, Command, CommandLine, Direction, EditError, EditorKey, Effect, Pos, PositionMap,
-    Selection, StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, Effect, Pos, PositionMap, Selection,
+    StoryId,
 };
 use super::Session;
 use super::history::{
@@ -382,7 +382,7 @@ fn math_text_selection_range(
 pub(super) const ALIGN_BEGIN: &str = "\\begin{aligned}";
 const ALIGN_END: &str = "\\end{aligned}";
 /// 对齐公式里 Enter 插入的换行分隔符。
-const ALIGN_ROW_BREAK: &str = " \\\\ ";
+pub(super) const ALIGN_ROW_BREAK: &str = " \\\\ ";
 
 /// 正在编辑的公式对象。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1218,20 +1218,8 @@ impl Session {
 
     /// 公式编辑期间截获输入；`None` 表示命令由 Session 的常规分派继续处理。
     pub(super) fn run_math_edit(&mut self, command: &Command) -> Result<Option<Effect>, EditError> {
-        // Mod+Backspace 的状态优先级由 keyboards::mod_backspace 单点裁决。
-        if matches!(command, Command::EditorKey(EditorKey::ModBackspace)) {
-            return Ok(None);
-        }
         if self.math_edit.is_none() {
             return Ok(None);
-        }
-        if self.composition.is_some() && matches!(command, Command::EditorKey(EditorKey::Escape)) {
-            let composition_id = self
-                .composition
-                .as_ref()
-                .ok_or(EditError::CompositionPending)?
-                .id;
-            return self.cancel_composition(composition_id).map(Some);
         }
         let math_text_active = self.math_edit_is_text_branch();
         let composition_command = matches!(
@@ -1282,12 +1270,6 @@ impl Session {
                     | Command::Undo
                     | Command::Redo
                     | Command::Delete(Direction::Backward)
-                    | Command::EditorKey(
-                        EditorKey::Escape
-                            | EditorKey::Enter
-                            | EditorKey::Tab
-                            | EditorKey::ShiftEnter
-                    )
             ) {
                 Ok(None)
             } else {
@@ -1366,27 +1348,10 @@ impl Session {
             | Command::RemoveRunPropertyPreservingContent(_) => {
                 return Err(EditError::UnsupportedInlineFormat);
             }
-            Command::EditorKey(EditorKey::Enter)
-                if matches!(
-                    self.math_edit.as_ref().map(|edit| &edit.target),
-                    Some(MathEditTarget::Block { align: true, .. })
-                ) && !self.math_edit_is_text_branch() =>
-            {
-                if self.math_edit_is_tree_branch() {
-                    self.math_tree_align_break(true)?
-                } else {
-                    self.math_insert_raw(ALIGN_ROW_BREAK, ALIGN_ROW_BREAK.len())?
-                }
-            }
-            Command::EditorKey(EditorKey::Enter) if self.math_edit_is_text_branch() => {
-                return Err(EditError::UnsupportedNewline);
-            }
             Command::InsertOneCharacterWidthSpace | Command::InsertTwoCharacterWidthSpace => {
                 // 数学槽位导航尚未定义；Tab 保留公式焦点，不回退为正文空格输入。
                 Effect::default()
             }
-            Command::EditorKey(EditorKey::Tab) => Effect::default(),
-            Command::EditorKey(EditorKey::ShiftEnter) => Effect::default(),
             Command::SetSelection(None) => {
                 if self.math_edit_is_text_branch() {
                     let cursor = self
@@ -1433,23 +1398,6 @@ impl Session {
             Command::SetPageGeometry(_)
             | Command::SetDefaultFontFamily(_)
             | Command::SetDocumentFontFamily { .. } => return Ok(None),
-            Command::EditorKey(EditorKey::Escape)
-                if self
-                    .math_edit
-                    .as_ref()
-                    .is_some_and(MathEdit::source_draft_is_pending) =>
-            {
-                if let Some(edit) = &mut self.math_edit {
-                    if let Some(draft) = &edit.source_draft {
-                        edit.cursor = draft.base_cursor();
-                    }
-                    edit.source_draft = None;
-                }
-                self.exit_math_edit(Direction::Forward, true)?
-            }
-            Command::EditorKey(EditorKey::Escape | EditorKey::Enter) => {
-                self.exit_math_edit(Direction::Forward, true)?
-            }
             Command::BeginCommandLine => {
                 self.command_line = Some(CommandLine::math(self.selection.focus.clone()));
                 Effect::default()
@@ -1624,7 +1572,144 @@ impl Session {
         })
     }
 
-    /// 从正文进入相邻公式：向前进入光标后的公式（光标置于开头），向后进入光标前的公式（光标置于末尾）。
+    /// 从正文进入相邻公式：候选必须跨过单个公式，且正文两端必须落在对应段首/段尾。
+    pub(super) fn navigation_math_crossing_direction(
+        &self,
+        current: &Pos,
+        target: &Pos,
+    ) -> Result<Option<Direction>, EditError> {
+        if current.story != target.story {
+            return Ok(None);
+        }
+        if current.paragraph_id == target.paragraph_id {
+            let object_len = OBJECT_REPLACEMENT.len_utf8();
+            for (start, _) in inline_math_slots(self.paragraph_for(current)?)? {
+                let Some(end) = start.checked_add(object_len) else {
+                    return Err(EditError::InvalidPosition);
+                };
+                if current.offset == start && target.offset == end {
+                    return Ok(Some(Direction::Forward));
+                }
+                if current.offset == end && target.offset == start {
+                    return Ok(Some(Direction::Backward));
+                }
+            }
+            return Ok(None);
+        }
+        if current.story != StoryId::Body || target.story != StoryId::Body {
+            return Ok(None);
+        }
+
+        let Some(current_location) = self.paragraph_index.get(&current.paragraph_id) else {
+            return Ok(None);
+        };
+        let Some(target_location) = self.paragraph_index.get(&target.paragraph_id) else {
+            return Ok(None);
+        };
+        let Some((current_parents, current_index)) =
+            history::parent_environment_path(&self.document.body, current_location)
+        else {
+            return Ok(None);
+        };
+        let Some((target_parents, target_index)) =
+            history::parent_environment_path(&self.document.body, target_location)
+        else {
+            return Ok(None);
+        };
+        if current_parents != target_parents {
+            return Ok(None);
+        }
+        let (math_index, direction) = if target_index == current_index.saturating_add(2) {
+            (current_index + 1, Direction::Forward)
+        } else if current_index == target_index.saturating_add(2) {
+            (target_index + 1, Direction::Backward)
+        } else {
+            return Ok(None);
+        };
+        let blocks = block_list_ref(&self.document.body, &current_parents)?;
+        if !matches!(
+            blocks.get(math_index),
+            Some(Block::Equation(_) | Block::Align(_))
+        ) {
+            return Ok(None);
+        }
+        let current_len = TextMap::new(self.paragraph_for(current)?)?.text.len();
+        let target_len = TextMap::new(self.paragraph_for(target)?)?.text.len();
+        let crosses_at_host_edges = match direction {
+            Direction::Forward => current.offset == current_len && target.offset == 0,
+            Direction::Backward => current.offset == 0 && target.offset == target_len,
+        };
+        if !crosses_at_host_edges {
+            return Err(EditError::InvalidPosition);
+        }
+        Ok(Some(direction))
+    }
+
+    /// 仅当当前正文焦点紧邻受支持的公式对象时进入该公式。
+    pub(super) fn enter_adjacent_math_if_present(
+        &mut self,
+        direction: Direction,
+    ) -> Result<bool, EditError> {
+        if self.selection.anchor != self.selection.focus
+            || self.math_edit.is_some()
+            || self.structure_selection.is_some()
+            || self.selected_block_environment.is_some()
+            || !self.selected_block_environments.is_empty()
+            || self.composition.is_some()
+            || self.command_line.is_some()
+            || self.block_environment_exit.is_some()
+        {
+            return Ok(false);
+        }
+        let focus = self.selection.focus.clone();
+        let paragraph = self.paragraph_for(&focus)?;
+        let object_len = OBJECT_REPLACEMENT.len_utf8();
+        if inline_math_slots(paragraph)?
+            .iter()
+            .any(|(start, _)| match direction {
+                Direction::Forward => *start == focus.offset,
+                Direction::Backward => start + object_len == focus.offset,
+            })
+        {
+            self.enter_math(direction)?;
+            return Ok(self.math_edit.is_some());
+        }
+        let at_edge = match direction {
+            Direction::Forward => focus.offset == TextMap::new(paragraph)?.text.len(),
+            Direction::Backward => focus.offset == 0,
+        };
+        if !at_edge || focus.story != StoryId::Body {
+            return Ok(false);
+        }
+        let Some(location) = self.paragraph_index.get(&focus.paragraph_id) else {
+            return Ok(false);
+        };
+        if location.is_title {
+            return Ok(false);
+        }
+        let Some((parent_ids, sibling_index)) =
+            history::parent_environment_path(&self.document.body, location)
+        else {
+            return Ok(false);
+        };
+        let neighbour = match direction {
+            Direction::Forward => sibling_index.checked_add(1),
+            Direction::Backward => sibling_index.checked_sub(1),
+        };
+        let Some(neighbour) = neighbour else {
+            return Ok(false);
+        };
+        let blocks = block_list_ref(&self.document.body, &parent_ids)?;
+        if !matches!(
+            blocks.get(neighbour),
+            Some(Block::Equation(_) | Block::Align(_))
+        ) {
+            return Ok(false);
+        }
+        self.enter_math(direction)?;
+        Ok(self.math_edit.is_some())
+    }
+
     pub(super) fn enter_math(&mut self, direction: Direction) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
@@ -1840,7 +1925,11 @@ impl Session {
         self.write_math_source(source, cursor, Some(EditGroup::InsertText), source_edit)
     }
 
-    fn math_insert_raw(&mut self, text: &str, cursor_in_text: usize) -> Result<Effect, EditError> {
+    pub(super) fn math_insert_raw(
+        &mut self,
+        text: &str,
+        cursor_in_text: usize,
+    ) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         let mut source = edit.source().ok_or(EditError::InvalidPosition)?.to_owned();
         let source_edit = edit.cursor..edit.cursor;
@@ -2202,10 +2291,19 @@ impl Session {
             .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Text { .. }))
     }
 
-    fn math_edit_is_tree_branch(&self) -> bool {
+    pub(super) fn math_edit_is_tree_branch(&self) -> bool {
         self.math_edit
             .as_ref()
             .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Tree { .. }))
+    }
+
+    pub(super) fn cancel_math_source_draft(&mut self) {
+        if let Some(edit) = &mut self.math_edit {
+            if let Some(draft) = &edit.source_draft {
+                edit.cursor = draft.base_cursor();
+            }
+            edit.source_draft = None;
+        }
     }
 
     fn math_tree_insert_text(&mut self, text: &str) -> Result<Effect, EditError> {
@@ -2320,7 +2418,7 @@ impl Session {
         )
     }
 
-    fn math_tree_align_break(&mut self, new_row: bool) -> Result<Effect, EditError> {
+    pub(super) fn math_tree_align_break(&mut self, new_row: bool) -> Result<Effect, EditError> {
         let edit = self.math_edit.clone().ok_or(EditError::InvalidPosition)?;
         let MathEditTarget::Block {
             block_id,

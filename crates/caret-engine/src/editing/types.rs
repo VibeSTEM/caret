@@ -14,6 +14,14 @@ pub struct Effect {
     pub position_map: Option<PositionMap>,
     /// 仅当历史补丁只影响同一段落时提供，可供应用层安全复用其余布局。
     pub changed_paragraph_id: Option<NodeId>,
+    /// 由 Session 仲裁后交给 app 适配层执行的系统剪贴板动作。
+    pub clipboard_action: Option<ClipboardAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardAction {
+    Copy,
+    Paste,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

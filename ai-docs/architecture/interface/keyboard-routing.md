@@ -22,7 +22,7 @@
 
 本文只定义跨层边界。画布按键的单键优先级、状态迁移和各处理器职责以[快捷键管理架构](keyboard-shortcut-architecture.md)为唯一权威；用户可见键位清单以[快捷键](keyboard-shortcuts.md)为唯一权威。本页不重复按键行为表。
 
-当前基线中，Session 的 `EditorKey` 单点入口覆盖部分按键；公式上下文仍在数学编辑分派中处理，方向键和 Home/End 仍由 `DocumentViewRuntime` 提供独立入口，Qt `commandMode` 仍前置处理部分方向键。071 的目标是让**所有现有画布编辑器快捷键**都进入 `session/keyboards/` 中对应的实体键处理器。窗口和控件作用域不并入编辑器 Session。
+当前所有已支持的画布编辑器快捷键都通过 `Session::run_editor_key` 分派到 `session/keyboards/` 的具体处理器。方向键、Home/End 的布局候选由 app 计算后随意图交回 Session；Qt `commandMode` 只投影光标显示，不改变编辑器键语义。窗口和控件作用域不并入编辑器 Session。尚未实现的表格快捷键只在键位规划中标注，不宣称已接入。
 
 平台 IME 候选界面可先消费 Escape；画布 IME 预编辑的物理事件由 Qt 输入适配处理。除这些平台输入例外外，Qt 不根据命令、公式、结构选择等编辑状态自行仲裁按键。当前 Rust 按键集合没有 `ShiftTab`；表格导航须在功能实现时定义并进入对应键处理器，不能把键位表中的目标行为读作已支持。
 

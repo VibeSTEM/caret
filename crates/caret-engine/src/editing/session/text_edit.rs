@@ -150,6 +150,7 @@ impl Session {
                     selection_changed: true,
                     composition_changed: false,
                     changed_paragraph_id: None,
+                    clipboard_action: None,
                     position_map: Some(position_map),
                 });
             }
@@ -190,6 +191,7 @@ impl Session {
                     selection_changed: true,
                     composition_changed: false,
                     changed_paragraph_id: None,
+                    clipboard_action: None,
                     position_map: Some(position_map),
                 });
             }
@@ -229,6 +231,7 @@ impl Session {
             selection_changed: true,
             composition_changed: false,
             changed_paragraph_id: None,
+            clipboard_action: None,
             position_map: Some(PositionMap::TextEdit {
                 paragraph_id,
                 start: from,

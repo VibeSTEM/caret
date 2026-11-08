@@ -12,6 +12,7 @@ mod flow_edit;
 mod flow_format;
 mod flow_map;
 mod grapheme;
+mod navigation;
 mod paragraph_ops;
 mod position;
 mod session;
@@ -19,7 +20,7 @@ mod session;
 mod tests;
 mod text_map;
 
-pub use command::{Command, Direction, EditorKey};
+pub use command::{Command, Direction, EditorKey, NavigationCandidate, NavigationGeneration};
 pub use command_line::{CommandLine, CommandLineMode};
 pub use command_registry::CommandCandidate;
 pub use environment::{
@@ -27,6 +28,7 @@ pub use environment::{
     EnvironmentSource, InlineSpan,
 };
 pub use error::EditError;
+pub use navigation::NavigationIntent;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
 pub use session::{
     CompositionRange, CompositionUpdateCandidate, MathEdit, MathEditBranch, MathEditTarget,
@@ -35,6 +37,6 @@ pub use session::{
     MathTreePositionError, Session, SessionCheckpoint,
 };
 pub use text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
-pub use types::{Effect, InputComposition};
+pub use types::{ClipboardAction, Effect, InputComposition};
 
 mod types;

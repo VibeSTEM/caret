@@ -4,11 +4,14 @@
 // 署名：Yuki Lu
 
 use super::super::Session;
-use crate::editing::{Command, EditError, Effect};
+use crate::editing::{Command, Direction, EditError, Effect};
 
 impl Session {
-    /// 按命令输入、输入法组字、选区和结构的顺序处理 Escape。
+    /// 按输入法组字、命令输入、数学焦点、选区和结构的顺序处理 Escape。
     pub(super) fn handle_escape(&mut self) -> Result<Effect, EditError> {
+        if let Some(composition) = &self.composition {
+            return self.cancel_composition(composition.id);
+        }
         if self.command_line.is_some() {
             let had_preedit = self
                 .command_line
@@ -18,8 +21,15 @@ impl Session {
             effect.composition_changed = had_preedit;
             return Ok(effect);
         }
-        if let Some(composition) = &self.composition {
-            return self.cancel_composition(composition.id);
+        if self
+            .math_edit
+            .as_ref()
+            .is_some_and(|edit| edit.source_draft_is_pending())
+        {
+            self.cancel_math_source_draft();
+        }
+        if self.math_edit.is_some() {
+            return self.exit_math_edit(Direction::Forward, true);
         }
         if self.selected_block_environment.take().is_some() {
             self.selected_block_environments.clear();

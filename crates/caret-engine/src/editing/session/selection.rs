@@ -5,7 +5,9 @@
 
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::text_map::TextMap;
-use super::super::{Affinity, Command, Direction, EditError, Effect, Pos, Selection, StoryId};
+use super::super::{
+    Affinity, Command, Direction, EditError, Effect, NavigationIntent, Pos, Selection, StoryId,
+};
 use super::Session;
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
@@ -232,10 +234,24 @@ impl Session {
     /// 提交键盘导航产生的位置，并按逻辑移动方向更新环境边界亲和性。
     pub fn set_navigation_selection(
         &mut self,
+        selection: Selection,
+        visual_affinity: VisualAffinity,
+        intent: NavigationIntent,
+    ) -> Result<Effect, EditError> {
+        self.set_navigation_selection_with_direction(selection, visual_affinity, intent, None)
+    }
+
+    /// 提交键盘导航候选；空段落没有可从位置推导的方向，因此由实体方向键显式提供。
+    pub(super) fn set_navigation_selection_with_direction(
+        &mut self,
         mut selection: Selection,
         visual_affinity: VisualAffinity,
+        intent: NavigationIntent,
+        logical_direction: Option<Direction>,
     ) -> Result<Effect, EditError> {
         self.ensure_math_edit_revision_current()?;
+        self.validate_navigation_position(&selection.anchor)?;
+        self.validate_navigation_position(&selection.focus)?;
         let was_collapsed = selection.anchor == selection.focus;
         if self.range_requires_block_environment_selection(&selection.anchor, &selection.focus) {
             return self.select_block_environments_from_range(
@@ -243,6 +259,27 @@ impl Session {
                 selection.focus,
                 visual_affinity,
             );
+        }
+        self.validate_selection(&selection)?;
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && self.selection.anchor == self.selection.focus
+            && self.math_edit.is_none()
+            && let Some(direction) =
+                self.navigation_math_crossing_direction(&self.selection.focus, &selection.focus)?
+        {
+            let effect = self.enter_math(direction)?;
+            if self.math_edit.is_some() {
+                return Ok(effect);
+            }
+        }
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && self.selection.anchor == self.selection.focus
+            && let Some(direction) =
+                self.navigation_environment_exit_direction(&selection.focus, logical_direction)?
+        {
+            return self.run(Command::ExitBlockEnvironment(direction));
         }
         let ordering = compare_positions(
             &self.paragraph_index,
@@ -389,6 +426,59 @@ impl Session {
             selection_changed: changed,
             composition_changed: cancels_command_line_preedit,
             ..Effect::default()
+        })
+    }
+
+    fn validate_navigation_position(&mut self, position: &Pos) -> Result<(), EditError> {
+        self.text_map_for(position)?.validate_pos(position)
+    }
+
+    /// 仅在经过位置校验和相邻公式仲裁后，判断候选是否跨出当前块环境。
+    fn navigation_environment_exit_direction(
+        &mut self,
+        target: &Pos,
+        visual_direction: Option<Direction>,
+    ) -> Result<Option<Direction>, EditError> {
+        let current = self.selection.focus.clone();
+        if current.paragraph_id == target.paragraph_id {
+            return Ok(None);
+        }
+        let current_environments = self
+            .structure_index
+            .at(&caret_structure::StructurePosition {
+                paragraph_id: current.paragraph_id.clone(),
+                offset_utf8: current.offset,
+            })
+            .into_iter()
+            .filter(|entry| entry.kind.is_block_environment())
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>();
+        let target_environments = self
+            .structure_index
+            .at(&caret_structure::StructurePosition {
+                paragraph_id: target.paragraph_id.clone(),
+                offset_utf8: target.offset,
+            })
+            .into_iter()
+            .filter(|entry| entry.kind.is_block_environment())
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>();
+        if current_environments.is_empty()
+            || !current_environments
+                .iter()
+                .any(|id| !target_environments.contains(id))
+        {
+            return Ok(None);
+        }
+        let text_len = self.text_map_for(&current)?.text.len();
+        Ok(if text_len == 0 {
+            visual_direction
+        } else if current.offset == text_len {
+            Some(Direction::Forward)
+        } else if current.offset == 0 {
+            Some(Direction::Backward)
+        } else {
+            None
         })
     }
 

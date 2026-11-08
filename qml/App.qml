@@ -450,14 +450,14 @@ Window {
 
     Shortcut {
         sequences: [StandardKey.Undo]
-        enabled: LayoutViewModel.canUndo
-        onActivated: LayoutViewModel.undo()
+        enabled: pageSurface.canvasHasActiveFocus && LayoutViewModel.canUndo
+        onActivated: LayoutViewModel.handleEditorKey("mod-z")
     }
 
     Shortcut {
         sequences: [StandardKey.Redo]
-        enabled: LayoutViewModel.canRedo
-        onActivated: LayoutViewModel.redo()
+        enabled: pageSurface.canvasHasActiveFocus && LayoutViewModel.canRedo
+        onActivated: LayoutViewModel.handleEditorKey("mod-shift-z")
     }
 
     Shortcut {

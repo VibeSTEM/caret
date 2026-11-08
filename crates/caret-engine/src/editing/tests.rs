@@ -769,6 +769,7 @@ fn environment_end_affinity_has_a_visible_transition() {
                     focus: boundary,
                 },
                 caret_layout::VisualAffinity::Downstream,
+                NavigationIntent::Horizontal,
             )
             .is_ok()
     );
@@ -788,6 +789,7 @@ fn environment_end_affinity_has_a_visible_transition() {
                     focus: next,
                 },
                 caret_layout::VisualAffinity::Downstream,
+                NavigationIntent::Horizontal,
             )
             .is_ok()
     );

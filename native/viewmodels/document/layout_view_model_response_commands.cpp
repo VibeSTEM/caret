@@ -135,9 +135,16 @@ QVariantMap LayoutViewModel::installInteractionResponse(const QByteArray& respon
     }
     refreshDocumentFileStatus();
     refreshAutoSaveDeadline();
-    return {{QStringLiteral("valid"), true},
-            {QStringLiteral("compositionCancelled"),
-             document.object().value(QStringLiteral("compositionCancelled")).toBool()}};
+    QVariantMap result{
+        {QStringLiteral("valid"), true},
+        {QStringLiteral("compositionCancelled"),
+         document.object().value(QStringLiteral("compositionCancelled")).toBool()},
+    };
+    const QJsonValue clipboard_action = document.object().value(QStringLiteral("clipboardAction"));
+    if (clipboard_action.isString()) {
+        result.insert(QStringLiteral("clipboardAction"), clipboard_action.toString());
+    }
+    return result;
 #else
     Q_UNUSED(response_bytes)
     return {{QStringLiteral("valid"), false},

@@ -20,6 +20,7 @@ Item {
     property int canvasGeometryRevision: 0
     property var activeGlyphPageRange: []
     property var pageGlyphFrameCache: ({})
+    readonly property bool canvasHasActiveFocus: pageCanvas.activeFocus
 
     function compositionPoint(pageIndex, x, y) {
         // C++ 坐标映射依赖 QML 无法直接读取的画布几何状态。
@@ -291,37 +292,21 @@ Item {
                     console.warn("Document caret navigation failed:", result.error);
             }
 
-            onStructureNavigationRequested: function (action) {
-                const result = LayoutViewModel.moveStructure(action);
-                if (!result.valid)
-                    console.warn("Document structure navigation failed:", result.error);
-            }
-
             onEditorKeyRequested: function (key) {
                 const hadPreedit = pageCanvas.preeditText.length > 0;
                 const result = LayoutViewModel.handleEditorKey(key);
                 if (!result.valid)
                     console.warn("Document editor key handling failed:", result.error);
-                else if (key === "escape" && hadPreedit && result.compositionCancelled === true)
+                else if (result.clipboardAction === "copy") {
+                    const clipboardResult = LayoutViewModel.copySelectionToClipboard();
+                    if (!clipboardResult.valid)
+                        console.warn("Document clipboard copy failed:", clipboardResult.error);
+                } else if (result.clipboardAction === "paste") {
+                    const clipboardResult = LayoutViewModel.pasteFromClipboard();
+                    if (!clipboardResult.valid)
+                        console.warn("Document clipboard paste failed:", clipboardResult.error);
+                } else if (key === "escape" && hadPreedit && result.compositionCancelled === true)
                     pageCanvas.cancelPreedit();
-            }
-
-            onClipboardCommandRequested: function (command) {
-                const result = command === "copy" ? LayoutViewModel.copySelectionToClipboard() : LayoutViewModel.pasteFromClipboard();
-                if (!result.valid)
-                    console.warn("Document clipboard command failed:", result.error);
-            }
-
-            onEditingCommandRequested: function (commandId) {
-                let result;
-                if (commandId === "text.split_paragraph")
-                    result = LayoutViewModel.splitParagraph();
-                else if (commandId === "text.soft_break")
-                    result = LayoutViewModel.insertSoftBreak();
-                else if (commandId === "text.delete_backward")
-                    result = LayoutViewModel.deleteBackward();
-                if (result && !result.valid)
-                    console.warn("Document editing command failed:", result.error);
             }
 
             DocumentCanvasPointerHandler {
