@@ -1,6 +1,6 @@
 # 072 — 空公式宿主占位的视觉与几何契约
 
-- 状态：ready
+- 状态：in-progress
 - 依赖：044
 - 优先级：P2
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -18,7 +18,8 @@
 - 区分数学结构内部必填槽与公式宿主/根流空态的布局角色。
 - 宿主根占位保留非零节点盒、点击区域、插入位置与 caret 几何；仅移除不合适的矩形绘制输出。
 - 内部必填空槽（分数、上下标、根式等）继续绘制现有占位框；可选槽仍保持不绘制。
-- 覆盖空 Equation、空 Align 及空 InlineMath 根流，并让对齐空块视觉契约与普通空块高亮/光标策略一致。
+- 覆盖空 Equation、空 Align 及空 InlineMath 根流，确保宿主空态不再呈现为公式内部必填槽。
+- 空根可进入编辑后，Qt 快照校验应接受 Rust 发布的数学 `math` 子命令模式，确保反斜杠命令输入和导航快照能够继续往返。
 - 不按交互焦点决定数学布局输出，不使缓存 key 依赖会话焦点；不改 MathTree 持久化语义，不移除用于插入点映射的几何。
 - 若新的布局角色影响缓存输出，缓存键需能区分该稳定布局输入；不要把焦点等瞬时交互状态带入缓存。
 
@@ -41,19 +42,22 @@
 
 ## 验收标准
 
-- [ ] `layout_math` 对空 MathFlow 的 Display/Inline 样式、空 Align 内容和单 Placeholder 宿主 cell、空 InlineMath 根不输出宿主占位描边矩形，且根节点盒宽高大于零；非空结构中的合法矩形不受影响。
-- [ ] 空宿主可点击进入并产生稳定的插入点几何；删除整块、撤销恢复和页面命中维持有效。
-- [ ] `\frac{}{}`、空上下标、根式必填槽等内部占位矩形保持现有呈现；可选槽行为不变。
-- [ ] 视觉结果不依赖焦点状态，布局缓存可继续只以布局输入为依据。
-- [ ] 快照、保存恢复、交互测试、格式/lint 和独立评审通过；最小高度、inline baseline 及平台截图验证如未覆盖须明确记录。
+- [x] `layout_math` 对空 MathFlow 的 Display/Inline 样式、空 Align 内容和单 Placeholder 宿主 cell、空 InlineMath 根不输出宿主占位描边矩形，且根节点盒宽高大于零；非空结构中的合法矩形不受影响。
+- [x] 空宿主可点击进入并产生稳定的插入点几何；页面命中保持有效。app 路径覆盖空 Equation 点击、输入、撤销和重做；空宿主整块删除与历史恢复沿用既有数学会话回归。
+- [x] Qt 快照校验接受公式 `math` 子命令状态；集成测试进入 InlineMath、打开 `\` 查询、输入 `alpha` 并通过视觉导航接口，不再返回 `layout.invalid_command_line`。
+- [x] `\frac{}{}`、空上下标、根式必填槽等内部占位矩形保持现有呈现；可选槽行为不变。
+- [x] 视觉结果不依赖焦点状态，布局缓存仍只以公式内容、字号、样式和字体为键。
+- [x] 快照、保存恢复、交互测试、格式/lint 和独立评审通过；最小高度、inline baseline 及平台截图验证如未覆盖须明确记录。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | `caret-math` 布局与页面快照测试 | 根/空 cell 无框但有非零节点盒，必填槽仍有框 | 未执行 |
-| — | engine 命中/光标/编辑/撤销测试 | 空公式宿主可以进入、编辑、删除及恢复 | 未执行 |
-| — | 受影响 Rust/native 格式、lint 与行为测试 | 直接消费者通过 | 未执行 |
+| 2026-11-08 | `cargo test --locked -p caret-math layout::tests::` | 根/空 cell 无框但有非零节点盒，必填槽仍有框 | 53 passed；包括 Display/Inline、Align、单 Placeholder 根、shaper 路径和内部槽位回归 |
+| 2026-11-08 | `cargo test --locked -p caret-engine`；`cargo test --locked -p caret-app` | 页面命中、光标、编辑与历史路径无回归 | engine 654 passed；app 256 passed。新增 app 测试覆盖空 Equation 点击、caret、输入、Undo/Redo |
+| 2026-11-08 | `cargo test --locked -p caret-tests --test native` | Qt 安装 `math` 命令状态并继续处理公式输入/导航 | CTest 10/10 passed；shell 回归使用真实 `insertText("\\")`、`insertText("alpha")` 与左移，命令光标 5→4 |
+| 2026-11-08 | `cargo lint --check` | 跨语言 clippy、依赖、CMake、QML/native lint 通过 | 9/9 stages passed；包含 native build、qmllint、clang-tidy、include-cleaner 和 cppcheck |
+| 2026-11-08 | `cargo format --check`；`git diff --check HEAD` | 全仓格式和差异空白检查通过 | 两项均通过 |
 
 ## 风险与回退
 
@@ -62,7 +66,13 @@
 ## 决策与工作记录
 
 - 2026-11-08：通过 `gh issue view 106` 审查问题；本地当前布局仍对空 flow Row 与 Placeholder 调用同一 `placeholder()`。分域复核确认 Align 宿主还存在单 Placeholder 形态；engine 对零尺寸节点会跳过命中槽。采用视觉图元与节点盒分离的验收方向，不把建议的普通行高对齐当成既定产品行为。
+- 2026-11-08：从合并 PR #115 后同步的 `main` 创建 `yuki/task-072-empty-math-host-placeholder`；继续确认数学布局转换输出与 engine 命中、页面绘制之间的职责边界。
+- 2026-11-08：`caret-math` 对仅根流（空根或单 Placeholder 根）布局后隐藏 Rectangle 图元，保留节点记录和非零盒；嵌套必填操作数仍经过原有可见占位布局。引擎回归覆盖空 InlineMath、Equation 与 Align cell 的页面形状、根盒和结构命中；app 回归覆盖空 Equation 点击、树焦点、输入、Undo/Redo。
+- 2026-11-08：真实 QML 日志追查发现 native 快照校验遗漏 Rust `CommandLineMode::Math`，导致 `\` 查询和导航快照被拒为 `layout.invalid_command_line`；已扩展合法 mode/prefix 并补 Qt 集成回归。光标仲裁仍统一走架构文档规定的 EditorKey 入口；公式专用部分只构造布局候选。
+- 2026-11-08：MathText 聚焦期间活动 math command line 的 Left/Right/Up/Down 先直接提交给统一 EditorKey 入口；补 app 回归验证普通 MathText 工作后可开启命令并移动查询光标。
+- 2026-11-08：Terra 分域审查及 Sol 完整最终 diff 只读 review 完成，无阻断发现；将 074 已实现的命令行优先派发从待实现步骤改为回归维护项。final review 已复核该更正。桌面截图和 fraction 上下移动留在后续任务边界。
+- 2026-11-08：本次未运行 macOS/Windows/Linux 桌面截图检查；实现不改变宿主盒尺寸和 baseline，跨平台视觉检查留作明确的待验边界。既有 app suite 覆盖文档会话保存恢复，数学会话 suite 覆盖空宿主删除与撤销恢复。
 
 ## 完成摘要
 
-未完成。
+代码与文档实现完成，直接消费者及跨语言验证通过，独立审查无阻断；等待 PR CI 和合并后将 task 标为 done 并关闭 issue #106。

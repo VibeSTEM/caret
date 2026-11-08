@@ -155,7 +155,7 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         return false;
     }
     const QString normalized_mode = mode.toString(QStringLiteral("command"));
-    if (normalized_mode != QStringLiteral("command") &&
+    if (normalized_mode != QStringLiteral("command") && normalized_mode != QStringLiteral("math") &&
         normalized_mode != QStringLiteral("fontFamily") &&
         normalized_mode != QStringLiteral("defaultFontTarget") &&
         normalized_mode != QStringLiteral("defaultFontScope") &&
@@ -164,11 +164,13 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
         error = QStringLiteral("layout.invalid_command_line");
         return false;
     }
-    const QString normalized_prefix = prefix.toString(
-        normalized_mode == QStringLiteral("fontFamily")
-            ? QStringLiteral("\\font ")
-            : (normalized_mode == QStringLiteral("command") ? QStringLiteral("\\")
-                                                            : QStringLiteral("\\defaultfont ")));
+    const QString normalized_prefix =
+        prefix.toString(normalized_mode == QStringLiteral("fontFamily")
+                            ? QStringLiteral("\\font ")
+                            : ((normalized_mode == QStringLiteral("command") ||
+                                normalized_mode == QStringLiteral("math"))
+                                   ? QStringLiteral("\\")
+                                   : QStringLiteral("\\defaultfont ")));
     const bool valid_prefix =
         normalized_mode == QStringLiteral("defaultFontTarget")
             ? normalized_prefix == QStringLiteral("\\defaultfont ")
@@ -181,7 +183,8 @@ bool parse_command_line(const QJsonValue& value, QVariantMap& result, QString& e
                   normalized_prefix.endsWith(QLatin1Char(' '))
             : normalized_prefix == (normalized_mode == QStringLiteral("fontFamily")
                                         ? QStringLiteral("\\font ")
-                                        : (normalized_mode == QStringLiteral("command")
+                                        : ((normalized_mode == QStringLiteral("command") ||
+                                            normalized_mode == QStringLiteral("math"))
                                                ? QStringLiteral("\\")
                                                : QStringLiteral("\\defaultfont ")));
     if (!valid_prefix) {

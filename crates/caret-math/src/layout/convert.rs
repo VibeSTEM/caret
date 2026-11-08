@@ -708,6 +708,16 @@ impl Converter<'_> {
 
     fn layout(&mut self, node: &MathNode, style: Style) -> Fragment {
         match node.kind {
+            K::Row if is_empty_host_flow(node) => {
+                // 宿主根占位保留内部节点盒与几何，但不把交互区域画成公式必填槽。
+                let mut fragment = if node.children.is_empty() {
+                    self.placeholder(style)
+                } else {
+                    self.row(&node.children, style)
+                };
+                fragment.frame.hide();
+                fragment
+            }
             // 空流仍是可编辑槽位；仅在布局中产生占位几何，不修改 MathFlow。
             K::Row
                 if node.children.is_empty()
@@ -1607,6 +1617,15 @@ fn is_placeholder_flow(node: &MathNode) -> bool {
             .as_ref()
             .is_some_and(|position| position.is_flow)
         && matches!(node.children.as_slice(), [only] if only.kind == K::Placeholder)
+}
+
+fn is_empty_host_flow(node: &MathNode) -> bool {
+    node.position.as_ref().is_some_and(|position| {
+        position.is_flow
+            && position.path.is_empty()
+            && (node.children.is_empty()
+                || matches!(node.children.as_slice(), [only] if only.kind == K::Placeholder))
+    })
 }
 
 fn has_text_items(node: &MathNode) -> bool {

@@ -3081,7 +3081,7 @@ fn explicit_breaks_keep_empty_pages_without_inventing_text_hit_targets() {
 }
 
 #[test]
-fn empty_formula_projections_keep_hosts_and_match_page_shapes() {
+fn empty_formula_projections_keep_host_geometry_without_placeholder_rectangles() {
     let mut inline = inline_math("x");
     let ParagraphContent::Math(inline_math) = &mut inline else {
         panic!("expected inline math")
@@ -3115,6 +3115,15 @@ fn empty_formula_projections_keep_hosts_and_match_page_shapes() {
             cell.root.content.clear();
         }
     }
+    let placeholder_id = NodeId::generate();
+    align.rows[0].cells[0].root.content = vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+        id: placeholder_id,
+        kind: caret_doc::MathNodeKind::Placeholder,
+        text: None,
+        attributes: BTreeMap::new(),
+        children: Vec::new(),
+        extra: BTreeMap::new(),
+    })];
     let mut document = Document::blank();
     document.body = vec![
         Block::Paragraph(paragraph),
@@ -3204,13 +3213,25 @@ fn empty_formula_projections_keep_hosts_and_match_page_shapes() {
             .collect();
         assert_eq!(slots.len(), if id == &align_id { 4 } else { 1 });
         for slot in slots {
-            assert!(shapes.shapes.iter().any(|shape| {
-                (shape.x_pt - (projection.object_x_pt + slot.x)).abs() < 1e-6
-                    && (shape.y_pt - (projection.baseline_y_pt + slot.y)).abs() < 1e-6
-                    && (shape.width_pt - slot.width).abs() < 1e-6
-                    && (shape.height_pt - slot.height).abs() < 1e-6
-                    && shape.line_clip_y_pt == projection.clip_y_pt
-            }));
+            assert!(
+                !shapes
+                    .shapes
+                    .iter()
+                    .any(|shape| shape.kind == crate::PageMathShapeKind::Rectangle)
+            );
+            let hit = snapshot
+                .hit_test_math_structure(
+                    projection.page_index,
+                    projection.object_x_pt + slot.x + slot.width / 2.0,
+                    projection.baseline_y_pt + slot.y + slot.height / 2.0,
+                )
+                .unwrap_or_else(|| panic!("empty host slot should remain hittable: {id}"));
+            assert_eq!(hit.position.offset, 0);
+            assert!(hit.caret.y1_pt > hit.caret.y0_pt);
+            let host = snapshot
+                .math_host(id)
+                .unwrap_or_else(|| panic!("missing math host: {id}"));
+            assert_eq!(hit.position.host, host.scopes[&slot.scope_id].host);
         }
     }
 }
