@@ -125,6 +125,13 @@ if(BUILD_TESTING)
   add_test(NAME caret_code_font_failure_test COMMAND caret_code_font_failure_test)
   set(_caret_code_font_failure_test_environment
       "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${QT_STAGING}/plugins;QT_FORCE_STDERR_LOGGING=1")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(
+      APPEND
+      _caret_code_font_failure_test_environment
+      "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures/sanitizers/linux-fontconfig-lsan.supp"
+    )
+  endif()
   set_tests_properties(caret_code_font_failure_test
                        PROPERTIES ENVIRONMENT "${_caret_code_font_failure_test_environment}")
 

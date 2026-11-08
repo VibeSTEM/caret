@@ -1,0 +1,3 @@
+# Qt 6.12 的 QFontDatabase 查询会让本测试在进程退出时报告 FcInit 泄漏。
+# 通过 CTest 环境将此规则限制在当前单测内。
+leak:FcInit
