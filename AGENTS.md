@@ -4,7 +4,7 @@ Caret 是轻量的所见即所得结构化编辑器。领域规则在 Rust，界
 
 只阅读当前任务相关的文档。工程栈以规范为准。外部调查只放在 [research](ai-docs/research/)。
 
-使用 `gh` 操作 GitHub 前先运行 `gh auth status`。宿主机已有登录凭据但沙箱无法访问时，通过权限提升在沙箱外运行 `gh`，不要在隔离沙箱中重复登录或刷新凭据；先说明所需操作并请求对应的沙箱权限。只有宿主机 `gh auth status` 也确认未登录或 scope 不足时，才引导维护者完成 GitHub 登录/授权，然后重新检查状态。`git push` 成功不代表 `gh` 已授权。创建 PR 只提交评审并触发 CI，不等同于合并；合并前确认 CI 结果和本次明确授权。
+使用 `gh` 操作 GitHub 前先运行 `gh auth status`。宿主机已有登录凭据但沙箱无法访问时，通过权限提升在沙箱外运行 `gh`，不要在隔离沙箱中重复登录或刷新凭据；先说明所需操作并请求对应的沙箱权限。只有宿主机 `gh auth status` 也确认未登录或 scope 不足时，才引导维护者完成 GitHub 登录/授权，然后重新检查状态。`git push` 成功不代表 `gh` 已授权。代码工作须走专用分支与 PR；纯 Markdown 改动不等待 CI，按 [提交规范](ai-docs/standards/commits.md#标准工作顺序)完成适用审查，若保护规则阻止合并则不绕过。PR 创建不等于授权合并，合并仍需明确授权；合并后同步 `main` 并清理已合并分支。
 
 非平凡代码、架构或文档改动开始前，必须阅读并执行[验证与评审标准](ai-docs/standards/validation-and-review.md)：按分支实际涉及的评审项分别委派 Terra/medium 领域检查，完成修复后由未参与实现的 Sol/medium subagent 对最终完整 diff 做只读 final review。纯格式或单行拼写修复可按该标准豁免。
 
