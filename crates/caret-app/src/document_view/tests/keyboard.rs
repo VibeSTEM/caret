@@ -447,7 +447,7 @@ fn arrow_leaves_section_before_entering_following_paragraph()
         .to_string(),
     )?;
     let outside: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
-    assert!(runtime.session.block_environment_exit().is_some());
+    assert!(runtime.session.block_boundary_exit().is_some());
     assert_eq!(
         outside["currentStructure"].as_array().map(Vec::len),
         Some(0)
@@ -458,7 +458,7 @@ fn arrow_leaves_section_before_entering_following_paragraph()
     assert_eq!(outside_caret["xPt"], outside["caretGeometry"]["xPt"]);
 
     runtime.move_visual_caret_json(true, false)?;
-    assert!(runtime.session.block_environment_exit().is_none());
+    assert!(runtime.session.block_boundary_exit().is_none());
     assert_eq!(
         runtime.session.selection().focus.paragraph_id.to_string(),
         after_id

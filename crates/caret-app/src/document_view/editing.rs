@@ -192,7 +192,7 @@ impl DocumentViewRuntime {
             }
             Some(caret_engine::MathEditTarget::Block { .. }) => (None, true),
             None if !math_edit_active
-                && self.session.block_environment_exit().is_none()
+                && self.session.block_boundary_exit().is_none()
                 && self.session.selected_block_environment().is_none()
                 && selection.anchor.paragraph_id == selection.focus.paragraph_id =>
             {

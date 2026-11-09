@@ -410,6 +410,7 @@ impl DocumentLayoutSnapshot {
                                 paragraph_id: &paragraph.id,
                                 line_index,
                                 line_clip_y_pt: projection.drawing_clip(),
+                                row_clips: &math_layout.row_clips,
                                 object_x_pt,
                                 baseline_y_pt: object_baseline_y_pt,
                             },
@@ -474,6 +475,7 @@ impl DocumentLayoutSnapshot {
                     paragraph_id: &fragment.math_id,
                     line_index: 0,
                     line_clip_y_pt: projection.drawing_clip(),
+                    row_clips: &layout.row_clips,
                     object_x_pt,
                     baseline_y_pt,
                 },
@@ -501,6 +503,7 @@ struct MathItemHost<'a> {
     paragraph_id: &'a NodeId,
     line_index: usize,
     line_clip_y_pt: Option<[f64; 2]>,
+    row_clips: &'a [caret_math::layout::MathRowClip],
     object_x_pt: f64,
     baseline_y_pt: f64,
 }
@@ -518,7 +521,22 @@ fn append_math_items(
     output: MathItemOutput<'_>,
     next_paint_order: &mut u64,
 ) -> Result<(), PageGlyphError> {
-    for item in items {
+    for (item_index, item) in items.iter().enumerate() {
+        let mut line_clip_y_pt = host.line_clip_y_pt;
+        for row_clip in host
+            .row_clips
+            .iter()
+            .filter(|clip| clip.item_range.contains(&item_index))
+        {
+            let clip = [
+                host.baseline_y_pt + row_clip.y0,
+                host.baseline_y_pt + row_clip.y1,
+            ];
+            line_clip_y_pt = Some(match line_clip_y_pt {
+                Some(existing) => [existing[0].max(clip[0]), existing[1].min(clip[1])],
+                None => clip,
+            });
+        }
         let color_bytes = |color: Option<caret_math::layout::MathColor>| {
             color.map(|color| [color.red, color.green, color.blue, color.alpha])
         };
@@ -544,7 +562,7 @@ fn append_math_items(
                     paint_order: *next_paint_order,
                     paragraph_id: host.paragraph_id.clone(),
                     line_index: host.line_index,
-                    line_clip_y_pt: host.line_clip_y_pt,
+                    line_clip_y_pt,
                     font: math_font_data(),
                     font_size_pt,
                     normalized_coords: Vec::new(),
@@ -583,7 +601,7 @@ fn append_math_items(
                     width_pt: *width,
                     height_pt: *height,
                     color: color_bytes(*color),
-                    line_clip_y_pt: host.line_clip_y_pt,
+                    line_clip_y_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -618,7 +636,7 @@ fn append_math_items(
                     fill: None,
                     stroke: color_bytes(*color),
                     stroke_width_pt: *thickness,
-                    line_clip_y_pt: host.line_clip_y_pt,
+                    line_clip_y_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -656,7 +674,7 @@ fn append_math_items(
                     fill: color_bytes(*fill),
                     stroke: color_bytes(*stroke),
                     stroke_width_pt: *stroke_width,
-                    line_clip_y_pt: host.line_clip_y_pt,
+                    line_clip_y_pt,
                 });
                 *next_paint_order += 1;
             }
@@ -728,7 +746,7 @@ fn append_math_items(
                                         (decoration.brush != [0, 0, 0, 0])
                                             .then_some(decoration.brush)
                                     }),
-                                    line_clip_y_pt: host.line_clip_y_pt,
+                                    line_clip_y_pt,
                                 });
                                 *next_paint_order += 1;
                             }
@@ -741,7 +759,7 @@ fn append_math_items(
                                 paint_order: *next_paint_order,
                                 paragraph_id: host.paragraph_id,
                                 line_index: host.line_index,
-                                line_clip_y_pt: host.line_clip_y_pt,
+                                line_clip_y_pt,
                                 foreground,
                             },
                         )? {

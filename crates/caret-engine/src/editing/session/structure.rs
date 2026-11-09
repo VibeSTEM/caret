@@ -23,6 +23,14 @@ mod environment_mutations;
 #[path = "structure/selection.rs"]
 mod selection;
 
+struct StructureEditBeforeState {
+    selection: Selection,
+    anchor_visual_affinity: VisualAffinity,
+    visual_affinity: VisualAffinity,
+    state_id: u64,
+    block_boundary_exit: Option<(NodeId, Direction)>,
+}
+
 impl Session {
     /// 统一提交结构事务的索引、历史与文档代际更新。
     pub(super) fn finalize_structure_edit(
@@ -34,6 +42,25 @@ impl Session {
         before_visual_affinity: VisualAffinity,
         before_state_id: u64,
     ) {
+        self.finalize_structure_edit_with_boundary(
+            updated_paragraph_index,
+            patch,
+            StructureEditBeforeState {
+                selection: before_selection,
+                anchor_visual_affinity: before_anchor_visual_affinity,
+                visual_affinity: before_visual_affinity,
+                state_id: before_state_id,
+                block_boundary_exit: None,
+            },
+        );
+    }
+
+    fn finalize_structure_edit_with_boundary(
+        &mut self,
+        updated_paragraph_index: super::super::paragraph_ops::ParagraphIndex,
+        patch: DocumentPatch,
+        before: StructureEditBeforeState,
+    ) {
         self.paragraph_index = updated_paragraph_index;
         self.structure_index = Arc::new(StructureIndex::build(&self.document));
         self.text_map_cache.clear();
@@ -41,12 +68,13 @@ impl Session {
 
         let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
-            before_selection,
-            before_visual_affinity,
+            before.selection,
+            before.visual_affinity,
             self.pending_inline_style.clone(),
-            before_state_id,
+            before.state_id,
         )
-        .with_anchor_visual_affinity(before_anchor_visual_affinity);
+        .with_anchor_visual_affinity(before.anchor_visual_affinity)
+        .with_block_boundary_exit(before.block_boundary_exit);
         self.record_history_edit(SessionHistoryEdit::new(
             patch,
             before_state,
@@ -90,8 +118,7 @@ impl Session {
         let Some(environment_index) = sibling_index.checked_sub(1) else {
             return Ok(None);
         };
-        let Some(siblings) =
-            block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
+        let Some(siblings) = block_list_by_parent_ids(&self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -104,7 +131,7 @@ impl Session {
         let environment = environment.clone();
         let environment_estimated_bytes = history::environment_estimated_bytes(&environment);
         let Some(siblings) =
-            block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -134,8 +161,157 @@ impl Session {
         }))
     }
 
+    /// 删除公式块后紧邻的空段落，并将光标放回公式末端。
+    pub(super) fn delete_empty_paragraph_after_math(
+        &mut self,
+        position: &Pos,
+    ) -> Result<Option<Effect>, EditError> {
+        if position.story != StoryId::Body
+            || position.offset != 0
+            || self.math_edit.is_some()
+            || self.block_boundary_exit.is_some()
+            || self.composition.is_some()
+            || self.command_line.is_some()
+            || self.selection.anchor != self.selection.focus
+            || !self.text_map_for(position)?.text.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(location) = self.paragraph_index.get(&position.paragraph_id).cloned() else {
+            return Ok(None);
+        };
+        if location.is_title {
+            return Ok(None);
+        }
+        let Some((parent_ids, paragraph_index)) =
+            history::parent_environment_path(&self.document.body, &location)
+        else {
+            return Ok(None);
+        };
+        let Some(math_index) = paragraph_index.checked_sub(1) else {
+            return Ok(None);
+        };
+        let siblings = block_list_by_parent_ids(&self.document.body, &parent_ids)
+            .ok_or(EditError::InvalidPosition)?;
+        if !matches!(
+            siblings.get(math_index),
+            Some(Block::Equation(_) | Block::Align(_))
+        ) {
+            return Ok(None);
+        }
+        let math_id = match siblings.get(math_index) {
+            Some(Block::Equation(equation)) => equation.id.clone(),
+            Some(Block::Align(align)) => align.id.clone(),
+            _ => unreachable!("the preceding sibling was checked as a math block"),
+        };
+        let Some(edit) = self.math_edit_at_block(&math_id, Direction::Backward)? else {
+            return Ok(None);
+        };
+        let anchor_paragraph = siblings[..paragraph_index]
+            .iter()
+            .rev()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some((paragraph, Direction::Backward)),
+                _ => None,
+            })
+            .or_else(|| {
+                siblings[paragraph_index + 1..]
+                    .iter()
+                    .find_map(|block| match block {
+                        Block::Paragraph(paragraph) => Some((paragraph, Direction::Forward)),
+                        _ => None,
+                    })
+            });
+        let selection_position =
+            if let Some((anchor_paragraph, anchor_direction)) = anchor_paragraph {
+                Pos {
+                    story: StoryId::Body,
+                    paragraph_id: anchor_paragraph.id.clone(),
+                    offset: match anchor_direction {
+                        Direction::Backward => TextMap::new(anchor_paragraph)?.text.len(),
+                        Direction::Forward => 0,
+                    },
+                    affinity: match anchor_direction {
+                        Direction::Backward => Affinity::Downstream,
+                        Direction::Forward => Affinity::Upstream,
+                    },
+                }
+            } else if let Some((paragraph_id, _)) =
+                self.paragraph_index.iter().find(|(paragraph_id, loc)| {
+                    *paragraph_id != &position.paragraph_id
+                        && loc.story == StoryId::Body
+                        && !loc.is_title
+                })
+            {
+                // 嵌套环境内可能没有同级段落；选择任一仍存活的正文段落作为隐藏 Session 锚点。
+                Pos {
+                    story: StoryId::Body,
+                    paragraph_id: paragraph_id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                }
+            } else {
+                return Ok(None);
+            };
+        let Some(siblings) = block_list_by_parent_ids_mut(&mut self.document.body, &parent_ids)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        let removed = siblings.remove(paragraph_index);
+        let Block::Paragraph(removed_paragraph) = removed else {
+            return Err(EditError::InvalidPosition);
+        };
+        if let Err(error) = self.document.validate() {
+            if let Some(siblings) =
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_ids)
+            {
+                siblings.insert(paragraph_index, Block::Paragraph(removed_paragraph));
+            }
+            return Err(EditError::InvalidDocument(error.to_string()));
+        }
+
+        let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_state_id = self.history_state_id;
+        let before_block_boundary_exit = self.block_boundary_exit.clone();
+        self.selection = Selection {
+            anchor: selection_position.clone(),
+            focus: selection_position.clone(),
+        };
+        self.selection_visual_affinity = match selection_position.affinity {
+            Affinity::Upstream => VisualAffinity::Upstream,
+            Affinity::Downstream => VisualAffinity::Downstream,
+        };
+        self.selection_anchor_visual_affinity = self.selection_visual_affinity;
+        self.math_edit = Some(edit);
+        self.block_boundary_exit = None;
+        self.finalize_structure_edit_with_boundary(
+            super::super::paragraph_ops::build_paragraph_index(&self.document.body),
+            DocumentPatch::BlockRange {
+                parent_environment_ids: parent_ids,
+                sibling_index: paragraph_index,
+                before: vec![Block::Paragraph(removed_paragraph)],
+                after: Vec::new(),
+            },
+            StructureEditBeforeState {
+                selection: before_selection,
+                anchor_visual_affinity: before_anchor_visual_affinity,
+                visual_affinity: before_visual_affinity,
+                state_id: before_state_id,
+                block_boundary_exit: before_block_boundary_exit,
+            },
+        );
+        Ok(Some(Effect {
+            document_changed: true,
+            selection_changed: true,
+            changed_paragraph_id: Some(selection_position.paragraph_id),
+            ..Effect::default()
+        }))
+    }
+
     /// 在虚拟环境外停靠点输入时，才创建外部段落并把首段文字写入该段。
-    pub(super) fn insert_text_at_environment_exit(
+    pub(super) fn insert_text_at_block_boundary(
         &mut self,
         text: &str,
     ) -> Result<Effect, EditError> {
@@ -166,11 +342,11 @@ impl Session {
                 paragraph
             })
             .collect::<Vec<_>>();
-        self.insert_paragraphs_at_environment_exit(paragraphs)
+        self.insert_paragraphs_at_block_boundary(paragraphs)
     }
 
     /// 在虚拟环境外停靠点按 Enter 时，创建外部空段落或含软换行的段落。
-    pub(super) fn insert_break_at_environment_exit(
+    pub(super) fn insert_break_at_block_boundary(
         &mut self,
         soft_break: bool,
     ) -> Result<Effect, EditError> {
@@ -183,20 +359,20 @@ impl Session {
                 .inlines
                 .push(caret_doc::ParagraphContent::SoftBreak(SoftBreak::default()));
         }
-        self.insert_paragraphs_at_environment_exit(vec![paragraph])
+        self.insert_paragraphs_at_block_boundary(vec![paragraph])
     }
 
-    fn insert_paragraphs_at_environment_exit(
+    fn insert_paragraphs_at_block_boundary(
         &mut self,
         mut paragraphs: Vec<Paragraph>,
     ) -> Result<Effect, EditError> {
-        let Some((environment_id, direction)) = self.block_environment_exit.clone() else {
+        let Some((block_id, direction)) = self.block_boundary_exit.clone() else {
             return Ok(Effect::default());
         };
-        let Some((parent_environment_ids, environment_index)) =
-            environment_parent_location(&self.document.body, &environment_id)
+        let Some((parent_environment_ids, block_index)) =
+            super::math_edit::find_block_path(&self.document.body, &block_id)
         else {
-            self.block_environment_exit = None;
+            self.block_boundary_exit = None;
             return Ok(Effect::default());
         };
         let inline_depth = parent_environment_ids.len() + 1;
@@ -205,8 +381,8 @@ impl Session {
             self.apply_pending_style_to_paragraph(paragraph, 0, text_len, inline_depth)?;
         }
         let sibling_index = match direction {
-            Direction::Backward => environment_index,
-            Direction::Forward => environment_index.saturating_add(1),
+            Direction::Backward => block_index,
+            Direction::Forward => block_index.saturating_add(1),
         };
         let Some(last_paragraph) = paragraphs.last() else {
             return Ok(Effect::default());
@@ -214,7 +390,7 @@ impl Session {
         let final_offset = TextMap::new(last_paragraph)?.text.len();
         let final_paragraph_id = last_paragraph.id.clone();
         let Some(siblings) =
-            block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -227,7 +403,7 @@ impl Session {
         );
         if let Err(error) = self.document.validate() {
             if let Some(siblings) =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
             {
                 siblings.drain(sibling_index..sibling_index + paragraphs.len());
             }
@@ -238,6 +414,7 @@ impl Session {
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
+        let before_block_boundary_exit = self.block_boundary_exit.clone();
         let position = Pos {
             story: StoryId::Body,
             paragraph_id: final_paragraph_id.clone(),
@@ -248,25 +425,28 @@ impl Session {
             anchor: position.clone(),
             focus: position,
         };
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.selection_visual_affinity = VisualAffinity::Upstream;
         self.selection_anchor_visual_affinity = VisualAffinity::Upstream;
         let paragraphs_estimated_bytes = paragraphs
             .iter()
             .map(history::paragraph_estimated_bytes)
             .sum();
-        self.finalize_structure_edit(
+        self.finalize_structure_edit_with_boundary(
             super::super::paragraph_ops::build_paragraph_index(&self.document.body),
-            DocumentPatch::EnvironmentBoundaryParagraphs {
+            DocumentPatch::BlockBoundaryParagraphs {
                 parent_environment_ids,
                 sibling_index,
                 paragraphs,
                 paragraphs_estimated_bytes,
             },
-            before_selection,
-            before_anchor_visual_affinity,
-            before_visual_affinity,
-            before_state_id,
+            StructureEditBeforeState {
+                selection: before_selection,
+                anchor_visual_affinity: before_anchor_visual_affinity,
+                visual_affinity: before_visual_affinity,
+                state_id: before_state_id,
+                block_boundary_exit: before_block_boundary_exit,
+            },
         );
         Ok(Effect {
             document_changed: true,
@@ -336,7 +516,7 @@ impl Session {
                     &self.selection.focus.paragraph_id,
                     *direction == Direction::Forward,
                 ) {
-                    let is_repeating_exit = self.block_environment_exit.as_ref().is_some_and(
+                    let is_repeating_exit = self.block_boundary_exit.as_ref().is_some_and(
                         |(active_id, active_direction)| {
                             active_id == &environment.id && active_direction == direction
                         },
@@ -365,7 +545,7 @@ impl Session {
                             Affinity::Upstream => VisualAffinity::Upstream,
                             Affinity::Downstream => VisualAffinity::Downstream,
                         };
-                        self.block_environment_exit = None;
+                        self.block_boundary_exit = None;
                         return Ok(Effect {
                             selection_changed: true,
                             ..Effect::default()
@@ -373,13 +553,13 @@ impl Session {
                     }
                 }
                 if let Some((active_environment_id, active_direction)) =
-                    self.block_environment_exit.clone()
+                    self.block_boundary_exit.clone()
                     && active_environment_id == environment.id
                 {
                     if active_direction == *direction {
                         return Ok(Effect::default());
                     }
-                    self.block_environment_exit = None;
+                    self.block_boundary_exit = None;
                     self.selection.focus.affinity = match direction {
                         Direction::Forward => Affinity::Downstream,
                         Direction::Backward => Affinity::Upstream,
@@ -394,7 +574,7 @@ impl Session {
                         ..Effect::default()
                     });
                 }
-                self.block_environment_exit = Some((environment.id.clone(), *direction));
+                self.block_boundary_exit = Some((environment.id.clone(), *direction));
                 self.selection.focus.affinity = match direction {
                     Direction::Backward => Affinity::Upstream,
                     Direction::Forward => Affinity::Downstream,
@@ -457,7 +637,7 @@ impl Session {
             anchor: target.clone(),
             focus: target,
         };
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
@@ -492,7 +672,7 @@ impl Session {
             return Err(EditError::InvalidPosition);
         };
         let Some(siblings) =
-            block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -504,7 +684,7 @@ impl Session {
         siblings.insert(insert_at, Block::Paragraph(paragraph.clone()));
         if let Err(error) = self.document.validate() {
             if let Some(siblings) =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
             {
                 siblings.remove(insert_at);
             }
@@ -517,7 +697,7 @@ impl Session {
             history::ParagraphState::capture(&self.document, &paragraph_index, &paragraph.id)
         else {
             if let Some(siblings) =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
             {
                 siblings.remove(insert_at);
             }
@@ -696,7 +876,7 @@ impl Session {
     }
 }
 
-fn block_list_by_environment_ids<'a>(
+fn block_list_by_parent_ids<'a>(
     blocks: &'a [Block],
     environment_ids: &[NodeId],
 ) -> Option<&'a [Block]> {
@@ -707,7 +887,7 @@ fn block_list_by_environment_ids<'a>(
         Block::Environment(environment) if &environment.id == environment_id => Some(environment),
         _ => None,
     })?;
-    block_list_by_environment_ids(&environment.children, rest)
+    block_list_by_parent_ids(&environment.children, rest)
 }
 
 fn environment_has_content(environment: &BlockEnvironment) -> Result<bool, EditError> {
@@ -739,14 +919,17 @@ pub(super) fn environment_has_content_at(
     blocks: &[Block],
     environment_id: &NodeId,
 ) -> Result<bool, EditError> {
-    let (parent_ids, sibling_index) =
-        environment_parent_location(blocks, environment_id).ok_or(EditError::InvalidPosition)?;
+    let (parent_ids, sibling_index) = super::math_edit::find_block_path(blocks, environment_id)
+        .ok_or(EditError::InvalidPosition)?;
     let siblings =
-        block_list_by_environment_ids(blocks, &parent_ids).ok_or(EditError::InvalidPosition)?;
-    let Some(Block::Environment(environment)) = siblings.get(sibling_index) else {
+        block_list_by_parent_ids(blocks, &parent_ids).ok_or(EditError::InvalidPosition)?;
+    let Some(block) = siblings.get(sibling_index) else {
         return Err(EditError::InvalidPosition);
     };
-    environment_has_content(environment)
+    match block {
+        Block::Environment(environment) => environment_has_content(environment),
+        _ => Ok(true),
+    }
 }
 
 fn environment_parent_location(
@@ -778,7 +961,7 @@ fn environment_parent_location(
     find(blocks, target_id, &mut Vec::new())
 }
 
-fn block_list_by_environment_ids_mut<'a>(
+fn block_list_by_parent_ids_mut<'a>(
     blocks: &'a mut Vec<Block>,
     environment_ids: &[NodeId],
 ) -> Option<&'a mut Vec<Block>> {
@@ -789,7 +972,7 @@ fn block_list_by_environment_ids_mut<'a>(
         Block::Environment(environment) if &environment.id == environment_id => Some(environment),
         _ => None,
     })?;
-    block_list_by_environment_ids_mut(&mut environment.children, remaining_ids)
+    block_list_by_parent_ids_mut(&mut environment.children, remaining_ids)
 }
 
 fn replace_block_at_location(

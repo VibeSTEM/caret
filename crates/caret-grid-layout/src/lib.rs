@@ -66,6 +66,53 @@ pub struct GridSpec {
     pub minimum_row_ascent: f64,
     /// 每行最小基线下方距离，单位为布局单位；作为 signed 行度量的下限，必须有限且非负。
     pub minimum_row_descent: f64,
+    /// 正文、数学宿主与表格可共用的可选行距策略。
+    pub row_spacing: Option<RowSpacing>,
+    /// 行距策略的基础行框度量。
+    pub base_row_ascent: f64,
+    pub base_row_descent: f64,
+    pub base_row_leading: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// 共享行框使用的行距语义。
+pub enum RowSpacing {
+    /// 内容自然扩展，不缩放行内内容。
+    Natural,
+    /// 正文自然行高乘以百分数，较高内容仍可扩展。
+    Multiple { percent: f64 },
+    /// 正文行框至少达到给定高度。
+    AtLeast { minimum_height: f64 },
+    /// 行推进固定为给定高度，允许并报告内容溢出。
+    Exactly { height: f64 },
+    /// 保留正文基线，仅在内容越出基础行框时扩展上下边界。
+    ExpandToFit {
+        /// 已决正文行高。
+        base_height: f64,
+        /// 已决正文基线。
+        base_baseline: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// 按行距规则解析后的行框。
+pub struct RowFrame {
+    /// 行框总高度。
+    pub height: f64,
+    /// 行框顶边到基线的距离。
+    pub baseline: f64,
+    /// 内容是否越出行框。
+    pub content_overflow: bool,
+    /// 是否裁切越出内容。
+    pub clip_content: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// 供共享行框算法使用的 signed ascent/descent 与非负 leading 度量。
+pub struct RowMetrics {
+    pub ascent: f64,
+    pub descent: f64,
+    pub leading: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,6 +135,10 @@ pub struct RowLayout {
     pub ascent: f64,
     /// 该行采用的基线下方距离，单位为布局单位；输入 signed 度量与最小值取较大者。
     pub descent: f64,
+    /// 内容度量是否超出固定行框。
+    pub content_overflow: bool,
+    /// 是否按行框裁切内容。
+    pub clip_content: bool,
     /// 与输入 `GridRow::Cells` 中的单元格逐项对应的位置；整行内容没有此项。
     pub cells: Vec<CellPosition>,
     /// `GridRow::Full` 内容的位置；非整行内容时为 `None`。整行内容从 x=0 放置。
@@ -163,6 +214,27 @@ pub fn layout_grid(rows: &[GridRow], spec: &GridSpec) -> Result<GridLayout, Grid
         || !valid(spec.row_gap)
         || !valid(spec.minimum_row_ascent)
         || !valid(spec.minimum_row_descent)
+        || !valid(spec.base_row_ascent)
+        || !valid(spec.base_row_descent)
+        || !valid(spec.base_row_leading)
+        || spec.row_spacing.is_some_and(|spacing| match spacing {
+            RowSpacing::Natural => false,
+            RowSpacing::Multiple { percent } => !percent.is_finite() || percent <= 0.0,
+            RowSpacing::AtLeast { minimum_height }
+            | RowSpacing::Exactly {
+                height: minimum_height,
+            } => !valid(minimum_height) || minimum_height == 0.0,
+            RowSpacing::ExpandToFit {
+                base_height,
+                base_baseline,
+            } => {
+                !valid(base_height)
+                    || base_height == 0.0
+                    || !base_baseline.is_finite()
+                    || base_baseline < 0.0
+                    || base_baseline > base_height
+            }
+        })
         || spec
             .column_widths
             .iter()
@@ -207,6 +279,20 @@ pub fn layout_grid(rows: &[GridRow], spec: &GridSpec) -> Result<GridLayout, Grid
                 heights[row_index].1 = heights[row_index].1.max(cell.descent);
             }
         }
+    }
+    let mut row_frames = Vec::with_capacity(rows.len());
+    for (index, _) in rows.iter().enumerate() {
+        row_frames.push(match spec.row_spacing {
+            Some(spacing) => Some(calculate_row_frame(
+                spec.base_row_ascent,
+                spec.base_row_descent,
+                spec.base_row_leading,
+                heights[index].0,
+                heights[index].1,
+                spacing,
+            )?),
+            None => None,
+        });
     }
     let has_resolved_widths = spec.column_widths.iter().any(Option::is_some);
     for (index, width) in spec.column_widths.iter().enumerate() {
@@ -276,12 +362,28 @@ pub fn layout_grid(rows: &[GridRow], spec: &GridSpec) -> Result<GridLayout, Grid
             horizontal_rule_positions.push(spec.row_gap / 2.0);
         }
         let (ascent, descent) = heights[index];
-        let baseline = y + ascent;
+        let resolved = row_frames[index];
+        let (row_height, row_baseline, row_ascent, row_descent, content_overflow, clip_content) =
+            if let Some(frame) = resolved {
+                (
+                    frame.height,
+                    frame.baseline,
+                    frame.baseline,
+                    frame.height - frame.baseline,
+                    frame.content_overflow,
+                    frame.clip_content,
+                )
+            } else {
+                (ascent + descent, ascent, ascent, descent, false, false)
+            };
+        let baseline = y + row_baseline;
         let mut layout = RowLayout {
             top: y,
             baseline,
-            ascent,
-            descent,
+            ascent: row_ascent,
+            descent: row_descent,
+            content_overflow,
+            clip_content,
             cells: Vec::new(),
             full: None,
         };
@@ -309,7 +411,7 @@ pub fn layout_grid(rows: &[GridRow], spec: &GridSpec) -> Result<GridLayout, Grid
             GridRow::Full(_) => layout.full = Some(CellPosition { x: 0.0, baseline }),
         }
         row_layouts.push(layout);
-        y += ascent + descent;
+        y += row_height;
     }
     if !rows.is_empty() && spec.horizontal_rules.contains(&rows.len()) {
         horizontal_rule_positions.push(y + spec.row_gap / 2.0);
@@ -357,6 +459,143 @@ pub fn layout_grid(rows: &[GridRow], spec: &GridSpec) -> Result<GridLayout, Grid
         return Err(GridLayoutError::NonFiniteResult);
     }
     Ok(grid)
+}
+
+/// 使用共享策略为正文行或网格行计算行框。
+///
+/// 内容 ascent/descent 允许为负，以保留数学字形相对基线的有符号度量。
+pub fn calculate_row_frame(
+    base_ascent: f64,
+    base_descent: f64,
+    base_leading: f64,
+    content_ascent: f64,
+    content_descent: f64,
+    spacing: RowSpacing,
+) -> Result<RowFrame, GridLayoutError> {
+    calculate_row_frame_with_content_leading(
+        RowMetrics {
+            ascent: base_ascent,
+            descent: base_descent,
+            leading: base_leading,
+        },
+        RowMetrics {
+            ascent: content_ascent,
+            descent: content_descent,
+            leading: 0.0,
+        },
+        false,
+        spacing,
+    )
+}
+
+/// 行框算法的扩展入口，供包含字体 leading 的正文行复用。
+pub fn calculate_row_frame_with_content_leading(
+    base: RowMetrics,
+    content: RowMetrics,
+    preserve_content_height: bool,
+    spacing: RowSpacing,
+) -> Result<RowFrame, GridLayoutError> {
+    let RowMetrics {
+        ascent: base_ascent,
+        descent: base_descent,
+        leading: base_leading,
+    } = base;
+    let RowMetrics {
+        ascent: content_ascent,
+        descent: content_descent,
+        leading: content_leading,
+    } = content;
+    if [base_ascent, base_descent, base_leading]
+        .into_iter()
+        .any(|value| !value.is_finite() || value < 0.0)
+        || !content_ascent.is_finite()
+        || !content_descent.is_finite()
+        || !content_leading.is_finite()
+        || content_leading < 0.0
+    {
+        return Err(GridLayoutError::InvalidMetric);
+    }
+    let font_height = base_ascent + base_descent;
+    let natural_height = font_height + base_leading;
+    let content_ink_height = content_ascent.max(0.0) + content_descent.max(0.0);
+    let content_height = content_ink_height + content_leading;
+    let required_height = natural_height.max(content_height);
+    if !font_height.is_finite() || !natural_height.is_finite() || !content_height.is_finite() {
+        return Err(GridLayoutError::NonFiniteResult);
+    }
+    let height = match spacing {
+        RowSpacing::Natural => required_height,
+        RowSpacing::Multiple { percent } if percent.is_finite() && percent > 0.0 => {
+            let content_needs_floor = preserve_content_height
+                || content_ascent > base_ascent
+                || content_descent > base_descent
+                || content_leading > base_leading;
+            (natural_height * percent / 100.0).max(if content_needs_floor {
+                content_height
+            } else {
+                0.0
+            })
+        }
+        RowSpacing::AtLeast { minimum_height }
+            if minimum_height.is_finite() && minimum_height > 0.0 =>
+        {
+            required_height.max(minimum_height)
+        }
+        RowSpacing::Exactly { height } if height.is_finite() && height > 0.0 => height,
+        RowSpacing::ExpandToFit {
+            base_height,
+            base_baseline,
+        } if base_height.is_finite()
+            && base_height > 0.0
+            && base_baseline.is_finite()
+            && base_baseline >= 0.0 =>
+        {
+            let extra_top = (content_ascent - base_baseline).max(0.0);
+            let extra_bottom = (content_descent - (base_height - base_baseline)).max(0.0);
+            let expanded = base_height + extra_top + extra_bottom;
+            if !expanded.is_finite() {
+                return Err(GridLayoutError::NonFiniteResult);
+            }
+            expanded
+        }
+        _ => return Err(GridLayoutError::InvalidMetric),
+    };
+    if !height.is_finite() || height <= 0.0 {
+        return Err(GridLayoutError::NonFiniteResult);
+    }
+    let expanding = matches!(spacing, RowSpacing::ExpandToFit { .. });
+    let content_overflow = !expanding && height < required_height;
+    let content_extends_base = content_ascent > base_ascent
+        || content_descent > base_descent
+        || content_leading > base_leading;
+    let baseline = if let RowSpacing::ExpandToFit {
+        base_height: _,
+        base_baseline,
+    } = spacing
+    {
+        base_baseline + (content_ascent - base_baseline).max(0.0)
+    } else if matches!(spacing, RowSpacing::Exactly { .. }) {
+        if height < natural_height {
+            height - base_descent
+        } else {
+            base_ascent + base_leading + (height - natural_height).max(0.0) / 2.0
+        }
+    } else if content_overflow {
+        content_ascent.max(0.0)
+    } else if content_extends_base {
+        content_ascent.max(0.0) + (height - content_ink_height).max(0.0) / 2.0
+    } else {
+        base_ascent + (height - font_height).max(0.0) / 2.0
+    };
+    if !baseline.is_finite() {
+        return Err(GridLayoutError::NonFiniteResult);
+    }
+    Ok(RowFrame {
+        height,
+        baseline,
+        content_overflow,
+        clip_content: matches!(spacing, RowSpacing::Exactly { .. }),
+    })
 }
 
 #[cfg(test)]

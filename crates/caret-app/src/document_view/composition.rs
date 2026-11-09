@@ -161,7 +161,7 @@ impl DocumentViewRuntime {
         let composition_range_before = self.composition_range.clone();
         let selection_is_single_paragraph =
             selection_before.anchor.paragraph_id == selection_before.focus.paragraph_id;
-        let outside_environment = self.session.block_environment_exit().is_some();
+        let outside_environment = self.session.block_boundary_exit().is_some();
         let math_text_target = self
             .session
             .math_text_input_context()

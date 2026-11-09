@@ -49,7 +49,7 @@ impl Session {
         else {
             return Err(EditError::InvalidPosition);
         };
-        let siblings = block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
+        let siblings = block_list_by_parent_ids(&self.document.body, &parent_environment_ids)
             .ok_or(EditError::InvalidPosition)?;
         let Some(Block::Environment(environment)) = siblings.get(sibling_index) else {
             return Err(EditError::InvalidPosition);
@@ -72,7 +72,7 @@ impl Session {
 
         {
             let siblings =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
                     .ok_or(EditError::InvalidPosition)?;
             siblings.remove(sibling_index);
             if let Some(paragraph) = &fallback_paragraph {
@@ -81,7 +81,7 @@ impl Session {
         }
         if let Err(error) = self.document.validate() {
             let siblings =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
                     .ok_or(EditError::InvalidPosition)?;
             if fallback_paragraph.is_some() {
                 siblings.remove(sibling_index);
@@ -106,7 +106,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.finalize_structure_edit(
             super::super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::EnvironmentDeletion {
@@ -285,9 +285,8 @@ impl Session {
             else {
                 return Err(EditError::InvalidPosition);
             };
-            let siblings =
-                block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
-                    .ok_or(EditError::InvalidPosition)?;
+            let siblings = block_list_by_parent_ids(&self.document.body, &parent_environment_ids)
+                .ok_or(EditError::InvalidPosition)?;
             let Some(Block::Environment(environment)) = siblings.get(sibling_index) else {
                 return Err(EditError::InvalidPosition);
             };
@@ -400,7 +399,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.finalize_structure_edit(
             updated_index,
             DocumentPatch::Compound(patches),

@@ -132,6 +132,11 @@ pub(crate) struct Context<'a> {
     /// 正文字号（pt）。
     pub base_size: f64,
     pub diagnostics: Vec<MathDiagnostic>,
+    pub host_table_id: Option<caret_doc::NodeId>,
+    pub host_row_spacing: Option<caret_grid_layout::RowSpacing>,
+    pub host_row_ascent: f64,
+    pub host_row_descent: f64,
+    pub host_row_leading: f64,
 }
 
 impl<'a> Context<'a> {
@@ -140,6 +145,11 @@ impl<'a> Context<'a> {
             font,
             base_size,
             diagnostics: Vec::new(),
+            host_table_id: None,
+            host_row_spacing: None,
+            host_row_ascent: 0.0,
+            host_row_descent: 0.0,
+            host_row_leading: 0.0,
         }
     }
 

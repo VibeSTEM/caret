@@ -471,6 +471,304 @@ fn equation_soft_break_uses_two_lines_and_preserves_text_caret_paths() {
 }
 
 #[test]
+fn display_math_uses_the_body_line_grid_as_its_stable_base() {
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let mut service = DocumentLayoutService::new();
+    let mut measure = |source: &str| {
+        let caret_math::ParsedMath::Tree(math_tree) =
+            caret_math::parse(source, caret_math::MathInputKind::Equation)
+                .unwrap_or_else(|error| panic!("valid equation should parse: {error}"))
+        else {
+            panic!("equation source should produce a math tree")
+        };
+        let equation_id = NodeId::generate();
+        let mut document = Document::blank();
+        document.body.push(Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }));
+        let snapshot = service
+            .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("equation should layout: {error}"));
+        let fragment = &snapshot.pages[0].layout.math_fragments[0];
+        let projection = &snapshot.math_projections[0];
+        let target = MathEditTarget::Block {
+            block_id: equation_id.clone(),
+            align: false,
+        };
+        let position = crate::MathTreePosition {
+            host: MathPositionHost::Equation {
+                owner_id: equation_id,
+            },
+            path: crate::MathSequencePath::new(Vec::new()),
+            offset: 0,
+            affinity: MathPositionAffinity::Downstream,
+        };
+        let caret = snapshot
+            .math_tree_caret(&target, &position)
+            .unwrap_or_else(|| panic!("equation root should have a caret"))
+            .0;
+        (
+            fragment.height_pt,
+            caret.y1_pt - caret.y0_pt,
+            projection.caret_baseline_y_pt - projection.caret_line_top_pt,
+            caret.y0_pt,
+        )
+    };
+
+    let x = measure("x");
+    let q = measure("q");
+    let fraction = measure(r"\frac{x}{q}");
+    assert!(
+        (x.0 - q.0).abs() < 0.01,
+        "ordinary glyphs share a stable host line"
+    );
+    assert!(
+        (x.1 - q.1).abs() < 0.01,
+        "ordinary glyph carets have equal height"
+    );
+    assert!(
+        (x.2 - q.2).abs() < 0.01,
+        "ordinary glyphs share the body baseline"
+    );
+    assert!(
+        (x.3 - q.3).abs() < 0.01,
+        "MathTree carets stay on one line box"
+    );
+    assert!(fraction.0 > x.0, "fractions expand the host when required");
+    assert_eq!(
+        fraction.1, x.1,
+        "formula structure does not replace the caret base height"
+    );
+    drop(measure);
+
+    let mut inline_measure = |source: &str| {
+        let mut document = Document::blank();
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines.push(inline_math(source));
+        document.body.push(Block::Paragraph(paragraph));
+        let snapshot = service
+            .layout(&document, 2, &mut catalog, &ShapingStyle::new(1200))
+            .unwrap_or_else(|error| panic!("inline equation should layout: {error}"));
+        let projection = &snapshot.math_projections[0];
+        (
+            snapshot.paragraphs[0].layout.paragraph.lines[0]
+                .metrics
+                .height_pt,
+            projection.caret_height_pt,
+        )
+    };
+    let inline_x = inline_measure("x");
+    let inline_q = inline_measure("q");
+    let inline_fraction = inline_measure(r"\frac{x}{q}");
+    assert!((inline_x.0 - inline_q.0).abs() < 0.01);
+    assert!((inline_x.1 - inline_q.1).abs() < 0.01);
+    assert!(inline_fraction.0 >= inline_x.0);
+    assert_eq!(inline_fraction.1, inline_x.1);
+}
+
+#[test]
+fn align_layout_accepts_exact_spacing_shorter_than_the_body_font_metrics() {
+    let caret_math::ParsedMath::Align(align) = caret_math::parse(
+        r"\begin{aligned}x\\y\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid Align source should parse: {error}")) else {
+        panic!("Align source should produce an Align model")
+    };
+    let mut document = Document::blank();
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 100,
+            extra: Default::default(),
+        };
+    document.body.push(Block::Align(align));
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("short Exactly Align should layout: {error}"));
+
+    assert_eq!(snapshot.pages[0].layout.math_fragments.len(), 1);
+    assert_eq!(
+        snapshot
+            .math_blocks
+            .values()
+            .next()
+            .map(|layout| layout.row_clips.len()),
+        Some(2)
+    );
+}
+
+#[test]
+fn align_outer_boundary_uses_first_and_last_row_under_natural_spacing() {
+    let caret_math::ParsedMath::Align(align) = caret_math::parse(
+        r"\begin{aligned}x\\y\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid Align source should parse: {error}")) else {
+        panic!("Align source should produce an Align model")
+    };
+    let align_id = align.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        Block::Align(align),
+    ];
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("multiline Align should layout: {error}"));
+    let projection = snapshot
+        .math_projections_by_id
+        .get(&align_id)
+        .and_then(|indices| indices.first())
+        .and_then(|index| snapshot.math_projections.get(*index))
+        .unwrap_or_else(|| panic!("Align should have a page projection"));
+    assert_eq!(projection.row_baselines.len(), 2);
+    let fallback = super::PageCaretGeometry {
+        page_index: projection.page_index,
+        x_pt: 0.0,
+        y0_pt: 0.0,
+        y1_pt: 1.0,
+    };
+    let first = snapshot
+        .math_block_boundary_caret(&align_id, crate::editing::Direction::Backward)
+        .unwrap_or(fallback);
+    let last = snapshot
+        .math_block_boundary_caret(&align_id, crate::editing::Direction::Forward)
+        .unwrap_or(fallback);
+    assert!(last.y0_pt > first.y0_pt + 5.0);
+    assert!(((first.y1_pt - first.y0_pt) - (last.y1_pt - last.y0_pt)).abs() < 0.001);
+}
+
+#[test]
+fn display_math_host_spacing_matches_body_line_spacing_rules() {
+    let layout = caret_math::layout::MathLayout {
+        width: 24.0,
+        ascent: 20.0,
+        descent: 2.0,
+        ..caret_math::layout::MathLayout::default()
+    };
+    let grid = caret_layout::FontLineMetrics {
+        ascent_pt: 8.0,
+        descent_pt: 2.0,
+        leading_pt: 2.0,
+    };
+    let natural =
+        super::calculate_math_host_metrics(&layout, grid, caret_layout::LineSpacing::Natural)
+            .unwrap_or_else(|error| panic!("natural math metrics should resolve: {error}"));
+    let multiple = super::calculate_math_host_metrics(
+        &layout,
+        grid,
+        caret_layout::LineSpacing::Multiple { percent: 115 },
+    )
+    .unwrap_or_else(|error| panic!("multiple math metrics should resolve: {error}"));
+    let at_least = super::calculate_math_host_metrics(
+        &layout,
+        grid,
+        caret_layout::LineSpacing::AtLeast {
+            min_centipoints: 3000,
+        },
+    )
+    .unwrap_or_else(|error| panic!("at-least math metrics should resolve: {error}"));
+    let exactly = super::calculate_math_host_metrics(
+        &layout,
+        grid,
+        caret_layout::LineSpacing::Exactly { centipoints: 500 },
+    )
+    .unwrap_or_else(|error| panic!("exact math metrics should resolve: {error}"));
+
+    assert_eq!(natural.height_pt, 23.0);
+    assert!((multiple.height_pt - 23.9).abs() < 0.001);
+    assert_eq!(at_least.height_pt, 32.0);
+    assert_eq!(exactly.height_pt, 5.0);
+    assert!(exactly.clip_ink_to_line_height);
+}
+
+#[test]
+fn display_math_uses_the_same_collapsed_paragraph_spacing_as_sections() {
+    let parsed = caret_math::parse("x", caret_math::MathInputKind::Equation)
+        .unwrap_or_else(|error| panic!("equation should parse: {error}"));
+    let caret_math::ParsedMath::Tree(math_tree) = parsed else {
+        panic!("equation should produce a MathTree")
+    };
+    let paragraph = |text: &str| {
+        let mut paragraph = Paragraph::empty(NodeId::generate());
+        paragraph.inlines.push(text_flow(Run {
+            text: text.to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        }));
+        paragraph
+    };
+    let equation_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph("before")),
+        Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(paragraph("after")),
+    ];
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog should load: {error}"));
+    let snapshot = DocumentLayoutService::new()
+        .layout(&document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("display math should layout: {error}"));
+    let page = &snapshot.pages[0];
+    let before = &snapshot.paragraphs[0];
+    let after = &snapshot.paragraphs[1];
+    let before_fragment = page
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| fragment.paragraph_id == before.id)
+        .unwrap_or_else(|| panic!("preceding paragraph should be on the page"));
+    let after_fragment = page
+        .layout
+        .fragments
+        .iter()
+        .find(|fragment| fragment.paragraph_id == after.id)
+        .unwrap_or_else(|| panic!("following paragraph should be on the page"));
+    let math_fragment = page
+        .layout
+        .math_fragments
+        .iter()
+        .find(|fragment| fragment.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should be on the page"));
+    let before_line_height = before.layout.paragraph.lines[0].metrics.height_pt;
+    let after_line_height = after.layout.paragraph.lines[0].metrics.height_pt;
+    let paragraph_gap = 8.0;
+
+    assert!(
+        (math_fragment.y_offset_pt
+            - before_fragment.y_offset_pt
+            - before_line_height
+            - paragraph_gap)
+            .abs()
+            < 0.01
+    );
+    assert!(
+        (after_fragment.y_offset_pt
+            - math_fragment.y_offset_pt
+            - math_fragment.height_pt
+            - paragraph_gap)
+            .abs()
+            < 0.01
+    );
+    assert!(
+        (page.layout.used_height_pt - after_fragment.y_offset_pt - after_line_height).abs() < 0.01
+    );
+}
+
+#[test]
 fn align_cell_soft_break_keeps_both_text_caret_paths() {
     let caret_math::ParsedMath::Align(mut align) = caret_math::parse(
         r"\begin{aligned}x\end{aligned}",
@@ -1153,7 +1451,10 @@ fn math_tree_caret_uses_inline_environment_children_geometry() {
         .find(|projection| projection.math_id == equation_id)
         .unwrap_or_else(|| panic!("equation should have a page projection"));
     assert!((caret.0.x_pt - (projection.object_x_pt + symbol.x + symbol.width)).abs() < 1e-9);
-    assert!((caret.0.y1_pt - caret.0.y0_pt - symbol.height).abs() < 1e-9);
+    assert!(
+        (caret.0.y1_pt - caret.0.y0_pt - projection.caret_height_pt).abs() < 1e-9,
+        "math caret uses the shared body line height"
+    );
 
     position.affinity = MathPositionAffinity::Downstream;
     let downstream = snapshot
@@ -1247,14 +1548,18 @@ fn math_structure_hit_enters_bold_environment_child_sequence() {
     let snapshot = DocumentLayoutService::new()
         .layout(&document, 19, &mut catalog, &ShapingStyle::new(1200))
         .unwrap_or_else(|error| panic!("bold equation should layout: {error}"));
-    let page = &snapshot.pages[0];
-    let fragment = page
-        .layout
-        .math_fragments
-        .first()
-        .unwrap_or_else(|| panic!("equation fragment should be present"));
-    let x_pt = page.margin_left_pt + f64::from(fragment.x_offset_pt) + 1.0;
-    let y_pt = page.margin_top_pt + f64::from(fragment.y_offset_pt) + 1.0;
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should have a page projection"));
+    let environment = snapshot.math_blocks[&equation_id]
+        .nodes
+        .iter()
+        .find(|node| node.is_container && node.width > 0.0 && node.height > 0.0)
+        .unwrap_or_else(|| panic!("equation should have an environment box"));
+    let x_pt = projection.object_x_pt + environment.x + environment.width / 2.0;
+    let y_pt = projection.baseline_y_pt + environment.y + environment.height / 2.0;
     let hit = snapshot
         .hit_test_math_structure(0, x_pt, y_pt)
         .unwrap_or_else(|| panic!("Bold math child sequence should be hittable"));
@@ -3303,9 +3608,9 @@ fn clipped_multiline_inline_math_publishes_only_visible_geometry() {
         math_id: math_id.clone(),
     };
     let raw = super::MathTextItemGeometry {
-        page_index: 0,
         object_x_pt: projection.object_x_pt,
         object_baseline_y_pt: projection.baseline_y_pt,
+        projection,
         items: &layout.items,
         sidecars,
     };

@@ -1,20 +1,52 @@
-//! 提交上下键使用的布局候选；按键状态优先级由 `up_arrow.rs` 和 `down_arrow.rs` 管理。
+//! 统一上下键的状态仲裁并提交布局候选；按键模块提供方向和候选。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
 use super::super::super::Session;
 use crate::editing::{
-    EditError, Effect, MathEditBranch, NavigationCandidate, NavigationGeneration, NavigationIntent,
-    Selection,
+    Command, Direction, EditError, Effect, MathEditBranch, NavigationCandidate,
+    NavigationGeneration, NavigationIntent, Selection,
 };
 
 impl Session {
+    /// 共用 Up/Down 的状态路由；按键模块只提供方向和候选。
+    pub(in crate::editing::session::keyboards) fn handle_vertical_arrow(
+        &mut self,
+        candidate: Option<NavigationCandidate>,
+        extend: bool,
+        structure: bool,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
+        if structure {
+            if self.composition.is_some() || self.command_line.is_some() || self.math_edit.is_some()
+            {
+                return Ok(Effect::default());
+            }
+            return self.run(Command::MoveStructure(direction));
+        }
+        if self.composition.is_some() {
+            return Ok(Effect::default());
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.command_line.is_some() {
+            return self.run(Command::MoveCommandLineSelection(direction));
+        }
+        if self.math_edit.is_some() {
+            return self.commit_math_vertical_navigation_candidate(candidate, extend, direction);
+        }
+        if candidate.is_none() {
+            return self.complete_vertical_document_edge(direction, extend);
+        }
+        self.commit_document_vertical_navigation_candidate(candidate, extend)
+    }
+
     /// 提交当前数学焦点下的上下键候选。
     pub(in crate::editing::session::keyboards) fn commit_math_vertical_navigation_candidate(
         &mut self,
         candidate: Option<NavigationCandidate>,
         extend: bool,
+        direction: Direction,
     ) -> Result<Effect, EditError> {
         let edit = self.math_edit.as_ref().ok_or(EditError::InvalidPosition)?;
         match &edit.branch {
@@ -56,7 +88,7 @@ impl Session {
                     }
                     self.focus_math_structure_hit(&hit, generation.font_generation)
                 }
-                None => Ok(Effect::default()),
+                None => self.exit_vertical_math_block(direction, extend),
                 Some(NavigationCandidate::Document { .. }) => Err(EditError::InvalidPosition),
             },
             MathEditBranch::Tree { .. } | MathEditBranch::Source => match candidate {
@@ -81,9 +113,24 @@ impl Session {
                     }
                     self.focus_math_structure_hit(&hit, generation.font_generation)
                 }
-                None => Ok(Effect::default()),
+                None => self.exit_vertical_math_block(direction, extend),
             },
         }
+    }
+
+    fn exit_vertical_math_block(
+        &mut self,
+        direction: Direction,
+        extend: bool,
+    ) -> Result<Effect, EditError> {
+        if extend
+            || !self
+                .math_edit()
+                .is_some_and(|edit| matches!(&edit.target, crate::MathEditTarget::Block { .. }))
+        {
+            return Ok(Effect::default());
+        }
+        self.exit_math_edit_for_navigation(direction)
     }
 
     /// 提交普通文档布局生成的上下导航候选。

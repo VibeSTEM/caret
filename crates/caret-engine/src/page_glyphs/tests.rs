@@ -200,8 +200,9 @@ fn display_math_text_uses_body_parley_fonts_and_keeps_the_sidecar_in_the_page_sn
     assert!(text_flow_box.baseline.abs() < 0.01);
     assert!((text_flow_box.y + math_layout.ascent).abs() < 0.01);
     let math_fragment = &snapshot.pages[0].layout.math_fragments[0];
-    let expected_baseline =
-        snapshot.pages[0].margin_top_pt + f64::from(math_fragment.y_offset_pt) + math_layout.ascent;
+    let expected_baseline = snapshot.pages[0].margin_top_pt
+        + f64::from(math_fragment.y_offset_pt)
+        + f64::from(math_fragment.baseline_pt);
     assert!(
         page.runs
             .iter()
@@ -1037,7 +1038,13 @@ fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
         Ok(caret_math::ParsedMath::Align(align)) => align,
         other => panic!("valid Align should parse: {other:?}"),
     };
+    let align_id = align.id.clone();
     let mut document = Document::blank();
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 1200,
+            extra: Default::default(),
+        };
     document.body.clear();
     document.body.push(Block::Equation(equation));
     document.body.push(Block::Align(align));
@@ -1061,6 +1068,37 @@ fn equation_and_align_blocks_paginate_and_use_the_shared_page_glyph_path() {
     assert!(
         !page.decorations.is_empty(),
         "display formula rules should be present"
+    );
+    let align_layout = &snapshot.math_blocks[&align_id];
+    assert_eq!(align_layout.row_clips.len(), 2);
+    assert!(align_layout.row_clips.iter().all(|clip| {
+        clip.row_id.is_some()
+            && clip.item_range.start < clip.item_range.end
+            && clip.y0.is_finite()
+            && clip.y1.is_finite()
+            && clip.y0 < clip.y1
+    }));
+    let align_projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == align_id)
+        .unwrap_or_else(|| panic!("Align should have a page projection"));
+    assert_eq!(
+        align_projection.row_clips.len(),
+        align_layout.row_clips.len()
+    );
+    assert!(
+        align_projection
+            .row_clips
+            .iter()
+            .zip(&align_layout.row_clips)
+            .all(|(projected, source)| {
+                projected.y0_pt.is_finite()
+                    && projected.y1_pt.is_finite()
+                    && projected.y0_pt < projected.y1_pt
+                    && (projected.y0_pt - align_projection.baseline_y_pt - source.y0).abs() < 1e-6
+                    && (projected.y1_pt - align_projection.baseline_y_pt - source.y1).abs() < 1e-6
+            })
     );
 }
 

@@ -282,6 +282,13 @@ impl Session {
         self.validate_navigation_position(&selection.anchor)?;
         self.validate_navigation_position(&selection.focus)?;
         let was_collapsed = selection.anchor == selection.focus;
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && let Some(direction) = logical_direction
+            && let Some(effect) = self.move_from_math_block_boundary_stop(direction)?
+        {
+            return Ok(effect);
+        }
         if self.range_requires_block_environment_selection(&selection.anchor, &selection.focus) {
             let anchor_visual_affinity = if self.selection.anchor == self.selection.focus
                 && self.structure_selection.is_none()
@@ -302,19 +309,35 @@ impl Session {
             && was_collapsed
             && self.selection.anchor == self.selection.focus
             && self.math_edit.is_none()
+            && self.selection.focus.story == selection.focus.story
+            && self.selection.focus.paragraph_id == selection.focus.paragraph_id
+            && self.selection.focus.offset == selection.focus.offset
+            && let Some(direction) = logical_direction
+            && self.enter_adjacent_math_if_present(direction)?
+        {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && self.selection.anchor == self.selection.focus
+            && self.math_edit.is_none()
             && let Some(direction) =
                 self.navigation_math_crossing_direction(&self.selection.focus, &selection.focus)?
+            && self.enter_adjacent_math_if_present(direction)?
         {
-            let effect = self.enter_math(direction)?;
-            if self.math_edit.is_some() {
-                return Ok(effect);
-            }
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
         }
         if intent == NavigationIntent::Horizontal
             && was_collapsed
             && self.selection.anchor == self.selection.focus
             && let Some(direction) =
-                self.navigation_environment_exit_direction(&selection.focus, logical_direction)?
+                self.navigation_block_boundary_stop_direction(&selection.focus, logical_direction)?
         {
             return self.run(Command::ExitBlockEnvironment(direction));
         }
@@ -473,7 +496,7 @@ impl Session {
         self.selected_block_environment = selected.first().cloned();
         self.selected_block_environments = selected;
         self.structure_selection = Some(super::StructureSelection { anchor, focus });
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         if cancels_command_line_preedit {
             self.command_line = None;
         }
@@ -489,7 +512,7 @@ impl Session {
     }
 
     /// 仅在经过位置校验和相邻公式仲裁后，判断候选是否跨出当前块环境。
-    fn navigation_environment_exit_direction(
+    fn navigation_block_boundary_stop_direction(
         &mut self,
         target: &Pos,
         visual_direction: Option<Direction>,
@@ -557,11 +580,11 @@ impl Session {
         });
         self.validate_selection(&next)?;
         let changed = self.selection != next
-            || self.block_environment_exit.is_some()
+            || self.block_boundary_exit.is_some()
             || self.selected_block_environment.is_some()
             || !self.selected_block_environments.is_empty()
             || self.structure_selection.is_some();
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;

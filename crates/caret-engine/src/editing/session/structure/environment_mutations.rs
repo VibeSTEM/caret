@@ -136,7 +136,7 @@ impl Session {
             extra: BTreeMap::new(),
         };
         let Some(siblings) =
-            block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };
@@ -146,7 +146,7 @@ impl Session {
         siblings.insert(sibling_index, Block::Environment(environment.clone()));
         if let Err(error) = self.document.validate() {
             if let Some(siblings) =
-                block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+                block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
             {
                 siblings.remove(sibling_index);
             }
@@ -220,7 +220,7 @@ impl Session {
         else {
             return Err(EditError::InvalidPosition);
         };
-        let siblings = block_list_by_environment_ids(&self.document.body, &parent_environment_ids)
+        let siblings = block_list_by_parent_ids(&self.document.body, &parent_environment_ids)
             .ok_or(EditError::InvalidPosition)?;
         let Some(Block::Environment(environment)) = siblings.get(sibling_index) else {
             return Err(EditError::InvalidPosition);
@@ -232,7 +232,7 @@ impl Session {
         let environment_estimated_bytes = history::environment_estimated_bytes(&environment);
         let title_id = environment.title.as_ref().map(|title| title.id.clone());
         let Some(siblings) =
-            block_list_by_environment_ids_mut(&mut self.document.body, &parent_environment_ids)
+            block_list_by_parent_ids_mut(&mut self.document.body, &parent_environment_ids)
         else {
             return Err(EditError::InvalidPosition);
         };

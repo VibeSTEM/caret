@@ -40,6 +40,9 @@ impl Session {
                 ..Effect::default()
             });
         }
+        if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+            return Ok(effect);
+        }
         let pos = self.selection.focus.clone();
         let map = self.text_map_for(&pos)?;
         map.validate_pos(&pos)?;

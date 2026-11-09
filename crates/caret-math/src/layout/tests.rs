@@ -11,9 +11,9 @@ use caret_doc::{
 };
 
 use super::{
-    MathItem, MathLayout, MathLayoutEngine, MathLayoutError, MathNodeBox, MathStyle,
-    MathTextRequest, MathTextRunBox, MathTextShape, MathTextShapeError, MathTextShaper,
-    layout_align, layout_math, layout_math_with_text_shaper,
+    MathHostRowGrid, MathItem, MathLayout, MathLayoutEngine, MathLayoutError, MathNodeBox,
+    MathStyle, MathTextRequest, MathTextRunBox, MathTextShape, MathTextShapeError, MathTextShaper,
+    layout_align, layout_align_with_host_row_grid, layout_math, layout_math_with_text_shaper,
 };
 use crate::layout::MathFont;
 use crate::{MathInputKind, ParsedMath, parse};
@@ -726,6 +726,8 @@ fn optional_placeholder_flows_keep_identity_without_changing_rendering() {
             SIZE,
             MathStyle::Display,
             None,
+            None,
+            None,
         )
         .unwrap_or_else(|error| panic!("布局输入应合法：{error}"));
         assert_eq!(layout.items, without_positions.items, "{source}");
@@ -1323,6 +1325,8 @@ fn text_islands_follow_editable_flow_boundaries() {
         SIZE,
         MathStyle::Inline,
         Some(&mut shaper),
+        None,
+        None,
     )
     .unwrap_or_else(|error| panic!("TextSpace should use body shaping: {error}"));
     let text_space_request = shaper
@@ -2219,4 +2223,42 @@ fn align_columns_share_x_positions_and_rows_share_baselines() {
             .iter()
             .any(|item| matches!(item, MathItem::Rule { .. }))
     );
+}
+
+#[test]
+fn host_row_grid_applies_body_fixed_advance_to_each_align_row() {
+    let align = match parse(
+        r"\begin{aligned}x&=\frac{1}{2}\\abcdefgh&=c\end{aligned}",
+        MathInputKind::Align,
+    ) {
+        Ok(ParsedMath::Align(align)) => align,
+        other => panic!("Align source should produce an Align document node: {other:?}"),
+    };
+    let layout = layout_align_with_host_row_grid(
+        font(),
+        &align,
+        SIZE,
+        &caret_doc::InlineEnvironmentTemplates::default(),
+        None,
+        MathHostRowGrid {
+            ascent: 8.0,
+            descent: 2.0,
+            leading: 2.0,
+            spacing: caret_grid_layout::RowSpacing::Exactly { height: 12.0 },
+        },
+    )
+    .unwrap_or_else(|error| panic!("host-grid Align should lay out: {error}"));
+    let row_box = |index: usize| {
+        let row = &align.rows[index];
+        layout
+            .nodes
+            .iter()
+            .find(|node| node.id.as_ref() == Some(&row.id))
+            .unwrap_or_else(|| panic!("Align row {index} should keep its layout box"))
+    };
+    let first = row_box(0);
+    let second = row_box(1);
+    assert_eq!(first.height, 12.0);
+    assert_eq!(second.height, 12.0);
+    assert!((second.baseline - first.baseline - 14.0).abs() < 0.1);
 }

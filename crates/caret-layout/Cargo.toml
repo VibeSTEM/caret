@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 caret-doc.workspace = true
 caret-font-roles.workspace = true
+caret-grid-layout.workspace = true
 fontique.workspace = true
 icu_segmenter.workspace = true
 icu_locale_core.workspace = true

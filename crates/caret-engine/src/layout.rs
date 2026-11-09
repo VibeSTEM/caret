@@ -13,11 +13,12 @@ use caret_doc::{
     Paragraph, ParagraphContent,
 };
 use caret_layout::{
-    FontCatalog, FontCatalogError, HitAffinity, InlineObjectLayout, PageLayout, PaginationItem,
-    ParagraphLayoutOptions, ParagraphLayouter, ParagraphPaginationInput, ParleyParagraphLayout,
-    PositionedGlyphLayoutItem, ResolvedDocumentTextSettings, ResolvedParagraphStyle, ShapingStyle,
-    TextIslandLayout, VisualAffinity, paginate_paragraphs, paragraph_has_empty_line,
-    resolve_paragraph_style,
+    FontCatalog, FontCatalogError, FontLineMetrics, HitAffinity, InlineObjectLayout, LineMetrics,
+    LineSpacing, PageLayout, PaginationItem, ParagraphLayoutOptions, ParagraphLayouter,
+    ParagraphPaginationInput, ParleyParagraphLayout, PositionedGlyphLayoutItem,
+    ResolvedDocumentTextSettings, ResolvedParagraphStyle, ShapingStyle, TextIslandLayout,
+    VisualAffinity, calculate_content_line_metrics_with_grid, calculate_line_metrics_with_grid,
+    paginate_paragraphs, paragraph_has_empty_line, resolve_paragraph_style,
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
@@ -82,6 +83,8 @@ pub struct LaidOutParagraph {
     pub environment_ids: Arc<[NodeId]>,
     source_paragraph: Arc<Paragraph>,
     resolved_style: ResolvedParagraphStyle,
+    math_caret_height_pt: f32,
+    math_caret_baseline_pt: f32,
     pub text: Arc<str>,
     pub layout: Arc<ParleyParagraphLayout>,
     /// 行内 MathBox 布局与 Parley inline-box ID 按顺序一一对应。
@@ -273,6 +276,8 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(input.environment_ids),
             source_paragraph: Arc::new(input.source_paragraph),
             resolved_style: input.resolved_style,
+            math_caret_height_pt: input.math_caret_height_pt,
+            math_caret_baseline_pt: input.math_caret_baseline_pt,
             text: Arc::from(input.text),
             layout: Arc::new(input.layout),
             inline_math_layouts: Arc::from(input.inline_math_layouts),
@@ -291,6 +296,8 @@ impl LaidOutParagraph {
             environment_ids: Arc::from(environment_ids),
             source_paragraph: Arc::clone(&self.source_paragraph),
             resolved_style: self.resolved_style,
+            math_caret_height_pt: self.math_caret_height_pt,
+            math_caret_baseline_pt: self.math_caret_baseline_pt,
             text: Arc::clone(&self.text),
             layout: Arc::clone(&self.layout),
             inline_math_layouts: Arc::clone(&self.inline_math_layouts),
@@ -324,6 +331,8 @@ struct LaidOutParagraphInput {
     story: StoryId,
     environment_ids: Vec<NodeId>,
     resolved_style: ResolvedParagraphStyle,
+    math_caret_height_pt: f32,
+    math_caret_baseline_pt: f32,
     text: String,
     layout: ParleyParagraphLayout,
     inline_math_layouts: Vec<Arc<caret_math::layout::MathLayout>>,
@@ -561,11 +570,39 @@ pub(crate) struct MathPageProjection {
     pub(crate) page_index: usize,
     pub(crate) object_x_pt: f64,
     pub(crate) baseline_y_pt: f64,
+    pub(crate) caret_line_top_pt: f64,
+    pub(crate) caret_baseline_y_pt: f64,
+    pub(crate) caret_height_pt: f64,
     pub(crate) clip_y_pt: Option<[f64; 2]>,
+    pub(crate) row_clips: Vec<MathPageRowClip>,
+    pub(crate) row_baselines: Vec<MathPageRowBaseline>,
     inline_index: Option<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MathPageRowClip {
+    pub(crate) row_id: NodeId,
+    pub(crate) y0_pt: f64,
+    pub(crate) y1_pt: f64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MathPageRowBaseline {
+    pub(crate) baseline_y_pt: f64,
+}
+
 impl MathPageProjection {
+    /// 根据数学节点自身基线生成正文高度的 caret，保持脚本相对正文基线的偏移。
+    fn caret_at_math_baseline(&self, x_pt: f64, math_baseline_y_pt: f64) -> PageCaretGeometry {
+        let baseline_shift = math_baseline_y_pt - self.caret_baseline_y_pt;
+        PageCaretGeometry {
+            page_index: self.page_index,
+            x_pt,
+            y0_pt: self.caret_line_top_pt + baseline_shift,
+            y1_pt: self.caret_line_top_pt + baseline_shift + self.caret_height_pt,
+        }
+    }
+
     /// 完全不可见的几何不发布；部分可见的几何取行裁切交集。
     fn clip_range(&self, top: f64, bottom: f64) -> Option<(f64, f64)> {
         let (top, bottom) = match self.clip_y_pt {
@@ -580,6 +617,37 @@ impl MathPageProjection {
             .is_none_or(|[top, bottom]| y >= top && y <= bottom)
     }
 
+    fn row_clip(&self, row_id: Option<&NodeId>) -> Option<[f64; 2]> {
+        let row_id = row_id?;
+        self.row_clips
+            .iter()
+            .find(|clip| &clip.row_id == row_id)
+            .map(|clip| [clip.y0_pt, clip.y1_pt])
+    }
+
+    fn contains_y_for_row(&self, y: f64, row_id: Option<&NodeId>) -> bool {
+        self.row_clip(row_id)
+            .is_none_or(|[top, bottom]| y >= top && y <= bottom)
+            && self.contains_y(y)
+    }
+
+    fn clip_range_for_row(
+        &self,
+        top: f64,
+        bottom: f64,
+        row_id: Option<&NodeId>,
+    ) -> Option<(f64, f64)> {
+        let (top, bottom) = match (self.row_clip(row_id), self.clip_y_pt) {
+            (Some([row_top, row_bottom]), Some([clip_top, clip_bottom])) => (
+                top.max(row_top).max(clip_top),
+                bottom.min(row_bottom).min(clip_bottom),
+            ),
+            (Some([row_top, row_bottom]), None) => (top.max(row_top), bottom.min(row_bottom)),
+            (None, _) => return self.clip_range(top, bottom),
+        };
+        (top < bottom).then_some((top, bottom))
+    }
+
     fn clip_caret(&self, mut caret: PageCaretGeometry) -> Option<PageCaretGeometry> {
         let Some([clip_top, clip_bottom]) = self.clip_y_pt else {
             return Some(caret);
@@ -589,7 +657,7 @@ impl MathPageProjection {
             return Some(caret);
         }
 
-        // 正文 Exactly 行距可完全裁掉数学 TextFlow 行；逻辑光标仍需锚定到最近可见边缘。
+        // Exactly 行距可完全裁掉数学内容；逻辑光标仍需锚定到最近可见边缘。
         let height = (caret.y1_pt - caret.y0_pt).min(clip_bottom - clip_top);
         if (caret.y0_pt + caret.y1_pt) / 2.0 < clip_top {
             caret.y0_pt = clip_top;
@@ -601,12 +669,134 @@ impl MathPageProjection {
         Some(caret)
     }
 
+    fn clip_caret_for_row(
+        &self,
+        mut caret: PageCaretGeometry,
+        row_id: Option<&NodeId>,
+    ) -> Option<PageCaretGeometry> {
+        let Some([row_top, row_bottom]) = self.row_clip(row_id) else {
+            return self.clip_caret(caret);
+        };
+        let Some((top, bottom)) = self.clip_range_for_row(caret.y0_pt, caret.y1_pt, row_id) else {
+            let height = (caret.y1_pt - caret.y0_pt).min(row_bottom - row_top);
+            if (caret.y0_pt + caret.y1_pt) / 2.0 < row_top {
+                caret.y0_pt = row_top;
+                caret.y1_pt = row_top + height;
+            } else {
+                caret.y0_pt = row_bottom - height;
+                caret.y1_pt = row_bottom;
+            }
+            return Some(caret);
+        };
+        caret.y0_pt = top;
+        caret.y1_pt = bottom;
+        Some(caret)
+    }
+
     pub(crate) fn drawing_clip(&self) -> Option<[f64; 2]> {
         self.clip_y_pt
     }
 }
 
+fn math_row_id_for_host(host: &MathPositionHost) -> Option<&NodeId> {
+    match host {
+        MathPositionHost::AlignCell { row_id, .. } => Some(row_id),
+        MathPositionHost::InlineMath { .. } | MathPositionHost::Equation { .. } => None,
+    }
+}
+
 impl DocumentLayoutSnapshot {
+    /// 返回显示公式块首尾的正文高度光标几何，Align 使用首行/末行边缘。
+    fn math_block_boundary_caret(
+        &self,
+        block_id: &NodeId,
+        direction: crate::editing::Direction,
+    ) -> Option<PageCaretGeometry> {
+        let mut projections = self
+            .math_projections_by_id
+            .get(block_id)?
+            .iter()
+            .filter_map(|index| self.math_projections.get(*index))
+            .filter(|projection| projection.inline_index.is_none())
+            .collect::<Vec<_>>();
+        projections.sort_by_key(|projection| projection.page_index);
+        let projection = match direction {
+            crate::editing::Direction::Backward => projections.first()?,
+            crate::editing::Direction::Forward => projections.last()?,
+        };
+        let page = self.pages.get(projection.page_index)?;
+        let x_pt = match direction {
+            crate::editing::Direction::Backward => page.margin_left_pt,
+            crate::editing::Direction::Forward => page.width_pt - page.margin_right_pt,
+        };
+        let row_baseline = match direction {
+            crate::editing::Direction::Backward => projection.row_baselines.first(),
+            crate::editing::Direction::Forward => projection.row_baselines.last(),
+        };
+        Some(row_baseline.map_or_else(
+            || PageCaretGeometry {
+                page_index: projection.page_index,
+                x_pt,
+                y0_pt: projection.caret_line_top_pt,
+                y1_pt: projection.caret_line_top_pt + projection.caret_height_pt,
+            },
+            |row| projection.caret_at_math_baseline(x_pt, row.baseline_y_pt),
+        ))
+    }
+
+    /// 返回块外侧停靠点的页面 x 坐标；环境容器和显示公式消费同一边界查询。
+    pub fn block_boundary_x(
+        &self,
+        block_id: &NodeId,
+        page_index: usize,
+        direction: crate::editing::Direction,
+    ) -> Option<f64> {
+        let environment_edge = self
+            .environment_ranges
+            .iter()
+            .filter(|range| &range.environment_id == block_id && range.page_index == page_index)
+            .map(|range| match direction {
+                crate::editing::Direction::Backward => range.x0_pt,
+                crate::editing::Direction::Forward => range.x1_pt,
+            })
+            .next();
+        if environment_edge.is_some() {
+            return environment_edge;
+        }
+        let has_projection = self
+            .math_projections_by_id
+            .get(block_id)?
+            .iter()
+            .filter_map(|index| self.math_projections.get(*index))
+            .any(|projection| {
+                projection.page_index == page_index && projection.inline_index.is_none()
+            });
+        if !has_projection {
+            return None;
+        }
+        let page = self.pages.get(page_index)?;
+        match direction {
+            crate::editing::Direction::Backward => Some(page.margin_left_pt),
+            crate::editing::Direction::Forward => Some(page.width_pt - page.margin_right_pt),
+        }
+    }
+
+    /// 将块类型的边界几何适配合并到共享外侧停靠光标投影。
+    pub fn block_boundary_caret(
+        &self,
+        block_id: &NodeId,
+        direction: crate::editing::Direction,
+        mut fallback: PageCaretGeometry,
+    ) -> PageCaretGeometry {
+        if let Some(caret) = self.math_block_boundary_caret(block_id, direction) {
+            return caret;
+        }
+        fallback.x_pt = self
+            .block_boundary_x(block_id, fallback.page_index, direction)
+            .unwrap_or(fallback.x_pt);
+        fallback
+    }
+
     /// 按页索引取连续片段，避免命中时扫描其他页面的公式。
     fn math_projections_on_page(&self, page_index: usize) -> &[MathPageProjection] {
         let start = self
@@ -740,6 +930,25 @@ impl DocumentLayoutSnapshot {
 
     pub(crate) fn math_host(&self, math_id: &NodeId) -> Option<&MathTextLayoutHost> {
         self.math_hosts.get(math_id)
+    }
+
+    fn math_text_row_id<'a>(
+        &'a self,
+        target: &MathEditTarget,
+        position: &MathTextPosition,
+    ) -> Option<&'a NodeId> {
+        let MathEditTarget::Block {
+            block_id,
+            align: true,
+        } = target
+        else {
+            return None;
+        };
+        let (row_index, _) = position.path.align_cell()?;
+        let MathBlockSource::Align(align) = self.math_block_sources.get(block_id)? else {
+            return None;
+        };
+        Some(&align.rows.get(row_index)?.id)
     }
     fn math_projection_items(
         &self,
@@ -960,16 +1169,28 @@ impl DocumentLayoutSnapshot {
             let Some((layout, sidecars)) = self.math_projection_items(projection) else {
                 continue;
             };
-            if let Some(mut hit) = hit_math_text_items(
-                page_index,
-                x_pt,
-                y_pt,
-                projection.object_x_pt,
-                projection.baseline_y_pt,
-                &layout.items,
+            let geometry = MathTextItemGeometry {
+                object_x_pt: projection.object_x_pt,
+                object_baseline_y_pt: projection.baseline_y_pt,
+                projection,
+                items: &layout.items,
                 sidecars,
-            ) {
-                let Some(caret) = projection.clip_caret(hit.caret) else {
+            };
+            if let Some(mut hit) = hit_math_text_items(page_index, x_pt, y_pt, &geometry) {
+                if !projection.contains_y_for_row(y_pt, math_row_id_for_host(&hit.host)) {
+                    continue;
+                }
+                let Some((normalized_caret, _)) = math_text_caret_in_items(
+                    &geometry,
+                    &hit.target,
+                    &hit.position,
+                    hit.visual_affinity,
+                ) else {
+                    continue;
+                };
+                let Some(caret) = projection
+                    .clip_caret_for_row(normalized_caret, math_row_id_for_host(&hit.host))
+                else {
                     continue;
                 };
                 hit.caret = caret;
@@ -994,9 +1215,9 @@ impl DocumentLayoutSnapshot {
                 continue;
             };
             let geometry = MathTextItemGeometry {
-                page_index,
                 object_x_pt: projection.object_x_pt,
                 object_baseline_y_pt: projection.baseline_y_pt,
+                projection,
                 items: &layout.items,
                 sidecars,
             };
@@ -1030,9 +1251,11 @@ impl DocumentLayoutSnapshot {
                         ) else {
                             continue;
                         };
-                        let Some((clip_top, clip_bottom)) =
-                            projection.clip_range(caret.y0_pt, caret.y1_pt)
-                        else {
+                        let Some((clip_top, clip_bottom)) = projection.clip_range_for_row(
+                            caret.y0_pt,
+                            caret.y1_pt,
+                            math_row_id_for_host(&sidecar.host),
+                        ) else {
                             continue;
                         };
                         caret.y0_pt = clip_top;
@@ -1074,15 +1297,19 @@ impl DocumentLayoutSnapshot {
                 continue;
             }
             let geometry = MathTextItemGeometry {
-                page_index,
                 object_x_pt: projection.object_x_pt,
                 object_baseline_y_pt: projection.baseline_y_pt,
+                projection,
                 items: &layout.items,
                 sidecars,
             };
             let (caret, _) =
                 math_text_caret_in_items(&geometry, target, position, visual_affinity)?;
-            let (y0_pt, y1_pt) = projection.clip_range(caret.y0_pt, caret.y1_pt)?;
+            let (y0_pt, y1_pt) = projection.clip_range_for_row(
+                caret.y0_pt,
+                caret.y1_pt,
+                math_row_id_for_host(&sidecar.host),
+            )?;
             return Some(PageMathTextHit {
                 token,
                 session_id: self.session_id.clone(),
@@ -1117,7 +1344,7 @@ impl DocumentLayoutSnapshot {
         if x_pt < 0.0 || y_pt < 0.0 || x_pt > page.width_pt || y_pt > page.height_pt {
             return None;
         }
-        let mut best: Option<(f64, usize, PageMathStructureHit)> = None;
+        let mut best: Option<(f64, u8, f64, usize, PageMathStructureHit)> = None;
         for projection in self.math_projections_on_page(page_index) {
             if !projection.contains_y(y_pt) {
                 continue;
@@ -1139,6 +1366,9 @@ impl DocumentLayoutSnapshot {
                 let Some(scope_host) = host.for_scope(&node.scope_id) else {
                     continue;
                 };
+                if !projection.contains_y_for_row(y_pt, math_row_id_for_host(&scope_host.host)) {
+                    continue;
+                }
                 let Some(root) = self.math_scope_root(projection, &node.scope_id) else {
                     continue;
                 };
@@ -1166,15 +1396,21 @@ impl DocumentLayoutSnapshot {
                 let height_pt = node.height;
                 let x1_pt = x0_pt + width_pt;
                 let y1_pt = y0_pt + height_pt;
+                let caret_band = projection
+                    .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + node.baseline);
+                let hit_y0_pt = y0_pt.min(caret_band.y0_pt);
+                let hit_y1_pt = y1_pt.max(caret_band.y1_pt);
                 if !x0_pt.is_finite()
                     || !y0_pt.is_finite()
                     || !x1_pt.is_finite()
                     || !y1_pt.is_finite()
                     || x_pt < x0_pt
                     || x_pt > x1_pt
-                    || y_pt < y0_pt
-                    || y_pt > y1_pt
                 {
+                    continue;
+                }
+                let strict_hit = y_pt >= y0_pt && y_pt <= y1_pt;
+                if !strict_hit && (y_pt < hit_y0_pt || y_pt > hit_y1_pt) {
                     continue;
                 }
                 let child_step = |index| {
@@ -1248,16 +1484,33 @@ impl DocumentLayoutSnapshot {
                     position,
                     caret,
                 };
+                let priority = u8::from(!strict_hit);
+                let distance = (y_pt - (y0_pt + y1_pt) / 2.0).abs();
                 let area = width_pt * height_pt;
                 let depth = node.path.len();
-                if best.as_ref().is_none_or(|(best_area, best_depth, _)| {
-                    area < *best_area || (area == *best_area && depth > *best_depth)
-                }) {
-                    best = Some((area, depth, hit));
+                if best.as_ref().is_none_or(
+                    |(best_distance, best_priority, best_area, best_depth, _)| {
+                        priority < *best_priority
+                            || (priority == *best_priority
+                                && if priority == 0 {
+                                    area < *best_area
+                                        || (area == *best_area
+                                            && (depth > *best_depth
+                                                || (depth == *best_depth
+                                                    && distance < *best_distance)))
+                                } else {
+                                    distance < *best_distance
+                                        || (distance == *best_distance
+                                            && (area < *best_area
+                                                || (area == *best_area && depth > *best_depth)))
+                                })
+                    },
+                ) {
+                    best = Some((distance, priority, area, depth, hit));
                 }
             }
         }
-        best.map(|(_, _, hit)| hit)
+        best.map(|(_, _, _, _, hit)| hit)
     }
 
     /// 根据同代公式结构插入点返回所属 MathFlow 的页面 caret 几何。
@@ -1337,12 +1590,6 @@ impl DocumentLayoutSnapshot {
                     .font_size_pt
                     .filter(|size| size.is_finite() && *size > 0.0)
                     .unwrap_or(f64::from(self.default_font_size_centipoints) / 100.0);
-                let (fallback_y, fallback_height) = if node.height > 0.0 {
-                    (node.y, node.height)
-                } else {
-                    let ascent = caret_font_size * 0.8;
-                    (node.baseline - ascent, caret_font_size)
-                };
                 let edge_child_indices = math_sequence_edge_child_indices(
                     position.offset,
                     sequence_len,
@@ -1449,16 +1696,15 @@ impl DocumentLayoutSnapshot {
                                 } else {
                                     child.x + child.width
                                 },
-                                child.y,
-                                child.height,
+                                child.baseline,
                                 child.font_size_pt,
                             ));
                         }
                         break;
                     }
                 }
-                let (local_x, caret_y, caret_height, caret_font_size) = edge_geometry
-                    .unwrap_or_else(|| {
+                let (local_x, caret_baseline, caret_font_size) =
+                    edge_geometry.unwrap_or_else(|| {
                         let local_x = if position.offset == 0 {
                             node.x
                         } else if position.offset == sequence_len {
@@ -1478,16 +1724,15 @@ impl DocumentLayoutSnapshot {
                                 })
                                 .map_or(node.x + node.width, |child| child.x)
                         };
-                        (local_x, fallback_y, fallback_height, Some(caret_font_size))
+                        (local_x, node.baseline, Some(caret_font_size))
                     });
-                let y0_pt = projection.baseline_y_pt + caret_y;
-                let y1_pt = y0_pt + caret_height;
-                let Some(caret) = projection.clip_caret(PageCaretGeometry {
-                    page_index: projection.page_index,
-                    x_pt: projection.object_x_pt + local_x,
-                    y0_pt,
-                    y1_pt,
-                }) else {
+                let raw_caret = projection.caret_at_math_baseline(
+                    projection.object_x_pt + local_x,
+                    projection.baseline_y_pt + caret_baseline,
+                );
+                let Some(caret) =
+                    projection.clip_caret_for_row(raw_caret, math_row_id_for_host(&position.host))
+                else {
                     continue;
                 };
                 let font_size_centipoints = caret_font_size
@@ -1532,9 +1777,9 @@ impl DocumentLayoutSnapshot {
                 continue;
             };
             let geometry = MathTextItemGeometry {
-                page_index: projection.page_index,
                 object_x_pt: projection.object_x_pt,
                 object_baseline_y_pt: projection.baseline_y_pt,
+                projection,
                 items: &layout.items,
                 sidecars,
             };
@@ -1542,7 +1787,9 @@ impl DocumentLayoutSnapshot {
                 math_text_caret_in_items(&geometry, target, position, visual_affinity)
             {
                 return if clip {
-                    projection.clip_caret(caret).map(|caret| (caret, size))
+                    projection
+                        .clip_caret_for_row(caret, self.math_text_row_id(target, position))
+                        .map(|caret| (caret, size))
                 } else {
                     Some((caret, size))
                 };
@@ -1612,9 +1859,9 @@ impl DocumentLayoutSnapshot {
                 continue;
             };
             let geometry = MathTextItemGeometry {
-                page_index: projection.page_index,
                 object_x_pt: projection.object_x_pt,
                 object_baseline_y_pt: projection.baseline_y_pt,
+                projection,
                 items: &layout.items,
                 sidecars,
             };
@@ -1625,8 +1872,11 @@ impl DocumentLayoutSnapshot {
                     rectangles
                         .into_iter()
                         .filter_map(|mut rect| {
-                            (rect.y0_pt, rect.y1_pt) =
-                                projection.clip_range(rect.y0_pt, rect.y1_pt)?;
+                            (rect.y0_pt, rect.y1_pt) = projection.clip_range_for_row(
+                                rect.y0_pt,
+                                rect.y1_pt,
+                                self.math_text_row_id(target, anchor),
+                            )?;
                             Some(rect)
                         })
                         .collect(),
@@ -1729,9 +1979,9 @@ impl DocumentLayoutSnapshot {
                     }
                     let Some((caret, _)) = math_text_caret_in_items(
                         &MathTextItemGeometry {
-                            page_index: projection.page_index,
                             object_x_pt: projection.object_x_pt,
                             object_baseline_y_pt: projection.baseline_y_pt,
+                            projection,
                             items: &layout.items,
                             sidecars,
                         },
@@ -1741,9 +1991,11 @@ impl DocumentLayoutSnapshot {
                     ) else {
                         continue;
                     };
-                    let Some((clip_top, clip_bottom)) =
-                        projection.clip_range(caret.y0_pt, caret.y1_pt)
-                    else {
+                    let Some((clip_top, clip_bottom)) = projection.clip_range_for_row(
+                        caret.y0_pt,
+                        caret.y1_pt,
+                        math_row_id_for_host(&sidecar.host),
+                    ) else {
                         continue;
                     };
                     let center_y = (clip_top + clip_bottom) / 2.0;
@@ -1822,20 +2074,25 @@ impl DocumentLayoutSnapshot {
                     ) {
                         continue;
                     }
-                    let Some(bounds) = sidecar.layout.cursor_geometry(hit.cursor, 0.0) else {
+                    let Some((bounds, line_index)) =
+                        sidecar.layout.cursor_geometry_with_line(hit.cursor, 0.0)
+                    else {
                         continue;
                     };
-                    let caret = PageCaretGeometry {
-                        page_index: projection.page_index,
-                        x_pt: island_x + bounds.x0,
-                        y0_pt: island_baseline + bounds.y0
-                            - f64::from(first_line.metrics().baseline),
-                        y1_pt: island_baseline + bounds.y1
-                            - f64::from(first_line.metrics().baseline),
+                    let Some(selected_line) = sidecar.layout.layout.get(line_index) else {
+                        continue;
                     };
-                    let Some((clip_top, clip_bottom)) =
-                        projection.clip_range(caret.y0_pt, caret.y1_pt)
-                    else {
+                    let selected_baseline = island_baseline
+                        + f64::from(
+                            selected_line.metrics().baseline - first_line.metrics().baseline,
+                        );
+                    let caret =
+                        projection.caret_at_math_baseline(island_x + bounds.x0, selected_baseline);
+                    let Some((clip_top, clip_bottom)) = projection.clip_range_for_row(
+                        caret.y0_pt,
+                        caret.y1_pt,
+                        math_row_id_for_host(&sidecar.host),
+                    ) else {
                         continue;
                     };
                     let center_y = (clip_top + clip_bottom) / 2.0;
@@ -2410,6 +2667,18 @@ impl DocumentLayoutService {
                     .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
             );
         }
+        let default_paragraph_style = resolve_paragraph_style(&document.global_settings, None)
+            .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
+        let default_line_spacing = default_paragraph_style.line_spacing;
+        let line_grid_metrics = self.resolve_line_grid_metrics(
+            catalog,
+            &text_settings,
+            base_style,
+            text_settings.default_language(),
+        )?;
+        let default_caret_metrics =
+            calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], default_line_spacing)
+                .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
         let mut ordered_inputs = Vec::new();
         {
             let mut math_context = MathLayoutContext {
@@ -2420,6 +2689,11 @@ impl DocumentLayoutService {
                 text_layouter: &mut self.layouter,
                 font_size_centipoints: base_style.font_size_centipoints,
                 content_width_pt: content_width_pt as f32,
+                line_grid_metrics,
+                line_spacing: default_line_spacing,
+                space_before_pt: default_paragraph_style.space_before_pt,
+                space_after_pt: default_paragraph_style.space_after_pt,
+                caret_metrics: default_caret_metrics,
             };
             collect_blocks(
                 &document.body,
@@ -2467,6 +2741,9 @@ impl DocumentLayoutService {
                 base_style,
                 text_settings.default_language(),
             )?;
+            let paragraph_caret_metrics =
+                calculate_line_metrics_with_grid(line_grid_metrics, &[], &[], style.line_spacing)
+                    .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?;
             let needs_mark_metrics = paragraph_has_empty_line(paragraph);
             if needs_mark_metrics && !paragraph.mark_style.is_empty() {
                 return Err(DocumentLayoutError::UnsupportedParagraphMarkStyle);
@@ -2480,6 +2757,11 @@ impl DocumentLayoutService {
                     text_layouter: &mut self.layouter,
                     font_size_centipoints: base_style.font_size_centipoints,
                     content_width_pt: content_width_pt as f32,
+                    line_grid_metrics,
+                    line_spacing: style.line_spacing,
+                    space_before_pt: style.space_before_pt,
+                    space_after_pt: style.space_after_pt,
+                    caret_metrics: paragraph_caret_metrics,
                 };
                 let previous_paragraph =
                     reuse.and_then(|(previous, _)| previous.paragraph_by_id(&paragraph.id));
@@ -2521,6 +2803,8 @@ impl DocumentLayoutService {
                 story: story.clone(),
                 environment_ids: environment_ids.clone(),
                 resolved_style: style,
+                math_caret_height_pt: paragraph_caret_metrics.height_pt,
+                math_caret_baseline_pt: paragraph_caret_metrics.baseline_pt,
                 text,
                 layout,
                 inline_math_layouts,
@@ -2601,6 +2885,12 @@ impl DocumentLayoutService {
                     x_offset_pt,
                     width_pt,
                     height_pt,
+                    baseline_pt,
+                    caret_baseline_pt,
+                    caret_height_pt,
+                    clip_ink_to_line_height,
+                    space_before_pt,
+                    space_after_pt,
                     ..
                 } => {
                     let math_id_ref = math_blocks
@@ -2617,6 +2907,12 @@ impl DocumentLayoutService {
                             x_offset_pt,
                             width_pt,
                             height_pt,
+                            baseline_pt,
+                            caret_baseline_pt,
+                            caret_height_pt,
+                            clip_ink_to_line_height,
+                            space_before_pt,
+                            space_after_pt,
                         },
                     ));
                 }
@@ -2772,15 +3068,54 @@ fn collect_math_projections(
     let mut projections = Vec::new();
     for (page_index, page) in pages.iter().enumerate() {
         for fragment in &page.layout.math_fragments {
-            if let Some(layout) = math_blocks.get(&fragment.math_id) {
+            if math_blocks.contains_key(&fragment.math_id) {
                 projections.push(MathPageProjection {
                     math_id: fragment.math_id.clone(),
                     page_index,
                     object_x_pt: page.margin_left_pt + f64::from(fragment.x_offset_pt),
                     baseline_y_pt: page.margin_top_pt
                         + f64::from(fragment.y_offset_pt)
-                        + layout.ascent,
-                    clip_y_pt: None,
+                        + f64::from(fragment.baseline_pt),
+                    caret_line_top_pt: page.margin_top_pt + f64::from(fragment.y_offset_pt),
+                    caret_baseline_y_pt: page.margin_top_pt
+                        + f64::from(fragment.y_offset_pt)
+                        + f64::from(fragment.caret_baseline_pt),
+                    caret_height_pt: f64::from(fragment.caret_height_pt),
+                    clip_y_pt: fragment.clip_ink_to_line_height.then_some([
+                        page.margin_top_pt + f64::from(fragment.y_offset_pt),
+                        page.margin_top_pt
+                            + f64::from(fragment.y_offset_pt)
+                            + f64::from(fragment.height_pt),
+                    ]),
+                    row_clips: math_blocks
+                        .get(&fragment.math_id)
+                        .into_iter()
+                        .flat_map(|layout| &layout.row_clips)
+                        .filter_map(|clip| {
+                            Some(MathPageRowClip {
+                                row_id: clip.row_id.clone()?,
+                                y0_pt: page.margin_top_pt
+                                    + f64::from(fragment.y_offset_pt)
+                                    + f64::from(fragment.baseline_pt)
+                                    + clip.y0,
+                                y1_pt: page.margin_top_pt
+                                    + f64::from(fragment.y_offset_pt)
+                                    + f64::from(fragment.baseline_pt)
+                                    + clip.y1,
+                            })
+                        })
+                        .collect(),
+                    row_baselines: math_blocks
+                        .get(&fragment.math_id)
+                        .into_iter()
+                        .flat_map(|layout| &layout.row_baselines)
+                        .map(|row| MathPageRowBaseline {
+                            baseline_y_pt: page.margin_top_pt
+                                + f64::from(fragment.y_offset_pt)
+                                + f64::from(fragment.baseline_pt)
+                                + row.baseline,
+                        })
+                        .collect(),
                     inline_index: None,
                 });
             }
@@ -2822,10 +3157,16 @@ fn collect_math_projections(
                                 + f64::from(inline_box.baseline.unwrap_or(inline_box.height))
                                 - f64::from(*raw_top)
                                 + f64::from(*adjustment),
+                            caret_line_top_pt: line_top,
+                            caret_baseline_y_pt: line_top
+                                + f64::from(paragraph.math_caret_baseline_pt),
+                            caret_height_pt: f64::from(paragraph.math_caret_height_pt),
                             clip_y_pt: line_box
                                 .metrics
                                 .clip_ink_to_line_height
                                 .then_some([line_top, line_top + height]),
+                            row_clips: Vec::new(),
+                            row_baselines: Vec::new(),
                             inline_index: Some(index),
                         });
                     }
@@ -2924,9 +3265,9 @@ fn collect_environment_ranges(
 }
 
 struct MathTextItemGeometry<'a> {
-    page_index: usize,
     object_x_pt: f64,
     object_baseline_y_pt: f64,
+    projection: &'a MathPageProjection,
     items: &'a [caret_math::layout::MathItem],
     sidecars: &'a HashMap<u64, MathTextSidecar>,
 }
@@ -2957,32 +3298,27 @@ fn math_text_caret_in_items(
             continue;
         };
         let island_baseline_y_pt = geometry.object_baseline_y_pt + baseline_y;
-        let (caret_x_pt, caret_y0_pt, caret_y1_pt) = if sidecar.layout.text.is_empty() {
-            let (ascent_pt, descent_pt) = sidecar.empty_caret_metrics?;
-            (
-                0.0,
-                island_baseline_y_pt - f64::from(ascent_pt),
-                island_baseline_y_pt + f64::from(descent_pt),
-            )
+        let (caret_x_pt, text_baseline_y_pt) = if sidecar.layout.text.is_empty() {
+            sidecar.empty_caret_metrics?;
+            (0.0, island_baseline_y_pt)
         } else {
-            let bounds = sidecar
-                .layout
-                .cursor_geometry_at(offset, visual_affinity, 0.0)?;
+            let (bounds, line_index) = sidecar.layout.cursor_geometry_with_line(
+                sidecar.layout.cursor_at(offset, visual_affinity)?,
+                0.0,
+            )?;
             let first_baseline = sidecar.layout.layout.lines().next()?.metrics().baseline;
+            let line_baseline = sidecar.layout.layout.get(line_index)?.metrics().baseline;
             (
                 bounds.x0,
-                island_baseline_y_pt + bounds.y0 - f64::from(first_baseline),
-                island_baseline_y_pt + bounds.y1 - f64::from(first_baseline),
+                island_baseline_y_pt + f64::from(line_baseline - first_baseline),
             )
         };
         let island_x_pt = geometry.object_x_pt + *x + caret_x_pt;
+        let caret = geometry
+            .projection
+            .caret_at_math_baseline(island_x_pt, text_baseline_y_pt);
         return Some((
-            PageCaretGeometry {
-                page_index: geometry.page_index,
-                x_pt: island_x_pt,
-                y0_pt: caret_y0_pt,
-                y1_pt: caret_y1_pt,
-            },
+            caret,
             sidecar.font_size_centipoints_at(offset, visual_affinity),
         ));
     }
@@ -3034,7 +3370,7 @@ fn math_text_selection_in_items(
             rectangles
                 .into_iter()
                 .map(|(bounds, _line_index)| PageSelectionRect {
-                    page_index: geometry.page_index,
+                    page_index: geometry.projection.page_index,
                     x0_pt: island_x_pt + bounds.x0,
                     y0_pt: island_baseline_y_pt + bounds.y0 - f64::from(line_baseline),
                     x1_pt: island_x_pt + bounds.x1,
@@ -3050,13 +3386,10 @@ fn hit_math_text_items(
     page_index: usize,
     page_x_pt: f64,
     page_y_pt: f64,
-    object_x_pt: f64,
-    object_baseline_y_pt: f64,
-    items: &[caret_math::layout::MathItem],
-    sidecars: &HashMap<u64, MathTextSidecar>,
+    geometry: &MathTextItemGeometry<'_>,
 ) -> Option<PageMathTextHit> {
     let mut zero_width_hit = None;
-    for item in items {
+    for item in geometry.items {
         let caret_math::layout::MathItem::TextIsland {
             token,
             x,
@@ -3066,11 +3399,17 @@ fn hit_math_text_items(
         else {
             continue;
         };
-        let Some(sidecar) = sidecars.get(token) else {
+        let Some(sidecar) = geometry.sidecars.get(token) else {
             continue;
         };
-        let island_x_pt = object_x_pt + x;
-        let island_baseline_y_pt = object_baseline_y_pt + baseline_y;
+        if !geometry
+            .projection
+            .contains_y_for_row(page_y_pt, math_row_id_for_host(&sidecar.host))
+        {
+            continue;
+        }
+        let island_x_pt = geometry.object_x_pt + x;
+        let island_baseline_y_pt = geometry.object_baseline_y_pt + baseline_y;
         if sidecar.layout.text.is_empty() {
             let Some((ascent_pt, descent_pt)) = sidecar.empty_caret_metrics else {
                 continue;
@@ -4168,6 +4507,11 @@ struct MathLayoutContext<'a> {
     text_layouter: &'a mut ParagraphLayouter,
     font_size_centipoints: u16,
     content_width_pt: f32,
+    line_grid_metrics: FontLineMetrics,
+    line_spacing: LineSpacing,
+    space_before_pt: f32,
+    space_after_pt: f32,
+    caret_metrics: LineMetrics,
 }
 
 enum LayoutInput<'a> {
@@ -4186,6 +4530,12 @@ enum LayoutInput<'a> {
         x_offset_pt: f32,
         width_pt: f32,
         height_pt: f32,
+        baseline_pt: f32,
+        caret_baseline_pt: f32,
+        caret_height_pt: f32,
+        clip_ink_to_line_height: bool,
+        space_before_pt: f32,
+        space_after_pt: f32,
     },
 }
 
@@ -4318,12 +4668,11 @@ fn collect_blocks<'a>(
                 };
                 push_math_block(
                     ordered,
-                    equation.id.clone(),
                     source,
                     layout,
                     text_layouts,
                     environment_ids.clone(),
-                    context.content_width_pt,
+                    context,
                 )?;
             }
             Block::Align(align) => {
@@ -4336,10 +4685,7 @@ fn collect_blocks<'a>(
                     .flat_map(|row| &row.cells)
                     .any(|cell| math_flow_contains_text(&cell.root));
                 let source = MathBlockSource::Align(align.clone());
-                let reused = reuse_math_block(previous, &align.id, &source);
-                let (layout, text_layouts) = if let Some(reused) = reused {
-                    reused
-                } else if contains_text {
+                let (layout, text_layouts) = if contains_text {
                     let math_base_style =
                         resolved_math_base_style(context.base_style, context.settings, None);
                     let mut shaper = EngineMathTextShaper::new(
@@ -4351,14 +4697,19 @@ fn collect_blocks<'a>(
                     );
                     (
                         Arc::new(
-                            caret_math::layout::layout_align_with_text_shaper_and_templates(
+                            caret_math::layout::layout_align_with_host_row_grid(
                                 engine.font(),
                                 align,
                                 DocumentUnits::centipoints_to_points(u32::from(
                                     context.font_size_centipoints,
                                 )),
                                 context.settings.inline_environment_templates(),
-                                &mut shaper,
+                                Some(&mut shaper),
+                                math_host_row_grid(
+                                    context.line_grid_metrics,
+                                    context.caret_metrics,
+                                    context.line_spacing,
+                                )?,
                             )
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
                         ),
@@ -4367,13 +4718,19 @@ fn collect_blocks<'a>(
                 } else if !context.settings.inline_environment_templates().is_empty() {
                     (
                         Arc::new(
-                            caret_math::layout::layout_align_with_templates(
+                            caret_math::layout::layout_align_with_host_row_grid(
                                 engine.font(),
                                 align,
                                 DocumentUnits::centipoints_to_points(u32::from(
                                     context.font_size_centipoints,
                                 )),
                                 context.settings.inline_environment_templates(),
+                                None,
+                                math_host_row_grid(
+                                    context.line_grid_metrics,
+                                    context.caret_metrics,
+                                    context.line_spacing,
+                                )?,
                             )
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
                         ),
@@ -4382,12 +4739,19 @@ fn collect_blocks<'a>(
                 } else {
                     (
                         Arc::new(
-                            caret_math::layout::layout_align(
+                            caret_math::layout::layout_align_with_host_row_grid(
                                 engine.font(),
                                 align,
                                 DocumentUnits::centipoints_to_points(u32::from(
                                     context.font_size_centipoints,
                                 )),
+                                context.settings.inline_environment_templates(),
+                                None,
+                                math_host_row_grid(
+                                    context.line_grid_metrics,
+                                    context.caret_metrics,
+                                    context.line_spacing,
+                                )?,
                             )
                             .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
                         ),
@@ -4396,12 +4760,11 @@ fn collect_blocks<'a>(
                 };
                 push_math_block(
                     ordered,
-                    align.id.clone(),
                     source,
                     layout,
                     text_layouts,
                     environment_ids.clone(),
-                    context.content_width_pt,
+                    context,
                 )?;
             }
             Block::Opaque(_) => return Err(DocumentLayoutError::UnsupportedContent),
@@ -4412,17 +4775,29 @@ fn collect_blocks<'a>(
 
 fn push_math_block<'a>(
     ordered: &mut Vec<LayoutInput<'a>>,
-    math_id: NodeId,
     source: MathBlockSource,
     layout: Arc<caret_math::layout::MathLayout>,
     text_layouts: HashMap<u64, MathTextSidecar>,
     environment_ids: Vec<NodeId>,
-    content_width_pt: f32,
+    context: &MathLayoutContext<'_>,
 ) -> Result<(), DocumentLayoutError> {
+    let math_id = match &source {
+        MathBlockSource::Equation(equation) => equation.id.clone(),
+        MathBlockSource::Align(align) => align.id.clone(),
+    };
     let width_pt = layout.width as f32;
-    let height_pt = (layout.ascent + layout.descent) as f32;
-    if !content_width_pt.is_finite()
-        || content_width_pt <= 0.0
+    let host_metrics = match &source {
+        MathBlockSource::Equation(equation)
+            if !math_flow_contains_soft_break(&equation.math_tree.root) =>
+        {
+            calculate_math_host_metrics(&layout, context.line_grid_metrics, context.line_spacing)?
+        }
+        MathBlockSource::Equation(_) => calculate_math_align_host_metrics(&layout)?,
+        MathBlockSource::Align(_) => calculate_math_align_host_metrics(&layout)?,
+    };
+    let height_pt = host_metrics.height_pt;
+    if !context.content_width_pt.is_finite()
+        || context.content_width_pt <= 0.0
         || !width_pt.is_finite()
         || width_pt < 0.0
         || !height_pt.is_finite()
@@ -4438,11 +4813,97 @@ fn push_math_block<'a>(
         layout,
         text_layouts,
         environment_ids,
-        x_offset_pt: (content_width_pt - width_pt) / 2.0,
+        x_offset_pt: (context.content_width_pt - width_pt) / 2.0,
         width_pt,
         height_pt,
+        baseline_pt: host_metrics.baseline_pt,
+        caret_baseline_pt: context.caret_metrics.baseline_pt,
+        caret_height_pt: context.caret_metrics.height_pt,
+        clip_ink_to_line_height: host_metrics.clip_ink_to_line_height,
+        space_before_pt: context.space_before_pt,
+        space_after_pt: context.space_after_pt,
     });
     Ok(())
+}
+
+fn calculate_math_host_metrics(
+    layout: &caret_math::layout::MathLayout,
+    line_grid_metrics: FontLineMetrics,
+    line_spacing: LineSpacing,
+) -> Result<LineMetrics, DocumentLayoutError> {
+    let width_pt = layout.width as f32;
+    let ascent_pt = layout.ascent as f32;
+    let descent_pt = layout.descent as f32;
+    if !width_pt.is_finite() || !ascent_pt.is_finite() || !descent_pt.is_finite() || width_pt < 0.0
+    {
+        return Err(DocumentLayoutError::Math(
+            "invalid display math line metrics".to_owned(),
+        ));
+    }
+    calculate_content_line_metrics_with_grid(line_grid_metrics, ascent_pt, descent_pt, line_spacing)
+        .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))
+}
+
+fn calculate_math_align_host_metrics(
+    layout: &caret_math::layout::MathLayout,
+) -> Result<LineMetrics, DocumentLayoutError> {
+    let height_pt = (layout.ascent + layout.descent) as f32;
+    let baseline_pt = layout.ascent as f32;
+    if !height_pt.is_finite() || height_pt <= 0.0 || !baseline_pt.is_finite() {
+        return Err(DocumentLayoutError::Math(
+            "invalid Align grid metrics".to_owned(),
+        ));
+    }
+    Ok(LineMetrics {
+        height_pt,
+        baseline_pt,
+        content_metrics_overflow_line_box: false,
+        object_ink_overflows_line_box: false,
+        // Exactly 行距的逐行裁切已附在 MathLayout 的行项范围上。
+        clip_ink_to_line_height: false,
+    })
+}
+
+fn math_host_row_grid(
+    line_grid: FontLineMetrics,
+    body_metrics: LineMetrics,
+    spacing: LineSpacing,
+) -> Result<caret_math::layout::MathHostRowGrid, DocumentLayoutError> {
+    Ok(caret_math::layout::MathHostRowGrid {
+        ascent: f64::from(line_grid.ascent_pt),
+        descent: f64::from(line_grid.descent_pt),
+        leading: f64::from(line_grid.leading_pt),
+        spacing: caret_layout::row_spacing_for_content_line_spacing(
+            spacing,
+            body_metrics.height_pt,
+            body_metrics.baseline_pt,
+        )
+        .map_err(|error| DocumentLayoutError::Paragraph(error.to_string()))?,
+    })
+}
+
+fn math_flow_contains_soft_break(flow: &MathFlow) -> bool {
+    flow.content.iter().any(|content| match content {
+        MathContent::SoftBreak(_) => true,
+        MathContent::Math(node) => node.children.iter().any(math_flow_contains_soft_break),
+        MathContent::Environment(environment) => environment
+            .children
+            .iter()
+            .any(math_content_contains_soft_break),
+        MathContent::Text(_) | MathContent::Opaque(_) => false,
+    })
+}
+
+fn math_content_contains_soft_break(content: &MathContent) -> bool {
+    match content {
+        MathContent::SoftBreak(_) => true,
+        MathContent::Math(node) => node.children.iter().any(math_flow_contains_soft_break),
+        MathContent::Environment(environment) => environment
+            .children
+            .iter()
+            .any(math_content_contains_soft_break),
+        MathContent::Text(_) | MathContent::Opaque(_) => false,
+    }
 }
 
 #[cfg(test)]

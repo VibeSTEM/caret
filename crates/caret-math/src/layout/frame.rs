@@ -13,6 +13,8 @@
 //   修改：以 Caret 自有类型保存坐标、基线与绘制项；统一为左上角原点和 y 向下，
 //   子帧立即展平；数学专有属性随片段而非通用绘制项保存。
 
+use std::ops::Range;
+
 use caret_doc::NodeId;
 
 use crate::backend::NodePosition;
@@ -110,6 +112,22 @@ pub(crate) struct Frame {
     pub height: f64,
     pub baseline: f64,
     pub items: Vec<(Point, Item)>,
+    pub row_clips: Vec<FrameRowClip>,
+    pub row_baselines: Vec<FrameRowBaseline>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FrameRowClip {
+    pub row_id: Option<NodeId>,
+    pub item_range: Range<usize>,
+    pub y0: f64,
+    pub y1: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FrameRowBaseline {
+    pub row_id: NodeId,
+    pub baseline: f64,
 }
 
 impl Frame {
@@ -119,6 +137,8 @@ impl Frame {
             height,
             baseline,
             items: Vec::new(),
+            row_clips: Vec::new(),
+            row_baselines: Vec::new(),
         }
     }
 
@@ -134,19 +154,48 @@ impl Frame {
         self.items.push((position, item));
     }
 
+    /// 在帧项中插入非绘制节点时同步维护逐行裁切索引。
+    pub(crate) fn insert(&mut self, index: usize, position: Point, item: Item) {
+        self.items.insert(index, (position, item));
+        for clip in &mut self.row_clips {
+            if clip.item_range.start >= index {
+                clip.item_range.start += 1;
+            }
+            if clip.item_range.end > index {
+                clip.item_range.end += 1;
+            }
+        }
+    }
+
     /// 把子帧平移后并入当前帧。
     pub(crate) fn push_frame(&mut self, position: Point, frame: Frame) {
+        let item_offset = self.items.len();
         self.items.extend(
             frame.items.into_iter().map(|(point, item)| {
                 (Point::new(point.x + position.x, point.y + position.y), item)
             }),
         );
+        self.row_clips
+            .extend(frame.row_clips.into_iter().map(|clip| FrameRowClip {
+                row_id: clip.row_id,
+                item_range: (clip.item_range.start + item_offset)
+                    ..(clip.item_range.end + item_offset),
+                y0: clip.y0 + position.y,
+                y1: clip.y1 + position.y,
+            }));
+        self.row_baselines
+            .extend(frame.row_baselines.into_iter().map(|row| FrameRowBaseline {
+                row_id: row.row_id,
+                baseline: row.baseline + position.y,
+            }));
     }
 
     /// 移除绘制项，只保留节点范围（`\phantom`）。
     pub(crate) fn hide(&mut self) {
         self.items
             .retain(|(_, item)| matches!(item, Item::Node { .. }));
+        self.row_clips.clear();
+        self.row_baselines.clear();
     }
 }
 

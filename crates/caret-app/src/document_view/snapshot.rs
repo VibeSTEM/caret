@@ -96,7 +96,7 @@ fn math_input_method_prefers_latin(session: &caret_engine::Session) -> bool {
 
 pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
     let exited_environment_id = session
-        .block_environment_exit()
+        .block_boundary_exit()
         .map(|(environment_id, _)| environment_id);
     let focus = &session.selection().focus;
     let mut stack = session.structure_index().at(&StructurePosition {
@@ -161,7 +161,7 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
         return None;
     }
     let exited_environment_id = session
-        .block_environment_exit()
+        .block_boundary_exit()
         .map(|(environment_id, _)| environment_id);
     let focus = &session.selection().focus;
     let mut stack = session.structure_index().at(&StructurePosition {
@@ -256,40 +256,15 @@ fn selection_rectangles_json(
     Value::Array(rectangles)
 }
 
-fn block_environment_exit_caret_x(
-    block_environment_exit: Option<&(NodeId, caret_engine::Direction)>,
+/// 将虚拟块外停靠点应用到所有返回路径共享的光标几何。
+pub(super) fn caret_geometry_with_block_boundary_exit(
+    block_boundary_exit: Option<(NodeId, caret_engine::Direction)>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-    page_index: usize,
-) -> Option<f64> {
-    let (environment_id, direction) = block_environment_exit?;
-    let mut ranges = snapshot
-        .environment_ranges
-        .iter()
-        .filter(|range| &range.environment_id == environment_id)
-        .collect::<Vec<_>>();
-    ranges.sort_by_key(|range| range.page_index);
-    match direction {
-        caret_engine::Direction::Backward => ranges
-            .into_iter()
-            .find(|range| range.page_index == page_index)
-            .map(|range| range.x0_pt),
-        caret_engine::Direction::Forward => ranges
-            .into_iter()
-            .rev()
-            .find(|range| range.page_index == page_index)
-            .map(|range| range.x1_pt),
-    }
-}
-
-/// 将虚拟环境外停靠点应用到所有返回路径共享的光标几何。
-pub(super) fn caret_geometry_with_environment_exit(
-    block_environment_exit: Option<(NodeId, caret_engine::Direction)>,
-    snapshot: &caret_engine::DocumentLayoutSnapshot,
-    mut caret: PageCaretGeometry,
+    caret: PageCaretGeometry,
 ) -> PageCaretGeometry {
-    caret.x_pt =
-        block_environment_exit_caret_x(block_environment_exit.as_ref(), snapshot, caret.page_index)
-            .unwrap_or(caret.x_pt);
+    if let Some((block_id, direction)) = block_boundary_exit {
+        return snapshot.block_boundary_caret(&block_id, direction, caret);
+    }
     caret
 }
 
@@ -812,7 +787,7 @@ impl DocumentViewRuntime {
             .as_ref()
             .and_then(caret_engine::Session::math_tree_input_context)
             .or_else(|| math_tree_context.clone());
-        let block_environment_exit = self.session.block_environment_exit();
+        let block_boundary_exit = self.session.block_boundary_exit();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
         let structure_selection = self
             .session
@@ -912,7 +887,7 @@ impl DocumentViewRuntime {
                 .caret_geometry(focus, visual_affinity)
                 .ok_or_else(|| "layout.invalid_caret_geometry".to_owned())?;
             let caret =
-                caret_geometry_with_environment_exit(block_environment_exit, snapshot, caret);
+                caret_geometry_with_block_boundary_exit(block_boundary_exit, snapshot, caret);
             let font_size_centipoints =
                 snapshot
                     .font_size_centipoints_at(focus, visual_affinity)

@@ -547,6 +547,16 @@ impl TextIslandLayout {
         cursor: VisualCursor,
         width_pt: f32,
     ) -> Option<parley::BoundingBox> {
+        self.cursor_geometry_with_line(cursor, width_pt)
+            .map(|(bounds, _)| bounds)
+    }
+
+    /// 返回插入点矩形和所属视觉行，供数学文本岛映射到宿主行基线。
+    pub fn cursor_geometry_with_line(
+        &self,
+        cursor: VisualCursor,
+        width_pt: f32,
+    ) -> Option<(parley::BoundingBox, usize)> {
         if !width_pt.is_finite()
             || width_pt < 0.0
             || self
@@ -557,12 +567,24 @@ impl TextIslandLayout {
             return None;
         }
         let raw = parley_cursor(&self.layout, cursor);
-        Some(
-            cursor_geometry_on_logical_cluster(&self.layout, raw, width_pt).map_or_else(
-                || raw.geometry(&self.layout, width_pt),
-                |(bounds, _)| bounds,
-            ),
-        )
+        if self.layout.text_len() == 0 {
+            return Some((raw.geometry(&self.layout, width_pt), 0));
+        }
+        let (bounds, line_index) = cursor_geometry_on_logical_cluster(&self.layout, raw, width_pt)
+            .unwrap_or_else(|| {
+                let bounds = raw.geometry(&self.layout, width_pt);
+                let midpoint = ((bounds.y0 + bounds.y1) / 2.0) as f32;
+                let index = self
+                    .layout
+                    .lines()
+                    .position(|line| {
+                        let metrics = line.metrics();
+                        metrics.block_min_coord <= midpoint && midpoint <= metrics.block_max_coord
+                    })
+                    .unwrap_or(0);
+                (bounds, index)
+            });
+        Some((bounds, line_index))
     }
 
     /// 以稳定文本偏移和视觉侧查询插入点，不静默吸附非法偏移。

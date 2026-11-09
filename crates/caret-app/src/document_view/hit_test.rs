@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::{DocumentViewRuntime, snapshot::caret_geometry_with_environment_exit};
+use super::{DocumentViewRuntime, snapshot::caret_geometry_with_block_boundary_exit};
 use caret_engine::{PageCaretView, RasterizedPageGlyphs, Selection};
 
 impl DocumentViewRuntime {
     /// 返回当前 Rust 光标位置在最新布局中的页面几何。
     pub fn current_caret_json(&mut self) -> Result<String, String> {
-        let (position, visual_affinity, block_environment_exit, math_context, math_tree_context) = {
+        let (position, visual_affinity, block_boundary_exit, math_context, math_tree_context) = {
             let display_session = self
                 .composition_preview_session
                 .as_ref()
@@ -17,7 +17,7 @@ impl DocumentViewRuntime {
             (
                 display_session.selection().focus.clone(),
                 display_session.selection_visual_affinity(),
-                display_session.block_environment_exit(),
+                display_session.block_boundary_exit(),
                 display_session.math_text_input_context(),
                 display_session.math_tree_input_context(),
             )
@@ -35,8 +35,8 @@ impl DocumentViewRuntime {
             snapshot
                 .caret_geometry(&position, visual_affinity)
                 .map(|caret| {
-                    PageCaretView::from(caret_geometry_with_environment_exit(
-                        block_environment_exit,
+                    PageCaretView::from(caret_geometry_with_block_boundary_exit(
+                        block_boundary_exit,
                         snapshot,
                         caret,
                     ))

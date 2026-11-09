@@ -19,7 +19,7 @@ L2 叶子
 └── caret-grid-layout: {}
 
 L3 派生
-├── caret-layout: {caret-doc; caret-font-roles; caret-foundation}
+├── caret-layout: {caret-doc; caret-font-roles; caret-foundation; caret-grid-layout}
 ├── caret-structure: {caret-doc; caret-foundation}
 └── caret-math: {caret-doc; caret-font-roles; caret-grid-layout}
 
@@ -43,9 +43,9 @@ L7 组合根
 
 未来代码环境领域 crate `caret-code` 在 050/051 出现独立、可复用的代码语义 API 时再创建，并与 `caret-math` 同属 L3。代码领域 crate 不承载纯静态字体资源；布局不得依赖同级代码领域 crate，跨领域协调由更高层完成。当前不创建只有转发或资源的空壳 crate。
 
-`caret-grid-layout` 只接收调用方测量好的单元格尺寸与已决列宽，计算列宽、基线行高、单元格位置和网格线坐标。它不负责文本换行、文档表格列宽求解、列表编号/缩进或分页。当前生产消费者是 `caret-math` 的 Typst 数学表格适配器；文档表格及列表在 046、051 接入前仍由各自任务定义布局策略。
+`caret-grid-layout` 只接收调用方测量好的单元格与行度量，计算共享行框、列宽、基线、单元格位置和网格线坐标。正文行距到通用几何输入的转换由 `caret-layout` 负责；`caret-math` 使用同一行框与网格定位算法，不反向依赖正文布局。它不负责文本换行、文档表格列宽求解、列表编号/缩进或分页。`caret-engine` 通过 L3 布局 API 提供正文行度量，不直接依赖该几何 crate；文档表格布局仍由 046 定义。
 
-当 046 或 051 实际接入该几何 crate 时，`caret-layout` 增加到 `caret-grid-layout` 的边需同步登记到 Cargo、依赖图和架构 lint；目前尚无该依赖。
+新增依赖边须同步登记到 Cargo、依赖图和架构 lint；当前 `caret-layout` 与 `caret-math` 直接依赖 `caret-grid-layout`，`caret-engine` 通过 `caret-layout` 的行距适配接口提供宿主输入。
 
 
 `caret-cli` 把参数适配成 `caret-app` 上的同一批命令。它不依赖 `caret-ffi`、`caret-engine` 或 Qt。`caret-app` 不依赖 `caret-ffi`。`caret-ffi` 不依赖 `caret-engine` 来绕过 `caret-app`。这样不会形成应用和边界之间的环，命令行也不会绕过应用服务。

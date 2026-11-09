@@ -123,6 +123,9 @@ impl Session {
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
+        if !extend && let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+            return Ok(effect);
+        }
         if extend && let Some(environment_id) = self.block_environment_at(&self.selection.focus) {
             self.select_block_environment(environment_id)?;
             return Ok(Effect {
@@ -137,5 +140,23 @@ impl Session {
             });
         }
         self.run(Command::ExitBlockEnvironment(direction))
+    }
+
+    /// 完成正文视觉列的上下边缘；若相邻块是显示公式，复用同一块邻接入口。
+    pub(in crate::editing::session::keyboards) fn complete_vertical_document_edge(
+        &mut self,
+        direction: Direction,
+        extend: bool,
+    ) -> Result<Effect, EditError> {
+        if !extend && let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+            return Ok(effect);
+        }
+        if !extend && self.enter_adjacent_block_math_if_present(direction)? {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        Ok(Effect::default())
     }
 }

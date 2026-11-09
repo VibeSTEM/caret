@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
-use super::super::{PositionMap, Selection, StoryId};
+use super::super::{Direction, PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use super::math_edit::{MathEdit, MathEditBranch, MathEditTarget};
 use caret_doc::{
@@ -123,7 +123,7 @@ pub(super) enum DocumentPatch {
         environment: Box<BlockEnvironment>,
         environment_estimated_bytes: usize,
     },
-    EnvironmentBoundaryParagraphs {
+    BlockBoundaryParagraphs {
         parent_environment_ids: Vec<NodeId>,
         sibling_index: usize,
         paragraphs: Vec<Paragraph>,
@@ -173,6 +173,7 @@ pub(super) struct SessionHistoryState {
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
     math_edit: Option<MathEditPosition>,
+    block_boundary_exit: Option<(NodeId, Direction)>,
     state_id: u64,
 }
 
@@ -265,8 +266,17 @@ impl SessionHistoryState {
             visual_affinity,
             pending_style,
             math_edit: None,
+            block_boundary_exit: None,
             state_id,
         }
+    }
+
+    pub(super) fn with_block_boundary_exit(
+        mut self,
+        block_boundary_exit: Option<(NodeId, Direction)>,
+    ) -> Self {
+        self.block_boundary_exit = block_boundary_exit;
+        self
     }
 
     pub(super) fn with_math_edit(mut self, math_edit: Option<MathEditPosition>) -> Self {
@@ -290,6 +300,7 @@ pub(super) struct HistoryTransition {
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
     pub math_edit: Option<MathEditPosition>,
+    pub block_boundary_exit: Option<(NodeId, Direction)>,
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
     pub document_changed: bool,
@@ -330,6 +341,16 @@ impl SessionHistoryEdit {
                 .math_edit
                 .as_ref()
                 .map_or(0, |position| position.estimated_bytes(seen_projections))
+            + self
+                .before
+                .block_boundary_exit
+                .as_ref()
+                .map_or(0, |(id, _)| node_id_bytes(id))
+            + self
+                .after
+                .block_boundary_exit
+                .as_ref()
+                .map_or(0, |(id, _)| node_id_bytes(id))
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -347,6 +368,7 @@ impl SessionHistoryEdit {
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
             math_edit: self.before.math_edit.clone(),
+            block_boundary_exit: self.before.block_boundary_exit.clone(),
             state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -360,6 +382,7 @@ impl SessionHistoryEdit {
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
             math_edit: self.after.math_edit.clone(),
+            block_boundary_exit: self.after.block_boundary_exit.clone(),
             state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -523,7 +546,7 @@ impl DocumentPatch {
                     .sum::<usize>()
                     + environment_estimated_bytes
             }
-            Self::EnvironmentBoundaryParagraphs {
+            Self::BlockBoundaryParagraphs {
                 parent_environment_ids,
                 paragraphs,
                 paragraphs_estimated_bytes,
@@ -634,7 +657,7 @@ impl DocumentPatch {
                 environment,
                 false,
             ),
-            Self::EnvironmentBoundaryParagraphs {
+            Self::BlockBoundaryParagraphs {
                 parent_environment_ids,
                 sibling_index,
                 paragraphs,
@@ -744,7 +767,7 @@ impl DocumentPatch {
                 environment,
                 true,
             ),
-            Self::EnvironmentBoundaryParagraphs {
+            Self::BlockBoundaryParagraphs {
                 parent_environment_ids,
                 sibling_index,
                 paragraphs,
@@ -1591,28 +1614,32 @@ fn block_list_at_path<'a>(blocks: &'a [Block], parent_path: &[usize]) -> Option<
     Some(current)
 }
 
+pub(super) struct RestoredHistoryTransition {
+    pub(super) selection: Selection,
+    pub(super) anchor_visual_affinity: VisualAffinity,
+    pub(super) visual_affinity: VisualAffinity,
+    pub(super) pending_style: PendingInlineStyle,
+    pub(super) state_id: u64,
+    pub(super) changed_paragraph_id: Option<NodeId>,
+    pub(super) document_changed: bool,
+    pub(super) math_edit: Option<MathEditPosition>,
+    pub(super) block_boundary_exit: Option<(NodeId, Direction)>,
+}
+
 pub(super) fn restore_history_transition(
     transition: HistoryTransition,
-) -> (
-    Selection,
-    VisualAffinity,
-    VisualAffinity,
-    PendingInlineStyle,
-    u64,
-    Option<NodeId>,
-    bool,
-    Option<MathEditPosition>,
-) {
-    (
-        transition.selection,
-        transition.anchor_visual_affinity,
-        transition.visual_affinity,
-        transition.pending_style,
-        transition.state_id,
-        transition.changed_paragraph_id,
-        transition.document_changed,
-        transition.math_edit,
-    )
+) -> RestoredHistoryTransition {
+    RestoredHistoryTransition {
+        selection: transition.selection,
+        anchor_visual_affinity: transition.anchor_visual_affinity,
+        visual_affinity: transition.visual_affinity,
+        pending_style: transition.pending_style,
+        state_id: transition.state_id,
+        changed_paragraph_id: transition.changed_paragraph_id,
+        document_changed: transition.document_changed,
+        math_edit: transition.math_edit,
+        block_boundary_exit: transition.block_boundary_exit,
+    }
 }
 
 #[cfg(test)]

@@ -24,7 +24,12 @@ const ALLOWED_RUST_EDGES: &[(&str, &[&str])] = &[
     ),
     (
         "caret-layout",
-        &["caret-doc", "caret-font-roles", "caret-foundation"],
+        &[
+            "caret-doc",
+            "caret-font-roles",
+            "caret-foundation",
+            "caret-grid-layout",
+        ],
     ),
     (
         "caret-engine",

@@ -77,6 +77,10 @@ fn math_fragment_projection_keeps_content_origin_and_serializes_page_margins()
             y_offset_pt: 12.25,
             width_pt: 42.0,
             height_pt: 19.0,
+            baseline_pt: 14.0,
+            caret_baseline_pt: 10.0,
+            caret_height_pt: 14.0,
+            clip_ink_to_line_height: false,
         });
 
     let view = DocumentLayoutView::from(&snapshot);
