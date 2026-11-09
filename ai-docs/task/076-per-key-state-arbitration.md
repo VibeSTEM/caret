@@ -60,7 +60,7 @@
 | --- | --- | --- | --- |
 | 2026-11-09 | `cargo test -p caret-engine --locked`；`cargo test -p caret-app --locked` | 逐键状态冲突、数学/结构状态、选区历史、IME 和 app 投影回归 | 676 engine 与 271 app 测试通过；含 Backspace/Delete 的命令行+MathEdit、composition 优先级、连续 Shift 跨块锚点视觉侧和撤销软换行回归 |
 | 2026-11-09 | `cargo test -p caret-tests --test native --locked` | 完整快照、ViewModel→QML Canvas、C++/QML、格式及窗口装载 | 10/10 CTest 通过；输入法状态更新和 Qt `ImHints` true/false 查询通过；新增字段 schema 验证通过 |
-| 2026-11-09 | `cargo format --changed --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | 变更文件格式与 workspace 静态检查 | 两项通过；CI 首轮发现两个 C++ 测试文件不符合 clang-format，已格式化并复查；Clippy 发现并修复 ModZ 条件结构与测试中的字符串比较分配后复跑通过 |
+| 2026-11-09 | `cargo format --changed --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | 变更文件格式与 workspace 静态检查 | 两项本地通过；CI 首轮发现两个 C++ 测试文件不符合 clang-format，已格式化并复查；Clippy 的 `clippy::expect_used` 也已移除并复跑通过；最新 PR CI 按用户要求未等待 |
 | 2026-11-09 | Terra 分域评审 + Sol 最终只读评审 | engine/session、app/native/IME、文档及完整最终 diff | Terra 分域复审与 Sol 最新 diff 复审均通过；已按其结构锚点发现补回归并通过；审查指出的实机输入法/Unicode 验收仍待目标设备确认 |
 
 ## 风险与回退
@@ -85,6 +85,7 @@
 - 2026-11-09：PR 首轮 CI 的变更文件格式检查发现 native 测试 C++ 格式差异；按仓库 `cargo format --changed` 格式化后，本地完整变更文件格式检查通过。
 - 2026-11-09：CI L1 在 Linux 上发现父块高亮测试对 JSON 浮点坐标做精确比较，导致 `y1Pt` 的约 1.4e-14 差异误报。测试现逐字段比较矩形并为坐标使用 1e-9 pt 容差；针对性回归与 `caret-app` 271 项均通过。
 - 2026-11-09：后续 CI Clippy 拒绝测试 helper 中的 `.expect()`（`clippy::expect_used`）；已改为返回带诊断信息的 `Result`。`cargo clippy --locked --workspace --all-targets -- -D warnings`、变更文件格式检查和 `caret-app` 271 项测试通过。
+- 2026-11-09：用户确认 Clippy 修复后其余检查已通过，并要求不等待最新 CI；因此记录本轮 workspace Clippy、本地格式和 app 测试通过，最新提交的 CI 结果未观测，不据此标记 CI 通过。目标平台 IME / Unicode 缺字实测仍待完成。
 
 ## 完成摘要
 
