@@ -18,6 +18,7 @@ use navigation::{
 mod demotion;
 pub(super) mod inline_root_split;
 mod metadata;
+mod multiline;
 mod navigation;
 mod path;
 mod source_draft;
@@ -431,6 +432,12 @@ pub enum MathEditBranch {
         path: MathSequencePath,
         anchor: MathTreePosition,
     },
+}
+
+struct MathSourceWriteOptions {
+    text_edit: Option<MathTextEdit>,
+    before_math_position_override: Option<MathEditPosition>,
+    reject_unmapped_metadata: bool,
 }
 
 /// 标识源码投影对应的会话与文档 generation。
@@ -1344,6 +1351,14 @@ impl Session {
                 return Err(EditError::UnsupportedNewline);
             }
             Command::Delete(Direction::Backward) if self.math_edit_is_text_branch() => {
+                let edit = self
+                    .math_edit
+                    .as_ref()
+                    .map(MathEdit::command_snapshot)
+                    .ok_or(EditError::InvalidPosition)?;
+                if let Some(effect) = multiline::handle_text_backspace(self, &edit)? {
+                    return Ok(Some(effect));
+                }
                 self.math_text_delete(Direction::Backward)?
             }
             Command::Delete(Direction::Forward) if self.math_edit_is_text_branch() => {
@@ -2185,8 +2200,11 @@ impl Session {
             cursor,
             None,
             source_edit,
-            None,
-            before_math_position,
+            MathSourceWriteOptions {
+                text_edit: None,
+                before_math_position_override: before_math_position,
+                reject_unmapped_metadata: false,
+            },
         )
     }
 
@@ -2196,6 +2214,9 @@ impl Session {
             .as_ref()
             .map(MathEdit::command_snapshot)
             .ok_or(EditError::InvalidPosition)?;
+        if let Some(effect) = multiline::handle_source_backspace(self, &edit)? {
+            return Ok(effect);
+        }
         let body = math_input_body_range(&edit).ok_or(EditError::InvalidPosition)?;
         let current_source = edit.source().ok_or(EditError::InvalidPosition)?;
         let body_source = current_source
@@ -2737,7 +2758,7 @@ impl Session {
         else {
             return Err(EditError::InvalidPosition);
         };
-        let before = Block::Align(before_align.clone());
+        let before_align = before_align.clone();
         let mut after_align = before_align.clone();
         let row = after_align
             .rows
@@ -2800,55 +2821,17 @@ impl Session {
             offset: 0,
             affinity: MathPositionAffinity::Downstream,
         };
-        next_cell
-            .validate()
-            .map_err(|error| EditError::InvalidMath(error.to_string()))?;
-        let after = Block::Align(after_align);
-        let (parents, sibling_index) =
-            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
-        let before_math = history_position(&edit);
-        let before_selection = (self.selection.clone(), self.selection_visual_affinity);
-        let before_pending_style = self.pending_inline_style.clone();
-        let document_before = self.document.clone();
-        let blocks = block_list(&mut self.document.body, &parents)?;
-        let slot = blocks
-            .get_mut(sibling_index)
-            .ok_or(EditError::InvalidPosition)?;
-        *slot = after.clone();
-        if let Err(error) = self.document.validate() {
-            self.document = document_before;
-            return Err(EditError::InvalidDocument(error.to_string()));
-        }
-        self.text_map_cache.clear();
-        self.pending_inline_style.clear();
-        let mut after_edit = edit.clone();
-        after_edit.source_projection = None;
-        after_edit.source_draft = None;
-        after_edit.cursor = 0;
-        after_edit.branch = MathEditBranch::Tree {
-            path: position.path.clone(),
-            anchor: position,
-        };
-        self.record_math_history_with_pending_style(
-            DocumentPatch::BlockRange {
-                parent_environment_ids: parents,
-                sibling_index,
-                before: vec![before],
-                after: vec![after],
+        multiline::commit_align_tree_edit(
+            self,
+            edit,
+            before_align,
+            after_align,
+            position.offset,
+            MathEditBranch::Tree {
+                path: position.path.clone(),
+                anchor: position,
             },
-            before_selection.clone(),
-            before_selection,
-            Some(before_math),
-            Some(history_position(&after_edit)),
-            before_pending_style,
-        );
-        after_edit.revision = self.current_math_edit_revision();
-        self.math_edit = Some(after_edit);
-        Ok(Effect {
-            document_changed: true,
-            selection_changed: true,
-            ..Effect::default()
-        })
+        )
     }
 
     fn math_tree_insert_template(
@@ -3037,6 +3020,14 @@ impl Session {
         let end = anchor.offset.max(edit.cursor);
         if end > contents.len() {
             return Err(EditError::InvalidPosition);
+        }
+        if matches!(direction, Direction::Backward)
+            && start == end
+            && path.steps().is_empty()
+            && let Some(effect) =
+                multiline::handle_tree_backspace(self, &edit, align_cell, start, end)?
+        {
+            return Ok(effect);
         }
         let deletion = if start < end {
             start..end
@@ -4393,7 +4384,38 @@ impl Session {
         merge_group: Option<EditGroup>,
         old_edit: std::ops::Range<usize>,
     ) -> Result<Effect, EditError> {
-        self.write_math_source_with_metadata(source, cursor, merge_group, old_edit, None, None)
+        self.write_math_source_with_metadata(
+            source,
+            cursor,
+            merge_group,
+            old_edit,
+            MathSourceWriteOptions {
+                text_edit: None,
+                before_math_position_override: None,
+                reject_unmapped_metadata: false,
+            },
+        )
+    }
+
+    /// 提交必须保留既有结构元数据的源码变更；无法映射元数据时拒绝而不进入草稿。
+    fn write_math_source_strict(
+        &mut self,
+        source: String,
+        cursor: usize,
+        merge_group: Option<EditGroup>,
+        old_edit: std::ops::Range<usize>,
+    ) -> Result<Effect, EditError> {
+        self.write_math_source_with_metadata(
+            source,
+            cursor,
+            merge_group,
+            old_edit,
+            MathSourceWriteOptions {
+                text_edit: None,
+                before_math_position_override: None,
+                reject_unmapped_metadata: true,
+            },
+        )
     }
 
     fn write_math_source_with_metadata(
@@ -4402,9 +4424,13 @@ impl Session {
         cursor: usize,
         merge_group: Option<EditGroup>,
         old_edit: std::ops::Range<usize>,
-        text_edit: Option<MathTextEdit>,
-        before_math_position_override: Option<MathEditPosition>,
+        options: MathSourceWriteOptions,
     ) -> Result<Effect, EditError> {
+        let MathSourceWriteOptions {
+            text_edit,
+            before_math_position_override,
+            reject_unmapped_metadata,
+        } = options;
         let edit = self
             .math_edit
             .as_ref()
@@ -4450,6 +4476,9 @@ impl Session {
                                 && caret_math::classify_input(&candidate_source, kind)
                                     == caret_math::MathInputStatus::Incomplete) =>
                     {
+                        if reject_unmapped_metadata {
+                            return Err(EditError::InvalidMath(error.to_string()));
+                        }
                         self.math_edit
                             .as_mut()
                             .ok_or(EditError::InvalidPosition)?
@@ -4931,6 +4960,11 @@ impl Session {
                         &source_projection,
                     );
                     if !metadata_preserved {
+                        if reject_unmapped_metadata {
+                            return Err(EditError::InvalidMath(
+                                "editing would discard unmapped math metadata".to_owned(),
+                            ));
+                        }
                         if text_edit.is_none() && matches!(edit.branch, MathEditBranch::Source) {
                             self.math_edit
                                 .as_mut()
