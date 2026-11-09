@@ -6,7 +6,7 @@
 
 结构类别、页面角色和节点语义的唯一权威定义见[文档树与结构](document-model/document-structure.md#页面层级与内容块形态)。本文件只规定结构索引、导航和焦点几何如何消费这些定义，不重述页面/内容分类。结构索引保存具体领域语义；界面只消费稳定 ID 和 Rust 投影，不根据标题文字、QML 节点树或具体 kind 再推断一次。
 
-当前 `StructureIndex` 为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境以及 Equation/Align 公式块建立条目。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 条目没有 Paragraph 停靠点，不进入段落导航序列。Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 创建与源码编辑提交时会把根层文本提升到 ParagraphContent，固定数学槽位仍在 MathFlow 内。规则见[数学公式架构](math.md#宿主边界与拆分)。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
+结构索引为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境以及 Equation/Align 公式块保留稳定条目和父链。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 不提供 Paragraph 停靠点；全树文档顺序必须由块身份、父链和同级次序表达，Paragraph ordinal 仅是段落导航的派生序号。Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 创建与源码编辑提交时会把根层文本提升到 ParagraphContent，固定数学槽位仍在 MathFlow 内。规则见[数学公式架构](math.md#宿主边界与拆分)。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
 
 Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则最完整的 Block。共享交互协议以 Paragraph 已验证的行为作为提取基准，但不复用其 paragraph_id/UTF-8 坐标作为所有 Block 的位置类型。Paragraph 适配器提供 TextMap/TextFlow 位置；Section/Custom/Equation/Align 适配器提供块身份、父级顺序、必要的块边界及领域内部位置。未来 Table、Figure 必须复用该协议，并通过窄领域适配器暴露单元格或图形内部位置；当前提及扩展契约不表示对应节点已实现。Inline 是 Paragraph 和显式提供行内流的 Block 内部内容层，不是任意块序列的直接子项。
 
@@ -14,9 +14,9 @@ Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则�
 
 `InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部编辑由 `MathEdit` 标识宿主与活动分支：Source 分支使用源码字节游标，Text 分支使用 MathFlow 中 TextFlow 的路径和显示偏移。Equation 与 Align 作为块级公式节点进入结构范围；当前 `MathEdit.target` 标识活动公式，不改变持久化树。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
 
-当前 `StructureClass` 只有 `Paragraph`、`SingleLine`、`MultiLine`、`Table` 和 `Figure` 内容块类别；页面组合层不是该枚举的同级成员。未来页面组合角色是否进入导航索引，按文档模型的层级语义另行接入。
+`StructureClass` 表达 `Paragraph`、`SingleLine`、`MultiLine`、`Table` 和 `Figure` 内容块类别；页面组合层不是该枚举的同级成员。页面组合角色若参与导航，按文档树父子层级表达，不折叠为内容块类别。
 
-当前文档模型尚无列表项节点/编号引用；列表节点、嵌套/多段列表项语义和导航由 [050](../../task/050-document-code-links-quotes.md) 定义，布局几何由 051 承接。列表连续范围是派生索引，不复制正文节点。
+列表项和编号引用作为 Block 层级扩展建模；相应节点接入后，连续列表范围是派生索引，不复制正文节点。列表的持久化与布局语义由其领域架构定义。
 
 ## 边界规则
 
@@ -28,14 +28,14 @@ Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则�
 | 列表项 | 计划中的块语义；列表项可包含一个或多个块，连续同列表引用形成派生列表范围 |
 | PageSection | 页面几何配置，不是内容结构 |
 
-删除普通 Heading 只影响该标题段落，不隐式删除标题范围内后续块。删除块环境才按该环境的明确子树边界处理。当前环境背景高亮、字符选区是不同的视图叠加；它们不写入文档格式、不打印，也不修改结构修订。高亮颜色、来源和绘制层以[画布与交互背景](../interface/canvas-highlighting.md)为唯一权威；[031](../../task/031-environment-highlight.md)只保留实现与验收记录。
+删除普通 Heading 只影响该标题段落，不隐式删除标题范围内后续块。删除块环境才按该环境的明确子树边界处理。当前环境背景高亮、字符选区是不同的视图叠加；它们不写入文档格式、不打印，也不修改结构修订。高亮颜色、来源和绘制层以[画布与交互背景](../interface/canvas-highlighting.md)为唯一权威。
 
 ## 索引与更新
 
 `caret-structure` 只读 `Document`，不依赖编辑引擎。索引是结构派生数据，不写入文档、不作为布局缓存键。布局几何来自同一代 `DocumentLayoutSnapshot`，避免 Qt 自行估算结构边界。
 
-- 节点按文档顺序排列，用稳定节点 ID 表示身份和父链；保存 kind、层级与段落序号范围，不复制正文。
-- `at(pos)` 沿稳定 ID 查出光标所在的外到内结构栈，供状态栏与画布使用。
+- 全树节点按父级路径和同级文档顺序排列，用稳定节点 ID 表示身份与父链；保存 kind、层级和宿主范围，不复制正文。Paragraph ordinal 是该索引提供的段落导航派生序号，不作为全树排序键。
+- 按任意有效文档位置或稳定宿主 ID 查询其结构祖先链，供状态栏、导航和画布使用；不依赖伪造 Paragraph 光标恢复非 Paragraph 宿主的父链。
 - Heading 的跨块大纲范围和列表连续范围是派生数据。当前结构事务提交后从文档树完整重建轻量结构索引；撤销/重做恢复文档后也会重建索引。标题插入、删除、级别变化后的范围因此由同一构建逻辑重新计算。暂不承诺局部增量更新，只有代表性文档的基准表明完整重建成为热点时才设计增量方案。
 - 块环境子树范围来自文档树，不从 Heading 层级推断。单纯绘制、分页几何或主题来源变化不重建结构索引；文档历史恢复会重建，以确保派生索引与恢复后的文档一致。索引变化与布局失效分别处理。
 - 每页的块环境范围由该页实际布局片段聚合，包含稳定环境 ID 和页面局部 pt 几何。跨页环境由多个页内范围表示，不能用一个跨页矩形近似。
@@ -94,7 +94,62 @@ qml/Canvas/                         # 画布组合与 Theme 绑定
 
 ## 复杂 Block 边界停靠
 
-具有独立块外边界语义的复杂 Block，可通过共享协议使用块前外侧、块内起点、块内终点、块后外侧位置。外侧状态由 Session 持有目标块 ID 与方向，不在文档里预先插入空段落。方向键第一次越过块首尾时停在对应外侧；再次沿同方向移动才越过外侧状态进入相邻内容，反方向则进入块内首/末位置。左右键遵循同一转换；上下键从相邻视觉行进入块首/末行，并在块顶/底离开到对应外侧。MathTree/MathText 候选不得跳过适用的块边界状态。Section/Custom 与 Equation/Align 通过各自内容适配接入；Paragraph 仍使用其真实 TextMap 首尾位置，不强制额外的虚拟停靠状态。InlineMath 是 Paragraph 中的 inline 原子，不参与块外停靠，其外部两侧由 TextMap 的 U+FFFC 位置表达，内部位置由数学编辑器提供。
+具有独立块外边界语义的复杂 Block 通过共享协议使用外前、内部(宿主局部位置)、外后三态。内部局部位置可到达起点、终点及其间合法位置，不为首尾另造状态类型。外侧状态由稳定 Block ID 与侧向识别，不在文档里预先插入空段落。水平键先停在可到达的块外侧，再进入内部或越过到相邻内容；反向移动遵循相反转换。上下键从相邻视觉行进入块首/末行，并在块顶/底离开到对应外侧。MathTree/MathText 候选不得跳过适用的块边界状态。Section/Custom 与 Equation/Align 通过各自内容适配接入；Paragraph 仍使用其真实 TextMap 首尾位置，不强制额外的虚拟停靠状态。InlineMath 是 Paragraph 中的 inline 原子，其外部两侧由 TextMap 的 U+FFFC 位置表达，内部位置由数学编辑器提供。
+
+## Inline 与 Block 的边界转移
+
+Inline 与具有独立外侧停靠语义的复杂 Block 都按三类位置处理：`外前｜内部(宿主局部位置)｜外后`。这是三种位置类别；内部承载宿主适配器提供的合法局部位置。单个空 InlineEnvironment 或单个空编辑槽只有一个内部插入点；复合 Block 即使内容为空，也可有多个合法空槽或子宿主位置。普通 Paragraph 使用真实 TextMap 首尾，不增加虚拟外侧位置。载体身份和局部坐标由适配器提供；`Affinity` 不替代三态位置身份。
+
+下表中的 Right/Left 表示简单 LTR 情况下的水平移动。若 bidi 或折行使同一逻辑位置存在不同视觉候选，先按布局选择相邻视觉候选，再映射到逻辑宿主位置；不得把屏幕左右直接等同于文档前后。
+
+### Inline 转移
+
+| 起点 | 按键 | 目标 | 规则 |
+| --- | --- | --- | --- |
+| InlineEnvironment 外前 | Right | 内部位置：起点 | 边界合法时在同一逻辑位置进入；否则按下方字素映射规则 |
+| InlineEnvironment 内部位置：起点 | Left | 外前 | 边界合法时在同一逻辑位置退出；否则按下方字素映射规则 |
+| InlineEnvironment 内部位置：非终点 | Right | 下一个内部字素边界 | 按 TextFlow 字素规则移动 |
+| InlineEnvironment 内部位置：非起点 | Left | 上一个内部字素边界 | 按 TextFlow 字素规则移动 |
+| InlineEnvironment 内部位置：终点 | Right | 外后 | 边界合法时在同一逻辑位置退出并更新格式视图；否则按下方字素映射规则 |
+| InlineEnvironment 外后 | Left | 内部位置：终点 | 边界合法时在同一逻辑位置进入；否则按下方字素映射规则 |
+| 空 InlineEnvironment 外前 | Right | 唯一内部位置 | 同一合法字素偏移进入，激活环境链和粉色槽位 |
+| 空 InlineEnvironment 内部位置 | Left | 外前 | 同一偏移退出 |
+| 空 InlineEnvironment 内部位置 | Right | 外后 | 同一偏移退出并清除该环境的活动状态 |
+| 空 InlineEnvironment 外后 | Left | 唯一内部位置 | 同一合法字素偏移进入，激活环境链和粉色槽位 |
+| InlineMath 外前 | Right | MathEdit 内部起点 | 进入公式内部；不创建 Block 停靠点 |
+| MathEdit 内部起点 | Left | InlineMath 外前 | 按 MathEdit 局部边界退出到 U+FFFC 前侧 |
+| MathEdit 内部终点 | Right | InlineMath 外后 | 按 MathEdit 局部边界退出到 U+FFFC 后侧 |
+| InlineMath 外后 | Left | MathEdit 内部终点 | 进入公式内部；不跳过末端位置 |
+| InlineMath 相邻视觉行 | Up/Down | 相邻视觉文本 caret | 垂直移动不进入 InlineMath |
+
+若 InlineEnvironment 的结构边界落在跨 Run/环境的扩展字素内部，该结构边界不是 caret。进入时映射到环境内方向最近的合法字素边界，退出时对称地映射到环境外方向最近的合法字素边界；映射可越过整个相关字素簇，不得落在簇内。若映射不唯一，拒绝转换并保留文档、焦点、选区与格式上下文。空 InlineEnvironment 只有位于合法字素边界时才有内部插入点。
+
+### 复杂 Block 转移
+
+以下规则适用于具有独立外侧停靠语义的 Section/Custom/Equation/Align 等 Block。外侧停靠身份由稳定 Block ID 与前/后侧表示；内部由各自适配器提供。方向键不能跳过适用的外侧停靠。
+
+Block 的位置类别只有 **外前、内部、外后**。表中的“内部位置：起点/终点”是内部位置携带的局部坐标，不是新增状态；“前方文档末端/后方文档起点”是相邻正文位置，也不属于 Block 状态。单个空编辑槽的 Block 按表中唯一内部位置转换；多个空 cell/子宿主各保留其 adapter 提供的内部位置，不合并成一个点。若 Block 不提供合法内部位置，则不伪造内部 caret。
+
+| 起点 | 按键 | 目标 | 规则 |
+| --- | --- | --- | --- |
+| 前方文档末端 | Right | Block 外前 | 到达可独立停留的块前停靠 |
+| Block 外前 | Left | 前方文档末端 | 离开块前停靠 |
+| Block 外前 | Right | 内部位置：起点 | 进入首个合法内部位置 |
+| Block 内部位置：起点 | Left | Block 外前 | 先停在块前；再次向左才进入前方内容 |
+| Block 内部位置：终点 | Right | Block 外后 | 先停在块后；再次向右才进入后方内容 |
+| Block 外后 | Right | 后方文档起点 | 离开块后停靠 |
+| Block 外后 | Left | 内部位置：终点 | 进入最后一个合法内部位置 |
+| 后方文档起点 | Left | Block 外后 | 到达可独立停留的块后停靠 |
+| 空单槽 Block 外前 | Right | 唯一内部位置 | 进入空槽位 |
+| 空单槽 Block 内部位置 | Left | 外前 | 同一位置向前退出 |
+| 空单槽 Block 内部位置 | Right | 外后 | 同一位置向后退出 |
+| 空单槽 Block 外后 | Left | 唯一内部位置 | 进入空槽位 |
+| Block 外侧相邻视觉行 | Up/Down | 内部位置：首行/末行 | 有效视觉候选直接进入块内 |
+| Block 内部位置：顶/底边界 | Up/Down | Block 外前/外后 | 仅在没有块内视觉候选时，转到对应外侧停靠 |
+
+Paragraph 继续使用其真实 TextMap 首尾，不套用复杂 Block 的虚拟停靠。Shift 扩选跨越宿主时使用共享文档顺序和稳定宿主范围，不从普通移动次数推导选区边界；位置比较、选区范围和删除事务协议见[块宿主交互](document-model/block-interaction.md)。
+
+结构索引从任意有效宿主 ID 解析稳定父链和同级顺序。只读查询与可变内容事务使用各自经过校验的定位入口，并共享同一身份、父链、顺序与文档代际语义。关于身份、顺序、代际与无法比较时的处理见[文档位置](document-model/document-position.md#跨宿主位置与顺序)。
 
 Paragraph 与复杂 Block 共用同一个位置仲裁、选区端点和删除事务协议；它们的端点表示并不相同。结构索引提供稳定顺序和宿主关系，布局适配器提供同代几何，Session 负责转换 anchor/focus 和动作目标。普通 Paragraph 不要求块级活动背景；需要背景的环境/公式通过可选几何能力提供。添加新 Block kind 时只实现其内容/几何适配，不复制状态机或快捷键仲裁。InlineMath 与行内格式环境仍由 Paragraph/内部 TextFlow 的 Inline 底座管理。共享协议详见[块宿主交互](document-model/block-interaction.md)。
 

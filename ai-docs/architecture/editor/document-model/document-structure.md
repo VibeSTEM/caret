@@ -59,8 +59,8 @@ crates/caret-structure/src/index.rs     唯一结构索引装配入口
 | 通用内容块形态 | 领域结构映射 | 说明 |
 | --- | --- | --- |
 | `Paragraph` | 普通段落 | 正文段落，可按宽度折行 |
-| `SingleLine` | Heading；后续 `Title`、Equation | 一个语义块，不承诺视觉排版只占一行；`Title` 只表达标题，Equation 按单行公式语义处理 |
-| `MultiLine` | 块环境；后续 Align | 一个容纳多个子项或显式多行内容的语义块 |
+| `SingleLine` | Heading、Equation；后续 `Title` | 一个语义块，不承诺视觉排版只占一行；`Title` 只表达标题，Equation 按单行公式语义处理 |
+| `MultiLine` | 块环境、Align | 一个容纳多个子项或显式多行内容的语义块 |
 | `Table` | 后续 Table | 独立的非文本结构 |
 | `Figure` | 后续 Figure | 独立的非文本结构 |
 
@@ -68,7 +68,7 @@ crates/caret-structure/src/index.rs     唯一结构索引装配入口
 
 `Title` 属于 `SingleLine` 内容块；`TitlePage` 是 `PageContent` 的一种 role，不是物理页或 `PageSection`。TitlePage 与 BodyPage 共用块模型，页级约束由分页布局兑现；标题页与显式分节能力尚未接入时，不应据此宣称已经可编辑或可导航。`PageSection` 只表示纸张、方向和边距等分页配置，与用户可见的环境分开。
 
-Heading、Section、Custom 等具体领域语义由结构索引保留，快照提供稳定语义 kind，界面按当前 UI 语言翻译；通用类别仅用于布局/导航分类，不替代状态栏的语义标签。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 映射为 `SingleLine`，Align 映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](../structure-navigation.md)。
+Heading、Section、Custom 等具体领域语义由结构索引保留，快照提供稳定语义 kind，界面按当前 UI 语言翻译；通用类别仅用于布局/导航分类，不替代状态栏的语义标签。`Title` 后续映射为 `SingleLine`；`TitlePage` 是更高层的 `PageContent` 页面角色；Equation 已映射为 `SingleLine`，Align 已映射为 `MultiLine`；Table/Figure 在对应节点接入索引后映射。`InlineMath` 留在 Paragraph 内，不单独进入块结构栈。索引如何维护这些语义见[结构导航](../structure-navigation.md)。
 
 页面组合的语义草案（不是当前 DTO 字段或 `.cdoc` JSON schema）：
 
