@@ -51,7 +51,8 @@
 - [x] `keyboards.rs` 不再包含通用导航状态路由；共享 helper 只处理重复的候选校验/提交，`TextInput` 适配也已归入 `keyboards/helpers/`。
 - [x] 按键与宿主文本适配公开入口均经过 Session 事务包装；命令行前缀、美元入口、字体候选、Undo/Redo 和导航候选不绕过代际校验及成功后的状态同步。
 - [x] MathText、MathTree、Source、命令行、IME、结构选区和正文中的剪贴板/Undo/Redo 路由已核对并保留现有领域事务；选区锚点与焦点视觉侧由 Session 持有并随撤销/重做恢复。
-- [ ] 各目标平台的 Latin 输入法提示有实测记录；MathTree 中中文标点/Unicode 符号输入与缺字 fallback 可发现且可恢复。
+- [x] macOS 27.2 ARM64 实测：MathTree 中可切换系统输入源，但键入仍为 Latin；Unicode/缺字显示与删除恢复检查通过。
+- [ ] Windows 与 Linux 目标平台的 Latin 输入法提示及 MathTree Unicode/缺字恢复实测。
 - [x] 失败与过时代际候选不更改焦点、选区、文档、composition 或历史；撤销/重做恢复正文选区两端视觉侧；Rust/native 测试、格式、Clippy 和独立评审通过。
 
 ## 验证计划与结果
@@ -62,6 +63,7 @@
 | 2026-11-09 | `cargo test -p caret-tests --test native --locked` | 完整快照、ViewModel→QML Canvas、C++/QML、格式及窗口装载 | 10/10 CTest 通过；输入法状态更新和 Qt `ImHints` true/false 查询通过；新增字段 schema 验证通过 |
 | 2026-11-09 | `cargo format --changed --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | 变更文件格式与 workspace 静态检查 | 两项本地通过；CI 首轮发现两个 C++ 测试文件不符合 clang-format，已格式化并复查；Clippy 的 `clippy::expect_used` 也已移除并复跑通过；最新 PR CI 按用户要求未等待 |
 | 2026-11-09 | Terra 分域评审 + Sol 最终只读评审 | engine/session、app/native/IME、文档及完整最终 diff | Terra 分域复审与 Sol 最新 diff 复审均通过；已按其结构锚点发现补回归并通过；审查指出的实机输入法/Unicode 验收仍待目标设备确认 |
+| 2026-11-09 | macOS 27.2 ARM64 原生桌面手测 | MathTree Latin 输入法提示、Unicode/缺字显示及删除恢复 | 用户确认清单测试通过；MathTree 可切换系统输入源，但输入结果保持 Latin。具体缺字码点/数学字体未记录；Windows 与 Linux 尚待实测 |
 
 ## 风险与回退
 
@@ -86,6 +88,7 @@
 - 2026-11-09：CI L1 在 Linux 上发现父块高亮测试对 JSON 浮点坐标做精确比较，导致 `y1Pt` 的约 1.4e-14 差异误报。测试现逐字段比较矩形并为坐标使用 1e-9 pt 容差；针对性回归与 `caret-app` 271 项均通过。
 - 2026-11-09：后续 CI Clippy 拒绝测试 helper 中的 `.expect()`（`clippy::expect_used`）；已改为返回带诊断信息的 `Result`。`cargo clippy --locked --workspace --all-targets -- -D warnings`、变更文件格式检查和 `caret-app` 271 项测试通过。
 - 2026-11-09：用户确认 Clippy 修复后其余检查已通过，并要求不等待最新 CI；因此记录本轮 workspace Clippy、本地格式和 app 测试通过，最新提交的 CI 结果未观测，不据此标记 CI 通过。目标平台 IME / Unicode 缺字实测仍待完成。
+- 2026-11-09：用户完成 macOS 27.2 ARM64 实测，确认清单中的 MathTree 输入法、Unicode/缺字与恢复检查均通过；输入源仍可切换，但结构数学输入保持 Latin。Windows/Linux 的平台行为仍未实测，因此逐平台验收保持进行中。
 
 ## 完成摘要
 
