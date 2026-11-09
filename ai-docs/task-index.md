@@ -106,7 +106,7 @@
 | 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | done |
 | 073 | 文档结构 | [块环境内容判定保全公式节点](task/073-environment-content-preservation.md) | P1 | 010、021 | S | done |
 | 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | done |
-| 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | planned |
+| 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | done |
 | 076 | 键盘架构 | [逐键状态仲裁与键盘路由一致性](task/076-per-key-state-arbitration.md) | P1 | 071 | L | done |
 | 077 | 数学交互 | [数学环境光标高度稳定性](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | planned |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |

@@ -324,6 +324,18 @@ bool parse_inline_environment_highlight_rects(const QJsonValue& value,
         value, page_sizes, QStringLiteral("inline_environment_highlight"), rectangles, error);
 }
 
+bool parse_math_block_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                      QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("math_block_highlight"),
+                                     rectangles, error);
+}
+
+bool parse_math_text_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                     QVariantList& rectangles, QString& error) {
+    return parse_geometry_rectangles(value, page_sizes, QStringLiteral("math_text_highlight"),
+                                     rectangles, error);
+}
+
 bool parse(const QString& snapshot_json, ParsedLayoutSnapshot& parsed_snapshot, QString& error,
            const ParsedLayoutSnapshot* previous_snapshot) {
     return parse(snapshot_json.toUtf8(), parsed_snapshot, error, previous_snapshot);
@@ -683,6 +695,16 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
             parsed_inline_environment_highlight_rects, error)) {
         return false;
     }
+    QVariantList parsed_math_block_highlight_rects;
+    if (!parse_math_block_highlight_rects(root.value(QStringLiteral("mathBlockHighlightRects")),
+                                          parsed_sizes, parsed_math_block_highlight_rects, error)) {
+        return false;
+    }
+    QVariantList parsed_math_text_highlight_rects;
+    if (!parse_math_text_highlight_rects(root.value(QStringLiteral("mathTextHighlightRects")),
+                                         parsed_sizes, parsed_math_text_highlight_rects, error)) {
+        return false;
+    }
     parsed_snapshot.page_sizes = std::move(parsed_sizes);
     parsed_snapshot.page_layouts = std::move(parsed_page_layouts);
     parsed_snapshot.page_glyph_revisions = std::move(parsed_page_glyph_revisions);
@@ -697,6 +719,8 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
         std::move(parsed_block_environment_highlight_rects);
     parsed_snapshot.inline_environment_highlight_rects =
         std::move(parsed_inline_environment_highlight_rects);
+    parsed_snapshot.math_block_highlight_rects = std::move(parsed_math_block_highlight_rects);
+    parsed_snapshot.math_text_highlight_rects = std::move(parsed_math_text_highlight_rects);
     const QJsonValue input_context_value = root.value(QStringLiteral("inputMethodContext"));
     if (!input_context_value.isObject()) {
         error = QStringLiteral("layout.invalid_input_method_context");

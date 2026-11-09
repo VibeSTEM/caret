@@ -3743,6 +3743,29 @@ fn collapsed_math_text_selection_keeps_one_visual_affinity()
 }
 
 #[test]
+fn math_text_input_context_exposes_the_whole_active_island_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut session, r"\text{abcd}")?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+
+    let context = session
+        .math_text_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(matches!(
+        &context.target,
+        MathEditTarget::Block { align: false, .. }
+    ));
+    assert_eq!(context.island_start.offset, 0);
+    assert_eq!(context.island_end.offset, context.surrounding_text.len());
+    assert_eq!(context.island_start.path, context.island_end.path);
+    assert_eq!(context.surrounding_text, "abcd");
+    assert_eq!(session.current_math_edit_target(), Some(&context.target));
+    Ok(())
+}
+
+#[test]
 fn math_text_selection_delete_collapses_at_start_and_arrows_collapse_by_direction()
 -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
@@ -5372,6 +5395,7 @@ fn math_text_selection_api_rejects_pending_composition_and_stale_revision() -> R
         .math_edit()
         .cloned()
         .ok_or(EditError::InvalidPosition)?;
+    assert!(session.current_math_edit_target().is_none());
     assert_eq!(
         session.set_math_text_selection_positions(context.anchor, context.focus),
         Err(EditError::InvalidPosition)
@@ -5383,6 +5407,7 @@ fn math_text_selection_api_rejects_pending_composition_and_stale_revision() -> R
         .as_mut()
         .ok_or(EditError::InvalidPosition)?
         .revision = revision;
+    assert_eq!(session.current_math_edit_target(), Some(&stale_edit.target));
     Ok(())
 }
 

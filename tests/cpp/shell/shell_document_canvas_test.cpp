@@ -942,7 +942,8 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                           "    pageBorderColor: \"#c8c8c8\"\n"
                           "    caretColor: \"#ff0000\"\n"
                           "    caretWidthCentipixels: 125\n"
-                          "    environmentHighlightColor: \"#fff2cc\"\n"
+                          "    blockHighlightColor: \"#fff2cc\"\n"
+                          "    inlineHighlightColor: \"#ffdae8\"\n"
                           "    environmentHighlightRadius: 4\n"
                           "    pageSizesPt: [Qt.size(60, 60), Qt.size(60, 60)]\n"
                           "    caretGeometry: ({ pageIndex: 0, xPt: 30, y0Pt: 20, y1Pt: 80 })\n"
@@ -953,7 +954,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     auto* rendered_canvas = qobject_cast<caret::DocumentCanvas*>(render_component.create());
     QVERIFY(rendered_canvas != nullptr);
     QCOMPARE(rendered_canvas->property("caretWidthCentipixels").toInt(), 125);
-    QVERIFY(rendered_canvas->setProperty("environmentHighlightRects",
+    QVERIFY(rendered_canvas->setProperty("blockHighlightRects",
                                          QVariantList{QVariantMap{{QStringLiteral("pageIndex"), 0},
                                                                   {QStringLiteral("x0Pt"), 10},
                                                                   {QStringLiteral("y0Pt"), 10},
@@ -964,8 +965,15 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                                                                   {QStringLiteral("y0Pt"), 10},
                                                                   {QStringLiteral("x1Pt"), 50},
                                                                   {QStringLiteral("y1Pt"), 20}}}));
-    QVERIFY(rendered_canvas->setProperty("environmentHighlightColor",
-                                         QColor(QStringLiteral("#fff2cc"))));
+    QVERIFY(rendered_canvas->setProperty("blockHighlightColor", QColor(QStringLiteral("#fff2cc"))));
+    QVERIFY(rendered_canvas->setProperty("inlineHighlightRects",
+                                         QVariantList{QVariantMap{{QStringLiteral("pageIndex"), 0},
+                                                                  {QStringLiteral("x0Pt"), 20},
+                                                                  {QStringLiteral("y0Pt"), 10},
+                                                                  {QStringLiteral("x1Pt"), 30},
+                                                                  {QStringLiteral("y1Pt"), 20}}}));
+    QVERIFY(
+        rendered_canvas->setProperty("inlineHighlightColor", QColor(QStringLiteral("#ffdae8"))));
     constexpr qsizetype glyph_pixel_count = qsizetype{8} * 8;
     QByteArray glyph_pixels(glyph_pixel_count * 4, '\0');
     for (qsizetype pixel = 0; pixel < glyph_pixel_count; ++pixel) {
@@ -1030,22 +1038,25 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
         }
         return count;
     };
-    const QColor environment_highlight_color(QStringLiteral("#fff2cc"));
-    QCOMPARE(rendered_canvas->property("environmentHighlightRects").toList().size(), 2);
-    QCOMPARE(rendered_canvas->property("environmentHighlightColor").value<QColor>(),
-             environment_highlight_color);
+    const QColor block_highlight_color(QStringLiteral("#fff2cc"));
+    const QColor inline_highlight_color(QStringLiteral("#ffdae8"));
+    QCOMPARE(rendered_canvas->property("blockHighlightRects").toList().size(), 2);
+    QCOMPARE(rendered_canvas->property("blockHighlightColor").value<QColor>(),
+             block_highlight_color);
+    QCOMPARE(rendered_canvas->property("inlineHighlightRects").toList().size(), 1);
     QCOMPARE(rendered_canvas->property("environmentHighlightRadius").toReal(), 4.0);
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) > 0, 3000);
     const QImage highlight_frame = render_window.grabWindow();
     QVERIFY(!highlight_frame.isNull());
-    QVERIFY(count_color_pixels(highlight_frame, environment_highlight_color) > 0);
+    QVERIFY(count_color_pixels(highlight_frame, block_highlight_color) > 0);
+    QVERIFY(count_color_pixels(highlight_frame, inline_highlight_color) > 0);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{1, 2}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) > 0, 3000);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 2}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) > 0, 3000);
     const auto pixel_at_logical_point = [&render_window](const QImage& image, qreal x, qreal y) {
         const qreal scale_x = static_cast<qreal>(image.width()) / render_window.width();
         const qreal scale_y = static_cast<qreal>(image.height()) / render_window.height();
@@ -1053,46 +1064,54 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
     };
     const QPointF highlight_origin = rendered_canvas->documentToContent(0, QPointF(10.0, 10.0));
     const QPointF highlight_center = rendered_canvas->documentToContent(0, QPointF(30.0, 15.0));
+    const QPointF inline_highlight_center =
+        rendered_canvas->documentToContent(0, QPointF(25.0, 15.0));
     const QPointF next_page_highlight_center =
         rendered_canvas->documentToContent(1, QPointF(30.0, 15.0));
     QCOMPARE(pixel_at_logical_point(highlight_frame, highlight_center.x(), highlight_center.y()),
-             environment_highlight_color);
+             block_highlight_color);
+    QCOMPARE(pixel_at_logical_point(highlight_frame, inline_highlight_center.x(),
+                                    inline_highlight_center.y()),
+             inline_highlight_color);
     QCOMPARE(pixel_at_logical_point(highlight_frame, next_page_highlight_center.x(),
                                     next_page_highlight_center.y()),
-             environment_highlight_color);
+             block_highlight_color);
     const QColor rounded_highlight_edge = pixel_at_logical_point(
         highlight_frame, highlight_origin.x() + 1.0, highlight_origin.y() + 1.0);
-    QVERIFY(rounded_highlight_edge.red() >= environment_highlight_color.red());
-    QVERIFY(rounded_highlight_edge.green() >= environment_highlight_color.green());
-    QVERIFY(rounded_highlight_edge.blue() >= environment_highlight_color.blue());
-    QVERIFY(rounded_highlight_edge != environment_highlight_color);
+    QVERIFY(rounded_highlight_edge.red() >= block_highlight_color.red());
+    QVERIFY(rounded_highlight_edge.green() >= block_highlight_color.green());
+    QVERIFY(rounded_highlight_edge.blue() >= block_highlight_color.blue());
+    QVERIFY(rounded_highlight_edge != block_highlight_color);
     const QColor rounded_highlight_inner_edge = pixel_at_logical_point(
         highlight_frame, highlight_origin.x() + 4.0, highlight_origin.y() + 4.0);
-    QVERIFY(rounded_highlight_inner_edge.red() >= environment_highlight_color.red());
-    QVERIFY(rounded_highlight_inner_edge.green() >= environment_highlight_color.green());
-    QVERIFY(rounded_highlight_inner_edge.blue() >= environment_highlight_color.blue());
-    QVERIFY(rounded_highlight_inner_edge != environment_highlight_color);
+    QVERIFY(rounded_highlight_inner_edge.red() >= block_highlight_color.red());
+    QVERIFY(rounded_highlight_inner_edge.green() >= block_highlight_color.green());
+    QVERIFY(rounded_highlight_inner_edge.blue() >= block_highlight_color.blue());
+    QVERIFY(rounded_highlight_inner_edge != block_highlight_color);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{1, 2}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) > 0, 3000);
     const QImage second_page_frame = render_window.grabWindow();
     QCOMPARE(pixel_at_logical_point(second_page_frame, next_page_highlight_center.x(),
                                     next_page_highlight_center.y()),
-             environment_highlight_color);
+             block_highlight_color);
     QVERIFY(pixel_at_logical_point(second_page_frame, highlight_center.x(), highlight_center.y()) !=
-            environment_highlight_color);
+            block_highlight_color);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 1}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) > 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) > 0, 3000);
     const QImage first_page_frame = render_window.grabWindow();
     QCOMPARE(pixel_at_logical_point(first_page_frame, highlight_center.x(), highlight_center.y()),
-             environment_highlight_color);
+             block_highlight_color);
     QVERIFY(pixel_at_logical_point(first_page_frame, next_page_highlight_center.x(),
-                                   next_page_highlight_center.y()) != environment_highlight_color);
+                                   next_page_highlight_center.y()) != block_highlight_color);
     QVERIFY(rendered_canvas->setProperty("visiblePageRange", QVariantList{0, 2}));
-    QVERIFY(rendered_canvas->setProperty("environmentHighlightRects", QVariantList{}));
+    QVERIFY(rendered_canvas->setProperty("blockHighlightRects", QVariantList{}));
+    QVERIFY(rendered_canvas->setProperty("inlineHighlightRects", QVariantList{}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        count_color_pixels(render_window.grabWindow(), environment_highlight_color) == 0, 3000);
+        count_color_pixels(render_window.grabWindow(), block_highlight_color) == 0, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        count_color_pixels(render_window.grabWindow(), inline_highlight_color) == 0, 3000);
     const QImage frame = render_window.grabWindow();
     QVERIFY(!frame.isNull());
     QCOMPARE(pixel_at_logical_point(frame, 60.5, 50.0), QColor(QStringLiteral("#c8c8c8")));
