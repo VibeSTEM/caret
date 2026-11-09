@@ -1,6 +1,6 @@
 # 076 — 逐键状态仲裁与键盘路由一致性
 
-- 状态：planned
+- 状态：in-progress
 - 依赖：071
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-09
@@ -47,20 +47,21 @@
 
 ## 验收标准
 
-- [ ] 每个已支持编辑器键的状态优先级能直接从其逐键 handler 阅读，且测试覆盖优先状态共存时获胜者与文档/历史副作用。
-- [ ] `keyboards.rs` 不含隐藏所有按键差异的通用状态优先级分支；保留的共享 helper 只执行可证明相同的校验/提交操作。
-- [ ] 所有键盘入口旁路均已接入对应 handler，或有受测的焦点作用域/平台例外与明确文档。
-- [ ] MathText、MathTree、Source、命令行、IME、结构选区和正文中的剪贴板/Undo/Redo 行为符合用户契约；注释准确反映实现。
+- [x] 已支持键的优先级可从逐键 handler 阅读；Backspace/Delete 先处理 composition/命令行焦点，再进入共享 `Command::Delete` 领域事务，由该事务统一处理选区、结构边界、公式和正文删除。命令行与 MathEdit 共存、composition、文档副作用均有直接按键行为用例。
+- [x] `keyboards.rs` 不再包含通用导航状态路由；共享 helper 只处理重复的候选校验/提交，`TextInput` 适配也已归入 `keyboards/helpers/`。
+- [x] 按键与宿主文本适配公开入口均经过 Session 事务包装；命令行前缀、美元入口、字体候选、Undo/Redo 和导航候选不绕过代际校验及成功后的状态同步。
+- [x] MathText、MathTree、Source、命令行、IME、结构选区和正文中的剪贴板/Undo/Redo 路由已核对并保留现有领域事务；选区锚点与焦点视觉侧由 Session 持有并随撤销/重做恢复。
 - [ ] 各目标平台的 Latin 输入法提示有实测记录；MathTree 中中文标点/Unicode 符号输入与缺字 fallback 可发现且可恢复。
-- [ ] 失败与过时代际候选不更改焦点、选区、文档、composition 或历史；格式、相关测试、lint 和独立评审通过。
+- [x] 失败与过时代际候选不更改焦点、选区、文档、composition 或历史；撤销/重做恢复正文选区两端视觉侧；Rust/native 测试、格式、Clippy 和独立评审通过。
 
 ## 验证计划与结果
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| — | 逐键状态优先级行为测试 | 每键冲突按契约仲裁，失败不产生副作用 | 未执行 |
-| — | app/native 键盘入口集成测试 | 无意外旁路、事件不重复消费 | 未执行 |
-| — | 格式/lint 与独立 review | 跨层改动符合门禁和架构边界 | 未执行 |
+| 2026-11-09 | `cargo test -p caret-engine --locked`；`cargo test -p caret-app --locked` | 逐键状态冲突、数学/结构状态、选区历史、IME 和 app 投影回归 | 676 engine 与 271 app 测试通过；含 Backspace/Delete 的命令行+MathEdit、composition 优先级、连续 Shift 跨块锚点视觉侧和撤销软换行回归 |
+| 2026-11-09 | `cargo test -p caret-tests --test native --locked` | 完整快照、ViewModel→QML Canvas、C++/QML、格式及窗口装载 | 10/10 CTest 通过；输入法状态更新和 Qt `ImHints` true/false 查询通过；新增字段 schema 验证通过 |
+| 2026-11-09 | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | Rust 格式与 workspace 静态检查 | 两项通过；Clippy 发现并修复 ModZ 条件结构与测试中的字符串比较分配后复跑通过 |
+| 2026-11-09 | Terra 分域评审 + Sol 最终只读评审 | engine/session、app/native/IME、文档及完整最终 diff | Terra 分域复审与 Sol 最新 diff 复审均通过；已按其结构锚点发现补回归并通过；审查指出的实机输入法/Unicode 验收仍待目标设备确认 |
 
 ## 风险与回退
 
@@ -71,6 +72,16 @@
 - 2026-11-08：只读审查发现多个方向/编辑键仍通过通用 router 管理状态；字符输入、字体候选、MathText 边缘及过期数学焦点也有特殊入口。根据用户设计新建独立架构任务，不修改已 done 的 071。
 - 2026-11-08：独立评审补充发现 MathTree 输入法仍禁用、MathText 数学命令行的 IME enabled 状态与 Session 契约冲突，且 `preferLatin` 未在完整快照/交互增量统一校验；将这些非上下键问题纳入本任务。
 - 2026-11-09：接收 074 移交的平台输入法提示验证、数学结构中的中文标点/Unicode 符号输入和缺字 fallback 验收；074 因此只关闭已有实现与测试覆盖的结构光标范围。
+- 2026-11-09：从已同步的 `main` 创建 `yuki/task-076-per-key-state-arbitration` 开始实施；先审计逐键 handler 与实际入口，再按状态冲突补行为测试和迁移。
+- 2026-11-09：Left/Right/Home/End 已各自在对应 handler 管理 composition、命令输入、MathEdit 与正文候选；候选提交/代际检查集中在 `keyboards/helpers/navigation.rs`。Shift+Left/Right 在 MathText 两端保持公式焦点，不再沿无候选路径越出文本流。
+- 2026-11-09：命令前缀与宿主字符输入经 `keyboards/helpers/text_input.rs` 适配并委托给具体按键 handler；字体目录闭包仅由 Enter/Tab handler 在处理字体候选时调用。数学命令查询与 MathText 同时活动时，快照正确报告 IME disabled，MathText 离开命令查询后恢复 Latin hint；完整快照和交互增量都校验 `preferLatin` 类型。
+- 2026-11-09：Terra 光标状态审计后修复嵌套块虚拟退出仍显示父环境的问题，并抽取重复的 inline span 边界包含判断。选区锚点和焦点视觉侧已改由 Session 持有并进入历史状态，移除 app 侧可变副本；新增软换行撤销回归用例覆盖原错误。
+- 2026-11-09：按用户确认创建后续任务 [077](077-stable-math-caret-height.md)，处理全部数学环境中稳定光标高度；不扩入本任务的键盘仲裁范围。
+- 2026-11-09：分域评审发现公开 lazy 按键/文本入口绕过 Session 事务、嵌套块退出的矩形高亮遗漏及结构历史锚点捕获不完整。统一入口现在通过共享事务包装处理过时代际、恢复和状态同步；结构历史显式保存原锚点视觉侧；块高亮排除退出节点并保留父块，完整快照与交互增量测试逐坐标比对父块矩形，根块退出仍为空。
+- 2026-11-09：Backspace/Delete 的 handler 明确仲裁 composition 和命令行后委托共享 Delete 领域事务；架构行为表已记载这一边界，新增直接 EditorKey 冲突用例覆盖命令行与 MathEdit 共存及 composition 不变性。
+- 2026-11-09：新增 native 用例验证输入法 `enabled` / `preferLatin` 从 ViewModel 经真实 QML 属性绑定到 Canvas、通知发出与 Qt 查询；Rust app 用例验证状态值源自 Session。目标平台实际输入法切换效果、数学模式下 Unicode/中文标点与缺字恢复仍需目标设备实测，不能由 Qt 查询测试替代。
+- 2026-11-09：Sol 最终评审发现键盘扩展跨块时结构选区转换覆盖锚点视觉侧，且折叠的正文投影会被事务收尾误判为无选区。Session 现在在进入及连续扩展时独立保留结构锚点侧，新增两次 Shift+Right 跨块候选的 EditorKey 回归。
+- 2026-11-09：本轮验证完成：engine 676/676、app 271/271；native CTest 10/10；格式与 workspace Clippy 通过。两次 Terra 复审及最终 Sol 复审的发现均已处理并复查。目标平台手动输入法与缺字恢复验收仍待完成。
 
 ## 完成摘要
 
