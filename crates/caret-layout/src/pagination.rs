@@ -61,6 +61,18 @@ pub struct MathBlockPaginationInput<'a> {
     pub width_pt: f32,
     /// 公式盒高度，单位为 pt；必须有限且非负。
     pub height_pt: f32,
+    /// MathBox 基线相对宿主行框顶部的偏移，单位为 pt。
+    pub baseline_pt: f32,
+    /// 正文行框基线相对宿主行框顶部的偏移，用于 Math caret 对齐。
+    pub caret_baseline_pt: f32,
+    /// 正文基础行距下的 caret 高度，单位为 pt。
+    pub caret_height_pt: f32,
+    /// 是否按 Exactly 行距裁切公式墨迹。
+    pub clip_ink_to_line_height: bool,
+    /// 显示公式块前的段落间距；与正文段落使用相同的相邻间距合并策略。
+    pub space_before_pt: f32,
+    /// 显示公式块后的段落间距；与正文段落使用相同的相邻间距合并策略。
+    pub space_after_pt: f32,
 }
 
 /// 一段连续行在页面上的引用；正文仍留在文档模型中。
@@ -84,6 +96,12 @@ pub struct MathBlockFragment {
     pub width_pt: f32,
     /// 公式盒高度，单位为 pt。
     pub height_pt: f32,
+    /// MathBox 基线相对宿主行框顶部的偏移，单位为 pt。
+    pub baseline_pt: f32,
+    /// 正文基础行距下的 caret 度量。
+    pub caret_baseline_pt: f32,
+    pub caret_height_pt: f32,
+    pub clip_ink_to_line_height: bool,
 }
 
 /// 一个页面上的段落行片段及其推进高度。
@@ -145,8 +163,16 @@ pub fn paginate_paragraphs(
                 if !math.x_offset_pt.is_finite()
                     || !math.width_pt.is_finite()
                     || !math.height_pt.is_finite()
+                    || !math.baseline_pt.is_finite()
+                    || !math.caret_baseline_pt.is_finite()
+                    || !math.caret_height_pt.is_finite()
+                    || !math.space_before_pt.is_finite()
+                    || !math.space_after_pt.is_finite()
                     || math.width_pt < 0.0
                     || math.height_pt < 0.0
+                    || math.caret_height_pt <= 0.0
+                    || math.space_before_pt < 0.0
+                    || math.space_after_pt < 0.0
                 {
                     return Err(PaginationError::InvalidMathBlock);
                 }
@@ -156,23 +182,38 @@ pub fn paginate_paragraphs(
                 {
                     return Err(PaginationError::InvalidMathBlock);
                 }
+                let pending_space_pt = if current_page(&pages).is_some_and(page_has_content) {
+                    previous_space_after_pt.max(math.space_before_pt)
+                } else {
+                    0.0
+                };
                 if current_page(&pages).is_some_and(page_has_content)
-                    && current_page(&pages)
-                        .is_some_and(|page| page.used_height_pt + math.height_pt > page_height_pt)
+                    && current_page(&pages).is_some_and(|page| {
+                        page.used_height_pt + pending_space_pt + math.height_pt > page_height_pt
+                    })
                 {
                     pages.push(PageLayout::default());
                 }
                 let page = pages.last_mut().ok_or(PaginationError::InvalidMathBlock)?;
-                let y_offset_pt = page.used_height_pt;
+                let pending_space_pt = if page_has_content(page) {
+                    pending_space_pt
+                } else {
+                    0.0
+                };
+                let y_offset_pt = page.used_height_pt + pending_space_pt;
                 page.math_fragments.push(MathBlockFragment {
                     math_id: math.math_id.clone(),
                     x_offset_pt: math.x_offset_pt,
                     y_offset_pt,
                     width_pt: math.width_pt,
                     height_pt: math.height_pt,
+                    baseline_pt: math.baseline_pt,
+                    caret_baseline_pt: math.caret_baseline_pt,
+                    caret_height_pt: math.caret_height_pt,
+                    clip_ink_to_line_height: math.clip_ink_to_line_height,
                 });
-                page.used_height_pt += math.height_pt;
-                previous_space_after_pt = 0.0;
+                page.used_height_pt = y_offset_pt + math.height_pt;
+                previous_space_after_pt = math.space_after_pt;
                 continue;
             }
             PaginationItem::Paragraph(paragraph) => paragraph,

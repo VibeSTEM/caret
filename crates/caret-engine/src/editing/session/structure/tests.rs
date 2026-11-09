@@ -148,7 +148,7 @@ fn structural_navigation_moves_between_nested_paragraphs_and_exits_container()
 }
 
 #[test]
-fn current_environment_view_keeps_parent_after_virtual_inner_environment_exit()
+fn current_environment_view_keeps_parent_after_virtual_inner_block_boundary_stop()
 -> Result<(), Box<dyn std::error::Error>> {
     let inner_id = NodeId::generate();
     let mut section = match environment(
@@ -176,7 +176,7 @@ fn current_environment_view_keeps_parent_after_virtual_inner_environment_exit()
     session.run(Command::MoveStructure(Direction::Forward))?;
     session.run(Command::ExitBlockEnvironment(Direction::Forward))?;
     assert_eq!(
-        session.block_environment_exit().map(|(id, _)| id),
+        session.block_boundary_exit().map(|(id, _)| id),
         Some(inner_id.clone())
     );
 
@@ -282,10 +282,10 @@ fn undoing_environment_creation_clears_its_virtual_exit_before_typing()
         BlockEnvironmentKind::Section,
     ))?;
     session.run(Command::ExitBlockEnvironment(Direction::Forward))?;
-    assert!(session.block_environment_exit().is_some());
+    assert!(session.block_boundary_exit().is_some());
 
     session.run(Command::Undo)?;
-    assert!(session.block_environment_exit().is_none());
+    assert!(session.block_boundary_exit().is_none());
     let inserted = session.run(Command::InsertText("first".to_owned()))?;
     assert!(inserted.document_changed);
     assert_eq!(
@@ -299,7 +299,7 @@ fn undoing_environment_creation_clears_its_virtual_exit_before_typing()
 }
 
 #[test]
-fn composition_at_virtual_environment_exit_is_one_undoable_edit()
+fn composition_at_block_boundary_stop_is_one_undoable_edit()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut session = Session::new(Document::blank())?;
     session.run(Command::CreateBlockEnvironment(
@@ -361,7 +361,7 @@ fn composition_at_virtual_environment_exit_is_one_undoable_edit()
 }
 
 #[test]
-fn composition_preview_at_environment_exit_tracks_each_inserted_line()
+fn composition_preview_at_block_boundary_tracks_each_inserted_line()
 -> Result<(), Box<dyn std::error::Error>> {
     for direction in [Direction::Backward, Direction::Forward] {
         let mut session = Session::new(Document::blank())?;
@@ -1230,7 +1230,7 @@ fn formulas_keep_empty_block_environments_from_backspace_cleanup()
             // A virtual stop outside the environment must not delete its formula subtree.
             let mut exit_session = Session::new(document.clone())?;
             exit_session.run(Command::ExitBlockEnvironment(Direction::Backward))?;
-            let exit = exit_session.block_environment_exit();
+            let exit = exit_session.block_boundary_exit();
             assert!(exit.is_some());
             let selection = exit_session.selection().clone();
             let generation = exit_session.document_generation();
@@ -1238,7 +1238,7 @@ fn formulas_keep_empty_block_environments_from_backspace_cleanup()
             assert!(!effect.document_changed);
             assert_eq!(exit_session.document, document);
             assert_eq!(*exit_session.selection(), selection);
-            assert_eq!(exit_session.block_environment_exit(), exit);
+            assert_eq!(exit_session.block_boundary_exit(), exit);
             assert_eq!(exit_session.document_generation(), generation);
         }
     }
@@ -1729,7 +1729,7 @@ fn section_command_on_existing_text_creates_a_separate_empty_section()
 }
 
 #[test]
-fn typing_at_virtual_environment_exit_materializes_one_outside_paragraph()
+fn typing_at_block_boundary_stop_materializes_one_outside_paragraph()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut section = match environment(BlockEnvironmentKind::Section, Vec::new()) {
         Block::Environment(section) => section,
@@ -1746,7 +1746,7 @@ fn typing_at_virtual_environment_exit_materializes_one_outside_paragraph()
     assert!(!exit.document_changed);
     assert_eq!(session.document_generation(), generation);
     assert_eq!(session.document.body.len(), 1);
-    assert!(session.block_environment_exit().is_some());
+    assert!(session.block_boundary_exit().is_some());
 
     session.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     let inserted = session.run(Command::InsertText("outside".to_owned()))?;
@@ -1780,7 +1780,7 @@ fn typing_at_virtual_environment_exit_materializes_one_outside_paragraph()
 }
 
 #[test]
-fn enter_at_virtual_environment_exit_materializes_outside_paragraphs()
+fn enter_at_block_boundary_stop_materializes_outside_paragraphs()
 -> Result<(), Box<dyn std::error::Error>> {
     for direction in [Direction::Backward, Direction::Forward] {
         for key in [EditorKey::Enter, EditorKey::ShiftEnter] {
@@ -1828,11 +1828,11 @@ fn enter_at_virtual_environment_exit_materializes_outside_paragraphs()
             })))?;
 
             session.run(Command::ExitBlockEnvironment(direction))?;
-            assert!(session.block_environment_exit().is_some());
+            assert!(session.block_boundary_exit().is_some());
             let effect = session.run(Command::EditorKey(key.clone()))?;
 
             assert!(effect.document_changed);
-            assert!(session.block_environment_exit().is_none());
+            assert!(session.block_boundary_exit().is_none());
             assert_eq!(session.document.body.len(), 2);
             let environment_index = match direction {
                 Direction::Backward => 1,

@@ -4255,8 +4255,8 @@ fn root_text_boundary_exits_and_reenters_tree_native_math_editing() -> Result<()
     ));
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
-    session.run(Command::MoveCaret(Direction::Forward))?;
     assert!(session.math_edit().is_none());
+    session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::EnterMath(Direction::Backward))?;
     assert!(matches!(
         session.math_edit().map(|edit| &edit.branch),
@@ -12897,12 +12897,18 @@ fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std:
 
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
+    assert!(session.math_edit().is_none());
+    assert!(session.block_boundary_exit().is_some());
+    session.run(Command::MoveCaret(Direction::Forward))?;
     assert!(matches!(
         session.math_edit().map(|edit| &edit.target),
         Some(MathEditTarget::Block { align: true, .. })
     ));
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
 
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert!(session.math_edit().is_none());
+    assert!(session.block_boundary_exit().is_some());
     session.run(Command::MoveCaret(Direction::Backward))?;
     assert!(matches!(
         session.math_edit().map(|edit| &edit.target),
@@ -12913,7 +12919,7 @@ fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn leaving_last_display_math_without_a_paragraph_keeps_formula_focus()
+fn leaving_last_display_math_without_a_paragraph_keeps_an_outer_boundary_stop()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = caret_doc::Document::blank();
     document.body = vec![
@@ -12923,13 +12929,10 @@ fn leaving_last_display_math_without_a_paragraph_keeps_formula_focus()
     let mut session = Session::new(document)?;
     session.run(Command::EnterMath(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
-    let target = session.math_edit().cloned();
-    let selection = session.selection().clone();
-
     session.run(Command::MoveCaret(Direction::Forward))?;
 
-    assert_eq!(session.math_edit(), target.as_ref());
-    assert_eq!(session.selection(), &selection);
+    assert!(session.math_edit().is_none());
+    assert!(session.block_boundary_exit().is_some());
     Ok(())
 }
 
@@ -13046,6 +13049,7 @@ fn deleting_empty_align_after_a_formula_chain_is_undoable() -> Result<(), Box<dy
     ];
     let mut session = Session::new(document)?;
     session.run(Command::EnterMath(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;

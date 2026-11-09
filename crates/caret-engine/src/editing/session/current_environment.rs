@@ -20,7 +20,7 @@ impl Session {
     pub fn current_inline_environment(
         &mut self,
     ) -> Result<Option<InlineEnvironmentRange>, EditError> {
-        if self.block_environment_exit().is_some()
+        if self.block_boundary_exit().is_some()
             || self.selected_block_environment().is_some()
             || !self.selected_block_environments().is_empty()
         {
@@ -52,7 +52,7 @@ impl Session {
             return Ok(CurrentEnvironmentView::default());
         }
         let exited_environment_id = self
-            .block_environment_exit()
+            .block_boundary_exit()
             .map(|(environment_id, _)| environment_id.clone());
         let focus = self.selection().focus.clone();
         let structure_stack = self

@@ -1047,7 +1047,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
@@ -1199,7 +1199,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
@@ -1674,10 +1674,41 @@ impl Session {
         Ok(Some(direction))
     }
 
+    /// 返回当前停靠点关联的公式块，供 app 在生成视觉导航候选前委托 Session 仲裁。
+    pub fn math_block_boundary_exit(&self) -> Option<(NodeId, Direction)> {
+        let (block_id, direction) = self.block_boundary_exit.as_ref()?;
+        let (parent_ids, index) = find_block_path(&self.document.body, block_id)?;
+        matches!(
+            block_list_ref(&self.document.body, &parent_ids)
+                .ok()?
+                .get(index),
+            Some(Block::Equation(_) | Block::Align(_))
+        )
+        .then(|| (block_id.clone(), *direction))
+    }
+
     /// 仅当当前正文焦点紧邻受支持的公式对象时进入该公式。
     pub(super) fn enter_adjacent_math_if_present(
         &mut self,
         direction: Direction,
+    ) -> Result<bool, EditError> {
+        self.enter_adjacent_math_with_inline(direction, true, true, true)
+    }
+
+    /// 仅当正文焦点位于文档块边界且相邻块是显示公式时进入该公式。
+    pub(super) fn enter_adjacent_block_math_if_present(
+        &mut self,
+        direction: Direction,
+    ) -> Result<bool, EditError> {
+        self.enter_adjacent_math_with_inline(direction, false, false, true)
+    }
+
+    fn enter_adjacent_math_with_inline(
+        &mut self,
+        direction: Direction,
+        include_inline: bool,
+        require_text_edge: bool,
+        stop_before_entering: bool,
     ) -> Result<bool, EditError> {
         if self.selection.anchor != self.selection.focus
             || self.math_edit.is_some()
@@ -1686,27 +1717,29 @@ impl Session {
             || !self.selected_block_environments.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
-            || self.block_environment_exit.is_some()
         {
             return Ok(false);
         }
         let focus = self.selection.focus.clone();
         let paragraph = self.paragraph_for(&focus)?;
         let object_len = OBJECT_REPLACEMENT.len_utf8();
-        if inline_math_slots(paragraph)?
-            .iter()
-            .any(|(start, _)| match direction {
-                Direction::Forward => *start == focus.offset,
-                Direction::Backward => start + object_len == focus.offset,
-            })
+        if self.block_boundary_exit.is_none()
+            && include_inline
+            && inline_math_slots(paragraph)?
+                .iter()
+                .any(|(start, _)| match direction {
+                    Direction::Forward => *start == focus.offset,
+                    Direction::Backward => start + object_len == focus.offset,
+                })
         {
-            self.enter_math(direction)?;
+            self.enter_math_with_constraints(direction, true, true)?;
             return Ok(self.math_edit.is_some());
         }
-        let at_edge = match direction {
-            Direction::Forward => focus.offset == TextMap::new(paragraph)?.text.len(),
-            Direction::Backward => focus.offset == 0,
-        };
+        let at_edge = !require_text_edge
+            || match direction {
+                Direction::Forward => focus.offset == TextMap::new(paragraph)?.text.len(),
+                Direction::Backward => focus.offset == 0,
+            };
         if !at_edge || focus.story != StoryId::Body {
             return Ok(false);
         }
@@ -1735,11 +1768,68 @@ impl Session {
         ) {
             return Ok(false);
         }
-        self.enter_math(direction)?;
+        let target_id = match blocks.get(neighbour) {
+            Some(Block::Equation(equation)) => equation.id.clone(),
+            Some(Block::Align(align)) => align.id.clone(),
+            _ => unreachable!("the adjacent math block was checked above"),
+        };
+        let opposite = match direction {
+            Direction::Backward => Direction::Forward,
+            Direction::Forward => Direction::Backward,
+        };
+        match self.block_boundary_exit.clone() {
+            Some((active_id, exit_direction)) if active_id == target_id => {
+                if direction == exit_direction {
+                    return Ok(true);
+                }
+                self.block_boundary_exit = None;
+            }
+            Some(_) => return Ok(false),
+            None if stop_before_entering => {
+                self.block_boundary_exit = Some((target_id, opposite));
+                self.advance_history_merge_epoch();
+                return Ok(true);
+            }
+            None => {
+                let edit = self
+                    .math_edit_at_block(&target_id, direction)?
+                    .ok_or(EditError::InvalidPosition)?;
+                self.math_edit = Some(edit);
+                self.advance_history_merge_epoch();
+                return Ok(true);
+            }
+        }
+        self.enter_math_with_constraints(direction, include_inline, require_text_edge)?;
         Ok(self.math_edit.is_some())
     }
 
     pub(super) fn enter_math(&mut self, direction: Direction) -> Result<Effect, EditError> {
+        if let Some((block_id, _)) = self.block_boundary_exit.clone()
+            && let Some(edit) = self.math_edit_at_block(&block_id, direction)?
+        {
+            self.block_boundary_exit = None;
+            self.math_edit = Some(edit);
+            self.advance_history_merge_epoch();
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        if self.enter_adjacent_math_with_inline(direction, true, true, false)? {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        self.enter_math_with_constraints(direction, true, true)
+    }
+
+    fn enter_math_with_constraints(
+        &mut self,
+        direction: Direction,
+        include_inline: bool,
+        require_text_edge: bool,
+    ) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.structure_selection.is_some()
@@ -1747,18 +1837,22 @@ impl Session {
             || !self.selected_block_environments.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
-            || self.block_environment_exit.is_some()
+            || self.block_boundary_exit.is_some()
         {
             return Ok(Effect::default());
         }
         let paragraph = self.paragraph_for(&focus)?.clone();
         let object_len = OBJECT_REPLACEMENT.len_utf8();
-        let slot = inline_math_slots(&paragraph)?
-            .into_iter()
-            .find(|(start, _)| match direction {
-                Direction::Forward => *start == focus.offset,
-                Direction::Backward => start + object_len == focus.offset,
-            });
+        let slot = if include_inline {
+            inline_math_slots(&paragraph)?
+                .into_iter()
+                .find(|(start, _)| match direction {
+                    Direction::Forward => *start == focus.offset,
+                    Direction::Backward => start + object_len == focus.offset,
+                })
+        } else {
+            None
+        };
         if let Some((start, math_id)) = slot {
             let tree = find_inline_math(&paragraph.inlines, &math_id)
                 .ok_or(EditError::InvalidPosition)?
@@ -1802,10 +1896,11 @@ impl Session {
             });
         }
         let text_len = TextMap::new(&paragraph)?.text.len();
-        let at_edge = match direction {
-            Direction::Forward => focus.offset == text_len,
-            Direction::Backward => focus.offset == 0,
-        };
+        let at_edge = !require_text_edge
+            || match direction {
+                Direction::Forward => focus.offset == text_len,
+                Direction::Backward => focus.offset == 0,
+            };
         if !at_edge || focus.story != StoryId::Body {
             return Ok(Effect::default());
         }
@@ -2351,7 +2446,7 @@ impl Session {
                         && path::root_text_flow_path(tree, direction == Direction::Backward, None)
                             .is_some_and(|edge| edge.steps() == path.steps());
                     if tree_root_edge {
-                        return self.exit_math_edit(direction, false);
+                        return self.exit_math_edit_for_navigation(direction);
                     }
                     let (tree, position, align_cell) =
                         self.math_tree_position_at_text_boundary(&edit, path, direction)?;
@@ -2438,7 +2533,7 @@ impl Session {
                     ..Effect::default()
                 })
             }
-            None => self.exit_math_edit(direction, false),
+            None => self.exit_math_edit_for_navigation(direction),
         }
     }
 
@@ -3490,7 +3585,7 @@ impl Session {
                         ..Effect::default()
                     });
                 }
-                return self.exit_math_edit(direction, false);
+                return self.exit_math_edit_for_navigation(direction);
             }
         }
         self.advance_history_merge_epoch();
@@ -3799,11 +3894,29 @@ impl Session {
         }
     }
 
-    /// 退出公式编辑，把正文光标放到公式之前（向后）或之后（向前）。
+    /// 退出公式编辑；块公式把边界 ID 和方向交给共享外侧停靠状态。
     pub(super) fn exit_math_edit(
         &mut self,
         direction: Direction,
         allow_fallback: bool,
+    ) -> Result<Effect, EditError> {
+        self.exit_math_edit_with_boundary(direction, allow_fallback, false)
+    }
+
+    /// Arrow navigation leaves a display formula at its outer row edge, keeping the block
+    /// boundary stop available for reentry or movement to the next sibling.
+    pub(super) fn exit_math_edit_for_navigation(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
+        self.exit_math_edit_with_boundary(direction, false, true)
+    }
+
+    fn exit_math_edit_with_boundary(
+        &mut self,
+        direction: Direction,
+        allow_fallback: bool,
+        keep_block_boundary_stop: bool,
     ) -> Result<Effect, EditError> {
         if self
             .math_edit
@@ -3864,17 +3977,13 @@ impl Session {
                         return Ok(Effect::default());
                     };
                     self.set_math_exit_selection(position);
-                } else if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
-                    self.set_math_exit_selection(position);
-                } else if let Some(next_edit) = self.math_edit_beside_block(block_id, direction)? {
-                    self.math_edit = Some(next_edit);
-                    self.advance_history_merge_epoch();
-                    return Ok(Effect {
-                        selection_changed: true,
-                        ..Effect::default()
-                    });
                 } else {
-                    return Ok(Effect::default());
+                    if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
+                        self.set_math_exit_selection(position);
+                    }
+                    if keep_block_boundary_stop {
+                        self.block_boundary_exit = Some((block_id.clone(), direction));
+                    }
                 }
             }
         }
@@ -3955,58 +4064,124 @@ impl Session {
         let Some(neighbour) = neighbour else {
             return Ok(None);
         };
-        let (block_id, align, cursor, branch) =
-            match block_list_ref(&self.document.body, &parent_ids)?.get(neighbour) {
-                Some(Block::Equation(equation)) => {
-                    let (cursor, branch) = math_tree_edge_position(
-                        &equation.math_tree,
-                        MathPositionHost::Equation {
-                            owner_id: equation.id.clone(),
-                        },
-                        direction,
-                        None,
-                    )?;
-                    (equation.id.clone(), false, cursor, branch)
-                }
-                Some(Block::Align(value)) => {
-                    let cell = match direction {
-                        Direction::Forward => {
-                            value.rows.iter().enumerate().find_map(|(row_index, row)| {
-                                row.cells.first().map(|cell| (row_index, 0, &row.id, cell))
-                            })
-                        }
-                        Direction::Backward => {
-                            value
-                                .rows
-                                .iter()
-                                .enumerate()
-                                .rev()
-                                .find_map(|(row_index, row)| {
-                                    let cell_index = row.cells.len().checked_sub(1)?;
-                                    Some((
-                                        row_index,
-                                        cell_index,
-                                        &row.id,
-                                        row.cells.get(cell_index)?,
-                                    ))
-                                })
-                        }
+        let Some(block) = block_list_ref(&self.document.body, &parent_ids)?.get(neighbour) else {
+            return Ok(None);
+        };
+        self.math_edit_for_block(block, direction)
+    }
+
+    pub(super) fn math_edit_at_block(
+        &self,
+        block_id: &NodeId,
+        entry_direction: Direction,
+    ) -> Result<Option<MathEdit>, EditError> {
+        let Some((parent_ids, index)) = find_block_path(&self.document.body, block_id) else {
+            return Err(EditError::InvalidPosition);
+        };
+        let Some(block) = block_list_ref(&self.document.body, &parent_ids)?.get(index) else {
+            return Err(EditError::InvalidPosition);
+        };
+        self.math_edit_for_block(block, entry_direction)
+    }
+
+    /// 统一仲裁数学块外侧停靠点的反向重入与同向越过。
+    pub(super) fn move_from_math_block_boundary_stop(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        let Some((block_id, exit_direction)) = self.block_boundary_exit.clone() else {
+            return Ok(None);
+        };
+        let entry_direction = match exit_direction {
+            Direction::Backward => Direction::Forward,
+            Direction::Forward => Direction::Backward,
+        };
+        let Some(target_edit) = self.math_edit_at_block(&block_id, entry_direction)? else {
+            return Ok(None);
+        };
+        if direction != exit_direction {
+            self.block_boundary_exit = None;
+            self.math_edit = Some(target_edit);
+            self.advance_history_merge_epoch();
+            return Ok(Some(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            }));
+        }
+
+        let next_edit = self.math_edit_beside_block(&block_id, direction)?;
+        if let Some(next_edit) = next_edit {
+            self.math_edit = Some(next_edit);
+            self.block_boundary_exit = None;
+            self.advance_history_merge_epoch();
+            return Ok(Some(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            }));
+        }
+        if let Some(position) = self.paragraph_beside_block(&block_id, direction)? {
+            self.set_math_exit_selection(position);
+            self.block_boundary_exit = None;
+            self.advance_history_merge_epoch();
+            return Ok(Some(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            }));
+        }
+        Ok(Some(Effect::default()))
+    }
+
+    fn math_edit_for_block(
+        &self,
+        block: &Block,
+        direction: Direction,
+    ) -> Result<Option<MathEdit>, EditError> {
+        let (block_id, align, cursor, branch) = match block {
+            Block::Equation(equation) => {
+                let (cursor, branch) = math_tree_edge_position(
+                    &equation.math_tree,
+                    MathPositionHost::Equation {
+                        owner_id: equation.id.clone(),
+                    },
+                    direction,
+                    None,
+                )?;
+                (equation.id.clone(), false, cursor, branch)
+            }
+            Block::Align(value) => {
+                let cell = match direction {
+                    Direction::Forward => {
+                        value.rows.iter().enumerate().find_map(|(row_index, row)| {
+                            row.cells.first().map(|cell| (row_index, 0, &row.id, cell))
+                        })
                     }
-                    .ok_or(EditError::InvalidPosition)?;
-                    let (row_index, cell_index, row_id, cell) = cell;
-                    let (cursor, branch) = math_tree_edge_position(
-                        cell,
-                        MathPositionHost::AlignCell {
-                            row_id: row_id.clone(),
-                            cell_id: cell.root.id.clone(),
-                        },
-                        direction,
-                        Some((row_index, cell_index)),
-                    )?;
-                    (value.id.clone(), true, cursor, branch)
+                    Direction::Backward => {
+                        value
+                            .rows
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(row_index, row)| {
+                                let cell_index = row.cells.len().checked_sub(1)?;
+                                Some((row_index, cell_index, &row.id, row.cells.get(cell_index)?))
+                            })
+                    }
                 }
-                _ => return Ok(None),
-            };
+                .ok_or(EditError::InvalidPosition)?;
+                let (row_index, cell_index, row_id, cell) = cell;
+                let (cursor, branch) = math_tree_edge_position(
+                    cell,
+                    MathPositionHost::AlignCell {
+                        row_id: row_id.clone(),
+                        cell_id: cell.root.id.clone(),
+                    },
+                    direction,
+                    Some((row_index, cell_index)),
+                )?;
+                (value.id.clone(), true, cursor, branch)
+            }
+            _ => return Ok(None),
+        };
         let target = MathEditTarget::Block { block_id, align };
         Ok(Some(MathEdit {
             target: target.clone(),
@@ -4019,7 +4194,7 @@ impl Session {
     }
 
     /// 块公式前（向后）或后（向前）的同级正文段落边缘。
-    fn paragraph_beside_block(
+    pub(super) fn paragraph_beside_block(
         &self,
         block_id: &NodeId,
         direction: Direction,

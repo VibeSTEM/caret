@@ -201,6 +201,7 @@ version = "0.1.0"
 dependencies = [
  "caret-doc",
  "caret-font-roles",
+ "caret-grid-layout",
  "criterion",
  "fontique",
  "icu_locale_core",

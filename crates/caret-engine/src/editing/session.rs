@@ -89,7 +89,7 @@ pub struct Session {
     pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
     math_edit: Option<MathEdit>,
-    block_environment_exit: Option<(NodeId, Direction)>,
+    block_boundary_exit: Option<(NodeId, Direction)>,
     selected_block_environment: Option<NodeId>,
     selected_block_environments: Vec<NodeId>,
     structure_selection: Option<StructureSelection>,
@@ -117,7 +117,7 @@ impl Session {
             pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             math_edit: self.math_edit.clone(),
-            block_environment_exit: self.block_environment_exit.clone(),
+            block_boundary_exit: self.block_boundary_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
             structure_selection: self.structure_selection.clone(),
@@ -162,7 +162,7 @@ impl Session {
             pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
             math_edit: None,
-            block_environment_exit: None,
+            block_boundary_exit: None,
             selected_block_environment: None,
             selected_block_environments: Vec::new(),
             structure_selection: None,
@@ -314,9 +314,9 @@ impl Session {
         self.command_line.as_ref()
     }
 
-    /// 当前光标是否停在块环境外侧，而不为导航插入可见空段落。
-    pub fn block_environment_exit(&self) -> Option<(NodeId, Direction)> {
-        self.block_environment_exit.clone()
+    /// 当前光标是否停在可编辑块的外侧，而不为导航插入可见空段落。
+    pub fn block_boundary_exit(&self) -> Option<(NodeId, Direction)> {
+        self.block_boundary_exit.clone()
     }
 
     /// 返回当前以完整页内几何表示的块环境结构选区。
@@ -375,7 +375,7 @@ impl Session {
             anchor: self.selection.focus.clone(),
             focus: self.selection.focus.clone(),
         });
-        self.block_environment_exit = None;
+        self.block_boundary_exit = None;
         Ok(Effect {
             selection_changed: changed,
             ..Effect::default()
@@ -512,6 +512,19 @@ impl Session {
         if matches!(command, Command::Undo | Command::Redo) {
             return self.handle_history_command(command == Command::Redo);
         }
+        if matches!(&command, Command::Delete(Direction::Backward))
+            && self.math_edit.is_none()
+            && self.block_boundary_exit.is_none()
+            && self.composition.is_none()
+            && self.command_line.is_none()
+            && self.selection.anchor == self.selection.focus
+            && self.selection.focus.offset == 0
+        {
+            let position = self.selection.focus.clone();
+            if let Some(effect) = self.delete_empty_paragraph_after_math(&position)? {
+                return Ok(effect);
+            }
+        }
         if let Some(effect) = self.run_math_edit(&command)? {
             return Ok(effect);
         }
@@ -532,9 +545,9 @@ impl Session {
             _ => None,
         };
         if let Some(text) = inserted_text
-            && self.block_environment_exit.is_some()
+            && self.block_boundary_exit.is_some()
         {
-            return self.insert_text_at_environment_exit(text);
+            return self.insert_text_at_block_boundary(text);
         }
         if matches!(&command, Command::Delete(_))
             && !self.selected_block_environments.is_empty()
@@ -552,16 +565,16 @@ impl Session {
             return self.delete_selected_block_environment();
         }
         if let Command::CommitComposition { id, text } = &command
-            && self.block_environment_exit.is_some()
+            && self.block_boundary_exit.is_some()
         {
             return self.commit_composition(*id, text);
         }
-        if self.block_environment_exit.is_some() {
+        if self.block_boundary_exit.is_some() {
             match command {
                 Command::InsertParagraphBreak => {
-                    return self.insert_break_at_environment_exit(false);
+                    return self.insert_break_at_block_boundary(false);
                 }
-                Command::InsertSoftBreak => return self.insert_break_at_environment_exit(true),
+                Command::InsertSoftBreak => return self.insert_break_at_block_boundary(true),
                 _ => {}
             }
         }
@@ -573,9 +586,9 @@ impl Session {
         if self.command_line.is_some() && matches!(&command, Command::Delete(Direction::Backward)) {
             return self.run_command_line(Command::BackspaceCommandLine);
         }
-        if self.block_environment_exit.is_some() && matches!(&command, Command::Delete(_)) {
-            let (environment_id, exit_direction) = self
-                .block_environment_exit
+        if self.block_boundary_exit.is_some() && matches!(&command, Command::Delete(_)) {
+            let (block_id, exit_direction) = self
+                .block_boundary_exit
                 .clone()
                 .ok_or(EditError::InvalidPosition)?;
             let deletes_adjacent_environment = matches!(
@@ -584,9 +597,9 @@ impl Session {
                     | (Direction::Backward, Command::Delete(Direction::Forward))
             );
             if deletes_adjacent_environment
-                && !structure::environment_has_content_at(&self.document.body, &environment_id)?
+                && !structure::environment_has_content_at(&self.document.body, &block_id)?
             {
-                self.selected_block_environment = Some(environment_id);
+                self.selected_block_environment = Some(block_id);
                 return self.delete_selected_block_environment();
             }
             return Ok(Effect::default());
@@ -930,7 +943,7 @@ impl Session {
             return Ok(Effect::default());
         };
         let previous_math_edit = self.math_edit.clone();
-        let (
+        let history::RestoredHistoryTransition {
             selection,
             anchor_visual_affinity,
             visual_affinity,
@@ -938,8 +951,9 @@ impl Session {
             state_id,
             changed_paragraph_id,
             document_changed,
-            math_edit_position,
-        ) = history::restore_history_transition(transition);
+            math_edit: math_edit_position,
+            block_boundary_exit,
+        } = history::restore_history_transition(transition);
         let restored_math_edit = match math_edit_position {
             Some(position) => {
                 let revision = self.current_math_edit_revision();
@@ -964,7 +978,8 @@ impl Session {
         let selection_changed = self.selection != selection
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
-            || previous_math_edit != restored_math_edit;
+            || previous_math_edit != restored_math_edit
+            || self.block_boundary_exit != block_boundary_exit;
         self.selection = selection;
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = visual_affinity;
@@ -973,7 +988,9 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_environment_exit = None;
+        self.block_boundary_exit = block_boundary_exit.filter(|(block_id, _)| {
+            math_edit::find_block_path(&self.document.body, block_id).is_some()
+        });
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         if document_changed {

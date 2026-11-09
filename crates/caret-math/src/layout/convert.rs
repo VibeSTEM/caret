@@ -71,18 +71,17 @@ impl Converter<'_> {
             if !is_placeholder_flow(child) {
                 continue;
             }
-            fragment.frame.items.insert(
+            let baseline = fragment.frame.baseline;
+            fragment.frame.insert(
                 0,
-                (
-                    Point::new(0.0, fragment.frame.baseline),
-                    Item::Node {
-                        id: child.id.clone(),
-                        position: self.styled_position(&child.position, style),
-                        width: 0.0,
-                        height: 0.0,
-                        baseline: 0.0,
-                    },
-                ),
+                Point::new(0.0, baseline),
+                Item::Node {
+                    id: child.id.clone(),
+                    position: self.styled_position(&child.position, style),
+                    width: 0.0,
+                    height: 0.0,
+                    baseline: 0.0,
+                },
             );
         }
         let frame = &fragment.frame;
@@ -498,19 +497,21 @@ impl Converter<'_> {
                     };
                     let nested = self.text_segments(&child.children, nested_style, text_style);
                     let mut fragment = self.joined(nested, AtomClass::Ord, nested_style);
-                    let frame = &fragment.frame;
-                    fragment.frame.items.insert(
+                    let (width, height, baseline) = (
+                        fragment.frame.width,
+                        fragment.frame.height,
+                        fragment.frame.baseline,
+                    );
+                    fragment.frame.insert(
                         0,
-                        (
-                            Point::default(),
-                            Item::Node {
-                                id: child.id.clone(),
-                                position: self.styled_position(&child.position, style),
-                                width: frame.width,
-                                height: frame.height,
-                                baseline: frame.baseline,
-                            },
-                        ),
+                        Point::default(),
+                        Item::Node {
+                            id: child.id.clone(),
+                            position: self.styled_position(&child.position, style),
+                            width,
+                            height,
+                            baseline,
+                        },
                     );
                     fragments.push(fragment);
                 }
@@ -775,6 +776,10 @@ impl Converter<'_> {
                     hlines: Vec::new(),
                     column_gap: 0.0,
                     row_gap: 0.0,
+                    row_spacing: None,
+                    base_row_ascent: 0.0,
+                    base_row_descent: 0.0,
+                    base_row_leading: 0.0,
                 };
                 layout_table(&mut self.ctx, style, rows, &spec)
             }
@@ -1169,7 +1174,19 @@ impl Converter<'_> {
             hlines: Vec::new(),
             column_gap: 0.5 * em,
             row_gap: 0.2 * em,
+            row_spacing: None,
+            base_row_ascent: 0.0,
+            base_row_descent: 0.0,
+            base_row_leading: 0.0,
         };
+        if node.id.as_ref() == self.ctx.host_table_id.as_ref()
+            && let Some(row_spacing) = self.ctx.host_row_spacing
+        {
+            spec.row_spacing = Some(row_spacing);
+            spec.base_row_ascent = self.ctx.host_row_ascent;
+            spec.base_row_descent = self.ctx.host_row_descent;
+            spec.base_row_leading = self.ctx.host_row_leading;
+        }
         let cell_style = match kind {
             "aligned" | "gathered" | "split" => style,
             _ => style.with_size(style.size.min(MathSize::Text)),

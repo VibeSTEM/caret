@@ -2,7 +2,7 @@
 
 use super::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetricsError, LineSpacing,
-    calculate_line_metrics, calculate_line_metrics_with_grid,
+    calculate_line_metrics, calculate_line_metrics_with_grid, row_spacing_for_content_line_spacing,
 };
 use std::ops::Range;
 
@@ -100,6 +100,19 @@ fn exactly_keeps_the_base_grid_baseline_when_larger_content_overflows()
 }
 
 #[test]
+fn exactly_content_line_spacing_does_not_require_a_nonnegative_body_baseline()
+-> Result<(), LineMetricsError> {
+    let spacing =
+        row_spacing_for_content_line_spacing(LineSpacing::Exactly { centipoints: 100 }, 1.0, -0.5)?;
+
+    assert_eq!(
+        spacing,
+        caret_grid_layout::RowSpacing::Exactly { height: 1.0 }
+    );
+    Ok(())
+}
+
+#[test]
 fn multiple_keeps_combined_text_and_object_metrics_from_overlapping()
 -> Result<(), Box<dyn std::error::Error>> {
     let result = calculate_line_metrics(
@@ -125,7 +138,7 @@ fn multiple_keeps_text_descenders_below_a_tall_inline_object()
         LineSpacing::Multiple { percent: 115 },
     )?;
 
-    assert_eq!(result.height_pt, 25.0);
+    assert!((result.height_pt - 25.975).abs() < 0.001);
     assert_eq!(result.baseline_pt, 20.0);
     assert!(!result.content_metrics_overflow_line_box);
     Ok(())
@@ -159,8 +172,8 @@ fn at_least_uses_the_largest_of_content_objects_and_requested_minimum()
         },
     )?;
 
-    assert_eq!(result.height_pt, 25.0);
-    assert_eq!(result.baseline_pt, 18.5);
+    assert_eq!(result.height_pt, 25.5);
+    assert_eq!(result.baseline_pt, 16.0);
     assert!(!result.content_metrics_overflow_line_box);
     assert!(!result.clip_ink_to_line_height);
     Ok(())

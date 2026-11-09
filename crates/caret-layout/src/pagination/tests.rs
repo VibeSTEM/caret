@@ -84,6 +84,12 @@ fn display_math_is_kept_together_and_starts_a_new_page_when_it_does_not_fit()
                 x_offset_pt: 12.0,
                 width_pt: 26.0,
                 height_pt: 25.0,
+                baseline_pt: 20.0,
+                caret_baseline_pt: 12.0,
+                caret_height_pt: 14.0,
+                clip_ink_to_line_height: false,
+                space_before_pt: 0.0,
+                space_after_pt: 0.0,
             }),
         ],
         50.0,
@@ -98,6 +104,40 @@ fn display_math_is_kept_together_and_starts_a_new_page_when_it_does_not_fit()
 }
 
 #[test]
+fn display_math_collapses_block_spacing_with_neighboring_paragraphs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let text = paragraph(&[20.0]);
+    let pages = paginate_paragraphs(
+        &[
+            input(&before_id, &text, 0.0, 8.0),
+            PaginationItem::MathBlock(MathBlockPaginationInput {
+                math_id: &math_id,
+                x_offset_pt: 0.0,
+                width_pt: 20.0,
+                height_pt: 20.0,
+                baseline_pt: 15.0,
+                caret_baseline_pt: 10.0,
+                caret_height_pt: 12.0,
+                clip_ink_to_line_height: false,
+                space_before_pt: 5.0,
+                space_after_pt: 10.0,
+            }),
+            input(&after_id, &text, 4.0, 0.0),
+        ],
+        100.0,
+    )?;
+
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].math_fragments[0].y_offset_pt, 28.0);
+    assert_eq!(pages[0].fragments[1].y_offset_pt, 58.0);
+    assert_eq!(pages[0].used_height_pt, 78.0);
+    Ok(())
+}
+
+#[test]
 fn display_math_rejects_height_sum_overflow_even_when_each_box_is_finite() {
     let first_id = NodeId::generate();
     let second_id = NodeId::generate();
@@ -107,12 +147,24 @@ fn display_math_rejects_height_sum_overflow_even_when_each_box_is_finite() {
             x_offset_pt: 0.0,
             width_pt: 10.0,
             height_pt: f32::MAX,
+            baseline_pt: 1.0,
+            caret_baseline_pt: 1.0,
+            caret_height_pt: 1.0,
+            clip_ink_to_line_height: false,
+            space_before_pt: 0.0,
+            space_after_pt: 0.0,
         }),
         PaginationItem::MathBlock(MathBlockPaginationInput {
             math_id: &second_id,
             x_offset_pt: 0.0,
             width_pt: 10.0,
             height_pt: f32::MAX,
+            baseline_pt: 1.0,
+            caret_baseline_pt: 1.0,
+            caret_height_pt: 1.0,
+            clip_ink_to_line_height: false,
+            space_before_pt: 0.0,
+            space_after_pt: 0.0,
         }),
     ];
 

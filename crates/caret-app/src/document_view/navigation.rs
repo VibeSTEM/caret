@@ -219,20 +219,15 @@ impl DocumentViewRuntime {
         if self.session.command_line().is_some() {
             return dispatch_navigation_key(
                 self,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(line_delta, None, extend),
                 "navigation.command_line",
+            );
+        }
+        if !extend && self.session.math_block_boundary_exit().is_some() {
+            return dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, None, false),
+                "navigation.math_block_boundary",
             );
         }
         if self.session.math_text_input_context().is_some()
@@ -244,6 +239,36 @@ impl DocumentViewRuntime {
             && let Some(result) = move_math_tree_vertical(self, line_delta, extend)
         {
             return result;
+        }
+        let at_vertical_edge = {
+            let focus = self.session.selection().focus.clone();
+            let visual_affinity = self.session.selection_visual_affinity();
+            let preferred_x = self.preferred_visual_x_pt;
+            let snapshot = self.current_snapshot()?;
+            let Some(paragraph_index) = snapshot.paragraph_index_by_id(&focus.paragraph_id) else {
+                return Err("navigation.unknown_paragraph".to_owned());
+            };
+            let paragraph = &snapshot.paragraphs[paragraph_index];
+            let Some(cursor) = paragraph.layout.cursor_at(focus.offset, visual_affinity) else {
+                return Err("navigation.invalid_caret".to_owned());
+            };
+            paragraph
+                .layout
+                .move_vertical(cursor, line_delta, preferred_x)
+                .is_none()
+        };
+        if at_vertical_edge {
+            let result = dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, None, extend),
+                "navigation.vertical_edge",
+            )?;
+            if self.session.math_edit().is_some()
+                || self.session.math_block_boundary_exit().is_some()
+            {
+                self.preferred_visual_x_pt = None;
+                return Ok(result);
+            }
         }
         let current = self.session.selection().clone();
         let selection_anchor = self
@@ -315,19 +340,7 @@ impl DocumentViewRuntime {
         let Some((focus, visual_affinity, preferred_x)) = target else {
             return dispatch_navigation_key(
                 self,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(line_delta, None, extend),
                 "navigation.vertical",
             );
         };
@@ -349,19 +362,9 @@ impl DocumentViewRuntime {
                     generation: generation.clone(),
                 });
                 session
-                    .run(Command::EditorKey(if line_delta < 0 {
-                        EditorKey::UpArrow {
-                            candidate,
-                            extend,
-                            structure: false,
-                        }
-                    } else {
-                        EditorKey::DownArrow {
-                            candidate,
-                            extend,
-                            structure: false,
-                        }
-                    }))
+                    .run(Command::EditorKey(vertical_navigation_key(
+                        line_delta, candidate, extend,
+                    )))
                     .map_err(|error| format!("selection.set: {error}"))
             },
         )
@@ -641,19 +644,7 @@ fn move_math_vertical(
         Err(error) if error == "navigation.math_text_edge" => {
             return Some(dispatch_navigation_key(
                 runtime,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(line_delta, None, extend),
                 "navigation.math_text",
             ));
         }
@@ -674,25 +665,14 @@ fn move_math_vertical(
             let old_context = runtime.session.math_text_input_context();
             let result = dispatch_navigation_key(
                 runtime,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: Some(NavigationCandidate::MathTextHit {
-                            hit: hit.clone(),
-                            generation,
-                        }),
-                        extend: false,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: Some(NavigationCandidate::MathTextHit {
-                            hit: hit.clone(),
-                            generation,
-                        }),
-                        extend: false,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(
+                    line_delta,
+                    Some(NavigationCandidate::MathTextHit {
+                        hit: hit.clone(),
+                        generation,
+                    }),
+                    false,
+                ),
                 "navigation.math_text_focus",
             );
             if runtime
@@ -716,19 +696,11 @@ fn move_math_vertical(
             let old_math_edit = runtime.session.math_edit().cloned();
             let result = dispatch_navigation_key(
                 runtime,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: Some(NavigationCandidate::MathTreeHit { hit, generation }),
-                        extend: false,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: Some(NavigationCandidate::MathTreeHit { hit, generation }),
-                        extend: false,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(
+                    line_delta,
+                    Some(NavigationCandidate::MathTreeHit { hit, generation }),
+                    false,
+                ),
                 "navigation.math_text_structure_focus",
             );
             if result.is_ok() && runtime.session.math_edit() != old_math_edit.as_ref() {
@@ -740,19 +712,7 @@ fn move_math_vertical(
         | caret_engine::MathTextVerticalTarget::DifferentMathStructure(_) => {
             return Some(dispatch_navigation_key(
                 runtime,
-                if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate: None,
-                        extend,
-                        structure: false,
-                    }
-                },
+                vertical_navigation_key(line_delta, None, extend),
                 "navigation.math_text",
             ));
         }
@@ -778,19 +738,9 @@ fn move_math_vertical(
                 generation: generation.clone(),
             });
             session
-                .run(Command::EditorKey(if line_delta < 0 {
-                    EditorKey::UpArrow {
-                        candidate,
-                        extend,
-                        structure: false,
-                    }
-                } else {
-                    EditorKey::DownArrow {
-                        candidate,
-                        extend,
-                        structure: false,
-                    }
-                }))
+                .run(Command::EditorKey(vertical_navigation_key(
+                    line_delta, candidate, extend,
+                )))
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
@@ -803,21 +753,7 @@ fn move_math_tree_vertical(
 ) -> Option<Result<String, String>> {
     let (target, position) = runtime.session.math_tree_input_context()?;
     let preferred_visual_x = runtime.preferred_visual_x_pt;
-    let key = |candidate| {
-        if line_delta < 0 {
-            EditorKey::UpArrow {
-                candidate,
-                extend,
-                structure: false,
-            }
-        } else {
-            EditorKey::DownArrow {
-                candidate,
-                extend,
-                structure: false,
-            }
-        }
-    };
+    let key = |candidate| vertical_navigation_key(line_delta, candidate, extend);
     if extend {
         // Tree 选区只保存一个序列路径，无法表达跨操作数的扩展范围。
         return Some(dispatch_navigation_key(
@@ -922,6 +858,27 @@ fn move_math_line_edge(
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
+}
+
+/// 把方向、布局候选和扩展状态统一映射到编辑器 Up/Down 键。
+fn vertical_navigation_key(
+    line_delta: isize,
+    candidate: Option<NavigationCandidate>,
+    extend: bool,
+) -> EditorKey {
+    if line_delta < 0 {
+        EditorKey::UpArrow {
+            candidate,
+            extend,
+            structure: false,
+        }
+    } else {
+        EditorKey::DownArrow {
+            candidate,
+            extend,
+            structure: false,
+        }
+    }
 }
 
 /// 正文和公式文本共用 Shift 锚点、光标亲和侧及垂直目标 x 的提交规则。

@@ -55,6 +55,19 @@ pub enum MathStyle {
     Display,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// 显示公式宿主提供给顶层数学表格的正文行网格。
+pub struct MathHostRowGrid {
+    /// 正文基础行框的上行高。
+    pub ascent: f64,
+    /// 正文基础行框的下行高。
+    pub descent: f64,
+    /// 正文基础行框额外 leading。
+    pub leading: f64,
+    /// 宿主采用的正文行距语义。
+    pub spacing: caret_grid_layout::RowSpacing,
+}
+
 /// 数学排版输入错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathLayoutError {
@@ -160,9 +173,35 @@ pub struct MathLayout {
     pub items: Vec<MathItem>,
     /// 按前序遍历排列；外层节点在内层之前。
     pub nodes: Vec<MathNodeBox>,
+    /// Exactly 行距中各行对应的绘制项范围及裁切纵坐标（相对公式基线）。
+    pub row_clips: Vec<MathRowClip>,
+    /// 顶层宿主表格行的稳定身份和基线（相对公式基线），与是否使用固定行裁切无关。
+    pub row_baselines: Vec<MathRowBaseline>,
     pub diagnostics: Vec<MathDiagnostic>,
     /// 文本岛请求的非通用字体族不可用，已使用回退字体。
     pub requested_text_family_missing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// 固定行距下数学表格的一行墨迹裁切区。
+pub struct MathRowClip {
+    /// 由数学表格提供的稳定行身份；无身份的临时表格行仅用于绘制裁切。
+    pub row_id: Option<NodeId>,
+    /// `MathLayout.items` 中属于该行的半开区间。
+    pub item_range: std::ops::Range<usize>,
+    /// 相对公式基线的裁切上边缘。
+    pub y0: f64,
+    /// 相对公式基线的裁切下边缘。
+    pub y1: f64,
+}
+
+/// 顶层宿主表格行的垂直定位。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathRowBaseline {
+    /// 由宿主表格提供的稳定行身份。
+    pub row_id: NodeId,
+    /// 相对公式基线的行基线位置。
+    pub baseline: f64,
 }
 
 /// 以给定数学字体与字号（pt）排版一棵数学树。
@@ -177,7 +216,15 @@ pub fn layout_math(
     style: MathStyle,
 ) -> Result<MathLayout, MathLayoutError> {
     validate_size(size)?;
-    layout_nodes(font, flow_nodes_for_layout(root), size, style, None)
+    layout_nodes(
+        font,
+        flow_nodes_for_layout(root),
+        size,
+        style,
+        None,
+        None,
+        None,
+    )
 }
 
 /// 无正文 shaper 的模板布局入口；TextFlow 仍走数学字体降级路径。
@@ -195,6 +242,8 @@ pub fn layout_math_with_templates(
         crate::backend::flow_nodes_for_layout_with_templates(root, Some(templates)),
         size,
         style,
+        None,
+        None,
         None,
     )
 }
@@ -216,6 +265,8 @@ pub fn layout_math_with_text_shaper(
         size,
         style,
         Some(text_shaper),
+        None,
+        None,
     )
 }
 
@@ -236,6 +287,8 @@ pub fn layout_math_with_text_shaper_and_templates(
         size,
         style,
         Some(text_shaper),
+        None,
+        None,
     )
 }
 
@@ -252,52 +305,7 @@ pub fn layout_align(
     align: &Align,
     size: f64,
 ) -> Result<MathLayout, MathLayoutError> {
-    validate_size(size)?;
-    let rows = align
-        .rows
-        .iter()
-        .map(|row| Node {
-            id: Some(row.id.clone()),
-            position: Some(NodePosition {
-                scope_id: row.id.clone(),
-                path: Vec::new(),
-                text_run_index: None,
-                is_text_flow: false,
-                is_flow: false,
-                is_container: false,
-                font_size_pt: None,
-            }),
-            kind: BackendNodeKind::Row,
-            text: None,
-            run: None,
-            attributes: Default::default(),
-            text_style: None,
-            children: row
-                .cells
-                .iter()
-                .flat_map(|cell| flow_nodes_for_layout(&cell.root))
-                .collect(),
-        })
-        .collect();
-    let matrix = Node {
-        id: Some(align.id.clone()),
-        position: Some(NodePosition {
-            scope_id: align.id.clone(),
-            path: Vec::new(),
-            text_run_index: None,
-            is_text_flow: false,
-            is_flow: false,
-            is_container: false,
-            font_size_pt: None,
-        }),
-        kind: BackendNodeKind::Matrix,
-        text: None,
-        run: None,
-        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
-        text_style: None,
-        children: rows,
-    };
-    layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
+    layout_align_internal(font, align, size, None, None, None)
 }
 
 /// 无正文 shaper 的 Align 模板布局入口；TextFlow 仍走数学字体降级路径。
@@ -307,60 +315,7 @@ pub fn layout_align_with_templates(
     size: f64,
     templates: &InlineEnvironmentTemplates,
 ) -> Result<MathLayout, MathLayoutError> {
-    validate_size(size)?;
-    for cell in align.rows.iter().flat_map(|row| &row.cells) {
-        validate_flow_templates(&cell.root, templates)?;
-    }
-    let rows = align
-        .rows
-        .iter()
-        .map(|row| Node {
-            id: Some(row.id.clone()),
-            position: Some(NodePosition {
-                scope_id: row.id.clone(),
-                path: Vec::new(),
-                text_run_index: None,
-                is_text_flow: false,
-                is_flow: false,
-                is_container: false,
-                font_size_pt: None,
-            }),
-            kind: BackendNodeKind::Row,
-            text: None,
-            run: None,
-            attributes: Default::default(),
-            text_style: None,
-            children: row
-                .cells
-                .iter()
-                .flat_map(|cell| {
-                    crate::backend::flow_nodes_for_layout_with_templates(
-                        &cell.root,
-                        Some(templates),
-                    )
-                })
-                .collect(),
-        })
-        .collect();
-    let matrix = Node {
-        id: Some(align.id.clone()),
-        position: Some(NodePosition {
-            scope_id: align.id.clone(),
-            path: Vec::new(),
-            text_run_index: None,
-            is_text_flow: false,
-            is_flow: false,
-            is_container: false,
-            font_size_pt: None,
-        }),
-        kind: BackendNodeKind::Matrix,
-        text: None,
-        run: None,
-        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
-        text_style: None,
-        children: rows,
-    };
-    layout_nodes(font, vec![matrix], size, MathStyle::Display, None)
+    layout_align_internal(font, align, size, Some(templates), None, None)
 }
 
 /// 使用调用方正文 shaping 处理 Align 单元格中的 TextFlow。
@@ -370,58 +325,7 @@ pub fn layout_align_with_text_shaper(
     size: f64,
     text_shaper: &mut dyn MathTextShaper,
 ) -> Result<MathLayout, MathLayoutError> {
-    validate_size(size)?;
-    let rows = align
-        .rows
-        .iter()
-        .map(|row| Node {
-            id: Some(row.id.clone()),
-            position: Some(NodePosition {
-                scope_id: row.id.clone(),
-                path: Vec::new(),
-                text_run_index: None,
-                is_text_flow: false,
-                is_flow: false,
-                is_container: false,
-                font_size_pt: None,
-            }),
-            kind: BackendNodeKind::Row,
-            text: None,
-            run: None,
-            attributes: Default::default(),
-            text_style: None,
-            children: row
-                .cells
-                .iter()
-                .flat_map(|cell| flow_nodes_for_layout(&cell.root))
-                .collect(),
-        })
-        .collect();
-    let matrix = Node {
-        id: Some(align.id.clone()),
-        position: Some(NodePosition {
-            scope_id: align.id.clone(),
-            path: Vec::new(),
-            text_run_index: None,
-            is_text_flow: false,
-            is_flow: false,
-            is_container: false,
-            font_size_pt: None,
-        }),
-        kind: BackendNodeKind::Matrix,
-        text: None,
-        run: None,
-        attributes: std::collections::BTreeMap::from([("style".to_owned(), "aligned".to_owned())]),
-        text_style: None,
-        children: rows,
-    };
-    layout_nodes(
-        font,
-        vec![matrix],
-        size,
-        MathStyle::Display,
-        Some(text_shaper),
-    )
+    layout_align_internal(font, align, size, None, Some(text_shaper), None)
 }
 
 /// 使用正文 shaper 和已解析主题模板处理 Align 单元格中的 TextFlow。
@@ -432,9 +336,41 @@ pub fn layout_align_with_text_shaper_and_templates(
     templates: &InlineEnvironmentTemplates,
     text_shaper: &mut dyn MathTextShaper,
 ) -> Result<MathLayout, MathLayoutError> {
+    layout_align_internal(font, align, size, Some(templates), Some(text_shaper), None)
+}
+
+/// 使用正文宿主行网格排版 Align；嵌套数学矩阵仍使用其原有数学行策略。
+pub fn layout_align_with_host_row_grid<'a>(
+    font: &'a MathFont,
+    align: &Align,
+    size: f64,
+    templates: &InlineEnvironmentTemplates,
+    text_shaper: Option<&'a mut dyn MathTextShaper>,
+    row_grid: MathHostRowGrid,
+) -> Result<MathLayout, MathLayoutError> {
+    layout_align_internal(
+        font,
+        align,
+        size,
+        Some(templates),
+        text_shaper,
+        Some(row_grid),
+    )
+}
+
+fn layout_align_internal<'a>(
+    font: &'a MathFont,
+    align: &Align,
+    size: f64,
+    templates: Option<&InlineEnvironmentTemplates>,
+    text_shaper: Option<&'a mut dyn MathTextShaper>,
+    host_row_grid: Option<MathHostRowGrid>,
+) -> Result<MathLayout, MathLayoutError> {
     validate_size(size)?;
-    for cell in align.rows.iter().flat_map(|row| &row.cells) {
-        validate_flow_templates(&cell.root, templates)?;
+    if let Some(templates) = templates {
+        for cell in align.rows.iter().flat_map(|row| &row.cells) {
+            validate_flow_templates(&cell.root, templates)?;
+        }
     }
     let rows = align
         .rows
@@ -458,11 +394,12 @@ pub fn layout_align_with_text_shaper_and_templates(
             children: row
                 .cells
                 .iter()
-                .flat_map(|cell| {
-                    crate::backend::flow_nodes_for_layout_with_templates(
+                .flat_map(|cell| match templates {
+                    Some(templates) => crate::backend::flow_nodes_for_layout_with_templates(
                         &cell.root,
                         Some(templates),
-                    )
+                    ),
+                    None => flow_nodes_for_layout(&cell.root),
                 })
                 .collect(),
         })
@@ -490,7 +427,9 @@ pub fn layout_align_with_text_shaper_and_templates(
         vec![matrix],
         size,
         MathStyle::Display,
-        Some(text_shaper),
+        text_shaper,
+        host_row_grid.map(|_| align.id.clone()),
+        host_row_grid,
     )
 }
 
@@ -500,6 +439,8 @@ fn layout_nodes<'a>(
     size: f64,
     style: MathStyle,
     text_shaper: Option<&'a mut dyn MathTextShaper>,
+    host_table_id: Option<NodeId>,
+    host_row_grid: Option<MathHostRowGrid>,
 ) -> Result<MathLayout, MathLayoutError> {
     let mut converter = Converter {
         ctx: Context::new(font, size),
@@ -509,6 +450,13 @@ fn layout_nodes<'a>(
         text_tokens: std::collections::HashSet::new(),
         math_text_style: Default::default(),
     };
+    converter.ctx.host_table_id = host_table_id;
+    if let Some(row_grid) = host_row_grid {
+        converter.ctx.host_row_spacing = Some(row_grid.spacing);
+        converter.ctx.host_row_ascent = row_grid.ascent;
+        converter.ctx.host_row_descent = row_grid.descent;
+        converter.ctx.host_row_leading = row_grid.leading;
+    }
     let fragment = match backend_nodes.as_slice() {
         [node] => converter.node(node, Style::root(style == MathStyle::Display)),
         nodes => converter.row(nodes, Style::root(style == MathStyle::Display)),
@@ -518,12 +466,37 @@ fn layout_nodes<'a>(
     }
     let frame = fragment.frame;
     let baseline = frame.baseline;
+    let mut output_item_prefix = Vec::with_capacity(frame.items.len() + 1);
+    output_item_prefix.push(0);
+    for (_, item) in &frame.items {
+        let previous = *output_item_prefix.last().unwrap_or(&0);
+        output_item_prefix.push(previous + usize::from(!matches!(item, Item::Node { .. })));
+    }
     let mut layout = MathLayout {
         width: frame.width,
         ascent: frame.ascent(),
         descent: frame.descent(),
         items: Vec::with_capacity(frame.items.len()),
         nodes: Vec::new(),
+        row_clips: frame
+            .row_clips
+            .iter()
+            .map(|clip| MathRowClip {
+                row_id: clip.row_id.clone(),
+                item_range: output_item_prefix[clip.item_range.start]
+                    ..output_item_prefix[clip.item_range.end],
+                y0: clip.y0 - baseline,
+                y1: clip.y1 - baseline,
+            })
+            .collect(),
+        row_baselines: frame
+            .row_baselines
+            .iter()
+            .map(|row| MathRowBaseline {
+                row_id: row.row_id.clone(),
+                baseline: row.baseline - baseline,
+            })
+            .collect(),
         diagnostics: converter.ctx.diagnostics,
         requested_text_family_missing: converter.requested_text_family_missing,
     };

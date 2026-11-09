@@ -10,11 +10,13 @@
 //   修改：网格列宽、行高、对齐和网格线坐标已抽取至 caret-grid-layout；本适配器保留数学片段、数学轴线、字号线宽和行节点盒；
 //   单元格为单个片段（按列指定对齐）；支持整行（`\intertext`）；为矩阵行输出稳定节点 ID 命中盒。
 
-use caret_grid_layout::{CellMetrics, GridRow, GridSpec, HorizontalAlignment, layout_grid};
+use caret_grid_layout::{
+    CellMetrics, GridRow, GridSpec, HorizontalAlignment, RowSpacing, layout_grid,
+};
 use read_fonts::tables::math::MathConstant as C;
 
 use super::context::{Context, Style};
-use super::frame::{Fragment, Frame, Item, Point};
+use super::frame::{Fragment, Frame, FrameRowClip, Item, Point};
 use super::glyph::glyph_fragment;
 use crate::backend::NodePosition;
 use crate::symbols::AtomClass;
@@ -47,6 +49,10 @@ pub(crate) struct TableSpec {
     pub hlines: Vec<usize>,
     pub column_gap: f64,
     pub row_gap: f64,
+    pub row_spacing: Option<RowSpacing>,
+    pub base_row_ascent: f64,
+    pub base_row_descent: f64,
+    pub base_row_leading: f64,
 }
 
 pub(crate) fn layout_table(
@@ -65,6 +71,7 @@ pub(crate) fn layout_table(
             .unwrap_or((0.0, 0.0));
 
     let stroke = STROKE_EM * ctx.font_size(style);
+    let host_rows = spec.row_spacing.is_some();
     let grid_rows: Vec<_> = rows
         .iter()
         .map(|row| match row {
@@ -88,8 +95,20 @@ pub(crate) fn layout_table(
         horizontal_rules: spec.hlines.clone(),
         column_gap: spec.column_gap,
         row_gap: spec.row_gap,
-        minimum_row_ascent: paren_ascent,
-        minimum_row_descent: paren_descent,
+        minimum_row_ascent: if host_rows { 0.0 } else { paren_ascent },
+        minimum_row_descent: if host_rows { 0.0 } else { paren_descent },
+        row_spacing: spec.row_spacing.or(Some(RowSpacing::Natural)),
+        base_row_ascent: if spec.row_spacing.is_some() {
+            spec.base_row_ascent
+        } else {
+            paren_ascent
+        },
+        base_row_descent: if spec.row_spacing.is_some() {
+            spec.base_row_descent
+        } else {
+            paren_descent
+        },
+        base_row_leading: spec.base_row_leading,
     };
     let grid = match layout_grid(&grid_rows, &grid_spec) {
         Ok(grid) => grid,
@@ -103,6 +122,17 @@ pub(crate) fn layout_table(
     let mut frame = Frame::new(grid.width, grid.height, grid.height / 2.0 + axis);
     for (r, row) in rows.into_iter().enumerate() {
         let row_layout = &grid.rows[r];
+        let row_item_start = frame.items.len();
+        let row_id = match &row {
+            TableRow::Cells { id, .. } => id.clone(),
+            TableRow::Full(_) => None,
+        };
+        if host_rows && let Some(row_id) = &row_id {
+            frame.row_baselines.push(super::frame::FrameRowBaseline {
+                row_id: row_id.clone(),
+                baseline: row_layout.top + row_layout.ascent,
+            });
+        }
         match row {
             TableRow::Cells {
                 id,
@@ -134,6 +164,14 @@ pub(crate) fn layout_table(
                 let pos = Point::new(position.x, position.baseline - full.ascent());
                 frame.push_frame(pos, full.frame);
             }
+        }
+        if row_layout.clip_content {
+            frame.row_clips.push(FrameRowClip {
+                row_id,
+                item_range: row_item_start..frame.items.len(),
+                y0: row_layout.top,
+                y1: row_layout.top + row_layout.ascent + row_layout.descent,
+            });
         }
     }
     for vx in grid.vertical_rule_positions {

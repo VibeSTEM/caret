@@ -20,6 +20,10 @@ fn spec() -> GridSpec {
         row_gap: 4.0,
         minimum_row_ascent: 0.0,
         minimum_row_descent: 0.0,
+        row_spacing: None,
+        base_row_ascent: 0.0,
+        base_row_descent: 0.0,
+        base_row_leading: 0.0,
     }
 }
 
@@ -173,6 +177,103 @@ fn rejects_arithmetic_overflow_in_output_geometry() {
         layout_grid(&rows, &spec()),
         Err(GridLayoutError::NonFiniteResult)
     );
+}
+
+#[test]
+fn exactly_row_frames_keep_fixed_advances_and_report_content_overflow() {
+    let frame = calculate_row_frame(
+        8.0,
+        3.0,
+        1.0,
+        18.0,
+        4.0,
+        RowSpacing::Exactly { height: 12.0 },
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(frame.height, 12.0);
+    assert_eq!(frame.baseline, 9.0);
+    assert!(frame.content_overflow);
+    assert!(frame.clip_content);
+
+    let spec = GridSpec {
+        row_spacing: Some(RowSpacing::Exactly { height: 12.0 }),
+        base_row_ascent: 8.0,
+        base_row_descent: 3.0,
+        base_row_leading: 1.0,
+        ..spec()
+    };
+    let grid = layout_grid(
+        &[
+            GridRow::Cells(vec![CellMetrics {
+                width: 5.0,
+                ascent: 18.0,
+                descent: 4.0,
+            }]),
+            GridRow::Cells(vec![CellMetrics {
+                width: 5.0,
+                ascent: 8.0,
+                descent: 3.0,
+            }]),
+        ],
+        &spec,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(grid.rows[0].baseline, 9.0);
+    assert!(grid.rows[0].content_overflow);
+    assert!(grid.rows[0].clip_content);
+    assert_eq!(grid.rows[1].top, 16.0);
+    assert_eq!(grid.height, 28.0);
+}
+
+#[test]
+fn row_frame_accepts_signed_math_extents_and_rejects_overflow() {
+    let frame = calculate_row_frame(8.0, 3.0, 0.0, -2.0, 1.0, RowSpacing::Natural)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(frame.height, 11.0);
+
+    assert_eq!(
+        calculate_row_frame(f64::MAX, f64::MAX, f64::MAX, 0.0, 0.0, RowSpacing::Natural,),
+        Err(GridLayoutError::NonFiniteResult)
+    );
+}
+
+#[test]
+fn row_frame_centers_content_ink_without_pushing_leading_below_the_row() {
+    let frame = calculate_row_frame_with_content_leading(
+        RowMetrics {
+            ascent: 8.0,
+            descent: 2.0,
+            leading: 1.0,
+        },
+        RowMetrics {
+            ascent: 16.0,
+            descent: 4.0,
+            leading: 2.0,
+        },
+        false,
+        RowSpacing::Natural,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(frame.height, 22.0);
+    assert_eq!(frame.baseline, 17.0);
+}
+
+#[test]
+fn expand_to_fit_accepts_body_baseline_beyond_short_exact_line_height() {
+    let frame = calculate_row_frame(
+        4.0,
+        1.0,
+        0.0,
+        8.0,
+        2.0,
+        RowSpacing::ExpandToFit {
+            base_height: 5.0,
+            base_baseline: 8.0,
+        },
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(frame.baseline, 8.0);
+    assert!(frame.height >= frame.baseline + 2.0);
 }
 
 #[test]

@@ -45,7 +45,7 @@ struct CompositionCandidateBase {
     pending_inline_style: PendingInlineStyle,
     command_line: Option<super::super::CommandLine>,
     math_edit: Option<super::math_edit::MathEdit>,
-    block_environment_exit: Option<(caret_doc::NodeId, super::super::Direction)>,
+    block_boundary_exit: Option<(caret_doc::NodeId, super::super::Direction)>,
     selected_block_environment: Option<caret_doc::NodeId>,
     selected_block_environments: Vec<caret_doc::NodeId>,
     structure_selection: Option<StructureSelection>,
@@ -67,7 +67,7 @@ impl CompositionCandidateBase {
             pending_inline_style: session.pending_inline_style.clone(),
             command_line: session.command_line.clone(),
             math_edit: session.math_edit.clone(),
-            block_environment_exit: session.block_environment_exit.clone(),
+            block_boundary_exit: session.block_boundary_exit.clone(),
             selected_block_environment: session.selected_block_environment.clone(),
             selected_block_environments: session.selected_block_environments.clone(),
             structure_selection: session.structure_selection.clone(),
@@ -531,7 +531,7 @@ impl Session {
             pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             math_edit: self.math_edit.clone(),
-            block_environment_exit: self.block_environment_exit.clone(),
+            block_boundary_exit: self.block_boundary_exit.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
             structure_selection: self.structure_selection.clone(),
@@ -578,8 +578,8 @@ impl Session {
             id: composition.id,
             text: preedit.clone(),
         })?;
-        if self.block_environment_exit.is_some() {
-            return self.composition_preview_at_environment_exit(
+        if self.block_boundary_exit.is_some() {
+            return self.composition_preview_at_block_boundary(
                 preview,
                 &preedit,
                 cursor_position_utf16,
@@ -647,7 +647,7 @@ impl Session {
     }
 
     /// 将块环境外的预编辑位置映射到新建的同级段落，而不是映射回环境内部段落。
-    fn composition_preview_at_environment_exit(
+    fn composition_preview_at_block_boundary(
         &self,
         mut preview: Self,
         preedit: &str,
@@ -748,7 +748,7 @@ impl Session {
             );
         }
         // 虚拟环境外位置没有相邻文本可供 IME 替换，保持外侧停靠点并将提交视为插入。
-        if self.block_environment_exit.is_some() {
+        if self.block_boundary_exit.is_some() {
             return Ok(());
         }
         if replacement_start == 0 && replacement_length == 0 {
@@ -837,8 +837,8 @@ impl Session {
         let prior = self.composition.take();
         let result = if self.math_text_edit_is_active() {
             self.math_text_insert(text)
-        } else if self.block_environment_exit.is_some() {
-            self.insert_text_at_environment_exit(text)
+        } else if self.block_boundary_exit.is_some() {
+            self.insert_text_at_block_boundary(text)
         } else {
             self.insert_text(text)
         };

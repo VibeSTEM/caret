@@ -1685,7 +1685,7 @@ fn ime_commit_at_environment_exit_inserts_after_the_environment()
         &serde_json::json!({"anchor": end.clone(), "focus": end}).to_string(),
     )?;
     runtime.move_visual_caret_json(true, false)?;
-    assert!(runtime.session.block_environment_exit().is_some());
+    assert!(runtime.session.block_boundary_exit().is_some());
 
     let preview = runtime.input_method_event_json("ni".to_owned(), String::new(), 0, 0, 2)?;
     let preview: Value = serde_json::from_str(&preview)?;
@@ -1724,7 +1724,7 @@ fn ime_commit_at_environment_exit_inserts_after_the_environment()
             }),
         "committed layout should include inserted text: {committed}"
     );
-    assert!(runtime.session.block_environment_exit().is_none());
+    assert!(runtime.session.block_boundary_exit().is_none());
     runtime.undo_json()?;
     assert_eq!(runtime.document().body.len(), 3);
     Ok(())

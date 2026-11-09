@@ -18,7 +18,9 @@ pub use fonts::{FontCatalog, FontCatalogError, FontFamily};
 pub use glyph_raster::{GlyphRasterOptions, GlyphRasterizer, RasterizedGlyph, RasterizedGlyphKey};
 pub use line_metrics::{
     FontLineMetrics, InkBounds, InlineObjectMetrics, LineMetrics, LineMetricsError, LineSpacing,
-    calculate_line_metrics, calculate_line_metrics_with_grid,
+    calculate_content_line_metrics_with_grid, calculate_line_metrics,
+    calculate_line_metrics_with_grid, row_spacing_for_content_line_spacing,
+    row_spacing_for_line_spacing,
 };
 pub use pagination::{
     MathBlockFragment, MathBlockPaginationInput, PageLayout, PaginationError, PaginationItem,
