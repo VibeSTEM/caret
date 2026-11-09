@@ -372,7 +372,11 @@ mod tests {
             .cursor_at(4, caret_engine::VisualAffinity::Upstream)
             .and_then(|cursor| paragraph.layout.cursor_geometry_with_line(cursor, 0.0))
             .ok_or_else(|| "empty formula end geometry is missing".to_owned())?;
-        assert_eq!(inline_end.0.x0 - inline_start.0.x0, 1.5);
+        let caret_advance = inline_end.0.x0 - inline_start.0.x0;
+        assert!(
+            (caret_advance - 1.5).abs() <= 1e-5,
+            "empty inline math caret advance should be 1.5pt, got {caret_advance}pt"
+        );
         let selection = Selection {
             anchor: caret_engine::Pos {
                 story: caret_engine::StoryId::Body,

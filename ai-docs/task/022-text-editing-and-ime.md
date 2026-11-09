@@ -37,7 +37,7 @@
 
 ## 验收标准
 
-- [x] 同一 Unicode 版本的扩展字素簇规则作用于 Paragraph 逻辑文本，跨 Run 和 Bold/Italic/Font 节点分段；格式边界不能制造额外光标停靠点。测试覆盖组合重音、跨 Run/环境拆开的 emoji ZWJ/肤色序列、中文、Indic 组合和阿拉伯组合标记，不依赖 shaping 的 glyph cluster 输出。
+- [x] 同一 Unicode 版本的扩展字素簇规则作用于 Paragraph 逻辑文本，跨 Run 和 Bold/Italic/Font 节点分段；格式边界不重置字素分段。测试覆盖组合重音、跨 Run/环境拆开的 emoji ZWJ/肤色序列、中文、Indic 组合和阿拉伯组合标记，不依赖 shaping 的 glyph cluster 输出。宿主边界位置遵循[结构导航中的 Inline 转移规则](../architecture/editor/structure-navigation.md#inline-转移)；字素边界约束仍有效。
 - [x] 选区端点验证完整字素边界，外部非法 Pos 明确拒绝，不静默拆开字素；格式选区吸附留给格式命令任务。
 - [x] 输入与编辑不隐式规范化 Unicode 码点序列；测试保留 NFD 码点。
 - [x] 编辑位置保留 affinity，范围操作使用事务位置映射；测试覆盖边界转移和组合位置映射。格式继承状态随格式命令任务实现。
