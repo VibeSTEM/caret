@@ -122,7 +122,11 @@ Inline 与具有独立外侧停靠语义的复杂 Block 都按三类位置处理
 | InlineMath 外后 | Left | MathEdit 内部终点 | 进入公式内部；不跳过末端位置 |
 | InlineMath 相邻视觉行 | Up/Down | 相邻视觉文本 caret | 垂直移动不进入 InlineMath |
 
+Run 属性范围（例如 `Run.props.underline`）同样参与 Inline 三态边界移动：非空范围在合法字素边界用 `Affinity` 表达外前/内部/外后归属，不生成环境节点身份；对应边界转移与 InlineEnvironment 对称。空光标处启用的格式由 `PendingInlineStyle` 表示，不创建零长度 Run 范围或 Inline 节点；它复用空 Inline 粉色槽位。Bold 与 Underline 在同一边界上的进入、退出步数必须一致。
+
 若 InlineEnvironment 的结构边界落在跨 Run/环境的扩展字素内部，该结构边界不是 caret。进入时映射到环境内方向最近的合法字素边界，退出时对称地映射到环境外方向最近的合法字素边界；映射可越过整个相关字素簇，不得落在簇内。若映射不唯一，拒绝转换并保留文档、焦点、选区与格式上下文。空 InlineEnvironment 只有位于合法字素边界时才有内部插入点。
+
+InlineMath 是行内原子，Up/Down 维持段落视觉行之间的导航，不进入该原子的内部；复杂 Block 有独立块级视觉行，故有效的上下候选可进入其内部首/末位置。
 
 ### 复杂 Block 转移
 
@@ -146,6 +150,9 @@ Block 的位置类别只有 **外前、内部、外后**。表中的“内部位
 | 空单槽 Block 外后 | Left | 唯一内部位置 | 进入空槽位 |
 | Block 外侧相邻视觉行 | Up/Down | 内部位置：首行/末行 | 有效视觉候选直接进入块内 |
 | Block 内部位置：顶/底边界 | Up/Down | Block 外前/外后 | 仅在没有块内视觉候选时，转到对应外侧停靠 |
+| Block 外前/外后停靠 | Up/Down | 相邻视觉行的最近合法位置 | 先取共享视觉行候选；候选属于相邻 Paragraph/Block 时进入该位置，不凭键向猜测文档顺序 |
+
+Block 的邻接外侧停靠只在相邻内容实际存在且属于同一有效文档顺序时到达。文档首尾没有前方/后方内容时，水平键在对应 Block 外侧停靠保持原位；Section 子项边缘按宿主父链寻找最近可达的父级边界。不得合成空 Paragraph 或跳到不相邻的正文兜底。
 
 Paragraph 继续使用其真实 TextMap 首尾，不套用复杂 Block 的虚拟停靠。Shift 扩选跨越宿主时使用共享文档顺序和稳定宿主范围，不从普通移动次数推导选区边界；位置比较、选区范围和删除事务协议见[块宿主交互](document-model/block-interaction.md)。
 

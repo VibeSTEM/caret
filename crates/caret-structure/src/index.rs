@@ -30,7 +30,7 @@ pub enum StructureKind {
     },
     Section,
     Custom,
-    /// 独立显示公式块；光标不进入，只作为结构节点参与索引。
+    /// 独立显示公式块；作为结构节点参与索引，内部焦点由 Block 宿主协议管理。
     Equation,
     /// 多行对齐公式块。
     Align,

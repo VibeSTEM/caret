@@ -1558,6 +1558,11 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
 
     auto* canvas = surface->findChild<caret::DocumentCanvas*>(QStringLiteral("documentCanvas"));
     QVERIFY(canvas != nullptr);
+    // 该隔离 QML 测试未初始化 ThemeViewModel，因此需显式设置光标宽度。
+    canvas->setCaretWidthCentipixels(100);
+    window.requestActivate();
+    canvas->forceActiveFocus(Qt::OtherFocusReason);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->hasActiveFocus(), 3000);
     QObject* selection_drag = surface->findChild<QObject*>(QStringLiteral("documentSelectionDrag"));
     QObject* pointer_handler =
         surface->findChild<QObject*>(QStringLiteral("documentCanvasPointerHandler"));
@@ -1697,7 +1702,6 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
                 0.02);
         QVERIFY(std::abs(ime_caret_document.y() - caret.value(QStringLiteral("y0Pt")).toReal()) <
                 0.02);
-
         const QImage frame = window.grabWindow().convertToFormat(QImage::Format_ARGB32);
         QVERIFY(!frame.isNull());
         const qreal scale_x = static_cast<qreal>(frame.width()) / window.width();
@@ -1829,7 +1833,7 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
 
     QVERIFY(view_model->clearSelection().value(QStringLiteral("valid")).toBool());
     QVERIFY(view_model->selectionRects().isEmpty());
-    QVariantMap structural_point;
+    QPointF structural_window;
     const QSizeF page_size = canvas->pageSizesPt().first().toSizeF();
     for (int y = 40; static_cast<qreal>(y) < std::min<qreal>(260.0, page_size.height()); y += 2) {
         for (int x = 40; static_cast<qreal>(x) < std::min<qreal>(page_size.width() - 20.0, 580.0);
@@ -1837,30 +1841,39 @@ void ShellLoadTest::mathTextDragUsesSharedPreviewAndCommitProtocol() {
             const qreal x_pt = static_cast<qreal>(x);
             const qreal y_pt = static_cast<qreal>(y);
             const QVariantMap placed = view_model->placeCaretAtPage(0, x_pt, y_pt);
-            if (placed.value(QStringLiteral("valid")).toBool() &&
-                placed.value(QStringLiteral("mathTree")).toBool()) {
-                structural_point = {{QStringLiteral("xPt"), x_pt}, {QStringLiteral("yPt"), y_pt}};
+            if (!placed.value(QStringLiteral("valid")).toBool() ||
+                !placed.value(QStringLiteral("mathTree")).toBool())
+                continue;
+
+            const QPointF candidate = canvas->mapToItem(
+                window.contentItem(), canvas->documentToContent(0, QPointF(x_pt, y_pt)));
+            const QPoint rounded_candidate = candidate.toPoint();
+            const QPointF canvas_point =
+                canvas->mapFromItem(window.contentItem(), QPointF(rounded_candidate));
+            const QVariantMap actual_hit = canvas->hitTestPage(canvas_point);
+            if (actual_hit.value(QStringLiteral("pageIndex")).toInt() != 0)
+                continue;
+            const QVariantMap rounded_placement =
+                view_model->placeCaretAtPage(0, actual_hit.value(QStringLiteral("xPt")).toReal(),
+                                             actual_hit.value(QStringLiteral("yPt")).toReal());
+            if (!rounded_placement.value(QStringLiteral("valid")).toBool() ||
+                !rounded_placement.value(QStringLiteral("mathTree")).toBool())
+                continue;
+            const QVariantMap actual_domain =
+                view_model->dragStartDomain(0, actual_hit.value(QStringLiteral("xPt")).toReal(),
+                                            actual_hit.value(QStringLiteral("yPt")).toReal());
+            if (actual_domain.value(QStringLiteral("valid")).toBool() &&
+                actual_domain.value(QStringLiteral("domainId")).toString().isEmpty()) {
+                structural_window = rounded_candidate;
                 break;
             }
         }
-        if (!structural_point.isEmpty()) {
+        if (!structural_window.isNull())
             break;
-        }
     }
-    QVERIFY(!structural_point.isEmpty());
-    const QVariantMap structural_domain =
-        view_model->dragStartDomain(0, structural_point.value(QStringLiteral("xPt")).toReal(),
-                                    structural_point.value(QStringLiteral("yPt")).toReal());
-    QVERIFY2(structural_domain.value(QStringLiteral("valid")).toBool(),
-             qPrintable(structural_domain.value(QStringLiteral("error")).toString()));
-    QVERIFY(structural_domain.value(QStringLiteral("domainId")).toString().isEmpty());
+    QVERIFY(!structural_window.isNull());
     QVERIFY(view_model->selectionRects().isEmpty());
 
-    const QPointF structural_window =
-        canvas->mapToItem(window.contentItem(),
-                          canvas->documentToContent(
-                              0, QPointF(structural_point.value(QStringLiteral("xPt")).toReal(),
-                                         structural_point.value(QStringLiteral("yPt")).toReal())));
     const QPointF body_left_window = canvas->mapToItem(window.contentItem(), stop_point(body_left));
     const QPointF body_right_window =
         canvas->mapToItem(window.contentItem(), stop_point(body_right));
