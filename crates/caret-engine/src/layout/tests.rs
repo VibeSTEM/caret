@@ -1552,7 +1552,7 @@ fn vertical_math_text_navigation_enters_the_adjacent_align_row() {
         )
         .unwrap_or_else(|| panic!("vertical movement should find the next Align row"));
     let crate::MathTextVerticalTarget::DifferentTextIsland(next) = next else {
-        panic!("separate Align rows should use a new text island focus");
+        panic!("separate Align rows should use a new text island focus: {next:?}");
     };
     assert!(matches!(
         next.host,
@@ -1602,7 +1602,7 @@ fn vertical_math_text_navigation_enters_an_empty_align_text_island() {
         )
         .unwrap_or_else(|| panic!("vertical movement should enter empty Align text"));
     let crate::MathTextVerticalTarget::DifferentTextIsland(next) = next else {
-        panic!("separate Align rows should enter a new text island");
+        panic!("separate Align rows should enter a new text island: {next:?}");
     };
     assert!(matches!(
         next.host,

@@ -78,6 +78,10 @@ pub enum NavigationCandidate {
         hit: crate::PageMathTextHit,
         generation: NavigationGeneration,
     },
+    MathTreeHit {
+        hit: crate::PageMathStructureHit,
+        generation: NavigationGeneration,
+    },
 }
 
 /// 单次视觉候选来源布局快照的身份与代际。

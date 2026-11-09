@@ -917,7 +917,11 @@ pub(super) fn can_materialize_source_as_text(tree: &MathTree) -> bool {
 }
 
 fn flow_source_is_textual(flow: &MathFlow, parsed: &MathFlow) -> bool {
-    flow.extra.is_empty() && content_sequence_source_is_textual(&flow.content, &parsed.content)
+    flow.extra.is_empty()
+        && (crate::math_validation::empty_tree_flow_matches_parsed_placeholder(
+            &flow.content,
+            &parsed.content,
+        ) || content_sequence_source_is_textual(&flow.content, &parsed.content))
 }
 
 fn content_sequence_source_is_textual(contents: &[MathContent], parsed: &[MathContent]) -> bool {

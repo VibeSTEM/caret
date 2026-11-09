@@ -46,7 +46,7 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | `mod_backspace.rs` | Mod+Backspace；已接入 | IME/命令行、数学编辑、行内环境、块环境顺序 |
 | `delete.rs` | Delete；已接入 | 正文及公式上下文中的前向删除；表格单元格行为待 045/046 接入后实现 |
 | `left_arrow.rs` / `right_arrow.rs` | Left / Right 与 Shift 变体；已接入 | 命令行光标、数学内部移动、正文视觉候选、公式宿主进入和边界行为；修饰变体随对应实体键管理 |
-| `up_arrow.rs` / `down_arrow.rs` | Up / Down、Shift 与结构移动变体；已接入 | 命令行候选选择、公式内部移动、正文 preferred x 候选和结构移动 |
+| `up_arrow.rs` / `down_arrow.rs` | Up / Down、Shift 与结构移动变体；已接入 | 各自 handler 明确选择 composition、命令行、公式和正文分支；结构移动受高优先级状态约束，布局候选提交委托 `keyboards/helpers/vertical_navigation.rs` |
 | `home.rs` / `end.rs` | Home / End 与 Shift 变体；已接入 | 命令行/数学文本/正文视觉行边界；修饰变体随对应实体键管理 |
 | `page_up.rs` / `page_down.rs` | PageUp / PageDown；后续结构任务 | 同类结构导航，按对应结构任务接入时再实现 |
 | `mod_space.rs` | Mod+Space；已接入 | 扩大结构选区；普通 Space 是文本输入，不是编辑器快捷键 |
@@ -54,13 +54,13 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | `mod_c.rs` / `mod_v.rs` | Mod+C / Mod+V；已接入 | 复制/粘贴的会话语义与作用域；系统剪贴板读写由 app 适配层提供 |
 | `mod_z.rs` | Mod+Z / Mod+Shift+Z；已接入 | 画布焦点下的 Undo/Redo Session 优先级、公式源码草稿本地历史与文档历史；工具栏仍使用 undo()/redo() 命令 API |
 
-当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格等尚未实现的规划键只记录目标文件和依赖，功能本身留在 045/046 等后续任务。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。按键模块接受 app 从同代布局快照算出的单次候选位置、视觉 affinity 或 preferred x 等必要标量，并负责上下文裁决、Session 状态校验和提交；app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
+当前逐键入口覆盖[唯一键位清单](keyboard-shortcuts.md)中所有已支持的画布编辑器快捷键；表格等尚未实现的规划键只记录目标文件和依赖，功能本身留在 045/046 等后续任务。未来新增编辑器快捷键也按具体快捷键或独立语义家族加入同一目录，不在 app、QML 或领域模块另建仲裁入口。目标结构是 `keyboards.rs` 只做模块注册和 `run_editor_key` 分派；本键状态优先级与具体动作由逐键 handler 负责。只有同一候选校验/提交确实被多个键以相同不变量调用时，才放进 `keyboards/helpers.rs` 与 `keyboards/helpers/`，辅助模块不得重新决定上下文优先级。app 保有并计算页面布局模型和视觉几何，engine 不复制或重算这些数据。候选无效时必须在任何焦点/文档迁移前拒绝，保证失败原子性。
 
 只改变扩选/修饰状态的变体（如 Shift+方向键）随基础键处理；形成独立语义动作的修饰快捷键（如 Mod+Backspace、Mod+Z）可有独立文件，仍由单一 Session 键盘入口分派。Qt 负责物理键和平台修饰映射；IME 预编辑仍由 Qt 输入适配先处理。
 
 ### 当前行为
 
-下表记录逐键统一后的行为边界，供实现与回归测试共同遵循。
+下表记录当前已实现的行为边界，供实现与回归测试共同遵循。逐键架构仍在收敛；不把统一入口误读为每个键已经以相同方式独立管理仲裁。
 
 | 按键 | 当前行为与例外 |
 | --- | --- |
@@ -68,7 +68,7 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | Enter / Shift+Enter | 命令输入下 Enter 接受候选、Shift+Enter 无操作；公式 Align 中 Enter 插入行分隔，数学文本分支拒绝换行，其他公式 Enter 退出；正文分别插入段落或软换行。 |
 | Tab | 命令输入交给 `TabCommandLine`：字体候选确认、普通查询补全、空查询退出并插入字面 `\`；公式中保留公式焦点；普通正文插入两个字符宽空格。表格 Tab 导航尚未实现。 |
 | Mod+Backspace | composition/命令输入中不改正文；数学编辑按公式规则处理；正文优先解除可解除的最内层行内环境，否则尝试解除块环境并保留内容。 |
-| Left / Right / Up / Down / Home / End | Qt 把方向和 Shift 扩展映射为几何查询；app 提供带 Session、文档和字体代际的单次候选；对应键 handler 校验候选并由 Session 提交焦点。命令输入和数学分支在 Session 优先处理；Qt `commandMode` 不再抢先改写语义。 |
+| Left / Right / Up / Down / Home / End | Qt 把方向和 Shift 扩展映射为几何查询，app 提供带 Session、文档和字体代际的单次候选。Up/Down 在各自 handler 按 composition→命令行→MathEdit→正文选择提交路径；结构移动变体在 composition、命令行或数学编辑活动时保持原位。MathTree Up/Down 使用当前公式内布局候选；跨操作数 Shift 扩展因单路径状态不能表示而保持原位。Left/Right/Home/End 仍通过共享 `route_navigation_key` 仲裁，计划在 076 收敛。Qt `commandMode` 不再抢先改写语义。 |
 | Mod+C / Mod+V | 对应键 handler 判断 composition、命令输入、数学文本选区及正文选区的允许行为；effect 请求 app 执行系统剪贴板读写。 |
 | Mod+Z / Mod+Shift+Z | 画布有焦点时 QML Shortcut 将 `mod-z` / `mod-shift-z` 交给 EditorKey handler，Session 选择数学源码草稿或文档历史；工具栏仍调用 undo()/redo()。 |
 | 结构与表格修饰键 | 结构扩选和上一块/下一块通过 `mod_space.rs`、`up_arrow.rs`、`down_arrow.rs` 进入 Session。表格快捷键尚属 045/046 规划，表格节点接入前不启用。 |
@@ -77,16 +77,15 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 
 ## 状态与优先级
 
-导航键的目标处理顺序（设计规则；具体优先级按键可有差别）如下：
+导航键没有强制套用到所有键的统一顺序。Up/Down 当前顺序如下；其他键以逐键处理器和上方行为矩阵为准：
 
 | 顺序 | 目标 | 说明 |
 | --- | --- | --- |
-| 1 | 命令输入 | 光标键移动命令行光标，不移动正文 |
-| 2 | IME composition | 导航不改正文选择；IME 提交、取消仍由 composition 协议处理 |
-| 3 | 结构选区 | 结构选择拥有当前编辑焦点 |
-| 4 | 数学树 / 数学文本 / 数学源码 | 由公式编辑分支决定内部导航语义 |
-| 5 | 块环境退出停靠点 | 后续边界键处理已有的环境退出状态 |
-| 6 | 正文 | 从布局快照取得视觉候选，再提交 Rust 选择变化 |
+| 1 | IME composition | 普通 Up/Down 不改变正文或数学选择 |
+| 2 | 命令输入 | Up/Down 移动命令行候选选择，不移动正文 |
+| 3 | MathEdit | 按 Text、Tree 或 Source 分支解释数学视觉候选；Shift 跨树位置保持原位 |
+| 4 | 正文 | 使用普通布局候选提交视觉选择变化 |
+| 特例 | 结构移动变体 | composition、命令行或 MathEdit 活动时无操作，否则执行 MoveStructure |
 
 每个按键文件可以有不同的状态优先级，不应把导航顺序机械套到 Enter、Tab 等按键上。交互字段也不是一概互斥：已确认 MathEdit 可与 MathText composition 共存，也可与 command line 共存；其他组合要逐项确认允许/拒绝条件，不推断为任意组合均合法。每次路由只选择拥有本次按键的处理者，并保留其他合法状态。
 
@@ -94,7 +93,7 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 
 ## 一致性结论
 
-所有已支持的画布按键现在使用一致的入口与管理架构：Qt 解析实体键和平台修饰键，QML/布局适配器只提供需要的窗口焦点或视觉候选，`Session::run_editor_key` 按 `EditorKey` 分派到同名逐键模块，模块按顺序裁决命令输入、composition、公式、结构与正文状态。按键之间的优先级可以不同，但权威入口和状态所有权一致。窗口快捷键与控件本地按键仍属于各自焦点作用域；尚未实现的表格键不计入“已支持”。
+已支持画布按键共享 `Session::run_editor_key` 入口，但逐键状态仲裁实现尚不完全一致：Enter/Escape/Tab/Mod+Backspace 等在自己的处理器中显式裁决；Up/Down 在本键 handler 中管理候选路径并把共同候选提交交给 helpers；Left/Right/Home/End 仍依赖共享 `route_navigation_key`，Backspace/Delete/Mod+Z 还有部分策略位于 Session/数学编辑模块。字符输入、字体候选与视觉边缘也存在绕过 handler 的入口。076 登记这些未完成迁移；不得将当前入口统一描述成架构收敛完成。窗口快捷键与控件本地按键仍属于各自焦点作用域；尚未实现的表格键不计入“已支持”。
 
 视觉候选包含 Session、文档和字体代际；Session 验证自身和文档代际，app 在生成候选时验证当前字体代际。扩选锚点由 Session 当前选择构造，app 不能提交任意旧锚点。剪贴板系统调用留在 app，复制/粘贴是否允许由逐键模块决定。
 

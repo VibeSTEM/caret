@@ -197,14 +197,34 @@ impl Session {
             }
             return Ok(Effect::default());
         }
-        if anchor.offset == focus.offset {
-            map.delete_range(self.paragraph_for_mut(&anchor)?, from, to)?;
-        } else {
-            let mut updated = paragraph.clone();
-            map.delete_range(&mut updated, from, to)?;
-            self.replace_paragraph(&anchor, updated)?;
-        }
+        let mut updated = paragraph.clone();
+        let merged_math_focus = map.delete_range_and_merge_inline_math(&mut updated, from, to)?;
+        self.replace_paragraph(&anchor, updated)?;
         self.text_map_cache.clear();
+        if let Some(merged_math_focus) = merged_math_focus {
+            let paragraph_id = merged_math_focus.paragraph_id.clone();
+            let result_boundaries = TextMap::new(self.paragraph_for(&anchor)?)?.grapheme_boundaries;
+            self.focus_merged_inline_math_at(
+                &merged_math_focus.paragraph_id,
+                &merged_math_focus.math_id,
+                merged_math_focus.root_offset,
+            )?;
+            return Ok(Effect {
+                document_changed: true,
+                selection_changed: true,
+                composition_changed: false,
+                changed_paragraph_id: Some(paragraph_id.clone()),
+                clipboard_action: None,
+                position_map: Some(PositionMap::TextEdit {
+                    paragraph_id,
+                    start: from,
+                    end: merged_math_focus.delete_end,
+                    inserted_len: 0,
+                    snap_graphemes: true,
+                    result_boundaries,
+                }),
+            });
+        }
         let result_map = self.text_map_for(&Pos {
             offset: from,
             ..anchor.clone()

@@ -50,7 +50,8 @@ void DocumentCanvas::setInputMethodContext(const QVariantMap& context) {
     }
     if (QGuiApplication::inputMethod() != nullptr) {
         QGuiApplication::inputMethod()->update(
-            was_enabled == is_enabled ? Qt::ImQueryInput : Qt::ImEnabled | Qt::ImQueryInput);
+            was_enabled == is_enabled ? Qt::ImQueryInput | Qt::ImHints
+                                      : Qt::ImEnabled | Qt::ImQueryInput | Qt::ImHints);
     }
 }
 
@@ -107,6 +108,10 @@ QVariant DocumentCanvas::inputMethodQuery(Qt::InputMethodQuery query) const {
     switch (query) {
     case Qt::ImEnabled:
         return m_input_method_context.value(QStringLiteral("enabled")).toBool();
+    case Qt::ImHints:
+        return m_input_method_context.value(QStringLiteral("preferLatin")).toBool()
+                   ? QVariant::fromValue(Qt::InputMethodHints(Qt::ImhPreferLatin))
+                   : QVariant::fromValue(Qt::InputMethodHints{});
     case Qt::ImCursorRectangle:
         return m_input_method_cursor_rectangle.isEmpty() ? caretRect(m_caret_geometry)
                                                          : m_input_method_cursor_rectangle;

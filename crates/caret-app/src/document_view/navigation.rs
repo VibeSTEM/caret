@@ -75,11 +75,7 @@ impl DocumentViewRuntime {
                 let focus_key = visual_caret_key(snapshot, &current.focus, current_visual);
                 match (anchor_key, focus_key) {
                     (Some(anchor_key), Some(focus_key)) => {
-                        let pick_anchor = if forward {
-                            anchor_key > focus_key
-                        } else {
-                            anchor_key < focus_key
-                        };
+                        let pick_anchor = pick_visual_anchor(forward, anchor_key, focus_key);
                         Some((
                             if pick_anchor {
                                 current.anchor.clone()
@@ -242,6 +238,11 @@ impl DocumentViewRuntime {
         }
         if self.session.math_text_input_context().is_some()
             && let Some(result) = move_math_vertical(self, line_delta, extend)
+        {
+            return result;
+        }
+        if self.session.math_tree_input_context().is_some()
+            && let Some(result) = move_math_tree_vertical(self, line_delta, extend)
         {
             return result;
         }
@@ -526,11 +527,7 @@ fn move_math_visual(
                 (Some(anchor), Some(focus)) => {
                     let anchor_key = (anchor.page_index, anchor.y0_pt, anchor.x_pt);
                     let focus_key = (focus.page_index, focus.y0_pt, focus.x_pt);
-                    let pick_anchor = if forward {
-                        anchor_key > focus_key
-                    } else {
-                        anchor_key < focus_key
-                    };
+                    let pick_anchor = pick_visual_anchor(forward, anchor_key, focus_key);
                     if pick_anchor {
                         (context.anchor.clone(), anchor_visual_affinity, true)
                     } else {
@@ -616,7 +613,19 @@ fn move_math_vertical(
 ) -> Option<Result<String, String>> {
     let context = runtime.session.math_text_input_context()?;
     let anchor_visual_affinity = context.anchor_visual_affinity;
-    let preferred_x = runtime.preferred_visual_x_pt;
+    let preferred_x = runtime.preferred_visual_x_pt.or_else(|| {
+        runtime
+            .current_snapshot()
+            .ok()
+            .and_then(|snapshot| {
+                snapshot.math_text_caret_geometry(
+                    &context.target,
+                    &context.focus,
+                    context.visual_affinity,
+                )
+            })
+            .map(|caret| caret.x_pt as f32)
+    });
     let moved = runtime.current_snapshot().and_then(|snapshot| {
         snapshot
             .move_math_text_vertical_target(
@@ -658,20 +667,7 @@ fn move_math_vertical(
             preferred_x_pt,
         } => (position, visual_affinity, preferred_x_pt),
         caret_engine::MathTextVerticalTarget::DifferentTextIsland(hit) if !extend => {
-            let preferred_x = preferred_x.unwrap_or_else(|| {
-                runtime
-                    .current_snapshot()
-                    .ok()
-                    .and_then(|snapshot| {
-                        snapshot.math_text_caret_geometry(
-                            &context.target,
-                            &context.focus,
-                            context.visual_affinity,
-                        )
-                    })
-                    .map(|caret| caret.x_pt as f32)
-                    .unwrap_or(hit.caret.x_pt as f32)
-            });
+            let preferred_x = preferred_x.unwrap_or(hit.caret.x_pt as f32);
             let generation = match navigation_generation(runtime) {
                 Ok(generation) => generation,
                 Err(error) => return Some(Err(error)),
@@ -712,7 +708,37 @@ fn move_math_vertical(
             }
             return Some(result);
         }
-        caret_engine::MathTextVerticalTarget::DifferentTextIsland(_) => {
+        caret_engine::MathTextVerticalTarget::DifferentMathStructure(hit) if !extend => {
+            let preferred_x = preferred_x.unwrap_or(hit.caret.x_pt as f32);
+            let generation = match navigation_generation(runtime) {
+                Ok(generation) => generation,
+                Err(error) => return Some(Err(error)),
+            };
+            let old_math_edit = runtime.session.math_edit().cloned();
+            let result = dispatch_navigation_key(
+                runtime,
+                if line_delta < 0 {
+                    EditorKey::UpArrow {
+                        candidate: Some(NavigationCandidate::MathTreeHit { hit, generation }),
+                        extend: false,
+                        structure: false,
+                    }
+                } else {
+                    EditorKey::DownArrow {
+                        candidate: Some(NavigationCandidate::MathTreeHit { hit, generation }),
+                        extend: false,
+                        structure: false,
+                    }
+                },
+                "navigation.math_text_structure_focus",
+            );
+            if result.is_ok() && runtime.session.math_edit() != old_math_edit.as_ref() {
+                runtime.preferred_visual_x_pt = Some(preferred_x);
+            }
+            return Some(result);
+        }
+        caret_engine::MathTextVerticalTarget::DifferentTextIsland(_)
+        | caret_engine::MathTextVerticalTarget::DifferentMathStructure(_) => {
             return Some(dispatch_navigation_key(
                 runtime,
                 if line_delta < 0 {
@@ -769,6 +795,65 @@ fn move_math_vertical(
                 .map_err(|error| format!("selection.math_text: {error}"))
         },
     ))
+}
+
+fn move_math_tree_vertical(
+    runtime: &mut DocumentViewRuntime,
+    line_delta: isize,
+    extend: bool,
+) -> Option<Result<String, String>> {
+    let (target, position) = runtime.session.math_tree_input_context()?;
+    let preferred_visual_x = runtime.preferred_visual_x_pt;
+    let key = |candidate| {
+        if line_delta < 0 {
+            EditorKey::UpArrow {
+                candidate,
+                extend,
+                structure: false,
+            }
+        } else {
+            EditorKey::DownArrow {
+                candidate,
+                extend,
+                structure: false,
+            }
+        }
+    };
+    if extend {
+        // Tree 选区只保存一个序列路径，无法表达跨操作数的扩展范围。
+        return Some(dispatch_navigation_key(
+            runtime,
+            key(None),
+            "navigation.math_tree",
+        ));
+    }
+    let snapshot = match runtime.current_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return Some(Err(error)),
+    };
+    let current_geometry = snapshot.math_tree_caret_geometry(&target, &position);
+    let preferred_x =
+        preferred_visual_x.or_else(|| current_geometry.map(|caret| caret.x_pt as f32));
+    let moved =
+        snapshot.move_math_tree_vertical_target(&target, &position, line_delta, preferred_x);
+    let generation = match navigation_generation(runtime) {
+        Ok(generation) => generation,
+        Err(error) => return Some(Err(error)),
+    };
+    let candidate = match moved {
+        Some(caret_engine::MathTreeVerticalTarget::Structure(hit)) => {
+            Some(NavigationCandidate::MathTreeHit { hit, generation })
+        }
+        Some(caret_engine::MathTreeVerticalTarget::Text(hit)) => {
+            Some(NavigationCandidate::MathTextHit { hit, generation })
+        }
+        None => None,
+    };
+    let result = dispatch_navigation_key(runtime, key(candidate), "navigation.math_tree");
+    if result.is_ok() && preferred_x.is_some() {
+        runtime.preferred_visual_x_pt = preferred_x;
+    }
+    Some(result)
 }
 
 fn move_math_line_edge(
@@ -896,4 +981,12 @@ fn visual_caret_key(
 ) -> Option<(usize, f64, f64)> {
     let caret = snapshot.caret_geometry(position, affinity)?;
     Some((caret.page_index, caret.y0_pt, caret.x_pt))
+}
+
+fn pick_visual_anchor(forward: bool, anchor: (usize, f64, f64), focus: (usize, f64, f64)) -> bool {
+    if forward {
+        anchor > focus
+    } else {
+        anchor < focus
+    }
 }

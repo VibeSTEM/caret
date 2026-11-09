@@ -1911,6 +1911,360 @@ fn text_island_accepts_plain_input_and_rebases_its_path() -> Result<(), EditErro
 }
 
 #[test]
+fn math_text_command_splits_inline_math_and_accepts_ime_input() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.run(Command::InsertText("xy".to_owned()))?;
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    accept(&mut session, "text")
+        .map_err(|error| panic!("accepting the \\text command failed: {error:?}"))?;
+
+    assert!(session.math_edit().is_none());
+    let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [ParagraphContent::Math(_), ParagraphContent::Text(text), ParagraphContent::Math(_)]
+            if text.runs.iter().all(|run| run.text.is_empty())
+    ));
+    session
+        .run(Command::InsertText("中文".to_owned()))
+        .map_err(|error| panic!("typing in the promoted text island failed: {error:?}"))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::InsertText("tail".to_owned()))?;
+    assert_eq!(
+        first_paragraph_text(&session),
+        format!("{OBJECT_REPLACEMENT}中文{OBJECT_REPLACEMENT}tail")
+    );
+    let mut start = session.selection().focus.clone();
+    start.offset = OBJECT_REPLACEMENT.len_utf8();
+    let mut end = start.clone();
+    end.offset += "中文".len();
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: start,
+        focus: end,
+    })))?;
+    let delete_effect = session.run(Command::Delete(Direction::Backward))?;
+    let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [ParagraphContent::Math(_), ParagraphContent::Text(text)]
+            if text.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "tail"
+    ));
+    assert_eq!(committed_inline_source(&session).as_deref(), Some("xy"));
+    assert_eq!(
+        first_paragraph_text(&session),
+        format!("{OBJECT_REPLACEMENT}tail")
+    );
+    let mut old_tail_position = session.selection().focus.clone();
+    old_tail_position.offset = 15;
+    old_tail_position.affinity = Affinity::Upstream;
+    let mapped_tail_position = delete_effect
+        .position_map
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?
+        .map(&old_tail_position);
+    assert_eq!(mapped_tail_position.offset, 6);
+    assert_eq!(mapped_tail_position.affinity, Affinity::Upstream);
+    for (offset, affinity) in [
+        (3, Affinity::Upstream),
+        (3, Affinity::Downstream),
+        (9, Affinity::Upstream),
+        (12, Affinity::Downstream),
+    ] {
+        let mut old_seam_position = old_tail_position.clone();
+        old_seam_position.offset = offset;
+        old_seam_position.affinity = affinity;
+        let mapped = delete_effect
+            .position_map
+            .as_ref()
+            .ok_or(EditError::InvalidPosition)?
+            .map(&old_seam_position);
+        assert_eq!(mapped.offset, 3);
+        assert_eq!(mapped.affinity, affinity);
+    }
+    assert!(matches!(
+        session.math_edit().map(|edit| (&edit.branch, edit.cursor)),
+        Some((MathEditBranch::Tree { path, .. }, 1)) if path.steps().is_empty()
+    ));
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(2));
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+
+    session.run(Command::Undo)?;
+    let Some(Block::Paragraph(paragraph)) = session.document().body.first() else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_),
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_)
+        ]
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_text_command_replaces_root_selection_and_undo_restores_its_tree_focus()
+-> Result<(), EditError> {
+    for (anchor_offset, focus_offset) in [(0, 2), (2, 0)] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        session.begin_inline_math()?;
+        session.run(Command::InsertText("xy".to_owned()))?;
+        let mut edit = session
+            .math_edit()
+            .cloned()
+            .ok_or(EditError::InvalidPosition)?;
+        let MathEditTarget::Inline { math_id, .. } = &edit.target else {
+            return Err(EditError::InvalidPosition);
+        };
+        let path = MathSequencePath::root();
+        let anchor = MathTreePosition {
+            host: MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            },
+            path: path.clone(),
+            offset: anchor_offset,
+            affinity: MathPositionAffinity::Downstream,
+        };
+        edit.cursor = focus_offset;
+        edit.branch = MathEditBranch::Tree { path, anchor };
+        session.math_edit = Some(edit);
+
+        accept(&mut session, "text")?;
+        assert!(matches!(
+            session.document().body.first(),
+            Some(Block::Paragraph(Paragraph { inlines, .. }))
+                if matches!(inlines.as_slice(), [ParagraphContent::Text(text)]
+                    if text.runs.iter().all(|run| run.text.is_empty()))
+        ));
+
+        session.run(Command::Undo)?;
+        assert_eq!(committed_inline_source(&session).as_deref(), Some("xy"));
+        assert!(matches!(
+            session.math_edit().map(|edit| (&edit.branch, edit.cursor)),
+            Some((MathEditBranch::Tree { path, anchor }, cursor))
+                if path.steps().is_empty()
+                    && anchor.offset == anchor_offset
+                    && cursor == focus_offset
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn math_text_command_splits_an_empty_inline_math_into_ime_text() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+
+    accept(&mut session, "text")?;
+    assert!(session.math_edit().is_none());
+    session.run(Command::InsertText("中文".to_owned()))?;
+    assert_eq!(first_paragraph_text(&session), "中文");
+    Ok(())
+}
+
+#[test]
+fn math_text_command_enters_ime_text_in_equation_and_align_blocks() -> Result<(), EditError> {
+    for block_command in ["equation", "align"] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        accept(&mut session, block_command)?;
+        accept(&mut session, "text")?;
+
+        assert!(matches!(
+            session.math_edit().map(|edit| (&edit.target, &edit.branch)),
+            Some((MathEditTarget::Block { .. }, MathEditBranch::Text { .. }))
+        ));
+        assert!(session.math_text_input_context().is_some());
+        session.run(Command::InsertText("中文".to_owned()))?;
+        assert!(inline_source(&session).is_some_and(|source| source.contains("中文")));
+    }
+    Ok(())
+}
+
+#[test]
+fn deleting_unrelated_paragraph_text_does_not_merge_an_untouched_math_seam() -> Result<(), EditError>
+{
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let empty_text = || caret_doc::TextFlow {
+        runs: vec![Run {
+            text: String::new(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    paragraph.inlines = vec![
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: parsed_inline_tree("x"),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(empty_text()),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: parsed_inline_tree("y"),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: "abc".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let map = TextMap::new(&paragraph)?;
+    assert_eq!(
+        map.text,
+        format!("{OBJECT_REPLACEMENT}{OBJECT_REPLACEMENT}abc")
+    );
+
+    let merged = map.delete_range_and_merge_inline_math(&mut paragraph, 8, 9)?;
+
+    assert!(merged.is_none());
+    assert!(matches!(
+        paragraph.inlines.as_slice(),
+        [
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_),
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_)
+        ]
+    ));
+    Ok(())
+}
+
+#[test]
+fn deleting_a_section_title_text_seam_merges_math_and_restores_tree_focus() -> Result<(), EditError>
+{
+    let environment_id = NodeId::generate();
+    let title_id = NodeId::generate();
+    let mut title = Paragraph::empty(title_id.clone());
+    title.inlines = vec![
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: parsed_inline_tree("x"),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: "a".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: parsed_inline_tree("y"),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: "tail".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(caret_doc::BlockEnvironment {
+        id: environment_id.clone(),
+        kind: caret_doc::BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(title),
+        children: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+        extra: BTreeMap::new(),
+    })];
+    let mut session = Session::new(document).map_err(|_| EditError::InvalidPosition)?;
+    let start = Pos {
+        story: StoryId::EnvironmentTitle(environment_id.clone()),
+        paragraph_id: title_id.clone(),
+        offset: OBJECT_REPLACEMENT.len_utf8(),
+        affinity: Affinity::Downstream,
+    };
+    let mut end = start.clone();
+    end.offset += 1;
+    session.selection = Selection {
+        anchor: start.clone(),
+        focus: end,
+    };
+
+    let effect = session.run(Command::Delete(Direction::Backward))?;
+
+    let Block::Environment(environment) = &session.document().body[0] else {
+        return Err(EditError::InvalidPosition);
+    };
+    let title = environment
+        .title
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(matches!(
+        title.inlines.as_slice(),
+        [ParagraphContent::Math(_), ParagraphContent::Text(_)]
+    ));
+    assert!(matches!(
+        session.math_edit().map(|edit| (&edit.target, &edit.branch, edit.cursor)),
+        Some((MathEditTarget::Inline { paragraph_id, .. }, MathEditBranch::Tree { path, .. }, 1))
+            if paragraph_id == &title_id && path.steps().is_empty()
+    ));
+    let mut old_tail = start.clone();
+    old_tail.offset = 9;
+    let mapped_tail = effect
+        .position_map
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?
+        .map(&old_tail);
+    assert_eq!(mapped_tail.offset, 5);
+
+    session.run(Command::Undo)?;
+    let Block::Environment(environment) = &session.document().body[0] else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(matches!(
+        environment
+            .title
+            .as_ref()
+            .map(|title| title.inlines.as_slice()),
+        Some([
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_),
+            ParagraphContent::Math(_),
+            ParagraphContent::Text(_)
+        ])
+    ));
+    session.run(Command::Redo)?;
+    assert!(matches!(
+        session.math_edit().map(|edit| (&edit.branch, edit.cursor)),
+        Some((MathEditBranch::Tree { path, .. }, 1)) if path.steps().is_empty()
+    ));
+    Ok(())
+}
+
+#[test]
 fn math_text_insertion_at_run_boundary_uses_the_focused_affinity() -> Result<(), EditError> {
     for (affinity, expected_language, reject_opaque) in [
         (MathPositionAffinity::Upstream, "en", false),
@@ -4683,7 +5037,7 @@ fn empty_fixed_math_operand_backspace_exits_or_removes_structure() -> Result<(),
 
 #[test]
 fn empty_math_operand_backspace_preserves_opaque_metadata_atomically() -> Result<(), EditError> {
-    for annotate_operand in [false, true] {
+    for annotation in 0..3 {
         let Block::Equation(mut equation) = display_math_block(false, r"\frac{}{}")? else {
             return Err(EditError::InvalidPosition);
         };
@@ -4691,15 +5045,24 @@ fn empty_math_operand_backspace_preserves_opaque_metadata_atomically() -> Result
         let Some(MathContent::Math(node)) = equation.math_tree.root.content.first_mut() else {
             return Err(EditError::InvalidPosition);
         };
-        if annotate_operand {
+        if annotation == 1 {
             node.children
                 .get_mut(1)
                 .ok_or(EditError::InvalidPosition)?
                 .extra
                 .insert("vendorOperand".to_owned(), serde_json::json!("preserve"));
-        } else {
+        } else if annotation == 0 {
             node.extra
                 .insert("vendorNode".to_owned(), serde_json::json!("preserve"));
+        } else {
+            let denominator = node.children.get_mut(1).ok_or(EditError::InvalidPosition)?;
+            let Some(MathContent::Math(placeholder)) = denominator.content.first_mut() else {
+                return Err(EditError::InvalidPosition);
+            };
+            placeholder.extra.insert(
+                "vendorPlaceholder".to_owned(),
+                serde_json::json!("preserve"),
+            );
         }
 
         let mut document = Document::blank();
@@ -5144,6 +5507,413 @@ fn tree_native_mod_backspace_downgrades_and_undo_restores_editable_focus() -> Re
     assert_eq!(inline_source(&session).as_deref(), Some("xyz"));
     assert!(session.math_edit().is_some_and(|edit| {
         edit.source_projection.is_none() && matches!(edit.branch, MathEditBranch::Tree { .. })
+    }));
+    Ok(())
+}
+
+#[test]
+fn tree_native_mod_backspace_accepts_empty_script_slots_and_restores_them() -> Result<(), EditError>
+{
+    for (template, expected_source, expected_cursor) in [
+        (r"\frac{}{}", r"\frac{}{}", 6),
+        (r"\sqrt{}", r"\sqrt{}", 6),
+        ("d_{}^{}", "d_{}^{{}}", 3),
+    ] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        session.begin_inline_math()?;
+        session.math_insert_template(template)?;
+        let before_demotion = session.document().clone();
+        let before_math_edit = session.math_edit().cloned();
+        assert!(
+            session
+                .math_edit()
+                .is_some_and(|edit| { matches!(edit.branch, MathEditBranch::Tree { .. }) })
+        );
+
+        session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+        assert!(session.math_edit().is_none());
+        assert_eq!(first_paragraph_text(&session), expected_source);
+        assert_eq!(session.selection().focus.offset, expected_cursor);
+
+        session.run(Command::Undo)?;
+        assert_eq!(session.document(), &before_demotion);
+        assert_eq!(session.math_edit(), before_math_edit.as_ref());
+        assert!(
+            session
+                .math_edit()
+                .is_some_and(|edit| { matches!(edit.branch, MathEditBranch::Tree { .. }) })
+        );
+        session.run(Command::Redo)?;
+        assert_eq!(first_paragraph_text(&session), expected_source);
+        assert_eq!(session.selection().focus.offset, expected_cursor);
+    }
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"\sqrt{q_1}d_{}")?;
+    let expected_source = inline_source(&session).ok_or(EditError::InvalidPosition)?;
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_text(&session), expected_source);
+    Ok(())
+}
+
+#[test]
+fn tree_native_mod_backspace_materializes_empty_root_math() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    let before = session.document().clone();
+    assert!(
+        session
+            .math_edit()
+            .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Tree { .. }))
+    );
+
+    let effect = session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert!(effect.document_changed);
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_text(&session), "");
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &before);
+    assert!(
+        session
+            .math_edit()
+            .is_some_and(|edit| matches!(edit.branch, MathEditBranch::Tree { .. }))
+    );
+    session.run(Command::Redo)?;
+    assert!(session.math_edit().is_none());
+    Ok(())
+}
+
+#[test]
+fn tree_native_mod_backspace_rejects_opaque_placeholder_metadata_atomically()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"\sqrt{}")?;
+    let Block::Paragraph(paragraph) = session
+        .document
+        .body
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let math = paragraph
+        .inlines
+        .iter_mut()
+        .find_map(|content| match content {
+            ParagraphContent::Math(math) => Some(math),
+            _ => None,
+        })
+        .ok_or(EditError::InvalidPosition)?;
+    let MathContent::Math(radical) = math
+        .math_tree
+        .root
+        .content
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let placeholder_flow = radical
+        .children
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let Some(MathContent::Math(placeholder)) = placeholder_flow.content.first_mut() else {
+        return Err(EditError::InvalidPosition);
+    };
+    placeholder.extra.insert(
+        "vendorPlaceholder".to_owned(),
+        serde_json::json!("preserve"),
+    );
+
+    let document_before = session.document().clone();
+    let selection_before = session.selection().clone();
+    let edit_before = session.math_edit().cloned();
+    let revision_before = session.current_math_edit_revision();
+    let generation_before = session.document_generation();
+    let history_before = session.history_state_id();
+    let undo_before = session.can_undo();
+    let redo_before = session.can_redo();
+    assert!(matches!(
+        session.run(Command::EditorKey(EditorKey::ModBackspace)),
+        Err(EditError::UnsupportedOpaqueContent)
+    ));
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(session.math_edit(), edit_before.as_ref());
+    assert_eq!(session.current_math_edit_revision(), revision_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id(), history_before);
+    assert_eq!(session.can_undo(), undo_before);
+    assert_eq!(session.can_redo(), redo_before);
+    Ok(())
+}
+
+#[test]
+fn tree_native_mod_backspace_maps_subsup_with_empty_sibling_slot() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"sada_{a}^{}a")?;
+    let expected_source = inline_source(&session).ok_or(EditError::InvalidPosition)?;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    let path = MathSequencePath::new(vec![MathSequenceStep::Operand {
+        content_index: 3,
+        operand_index: 2,
+    }]);
+    let position = MathTreePosition {
+        host: anchor.host.clone(),
+        path: path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree {
+        path,
+        anchor: position,
+    };
+    let before_math_edit = session.math_edit().cloned();
+    let sup_cursor = expected_source
+        .find("^{}")
+        .ok_or(EditError::InvalidPosition)?
+        + 2;
+
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_text(&session), expected_source);
+    assert_eq!(session.selection().focus.offset, sup_cursor);
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit(), before_math_edit.as_ref());
+    session.run(Command::Redo)?;
+    assert_eq!(session.selection().focus.offset, sup_cursor);
+
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"sada_{a}^{}a")?;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    let path = MathSequencePath::root();
+    let position = MathTreePosition {
+        host: anchor.host.clone(),
+        path: path.clone(),
+        offset: 5,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    edit.cursor = position.offset;
+    edit.branch = MathEditBranch::Tree {
+        path,
+        anchor: position,
+    };
+    let expected_source = inline_source(&session).ok_or(EditError::InvalidPosition)?;
+    let end_cursor = expected_source.len();
+    let before_math_edit = session.math_edit().cloned();
+
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_text(&session), expected_source);
+    assert_eq!(session.selection().focus.offset, end_cursor);
+    session.run(Command::Undo)?;
+    assert_eq!(session.math_edit(), before_math_edit.as_ref());
+    session.run(Command::Redo)?;
+    assert_eq!(session.selection().focus.offset, end_cursor);
+    Ok(())
+}
+
+#[test]
+fn typing_a_batch_at_script_base_start_keeps_new_script_outside() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template("x^a")?;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    let base_path = MathSequencePath::new(vec![MathSequenceStep::Operand {
+        content_index: 0,
+        operand_index: 0,
+    }]);
+    let base_start = MathTreePosition {
+        host: anchor.host.clone(),
+        path: base_path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree {
+        path: base_path,
+        anchor: base_start,
+    };
+
+    session.run(Command::InsertText("v^b".to_owned()))?;
+    assert_eq!(inline_source(&session).as_deref(), Some("v^{b}x^{a}"));
+    assert!(
+        session
+            .math_tree_input_context()
+            .is_some_and(|(_, position)| {
+                position.path.steps()
+                    == [MathSequenceStep::Operand {
+                        content_index: 0,
+                        operand_index: 1,
+                    }]
+                    && position.offset == 1
+            })
+    );
+    session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+    assert!(session.math_edit().is_none());
+    assert_eq!(first_paragraph_text(&session), "v^{b}x^{a}");
+    Ok(())
+}
+
+#[test]
+fn script_base_start_insertion_lifts_for_script_kinds_and_grouped_base() -> Result<(), EditError> {
+    for (source, expected, group_depth) in [
+        ("x^a", "vx^{a}", 0),
+        ("x_a", "vx_{a}", 0),
+        ("x_a^b", "vx_{a}^{b}", 0),
+        ("{x}^a", "v{x}^{a}", 1),
+        ("{{x}}^a", "v{{x}}^{a}", 2),
+    ] {
+        let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+        session.begin_inline_math()?;
+        session.math_insert_template(source)?;
+        let edit = session
+            .math_edit
+            .as_mut()
+            .ok_or(EditError::InvalidPosition)?;
+        let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+            return Err(EditError::InvalidPosition);
+        };
+        let mut steps = vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }];
+        for _ in 0..group_depth {
+            steps.push(MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            });
+        }
+        let path = MathSequencePath::new(steps);
+        let position = MathTreePosition {
+            host: anchor.host.clone(),
+            path,
+            offset: 0,
+            affinity: MathPositionAffinity::Downstream,
+        };
+        edit.cursor = 0;
+        edit.branch = MathEditBranch::Tree {
+            path: position.path.clone(),
+            anchor: position,
+        };
+
+        session.run(Command::InsertText("v".to_owned()))?;
+        assert_eq!(
+            inline_source(&session).as_deref(),
+            Some(expected),
+            "{source}"
+        );
+        assert!(
+            session
+                .math_tree_input_context()
+                .is_some_and(|(_, position)| {
+                    position.path.steps().is_empty() && position.offset == 1
+                })
+        );
+        session.run(Command::EditorKey(EditorKey::ModBackspace))?;
+        assert!(session.math_edit().is_none());
+        assert_eq!(first_paragraph_text(&session), expected, "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn tree_native_backspace_at_subsup_sibling_end_deletes_only_the_last_symbol()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"sada_{a}^{}a")?;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    let path = MathSequencePath::root();
+    let position = MathTreePosition {
+        host: anchor.host.clone(),
+        path: path.clone(),
+        offset: 5,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    edit.cursor = position.offset;
+    edit.branch = MathEditBranch::Tree {
+        path,
+        anchor: position,
+    };
+
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(inline_source(&session).as_deref(), Some(r"sada_{a}^{}"));
+    Ok(())
+}
+
+#[test]
+fn tree_native_backspace_in_empty_superscript_leaves_sibling_contents_intact()
+-> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.begin_inline_math()?;
+    session.math_insert_template(r"sada_{a}^{}a")?;
+    let source_before = inline_source(&session).ok_or(EditError::InvalidPosition)?;
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    let path = MathSequencePath::new(vec![MathSequenceStep::Operand {
+        content_index: 3,
+        operand_index: 2,
+    }]);
+    let position = MathTreePosition {
+        host: anchor.host.clone(),
+        path: path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree {
+        path,
+        anchor: position,
+    };
+
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(
+        inline_source(&session).as_deref(),
+        Some(source_before.as_str())
+    );
+    assert!(session.math_edit().is_some_and(|edit| {
+        matches!(
+            &edit.branch,
+            MathEditBranch::Tree { path, anchor }
+                if path.steps().is_empty() && anchor.path.steps().is_empty()
+                    && anchor.offset == 3 && edit.cursor == 3
+        )
     }));
     Ok(())
 }

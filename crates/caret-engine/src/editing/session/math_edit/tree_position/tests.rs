@@ -483,6 +483,93 @@ fn movement_preserves_an_empty_fixed_slot_as_a_structural_caret_stop() {
 }
 
 #[test]
+fn movement_does_not_expose_a_boundary_after_required_placeholder() {
+    let fraction_tree = tree(vec![node(
+        MathNodeKind::Fraction,
+        vec![
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+        ],
+    )]);
+    let numerator_start = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+        0,
+    );
+
+    let MathTreeCaretMove::Position(next) =
+        advance_math_tree_position(&fraction_tree, &numerator_start, true, None)
+            .unwrap_or_else(|_| panic!("right movement should leave the empty numerator"))
+    else {
+        panic!("right movement should enter the next structural operand");
+    };
+    assert_eq!(
+        next.path.steps(),
+        &[MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]
+    );
+    assert_eq!(next.offset, 0);
+
+    let denominator_start = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }],
+        0,
+    );
+    let MathTreeCaretMove::Position(previous) =
+        advance_math_tree_position(&fraction_tree, &denominator_start, false, None)
+            .unwrap_or_else(|_| panic!("left movement should enter the previous numerator"))
+    else {
+        panic!("left movement should enter the previous structural operand");
+    };
+    assert_eq!(
+        previous.path.steps(),
+        &[MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]
+    );
+    assert_eq!(previous.offset, 0);
+
+    let mixed = tree(vec![node(
+        MathNodeKind::Fraction,
+        vec![
+            flow(vec![
+                node(MathNodeKind::Placeholder, vec![]),
+                node(MathNodeKind::Symbol, vec![]),
+            ]),
+            flow(vec![]),
+        ],
+    )]);
+    let mixed_start = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+        0,
+    );
+    let MathTreeCaretMove::Position(after_symbol) =
+        advance_math_tree_position(&mixed, &mixed_start, true, None)
+            .unwrap_or_else(|_| panic!("right movement should cross stale placeholder geometry"))
+    else {
+        panic!("right movement should remain in the mixed operand");
+    };
+    assert_eq!(after_symbol.offset, 2);
+    let MathTreeCaretMove::Position(before_placeholder) =
+        advance_math_tree_position(&mixed, &after_symbol, false, None)
+            .unwrap_or_else(|_| panic!("left movement should cross stale placeholder geometry"))
+    else {
+        panic!("left movement should remain in the mixed operand");
+    };
+    assert_eq!(before_placeholder.offset, 0);
+}
+
+#[test]
 fn rejects_mismatched_host_and_non_text_paths() {
     let tree = tree(vec![node(MathNodeKind::Row, vec![])]);
     assert_eq!(

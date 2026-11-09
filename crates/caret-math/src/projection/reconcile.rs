@@ -107,6 +107,12 @@ fn reconcile_sidecar_flow(
     parsed: &MathFlow,
     map: &super::source_map::MathFlowSourceMap,
 ) -> Option<super::source_map::MathFlowSourceMap> {
+    if empty_target_matches_parsed_placeholder(&target.content, &parsed.content) {
+        return Some(super::source_map::MathFlowSourceMap::from_parser_parts(
+            map.range.clone(),
+            Vec::new(),
+        ));
+    }
     Some(super::source_map::MathFlowSourceMap::from_parser_parts(
         map.range.clone(),
         reconcile_sidecar_sequence(
@@ -116,6 +122,21 @@ fn reconcile_sidecar_flow(
             map.range.range.as_ref(),
         )?,
     ))
+}
+
+fn empty_target_matches_parsed_placeholder(target: &[MathContent], parsed: &[MathContent]) -> bool {
+    let is_placeholder = |contents: &[MathContent]| {
+        matches!(
+            contents,
+            [MathContent::Math(node)]
+                if node.kind == MathNodeKind::Placeholder
+                    && node.text.is_none()
+                    && node.attributes.is_empty()
+                    && node.children.is_empty()
+                    && node.extra.is_empty()
+        )
+    };
+    target.is_empty() && is_placeholder(parsed)
 }
 
 fn reconcile_sidecar_sequence(

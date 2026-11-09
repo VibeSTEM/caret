@@ -477,6 +477,27 @@ fn tree_position_source_boundary(
     if contents.len() != content_maps.len() || position.offset > contents.len() {
         return None;
     }
+    if position.offset == 0
+        && (contents.is_empty()
+            || matches!(
+                contents,
+                [MathContent::Math(node)]
+                    if node.kind == caret_doc::MathNodeKind::Placeholder
+            ))
+    {
+        let range = if contents.is_empty() {
+            flow_range.clone()
+        } else {
+            content_maps.first().and_then(MathContentSourceMap::range)
+        };
+        if let Some(range) = range
+            && source.get(range.clone()).is_some_and(|group| {
+                group.starts_with('{') && group.ends_with('}') && group.len() >= 2
+            })
+        {
+            return range.start.checked_add(1);
+        }
+    }
     let previous = position
         .offset
         .checked_sub(1)
@@ -508,7 +529,13 @@ fn tree_position_source_boundary(
 
 fn flows_correspond_for_position_mapping(previous: &MathFlow, projected: &MathFlow) -> bool {
     previous.extra == projected.extra
-        && content_sequences_correspond_for_position_mapping(&previous.content, &projected.content)
+        && (crate::math_validation::empty_tree_flow_matches_parsed_placeholder(
+            &previous.content,
+            &projected.content,
+        ) || content_sequences_correspond_for_position_mapping(
+            &previous.content,
+            &projected.content,
+        ))
 }
 
 fn content_sequences_correspond_for_position_mapping(

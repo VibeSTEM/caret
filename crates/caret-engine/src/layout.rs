@@ -21,6 +21,8 @@ use caret_layout::{
 };
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
+mod math_navigation;
+
 const UTF16_CHECKPOINT_STRIDE_BYTES: usize = 64;
 const LINE_GRID_LATIN_SAMPLE: char = 'M';
 // 零推进行内文本岛使用独立的透明推进，保留可与相邻正文区分的点击槽位。
@@ -702,6 +704,14 @@ pub enum MathTextVerticalTarget {
         preferred_x_pt: f32,
     },
     DifferentTextIsland(PageMathTextHit),
+    DifferentMathStructure(PageMathStructureHit),
+}
+
+/// 数学树焦点按页面几何移动后的文本岛或结构位置。
+#[derive(Debug, Clone, PartialEq)]
+pub enum MathTreeVerticalTarget {
+    Structure(PageMathStructureHit),
+    Text(PageMathTextHit),
 }
 
 /// 页面内命中的必需数学结构槽；路径、宿主和插入点来自同一布局代际。
@@ -1174,12 +1184,7 @@ impl DocumentLayoutSnapshot {
                         MathPathStep::Content(index)
                     }
                 };
-                let is_placeholder_slot = !environment_children
-                    && matches!(
-                        contents,
-                        [MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder
-                    );
-                let offset = if contents.is_empty() || is_placeholder_slot {
+                let raw_offset = if contents.is_empty() {
                     0
                 } else {
                     contents
@@ -1208,6 +1213,17 @@ impl DocumentLayoutSnapshot {
                         .max()
                         .unwrap_or(0)
                 };
+                let mut offset = raw_offset;
+                while !environment_children
+                    && offset > 0
+                    && matches!(
+                        contents.get(offset - 1),
+                        Some(MathContent::Math(node))
+                            if node.kind == caret_doc::MathNodeKind::Placeholder
+                    )
+                {
+                    offset -= 1;
+                }
                 let position = MathTreePosition {
                     host: scope_host.host,
                     path,
@@ -1546,6 +1562,24 @@ impl DocumentLayoutSnapshot {
             .map(|(caret, _)| caret)
     }
 
+    pub(crate) fn math_text_host(
+        &self,
+        target: &MathEditTarget,
+        position: &MathTextPosition,
+    ) -> Option<MathPositionHost> {
+        for projection in self.math_projections_for_target(target) {
+            let Some((_, sidecars)) = self.math_projection_items(projection) else {
+                continue;
+            };
+            for sidecar in sidecars.values() {
+                if &sidecar.target == target && sidecar.offset_at_position(position).is_some() {
+                    return Some(sidecar.host.clone());
+                }
+            }
+        }
+        None
+    }
+
     /// 返回同一数学文本岛中端点之间、由该代 Parley 布局生成的选区矩形。
     pub fn math_text_selection_geometry(
         &self,
@@ -1637,28 +1671,6 @@ impl DocumentLayoutSnapshot {
         Some((position, affinity, preferred_x?))
     }
 
-    /// 先复用当前岛的 Parley 垂直移动；到达边缘后按页面几何找最近的相邻数学文本。
-    pub fn move_math_text_vertical_target(
-        &self,
-        target: &MathEditTarget,
-        position: &MathTextPosition,
-        visual_affinity: VisualAffinity,
-        line_delta: isize,
-        preferred_x: Option<f32>,
-    ) -> Option<MathTextVerticalTarget> {
-        if let Some((position, visual_affinity, preferred_x_pt)) =
-            self.move_math_text_vertical(target, position, visual_affinity, line_delta, preferred_x)
-        {
-            return Some(MathTextVerticalTarget::SameTextIsland {
-                position,
-                visual_affinity,
-                preferred_x_pt,
-            });
-        }
-        self.adjacent_math_text_hit(target, position, visual_affinity, line_delta, preferred_x)
-            .map(MathTextVerticalTarget::DifferentTextIsland)
-    }
-
     fn adjacent_math_text_hit(
         &self,
         target: &MathEditTarget,
@@ -1671,6 +1683,9 @@ impl DocumentLayoutSnapshot {
             return None;
         }
         let current = self.math_text_caret_geometry(target, position, visual_affinity)?;
+        let current_host = self.math_text_host(target, position)?;
+        let (current_path, current_offset) =
+            MathTreePosition::sequence_boundary_from_text_path(position.path.steps()).ok()?;
         let preferred_x = preferred_x.unwrap_or(current.x_pt as f32);
         if !preferred_x.is_finite() {
             return None;
@@ -1703,6 +1718,15 @@ impl DocumentLayoutSnapshot {
                     else {
                         continue;
                     };
+                    if !math_navigation::math_text_candidate_is_vertical_neighbor(
+                        &current_host,
+                        current_path.steps(),
+                        current_offset,
+                        &sidecar.host,
+                        &next_position.path,
+                    ) {
+                        continue;
+                    }
                     let Some((caret, _)) = math_text_caret_in_items(
                         &MathTextItemGeometry {
                             page_index: projection.page_index,
@@ -1789,6 +1813,15 @@ impl DocumentLayoutSnapshot {
                     else {
                         continue;
                     };
+                    if !math_navigation::math_text_candidate_is_vertical_neighbor(
+                        &current_host,
+                        current_path.steps(),
+                        current_offset,
+                        &sidecar.host,
+                        &next_position.path,
+                    ) {
+                        continue;
+                    }
                     let Some(bounds) = sidecar.layout.cursor_geometry(hit.cursor, 0.0) else {
                         continue;
                     };

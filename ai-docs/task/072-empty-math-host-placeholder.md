@@ -1,6 +1,6 @@
 # 072 — 空公式宿主占位的视觉与几何契约
 
-- 状态：in-progress
+- 状态：done
 - 依赖：044
 - 优先级：P2
 - 创建 / 更新：2026-11-08 / 2026-11-08
@@ -72,7 +72,8 @@
 - 2026-11-08：MathText 聚焦期间活动 math command line 的 Left/Right/Up/Down 先直接提交给统一 EditorKey 入口；补 app 回归验证普通 MathText 工作后可开启命令并移动查询光标。
 - 2026-11-08：Terra 分域审查及 Sol 完整最终 diff 只读 review 完成，无阻断发现；将 074 已实现的命令行优先派发从待实现步骤改为回归维护项。final review 已复核该更正。桌面截图和 fraction 上下移动留在后续任务边界。
 - 2026-11-08：本次未运行 macOS/Windows/Linux 桌面截图检查；实现不改变宿主盒尺寸和 baseline，跨平台视觉检查留作明确的待验边界。既有 app suite 覆盖文档会话保存恢复，数学会话 suite 覆盖空宿主删除与撤销恢复。
+- 2026-11-08：PR [#116](https://github.com/VibeSTEM/caret/pull/116) 的必需 CI 全部通过并已 squash 合并，merge commit `11dc1d4e`；issue #106 已关闭。
 
 ## 完成摘要
 
-代码与文档实现完成，直接消费者及跨语言验证通过，独立审查无阻断；等待 PR CI 和合并后将 task 标为 done 并关闭 issue #106。
+代码与文档实现完成，直接消费者及跨语言验证通过，独立审查无阻断；PR #116 已合并，issue #106 已关闭。

@@ -21,6 +21,7 @@ CommandPopupFrame {
     readonly property var mathCandidateLabels: ({
             "\\frac": qsTranslate("CommandCompletion", "Fraction"),
             "\\sqrt": qsTranslate("CommandCompletion", "Square root"),
+            "\\text": qsTranslate("CommandCompletion", "Text"),
             "\\superscript": qsTranslate("CommandCompletion", "Superscript"),
             "\\subscript": qsTranslate("CommandCompletion", "Subscript"),
             "\\sum": qsTranslate("CommandCompletion", "Summation"),

@@ -84,6 +84,175 @@ fn inline_math_tree() -> caret_doc::MathTree {
     }
 }
 
+fn symbol_flow(text: &str) -> caret_doc::MathFlow {
+    caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Symbol,
+            text: Some(text.to_owned()),
+            attributes: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    }
+}
+
+fn symbol_content(text: &str) -> caret_doc::MathContent {
+    symbol_flow_with_atom_class(text)
+        .content
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("symbol flow should contain one symbol"))
+}
+
+fn symbol_flow_with_atom_class(text: &str) -> caret_doc::MathFlow {
+    let mut flow = symbol_flow(text);
+    if let Some(caret_doc::MathContent::Math(symbol)) = flow.content.first_mut() {
+        symbol
+            .attributes
+            .insert("atomClass".to_owned(), "ord".to_owned());
+    }
+    flow
+}
+
+fn inline_subsup_document(superscript: Option<&str>) -> (Document, NodeId, NodeId) {
+    let paragraph_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut root = caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: ["s", "a", "d"].into_iter().map(symbol_content).collect(),
+        extra: BTreeMap::new(),
+    };
+    root.content
+        .push(caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::SubSup,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: vec![
+                symbol_flow_with_atom_class("a"),
+                symbol_flow_with_atom_class("a"),
+                superscript.map_or_else(
+                    || caret_doc::MathFlow {
+                        id: NodeId::generate(),
+                        content: Vec::new(),
+                        extra: BTreeMap::new(),
+                    },
+                    symbol_flow_with_atom_class,
+                ),
+            ],
+            extra: BTreeMap::new(),
+        }));
+    root.content.push(symbol_content("a"));
+
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: caret_doc::MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    (document, paragraph_id, math_id)
+}
+
+fn inline_superscript_document() -> (Document, NodeId, NodeId) {
+    let paragraph_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let root = caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Superscript,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: vec![
+                symbol_flow_with_atom_class("x"),
+                symbol_flow_with_atom_class("a"),
+            ],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    };
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: caret_doc::MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root,
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    (document, paragraph_id, math_id)
+}
+
+fn placeholder_flow() -> caret_doc::MathFlow {
+    caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Placeholder,
+            text: None,
+            attributes: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    }
+}
+
+fn fraction_document() -> (Document, NodeId) {
+    let block_id = NodeId::generate();
+    let math_tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                id: NodeId::generate(),
+                kind: caret_doc::MathNodeKind::Fraction,
+                text: None,
+                attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+                children: vec![symbol_flow("a"), symbol_flow("b")],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(caret_doc::Equation {
+        id: block_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    (document, block_id)
+}
+
+fn math_text_content(text: &str) -> caret_doc::MathContent {
+    caret_doc::MathContent::Text(caret_doc::TextFlow {
+        runs: vec![Run {
+            text: text.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })
+}
+
 fn align_document(cells: &[&str]) -> Document {
     let align = caret_doc::Align {
         id: NodeId::generate(),
@@ -415,6 +584,1100 @@ fn horizontal_navigation_enters_display_math_at_document_edges()
             assert_eq!(*actual_align, expected_align);
         }
     }
+    Ok(())
+}
+
+#[test]
+fn math_tree_vertical_navigation_moves_between_fraction_operands()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, block_id) = fraction_document();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id,
+        align: false,
+    };
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation {
+            owner_id: match &target {
+                caret_engine::MathEditTarget::Block { block_id, .. } => block_id.clone(),
+                _ => unreachable!(),
+            },
+        },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let snapshot = runtime.current_snapshot()?;
+    let caret = snapshot
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("fraction numerator caret is missing"))?;
+    let hit = caret_engine::PageMathStructureHit {
+        session_id: snapshot.session_id.clone(),
+        document_generation: snapshot.document_generation,
+        font_generation: snapshot.font_generation,
+        target,
+        position,
+        caret,
+    };
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+
+    let original_document = runtime.session.document().clone();
+    let original_history = runtime.session.history_state_id();
+    let mut stale_hit = hit.clone();
+    stale_hit.document_generation = stale_hit.document_generation.saturating_add(1);
+    let stale_generation = caret_engine::NavigationGeneration {
+        session_id: runtime.session.session_id().clone(),
+        document_generation: stale_hit.document_generation,
+        font_generation: stale_hit.font_generation,
+    };
+    assert!(
+        runtime
+            .session
+            .run(caret_engine::Command::EditorKey(
+                caret_engine::EditorKey::DownArrow {
+                    candidate: Some(caret_engine::NavigationCandidate::MathTreeHit {
+                        hit: stale_hit,
+                        generation: stale_generation,
+                    }),
+                    extend: false,
+                    structure: false,
+                },
+            ))
+            .is_err()
+    );
+    assert_eq!(runtime.session.document(), &original_document);
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, pos)| pos),
+        Some(hit.position.clone())
+    );
+    assert_eq!(runtime.session.history_state_id(), original_history);
+
+    runtime.move_vertical_caret_json(1, true)?;
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, pos)| pos),
+        Some(hit.position.clone())
+    );
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let (_, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left MathTree focus"))?;
+    assert_eq!(
+        focus.path.steps().last(),
+        Some(&caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        })
+    );
+
+    runtime.move_vertical_caret_json(-1, false)?;
+    let (_, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Up left MathTree focus"))?;
+    assert_eq!(focus, hit.position);
+    Ok(())
+}
+
+#[test]
+fn subsup_pointer_focus_routes_backspace_and_mod_backspace_by_operand_path()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, paragraph_id, math_id) = inline_subsup_document(Some("a"));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id: paragraph_id.clone(),
+        math_id,
+    };
+    let superscript_path =
+        caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 3,
+            operand_index: 2,
+        }]);
+    let superscript_position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::InlineMath {
+            owner_id: match &target {
+                caret_engine::MathEditTarget::Inline { math_id, .. } => math_id.clone(),
+                _ => unreachable!(),
+            },
+        },
+        path: superscript_path.clone(),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let superscript_hit = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &superscript_position)
+            .ok_or_else(|| std::io::Error::other("superscript caret geometry is missing"))?;
+        snapshot
+            .hit_test_math_structure(
+                caret.page_index,
+                caret.x_pt,
+                (caret.y0_pt + caret.y1_pt) / 2.0,
+            )
+            .ok_or_else(|| std::io::Error::other("superscript hit is missing"))?
+    };
+    assert_eq!(superscript_hit.position.path, superscript_path);
+    assert_eq!(superscript_hit.position.offset, 1);
+    runtime
+        .session
+        .focus_math_structure_hit(&superscript_hit, runtime.layout.font_generation())?;
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, position)| position),
+        Some(superscript_hit.position.clone())
+    );
+
+    runtime.handle_editor_key_json("backspace")?;
+    let (_, after_script_backspace) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Backspace left MathTree focus"))?;
+    assert_eq!(after_script_backspace.path, superscript_path);
+    assert_eq!(after_script_backspace.offset, 0);
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        return Err("inline math paragraph disappeared after script Backspace".into());
+    };
+    let ParagraphContent::Math(math) = &paragraph.inlines[0] else {
+        return Err("SubSup inline math disappeared after script Backspace".into());
+    };
+    let caret_doc::MathContent::Math(subsup) = &math.math_tree.root.content[3] else {
+        return Err("SubSup node disappeared after script Backspace".into());
+    };
+    assert!(subsup.children[2].content.is_empty());
+
+    let before_empty_slot_backspace = runtime.session.document().clone();
+    runtime.handle_editor_key_json("backspace")?;
+    assert_eq!(runtime.session.document(), &before_empty_slot_backspace);
+    assert!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .is_some_and(|(_, position)| {
+                position.path.steps().is_empty() && position.offset == 3
+            })
+    );
+    runtime.handle_editor_key_json("backspace")?;
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        return Err("inline math paragraph disappeared after Backspace".into());
+    };
+    let ParagraphContent::Math(math) = &paragraph.inlines[0] else {
+        return Err("SubSup inline math disappeared after Backspace".into());
+    };
+    assert_eq!(math.math_tree.root.content.len(), 4);
+    assert!(matches!(
+        &math.math_tree.root.content[2],
+        caret_doc::MathContent::Math(node)
+            if node.kind == caret_doc::MathNodeKind::SubSup
+    ));
+
+    let (document, paragraph_id, math_id) = inline_subsup_document(Some("a"));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let host = caret_engine::MathPositionHost::InlineMath { owner_id: math_id };
+    let position = caret_engine::MathTreePosition {
+        host: host.clone(),
+        path: superscript_path.clone(),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let hit = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &position)
+            .ok_or_else(|| std::io::Error::other("superscript caret geometry is missing"))?;
+        snapshot
+            .hit_test_math_structure(
+                caret.page_index,
+                caret.x_pt,
+                (caret.y0_pt + caret.y1_pt) / 2.0,
+            )
+            .ok_or_else(|| std::io::Error::other("superscript hit is missing"))?
+    };
+    assert_eq!(hit.position.path, superscript_path);
+    assert_eq!(hit.position.offset, 1);
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+    runtime.handle_editor_key_json("mod-backspace")?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        block_text(&runtime.session.document().body[0]),
+        Some("sada_{a}^{a}a")
+    );
+    assert_eq!(
+        runtime.session.selection().focus.offset,
+        "sada_{a}^{a}a".find("^{a}").ok_or_else(|| {
+            std::io::Error::other("serialized superscript operand is missing")
+        })? + 3
+    );
+    runtime.handle_editor_key_json("mod-z")?;
+    assert!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .is_some_and(|(_, position)| {
+                position.path == superscript_path && position.offset == 1
+            })
+    );
+    runtime.handle_editor_key_json("mod-shift-z")?;
+    assert!(runtime.session.math_edit().is_none());
+
+    let (document, paragraph_id, math_id) = inline_subsup_document(Some("a"));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let host = caret_engine::MathPositionHost::InlineMath { owner_id: math_id };
+    let root_position = caret_engine::MathTreePosition {
+        host,
+        path: caret_engine::MathSequencePath::root(),
+        offset: 5,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let root_hit = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &root_position)
+            .ok_or_else(|| std::io::Error::other("root-end caret geometry is missing"))?;
+        snapshot
+            .hit_test_math_structure(
+                caret.page_index,
+                caret.x_pt,
+                (caret.y0_pt + caret.y1_pt) / 2.0,
+            )
+            .ok_or_else(|| std::io::Error::other("root-end structure hit is missing"))?
+    };
+    assert!(root_hit.position.path.steps().is_empty());
+    assert_eq!(root_hit.position.offset, 5);
+    runtime
+        .session
+        .focus_math_structure_hit(&root_hit, runtime.layout.font_generation())?;
+    runtime.handle_editor_key_json("backspace")?;
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        return Err("inline math paragraph disappeared after root-end Backspace".into());
+    };
+    let ParagraphContent::Math(math) = &paragraph.inlines[0] else {
+        return Err("SubSup inline math disappeared after root-end Backspace".into());
+    };
+    assert_eq!(math.math_tree.root.content.len(), 4);
+    assert!(matches!(
+        &math.math_tree.root.content[3],
+        caret_doc::MathContent::Math(node)
+            if node.kind == caret_doc::MathNodeKind::SubSup
+    ));
+    Ok(())
+}
+
+#[test]
+fn subsup_base_start_pointer_focus_supports_mod_backspace() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (document, paragraph_id, math_id) = inline_subsup_document(Some("a"));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let internal_position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::InlineMath { owner_id: math_id },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 3,
+            operand_index: 0,
+        }]),
+        offset: 0,
+        affinity: caret_engine::MathPositionAffinity::Downstream,
+    };
+    let caret = runtime
+        .current_snapshot()?
+        .math_tree_caret_geometry(&target, &internal_position)
+        .ok_or_else(|| std::io::Error::other("base-start caret geometry is missing"))?;
+    let placed: serde_json::Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        caret.page_index as i32,
+        caret.x_pt,
+        (caret.y0_pt + caret.y1_pt) / 2.0,
+    )?)?;
+    assert_eq!(placed["mathTree"], true);
+    assert!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .is_some_and(|(_, position)| {
+                position.path.steps()
+                    == [caret_engine::MathSequenceStep::Operand {
+                        content_index: 3,
+                        operand_index: 0,
+                    }]
+                    && position.offset == 0
+            })
+    );
+    runtime.handle_editor_key_json("mod-backspace")?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        block_text(&runtime.session.document().body[0]),
+        Some("sada_{a}^{a}a")
+    );
+    assert_eq!(runtime.session.selection().focus.offset, 3);
+    Ok(())
+}
+
+#[test]
+fn inserting_before_superscript_base_then_mod_backspace_succeeds()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, paragraph_id, math_id) = inline_superscript_document();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::InlineMath { owner_id: math_id },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 0,
+        affinity: caret_engine::MathPositionAffinity::Downstream,
+    };
+    let caret = runtime
+        .current_snapshot()?
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("superscript base-start geometry is missing"))?;
+    let placed: serde_json::Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        caret.page_index as i32,
+        caret.x_pt,
+        (caret.y0_pt + caret.y1_pt) / 2.0,
+    )?)?;
+    assert_eq!(placed["mathTree"], true);
+    let (_, before_insert) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("pointer did not enter MathTree"))?;
+    assert_eq!(before_insert.path, position.path);
+    assert_eq!(before_insert.offset, 0);
+    runtime.insert_text_json("v".to_owned())?;
+    let (_, after_insert) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("insert left MathTree focus"))?;
+    assert!(after_insert.path.steps().is_empty());
+    assert_eq!(after_insert.offset, 1);
+    let result = runtime.handle_editor_key_json("mod-backspace");
+    assert!(
+        result.is_ok(),
+        "Mod+Backspace failed after insertion: {result:?}"
+    );
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        block_text(&runtime.session.document().body[0]),
+        Some("vx^{a}")
+    );
+    assert_eq!(runtime.session.selection().focus.offset, 1);
+    Ok(())
+}
+
+#[test]
+fn typing_at_empty_superscript_base_fills_its_placeholder() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut document, paragraph_id, math_id) = inline_superscript_document();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err("expected paragraph".into());
+    };
+    let ParagraphContent::Math(math) = &mut paragraph.inlines[0] else {
+        return Err("expected inline math".into());
+    };
+    let Some(caret_doc::MathContent::Math(script)) = math.math_tree.root.content.first_mut() else {
+        return Err("expected superscript".into());
+    };
+    script.children[0] = placeholder_flow();
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::InlineMath { owner_id: math_id },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 0,
+        affinity: caret_engine::MathPositionAffinity::Downstream,
+    };
+    let caret = runtime
+        .current_snapshot()?
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("empty-base caret geometry is missing"))?;
+    let placed: serde_json::Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        caret.page_index as i32,
+        caret.x_pt,
+        (caret.y0_pt + caret.y1_pt) / 2.0,
+    )?)?;
+    assert_eq!(placed["mathTree"], true);
+    let (_, before_insert) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("pointer did not enter the empty MathTree slot"))?;
+    assert_eq!(before_insert.path, position.path);
+    assert_eq!(before_insert.offset, 0);
+    runtime.insert_text_json("v".to_owned())?;
+    let (_, after_insert) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("placeholder replacement left MathTree focus"))?;
+    assert_eq!(after_insert.path, position.path);
+    assert_eq!(after_insert.offset, 1);
+    let Block::Paragraph(paragraph) = &runtime.session.document().body[0] else {
+        return Err("paragraph disappeared after placeholder replacement".into());
+    };
+    let ParagraphContent::Math(math) = &paragraph.inlines[0] else {
+        return Err("inline math disappeared after placeholder replacement".into());
+    };
+    let Some(caret_doc::MathContent::Math(script)) = math.math_tree.root.content.first() else {
+        return Err("superscript disappeared after placeholder replacement".into());
+    };
+    assert!(matches!(
+        script.children[0].content.first(),
+        Some(caret_doc::MathContent::Math(node))
+            if node.kind == caret_doc::MathNodeKind::Symbol && node.text.as_deref() == Some("v")
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_tree_vertical_navigation_enters_textflow_in_an_operand()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut equation.math_tree.root.content[0] else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    fraction.children[1].content = vec![math_text_content("denominator")];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation { owner_id: block_id },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let snapshot = runtime.current_snapshot()?;
+    let caret = snapshot
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("fraction numerator caret is missing"))?;
+    let hit = caret_engine::PageMathStructureHit {
+        session_id: snapshot.session_id.clone(),
+        document_generation: snapshot.document_generation,
+        font_generation: snapshot.font_generation,
+        target,
+        position,
+        caret,
+    };
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Down did not enter denominator TextFlow"))?;
+    assert_eq!(context.surrounding_text, "denominator");
+    Ok(())
+}
+
+#[test]
+fn math_tree_vertical_navigation_keeps_empty_fraction_operand_insertable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut equation.math_tree.root.content[0] else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    let mut denominator = symbol_flow("d");
+    let mut empty_slot = placeholder_flow();
+    denominator.content.push(empty_slot.content.remove(0));
+    fraction.children = vec![placeholder_flow(), denominator];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let after_placeholder = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation {
+            owner_id: block_id.clone(),
+        },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]),
+        offset: 2,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let hit = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &after_placeholder)
+            .ok_or_else(|| std::io::Error::other("post-placeholder caret geometry is missing"))?;
+        snapshot
+            .hit_test_math_structure(
+                caret.page_index,
+                caret.x_pt,
+                (caret.y0_pt + caret.y1_pt) / 2.0,
+            )
+            .ok_or_else(|| std::io::Error::other("post-placeholder mouse hit is missing"))?
+    };
+    assert_eq!(hit.position.offset, 1);
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation { owner_id: block_id },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 0,
+        affinity: caret_engine::MathPositionAffinity::Downstream,
+    };
+    let snapshot = runtime.current_snapshot()?;
+    let caret = snapshot
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("empty numerator caret is missing"))?;
+    let initial_hit = caret_engine::PageMathStructureHit {
+        session_id: snapshot.session_id.clone(),
+        document_generation: snapshot.document_generation,
+        font_generation: snapshot.font_generation,
+        target: target.clone(),
+        position,
+        caret,
+    };
+    runtime
+        .session
+        .focus_math_structure_hit(&initial_hit, runtime.layout.font_generation())?;
+
+    let next = runtime
+        .current_snapshot()?
+        .move_math_tree_vertical_target(&target, &initial_hit.position, 1, Some(10_000.0))
+        .ok_or_else(|| std::io::Error::other("Down found no denominator slot"))?;
+    let caret_engine::MathTreeVerticalTarget::Structure(next) = next else {
+        return Err("empty fraction operand should remain a tree slot".into());
+    };
+    assert_eq!(
+        next.position.path.steps().last(),
+        Some(&caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        })
+    );
+    assert_eq!(next.position.offset, 1);
+    runtime
+        .session
+        .focus_math_structure_hit(&next, runtime.layout.font_generation())?;
+    runtime.insert_text_json("x".to_owned())?;
+
+    let Some(Block::Equation(equation)) = runtime
+        .session
+        .document()
+        .body
+        .iter()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction disappeared after inserting into denominator".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &equation.math_tree.root.content[0] else {
+        return Err("fraction disappeared after inserting into denominator".into());
+    };
+    assert!(matches!(
+        fraction.children[1].content.as_slice(),
+        [
+            caret_doc::MathContent::Math(existing),
+            caret_doc::MathContent::Math(inserted),
+        ] if existing.kind == caret_doc::MathNodeKind::Symbol
+            && existing.text.as_deref() == Some("d")
+            && inserted.kind == caret_doc::MathNodeKind::Symbol
+            && inserted.text.as_deref() == Some("x")
+    ));
+    Ok(())
+}
+
+#[test]
+fn math_tree_focus_after_required_placeholder_is_normalized_before_typing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut equation.math_tree.root.content[0] else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    let mut denominator = placeholder_flow();
+    denominator.content.push(symbol_flow("d").content.remove(0));
+    fraction.children = vec![placeholder_flow(), denominator];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let invalid_position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation {
+            owner_id: block_id.clone(),
+        },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let valid_after_content = caret_engine::MathTreePosition {
+        offset: 2,
+        ..invalid_position.clone()
+    };
+    let (page_index, x_pt, y0_pt, y1_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &valid_after_content)
+            .ok_or_else(|| std::io::Error::other("post-content caret geometry is missing"))?;
+        (caret.page_index, caret.x_pt, caret.y0_pt, caret.y1_pt)
+    };
+    let placement: serde_json::Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        page_index as i32,
+        x_pt,
+        (y0_pt + y1_pt) / 2.0,
+    )?)?;
+    assert_eq!(placement["mathTree"], true);
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, focus)| focus.offset),
+        Some(2),
+        "clicking after existing content must keep its legal boundary"
+    );
+    let (page_index, x_pt, y0_pt, y1_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &invalid_position)
+            .ok_or_else(|| std::io::Error::other("post-placeholder caret geometry is missing"))?;
+        (caret.page_index, caret.x_pt, caret.y0_pt, caret.y1_pt)
+    };
+    let placement: serde_json::Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        page_index as i32,
+        x_pt,
+        (y0_pt + y1_pt) / 2.0,
+    )?)?;
+    assert_eq!(
+        placement["mathTree"], true,
+        "click should stay in the math tree"
+    );
+    let (focused_target, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("click did not focus MathTree"))?;
+    assert_eq!(focused_target, target);
+    assert_eq!(focus.path, invalid_position.path);
+    assert_eq!(focus.offset, 0, "click must land before the Placeholder");
+
+    runtime.insert_text_json("asdasd".to_owned())?;
+    let Some(Block::Equation(equation)) = runtime
+        .session
+        .document()
+        .body
+        .iter()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction disappeared after typing".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &equation.math_tree.root.content[0] else {
+        return Err("fraction disappeared after typing".into());
+    };
+    assert!(fraction.children[1].content.iter().all(|content| {
+        !matches!(content, caret_doc::MathContent::Math(node) if node.kind == caret_doc::MathNodeKind::Placeholder)
+    }));
+    let symbols = fraction.children[1]
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            caret_doc::MathContent::Math(node) if node.kind == caret_doc::MathNodeKind::Symbol => {
+                node.text.as_deref()
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(
+        symbols, "asdasdd",
+        "typing must replace the slot and preserve following content"
+    );
+    Ok(())
+}
+
+#[test]
+fn math_tree_focus_normalizes_a_stale_hit_after_required_placeholder()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut equation.math_tree.root.content[0] else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    let mut denominator = placeholder_flow();
+    denominator.content.push(symbol_flow("d").content.remove(0));
+    fraction.children = vec![placeholder_flow(), denominator];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let make_position = |offset| caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation {
+            owner_id: block_id.clone(),
+        },
+        path: caret_engine::MathSequencePath::new(vec![caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]),
+        offset,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let make_hit = |runtime: &mut DocumentViewRuntime,
+                    position|
+     -> Result<_, Box<dyn std::error::Error>> {
+        let snapshot = runtime.current_snapshot()?;
+        let caret = snapshot
+            .math_tree_caret_geometry(&target, &position)
+            .ok_or_else(|| std::io::Error::other("post-placeholder caret geometry is missing"))?;
+        Ok(caret_engine::PageMathStructureHit {
+            session_id: snapshot.session_id.clone(),
+            document_generation: snapshot.document_generation,
+            font_generation: snapshot.font_generation,
+            target: target.clone(),
+            position,
+            caret,
+        })
+    };
+    let hit = make_hit(&mut runtime, make_position(2))?;
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, focus)| focus.offset),
+        Some(2),
+        "content after a Placeholder must retain its caret positions"
+    );
+
+    runtime.insert_text_json("x".to_owned())?;
+    let Block::Equation(equation) = runtime
+        .session
+        .document()
+        .body
+        .iter()
+        .find(|block| matches!(block, Block::Equation(_)))
+        .ok_or_else(|| std::io::Error::other("fraction disappeared after typing"))?
+    else {
+        return Err("fraction disappeared after typing".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &equation.math_tree.root.content[0] else {
+        return Err("fraction disappeared after typing".into());
+    };
+    assert!(matches!(
+        fraction.children[1].content.as_slice(),
+        [
+            caret_doc::MathContent::Math(placeholder),
+            caret_doc::MathContent::Math(existing),
+            caret_doc::MathContent::Math(inserted),
+        ] if placeholder.kind == caret_doc::MathNodeKind::Placeholder
+            && existing.text.as_deref() == Some("d")
+            && inserted.text.as_deref() == Some("x")
+    ));
+    let hit = make_hit(&mut runtime, make_position(1))?;
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+    assert_eq!(
+        runtime
+            .session
+            .math_tree_input_context()
+            .map(|(_, focus)| focus.offset),
+        Some(0),
+        "a required slot has no legal caret boundary after its Placeholder"
+    );
+    Ok(())
+}
+
+#[test]
+fn math_tree_vertical_navigation_escapes_nested_fraction_to_outer_sibling()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(outer_fraction) = &mut equation.math_tree.root.content[0]
+    else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    let inner_fraction = caret_doc::MathNode {
+        id: NodeId::generate(),
+        kind: caret_doc::MathNodeKind::Fraction,
+        text: None,
+        attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+        children: vec![symbol_flow("a"), symbol_flow("b")],
+        extra: BTreeMap::new(),
+    };
+    outer_fraction.children[0].content = vec![caret_doc::MathContent::Math(inner_fraction)];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let position = caret_engine::MathTreePosition {
+        host: caret_engine::MathPositionHost::Equation { owner_id: block_id },
+        path: caret_engine::MathSequencePath::new(vec![
+            caret_engine::MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 0,
+            },
+            caret_engine::MathSequenceStep::Operand {
+                content_index: 0,
+                operand_index: 1,
+            },
+        ]),
+        offset: 1,
+        affinity: caret_engine::MathPositionAffinity::Upstream,
+    };
+    let snapshot = runtime.current_snapshot()?;
+    let caret = snapshot
+        .math_tree_caret_geometry(&target, &position)
+        .ok_or_else(|| std::io::Error::other("nested denominator caret is missing"))?;
+    let hit = caret_engine::PageMathStructureHit {
+        session_id: snapshot.session_id.clone(),
+        document_generation: snapshot.document_generation,
+        font_generation: snapshot.font_generation,
+        target,
+        position,
+        caret,
+    };
+    runtime
+        .session
+        .focus_math_structure_hit(&hit, runtime.layout.font_generation())?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let (_, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Down left nested MathTree focus"))?;
+    assert_eq!(
+        focus.path.steps(),
+        &[caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn math_textflow_vertical_navigation_enters_a_math_tree_operand()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut document, block_id) = fraction_document();
+    let Some(Block::Equation(equation)) = document
+        .body
+        .iter_mut()
+        .find(|block| matches!(block, Block::Equation(_)))
+    else {
+        return Err("fraction fixture is not an equation".into());
+    };
+    let caret_doc::MathContent::Math(fraction) = &mut equation.math_tree.root.content[0] else {
+        return Err("fraction fixture root has no fraction".into());
+    };
+    fraction.children[0].content = vec![math_text_content("numerator")];
+
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id,
+        align: false,
+    };
+    let (token, position, order_utf8, visual_affinity) = {
+        let snapshot = runtime.current_snapshot()?;
+        snapshot
+            .math_text_drag_stops(0)
+            .into_iter()
+            .find(|stop| stop.target == target && stop.order_utf8 == "numerator".len())
+            .map(|stop| {
+                (
+                    stop.token,
+                    stop.position,
+                    stop.order_utf8,
+                    stop.visual_affinity,
+                )
+            })
+            .ok_or_else(|| std::io::Error::other("fraction numerator TextFlow caret is missing"))?
+    };
+    let hit = runtime
+        .current_snapshot()?
+        .math_text_drag_hit(0, token, &target, &position, order_utf8, visual_affinity)
+        .ok_or_else(|| std::io::Error::other("fraction numerator TextFlow hit is missing"))?;
+    let preferred_x = hit.caret.x_pt;
+    runtime
+        .session
+        .focus_math_text_hit(&hit, runtime.layout.font_generation())?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let (_, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Down did not enter denominator MathTree"))?;
+    assert_eq!(
+        focus.path.steps().last(),
+        Some(&caret_engine::MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        })
+    );
+    runtime.move_vertical_caret_json(-1, false)?;
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("Up did not return to numerator TextFlow"))?;
+    assert_eq!(context.focus, position);
+    let restored_caret = runtime
+        .current_snapshot()?
+        .math_text_caret_geometry(&target, &context.focus, context.visual_affinity)
+        .ok_or_else(|| std::io::Error::other("restored numerator caret geometry is missing"))?;
+    assert!((restored_caret.x_pt - preferred_x).abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn math_textflow_vertical_navigation_enters_next_align_row_tree_slot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align = caret_doc::Align {
+        id: NodeId::generate(),
+        rows: vec![
+            caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![align_text_tree("ab")],
+                extra: BTreeMap::new(),
+            },
+            caret_doc::MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![caret_doc::MathTree {
+                    schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                    root: placeholder_flow(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            },
+        ],
+        extra: BTreeMap::new(),
+    };
+    let expected_row = align.rows[1].id.clone();
+    let mut document = Document::blank();
+    document.body.push(Block::Align(align.clone()));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let target = caret_engine::MathEditTarget::Block {
+        block_id: align.id,
+        align: true,
+    };
+    let hit = runtime
+        .current_snapshot()?
+        .math_text_drag_stops(0)
+        .into_iter()
+        .filter(|stop| stop.target == target && stop.position.path.align_cell() == Some((0, 0)))
+        .filter_map(|stop| {
+            runtime.current_snapshot().ok()?.math_text_drag_hit(
+                0,
+                stop.token,
+                &target,
+                &stop.position,
+                stop.order_utf8,
+                stop.visual_affinity,
+            )
+        })
+        .find(|hit| hit.position.offset == "ab".len())
+        .ok_or_else(|| std::io::Error::other("first Align row text caret is missing"))?;
+    runtime
+        .session
+        .focus_math_text_hit(&hit, runtime.layout.font_generation())?;
+
+    runtime.move_vertical_caret_json(1, false)?;
+    let (_, focus) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("Down did not enter the next Align tree slot"))?;
+    assert!(matches!(
+        focus.host,
+        caret_engine::MathPositionHost::AlignCell { row_id, .. } if row_id == expected_row
+    ));
+    assert_eq!(focus.offset, 0);
     Ok(())
 }
 

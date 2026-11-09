@@ -182,6 +182,7 @@ pub const MATH_SPLIT_INLINE_COMMAND_ID: &str = "math.split_inline";
 const MATH_CANDIDATES: &[(&str, &str, &str)] = &[
     ("\\frac", "Fraction", "\\frac{}{}"),
     ("\\sqrt", "Square root", "\\sqrt{}"),
+    ("\\text", "Text", "\\text{}"),
     ("\\superscript", "Superscript", "^{}"),
     ("\\subscript", "Subscript", "_{}"),
     ("\\sum", "Summation", "\\sum"),
@@ -258,4 +259,27 @@ pub fn math_candidates() -> Vec<CommandCandidate> {
         },
     );
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MATH_INSERT_COMMAND_ID, math_candidates};
+
+    #[test]
+    fn math_text_command_is_registered_as_an_insertable_text_island() {
+        let candidates = math_candidates();
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.alias == "\\text")
+        );
+        for candidate in candidates
+            .iter()
+            .filter(|candidate| candidate.alias == "\\text")
+        {
+            assert_eq!(candidate.command_id, MATH_INSERT_COMMAND_ID);
+            assert_eq!(candidate.value.as_deref(), Some("\\text{}"));
+            assert!(candidate.available);
+        }
+    }
 }
