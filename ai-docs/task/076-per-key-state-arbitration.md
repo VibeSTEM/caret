@@ -84,6 +84,7 @@
 - 2026-11-09：本轮验证完成：engine 676/676、app 271/271；native CTest 10/10；格式与 workspace Clippy 通过。两次 Terra 复审及最终 Sol 复审的发现均已处理并复查。目标平台手动输入法与缺字恢复验收仍待完成。
 - 2026-11-09：PR 首轮 CI 的变更文件格式检查发现 native 测试 C++ 格式差异；按仓库 `cargo format --changed` 格式化后，本地完整变更文件格式检查通过。
 - 2026-11-09：CI L1 在 Linux 上发现父块高亮测试对 JSON 浮点坐标做精确比较，导致 `y1Pt` 的约 1.4e-14 差异误报。测试现逐字段比较矩形并为坐标使用 1e-9 pt 容差；针对性回归与 `caret-app` 271 项均通过。
+- 2026-11-09：后续 CI Clippy 拒绝测试 helper 中的 `.expect()`（`clippy::expect_used`）；已改为返回带诊断信息的 `Result`。`cargo clippy --locked --workspace --all-targets -- -D warnings`、变更文件格式检查和 `caret-app` 271 项测试通过。
 
 ## 完成摘要
 
