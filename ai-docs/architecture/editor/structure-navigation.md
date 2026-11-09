@@ -1,6 +1,6 @@
 # 结构导航
 
-更新日期：2026-11-09。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
+更新日期：2026-11-10。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
 
 ## 结构语义与界面类别
 
@@ -121,8 +121,15 @@ Inline 与具有独立外侧停靠语义的复杂 Block 都按三类位置处理
 | MathEdit 内部终点 | Right | InlineMath 外后 | 按 MathEdit 局部边界退出到 U+FFFC 后侧 |
 | InlineMath 外后 | Left | MathEdit 内部终点 | 进入公式内部；不跳过末端位置 |
 | InlineMath 相邻视觉行 | Up/Down | 相邻视觉文本 caret | 垂直移动不进入 InlineMath |
+| `Run.props.underline` 范围外前 | Right | 范围内部起点 | 在合法字素偏移进入内部归属，不跳过首个字素 |
+| Run 属性范围内部起点 | Left | 范围外前 | 在同一合法字素偏移更新 `Affinity` |
+| Run 属性范围内部位置：非终点 | Right | 下一个内部字素边界 | 按 TextFlow 字素规则移动 |
+| Run 属性范围内部位置：非起点 | Left | 上一个内部字素边界 | 按 TextFlow 字素规则移动 |
+| Run 属性范围内部终点 | Right | 范围外后 | 在同一合法字素偏移更新 `Affinity` |
+| `Run.props.underline` 范围外后 | Left | 范围内部终点 | 在合法字素偏移进入内部归属，不跳过末个字素 |
+| 空光标的 `PendingInlineStyle` | Left/Right | 上/下一个普通文本位置 | 移动时清除待输入格式与粉色槽位；关闭格式时在原位置清除。它不创建零长度范围或额外 caret 步数 |
 
-Run 属性范围（例如 `Run.props.underline`）同样参与 Inline 三态边界移动：非空范围在合法字素边界用 `Affinity` 表达外前/内部/外后归属，不生成环境节点身份；对应边界转移与 InlineEnvironment 对称。空光标处启用的格式由 `PendingInlineStyle` 表示，不创建零长度 Run 范围或 Inline 节点；它复用空 Inline 粉色槽位。Bold 与 Underline 在同一边界上的进入、退出步数必须一致。
+相邻或嵌套的 InlineEnvironment 若边界落在同一合法字素偏移，不为每个环境额外生成同坐标 caret。单次进入/退出该重合边界时，位置携带并更新完整有序环境链；插入格式按该链解析。边界偏移不同的环境仍分别转换。空嵌套环境继续合成为唯一内部 stop。Run 属性范围不提供宿主身份；非空范围由 `Affinity` 表达边界归属，空光标由 `PendingInlineStyle` 表达待输入格式。空光标启用格式时，在当前位置设置 `PendingInlineStyle` 并显示粉色槽位，不增加 caret 位置或移动步数；关闭格式或移动光标时清除待输入格式与槽位。Bold 与 Underline 在同一边界的进入、退出步数一致。
 
 若 InlineEnvironment 的结构边界落在跨 Run/环境的扩展字素内部，该结构边界不是 caret。进入时映射到环境内方向最近的合法字素边界，退出时对称地映射到环境外方向最近的合法字素边界；映射可越过整个相关字素簇，不得落在簇内。若映射不唯一，拒绝转换并保留文档、焦点、选区与格式上下文。空 InlineEnvironment 只有位于合法字素边界时才有内部插入点。
 
@@ -153,6 +160,18 @@ Block 的位置类别只有 **外前、内部、外后**。表中的“内部位
 | Block 外前/外后停靠 | Up/Down | 相邻视觉行的最近合法位置 | 先取共享视觉行候选；候选属于相邻 Paragraph/Block 时进入该位置，不凭键向猜测文档顺序 |
 
 Block 的邻接外侧停靠只在相邻内容实际存在且属于同一有效文档顺序时到达。文档首尾没有前方/后方内容时，水平键在对应 Block 外侧停靠保持原位；Section 子项边缘按宿主父链寻找最近可达的父级边界。不得合成空 Paragraph 或跳到不相邻的正文兜底。
+
+### 嵌套与相邻宿主的重合边界
+
+多个宿主边界若对应同一可编辑文档间隙，且没有不同的插入目标，则解析为一个规范位置，不因宿主层数或相邻宿主数增加重复 caret。移动方向决定从该间隙进入左侧/右侧宿主；位置携带解析所需的宿主链和局部坐标。
+
+- Equation/Align 是 Section 最后一个子项时，子 Block 的外后与 Section 的内部终点是同一规范边界；再向右才进入独立的 Section 外后。首子项的外前与 Section 内部起点对称处理。
+- 同级 Equation/Align 相邻时，前一块外后与后一块外前合并为两块之间的单一规范间隙；向左进入前块，向右进入后块。Section/Custom 等容器边界按同样的父链规则解析。
+- 非空 InlineEnvironment 的嵌套边界若在同一字素偏移重合，单次边界转换同时更新完整环境链，不逐层添加 caret 步数；只有偏移不同的真实编辑边界才有独立停靠。格式继承仍使用转换后的活动环境链。
+
+规范边界保留足以恢复宿主及方向的稳定身份，不依赖 Paragraph ordinal 或 ID 字典序。若两个宿主边界在位置相同但插入/编辑目标不同，则它们不是同一规范间隙，适配器必须给出可区分的局部位置。
+
+Escape 离开当前活动的复杂 Block 时进入该 Block 的外后停靠；重复 Escape 保持在同一停靠，不越过相邻 Block。需要继续浏览或进入相邻宿主时使用方向键，由共享文档顺序仲裁；宿主适配器不搜索远处 Paragraph 作为 Escape 的替代落点。
 
 Paragraph 继续使用其真实 TextMap 首尾，不套用复杂 Block 的虚拟停靠。Shift 扩选跨越宿主时使用共享文档顺序和稳定宿主范围，不从普通移动次数推导选区边界；位置比较、选区范围和删除事务协议见[块宿主交互](document-model/block-interaction.md)。
 

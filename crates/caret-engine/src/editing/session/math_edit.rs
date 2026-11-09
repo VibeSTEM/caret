@@ -3894,8 +3894,7 @@ impl Session {
         self.exit_math_edit_with_boundary(direction, allow_fallback, false)
     }
 
-    /// Arrow navigation leaves a display formula at its outer row edge, keeping the block
-    /// boundary stop available for reentry or movement to the next sibling.
+    /// 显式离开块公式时停在外侧边界，供重新进入或继续移动到相邻宿主。
     pub(super) fn exit_math_edit_for_navigation(
         &mut self,
         direction: Direction,
@@ -3997,7 +3996,7 @@ impl Session {
         };
     }
 
-    /// 显式退出时跳过连续公式块，寻找最近的同级正文段落。
+    /// 查找同级正文段落；定位、Enter 回退和对象删除恢复使用此策略，Escape 不跨块跳转。
     fn paragraph_beside_math_chain(
         &self,
         block_id: &NodeId,
