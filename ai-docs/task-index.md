@@ -111,6 +111,6 @@
 | 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | implemented |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | implemented |
-| 080 | 数学交互 | [数学块边界删除与 Shift 选区](task/080-math-block-boundary-deletion-and-selection.md) | P1 | 071、074、077 | M | ready |
+| 080 | 数学交互 | [数学块边界删除与 Shift 选区](task/080-math-block-boundary-deletion-and-selection.md) | P1 | 071、074、077 | L | in-progress |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

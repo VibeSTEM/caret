@@ -1,6 +1,6 @@
 # 080 — 数学块边界删除与 Shift 选区
 
-- 状态：ready
+- 状态：in-progress
 - 依赖：071、074、077
 - 优先级：P1
 - 创建 / 更新：2026-11-09 / 2026-11-09
@@ -23,16 +23,18 @@
 
 ## 范围与非目标
 
-- 修复连续块级 Equation/Align 的删除落点，保留块链上每个仍存在的左右边界 stop；焦点恢复基于相邻有效宿主，不以“找到 Paragraph”为唯一目标。
+- 修复连续块级 Equation/Align 的删除落点，保留块链上每个仍存在的左右边界 stop；删除焦点恢复基于相邻有效宿主，不以“找到 Paragraph”为唯一目标。显式 Escape 离开公式仍保留跳过公式链、寻找正文的既有契约。
 - 修复数学块紧邻 Section 时 Backspace 的位置解析与失败原子性；覆盖 Section 标题、首个正文 Paragraph、嵌套子块及相邻数学块的有效边界。
-- 让 Shift+Left/Right/Up/Down 能扩展正文结构选区并完整纳入/移出块级数学对象和行内 InlineMath；普通光标移动仍使用既有导航规则。
-- 统一数学宿主到正文结构位置的映射、扩选边界和几何来源；区分真正的原子数学范围与数学内部 `MathText` 文本岛，不把数学内部 caret 错误折算成整块选择。
+- 让 Shift+Left/Right/Up/Down 能扩展正文结构选区并完整纳入/移出块级数学对象和行内 InlineMath；普通光标移动仍使用既有导航规则。数学内部 MathTree/MathText 选区保持其树内语义，只有越过宿主边界才进入正文结构范围。
+- 统一数学宿主到正文结构位置的映射、扩选边界和几何来源。结构选中的数学节点必须参与范围投影与 Backspace/Delete 替换；复制行为不得泄露 U+FFFC 或静默丢弃已选数学节点，需实现已有剪贴板表达或明确拒绝不支持的跨层复制。
 - 不改变 Align 逻辑行的空行删除/非空行首 no-op 规则（079）；不实现表格单元格选择或一般任意嵌套块的完整结构选择。
 
 ## 前置条件与待决策
 
-- 先在当前分支复现三种反馈，分别覆盖 Equation、Align、InlineMath 与 Section/连续数学块组合；记录起始 caret stop、按键方向、预期 anchor/focus 和实际结构位置。
-- 检查 `Session::delete_math_object`、相邻数学块查找/焦点恢复、Section Paragraph Backspace 路径、`left_arrow.rs` / `right_arrow.rs` 与结构扩选候选提交。确认真实根因后再决定共享 helper 的边界，避免为单个 math 类型添加特殊路由。
+- 已确认 `Session::delete_math_object` 误用 `paragraph_beside_math_chain`：该 helper 跳过同级 Equation/Align，遇到 Section 返回 None；保留它用于显式 Escape 的原契约，删除改用独立的相邻宿主边界解析。
+- 已确认 `StructureIndex` 当前仅为 Equation/Align 建零长 paragraph ordinal 范围，扩选/高亮/删除只按段落及块环境建模；布局候选也按相邻 Paragraph 生成，故只改方向键 handler 不足。
+- 已确认 MathTree Tree/Source 的 Shift 水平移动无操作，MathText/MathTree hit 和垂直候选在 extend 分支也会 no-op；MathTree 复制尚无实现。完成前须为 selection 的文档范围、几何、删除/替换和复制定义一致契约。
+- 先补运行时可复现测试，分别覆盖 Equation、Align、InlineMath 与 Section/连续数学块组合；记录起始 caret stop、按键方向、预期 anchor/focus 和实际结构位置。
 - 明确跨块结构选区应将公式对象视为一个原子范围；当选区从 MathText 文本岛内部发起时，先按公式内部文本规则扩展，越过宿主边界后再进入正文结构选区。
 - 若某个焦点状态的 anchor 无法在当前文档位置模型无损表达，操作必须保持原文档和有效焦点，并给出确定行为；不得生成 `InvalidPosition`。
 
@@ -46,7 +48,7 @@
 
 ## 预计改动
 
-预计涉及 `crates/caret-engine/src/editing/session/math_edit/` 中的删除/焦点恢复、`crates/caret-engine/src/editing/session/keyboards/` 及其 `helpers/` 中的块边界与结构扩选提交、Session 行为测试，以及 `ai-docs/architecture/editor/structure-navigation.md` 和 `ai-docs/architecture/editor/math.md`。只有当布局快照缺少表达现有对象范围所需的几何时，才扩展 `caret-app` 候选投影；不在 Qt/QML 重写选区仲裁。
+预计涉及 `caret-engine` Session 数学删除与结构选区、`caret-structure` 文档顺序/范围索引、`caret-layout` 选区几何、`caret-app` 同代导航候选和剪贴板适配、跨层行为测试，以及数学与结构导航架构文档。Qt/QML 不重写选区仲裁；只有 Rust 投影无法表达必要候选或几何时才修改视图边界。
 
 ## 验收标准
 
@@ -55,6 +57,7 @@
 - [ ] Shift+方向键能从数学块前后扩选 Equation/Align，并能从两侧扩选行内 InlineMath；四个方向、反向 anchor/focus 和跨 Paragraph 情况符合统一选区范围。
 - [ ] 从 MathText 内部扩选时先保留数学文本岛内的文本语义；越过公式宿主边界后将数学宿主映射为正文结构选区，不丢失正文锚点。
 - [ ] 每个视觉高亮、命中、caret stop 和 anchor/focus 均来自同一代布局几何；不会显示选中但模型范围为空，或模型选择了公式但没有对应高亮。
+- [ ] 对数学结构选区执行 Backspace/Delete、输入替换及复制时，文档节点范围与可见选区一致；复制不会输出 U+FFFC 或静默漏掉公式。
 - [ ] Undo/Redo 恢复删除前后的有效宿主焦点与选区；所有失败路径保留文档、generation、选区、焦点和历史。
 - [ ] 不重复实现 Equation、Align 与 InlineMath 的边界仲裁；旧的跳过链式块和失效位置逻辑已移除，架构文档记录权威调用链。
 - [ ] 相关 Rust 行为测试、格式/lint 与独立评审通过；未执行的窗口/平台验收如实记录。
@@ -73,7 +76,8 @@
 
 ## 决策与工作记录
 
-- 2026-11-09：创建任务。维护者报告块数学删除落点跳过相邻数学块、Section 前退格产生 `edit.invalid_position`、Shift+方向键不能选中块级和行内数学。现象待代码路径复现，尚未认定具体根因。
+- 2026-11-09：创建任务。维护者报告块数学删除落点跳过相邻数学块、Section 前退格产生 `edit.invalid_position`、Shift+方向键不能选中块级和行内数学。
+- 2026-11-09：Terra/medium 只读领域审查确认：删除分支误用仅供 Escape 的公式链跳过 helper；Section 侧无相邻 Paragraph 时在 mutation 前失败。Shift 选区还缺结构索引与布局几何对数学块的支持；扩选须同步考虑删除、替换、复制，不能只开放 handler。
 
 ## 完成摘要
 
