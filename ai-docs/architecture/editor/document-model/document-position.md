@@ -1,6 +1,6 @@
 # 文档位置与限制
 
-更新日期：2026-11-02。本文定义目标运行时位置、位置映射及模型深度/尺寸契约；当前实现进度与未完成项见[043 公式模型与编辑](../../../task/043-math-model-and-editing.md)。持久化节点语义见[文档树与结构](document-structure.md)，`.cdoc` 格式见[文档存储](document-storage.md)。
+更新日期：2026-11-09。本文定义目标运行时位置、位置映射及模型深度/尺寸契约；当前实现进度与未完成项只见[任务索引](../../../task-index.md)。持久化节点语义见[文档树与结构](document-structure.md)，共享 Block 交互见[块宿主交互](block-interaction.md)，导航投影见[结构导航](../structure-navigation.md)，`.cdoc` 格式见[文档存储](document-storage.md)。
 
 ## 位置
 
@@ -18,6 +18,8 @@
 Paragraph 与 MathFlow 的连续 TextFlow 均按拼接后的 Unicode 文本计算字素边界，Run、InlineEnvironment 与相邻 TextFlow 边界不打断字素分段；可编辑结构原子（Paragraph 中的 `InlineMath`、MathFlow 中的 MathNode）和显式 `SoftBreak` 两侧设置强制停靠点。即使拼接后的文本会把结构占位符/换行与邻接字符组成扩展字素，caret 仍可停在这些结构项两边，结构项和换行可独立选择/删除。Opaque 节点不提供编辑位置。其他简单 LTR 移动按相邻字素边界进行。鼠标命中按布局给出的相邻字素簇边缘选择亲和性；若点击精确落在无法区分两侧的边界，确定性地选择逻辑 `Downstream`。工具栏格式命令保留原光标亲和性；选区命令保留锚点和焦点的完整 Pos，并在事务改写后通过位置映射恢复两侧。对于 bidi 或换行处视觉位置不同的同逻辑 Pos，方向键按视觉布局直接移动到相邻视觉 caret 候选，并以目标候选的字素边缘确定逻辑 affinity；不先执行上表的同位置状态转换。混合方向文本不能按屏幕左/右推断逻辑 upstream/downstream。鼠标命中测试和结构命令也必须明确提交逻辑侧。选区锚点和焦点各自携带完整 `Pos`，因此选区方向及两端的边界语义都能保留。
 
 选区记住锚点和焦点。公式编辑会话记录宿主、活动分支和分支内位置；显式源码草稿的位置是 UTF-8 字节偏移，TextFlow 模式使用共享文本位置，二者都不直接等同于宿主段落 `Pos`。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，行内公式使用 `ParagraphContent::Math` 并在 `TextMap` 中占 U+FFFC 原子位置；Equation/Align 还带公式块及 Align 行列定位。实际目标调用链见[内容节点代码链路](content-code-path.md)。MathFlow 与 Paragraph 的 TextFlow 事务共用文本位置原语，并通过各自宿主路径映射回文档位置；事务失败时保留原文档和有效焦点。
+
+Paragraph 是 `Block` 的简单变体，使用完整的 Paragraph/TextMap 位置；不能将复杂 Block 的边界编码成 Paragraph 零长度文本偏移，也不能因为共享 Block 协议而替 Paragraph 加入虚拟块停靠点。InlineMath 外部两侧是 U+FFFC 前后两个位置，InlineEnvironment 的内外语义由逻辑边界亲和性表达。Section、Equation、Align 等复杂 Block 的外部位置由会话持有稳定 Block ID 和前/后侧，内部位置由各自适配器提供（例如 Section 子树位置、Equation 焦点或 Align 行列）。共享选区保留有序 anchor/focus 及方向，并映射到同一文档顺序；各宿主坐标无需相同，也不能在缺少邻接 Paragraph 时凭空构造一个段落位置。Paragraph 的成熟文本编辑行为是抽取共享不变量的基准，但其 paragraph_id/UTF-8 坐标和文本历史映射不是其他 Block 的通用表示。具体移动、停靠和几何规则见[块宿主交互](block-interaction.md)与[结构导航](../structure-navigation.md)。
 
 ## 上限
 

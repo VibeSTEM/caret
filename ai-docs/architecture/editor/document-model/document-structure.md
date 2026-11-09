@@ -1,6 +1,6 @@
 # 文档树与结构
 
-更新日期：2026-11-03。本文是持久化 DTO、文档树和页面层级的权威定义。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；行内/块级语义适配见[行内与块级环境适配](inline-and-block-environments.md)。位置与上限见[文档位置](document-position.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
+更新日期：2026-11-09。本文是持久化 DTO、文档树、页面层级及 Block/Inline 内容层次的唯一权威定义。Paragraph 是 `Block` 的一个具体变体，也是结构最简单的块；其他 Block 可拥有更复杂的容器或内部位置。语义草图与具体 Rust/JSON schema 分别说明概念和字段，不照搬 OOXML，也不承诺 DOCX 兼容；内容节点的职责链路见[内容节点代码链路](content-code-path.md)；块环境标题、编号、模板和结构编辑见[块环境模型](document-environments.md)；共享 Block 交互协议及 Paragraph 基线见[块宿主交互](block-interaction.md)。位置与上限见[文档位置](document-position.md)，导航投影见[结构导航](../structure-navigation.md)，载体视图见[环境视图](environment-views.md)，文件格式与写入边界见[`.cdoc` 格式](document-storage.md)。
 
 ## 持久化树
 
@@ -18,7 +18,7 @@
 
 ### Block 与 Inline 节点
 
-`Block` 和 `ParagraphContent` 是文档树的两类内容节点，归属不同的容器：
+文档内容分为两层：Block 与 Inline。Block 是页面内容的块级节点类别，Paragraph 是结构最简单且规则最完整的 Block 变体；Section、Equation、Align 等其他 Block 持有各自的结构或领域内容。Inline 是 Paragraph 或显式支持行内流的其他 Block 内部可承载的内容层，不是第三种内容层，也不直接插入任意块序列。Paragraph 的文本与行内规则是共享 Block 交互行为的基准，复杂 Block 通过适配器接入共享协议，而不是复制一套状态。PageContent 组织 Block 序列，是页面容器，不是第三层文档内容节点。持久化树仍由不同强类型节点和容器表达：
 
 | 节点层级 | 所属容器 | 内容 |
 | --- | --- | --- |
@@ -26,7 +26,7 @@
 | `ParagraphContent` | Paragraph block 或行内格式环境的有序子项 | `Text(TextFlow)`、`Math(InlineMath)`、`Environment(InlineEnvironment<ParagraphContent>)`、`SoftBreak`、未知行内项 |
 | `TextFlow` | `ParagraphContent::Text` 或 Math `Text(TextFlow)` | 有序 Run 片段及其属性、语言与未知字段；不含 Math 节点或块级布局 |
 
-页面角色组织块流；`Paragraph` 持有 `Vec<ParagraphContent>` 并负责段落级排版。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
+页面角色组织 Block 流；Paragraph block 持有 `Vec<ParagraphContent>` 并负责段落级排版。Section 等容器 Block 持有 `Vec<Block>`，可通过 Paragraph 子项承载行内内容；其他 Block（例如 Align 或未来的 Table/Figure）只有在其内部模型显式提供 ParagraphContent、MathContent 或等价 inline-capable 流时才承载 Inline。Inline 可复用在 Paragraph 及这些内层流中，但不能越过宿主定义直接插进任意 Block 序列。公式文本项和正文 `ParagraphContent::Text` 共用同一种 `TextFlow`，但公式文本项不获得段落折行、段落前后间距或块级身份。`InlineEnvironment<Child>` 的子项类型由宿主流决定：正文包装使用 `ParagraphContent`，数学流包装使用 `MathContent`。正文格式树编辑与 InlineMath 根层提升由各自宿主适配器处理；共用 TextFlow 文本/格式操作、Run 范围替换和字素原语，不将两种节点枚举抹平成无类型数据。数学节点的分子、分母、上下标等固定槽位各自持有 `MathFlow`；槽内文本和 MathNode 不得提升到 Paragraph 层，只有 InlineMath 根流及其格式包装子树中的 TextFlow 可按 Paragraph 宿主规则提升为相邻 ParagraphContent。Run 边界和行内环境边界不改变宿主 UTF-8 偏移或跨节点字素分段。InlineMath 创建及从源码导入时执行根层提升；具体事务规则见[数学公式](../math.md#宿主边界与拆分)。
 
 共享结构消除重复文本与格式语义，不自动构成性能保证。正文 TextFlow 与 MathFlow TextFlow 共用范围编辑、格式树拆分合并和字素原语；各自宿主适配器解析物理路径、校验元数据并提交对应历史事务。MathEdit 只为固定操作数槽位与公式焦点管理提供宿主策略；临时 TeX 草稿和位置映射仅用于源码编辑，不参与普通文本操作或文档持久化。实现成本是否下降、局部事务是否减少分配，需用代表性基准验证，不能据此宣称性能收益。
 
@@ -34,7 +34,7 @@
 
 “行内内容插入”描述的是编辑操作，不是第三类节点或容器。普通文本输入在光标/选区处更新 ParagraphContent；`\newline` 与 Shift+Enter 插入 `SoftBreak`，保留 Paragraph；Enter 与 `\newparagraph` 执行段落拆分，在所属块流中创建新的 Paragraph wrapper。`\section` 的段落转换和 Section title 语义见[块环境模型](document-environments.md)；Section children 仍由块流持有。命令模式、按键入口和补全规则由[命令输入](../command-input.md)定义；节点本身及其持久化语义仍由本文定义。
 
-`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。`ParagraphContent::Text(TextFlow)` 持有普通文字内容。粗体、斜体、局部字体和下划线的载体及语义适配见[行内与块级环境适配](inline-and-block-environments.md)，格式命令见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
+`Run.props` 和 `Paragraph.props` / `Paragraph.layout` 保存直接属性；Run 与 Paragraph 是属性的承载对象，不是格式环境。`ParagraphContent::Text(TextFlow)` 持有普通文字内容。粗体、斜体、局部字体和下划线的载体及语义适配见[环境视图](environment-views.md)，格式命令见[文字格式语义](../text-formatting.md)。InlineEnvironment kind、稳定存储名称和模型节点集中定义于 `caret-doc/src/model/inline_environment.rs`；Run 属性及其允许格式由文档模型校验；`caret-layout/src/shaping.rs` 将环境和 Run 直接属性投影为排版样式，文档模型不依赖 Parley，也不负责选字体或塑形。格式树及直接属性只能由 Rust 编辑会话事务修改，QML 不维护副本。
 
 Rust 文件按数据职责和编辑职责对应：
 
@@ -112,7 +112,7 @@ MathNode { id, kind, text?, attributes, children: Vec<MathFlow>, extra }
 图中列的是目标 `caret-doc` DTO；`CodeSpan`、`Title`、`Table`、`Figure` 和页面组合均为规划概念，不能视为已持久化节点。每个 DTO 的可选字段默认值与 JSON 编解码细节以对应 Rust 结构定义为准。
 
 
-块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[行内与块级环境适配](inline-and-block-environments.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。
+块环境编辑规则见[块环境模型](document-environments.md)；行内载体和两层环境适配见[环境视图](environment-views.md)；格式解析和直接属性规则见[文字格式语义](../text-formatting.md)。
 
 ## 文本与实现边界
 

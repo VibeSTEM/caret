@@ -1,6 +1,6 @@
 # 数学公式
 
-更新日期：2026-11-08。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。任务进度见[011 总体验收](../../task/011-impl-math.md)及其拆分任务；公式与表格之间的工作边界见[专题索引](math-and-table.md)。
+更新日期：2026-11-09。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。任务进度见[011 总体验收](../../task/011-impl-math.md)及其拆分任务；公式与表格之间的工作边界见[专题索引](math-and-table.md)。
 
 ## 公式节点与 LaTeX 语义
 
@@ -26,7 +26,7 @@ MathTree 是 `.cdoc` 中数学内容的唯一权威。文档只保存结构、�
 
 ### 文档树中的位置
 
-段落中的公式是 `ParagraphContent::Math(InlineMath)`；显示公式 `Equation` 与 `Align` 是块节点。段落与行内树的结构字段由[文档树与结构](document-model/document-structure.md)定义，公式与文本的适配规则由[行内与块级环境适配](document-model/inline-and-block-environments.md)定义。
+段落中的公式是 `ParagraphContent::Math(InlineMath)`；显示公式 `Equation` 与 `Align` 是 Block 节点。持久化结构字段由[文档树与结构](document-model/document-structure.md)定义；共享 Block/Inline 交互由[块宿主交互](document-model/block-interaction.md)定义；数学载体候选与文本适配见[环境视图](document-model/environment-views.md)。
 
 ```text
 Document.body: Vec<Block>
@@ -112,7 +112,8 @@ split/merge 操作接收强类型有序流和宿主路径，由宿主适配器�
 - 数学文本选区使用 UTF-8 字节偏移设置 anchor/focus；两端必须落在 grapheme 边界。输入和退格/删除替换选区，左右键将选区折叠到对应边界。仅在源码模式切换或提交时，若临时映射不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的选区由宿主路径映射到同一逻辑文本范围；公式原子与相邻文本之间必须保留可用 caret 边界。布局命中和选区绘制使用相同的 MathBox 几何。
 - 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与 Enter 可退出公式。
 - Up/Down 在 MathTree 中根据同一公式布局快照生成垂直候选，使用结构节点、分数槽位及脚本的实际基线和光标高度；候选只进入可见的正尺寸结构槽，必需 Placeholder 可在其前定位、不会生成其后的插入点。左右键跨入或离开 MathFlow 时也不会停在 Placeholder 后。Session 对鼠标命中、导航和输入统一约束紧邻 Placeholder 的非法边界，同时保留 Placeholder 后其他已有内容的合法位置。Align 同一行的不同 cell 不视为上下目标，跨行按宿主行和页面几何选择。Session 通过统一 `EditorKey` 入口校验目标公式与布局代际后提交。MathFlow 内 TextFlow 继续使用 Parley 正文文本移动语义并适配宿主路径。当前树位置只表示一个 MathFlow 路径，跨操作数的 Shift 扩展不能无损表示，因此保持原位置；普通正文与 TextFlow 的扩选状态仍由其各自宿主位置表达。
-- 块级 Equation/Align 参与与 Section 相同的相邻块方向键仲裁：Left/Right 从相邻段落进入公式；Up/Down 从正文视觉列边缘进入公式首/末行；公式对应边缘按反方向回到邻接正文或公式块。Up/Down 的边界入口只查找相邻块级公式，不误入同段行内公式；左右键仍可按既有契约进入相邻行内公式。入口复用 Session 的块邻接逻辑；正文、MathText 和 MathTree 只负责计算视觉候选与方向，不另建公式专用块跳转状态。
+- Equation/Align 的块边界进入/退出使用[结构导航](structure-navigation.md)规定的共享 Block 仲裁；数学适配器只提供 MathTree/MathText 内部移动候选和同代公式几何，不再维护公式专用块跳转状态。
+- InlineMath 是 Paragraph 内的 U+FFFC 原子 Inline。外部两侧及公式内部位置按[文档位置](document-model/document-position.md)映射；它通过共享 Inline 范围底座参加选区与删除，不使用复杂 Block 的边界停靠。Inline 高亮与空槽位规则以[画布高亮](../interface/canvas-highlighting.md)为准。
 - `_` 与 `^` 插入带空组的下标与上标，`{` 自动补 `}`，`}` 跳出组。
 - 公式编辑中 `\` 打开数学命令，不打开正文命令；`Align` 中 Enter 插入 `\\` 结束一行，`&` 为对齐点。
 - 退格行为按焦点对象分别仲裁：MathTree 根为空时删除整个 InlineMath、Equation 或整个空 Align 对象；源码分支中的空公式也删除对应公式对象。Align 的 Backspace 按逻辑行优先处理：当前行的所有 cell 均为空时删除整行，焦点落在前一行末端；若删除首行则落到新首行起点；唯一的空 Align 仍按空公式宿主规则删除整个对象。删除行前检查被移除的行、cell、MathTree、MathFlow、TextFlow 和 Run 元数据；无法安全丢弃时原子拒绝。非空 Align 行在首 cell 逻辑起点处 Backspace 不产生任何状态变化，不合并内容、不跨行移动；行内其他空 cell 的退格仍按 cell 导航规则处理。逻辑行退格策略由块编辑共享，Align Tree、Text 和有效源码分支映射各自焦点与行结构；源码行含注释或元数据无法安全映射时保留原状态。该规则面向拥有内部逻辑行/cell 模型的块，不由视觉多行或 `MultiLine` 索引分类推导：Section 是标题与子块容器，其中 Paragraph 保留段落退格规则。空构造参数（例如 `\\sqrt{}`）先按公式内部退格规则移除构造，光标位于空 MathText 文本岛时保留该文本岛，不删除宿主公式。结构选区的块删除、普通 Paragraph 的空段删除和 MathTree 根删除不共享“空对象”判定。只移动插入点的离开操作不产生撤销步；修改文档树的操作才记账。删除公式对象的撤销恢复公式编辑目标、焦点和视觉 affinity，重做恢复删除后的宿主焦点。
