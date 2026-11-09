@@ -9826,7 +9826,8 @@ fn paste_preserves_latex_group_syntax() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
-fn align_row_break_is_one_navigation_and_deletion_unit() -> Result<(), Box<dyn std::error::Error>> {
+fn align_row_break_navigation_keeps_nonempty_row_start_backspace_as_noop()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut session = session_with_text("")?;
     accept(&mut session, "align")?;
     enter_source_edit(&mut session, Direction::Forward)?;
@@ -9838,9 +9839,19 @@ fn align_row_break_is_one_navigation_and_deletion_unit() -> Result<(), Box<dyn s
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
     session.run(Command::MoveCaret(Direction::Forward))?;
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
+    let source_before = session
+        .math_edit()
+        .map(source_text)
+        .unwrap_or_default()
+        .to_owned();
+    let align_before = first_align(&session)?.clone();
     session.run(Command::Delete(Direction::Backward))?;
 
-    assert_eq!(session.math_edit().and_then(MathEdit::source), Some("aabc"));
+    assert_eq!(
+        session.math_edit().map(source_text),
+        Some(source_before.as_str())
+    );
+    assert_eq!(first_align(&session)?, &align_before);
     Ok(())
 }
 
@@ -12776,6 +12787,543 @@ fn align_enter_inserts_row_break() -> Result<(), Box<dyn std::error::Error>> {
         source_text(edit)
     );
     assert_eq!(source_text(edit), "a&=b \\\\ c&=d");
+    Ok(())
+}
+
+#[test]
+fn align_source_backspace_removes_empty_rows_and_keeps_nonempty_row_start_unchanged()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut blank_trailing_row = session_with_text("")?;
+    accept(&mut blank_trailing_row, "align")?;
+    enter_source_edit(&mut blank_trailing_row, Direction::Forward)?;
+    blank_trailing_row.run(Command::InsertText("a".to_owned()))?;
+    blank_trailing_row.run(Command::EditorKey(EditorKey::Enter))?;
+    assert!(
+        blank_trailing_row
+            .math_edit()
+            .is_some_and(|edit| source_text(edit).contains(r"\\"))
+    );
+    blank_trailing_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert!(
+        !blank_trailing_row
+            .math_edit()
+            .is_some_and(|edit| source_text(edit).contains(r"\\"))
+    );
+    assert_eq!(first_align(&blank_trailing_row)?.rows.len(), 1);
+
+    let mut blank_multicell_row = session_with_text("")?;
+    accept(&mut blank_multicell_row, "align")?;
+    enter_source_edit(&mut blank_multicell_row, Direction::Forward)?;
+    blank_multicell_row.run(Command::InsertText("a&b".to_owned()))?;
+    blank_multicell_row.run(Command::EditorKey(EditorKey::Enter))?;
+    blank_multicell_row.run(Command::InsertText("&".to_owned()))?;
+    assert_eq!(
+        blank_multicell_row
+            .math_edit()
+            .and_then(MathEdit::align_cell_at_cursor),
+        Some((1, 1, 0))
+    );
+    blank_multicell_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert_eq!(first_align(&blank_multicell_row)?.rows.len(), 1);
+    assert_eq!(first_align(&blank_multicell_row)?.rows[0].cells.len(), 2);
+    assert_eq!(
+        blank_multicell_row.math_edit().map(source_text),
+        Some("a&b ")
+    );
+
+    let mut blank_middle_row = session_with_text("")?;
+    accept(&mut blank_middle_row, "align")?;
+    enter_source_edit(&mut blank_middle_row, Direction::Forward)?;
+    blank_middle_row.run(Command::InsertText(r"a&b \\ & \\ c".to_owned()))?;
+    let edit = blank_middle_row
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let projection = edit
+        .source_projection
+        .as_deref()
+        .ok_or(EditError::InvalidPosition)?;
+    let align_map = projection.align().ok_or(EditError::InvalidPosition)?;
+    let cursor = align_map
+        .row_navigation_range(1)
+        .ok_or(EditError::InvalidPosition)?
+        .start
+        .checked_sub(projection.edit_range().start)
+        .ok_or(EditError::InvalidPosition)?;
+    blank_middle_row
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .cursor = cursor;
+    assert_eq!(
+        blank_middle_row
+            .math_edit()
+            .and_then(MathEdit::align_cell_at_cursor),
+        Some((1, 0, 0))
+    );
+    blank_middle_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert_eq!(first_align(&blank_middle_row)?.rows.len(), 2);
+    assert_eq!(first_align(&blank_middle_row)?.rows[0].cells.len(), 2);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&blank_middle_row)?.rows[1].cells[0]),
+        "c"
+    );
+
+    let mut blank_first_row = session_with_text("")?;
+    accept(&mut blank_first_row, "align")?;
+    enter_source_edit(&mut blank_first_row, Direction::Forward)?;
+    blank_first_row.run(Command::EditorKey(EditorKey::Enter))?;
+    blank_first_row.run(Command::InsertText("b".to_owned()))?;
+    if let Some(edit) = &mut blank_first_row.math_edit {
+        edit.cursor = 0;
+    }
+    assert_eq!(
+        blank_first_row
+            .math_edit()
+            .and_then(MathEdit::align_cell_at_cursor),
+        Some((0, 0, 0))
+    );
+    blank_first_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert_eq!(first_align(&blank_first_row)?.rows.len(), 1);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&blank_first_row)?.rows[0].cells[0]),
+        "b"
+    );
+
+    let mut nonempty_row = session_with_text("")?;
+    accept(&mut nonempty_row, "align")?;
+    enter_source_edit(&mut nonempty_row, Direction::Forward)?;
+    nonempty_row.run(Command::InsertText("a".to_owned()))?;
+    nonempty_row.run(Command::EditorKey(EditorKey::Enter))?;
+    nonempty_row.run(Command::InsertText("b".to_owned()))?;
+    nonempty_row.run(Command::MoveCaret(Direction::Backward))?;
+    assert_eq!(
+        nonempty_row
+            .math_edit()
+            .and_then(MathEdit::align_cell_at_cursor),
+        Some((1, 0, 0))
+    );
+    let source_before =
+        source_text(nonempty_row.math_edit().ok_or(EditError::InvalidPosition)?).to_owned();
+    let document_before = nonempty_row.document().clone();
+    let edit_before = nonempty_row.math_edit().cloned();
+    let effect = nonempty_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert!(!effect.document_changed);
+    assert!(!effect.selection_changed);
+    assert_eq!(
+        source_text(nonempty_row.math_edit().ok_or(EditError::InvalidPosition)?),
+        source_before
+    );
+    assert_eq!(nonempty_row.document(), &document_before);
+    assert_eq!(nonempty_row.math_edit(), edit_before.as_ref());
+    Ok(())
+}
+
+#[test]
+fn align_backspace_removes_a_blank_row_and_history_restores_its_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+    session.run(Command::InsertText("a".to_owned()))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+
+    let align_before = first_align(&session)?.clone();
+    assert_eq!(align_before.rows.len(), 2);
+    let blank_row_id = align_before.rows[1].id.clone();
+    let deleted = session.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert!(deleted.document_changed);
+    let align_after = first_align(&session)?;
+    assert_eq!(align_after.rows.len(), 1);
+    assert_eq!(
+        caret_math::serialize_tree(&align_after.rows[0].cells[0]),
+        "a"
+    );
+    let edit_after = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    assert!(matches!(
+        &edit_after.branch,
+        MathEditBranch::Tree { anchor, .. }
+            if matches!(anchor.host, MathPositionHost::AlignCell { ref row_id, .. }
+                if row_id == &align_after.rows[0].id)
+    ));
+
+    session.run(Command::Undo)?;
+    let restored_align = first_align(&session)?;
+    assert_eq!(restored_align.rows.len(), 2);
+    assert_eq!(restored_align.rows[1].id, blank_row_id);
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { anchor, .. })
+            if matches!(anchor.host, MathPositionHost::AlignCell { ref row_id, .. }
+                if row_id == &blank_row_id)
+    ));
+    session.run(Command::Redo)?;
+    assert_eq!(first_align(&session)?.rows.len(), 1);
+    let bytes = caret_doc::CdocFile::new(session.document().clone())?.to_bytes()?;
+    let reopened = caret_doc::open(&bytes)?;
+    let reopened_session = Session::new(reopened.document().clone())?;
+    assert_eq!(first_align(&reopened_session)?.rows.len(), 1);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&reopened_session)?.rows[0].cells[0]),
+        "a"
+    );
+    Ok(())
+}
+
+#[test]
+fn align_backspace_removes_one_of_two_adjacent_empty_rows() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    session.run(Command::InsertText("a".to_owned()))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+    assert_eq!(first_align(&session)?.rows.len(), 3);
+
+    session.run(Command::EditorKey(EditorKey::Backspace))?;
+
+    assert_eq!(first_align(&session)?.rows.len(), 2);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&session)?.rows[0].cells[0]),
+        "a"
+    );
+    assert!(
+        first_align(&session)?.rows[1].cells[0]
+            .root
+            .content
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn align_backspace_removes_a_row_with_an_empty_text_flow() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    enter_source_edit(&mut session, Direction::Forward)?;
+    session.run(Command::InsertText(r"a \\ \text{}".to_owned()))?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let align_cell = edit
+        .align_cell_at_cursor()
+        .map(|(row, cell, _)| (row, cell))
+        .ok_or(EditError::InvalidPosition)?;
+    let tree = session.math_tree_for_edit(&edit, Some(align_cell))?;
+    let path = path::root_text_flow_path(tree, false, Some(align_cell))
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(align_cell.0, 1);
+    session.enter_math_text_branch(path, 0);
+
+    let effect = session.run(Command::EditorKey(EditorKey::Backspace))?;
+
+    assert!(effect.document_changed);
+    assert_eq!(first_align(&session)?.rows.len(), 1);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&session)?.rows[0].cells[0]),
+        "a"
+    );
+    Ok(())
+}
+
+#[test]
+fn backspace_at_a_later_align_textflow_start_deletes_the_previous_text_grapheme()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    enter_source_edit(&mut session, Direction::Forward)?;
+    session.run(Command::InsertText(r"\text{a}\text{b}".to_owned()))?;
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let align_cell = (0, 0);
+    let tree = session.math_tree_for_edit(&edit, Some(align_cell))?;
+    assert_eq!(tree.root.content.len(), 2);
+    let path = MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(1)], Some(align_cell));
+    session.enter_math_text_branch(path, 0);
+
+    session.run(Command::EditorKey(EditorKey::Backspace))?;
+
+    let edit = session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let tree = session.math_tree_for_edit(&edit, Some(align_cell))?;
+    assert_eq!(caret_math::serialize_tree(tree), r"\text{b}");
+    Ok(())
+}
+
+#[test]
+fn backspace_in_a_unique_empty_align_textflow_deletes_the_host_in_both_branches()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut source_session = session_with_text("")?;
+    accept(&mut source_session, "align")?;
+    enter_source_edit(&mut source_session, Direction::Forward)?;
+    source_session.run(Command::InsertText(r"\text{}".to_owned()))?;
+    source_session.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert!(first_align(&source_session).is_err());
+    assert!(source_session.math_edit().is_none());
+
+    let mut text_session = session_with_text("")?;
+    accept(&mut text_session, "align")?;
+    enter_source_edit(&mut text_session, Direction::Forward)?;
+    text_session.run(Command::InsertText(r"\text{}".to_owned()))?;
+    let edit = text_session
+        .math_edit()
+        .cloned()
+        .ok_or(EditError::InvalidPosition)?;
+    let align_cell = (0, 0);
+    let tree = text_session.math_tree_for_edit(&edit, Some(align_cell))?;
+    let path = path::root_text_flow_path(tree, false, Some(align_cell))
+        .ok_or(EditError::InvalidPosition)?;
+    text_session.enter_math_text_branch(path, 0);
+    text_session.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert!(first_align(&text_session).is_err());
+    assert!(text_session.math_edit().is_none());
+    Ok(())
+}
+
+#[test]
+fn align_backspace_at_nonempty_row_start_is_a_complete_no_op()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    session.run(Command::InsertText("a".to_owned()))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+    session.run(Command::InsertText("b".to_owned()))?;
+    session.run(Command::Undo)?;
+    assert!(session.can_redo());
+    let row = &first_align(&session)?.rows[0];
+    let path = MathSequencePath::root();
+    let anchor = MathTreePosition {
+        host: MathPositionHost::AlignCell {
+            row_id: row.id.clone(),
+            cell_id: row.cells[0].root.id.clone(),
+        },
+        path: path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree { path, anchor };
+    let document_before = session.document().clone();
+    let edit_before = session.math_edit().cloned();
+    let selection_before = session.selection().clone();
+    let visual_affinity_before = session.selection_visual_affinity;
+    let generation_before = session.document_generation();
+    let history_state_before = session.history_state_id;
+    let merge_epoch_before = session.history_merge_epoch;
+    let can_redo_before = session.can_redo();
+
+    let effect = session.run(Command::EditorKey(EditorKey::Backspace))?;
+
+    assert!(!effect.document_changed);
+    assert!(!effect.selection_changed);
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.math_edit(), edit_before.as_ref());
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(session.selection_visual_affinity, visual_affinity_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.history_state_id, history_state_before);
+    assert_eq!(session.history_merge_epoch, merge_epoch_before);
+    assert_eq!(session.can_redo(), can_redo_before);
+    session.run(Command::Redo)?;
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&session)?.rows[1].cells[0]),
+        "b"
+    );
+    Ok(())
+}
+
+#[test]
+fn softbreak_is_content_not_an_empty_align_row() -> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    let row = &first_align(&session)?.rows[0];
+    let path = MathSequencePath::root();
+    let anchor = MathTreePosition {
+        host: MathPositionHost::AlignCell {
+            row_id: row.id.clone(),
+            cell_id: row.cells[0].root.id.clone(),
+        },
+        path: path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let Block::Align(align) = session
+        .document
+        .body
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    align.rows[0].cells[0]
+        .root
+        .content
+        .push(MathContent::SoftBreak(caret_doc::SoftBreak::default()));
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree { path, anchor };
+
+    let effect = session.run(Command::EditorKey(EditorKey::Backspace))?;
+
+    assert!(!effect.document_changed);
+    assert_eq!(first_align(&session)?.rows.len(), 1);
+    assert_eq!(
+        first_align(&session)?.rows[0].cells[0].root.content,
+        vec![MathContent::SoftBreak(caret_doc::SoftBreak::default())]
+    );
+    Ok(())
+}
+
+#[test]
+fn align_backspace_checks_every_cell_and_refuses_to_drop_row_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut occupied_row = session_with_text("")?;
+    accept(&mut occupied_row, "align")?;
+    occupied_row.run(Command::InsertText("a".to_owned()))?;
+    occupied_row.run(Command::InsertText("&".to_owned()))?;
+    occupied_row.run(Command::InsertText("b".to_owned()))?;
+    occupied_row.run(Command::EditorKey(EditorKey::Enter))?;
+    occupied_row.run(Command::InsertText("c".to_owned()))?;
+    let row = &first_align(&occupied_row)?.rows[1];
+    let path = MathSequencePath::root();
+    let anchor = MathTreePosition {
+        host: MathPositionHost::AlignCell {
+            row_id: row.id.clone(),
+            cell_id: row.cells[0].root.id.clone(),
+        },
+        path: path.clone(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let edit = occupied_row
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    edit.cursor = 0;
+    edit.branch = MathEditBranch::Tree { path, anchor };
+    let document_before = occupied_row.document().clone();
+    let edit_before = occupied_row.math_edit().cloned();
+    occupied_row.run(Command::EditorKey(EditorKey::Backspace))?;
+    assert_eq!(occupied_row.document(), &document_before);
+    assert_eq!(occupied_row.math_edit(), edit_before.as_ref());
+    assert_eq!(first_align(&occupied_row)?.rows.len(), 2);
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&occupied_row)?.rows[0].cells[0]),
+        "a"
+    );
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&occupied_row)?.rows[0].cells[1]),
+        "b"
+    );
+    assert_eq!(
+        caret_math::serialize_tree(&first_align(&occupied_row)?.rows[1].cells[1]),
+        "c"
+    );
+
+    let mut metadata_row = session_with_text("")?;
+    accept(&mut metadata_row, "align")?;
+    metadata_row.run(Command::InsertText("a".to_owned()))?;
+    metadata_row.run(Command::EditorKey(EditorKey::Enter))?;
+    let Block::Align(align) = metadata_row
+        .document
+        .body
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    align.rows[1]
+        .extra
+        .insert("vendorRow".to_owned(), serde_json::Value::Bool(true));
+    let document_before = metadata_row.document().clone();
+    let edit_before = metadata_row.math_edit().cloned();
+    let generation_before = metadata_row.document_generation();
+
+    assert_eq!(
+        metadata_row.run(Command::EditorKey(EditorKey::Backspace)),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+    assert_eq!(metadata_row.document(), &document_before);
+    assert_eq!(metadata_row.math_edit(), edit_before.as_ref());
+    assert_eq!(metadata_row.document_generation(), generation_before);
+    Ok(())
+}
+
+#[test]
+fn align_source_row_backspace_preserves_or_atomically_rejects_neighbor_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    accept(&mut session, "align")?;
+    enter_source_edit(&mut session, Direction::Forward)?;
+    session.run(Command::InsertText("a".to_owned()))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+    let Block::Align(align) = session
+        .document
+        .body
+        .first_mut()
+        .ok_or(EditError::InvalidPosition)?
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let Some(MathContent::Math(node)) = align.rows[0].cells[0].root.content.first_mut() else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    node.extra
+        .insert("vendorNode".to_owned(), serde_json::Value::Bool(true));
+    let document_before = session.document().clone();
+    let edit_before = session.math_edit().cloned();
+    let selection_before = session.selection().clone();
+    let generation_before = session.document_generation();
+    let history_state_before = session.history_state_id;
+    let merge_epoch_before = session.history_merge_epoch;
+    let can_redo_before = session.can_redo();
+
+    match session.run(Command::EditorKey(EditorKey::Backspace)) {
+        Ok(effect) => {
+            assert!(effect.document_changed);
+            assert_eq!(first_align(&session)?.rows.len(), 1);
+            let Some(MathContent::Math(node)) =
+                first_align(&session)?.rows[0].cells[0].root.content.first()
+            else {
+                return Err(EditError::InvalidPosition.into());
+            };
+            assert_eq!(
+                node.extra.get("vendorNode"),
+                Some(&serde_json::Value::Bool(true))
+            );
+            assert!(
+                !session
+                    .math_edit()
+                    .is_some_and(MathEdit::source_draft_is_pending)
+            );
+        }
+        Err(EditError::InvalidMath(_)) => {
+            assert_eq!(session.document(), &document_before);
+            assert_eq!(session.math_edit(), edit_before.as_ref());
+            assert_eq!(session.selection(), &selection_before);
+            assert_eq!(session.document_generation(), generation_before);
+            assert_eq!(session.history_state_id, history_state_before);
+            assert_eq!(session.history_merge_epoch, merge_epoch_before);
+            assert_eq!(session.can_redo(), can_redo_before);
+        }
+        Err(error) => return Err(error.into()),
+    }
     Ok(())
 }
 

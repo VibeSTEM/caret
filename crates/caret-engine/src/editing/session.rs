@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod block_rows;
 mod checkpoint;
 mod clipboard;
 mod command_line;

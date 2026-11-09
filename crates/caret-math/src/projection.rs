@@ -28,6 +28,8 @@ pub struct AlignSourceMap {
     cell_ranges: Vec<Vec<Range<usize>>>,
     /// 每个 cell 的导航范围，包含语义范围裁掉的前后 trivia。
     cell_navigation_ranges: Vec<Vec<Range<usize>>>,
+    /// 每行结束 `\\` 分隔符的完整源码范围。
+    row_break_ranges: Vec<Option<Range<usize>>>,
     /// Align cell 的树映射，范围坐标已转换到完整公式源码。
     cell_trees: Vec<Vec<MathTreeSourceMap>>,
 }
@@ -36,6 +38,7 @@ pub(crate) struct AlignSourceRanges {
     pub(crate) content: Range<usize>,
     pub(crate) cells: Vec<Vec<Range<usize>>>,
     pub(crate) navigation: Vec<Vec<Range<usize>>>,
+    pub(crate) row_breaks: Vec<Option<Range<usize>>>,
 }
 
 impl AlignSourceMap {
@@ -59,6 +62,17 @@ impl AlignSourceMap {
         &self.cell_navigation_ranges
     }
 
+    /// 返回一行所有 cell 及其分隔符覆盖的导航范围。
+    pub fn row_navigation_range(&self, row: usize) -> Option<Range<usize>> {
+        let cells = self.cell_navigation_ranges.get(row)?;
+        Some(cells.first()?.start..cells.last()?.end)
+    }
+
+    /// 返回指定逻辑行结束分隔符的完整源码范围；最后一行没有分隔符时为 `None`。
+    pub fn row_break_range_after(&self, row: usize) -> Option<Range<usize>> {
+        self.row_break_ranges.get(row)?.clone()
+    }
+
     /// 返回单元格数学树对应的源码映射。
     pub fn cell_tree(&self, row: usize, cell: usize) -> Option<&MathTreeSourceMap> {
         self.cell_trees.get(row)?.get(cell)
@@ -72,6 +86,7 @@ impl AlignSourceMap {
             && self.content_range == other.content_range
             && self.cell_ranges == other.cell_ranges
             && self.cell_navigation_ranges == other.cell_navigation_ranges
+            && self.row_break_ranges == other.row_break_ranges
             && self.cell_trees.len() == other.cell_trees.len()
             && self
                 .cell_trees
@@ -280,6 +295,7 @@ impl<'a> MathSourceMap<'a> {
                     && align.content_range.end <= align.environment_range.end
                     && align.content_range == self.edit_range
                     && align.cell_ranges.len() == align.cell_navigation_ranges.len()
+                    && align.cell_ranges.len() == align.row_break_ranges.len()
                     && align
                         .cell_ranges
                         .iter()
@@ -295,6 +311,11 @@ impl<'a> MathSourceMap<'a> {
                                         && cell.end <= nav.end
                                 })
                         })
+                    && align.row_break_ranges.iter().flatten().all(|row_break| {
+                        valid_range(row_break, &self.source)
+                            && align.content_range.start <= row_break.start
+                            && row_break.end <= align.content_range.end
+                    })
             }
         }
     }
@@ -461,11 +482,20 @@ impl<'a> MathSourceMap<'a> {
                             .collect::<Option<Vec<_>>>()
                     })
                     .collect::<Option<Vec<_>>>()?;
+                let row_break_ranges = align
+                    .row_break_ranges
+                    .iter()
+                    .map(|row_break| match row_break {
+                        Some(row_break) => Some(rebase(row_break, false)),
+                        None => Some(None),
+                    })
+                    .collect::<Option<Vec<_>>>()?;
                 Some(AlignSourceMap {
                     environment_range,
                     content_range,
                     cell_ranges,
                     cell_navigation_ranges,
+                    row_break_ranges,
                     cell_trees: Vec::new(),
                 })
             }
@@ -518,6 +548,7 @@ impl<'a> MathSourceMap<'a> {
                     .iter()
                     .map(|ranges| ranges.capacity() * size_of::<Range<usize>>())
                     .sum::<usize>()
+                + align.row_break_ranges.capacity() * size_of::<Option<Range<usize>>>()
                 + align
                     .cell_trees
                     .iter()
@@ -622,6 +653,9 @@ impl<'a> MathProjection<'a> {
         if tree.rows.len() != ranges.cells.len() || tree.rows.len() != ranges.navigation.len() {
             return None;
         }
+        if tree.rows.len() != ranges.row_breaks.len() {
+            return None;
+        }
         if let Some(source_maps) = &source_maps
             && source_maps.len() != tree.rows.len()
         {
@@ -656,6 +690,7 @@ impl<'a> MathProjection<'a> {
             content_range: ranges.content,
             cell_ranges: ranges.cells,
             cell_navigation_ranges: ranges.navigation,
+            row_break_ranges: ranges.row_breaks,
             cell_trees,
         });
         Some(Self {

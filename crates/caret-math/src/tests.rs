@@ -1529,6 +1529,11 @@ fn align_preserves_a_trailing_empty_row_after_row_break() {
     let align_map = source_map
         .align()
         .unwrap_or_else(|| panic!("Align projection should retain its source map"));
+    let row_break = align_map
+        .row_break_range_after(0)
+        .unwrap_or_else(|| panic!("first row should retain its explicit break range"));
+    assert_eq!(&source[row_break], r"\\");
+    assert_eq!(align_map.row_break_range_after(1), None);
     let semantic = align_map
         .cell_range(1, 0)
         .unwrap_or_else(|| panic!("trailing empty cell should have a semantic range"));

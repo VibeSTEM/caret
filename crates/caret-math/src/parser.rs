@@ -313,6 +313,7 @@ fn parse_align<'source>(
     let environment_content_end = parsed_rows.environment_content_end;
     let environment_end = parsed_rows.environment_end;
     let mut rows = parsed_rows.rows;
+    let mut row_break_ranges = parsed_rows.row_break_ranges;
     parser.skip_space();
     if parser.pos < body.end {
         return Err(MathParseError::InputKindMismatch {
@@ -329,12 +330,14 @@ fn parse_align<'source>(
             )],
             range: environment_end_start..environment_end_start,
         });
+        row_break_ranges.push(None);
     }
     let mut align_rows = Vec::new();
     let mut cell_ranges = Vec::new();
     let mut cell_navigation_ranges = Vec::new();
     let mut cell_source_maps = Vec::new();
-    for row in rows {
+    let mut row_breaks = Vec::new();
+    for (row, row_break) in rows.into_iter().zip(row_break_ranges) {
         let MatrixRow::Cells { cells, .. } = row else {
             return Err(parser.error_at(
                 env_start,
@@ -371,6 +374,7 @@ fn parse_align<'source>(
         }
         cell_ranges.push(row_ranges);
         cell_navigation_ranges.push(row_navigation_ranges);
+        row_breaks.push(row_break);
         if capture_source_map {
             cell_source_maps.push(row_source_maps);
         }
@@ -395,6 +399,7 @@ fn parse_align<'source>(
             content: environment_content_start..environment_content_end,
             cells: cell_ranges,
             navigation: cell_navigation_ranges,
+            row_breaks,
         },
         capture_source_map.then_some(cell_source_maps),
     )
@@ -967,6 +972,7 @@ enum MatrixRow {
 
 struct MatrixRows {
     rows: Vec<MatrixRow>,
+    row_break_ranges: Vec<Option<Range<usize>>>,
     environment_end_start: usize,
     environment_content_end: usize,
     environment_end: usize,
@@ -2285,6 +2291,7 @@ impl<'s> Parser<'s> {
         preserve_trailing_empty_row: bool,
     ) -> ParseResult<MatrixRows> {
         let mut rows = Vec::new();
+        let mut row_break_ranges = Vec::new();
         let mut trailing_row_break = false;
         loop {
             self.check_budget()?;
@@ -2310,9 +2317,11 @@ impl<'s> Parser<'s> {
                             )],
                             range: row_start..row_start,
                         });
+                        row_break_ranges.push(None);
                     }
                     return Ok(MatrixRows {
                         rows,
+                        row_break_ranges,
                         environment_end_start,
                         environment_content_end: row_start,
                         environment_end: self.pos,
@@ -2322,6 +2331,7 @@ impl<'s> Parser<'s> {
                     trailing_row_break = false;
                     self.read_command();
                     rows.push(MatrixRow::Hline(row_start..self.pos));
+                    row_break_ranges.push(None);
                     continue;
                 }
                 Some("intertext") => {
@@ -2336,6 +2346,7 @@ impl<'s> Parser<'s> {
                         children,
                     );
                     rows.push(MatrixRow::Intertext(text, row_start..self.pos));
+                    row_break_ranges.push(None);
                     continue;
                 }
                 _ => {}
@@ -2386,6 +2397,11 @@ impl<'s> Parser<'s> {
             rows.push(MatrixRow::Cells {
                 cells,
                 range: row_start..row_end,
+            });
+            row_break_ranges.push(if row_ended_with_break {
+                Some(self.pos - 2..self.pos)
+            } else {
+                None
             });
             trailing_row_break = row_ended_with_break;
         }
