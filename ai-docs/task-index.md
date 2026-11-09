@@ -108,7 +108,8 @@
 | 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | done |
 | 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | done |
 | 076 | 键盘架构 | [逐键状态仲裁与键盘路由一致性](task/076-per-key-state-arbitration.md) | P1 | 071 | L | done |
-| 077 | 数学交互 | [数学环境光标高度稳定性](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | planned |
+| 077 | 数学交互 | [数学宿主行框与光标高度统一](task/077-stable-math-caret-height.md) | P1 | 044、074 | M | ready |
 | 078 | 数学输入 | [数学输入源的拉丁字符等效输出](task/078-math-latin-input-source-parity.md) | P1 | 076 | M | ready |
+| 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | ready |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
