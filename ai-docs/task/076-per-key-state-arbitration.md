@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：071
 - 优先级：P1
-- 创建 / 更新：2026-11-08 / 2026-11-08
+- 创建 / 更新：2026-11-08 / 2026-11-09
 
 ## 目标与背景
 
@@ -22,6 +22,7 @@
 - 核对 `TextInput`、反斜线/美元前缀、MathText 视觉边缘、字体候选 Enter/Tab、过期 MathEdit Escape 等绕过逐键入口的路径；决定将其接入具体 handler 或记录明确的适配层例外。
 - 核对复制/粘贴与撤销/重做在 MathText、MathTree、Source、command line、composition、结构选区和正文下的实际契约；同步注释与架构文档，禁止仅凭旧注释改变用户行为。
 - 明确公式输入法范围：当前 MathTree/Source 禁止 composition，`ImhPreferLatin` 仅适用于允许 IME 的文本状态且不是 OS 锁定；检查 MathText 数学命令行的 `ImEnabled` 与 Session 拒绝 composition 是否一致。
+- 接续 074 移交的平台输入体验验收：验证锁定 Qt 6.12 上 Latin 输入法提示在各目标平台的实际效果，并明确不能由应用保证切换 OS 输入法；确认数学结构中的中文标点/Unicode 符号如何显式输入、缺字时的可见反馈与恢复路径。
 - 校验新增输入法上下文字段在完整布局快照和交互增量中的类型与缺失策略；覆盖 Rust→ViewModel→Canvas 的 true/false 状态更新、焦点切换和 `Qt::ImHints` 通知。
 - 不将窗口 Shortcut 或控件本地快捷键塞入 Session；不增加静态快捷键运行时注册表；不重开已 done 的 071。
 
@@ -50,6 +51,7 @@
 - [ ] `keyboards.rs` 不含隐藏所有按键差异的通用状态优先级分支；保留的共享 helper 只执行可证明相同的校验/提交操作。
 - [ ] 所有键盘入口旁路均已接入对应 handler，或有受测的焦点作用域/平台例外与明确文档。
 - [ ] MathText、MathTree、Source、命令行、IME、结构选区和正文中的剪贴板/Undo/Redo 行为符合用户契约；注释准确反映实现。
+- [ ] 各目标平台的 Latin 输入法提示有实测记录；MathTree 中中文标点/Unicode 符号输入与缺字 fallback 可发现且可恢复。
 - [ ] 失败与过时代际候选不更改焦点、选区、文档、composition 或历史；格式、相关测试、lint 和独立评审通过。
 
 ## 验证计划与结果
@@ -68,6 +70,7 @@
 
 - 2026-11-08：只读审查发现多个方向/编辑键仍通过通用 router 管理状态；字符输入、字体候选、MathText 边缘及过期数学焦点也有特殊入口。根据用户设计新建独立架构任务，不修改已 done 的 071。
 - 2026-11-08：独立评审补充发现 MathTree 输入法仍禁用、MathText 数学命令行的 IME enabled 状态与 Session 契约冲突，且 `preferLatin` 未在完整快照/交互增量统一校验；将这些非上下键问题纳入本任务。
+- 2026-11-09：接收 074 移交的平台输入法提示验证、数学结构中的中文标点/Unicode 符号输入和缺字 fallback 验收；074 因此只关闭已有实现与测试覆盖的结构光标范围。
 
 ## 完成摘要
 
