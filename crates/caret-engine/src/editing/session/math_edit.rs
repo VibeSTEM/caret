@@ -1445,6 +1445,7 @@ impl Session {
     pub(super) fn insert_display_math(&mut self, align: bool) -> Result<Effect, EditError> {
         let plan = self.prepare_display_math_insert(align)?;
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let blocks = block_list(&mut self.document.body, &plan.parent_environment_ids)?;
@@ -1474,6 +1475,7 @@ impl Session {
                 after: plan.after,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );

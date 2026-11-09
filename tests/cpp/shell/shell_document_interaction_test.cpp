@@ -318,6 +318,27 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
     QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
     QCOMPARE(interaction_changed.size(), 0);
 
+    QJsonObject invalid_prefer_latin_context{
+        {QStringLiteral("surroundingText"), QStringLiteral("")},
+        {QStringLiteral("cursorPosition"), 0},
+        {QStringLiteral("anchorPosition"), 0},
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("preferLatin"), QStringLiteral("true")}};
+    QJsonObject invalid_prefer_latin_interaction{
+        {QStringLiteral("documentGeneration"), inline_view_model.documentGeneration()},
+        {QStringLiteral("fontGeneration"), inline_view_model.fontGeneration()},
+        {QStringLiteral("selectionRects"), QJsonArray{}},
+        {QStringLiteral("inputMethodContext"), invalid_prefer_latin_context},
+        {QStringLiteral("caretGeometry"), QJsonObject{{QStringLiteral("pageIndex"), 0},
+                                                      {QStringLiteral("xPt"), 0.0},
+                                                      {QStringLiteral("y0Pt"), 0.0},
+                                                      {QStringLiteral("y1Pt"), 1.0}}}};
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
+                                                                 invalid_prefer_latin_interaction));
+    QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
+    QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
+    QCOMPARE(interaction_changed.size(), 0);
+
     QJsonObject missing_input_context_snapshot = root;
     missing_input_context_snapshot.remove(QStringLiteral("inputMethodContext"));
     QVERIFY(!caret::LayoutViewModelTestProbe::installSnapshot(inline_view_model,
@@ -490,6 +511,73 @@ void ShellLoadTest::commandLineQueryProjectsRustCandidatesWithoutEditingTheDocum
              qPrintable(math_navigation.value(QStringLiteral("error")).toString()));
     QCOMPARE(view_model->commandLine().value(QStringLiteral("cursor")).toInt(), 4);
     delete probe;
+}
+
+void ShellLoadTest::inputMethodContextFlowsFromViewModelToCanvas() {
+    auto runtime = caret::ffi::new_blank_document_runtime();
+    const rust::String snapshot = caret::ffi::layout_snapshot_json(*runtime);
+    QVERIFY(!std::string_view(snapshot.data(), snapshot.size()).starts_with("error:"));
+    QVERIFY(caret::install_layout_snapshot(
+        QString::fromUtf8(snapshot.data(), static_cast<qsizetype>(snapshot.size()))));
+    QVERIFY(caret::install_document_runtime(std::move(runtime)));
+
+    QQmlEngine engine;
+    engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
+    QQmlComponent component(&engine);
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Canvas\n"
+                          "import Caret.ViewModels\n"
+                          "Item { DocumentCanvas { objectName: \"canvas\"; "
+                          "inputMethodContext: LayoutViewModel.inputMethodContext } }\n"),
+        QUrl());
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QObject* root = component.create();
+    QVERIFY(root != nullptr);
+    auto* canvas = root->findChild<caret::DocumentCanvas*>(QStringLiteral("canvas"));
+    QVERIFY(canvas != nullptr);
+    auto* view_model =
+        engine.singletonInstance<caret::LayoutViewModel*>("Caret.ViewModels", "LayoutViewModel");
+    QVERIFY(view_model != nullptr);
+    QSignalSpy interaction_changed(view_model, &caret::LayoutViewModel::interactionChanged);
+    QSignalSpy context_changed(canvas, &caret::DocumentCanvas::inputMethodContextChanged);
+    QVERIFY(interaction_changed.isValid());
+    QVERIFY(context_changed.isValid());
+
+    const rust::String interaction = caret::ffi::interaction_state_json(*caret::document_runtime());
+    QVERIFY(!std::string_view(interaction.data(), interaction.size()).starts_with("error:"));
+    QJsonObject root_json =
+        QJsonDocument::fromJson(
+            QByteArray(interaction.data(), static_cast<qsizetype>(interaction.size())))
+            .object();
+    QJsonObject input_context = root_json.value(QStringLiteral("inputMethodContext")).toObject();
+    QVERIFY(input_context.contains(QStringLiteral("enabled")));
+    QVERIFY(input_context.contains(QStringLiteral("preferLatin")));
+
+    const QList<QPair<bool, bool>> contexts{{true, true}, {false, false}};
+    for (const auto& [enabled, prefer_latin] : contexts) {
+        input_context.insert(QStringLiteral("enabled"), enabled);
+        input_context.insert(QStringLiteral("preferLatin"), prefer_latin);
+        root_json.insert(QStringLiteral("inputMethodContext"), input_context);
+        QVariantMap expected_context = input_context.toVariantMap();
+        if (!expected_context.contains(QStringLiteral("surroundingText"))) {
+            expected_context.insert(
+                QStringLiteral("surroundingText"),
+                view_model->inputMethodContext().value(QStringLiteral("surroundingText")));
+        }
+        const qsizetype context_notifications = context_changed.size();
+        const qsizetype interaction_notifications = interaction_changed.size();
+        QVERIFY(caret::LayoutViewModelTestProbe::installInteraction(*view_model, root_json));
+        QTRY_COMPARE_WITH_TIMEOUT(canvas->inputMethodContext(), expected_context, 3000);
+        QCOMPARE(canvas->inputMethodQuery(Qt::ImEnabled).toBool(), enabled);
+        QCOMPARE(canvas->inputMethodQuery(Qt::ImHints)
+                     .value<Qt::InputMethodHints>()
+                     .testFlag(Qt::ImhPreferLatin),
+                 prefer_latin);
+        QTRY_VERIFY_WITH_TIMEOUT(context_changed.size() > context_notifications, 3000);
+        QVERIFY(interaction_changed.size() > interaction_notifications);
+    }
+    delete root;
 }
 
 void ShellLoadTest::cancelledInputMethodStateAllowsTheNextCommit() {

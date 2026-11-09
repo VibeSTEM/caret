@@ -39,6 +39,7 @@ struct CompositionCandidateBase {
     session_id: caret_doc::NodeId,
     document_generation: u64,
     selection: Selection,
+    selection_anchor_visual_affinity: caret_layout::VisualAffinity,
     selection_visual_affinity: caret_layout::VisualAffinity,
     composition: Option<InputComposition>,
     pending_inline_style: PendingInlineStyle,
@@ -60,6 +61,7 @@ impl CompositionCandidateBase {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
             selection: session.selection.clone(),
+            selection_anchor_visual_affinity: session.selection_anchor_visual_affinity,
             selection_visual_affinity: session.selection_visual_affinity,
             composition: session.composition.clone(),
             pending_inline_style: session.pending_inline_style.clone(),
@@ -270,6 +272,7 @@ impl Session {
             .as_ref()
             .map(MathEditPosition::from_edit);
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_pending_style = self.pending_inline_style.clone();
         candidate.edit_history = mem::replace(&mut self.edit_history, history::history());
@@ -288,6 +291,7 @@ impl Session {
                     before_pending_style.clone(),
                     original_history_state_id,
                 )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity)
                 .with_math_edit(Some(before_math_position)),
                 SessionHistoryState::new(
                     candidate.selection.clone(),
@@ -295,6 +299,7 @@ impl Session {
                     candidate.pending_inline_style.clone(),
                     after_state_id,
                 )
+                .with_anchor_visual_affinity(candidate.selection_anchor_visual_affinity)
                 .with_math_edit(after_math_position),
             );
             candidate.record_history_edit(edit);
@@ -368,6 +373,7 @@ impl Session {
         let original_session_id = self.session_id.clone();
         let original_generation = self.document_generation;
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let mut affected_ids =
@@ -453,13 +459,15 @@ impl Session {
                     before_visual_affinity,
                     self.pending_inline_style.clone(),
                     before_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity),
                 SessionHistoryState::new(
                     candidate.selection.clone(),
                     candidate.selection_visual_affinity,
                     candidate.pending_inline_style.clone(),
                     after_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(candidate.selection_anchor_visual_affinity),
             );
             candidate.record_history_edit(edit);
             candidate.session_id = original_session_id;
@@ -515,6 +523,7 @@ impl Session {
         Self {
             document: self.document.clone(),
             selection: self.selection.clone(),
+            selection_anchor_visual_affinity: self.selection_anchor_visual_affinity,
             selection_visual_affinity: self.selection_visual_affinity,
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,

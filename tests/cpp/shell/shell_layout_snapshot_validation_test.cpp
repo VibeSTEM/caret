@@ -281,6 +281,20 @@ void ShellLoadTest::invalidLayoutSnapshotsAreRejectedWithoutReplacingPublishedPa
                     {QStringLiteral("cursorPosition"), 0},
                     {QStringLiteral("anchorPosition"), 0}});
     QVERIFY(reject(missing_input_context_enabled));
+    QJsonObject invalid_input_context_prefer_latin = root;
+    QJsonObject invalid_prefer_latin_context =
+        root.value(QStringLiteral("inputMethodContext")).toObject();
+    invalid_prefer_latin_context.insert(QStringLiteral("preferLatin"), QStringLiteral("true"));
+    invalid_input_context_prefer_latin.insert(QStringLiteral("inputMethodContext"),
+                                              invalid_prefer_latin_context);
+    QVERIFY(reject(invalid_input_context_prefer_latin));
+    QJsonObject missing_input_context_prefer_latin = root;
+    QJsonObject missing_prefer_latin_context =
+        root.value(QStringLiteral("inputMethodContext")).toObject();
+    missing_prefer_latin_context.remove(QStringLiteral("preferLatin"));
+    missing_input_context_prefer_latin.insert(QStringLiteral("inputMethodContext"),
+                                              missing_prefer_latin_context);
+    QVERIFY(reject(missing_input_context_prefer_latin));
     const caret::LayoutViewModel after_rejections;
     QCOMPARE(after_rejections.pageLayouts(), published_pages);
     QCOMPARE(after_rejections.paragraphLayouts(), view_model.paragraphLayouts());

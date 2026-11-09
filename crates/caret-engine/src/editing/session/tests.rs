@@ -304,6 +304,28 @@ fn escape_cancels_ime_preedit_before_collapsing_an_existing_selection() {
 }
 
 #[test]
+fn editor_delete_keys_leave_document_and_composition_owned_state_unchanged() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    run_ok(&mut session, Command::InsertText("hello".to_owned()));
+    run_ok(
+        &mut session,
+        Command::UpdateComposition {
+            id: 8,
+            preedit: "にほん".to_owned(),
+        },
+    );
+    let document_before_keys = session.document().clone();
+    let composition_before_keys = session.composition().cloned();
+
+    for key in [EditorKey::Backspace, EditorKey::Delete] {
+        run_ok(&mut session, Command::EditorKey(key));
+        assert_eq!(session.document(), &document_before_keys);
+        assert_eq!(session.composition().cloned(), composition_before_keys);
+    }
+}
+
+#[test]
 fn tab_completes_a_filtered_command_without_editing_the_document() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
@@ -1627,6 +1649,21 @@ fn session_with_inline_math(source: &str) -> Session {
     run_ok(&mut session, Command::InsertInlineMath(source.to_owned()));
     run_ok(&mut session, Command::EnterMath(Direction::Backward));
     session
+}
+
+#[test]
+fn lazy_editor_key_adapter_keeps_stale_math_escape_transaction_semantics() {
+    let mut session = session_with_inline_math("x");
+    session.document_generation += 1;
+
+    let effect = session
+        .run_editor_key_with_font_choices_lazy(EditorKey::Escape, || {
+            panic!("Escape must not load font choices")
+        })
+        .unwrap_or_else(|error| panic!("Escape should discard the stale projection: {error}"));
+
+    assert!(effect.selection_changed);
+    assert!(session.math_edit().is_none());
 }
 
 fn first_inline_math_source(session: &Session) -> String {

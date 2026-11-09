@@ -708,6 +708,7 @@ bool parse(const QJsonDocument& document, ParsedLayoutSnapshot& parsed_snapshot,
     qsizetype anchor_position = 0;
     if (!context.value(QStringLiteral("surroundingText")).isString() ||
         !context.value(QStringLiteral("enabled")).isBool() ||
+        !context.value(QStringLiteral("preferLatin")).isBool() ||
         !nonnegative_index(context.value(QStringLiteral("cursorPosition")), cursor_position) ||
         !nonnegative_index(context.value(QStringLiteral("anchorPosition")), anchor_position) ||
         cursor_position > surrounding_text.size() || anchor_position > surrounding_text.size()) {

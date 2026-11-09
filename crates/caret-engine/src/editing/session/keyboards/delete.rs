@@ -7,7 +7,7 @@ use super::super::Session;
 use crate::editing::{Command, Direction, EditError, Effect};
 
 impl Session {
-    /// 命令输入或输入法拥有焦点时不删除正文内容；公式编辑复用领域删除命令。
+    /// 组合输入或命令行占有焦点时不删除正文；其他焦点交给共享领域删除事务。
     pub(super) fn handle_delete(&mut self) -> Result<Effect, EditError> {
         if self.composition.is_some() || self.command_line.is_some() {
             return Ok(Effect::default());

@@ -80,22 +80,35 @@ fn command_line_state(session: &caret_engine::Session) -> Value {
 }
 
 fn math_input_method_enabled(session: &caret_engine::Session) -> bool {
-    session.math_edit().is_none() || session.math_text_input_context().is_some()
+    let math_query_active = session
+        .command_line()
+        .is_some_and(|line| line.mode == caret_engine::CommandLineMode::Math);
+    !math_query_active
+        && (session.math_edit().is_none() || session.math_text_input_context().is_some())
 }
 
 fn math_input_method_prefers_latin(session: &caret_engine::Session) -> bool {
-    session.math_text_input_context().is_some()
+    !session
+        .command_line()
+        .is_some_and(|line| line.mode == caret_engine::CommandLineMode::Math)
+        && session.math_text_input_context().is_some()
 }
 
 pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value {
-    if session.block_environment_exit().is_some() {
-        return Value::Array(Vec::new());
-    }
+    let exited_environment_id = session
+        .block_environment_exit()
+        .map(|(environment_id, _)| environment_id);
     let focus = &session.selection().focus;
-    let stack = session.structure_index().at(&StructurePosition {
+    let mut stack = session.structure_index().at(&StructurePosition {
         paragraph_id: focus.paragraph_id.clone(),
         offset_utf8: focus.offset,
     });
+    if let Some(exited_environment_id) = exited_environment_id {
+        stack.retain(|entry| entry.id != exited_environment_id);
+        if !stack.iter().any(|entry| entry.kind.is_block_environment()) {
+            return Value::Array(Vec::new());
+        }
+    }
     let has_block_environment = stack.iter().any(|entry| entry.kind.is_block_environment());
     let mut entries = Vec::with_capacity(stack.len());
     let mut previous_kind = None;
@@ -138,15 +151,20 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
 }
 
 fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
-    if session.block_environment_exit().is_some() || session.selected_block_environment().is_some()
-    {
+    if session.selected_block_environment().is_some() {
         return None;
     }
+    let exited_environment_id = session
+        .block_environment_exit()
+        .map(|(environment_id, _)| environment_id);
     let focus = &session.selection().focus;
-    let stack = session.structure_index().at(&StructurePosition {
+    let mut stack = session.structure_index().at(&StructurePosition {
         paragraph_id: focus.paragraph_id.clone(),
         offset_utf8: focus.offset,
     });
+    if let Some(exited_environment_id) = exited_environment_id {
+        stack.retain(|entry| entry.id != exited_environment_id);
+    }
     stack
         .iter()
         .rev()

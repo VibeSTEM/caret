@@ -169,6 +169,7 @@ pub(super) struct SessionHistoryEdit {
 #[derive(Debug, Clone)]
 pub(super) struct SessionHistoryState {
     selection: Selection,
+    anchor_visual_affinity: VisualAffinity,
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
     math_edit: Option<MathEditPosition>,
@@ -260,6 +261,7 @@ impl SessionHistoryState {
     ) -> Self {
         Self {
             selection,
+            anchor_visual_affinity: visual_affinity,
             visual_affinity,
             pending_style,
             math_edit: None,
@@ -271,11 +273,20 @@ impl SessionHistoryState {
         self.math_edit = math_edit;
         self
     }
+
+    pub(super) fn with_anchor_visual_affinity(
+        mut self,
+        anchor_visual_affinity: VisualAffinity,
+    ) -> Self {
+        self.anchor_visual_affinity = anchor_visual_affinity;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct HistoryTransition {
     pub selection: Selection,
+    pub anchor_visual_affinity: VisualAffinity,
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
     pub math_edit: Option<MathEditPosition>,
@@ -332,6 +343,7 @@ impl SessionHistoryEdit {
     fn before_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.before.selection.clone(),
+            anchor_visual_affinity: self.before.anchor_visual_affinity,
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
             math_edit: self.before.math_edit.clone(),
@@ -344,6 +356,7 @@ impl SessionHistoryEdit {
     fn after_transition(&self) -> HistoryTransition {
         HistoryTransition {
             selection: self.after.selection.clone(),
+            anchor_visual_affinity: self.after.anchor_visual_affinity,
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
             math_edit: self.after.math_edit.clone(),
@@ -1583,6 +1596,7 @@ pub(super) fn restore_history_transition(
 ) -> (
     Selection,
     VisualAffinity,
+    VisualAffinity,
     PendingInlineStyle,
     u64,
     Option<NodeId>,
@@ -1591,6 +1605,7 @@ pub(super) fn restore_history_transition(
 ) {
     (
         transition.selection,
+        transition.anchor_visual_affinity,
         transition.visual_affinity,
         transition.pending_style,
         transition.state_id,

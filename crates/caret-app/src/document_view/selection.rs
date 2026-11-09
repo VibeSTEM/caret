@@ -510,9 +510,8 @@ impl DocumentViewRuntime {
             (Endpoint::Body(anchor, anchor_visual), Endpoint::Body(focus, focus_visual)) => {
                 let effect = self
                     .session
-                    .set_pointer_selection_range(anchor, focus, focus_visual)
+                    .set_pointer_selection_range(anchor, focus, anchor_visual, focus_visual)
                     .map_err(|error| format!("selection.set: {error}"))?;
-                self.anchor_visual_affinity = anchor_visual;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
                     self.composition_id = None;
@@ -612,7 +611,6 @@ impl DocumentViewRuntime {
                         anchor_hit.font_generation,
                     )
                     .map_err(|error| format!("selection.math_text: {error}"))?;
-                self.anchor_visual_affinity = anchor_hit.visual_affinity;
                 self.preferred_visual_x_pt = None;
                 if effect.composition_changed {
                     self.composition_id = None;
@@ -634,7 +632,6 @@ impl DocumentViewRuntime {
             .session
             .set_selection_with_visual_affinity(None, visual_affinity)
             .map_err(|error| format!("selection.clear: {error}"))?;
-        self.anchor_visual_affinity = visual_affinity;
         self.preferred_visual_x_pt = None;
         if effect.composition_changed {
             self.composition_id = None;

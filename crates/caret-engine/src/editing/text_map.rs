@@ -183,6 +183,13 @@ pub(super) struct EnvironmentSpan {
     pub(super) depth: usize,
 }
 
+fn span_contains_offset(span: &EnvironmentSpan, offset: usize, affinity: Affinity) -> bool {
+    span.start < span.end
+        && ((span.start < offset && offset < span.end)
+            || (offset == span.start && affinity == Affinity::Downstream)
+            || (offset == span.end && affinity == Affinity::Upstream))
+}
+
 impl TextMap {
     pub(super) fn new(paragraph: &Paragraph) -> Result<Self, EditError> {
         let mut object_spans = Vec::new();
@@ -285,12 +292,7 @@ impl TextMap {
     ) -> Option<(NodeId, usize, usize)> {
         self.environment_spans
             .iter()
-            .filter(|span| {
-                span.start < span.end
-                    && ((span.start < offset && offset < span.end)
-                        || (offset == span.start && affinity == Affinity::Downstream)
-                        || (offset == span.end && affinity == Affinity::Upstream))
-            })
+            .filter(|span| span_contains_offset(span, offset, affinity))
             .max_by_key(|span| span.depth)
             .and_then(|span| span.id.clone().map(|id| (id, span.start, span.end)))
     }
@@ -306,12 +308,7 @@ impl TextMap {
             .iter()
             .chain(self.object_spans.iter())
             .chain(self.property_spans.iter())
-            .filter(|span| {
-                span.start < span.end
-                    && ((span.start < offset && offset < span.end)
-                        || (offset == span.start && affinity == Affinity::Downstream)
-                        || (offset == span.end && affinity == Affinity::Upstream))
-            })
+            .filter(|span| span_contains_offset(span, offset, affinity))
             .collect::<Vec<_>>();
         stack.sort_by_key(|span| span.depth);
         stack

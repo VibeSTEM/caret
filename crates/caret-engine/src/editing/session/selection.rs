@@ -174,10 +174,32 @@ impl Session {
         selection: Option<Selection>,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        let anchor_visual_affinity = selection
+            .as_ref()
+            .filter(|selection| selection.anchor != selection.focus)
+            .map(|_| self.selection_anchor_visual_affinity)
+            .unwrap_or(visual_affinity);
+        self.set_selection_with_visual_affinities(
+            selection,
+            anchor_visual_affinity,
+            visual_affinity,
+        )
+    }
+
+    /// 将正文选区两端的视觉侧与逻辑位置一并提交。
+    pub fn set_selection_with_visual_affinities(
+        &mut self,
+        selection: Option<Selection>,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        let previous_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let previous_visual_affinity = self.selection_visual_affinity;
         let mut effect = self.run(Command::SetSelection(selection))?;
-        effect.selection_changed |= previous_visual_affinity != visual_affinity;
-        self.selection_visual_affinity = visual_affinity;
+        effect.selection_changed |= previous_anchor_visual_affinity != anchor_visual_affinity
+            || previous_visual_affinity != focus_visual_affinity;
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
+        self.selection_visual_affinity = focus_visual_affinity;
         Ok(effect)
     }
 
@@ -186,13 +208,20 @@ impl Session {
         &mut self,
         anchor: Pos,
         focus: Pos,
+        anchor_visual_affinity: VisualAffinity,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
         if self.range_requires_block_environment_selection(&anchor, &focus) {
-            self.select_block_environments_from_range(anchor, focus, visual_affinity)
+            self.select_block_environments_from_range_with_anchor_affinity(
+                anchor,
+                focus,
+                anchor_visual_affinity,
+                visual_affinity,
+            )
         } else {
-            self.set_selection_with_visual_affinity(
+            self.set_selection_with_visual_affinities(
                 Some(Selection { anchor, focus }),
+                anchor_visual_affinity,
                 visual_affinity,
             )
         }
@@ -213,7 +242,7 @@ impl Session {
             || anchor_environment.is_none()
     }
 
-    fn block_environment_at(&self, position: &Pos) -> Option<NodeId> {
+    pub(super) fn block_environment_at(&self, position: &Pos) -> Option<NodeId> {
         let ordinal = self
             .structure_index
             .paragraph_ordinal(&position.paragraph_id)?;
@@ -254,9 +283,17 @@ impl Session {
         self.validate_navigation_position(&selection.focus)?;
         let was_collapsed = selection.anchor == selection.focus;
         if self.range_requires_block_environment_selection(&selection.anchor, &selection.focus) {
-            return self.select_block_environments_from_range(
+            let anchor_visual_affinity = if self.selection.anchor == self.selection.focus
+                && self.structure_selection.is_none()
+            {
+                self.selection_visual_affinity
+            } else {
+                self.selection_anchor_visual_affinity
+            };
+            return self.select_block_environments_from_range_with_anchor_affinity(
                 selection.anchor,
                 selection.focus,
+                anchor_visual_affinity,
                 visual_affinity,
             );
         }
@@ -376,6 +413,22 @@ impl Session {
         focus: Pos,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
+        self.select_block_environments_from_range_with_anchor_affinity(
+            anchor,
+            focus,
+            visual_affinity,
+            visual_affinity,
+        )
+    }
+
+    /// 保存结构选区时分别保留锚点和焦点的排版视觉侧。
+    pub(in crate::editing::session) fn select_block_environments_from_range_with_anchor_affinity(
+        &mut self,
+        anchor: Pos,
+        focus: Pos,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
         if self.has_uncommitted_math_source_draft() {
             return Err(EditError::InvalidMath(
                 "resolve or cancel the incomplete math source draft before changing selection"
@@ -409,12 +462,14 @@ impl Session {
                 .as_ref()
                 .is_none_or(|selection| selection.anchor != anchor || selection.focus != focus)
             || self.selection.focus != focus
-            || self.selection_visual_affinity != visual_affinity;
+            || self.selection_anchor_visual_affinity != anchor_visual_affinity
+            || self.selection_visual_affinity != focus_visual_affinity;
         self.selection = Selection {
             anchor: focus.clone(),
             focus: focus.clone(),
         };
-        self.selection_visual_affinity = visual_affinity;
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
+        self.selection_visual_affinity = focus_visual_affinity;
         self.selected_block_environment = selected.first().cloned();
         self.selected_block_environments = selected;
         self.structure_selection = Some(super::StructureSelection { anchor, focus });

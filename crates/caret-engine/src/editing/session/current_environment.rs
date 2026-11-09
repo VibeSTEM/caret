@@ -46,12 +46,14 @@ impl Session {
 
     /// 从编辑状态推导 Inline 和 Block 候选；此查询不依赖布局快照。
     pub fn current_environment_view(&mut self) -> Result<CurrentEnvironmentView, EditError> {
-        if self.block_environment_exit().is_some()
-            || self.selected_block_environment().is_some()
+        if self.selected_block_environment().is_some()
             || !self.selected_block_environments().is_empty()
         {
             return Ok(CurrentEnvironmentView::default());
         }
+        let exited_environment_id = self
+            .block_environment_exit()
+            .map(|(environment_id, _)| environment_id.clone());
         let focus = self.selection().focus.clone();
         let structure_stack = self
             .structure_index()
@@ -63,6 +65,9 @@ impl Session {
             .collect::<Vec<_>>();
         let mut block = Vec::new();
         for entry in structure_stack {
+            if exited_environment_id.as_ref() == Some(&entry.id) {
+                continue;
+            }
             let adapter = match entry.kind {
                 StructureKind::Section => for_block_environment(BlockEnvironmentKind::Section),
                 StructureKind::Custom => for_block_environment(BlockEnvironmentKind::Custom),
@@ -88,6 +93,10 @@ impl Session {
                 inline_range: None,
                 depth: block.len(),
             });
+        }
+
+        if exited_environment_id.is_some() {
+            return Ok(CurrentEnvironmentView::new(Vec::new(), block));
         }
 
         if matches!(

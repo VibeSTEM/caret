@@ -22,7 +22,7 @@
 
 本文只定义跨层边界。画布按键的单键优先级、状态迁移和各处理器职责以[快捷键管理架构](keyboard-shortcut-architecture.md)为唯一权威；用户可见键位清单以[快捷键](keyboard-shortcuts.md)为唯一权威。本页不重复按键行为表。
 
-当前所有已支持的画布编辑器快捷键都通过 `Session::run_editor_key` 分派到 `session/keyboards/` 的具体处理器，但统一入口不代表状态优先级已全部归属具体键文件：Up/Down 在各自 handler 中选择 composition、命令行、数学编辑和正文路径；Left/Right/Home/End 仍将主要仲裁交给共享 `route_navigation_key`。逐键差异和迁移范围由[快捷键管理架构](keyboard-shortcut-architecture.md)与[076](../../task/076-per-key-state-arbitration.md)记录。方向键、Home/End 的布局候选由 app 计算后交回 Session；Qt `commandMode` 只投影光标显示，不改变编辑器键语义。窗口和控件作用域不并入编辑器 Session。尚未实现的表格快捷键只在键位规划中标注，不宣称已接入。
+当前所有已支持的画布编辑器快捷键都通过 `Session::run_editor_key` 分派到 `session/keyboards/` 的具体处理器。公开按键及宿主文本入口共享 Session 事务包装，保证过时代际检查、失败恢复和成功后的修订同步；各方向键、Home/End handler 独立选择状态路径，共同候选操作位于 `keyboards/helpers/`，文本输入适配将命令前缀转交具体 handler。Backspace/Delete 在各自 handler 仲裁输入法和命令行焦点后复用同一个领域删除事务。详细状态与例外只在[快捷键管理架构](keyboard-shortcut-architecture.md)维护。布局候选由 app 计算后交回 Session；Qt `commandMode` 只投影光标显示，不改变编辑器键语义。窗口和控件作用域不并入编辑器 Session。尚未实现的表格快捷键只在键位规划中标注，不宣称已接入。
 
 平台 IME 候选界面可先消费 Escape；画布 IME 预编辑的物理事件由 Qt 输入适配处理。除这些平台输入例外外，Qt 不根据命令、公式、结构选择等编辑状态自行仲裁按键。当前 Rust 按键集合没有 `ShiftTab`；表格导航须在功能实现时定义并进入对应键处理器，不能把键位表中的目标行为读作已支持。
 

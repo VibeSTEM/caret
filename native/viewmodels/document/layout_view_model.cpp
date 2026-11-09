@@ -179,7 +179,8 @@ bool LayoutViewModel::installInteraction(const QJsonObject& root) {
 
     const QVariantList selection_rectangles = rectangles_value.toArray().toVariantList();
     const QJsonObject input_context_json = input_context_value.toObject();
-    if (!input_context_json.value(QStringLiteral("enabled")).isBool()) {
+    if (!input_context_json.value(QStringLiteral("enabled")).isBool() ||
+        !input_context_json.value(QStringLiteral("preferLatin")).isBool()) {
         m_error = QStringLiteral("layout.invalid_input_method_context");
         return false;
     }

@@ -3,4 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+mod navigation;
+mod text_input;
 mod vertical_navigation;

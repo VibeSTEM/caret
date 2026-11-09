@@ -67,8 +67,10 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | Escape | MathEdit、命令输入、composition、块环境/普通选区与结构按 handler 的明确优先级处理；普通选区 Escape 只收起选区，再按一次才退出结构。IME 预编辑时 Qt 只转交 Escape 意图，由 Session 确认是否取消。 |
 | Enter / Shift+Enter | 命令输入下 Enter 接受候选、Shift+Enter 无操作；公式 Align 中 Enter 插入行分隔，数学文本分支拒绝换行，其他公式 Enter 退出；正文分别插入段落或软换行。 |
 | Tab | 命令输入交给 `TabCommandLine`：字体候选确认、普通查询补全、空查询退出并插入字面 `\`；公式中保留公式焦点；普通正文插入两个字符宽空格。表格 Tab 导航尚未实现。 |
+| Backspace | 组合输入期间不改文档；命令行优先删除查询；其余情况交给共享 `Command::Delete(Backward)` 事务处理选区、虚拟块边界、MathText/MathTree/Source 与正文删除。逐键 handler 决定焦点优先级，领域事务共享复杂删除规则。 |
+| Delete | 组合输入或命令行期间不改文档；其余情况交给共享 `Command::Delete(Forward)` 事务，按公式、结构和正文语义删除。 |
 | Mod+Backspace | composition/命令输入中不改正文；数学编辑按公式规则处理；正文优先解除可解除的最内层行内环境，否则尝试解除块环境并保留内容。 |
-| Left / Right / Up / Down / Home / End | Qt 把方向和 Shift 扩展映射为几何查询，app 提供带 Session、文档和字体代际的单次候选。Up/Down 在各自 handler 按 composition→命令行→MathEdit→正文选择提交路径；结构移动变体在 composition、命令行或数学编辑活动时保持原位。MathTree Up/Down 使用当前公式内布局候选；跨操作数 Shift 扩展因单路径状态不能表示而保持原位。Left/Right/Home/End 仍通过共享 `route_navigation_key` 仲裁，计划在 076 收敛。Qt `commandMode` 不再抢先改写语义。 |
+| Left / Right / Up / Down / Home / End | Qt 把方向和 Shift 扩展映射为几何查询，app 提供带 Session、文档和字体代际的单次候选。每个键 handler 按自己的状态顺序处理 composition、命令行、MathEdit 和正文；结构移动变体在 composition、命令行或数学编辑活动时保持原位。MathTree Up/Down 使用当前公式内布局候选；跨操作数 Shift 扩展因单路径状态不能表示而保持原位。候选代际检查与无损提交由 `keyboards/helpers/navigation.rs` 和 `vertical_navigation.rs` 共享。Qt `commandMode` 不再抢先改写语义。 |
 | Mod+C / Mod+V | 对应键 handler 判断 composition、命令输入、数学文本选区及正文选区的允许行为；effect 请求 app 执行系统剪贴板读写。 |
 | Mod+Z / Mod+Shift+Z | 画布有焦点时 QML Shortcut 将 `mod-z` / `mod-shift-z` 交给 EditorKey handler，Session 选择数学源码草稿或文档历史；工具栏仍调用 undo()/redo()。 |
 | 结构与表格修饰键 | 结构扩选和上一块/下一块通过 `mod_space.rs`、`up_arrow.rs`、`down_arrow.rs` 进入 Session。表格快捷键尚属 045/046 规划，表格节点接入前不启用。 |
@@ -87,15 +89,17 @@ Qt QKeyEvent → 平台键映射 → 编辑器意图
 | 4 | 正文 | 使用普通布局候选提交视觉选择变化 |
 | 特例 | 结构移动变体 | composition、命令行或 MathEdit 活动时无操作，否则执行 MoveStructure |
 
-每个按键文件可以有不同的状态优先级，不应把导航顺序机械套到 Enter、Tab 等按键上。交互字段也不是一概互斥：已确认 MathEdit 可与 MathText composition 共存，也可与 command line 共存；其他组合要逐项确认允许/拒绝条件，不推断为任意组合均合法。每次路由只选择拥有本次按键的处理者，并保留其他合法状态。
+每个按键文件可以有不同的状态优先级，不应把导航顺序机械套到 Enter、Tab 等按键上。Left/Right/Home/End 当前也在各自文件中仲裁 composition、命令行、MathEdit 和正文候选；共享 helper 只校验 generation、提交候选或完成既定的数学分支候选。`keyboards/helpers/text_input.rs` 是宿主文本输入适配入口，负责命令行目标选择和把 `\\` / `$` 交给对应的具体按键 handler，不代替实体按键 handler 仲裁。
+
+交互字段也不是一概互斥：已确认 MathEdit 可与 MathText composition 共存，也可与 command line 共存；其他组合要逐项确认允许/拒绝条件，不推断为任意组合均合法。每次路由只选择拥有本次按键的处理者，并保留其他合法状态。
 
 方向键的视觉顺序、双向文本亲和性和 preferred x 属于布局几何信息；Session 不应复制 Parley 页面模型。Session 负责判断导航目标、允许/拒绝迁移和提交选择/结构变更。app 负责把同代快照上的几何候选交给 Session，并投影结果。公式内部树路径、文本岛和源码位置由数学领域模块负责。
 
 ## 一致性结论
 
-已支持画布按键共享 `Session::run_editor_key` 入口，但逐键状态仲裁实现尚不完全一致：Enter/Escape/Tab/Mod+Backspace 等在自己的处理器中显式裁决；Up/Down 在本键 handler 中管理候选路径并把共同候选提交交给 helpers；Left/Right/Home/End 仍依赖共享 `route_navigation_key`，Backspace/Delete/Mod+Z 还有部分策略位于 Session/数学编辑模块。字符输入、字体候选与视觉边缘也存在绕过 handler 的入口。076 登记这些未完成迁移；不得将当前入口统一描述成架构收敛完成。窗口快捷键与控件本地按键仍属于各自焦点作用域；尚未实现的表格键不计入“已支持”。
+已支持画布实体按键共享 `Session::run_editor_key` 分派入口。公开按键和文本适配入口都经过 Session 事务包装，执行过时代际检查、错误恢复和成功后的修订/锚点同步。逐键状态仲裁由对应 handler 管理；导航候选提交与文本输入适配分别位于 `keyboards/helpers/`。Backspace/Delete 在 handler 中决定 composition/命令行焦点优先级，之后复用 `Command::Delete` 领域事务处理数学、结构与正文删除，避免逐键复制同一套事务规则。`run_editor_key_with_font_choices_lazy` 只把按键 handler 需要的字体目录闭包交给 Enter/Tab handler，只有选择字体候选时才计算目录，不在 app 侧判断命令行优先级。`Command::Undo/Redo` 和直接领域 `Delete` 命令仍保留 Session 级兼容入口。窗口快捷键与控件本地按键仍属于各自焦点作用域；尚未实现的表格键不计入“已支持”。
 
-视觉候选包含 Session、文档和字体代际；Session 验证自身和文档代际，app 在生成候选时验证当前字体代际。扩选锚点由 Session 当前选择构造，app 不能提交任意旧锚点。剪贴板系统调用留在 app，复制/粘贴是否允许由逐键模块决定。
+视觉候选包含 Session、文档和字体代际；Session 验证自身和文档代际，app 在生成候选时验证当前字体代际。扩选锚点由 Session 当前选择构造，app 不能提交任意旧锚点。正文选区锚点与焦点各自保留视觉侧并随撤销/重做恢复；布局和 Qt 只读取会话状态，不再维护第二份可变锚点亲和性。MathText 两端视觉侧仍随其数学文本位置保存。剪贴板系统调用留在 app，复制/粘贴是否允许由逐键模块决定。
 
 ## 新增与修改快捷键的规则
 
