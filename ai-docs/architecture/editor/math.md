@@ -50,11 +50,11 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 公式后端是工作区内的 `caret-math` crate，选型依据见[研究 010](../../research/010-typst-math-layout.md)：
 
 - **解析与导出**：LaTeX 子集解析器将输入转换为 `MathTree` / `Align`；导出器将文档树转换为规范 TeX。编辑 TextFlow 不经此转换边界；显式源码编辑才使用临时 TeX 草稿和会话映射。树与草稿无法无歧义对齐，或导出无法表达格式与扩展元数据时，返回明确错误并保留有效状态。
-- **排版**：`layout/` 移植自 Typst v0.15.1 的数学排版，度量来自 OpenType MATH 表，经 `read-fonts` / `skrifa` 读取。`Align` 的显示布局在调用期间适配成数学后端的 `aligned` 矩阵，由数学表格适配器计算对齐列与行距；持久模型仍为 `Align → rows → cells`，不会转存为 Caret 文档表格。网格纯几何定位已抽取到无 workspace 依赖的 `caret-grid-layout`；移植文件的来源与修改记录在文件头，见[源码署名](../../standards/source-attribution.md)。
-- **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。SVG/PNG 不是文档模型，也不是交互路径。
+- **排版**：`layout/` 移植自 Typst v0.15.1 的数学排版，度量来自 OpenType MATH 表，经 `read-fonts` / `skrifa` 读取。`Align` 的显示布局在调用期间适配成数学后端的 `aligned` 矩阵，由数学表格适配器计算对齐列与行距；Equation 是单行单格的显示公式，Align 是多行多格的显示公式；两者都不转存为 Caret 文档表格。行框和网格纯几何由共享的 `caret-grid-layout` 计算，正文布局与数学宿主向它提供测量结果和行距策略；文档表格以后也复用同一层。嵌套 matrix/cases 保持数学自身排版，不继承宿主正文行高。移植文件的来源与修改记录在文件头，见[源码署名](../../standards/source-attribution.md)。
+- **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。InlineMath 作为行内对象参与正文段落行框；Equation 作为一行一格、Align 作为多行多格使用正文基础行框和共享网格推进。超出行框的上标、分数等由 Natural、Multiple、AtLeast、Exactly 规则处理。数学 caret 使用宿主的正文基础行高，并锚定 MathNodeBox 或 MathText 当前视觉行的真实基线；上下标等结构保留相对基线偏移，多行文本岛按当前视觉行取基线。Exactly 按宿主行距固定推进，逐行溢出裁切必须与行身份、绘制、命中和 caret 共用同一几何。Equation/Align 的块前后间距沿用普通段落的相邻间距合并规则。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：`MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；页面布局服务负责组合和复用。
 
-数学 `aligned` / `matrix` 的适配器处理 MathFlow 片段、数学字号与 OpenType MATH 度量，并把已测量网格交给 `caret-grid-layout` 定位。Caret 文档表格由 [045](../../task/045-table-model-and-editing.md) / [046](../../task/046-table-layout-and-canvas.md) 定义，处理单元格块序列、可用宽度下的列宽求解、内容重排、分页裁剪与命中；其几何适配器可复用 `caret-grid-layout`，但不依赖 `caret-math`。列表布局同样可以把标记列与正文列作为几何输入；编号、缩进、嵌套和跨页连续性仍归 [051](../../task/051-code-links-quotes-layout.md)。截至本记录，生产消费者只有 `caret-math`；046/051 的接入仍待各自任务实现和验证。
+数学 `aligned` / `matrix` 的适配器处理 MathFlow 片段、数学字号与 OpenType MATH 度量，并把已测量网格交给 `caret-grid-layout` 定位。正文行度量通过 `caret-layout` 适配到同一共享行框 API；块级 Equation/Align 由 engine 提供正文行距输入，Align 逐行布局而不污染嵌套 matrix/cases 的数学策略。Caret 文档表格由 [045](../../task/045-table-model-and-editing.md) / [046](../../task/046-table-layout-and-canvas.md) 定义，处理单元格块序列、可用宽度下的列宽求解、内容重排、分页裁剪与命中；其几何适配器复用 `caret-grid-layout`，但不依赖 `caret-math`。列表布局同样可以把标记列与正文列作为几何输入；编号、缩进、嵌套和跨页连续性仍归 [051](../../task/051-code-links-quotes-layout.md)。
 
 数学字体的内置默认角色为 STIX Two Math（OFL），三平台不依赖本机字体。文档 `defaultMathFontFamily` 使用统一 `<default>` 字段值；布局与字体选择按[字体选择规范](font-selection.md)解析该标记、显式字体和缺字回退，并为不支持的选择提供诊断。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
 
@@ -112,6 +112,7 @@ split/merge 操作接收强类型有序流和宿主路径，由宿主适配器�
 - 数学文本选区使用 UTF-8 字节偏移设置 anchor/focus；两端必须落在 grapheme 边界。输入和退格/删除替换选区，左右键将选区折叠到对应边界。仅在源码模式切换或提交时，若临时映射不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的选区由宿主路径映射到同一逻辑文本范围；公式原子与相邻文本之间必须保留可用 caret 边界。布局命中和选区绘制使用相同的 MathBox 几何。
 - 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与 Enter 可退出公式。
 - Up/Down 在 MathTree 中根据同一公式布局快照生成垂直候选，使用结构节点、分数槽位及脚本的实际基线和光标高度；候选只进入可见的正尺寸结构槽，必需 Placeholder 可在其前定位、不会生成其后的插入点。左右键跨入或离开 MathFlow 时也不会停在 Placeholder 后。Session 对鼠标命中、导航和输入统一约束紧邻 Placeholder 的非法边界，同时保留 Placeholder 后其他已有内容的合法位置。Align 同一行的不同 cell 不视为上下目标，跨行按宿主行和页面几何选择。Session 通过统一 `EditorKey` 入口校验目标公式与布局代际后提交。MathFlow 内 TextFlow 继续使用 Parley 正文文本移动语义并适配宿主路径。当前树位置只表示一个 MathFlow 路径，跨操作数的 Shift 扩展不能无损表示，因此保持原位置；普通正文与 TextFlow 的扩选状态仍由其各自宿主位置表达。
+- 块级 Equation/Align 参与与 Section 相同的相邻块方向键仲裁：Left/Right 从相邻段落进入公式；Up/Down 从正文视觉列边缘进入公式首/末行；公式对应边缘按反方向回到邻接正文或公式块。Up/Down 的边界入口只查找相邻块级公式，不误入同段行内公式；左右键仍可按既有契约进入相邻行内公式。入口复用 Session 的块邻接逻辑；正文、MathText 和 MathTree 只负责计算视觉候选与方向，不另建公式专用块跳转状态。
 - `_` 与 `^` 插入带空组的下标与上标，`{` 自动补 `}`，`}` 跳出组。
 - 公式编辑中 `\` 打开数学命令，不打开正文命令；`Align` 中 Enter 插入 `\\` 结束一行，`&` 为对齐点。
 - 退格行为按焦点对象分别仲裁：MathTree 根为空时删除整个 InlineMath、Equation 或整个空 Align 对象；源码分支中的空公式也删除对应公式对象。Align 中当前 cell 为空但其他 cell 仍有内容时，退格移向相邻 cell，不删除 Align、行或相邻 cell。空构造参数（例如 `\\sqrt{}`）先按公式内部退格规则移除构造，光标位于空 MathText 文本岛时保留该文本岛，不删除宿主公式。结构选区的块删除、普通 Paragraph 的空段删除和 MathTree 根删除不共享“空对象”判定。只移动插入点的离开操作不产生撤销步；修改文档树的操作才记账。删除公式对象的撤销恢复公式编辑目标、焦点和视觉 affinity，重做恢复删除后的宿主焦点。

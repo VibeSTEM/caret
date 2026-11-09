@@ -55,6 +55,7 @@ flowchart TB
   engine --> fontroles
   layout --> doc
   layout --> fontroles
+  layout --> grid
   structure --> doc
   math --> doc
   math --> fontroles
