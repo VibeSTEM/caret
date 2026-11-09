@@ -1,6 +1,6 @@
 # 文字格式语义
 
-更新日期：2026-11-01。本文定义目标格式语义；当前开发实现与目标载体的差异由[行内与块级环境适配](document-model/inline-and-block-environments.md)标明。节点和字段现状以[文档模型](document-model.md)为准。本文维护格式解析、选择区操作和环境格式化规则；字体候选另见[多文字体系字体选择](font-selection.md)。
+更新日期：2026-11-09。本文定义目标格式语义；当前开发实现与目标载体的差异由[环境视图](document-model/environment-views.md)标明。节点和字段现状以[文档模型](document-model.md)为准。本文维护格式解析、选择区操作和环境格式化规则；Block/Inline 交互底座见[块宿主交互](document-model/block-interaction.md)，字体候选另见[多文字体系字体选择](font-selection.md)。
 
 ## 格式解析
 
@@ -14,7 +14,7 @@
 | Underline | `Run.props.underline` | glyph 装饰直接属性；按语义需要投影为当前行内范围 |
 | 段落属性 | `Paragraph.props` / `Paragraph.layout` | 只保存注册表允许的段落值 |
 
-行内持久化载体与统一交互视图的边界见[行内载体与环境视图](document-model/inline-and-block-environments.md)。文档树和字段定义见[文档树与结构](document-model/document-structure.md)。
+行内持久化载体与统一交互视图的边界见[环境视图](document-model/environment-views.md)。文档树和字段定义见[文档树与结构](document-model/document-structure.md)。
 
 ### 属性解析优先级
 
@@ -53,7 +53,7 @@ Font 环境可嵌套，内层字体覆盖外层。文档排版主题可定义可
 ## 选区与待输入格式
 
 - 非空选区修改所覆盖的文字范围，不改文字内容；选区端点先按字素规则向外扩展。相交格式区间在局部边界拆分，新环境放入已有环境链内侧以保留既有模板优先级；仅一次命令同时创建的多个环境按稳定 kind 顺序嵌套。不同命令历史可以留下不同但有效的树形；不得为了生成统一树形而重排已有环境并改变有效格式。测试分别验证正文内容、解析后的有效格式、位置映射和 ID/撤销，不要求语义等价的操作序列生成相同节点树。仅兼容的相邻片段才合并。
-- 空选区执行粗体/斜体时，按光标处有效状态切换 pending typing style，下一段已提交输入使用切换后的状态。主题/祖先提供粗斜体而用户显式关闭时，插入或范围格式化生成 `enabled: false` 的 EnvironmentNode；重新开启时生成 `enabled: true`。显式清除局部环境是 unwrap 并恢复继承，不等同于关闭。移动插入点后丢弃旧 pending 值并重新解析新位置上下文。
+- 空选区执行粗体/斜体时，按光标处有效状态切换 `PendingInlineStyle`，下一段已提交输入使用切换后的状态。空光标处存在有效 pending inline style 时，画布显示粉色 Inline 槽位；关闭格式或移动插入点后槽位消失并按新位置重新解析。该槽位只是 pending 状态的视觉投影，不创建空 EnvironmentNode；颜色和几何由[画布高亮](../interface/canvas-highlighting.md)唯一维护。主题/祖先提供粗斜体而用户显式关闭时，插入或范围格式化生成 `enabled: false` 的 EnvironmentNode；重新开启时生成 `enabled: true`。显式清除局部环境是 unwrap 并恢复继承，不等同于关闭。
 - 工具栏和弹出控件不能丢失编辑选区。点击颜色选择器后仍作用于原目标范围。
 - 粗体/斜体命令采用“统一应用”策略：非空选区只要有任一部分未启用该格式，就将 `enabled: true` 应用到整个选区；仅当整个选区都已启用时才将 `enabled: false` 应用到整个选区。显式 API 设置值与用户点击切换是不同操作。
 - Enter 对段落标记的继承、粘贴后的 pending 状态，由命令规格统一定义。

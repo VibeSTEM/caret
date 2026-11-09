@@ -1,6 +1,6 @@
 # Block、正文与公式内容的代码链路
 
-更新日期：2026-11-04。本文定义内容模型的目标职责链路；实现进度与验证证据以对应任务为准。持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[行内与块级环境适配](inline-and-block-environments.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
+更新日期：2026-11-09。本文定义内容模型的目标职责链路；实现进度与验证证据以对应任务为准。持久化语义以[文档树与结构](document-structure.md)及[文档存储](document-storage.md)为准，行内/块级载体的适配规则以[环境视图](environment-views.md)为准，Block 交互协议以[块宿主交互](block-interaction.md)为准，数学模型和 `\text` 转换规则以[数学公式](../math.md)为准。
 
 ## 文档模型与消费者
 

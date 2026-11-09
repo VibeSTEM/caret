@@ -51,7 +51,7 @@
 - [x] 文档字体默认值按 Script 与 Script+Language 目标由 Rust 文档设置持有；`\defaultfont` 可键盘导航目标层级并提交设置，`\font` 可查询本机字体并将所选字体应用为局部 Font 环境。字体缺失保留请求并由 shaping fallback 处理；UI 不扫描目录。
 - [x] `defaultCodeFontFamily` 默认值、校验、`.cdoc` 持久化和快照投影已接通；代码 shaping 使用显式字体或内置 JetBrains Mono，保持代码角色等宽空格语义。实际代码块节点尚未实现。
 - [x] 历史实现：`\underline` 曾以 Run 直接属性保存，并接通选区、pending typing、软换行、IME、Undo/Redo、Rust/Parley 装饰几何和 Qt QSG 绘制；对应历史行为测试通过。该存储结果不代表当前目标架构已经实现。
-- [ ] 按[行内与块级环境适配](../architecture/editor/document-model/inline-and-block-environments.md)统一下划线载体、范围高亮与 Mod+Backspace 写回；补齐 Run 边界、InlineMath 边界、键盘上下文和失败原子性验证。`.cdoc` 尚未稳定发布，不要求兼容早期开发分支格式。
+- [ ] 按[环境视图](../architecture/editor/document-model/environment-views.md)统一下划线载体、范围高亮与 Mod+Backspace 写回；补齐 Run 边界、InlineMath 边界、键盘上下文和失败原子性验证。`.cdoc` 尚未稳定发布，不要求兼容早期开发分支格式。
 - [x] `\firstlineindent`、Tab、`\singlecharspace`、`\doublecharspace` 与普通 U+0020 半字宽排版语义已接通；首行缩进参与布局、光标/选区几何、撤销/重做和 `.cdoc` 往返。
 - [x] 上述已交付能力通过对应 Rust、跨层、QML 加载/格式和持久化测试；字体弹窗初始实现通过构建与加载检查。
 - [x] 下划线装饰跨 Rust FFI/Qt Quick 场景图的像素级行为测试通过；命令字体弹窗的边缘定位、滚动和鼠标行为由 059 验收，不阻塞本任务既有命令状态/API。

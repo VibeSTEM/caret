@@ -9,16 +9,16 @@ Caret 有两类不同用途的背景：
 | 背景 | 表示什么 | 渲染位置 | 几何来源 |
 | --- | --- | --- | --- |
 | 块焦点高亮 | 当前块环境或活动 Equation/Align，奶油黄 | 文档画布通用块高亮 QSG 层；纸张之上、选区与字形之下 | Rust 分别投影块环境分页范围和 MathFragment 宿主范围；ViewModel 合并到同一列表 |
-| 行内焦点高亮 | 当前行内环境、活动 InlineMath，或块级公式内的活动 TextFlow island，粉色 | 文档画布通用 inline 高亮 QSG 层；位于块层之上、选区与字形之下 | Rust 分别投影行内环境文本视觉行、InlineMath MathBox 和块级数学 TextFlow island；ViewModel 合并到同一列表 |
+| 行内焦点高亮 | 当前行内环境、活动 InlineMath、块级公式内的活动 TextFlow island，或空光标处有效的 PendingInlineStyle，粉色 | 文档画布通用 inline 高亮 QSG 层；位于块层之上、选区与字形之下 | Rust 投影行内环境文本视觉行/空范围槽位、InlineMath MathBox、数学 TextFlow island 或 caret/行框派生的 pending-style 槽位；ViewModel 合并到同一列表 |
 | 命令提示背景 | 正在输入的命令查询/候选控件 | QML 命令输入/补全控件自身的背景 | QML 控件的内容尺寸、候选尺寸和插入点锚定位置 |
 
-块与 inline 焦点是文稿画布内容的临时视觉投影。两个层级可同时显示，各取本层级的活动范围；Qt/QML 保留并绘制两组独立矩形与颜色。文本范围按视觉行切片，公式块使用 MathFragment，数学文本使用 TextFlow island 几何。它们必须与页面缩放、分页裁剪、文字、选区和光标处于同一画布坐标与场景图顺序中。Rust 提供领域范围及布局几何，Qt 校验快照并合并同视觉层的来源，QSG 在字形之前绘制背景；这些层不遍历文档树、不重复塑形，也不改写文档或布局状态。
+块与 inline 焦点是文稿画布内容的临时视觉投影。Paragraph 虽是 Block，但普通段落焦点不自动产生块背景；只有活动环境或公式适配器提供有效高亮范围时才绘制块底色。两个层级可同时显示，各取本层级的活动范围；Qt/QML 保留并绘制两组独立矩形与颜色。文本范围按视觉行切片，公式块使用 MathFragment，数学文本使用 TextFlow island 几何。InlineMath 和 InlineEnvironment 共用 inline 空范围槽位策略：MathBox 已有占位宽度时复用其几何；空格式环境或活动的空光标 PendingInlineStyle 则以布局提供的 caret/行框几何生成非零背景槽位，不能因范围长度为零或尚未产生环境节点就丢失活动反馈。槽位仅用于绘制，不创建文档字符或环境节点；PendingInlineStyle 关闭或焦点移走后不再投影。所有几何必须与页面缩放、分页裁剪、文字、选区和光标处于同一画布坐标与场景图顺序中。Rust 提供领域范围及布局几何，Qt 校验快照并合并同视觉层的来源，QSG 在字形之前绘制背景；这些层不遍历文档树、不重复塑形，也不改写文档或布局状态。
 
 ## 活动公式焦点
 
 活动 MathEdit target 为块级 Equation 或 Align 时，Rust 以经过 revision 校验的 `MathEditTarget::Block` 匹配同代 `MathFragment`，生成奶油黄宿主矩形。矩形横跨页面版心宽度，纵向采用 MathFragment 的位置与高度并裁切到页面；Align 按整个宿主着色，不单独着色 cell。InlineMath 不产生块背景。
 
-块级 Equation/Align 中的活动 MathFlow `TextFlow`（包括 `\text{...}`）产生粉色 inline 高亮，覆盖该 island 的完整布局范围。IME 预编辑使用预览 Session 与布局快照重新计算文本岛范围；细线 composition underline 由独立的输入法预编辑层绘制，不拼入粉色背景矩形。文本矩形按所在纸张的 x/y 边界裁切，超出纸张的数学排版不会让高亮快照失效。空 TextFlow 的零宽度范围不制造额外宽度；空宿主由块级黄色背景标示。
+块级 Equation/Align 中的活动 MathFlow `TextFlow`（包括 `\text{...}`）产生粉色 inline 高亮，覆盖该 island 的完整布局范围。IME 预编辑使用预览 Session 与布局快照重新计算文本岛范围；细线 composition underline 由独立的输入法预编辑层绘制，不拼入粉色背景矩形。文本矩形按所在纸张的 x/y 边界裁切，超出纸张的数学排版不会让高亮快照失效。没有活动空 InlineEnvironment 时，空 TextFlow 的零宽度文本范围不制造额外宽度；若其内部有活动空 InlineEnvironment，则由统一 inline 槽位策略提供非零粉色背景。空公式宿主由块级黄色背景标示。
 
 数学几何与普通环境几何在快照中保留领域来源，Qt ViewModel 分别把它们合并为 `blockHighlightRects` 和 `inlineHighlightRects`。普通 Section 与 Equation/Align 共用同一块层，普通 inline 环境与数学 TextFlow 共用同一 inline 层；两者复用对应颜色、圆角、padding、裁剪和节点更新实现。MathEdit 块目标有效时，不从其正文停靠点推导相邻 Section 的高亮。
 
@@ -26,7 +26,7 @@ Caret 有两类不同用途的背景：
 
 ## 复用边界
 
-块焦点和 inline 焦点使用各自一个通用 QSG 绘制层：绘制器消费矩形列表与样式参数，不理解环境 kind 或数学目标，也不计算文档范围。两个层可有独立的颜色 token 与几何策略；层内的来源共享绘制、裁剪、圆角和节点更新机制，不能为 Section、Equation/Align 或不同 inline 内容复制平行 renderer。
+块焦点和 inline 焦点使用各自一个通用 QSG 绘制层：绘制器消费矩形列表与样式参数，不理解环境 kind 或数学目标，也不计算文档范围。两个层可有独立的颜色 token 与几何策略；层内的来源共享绘制、裁剪、圆角和节点更新机制，不能为 Section、Equation/Align 或不同 inline 内容复制平行 renderer。inline 的空范围槽位由 Rust 统一适配，Bold 等格式环境与空 InlineMath 使用同一粉色视觉槽位契约；TextMap 范围和 MathBox 内容几何仍由各自载体提供。
 
 命令提示与环境高亮可以共享设计令牌或视觉约定，例如主题色管理方式、圆角规范；但 QML `HighlightBackground` 和 QSG 节点属于不同渲染及交互边界，不能为了“共用背景”把命令弹出控件移入文稿场景图，也不能让 QML 重建正文环境几何。只有确实跨两种渲染系统共用且保持纯数据的样式定义，才应抽为共同主题属性；绘制代码应留在各自的渲染层。
 

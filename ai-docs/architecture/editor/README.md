@@ -25,7 +25,8 @@
 | 权威主题 | 文档 |
 | --- | --- |
 | 文档树与页面角色 | [文档树与结构](document-model/document-structure.md) |
-| 行内载体、语义适配层与块环境视图 | [行内载体与环境视图](document-model/inline-and-block-environments.md) |
+| Block 共享交互协议 | [块宿主交互](document-model/block-interaction.md) |
+| 行内/块级环境载体与语义视图 | [环境视图](document-model/environment-views.md) |
 | Block、ParagraphContent、InlineEnvironment 与 TextFlow 的目标职责链路 | [内容节点代码链路](document-model/content-code-path.md) |
 | 块环境标题、编号与结构编辑 | [环境模型](document-model/document-environments.md) |
 | 位置与模型上限 | [文档位置](document-model/document-position.md) |

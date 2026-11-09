@@ -8,7 +8,9 @@
 
 当前 `StructureIndex` 为 Paragraph、由段落大纲属性识别的 Heading、`Section`/`Custom` 块环境以及 Equation/Align 公式块建立条目。Section/Custom 共享可嵌套的标题/子项容器；Section 另有编号语义。二者都投影为 `multiLine`，但不能在 Rust 索引或文档数据中抹掉具体 kind。Custom 的实例名可覆盖通用显示名，模板扩展复用容器模型，不要求新增 QML 类别分支。Equation/Align 条目没有 Paragraph 停靠点，不进入段落导航序列。Paragraph block 的 `ParagraphContent::Text(TextFlow)` 与数学 `MathContent::Text(TextFlow)` 共用文本载体；InlineMath 创建与源码编辑提交时会把根层文本提升到 ParagraphContent，固定数学槽位仍在 MathFlow 内。规则见[数学公式架构](math.md#宿主边界与拆分)。模型及代码边界见[内容节点代码链路](document-model/content-code-path.md)。
 
-行内与块级当前环境的权威适配规则见[行内与块级环境适配](document-model/inline-and-block-environments.md)。行内 `EnvironmentNode`、Run 下划线范围和 `InlineMath` 分别保留自己的载体与编辑入口，不作为块级导航停靠点。
+Block 是统一块级宿主类别，Paragraph 是结构最简单且编辑规则最完整的 Block。共享交互协议以 Paragraph 已验证的行为作为提取基准，但不复用其 paragraph_id/UTF-8 坐标作为所有 Block 的位置类型。Paragraph 适配器提供 TextMap/TextFlow 位置；Section/Custom/Equation/Align 适配器提供块身份、父级顺序、必要的块边界及领域内部位置。未来 Table、Figure 必须复用该协议，并通过窄领域适配器暴露单元格或图形内部位置；当前提及扩展契约不表示对应节点已实现。Inline 是 Paragraph 和显式提供行内流的 Block 内部内容层，不是任意块序列的直接子项。
+
+行内与块级当前环境的权威适配规则见[环境视图](document-model/environment-views.md)。行内 `EnvironmentNode`、Run 下划线范围和 `InlineMath` 分别保留自己的载体与编辑入口，不作为块级导航停靠点。
 
 `InlineMath` 是 Paragraph 中的 U+FFFC 原子对象；公式内部编辑由 `MathEdit` 标识宿主与活动分支：Source 分支使用源码字节游标，Text 分支使用 MathFlow 中 TextFlow 的路径和显示偏移。Equation 与 Align 作为块级公式节点进入结构范围；当前 `MathEdit.target` 标识活动公式，不改变持久化树。Table、Figure 的结构映射在相应文档节点实现并接入索引后启用。
 
@@ -26,7 +28,7 @@
 | 列表项 | 计划中的块语义；列表项可包含一个或多个块，连续同列表引用形成派生列表范围 |
 | PageSection | 页面几何配置，不是内容结构 |
 
-删除普通 Heading 只影响该标题段落，不隐式删除标题范围内后续块。删除块环境才按该环境的明确子树边界处理。当前环境背景高亮、字符选区是不同的视图叠加；它们不写入文档格式、不打印，也不修改结构修订。当前环境背景高亮的视觉规则由[031](../../task/031-environment-highlight.md)定义。
+删除普通 Heading 只影响该标题段落，不隐式删除标题范围内后续块。删除块环境才按该环境的明确子树边界处理。当前环境背景高亮、字符选区是不同的视图叠加；它们不写入文档格式、不打印，也不修改结构修订。高亮颜色、来源和绘制层以[画布与交互背景](../interface/canvas-highlighting.md)为唯一权威；[031](../../task/031-environment-highlight.md)只保留实现与验收记录。
 
 ## 索引与更新
 
@@ -63,7 +65,10 @@ crates/caret-structure/src/
 
 crates/caret-engine/src/editing/session/
 ├── structure.rs                    # 结构命令入口与事务边界
-└── structure/                      # 多职责增长后再拆分导航、环境操作
+└── structure/
+    ├── environment_mutations.rs     # 块环境删除、解除等结构变更
+    ├── selection.rs                 # 块环境结构选区与操作
+    └── tests.rs                     # Session 结构行为测试
 
 crates/caret-app/src/document_view/  # 生成当前结构与同代布局几何的只读投影
 native/viewmodels/document/         # 校验、保存和发布 Rust 快照
@@ -75,7 +80,7 @@ qml/Canvas/                         # 画布组合与 Theme 绑定
 
 ## 当前环境高亮
 
-当前环境采用语义视图设计，不要求每项都对应同类持久化节点。目标适配器按 Inline 与 Block 分层，具体来源和操作见[行内与块级环境适配](document-model/inline-and-block-environments.md)。目标快照保留来源类型与逻辑范围，真实节点使用持久化 ID，Run 属性范围不生成 ID。
+当前环境采用语义视图设计，不要求每项都对应同类持久化节点。目标适配器按 Inline 与 Block 分层，具体来源和操作见[环境视图](document-model/environment-views.md)。目标快照保留来源类型与逻辑范围，真实节点使用持久化 ID，Run 属性范围不生成 ID。
 
 数学焦点与普通环境焦点都由 Rust 依据当前 Session 和同代布局快照投影几何，Qt 校验并把同视觉层的领域来源合并后交给画布，不推导语义或范围。Equation/Align 活动焦点与 TextFlow 高亮的几何、图层及复用规则以[画布与交互背景](../interface/canvas-highlighting.md#活动公式焦点)为准；能力区分宿主原子边界与公式内部可编辑性。
 
@@ -87,9 +92,11 @@ qml/Canvas/                         # 画布组合与 Theme 绑定
 
 数学宿主沿用与普通文本一致的基础行框、行距和光标高度策略；普通数学字形不应仅因字形轮廓不同而使光标或宿主行框跳变。上标、下标、分数、根式等结构超出正文基准时，宿主行框及必要的光标范围按正文行距规则处理：可扩展的行距模式容纳所需数学内容；固定行距保持固定推进，并按行距契约处理溢出。光标的水平位置、基线和结构内垂直位置仍由数学布局决定；统一高度策略不得改变脚本、分数槽位或 Align 行/单元格定位。
 
-## 块边界停靠
+## 复杂 Block 边界停靠
 
-所有可编辑块容器共享四个停靠状态：块前外侧、块内起点、块内终点、块后外侧。外侧状态由 Session 持有目标块 ID 与方向，不在文档里预先插入空段落。方向键第一次越过块首尾时停在对应外侧；再次沿同方向移动才越过外侧状态进入相邻内容，反方向则进入块内首/末位置。左右键遵循相同的状态转换；上下键从相邻视觉行进入块首/末行，并在块顶/底离开到相应外侧状态。MathTree/MathText 的结构候选不得跳过该外侧状态。
+具有独立块外边界语义的复杂 Block，可通过共享协议使用块前外侧、块内起点、块内终点、块后外侧位置。外侧状态由 Session 持有目标块 ID 与方向，不在文档里预先插入空段落。方向键第一次越过块首尾时停在对应外侧；再次沿同方向移动才越过外侧状态进入相邻内容，反方向则进入块内首/末位置。左右键遵循同一转换；上下键从相邻视觉行进入块首/末行，并在块顶/底离开到对应外侧。MathTree/MathText 候选不得跳过适用的块边界状态。Section/Custom 与 Equation/Align 通过各自内容适配接入；Paragraph 仍使用其真实 TextMap 首尾位置，不强制额外的虚拟停靠状态。InlineMath 是 Paragraph 中的 inline 原子，不参与块外停靠，其外部两侧由 TextMap 的 U+FFFC 位置表达，内部位置由数学编辑器提供。
+
+Paragraph 与复杂 Block 共用同一个位置仲裁、选区端点和删除事务协议；它们的端点表示并不相同。结构索引提供稳定顺序和宿主关系，布局适配器提供同代几何，Session 负责转换 anchor/focus 和动作目标。普通 Paragraph 不要求块级活动背景；需要背景的环境/公式通过可选几何能力提供。添加新 Block kind 时只实现其内容/几何适配，不复制状态机或快捷键仲裁。InlineMath 与行内格式环境仍由 Paragraph/内部 TextFlow 的 Inline 底座管理。共享协议详见[块宿主交互](document-model/block-interaction.md)。
 
 在块前/后外侧按 Enter、输入文字或提交输入法时，事务在目标块同级插入段落，再把焦点映射到新段落；不改写已有相邻段落。段落插入、焦点恢复、外侧停靠状态和撤销补丁属于一个原子事务。外侧 caret 几何由块适配器投影到共享边界查询：Section 使用容器范围；居中 Equation/Align 使用所在页面内容行的行首/行尾，Align 的垂直位置对应首行/末行。绘制、指针命中和交互快照消费同一几何。
 

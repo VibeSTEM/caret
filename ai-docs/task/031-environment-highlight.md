@@ -29,7 +29,7 @@
 
 ## 历史实现边界
 
-本任务记录的“最内层环境独占高亮”是 2026-10-30 完成的单层实现行为，不再是当前设计规则。当前载体映射与跨层级同时绘制以[行内载体与环境视图](../architecture/editor/document-model/inline-and-block-environments.md)及[画布与交互背景](../architecture/interface/canvas-highlighting.md)为准；公式活动焦点由 075 负责验收。下方旧验证表中“当前代际非法交互清除高亮”记录的是 2026-10-30 的历史契约；075 将其调整为整份交互原子拒绝并保留上次有效高亮。
+本任务记录的“最内层环境独占高亮”是 2026-10-30 完成的单层实现行为，不再是当前设计规则。当前载体映射与跨层级同时绘制以[环境视图](../architecture/editor/document-model/environment-views.md)及[画布与交互背景](../architecture/interface/canvas-highlighting.md)为准；公式活动焦点由 075 负责验收。下方旧验证表中“当前代际非法交互清除高亮”记录的是 2026-10-30 的历史契约；075 将其调整为整份交互原子拒绝并保留上次有效高亮。
 
 ## 历史设计提案与实现记录
 
