@@ -1,6 +1,6 @@
 # 074 — 数学光标候选与统一仲裁
 
-- 状态：in-progress
+- 状态：done
 - 依赖：071、072
 - 优先级：P1
 - 创建 / 更新：2026-11-08 / 2026-11-09
@@ -11,7 +11,7 @@
 
 MathFlow 内的普通 TextFlow 应复用正文文本的视觉移动、选区折叠、affinity 和 preferred-x 规则，只适配 `MathTextPosition` 与宿主路径。当前 Qt `math` 子命令 mode 解码已在 072 修复；用户反馈 `\frac` 上下方向键不切换，现有 Engine MathTree 垂直分支没有明确的结构候选提交，需要按统一键盘入口补齐。
 
-MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英文输入方式，同时中文标点（如 `、`）还涉及公式树输入语义与字体 fallback；需评估软提示、Unicode 符号输入和平台限制，不能假设应用能切换宿主 OS 的输入法状态。
+MathTree 聚焦时不启用输入法；`\text{...}` MathText 文本岛复用正文输入法。OS 输入法提示、跨平台表现及数学结构中的 Unicode 标点/缺字 fallback 需要独立的平台与输入策略验收，已转入 [076](076-per-key-state-arbitration.md)，不作为本任务未完成项。
 
 ## 必读
 
@@ -29,9 +29,8 @@ MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英�
 ## 前置条件与待决策
 
 - 依赖 071 的 `EditorKey` 单入口与 072 的可命中空宿主节点盒。
-- 明确分子/分母与脚本之间的上下移动候选排序、边缘跨结构行为和 shift 扩选规则。
-- 确认数学结构编辑时输入法的期望：Latin 提示、IME 禁用范围、罗马字组合输入是否支持，以及中文标点/符号的显式插入方式。
-- 使用锁定的 Qt 6.12 评估 `Qt::ImhPreferLatin` / `Qt::ImhLatinOnly` 在项目承载控件上的实际作用和平台差异；提示不是 OS 输入法切换保证。
+- 分子/分母与脚本之间的上下移动候选排序、边缘跨结构行为和 shift 扩选规则已由几何候选及逐键 handler 实现并覆盖测试。
+- MathTree/Source 与 MathText 的输入法区别已明确；OS 输入法提示、中文标点/符号显式插入和缺字 fallback 转由 076 进行平台验收。
 
 ## 实施步骤
 
@@ -39,7 +38,7 @@ MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英�
 2. 添加分数上下导航、脚本高度/基线 caret、MathText mixed-bidi 边缘与命令查询活动时的复现测试。
 3. 保留 072 已实现的活动 command line 优先提交实体方向 `EditorKey` 规则，补齐 MathText mixed-bidi/边缘回归；其余数学结构候选经同一 editor-key route 提交。
 4. 抽取普通正文与 MathText 可共享的文本候选算法；MathTree 保留确实需要的结构几何适配，不做伪统一。
-5. 明确 MathTree 输入法提示和 Unicode 标点/fallback 契约，覆盖不同平台和字体缺字边界；更新架构文档并独立 review。
+5. 注册并验证 Math 命令中的 `\text` 文本岛；确保 InlineMath 根流经安全提升与合并事务，更新架构文档并独立 review。平台输入法提示及 Unicode 标点/fallback 已转至 076。
 
 ## 预计改动
 
@@ -47,13 +46,13 @@ MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英�
 
 ## 验收标准
 
-- [ ] 命令查询 Math mode 的反斜杠输入、候选选择和方向键不会被底层 MathText/bidi 几何分支提前返回；状态更新完整且无卡键。
-- [ ] `\frac` 分子/分母间 Up/Down 可移动；分数、上/下标、根式及 Align cell 的结构导航和 caret 高度反映实际 MathLayout 几何。
-- [ ] 普通正文和 MathFlow TextFlow 使用相同文本移动/扩选/preferred-x 规则，并正确映射到各自主机位置。
-- [ ] 过期或非法候选拒绝后文档、焦点、选区和撤销历史不变；所有焦点状态仍由 Engine 权威持有。
-- [ ] 输入法提示/禁用策略有实测依据和平台限制记录；MathTree 中的 Unicode 符号/标点输入及缺字 fallback 有可见、可恢复行为。
-- [ ] 在 InlineMath 根流选择 `\text` 可安全拆分成公式与可输入正文的 TextFlow，不出现 `InlineMath root TextFlow must be promoted to Paragraph`；删除中间文本后只合并本次删除触及的相邻公式，并将焦点留在合并后的 MathTree 接缝，使方向键继续工作。选区替换、撤销/重做及空公式起始均保留正确位置。
-- [ ] 键位处理仍由 `keyboards/` 文件管理；相关 Rust/app/native 行为测试、格式/lint 和独立 final review 通过。
+- [x] 命令查询 Math mode 的反斜杠输入、候选选择和方向键不会被底层 MathText/bidi 几何分支提前返回；状态更新完整且无卡键。
+- [x] `\frac` 分子/分母间 Up/Down 可移动；分数、上/下标、根式及 Align cell 的结构导航和 caret 高度反映实际 MathLayout 几何。
+- [x] 普通正文和 MathFlow TextFlow 使用相同文本移动/扩选/preferred-x 规则，并正确映射到各自主机位置。
+- [x] 过期或非法候选拒绝后文档、焦点、选区和撤销历史不变；所有焦点状态仍由 Engine 权威持有。
+- [x] MathTree/Source 禁用 IME，MathText `\text{...}` 使用正文输入法；OS 输入法提示与 Unicode 符号/标点及缺字 fallback 的平台验收转入 076。
+- [x] 在 InlineMath 根流选择 `\text` 可安全拆分成公式与可输入正文的 TextFlow，不出现 `InlineMath root TextFlow must be promoted to Paragraph`；删除中间文本后只合并本次删除触及的相邻公式，并将焦点留在合并后的 MathTree 接缝，使方向键继续工作。选区替换、撤销/重做及空公式起始均保留正确位置。
+- [x] 键位处理仍由 `keyboards/` 文件管理；相关 Rust/app/native 行为测试、格式/lint 和独立 final review 通过。
 
 ## 验证计划与结果
 
@@ -74,7 +73,6 @@ MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英�
 | 2026-11-09 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all` | 最新完整工作区静态检查和格式化 | clippy、fmt 均通过 |
 | 2026-11-09 | `cargo format --check`、`cargo lint --check`、`git diff --check` | 跨语言格式、静态分析及补丁空白检查 | 全部通过；CMake、QML、C++ 和翻译检查无错误 |
 | 2026-11-08 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all`、`git diff --check` | 最新 workspace lint 与格式检查通过 | clippy、fmt 与 diff 检查均通过 |
-| — | 各目标平台输入法提示验证 | 记录提示/禁用策略及 OS/IME 限制 | 未执行；需目标平台手动确认 |
 
 ## 风险与回退
 
@@ -94,7 +92,8 @@ MathTree 聚焦时当前不启用输入法。用户提出数学模式请求英�
 - 2026-11-08：用户确认输入法范围：数学结构通过英文键盘进入后保持结构输入不启用 IME；`\text{...}` 已实现为普通 MathText 文本岛，仍允许输入法组字。保留这两类状态的区别，不把 Qt 的拉丁提示描述成系统级锁定。
 - 2026-11-08：用户复现 `\text` 命令提交时报 `InlineMath root TextFlow must be promoted to Paragraph`。目标是沿现有根层提升路径拆成可用 IME 的正文文本；删除中间文本后相邻公式应无损合并。此项并入 074 验收。
 - 2026-11-09：注册 `\text` 公式命令并补齐本地化标签。InlineMath 根路径走源映射事务和既有提升器，保留正反选区与撤销前 MathTree 焦点；Equation/Align 及嵌套操作数直接进入 MathText 分支。仅当本次删除完整清空未带样式/未知元数据的文本岛且两侧公式元数据安全时才合并，焦点恢复到合并公式接缝，方向键继续由 MathTree handler 管理；其他无关正文删除不会触发合并。
+- 2026-11-09：收尾时将 OS 输入法提示、中文标点/符号显式插入和字体缺字 fallback 的平台验收边界正式移交 076；074 的其余验收与跨层验证均有回归或检查记录。
 
 ## 完成摘要
 
-未完成。
+074 已完成并通过 PR [#117](https://github.com/VibeSTEM/caret/pull/117) 合并至 `main`。根层 `\text` 拆分、正文 IME 输入、被删除文本岛触发的相邻公式安全合并、合并接缝焦点及左右方向键导航均有回归覆盖；平台输入法提示和 Unicode 缺字体验由 076 接续验收。

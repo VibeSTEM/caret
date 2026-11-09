@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-08。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-09。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -105,7 +105,7 @@
 | 071 | 架构 | [宿主焦点协议与键盘意图路由](task/071-host-focus-and-key-routing.md) | P1 | 010、021、027、030、043、044、073 | L | done |
 | 072 | 数学排版 | [空公式宿主占位的视觉与几何契约](task/072-empty-math-host-placeholder.md) | P2 | 044 | S | done |
 | 073 | 文档结构 | [块环境内容判定保全公式节点](task/073-environment-content-preservation.md) | P1 | 010、021 | S | done |
-| 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | in-progress |
+| 074 | 数学交互 | [数学光标候选与统一仲裁](task/074-math-caret-routing-and-geometry.md) | P1 | 071、072 | M | done |
 | 075 | 数学交互 | [Equation / Align 活动块背景高亮](task/075-equation-align-active-highlight.md) | P2 | 044、072 | M | planned |
 | 076 | 键盘架构 | [逐键状态仲裁与键盘路由一致性](task/076-per-key-state-arbitration.md) | P1 | 071 | L | planned |
 
