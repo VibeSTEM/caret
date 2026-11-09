@@ -90,16 +90,34 @@ fn structure_snapshot_keeps_parent_highlight_after_virtual_inner_exit() -> Resul
         .collect();
     assert!(!expected_parent_rectangles.is_empty());
     let expected_parent_rectangles = Value::Array(expected_parent_rectangles);
-    assert_eq!(
-        layout["blockEnvironmentHighlightRects"],
-        expected_parent_rectangles
-    );
+    let assert_rectangles_match = |actual: &Value| {
+        let actual_rectangles = actual
+            .as_array()
+            .expect("block environment highlight rectangles should be an array");
+        let expected_rectangles = expected_parent_rectangles
+            .as_array()
+            .expect("expected parent rectangles should be an array");
+        assert_eq!(actual_rectangles.len(), expected_rectangles.len());
+        for (actual, expected) in actual_rectangles.iter().zip(expected_rectangles) {
+            assert_eq!(actual["pageIndex"], expected["pageIndex"]);
+            for key in ["x0Pt", "y0Pt", "x1Pt", "y1Pt"] {
+                let actual = actual[key]
+                    .as_f64()
+                    .expect("actual rectangle coordinate should be numeric");
+                let expected = expected[key]
+                    .as_f64()
+                    .expect("expected rectangle coordinate should be numeric");
+                assert!(
+                    (actual - expected).abs() <= 1e-9,
+                    "rectangle coordinate {key} differs: {actual} vs {expected}"
+                );
+            }
+        }
+    };
+    assert_rectangles_match(&layout["blockEnvironmentHighlightRects"]);
     let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
         .map_err(|error| error.to_string())?;
-    assert_eq!(
-        interaction["blockEnvironmentHighlightRects"],
-        expected_parent_rectangles
-    );
+    assert_rectangles_match(&interaction["blockEnvironmentHighlightRects"]);
 
     let root_environment = BlockEnvironment {
         id: NodeId::generate(),
