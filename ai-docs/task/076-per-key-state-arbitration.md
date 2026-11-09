@@ -60,7 +60,7 @@
 | --- | --- | --- | --- |
 | 2026-11-09 | `cargo test -p caret-engine --locked`；`cargo test -p caret-app --locked` | 逐键状态冲突、数学/结构状态、选区历史、IME 和 app 投影回归 | 676 engine 与 271 app 测试通过；含 Backspace/Delete 的命令行+MathEdit、composition 优先级、连续 Shift 跨块锚点视觉侧和撤销软换行回归 |
 | 2026-11-09 | `cargo test -p caret-tests --test native --locked` | 完整快照、ViewModel→QML Canvas、C++/QML、格式及窗口装载 | 10/10 CTest 通过；输入法状态更新和 Qt `ImHints` true/false 查询通过；新增字段 schema 验证通过 |
-| 2026-11-09 | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | Rust 格式与 workspace 静态检查 | 两项通过；Clippy 发现并修复 ModZ 条件结构与测试中的字符串比较分配后复跑通过 |
+| 2026-11-09 | `cargo format --changed --check`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | 变更文件格式与 workspace 静态检查 | 两项通过；CI 首轮发现两个 C++ 测试文件不符合 clang-format，已格式化并复查；Clippy 发现并修复 ModZ 条件结构与测试中的字符串比较分配后复跑通过 |
 | 2026-11-09 | Terra 分域评审 + Sol 最终只读评审 | engine/session、app/native/IME、文档及完整最终 diff | Terra 分域复审与 Sol 最新 diff 复审均通过；已按其结构锚点发现补回归并通过；审查指出的实机输入法/Unicode 验收仍待目标设备确认 |
 
 ## 风险与回退
@@ -82,6 +82,7 @@
 - 2026-11-09：新增 native 用例验证输入法 `enabled` / `preferLatin` 从 ViewModel 经真实 QML 属性绑定到 Canvas、通知发出与 Qt 查询；Rust app 用例验证状态值源自 Session。目标平台实际输入法切换效果、数学模式下 Unicode/中文标点与缺字恢复仍需目标设备实测，不能由 Qt 查询测试替代。
 - 2026-11-09：Sol 最终评审发现键盘扩展跨块时结构选区转换覆盖锚点视觉侧，且折叠的正文投影会被事务收尾误判为无选区。Session 现在在进入及连续扩展时独立保留结构锚点侧，新增两次 Shift+Right 跨块候选的 EditorKey 回归。
 - 2026-11-09：本轮验证完成：engine 676/676、app 271/271；native CTest 10/10；格式与 workspace Clippy 通过。两次 Terra 复审及最终 Sol 复审的发现均已处理并复查。目标平台手动输入法与缺字恢复验收仍待完成。
+- 2026-11-09：PR 首轮 CI 的变更文件格式检查发现 native 测试 C++ 格式差异；按仓库 `cargo format --changed` 格式化后，本地完整变更文件格式检查通过。
 
 ## 完成摘要
 

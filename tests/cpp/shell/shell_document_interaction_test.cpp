@@ -333,8 +333,8 @@ void ShellLoadTest::environmentHighlightSnapshotSelectsAndClearsActiveRects() {
                                                       {QStringLiteral("xPt"), 0.0},
                                                       {QStringLiteral("y0Pt"), 0.0},
                                                       {QStringLiteral("y1Pt"), 1.0}}}};
-    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(
-        inline_view_model, invalid_prefer_latin_interaction));
+    QVERIFY(!caret::LayoutViewModelTestProbe::installInteraction(inline_view_model,
+                                                                 invalid_prefer_latin_interaction));
     QCOMPARE(inline_view_model.environmentHighlightRects(), visible_environment_rects);
     QCOMPARE(inline_view_model.inputMethodContext(), previous_input_method_context);
     QCOMPARE(interaction_changed.size(), 0);
@@ -524,12 +524,13 @@ void ShellLoadTest::inputMethodContextFlowsFromViewModelToCanvas() {
     QQmlEngine engine;
     engine.addImportPath(QString::fromUtf8(CARET_QML_IMPORT_PATH));
     QQmlComponent component(&engine);
-    component.setData(QByteArrayLiteral("import QtQuick\n"
-                                        "import Caret.Canvas\n"
-                                        "import Caret.ViewModels\n"
-                                        "Item { DocumentCanvas { objectName: \"canvas\"; "
-                                        "inputMethodContext: LayoutViewModel.inputMethodContext } }\n"),
-                      QUrl());
+    component.setData(
+        QByteArrayLiteral("import QtQuick\n"
+                          "import Caret.Canvas\n"
+                          "import Caret.ViewModels\n"
+                          "Item { DocumentCanvas { objectName: \"canvas\"; "
+                          "inputMethodContext: LayoutViewModel.inputMethodContext } }\n"),
+        QUrl());
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     QObject* root = component.create();
     QVERIFY(root != nullptr);
@@ -545,10 +546,10 @@ void ShellLoadTest::inputMethodContextFlowsFromViewModelToCanvas() {
 
     const rust::String interaction = caret::ffi::interaction_state_json(*caret::document_runtime());
     QVERIFY(!std::string_view(interaction.data(), interaction.size()).starts_with("error:"));
-    QJsonObject root_json = QJsonDocument::fromJson(
-                                QByteArray(interaction.data(),
-                                           static_cast<qsizetype>(interaction.size())))
-                                .object();
+    QJsonObject root_json =
+        QJsonDocument::fromJson(
+            QByteArray(interaction.data(), static_cast<qsizetype>(interaction.size())))
+            .object();
     QJsonObject input_context = root_json.value(QStringLiteral("inputMethodContext")).toObject();
     QVERIFY(input_context.contains(QStringLiteral("enabled")));
     QVERIFY(input_context.contains(QStringLiteral("preferLatin")));
