@@ -30,6 +30,8 @@ struct ParsedLayoutSnapshot {
     QVariantList current_structure;
     QVariantList block_environment_highlight_rects;
     QVariantList inline_environment_highlight_rects;
+    QVariantList math_block_highlight_rects;
+    QVariantList math_text_highlight_rects;
     QVariantMap command_line;
     QVariantMap input_method_context;
     QString session_id;
@@ -54,5 +56,9 @@ bool parse_block_environment_highlight_rects(const QJsonValue& value,
 bool parse_inline_environment_highlight_rects(const QJsonValue& value,
                                               const QVariantList& page_sizes,
                                               QVariantList& rectangles, QString& error);
+bool parse_math_block_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                      QVariantList& rectangles, QString& error);
+bool parse_math_text_highlight_rects(const QJsonValue& value, const QVariantList& page_sizes,
+                                     QVariantList& rectangles, QString& error);
 
 } // namespace caret::layout_snapshot

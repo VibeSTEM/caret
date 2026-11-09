@@ -149,6 +149,25 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
     assert_eq!(interaction["inputMethodContext"]["enabled"], true);
     assert_eq!(interaction["inputMethodContext"]["surroundingText"], "ab");
     assert_eq!(
+        interaction["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        interaction["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    let math_block_rectangles = interaction["mathBlockHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("math block highlight was omitted"))?;
+    assert_eq!(math_block_rectangles.len(), 1);
+    assert_eq!(math_block_rectangles[0]["pageIndex"], 0);
+    assert!(math_block_rectangles[0]["x1Pt"].as_f64() > math_block_rectangles[0]["x0Pt"].as_f64());
+    assert!(math_block_rectangles[0]["y1Pt"].as_f64() > math_block_rectangles[0]["y0Pt"].as_f64());
+    let math_text_rectangles = interaction["mathTextHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("math text highlight was omitted"))?;
+    assert!(!math_text_rectangles.is_empty());
+    assert_eq!(
         interaction["selectionRects"].as_array().map(Vec::len),
         Some(0)
     );
@@ -252,6 +271,320 @@ fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
     assert_eq!(
         runtime.session.command_line().map(|line| line.mode),
         Some(caret_engine::CommandLineMode::Math)
+    );
+    Ok(())
+}
+
+#[test]
+fn equation_and_align_text_focus_publish_full_width_block_highlights()
+-> Result<(), Box<dyn std::error::Error>> {
+    for align in [false, true] {
+        let tree = MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: "x".to_owned(),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        };
+        let block_id = NodeId::generate();
+        let block = if align {
+            Block::Align(caret_doc::Align {
+                id: block_id.clone(),
+                rows: vec![caret_doc::MathAlignRow {
+                    id: NodeId::generate(),
+                    cells: vec![tree],
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })
+        } else {
+            Block::Equation(Equation {
+                id: block_id.clone(),
+                math_tree: tree,
+                extra: BTreeMap::new(),
+            })
+        };
+        let mut document = Document::blank();
+        let section_id = NodeId::generate();
+        let mut section_children = (0..48)
+            .map(|_| Block::Paragraph(Paragraph::empty(NodeId::generate())))
+            .collect::<Vec<_>>();
+        section_children.push(block);
+        document.body.push(Block::Environment(BlockEnvironment {
+            id: section_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(Paragraph::empty(NodeId::generate())),
+            children: section_children,
+            extra: BTreeMap::new(),
+        }));
+        let mut runtime = DocumentViewRuntime::new(document)?;
+        runtime.layout_snapshot_json()?;
+        let unfocused: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        assert_eq!(unfocused["mathBlockHighlightRects"], serde_json::json!([]));
+
+        let (page_index, x_pt, y_pt) = {
+            let snapshot = runtime.current_snapshot()?;
+            let (page_index, page, fragment) = snapshot
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    page.layout
+                        .math_fragments
+                        .iter()
+                        .find(|fragment| fragment.math_id == block_id)
+                        .map(|fragment| (page_index, page, fragment))
+                })
+                .ok_or_else(|| std::io::Error::other("math host fragment is missing"))?;
+            let left = page.margin_left_pt + f64::from(fragment.x_offset_pt);
+            let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+            let right = left + f64::from(fragment.width_pt);
+            let bottom = top + f64::from(fragment.height_pt);
+            let mut hit = None;
+            let mut y = top;
+            while y <= bottom && hit.is_none() {
+                let mut x = left;
+                while x <= right {
+                    if snapshot.hit_test_math_text(page_index, x, y).is_some() {
+                        hit = Some((x, y));
+                        break;
+                    }
+                    x += 0.5;
+                }
+                y += 0.5;
+            }
+            let (x, y) =
+                hit.ok_or_else(|| std::io::Error::other("math TextFlow was not hittable"))?;
+            (page_index, x, y)
+        };
+        assert!(page_index > 0, "the focus case must exercise a later page");
+        let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+            i32::try_from(page_index)?,
+            x_pt,
+            y_pt,
+        )?)?;
+        assert_eq!(placed["mathText"], true);
+
+        let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        let block_rectangles = interaction["mathBlockHighlightRects"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("math block highlight was omitted"))?;
+        assert_eq!(block_rectangles.len(), 1, "align={align}");
+        assert_eq!(block_rectangles[0]["pageIndex"], page_index);
+        let page = &runtime.current_snapshot()?.pages[page_index];
+        assert_eq!(block_rectangles[0]["x0Pt"], page.margin_left_pt);
+        assert_eq!(
+            block_rectangles[0]["x1Pt"],
+            page.width_pt - page.margin_right_pt
+        );
+        assert!(
+            interaction["mathTextHighlightRects"]
+                .as_array()
+                .is_some_and(|rectangles| !rectangles.is_empty())
+        );
+        assert_eq!(
+            interaction["blockEnvironmentHighlightRects"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            interaction["inlineEnvironmentHighlightRects"],
+            serde_json::json!([])
+        );
+        runtime.session.select_block_environment(section_id)?;
+        let selected: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        assert_eq!(selected["mathBlockHighlightRects"], serde_json::json!([]));
+        assert_eq!(selected["mathTextHighlightRects"], serde_json::json!([]));
+        assert_eq!(
+            selected["blockEnvironmentHighlightRects"],
+            serde_json::json!([])
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn overwide_block_math_text_highlight_is_clipped_to_the_page()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: "x".repeat(300),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let (page_width, page_height, page_index, x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = snapshot
+            .pages
+            .first()
+            .ok_or_else(|| std::io::Error::other("math page is missing"))?;
+        let fragment = page
+            .layout
+            .math_fragments
+            .first()
+            .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+        let x = page.width_pt / 2.0;
+        let top = page.margin_top_pt + f64::from(fragment.y_offset_pt);
+        let bottom = top + f64::from(fragment.height_pt);
+        let mut hit = None;
+        let mut y = top;
+        while y <= bottom.min(top + 30.0) && hit.is_none() {
+            if snapshot.hit_test_math_text(0, x, y).is_some() {
+                hit = Some((x, y));
+            }
+            y += 0.5;
+        }
+        let (x, y) = hit.ok_or_else(|| std::io::Error::other("wide TextFlow was not hittable"))?;
+        (page.width_pt, page.height_pt, 0, x, y)
+    };
+    let placed: Value =
+        serde_json::from_str(&runtime.place_caret_at_page_json(page_index, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathText"], true);
+
+    let context = runtime
+        .session
+        .math_text_input_context()
+        .ok_or_else(|| std::io::Error::other("wide TextFlow input context is missing"))?;
+    let target = context.target.clone();
+    let island_start = context.island_start.clone();
+    let island_end = context.island_end.clone();
+    let raw_geometry = runtime
+        .current_snapshot()?
+        .math_text_selection_geometry(&target, &island_start, &island_end)
+        .ok_or_else(|| std::io::Error::other("wide TextFlow geometry is missing"))?;
+    assert!(
+        raw_geometry
+            .iter()
+            .any(|rectangle| rectangle.x0_pt < 0.0 || rectangle.x1_pt > page_width)
+    );
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let rectangles = interaction["mathTextHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("clipped math highlight was omitted"))?;
+    assert!(!rectangles.is_empty());
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle["pageIndex"] == page_index
+            && rectangle["x0Pt"]
+                .as_f64()
+                .is_some_and(|x| (0.0..page_width).contains(&x))
+            && rectangle["x1Pt"].as_f64().is_some_and(|x| x <= page_width)
+            && rectangle["y0Pt"]
+                .as_f64()
+                .is_some_and(|y| (0.0..page_height).contains(&y))
+            && rectangle["y1Pt"].as_f64().is_some_and(|y| y <= page_height)
+    }));
+    Ok(())
+}
+
+#[test]
+fn inline_math_focus_uses_the_existing_inline_highlight_without_a_block_highlight()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath("x".to_owned()))?;
+    runtime.session.run(caret_engine::Command::EnterMath(
+        caret_engine::Direction::Backward,
+    ))?;
+    runtime.layout_snapshot_json()?;
+
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert_eq!(
+        interaction["mathBlockHighlightRects"],
+        serde_json::json!([])
+    );
+    assert_eq!(interaction["mathTextHighlightRects"], serde_json::json!([]));
+    assert!(
+        interaction["inlineEnvironmentHighlightRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_align_cell_focus_publishes_the_shared_parent_block_highlight()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align_id = NodeId::generate();
+    let tree = MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Align(caret_doc::Align {
+        id: align_id.clone(),
+        rows: vec![caret_doc::MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![tree],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let (x_pt, y_pt) = {
+        let snapshot = runtime.current_snapshot()?;
+        let page = &snapshot.pages[0];
+        let fragment = page
+            .layout
+            .math_fragments
+            .iter()
+            .find(|fragment| fragment.math_id == align_id)
+            .ok_or_else(|| std::io::Error::other("empty Align cell fragment is missing"))?;
+        (
+            page.margin_left_pt
+                + f64::from(fragment.x_offset_pt)
+                + f64::from(fragment.width_pt) / 2.0,
+            page.margin_top_pt
+                + f64::from(fragment.y_offset_pt)
+                + f64::from(fragment.height_pt) / 2.0,
+        )
+    };
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
+    assert_eq!(placed["mathTree"], true);
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let block_rectangles = interaction["mathBlockHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("empty Align block highlight is missing"))?;
+    assert_eq!(block_rectangles.len(), 1);
+    assert_eq!(interaction["mathTextHighlightRects"], serde_json::json!([]));
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
     );
     Ok(())
 }
@@ -399,6 +732,16 @@ fn empty_equation_host_keeps_hit_caret_edit_and_history_without_placeholder_box(
 
     let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(0, x_pt, y_pt)?)?;
     assert_eq!(placed["mathTree"], true);
+    let empty_interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert!(
+        empty_interaction["mathBlockHighlightRects"]
+            .as_array()
+            .is_some_and(|rectangles| rectangles.len() == 1)
+    );
+    assert_eq!(
+        empty_interaction["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
     let focus_before_edit = runtime
         .session
         .math_tree_input_context()

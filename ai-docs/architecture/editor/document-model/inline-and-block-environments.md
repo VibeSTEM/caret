@@ -55,7 +55,7 @@ flowchart LR
     OPS["按来源和能力选择操作"]
     WRITE["载体专属事务写回"]
     GEO["同 generation 的布局几何映射"]
-    HILITE["environmentHighlights"]
+    HILITE["blockHighlightRects / inlineHighlightRects"]
     PAINT["Qt and QML 绘制"]
 
     IE --> IEA --> VIEW
@@ -81,7 +81,7 @@ flowchart LR
 
 - 查询阶段不访问布局；Inline 与 Block 列表独立生成，因此两层高亮可以同时存在。`InlineMath`/数学块候选必须与活动公式对象的身份匹配，普通光标仅停在对象边界时不会把公式误认成当前环境。
 - 操作阶段按 `EnvironmentSource` 回到真实载体：环境树操作、Run 属性更新、公式树编辑和块结构事务各自验证并提交。不能把这些写回折叠成一个通用“改环境”函数。
-- 几何阶段按候选的 ID 或逻辑范围选择布局结果：普通块环境取页内结构范围，Run/InlineEnvironment 取文本范围，行内公式取 MathBox，数学块取公式块几何。全部使用与当前文档相同 generation 的快照，再合并为 `environmentHighlights`。
+- 几何阶段按候选的 ID 或逻辑范围选择布局结果：普通块环境取页内结构范围，Run/InlineEnvironment 取文本范围，行内公式取 MathBox。活动 Equation/Align 则由经过 revision 校验的 MathEdit target 匹配同代 MathFragment；活动数学 TextFlow island 使用其文本范围几何。快照保留来源，Qt ViewModel 按块/inline 视觉层合并到 `blockHighlightRects` 与 `inlineHighlightRects`。具体图层和复用契约见[画布与交互背景](../../interface/canvas-highlighting.md)。
 
 ## Inline 适配
 
@@ -113,7 +113,7 @@ Section、Custom 等普通块环境通过块节点、结构索引和块环境编
 
 ### 数学块
 
-Equation、Align 是公式内容块，在文档结构中拥有稳定 ID；宿主块流将它们视为原子范围，公式编辑器仍可进入内部。活动公式焦点关联到其宿主公式节点。块公式的高亮几何来自同代公式布局快照；不得把数学树塞进 Section/Custom 的块环境子树，也不得将公式内部可编辑性误写成宿主结构可拆分。
+Equation、Align 是公式内容块，在文档结构中拥有稳定 ID；宿主块流将它们视为原子范围，公式编辑器仍可进入内部。活动公式焦点关联到其宿主公式节点。块公式的高亮几何来自同代公式布局快照；不得把数学树塞进 Section/Custom 的块环境子树，也不得将公式内部可编辑性误写成宿主结构可拆分。活动焦点的全宽块背景与 MathText inline 高亮统一由[画布高亮架构](../../interface/canvas-highlighting.md#活动公式焦点)定义。
 
 ## 查询与几何组合
 

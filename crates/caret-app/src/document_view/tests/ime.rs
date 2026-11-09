@@ -301,6 +301,77 @@ fn block_math_text_edit_reuses_all_paragraph_layouts() -> Result<(), String> {
         hit.ok_or_else(|| "equation TextFlow was not hittable".to_owned())?
     };
     runtime.place_caret_at_page_json(0, x_pt, y_pt)?;
+    let highlight_before_preedit: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    let preedit =
+        runtime.input_method_event_json("long-preedit".to_owned(), String::new(), 0, 0, 12)?;
+    let preedit: Value = serde_json::from_str(&preedit).map_err(|error| error.to_string())?;
+    assert!(
+        preedit["mathBlockHighlightRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    assert!(
+        preedit["mathTextHighlightRects"]
+            .as_array()
+            .is_some_and(|rectangles| !rectangles.is_empty())
+    );
+    let preview_context = runtime
+        .composition_preview_session
+        .as_ref()
+        .and_then(caret_engine::Session::math_text_input_context)
+        .ok_or_else(|| "preedit preview lost math text focus".to_owned())?;
+    let expected_preview_geometry = runtime
+        .composition_snapshot
+        .as_ref()
+        .ok_or_else(|| "math preview snapshot is missing".to_owned())?
+        .math_text_selection_geometry(
+            &preview_context.target,
+            &preview_context.island_start,
+            &preview_context.island_end,
+        )
+        .ok_or_else(|| "math preview island geometry is missing".to_owned())?;
+    let actual_preview_geometry = preedit["mathTextHighlightRects"]
+        .as_array()
+        .ok_or_else(|| "math preedit highlight geometry was omitted".to_owned())?;
+    assert_eq!(
+        actual_preview_geometry.len(),
+        expected_preview_geometry.len()
+    );
+    for (actual, expected) in actual_preview_geometry
+        .iter()
+        .zip(expected_preview_geometry)
+    {
+        assert_eq!(
+            actual["pageIndex"].as_u64(),
+            Some(u64::try_from(expected.page_index).map_err(|error| error.to_string())?)
+        );
+        for (key, expected) in [
+            ("x0Pt", expected.x0_pt),
+            ("y0Pt", expected.y0_pt),
+            ("x1Pt", expected.x1_pt),
+            ("y1Pt", expected.y1_pt),
+        ] {
+            let actual = actual[key]
+                .as_f64()
+                .ok_or_else(|| format!("math preedit highlight is missing {key}"))?;
+            assert!(
+                (actual - expected).abs() < 0.001,
+                "{key}: {actual} != {expected}"
+            );
+        }
+    }
+    assert_ne!(
+        preedit["mathTextHighlightRects"],
+        highlight_before_preedit["mathTextHighlightRects"]
+    );
+    runtime.input_method_event_json(String::new(), String::new(), 0, 0, 0)?;
+    let after_cancel: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        after_cancel["mathTextHighlightRects"],
+        highlight_before_preedit["mathTextHighlightRects"]
+    );
     runtime.insert_text_json("X".to_owned())?;
     let updated = runtime
         .last_snapshot

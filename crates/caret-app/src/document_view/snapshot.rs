@@ -8,8 +8,8 @@ use super::{
 };
 use caret_doc::NodeId;
 use caret_engine::{
-    Affinity, CompositionRange, DocumentLayoutDeltaView, PageCaretGeometry, Pos, Selection,
-    StructureClass, StructureKind, StructurePosition,
+    Affinity, CompositionRange, DocumentLayoutDeltaView, MathEditTarget, MathTextInputContext,
+    PageCaretGeometry, Pos, Selection, StructureClass, StructureKind, StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -151,7 +151,13 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
 }
 
 fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
-    if session.selected_block_environment().is_some() {
+    if session.selected_block_environment().is_some() || session.structure_selection().is_some() {
+        return None;
+    }
+    if matches!(
+        session.current_math_edit_target(),
+        Some(MathEditTarget::Block { .. })
+    ) {
         return None;
     }
     let exited_environment_id = session
@@ -170,6 +176,16 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
         .rev()
         .find(|entry| entry.kind.is_block_environment())
         .map(|entry| entry.id.clone())
+}
+
+fn current_math_block_target(session: &caret_engine::Session) -> Option<MathEditTarget> {
+    if session.selected_block_environment().is_some() || session.structure_selection().is_some() {
+        return None;
+    }
+    match session.current_math_edit_target()? {
+        target @ MathEditTarget::Block { .. } => Some(target.clone()),
+        MathEditTarget::Inline { .. } => None,
+    }
 }
 
 /// 将最终选区一次性投影为页面矩形；文本布局负责文字几何，结构环境复用环境范围。
@@ -302,6 +318,99 @@ fn block_environment_highlight_rects(
     )
 }
 
+/// 以活动 Equation/Align 的 MathFragment 定位整段版心背景。
+fn math_block_highlight_rects(
+    target: Option<&MathEditTarget>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
+    let Some(MathEditTarget::Block { block_id, .. }) = target else {
+        return Value::Array(Vec::new());
+    };
+    let rectangles = snapshot
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(page_index, page)| {
+            let x0 = page.margin_left_pt;
+            let x1 = page.width_pt - page.margin_right_pt;
+            page.layout
+                .math_fragments
+                .iter()
+                .filter(|fragment| &fragment.math_id == block_id)
+                .filter_map(move |fragment| {
+                    let page_index = i64::try_from(page_index).ok()?;
+                    let y0 = (page.margin_top_pt + f64::from(fragment.y_offset_pt))
+                        .clamp(0.0, page.height_pt);
+                    let y1 = (page.margin_top_pt
+                        + f64::from(fragment.y_offset_pt)
+                        + f64::from(fragment.height_pt))
+                    .clamp(0.0, page.height_pt);
+                    (x0.is_finite() && x1.is_finite() && y0.is_finite() && y1.is_finite())
+                        .then_some((page_index, x0, y0, x1, y1))
+                        .filter(|(_, x0, y0, x1, y1)| x1 > x0 && y1 > y0)
+                        .map(|(page_index, x0, y0, x1, y1)| {
+                            json!({
+                                "pageIndex": page_index,
+                                "x0Pt": x0,
+                                "y0Pt": y0,
+                                "x1Pt": x1,
+                                "y1Pt": y1,
+                            })
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(rectangles)
+}
+
+/// 将活动数学 TextFlow island 投影为粉色高亮几何，并裁切到页面边界。
+fn math_text_highlight_rects(
+    context: Option<&MathTextInputContext>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
+    let Some(context) =
+        context.filter(|context| matches!(&context.target, MathEditTarget::Block { .. }))
+    else {
+        return Value::Array(Vec::new());
+    };
+    let rectangles = snapshot
+        .math_text_selection_geometry(&context.target, &context.island_start, &context.island_end)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|rectangle| {
+            let page = snapshot.pages.get(rectangle.page_index)?;
+            let (x0, y0, x1, y1) = (
+                rectangle.x0_pt,
+                rectangle.y0_pt,
+                rectangle.x1_pt,
+                rectangle.y1_pt,
+            );
+            if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) {
+                return None;
+            }
+            let x0 = x0.clamp(0.0, page.width_pt);
+            let y0 = y0.clamp(0.0, page.height_pt);
+            let x1 = x1.clamp(0.0, page.width_pt);
+            let y1 = y1.clamp(0.0, page.height_pt);
+            (x1 > x0 && y1 > y0).then_some((rectangle.page_index, x0, y0, x1, y1))
+        })
+        .collect::<Vec<_>>();
+    Value::Array(
+        rectangles
+            .into_iter()
+            .map(|(page_index, x0_pt, y0_pt, x1_pt, y1_pt)| {
+                json!({
+                    "pageIndex": page_index,
+                    "x0Pt": x0_pt,
+                    "y0Pt": y0_pt,
+                    "x1Pt": x1_pt,
+                    "y1Pt": y1_pt,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// 将当前最内层行内环境投影为布局层选区矩形。
 fn inline_environment_highlight_rects(
     range: Option<&caret_engine::InlineSpan>,
@@ -385,9 +494,16 @@ impl DocumentViewRuntime {
         let environment_view = highlight_session
             .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let inline_environment = environment_view
-            .innermost_inline()
-            .and_then(|entry| entry.inline_range.as_ref());
+        let math_block_target = current_math_block_target(highlight_session);
+        let inline_environment = (math_block_target.is_none()
+            && highlight_session.selected_block_environment().is_none()
+            && highlight_session.structure_selection().is_none())
+        .then(|| environment_view.innermost_inline())
+        .flatten()
+        .and_then(|entry| entry.inline_range.as_ref());
+        let math_text_context = math_block_target
+            .as_ref()
+            .and_then(|_| highlight_session.math_text_input_context());
         let focus_environment_id = current_block_environment_id(highlight_session);
         let selection = self.session.selection().clone();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
@@ -431,6 +547,18 @@ impl DocumentViewRuntime {
             .insert(
                 "blockEnvironmentHighlightRects".to_owned(),
                 block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
+            );
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "mathBlockHighlightRects".to_owned(),
+                math_block_highlight_rects(math_block_target.as_ref(), snapshot),
+            );
+        view.as_object_mut()
+            .ok_or_else(|| "layout.invalid_view_object".to_owned())?
+            .insert(
+                "mathTextHighlightRects".to_owned(),
+                math_text_highlight_rects(math_text_context.as_ref(), snapshot),
             );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -659,13 +787,20 @@ impl DocumentViewRuntime {
             .unwrap_or(&mut self.session)
             .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let inline_environment = environment_view
-            .innermost_inline()
-            .and_then(|entry| entry.inline_range.as_ref());
         let highlight_session = self
             .composition_preview_session
             .as_ref()
             .unwrap_or(&self.session);
+        let math_block_target = current_math_block_target(highlight_session);
+        let inline_environment = (math_block_target.is_none()
+            && highlight_session.selected_block_environment().is_none()
+            && highlight_session.structure_selection().is_none())
+        .then(|| environment_view.innermost_inline())
+        .flatten()
+        .and_then(|entry| entry.inline_range.as_ref());
+        let math_text_highlight_context = math_block_target
+            .as_ref()
+            .and_then(|_| highlight_session.math_text_input_context());
         let focus_environment_id = current_block_environment_id(highlight_session);
         let math_geometry_context = self
             .composition_preview_session
@@ -686,6 +821,10 @@ impl DocumentViewRuntime {
         let snapshot = self.current_snapshot()?;
         let inline_environment_rectangles =
             inline_environment_highlight_rects(inline_environment, snapshot);
+        let math_block_rectangles =
+            math_block_highlight_rects(math_block_target.as_ref(), snapshot);
+        let math_text_rectangles =
+            math_text_highlight_rects(math_text_highlight_context.as_ref(), snapshot);
         let body_rectangles = selection_rectangles_json(
             &selection,
             structure_selection
@@ -788,6 +927,8 @@ impl DocumentViewRuntime {
             "commandLine": command_line,
             "currentStructure": current_structure,
             "blockEnvironmentHighlightRects": block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
+            "mathBlockHighlightRects": math_block_rectangles,
+            "mathTextHighlightRects": math_text_rectangles,
             "inlineEnvironmentHighlightRects": inline_environment_rectangles,
             "caretGeometry": {
                 "pageIndex": caret.page_index,

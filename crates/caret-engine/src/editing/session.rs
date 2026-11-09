@@ -72,6 +72,9 @@ pub struct MathTextInputContext {
     pub target: MathEditTarget,
     pub anchor: MathTextPosition,
     pub focus: MathTextPosition,
+    /// 整个连续数学文本岛的首尾端点，用于绘制文本岛范围而不推导第二份树状态。
+    pub island_start: MathTextPosition,
+    pub island_end: MathTextPosition,
 }
 
 #[derive(Debug)]
@@ -207,6 +210,9 @@ impl Session {
         };
         let (island, anchor_utf8, focus_utf8) = self.math_text_selection_island_offsets()?;
         let surrounding_text = island.display().to_owned();
+        let island_start = island.position_at_offset(0, MathPositionAffinity::Downstream)?;
+        let island_end =
+            island.position_at_offset(surrounding_text.len(), MathPositionAffinity::Upstream)?;
         let anchor_utf16 =
             super::text_map::utf8_offset_to_utf16(&surrounding_text, anchor_utf8).ok()?;
         let focus_utf16 =
@@ -220,7 +226,15 @@ impl Session {
             target: edit.target.clone(),
             anchor: anchor.clone(),
             focus: MathTextPosition::new(path.clone(), edit.cursor, *focus_affinity),
+            island_start,
+            island_end,
         })
+    }
+
+    /// 返回经文档代际校验的当前数学编辑目标；过期公式焦点返回 `None`。
+    pub fn current_math_edit_target(&self) -> Option<&MathEditTarget> {
+        self.ensure_math_edit_revision_current().ok()?;
+        self.math_edit.as_ref().map(|edit| &edit.target)
     }
 
     /// 返回当前数学结构序列插入点；源码/TextFlow 分支或过期焦点返回 `None`。
