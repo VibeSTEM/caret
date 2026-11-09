@@ -1,6 +1,6 @@
 # 数学公式
 
-更新日期：2026-11-09。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。任务进度见[011 总体验收](../../task/011-impl-math.md)及其拆分任务；公式与表格之间的工作边界见[专题索引](math-and-table.md)。
+更新日期：2026-11-09。本文是 Caret 数学文档模型、LaTeX 子集、公式编辑语义和字体选择的唯一权威。公式与表格之间的工作边界见[专题索引](math-and-table.md)。
 
 ## 公式节点与 LaTeX 语义
 
@@ -54,14 +54,14 @@ Caret 数学树保留 TeX 原子与符号顺序，不解析成代数关系或运
 - **输出**：`MathLayout` 独立产出 Glyph、Rule、Line、Rectangle 和 MathNodeBox 项及其几何；页面布局将这些项适配到 Caret 页面快照，并让绘制、命中和光标共用几何。InlineMath 作为行内对象参与正文段落行框；Equation 作为一行一格、Align 作为多行多格使用正文基础行框和共享网格推进。超出行框的上标、分数等由 Natural、Multiple、AtLeast、Exactly 规则处理。数学 caret 使用宿主的正文基础行高，并锚定 MathNodeBox 或 MathText 当前视觉行的真实基线；上下标等结构保留相对基线偏移，多行文本岛按当前视觉行取基线。Exactly 按宿主行距固定推进，逐行溢出裁切必须与行身份、绘制、命中和 caret 共用同一几何。Equation/Align 的块前后间距沿用普通段落的相邻间距合并规则。空公式宿主（InlineMath 根、Equation 根与 Align cell 根）保留非零 MathNodeBox 作为命中、插入点和 caret 的布局锚点，但不输出内部必填槽使用的描边 Rectangle；分数、脚本、根式等内部必填空槽仍绘制该矩形。这个区别属于稳定的树布局角色，与当前焦点无关。SVG/PNG 不是文档模型，也不是交互路径。
 - **缓存**：`MathLayoutEngine` 按公式内容、字号、样式与字体缓存排版结果；页面布局服务负责组合和复用。
 
-数学 `aligned` / `matrix` 的适配器处理 MathFlow 片段、数学字号与 OpenType MATH 度量，并把已测量网格交给 `caret-grid-layout` 定位。正文行度量通过 `caret-layout` 适配到同一共享行框 API；块级 Equation/Align 由 engine 提供正文行距输入，Align 逐行布局而不污染嵌套 matrix/cases 的数学策略。Caret 文档表格由 [045](../../task/045-table-model-and-editing.md) / [046](../../task/046-table-layout-and-canvas.md) 定义，处理单元格块序列、可用宽度下的列宽求解、内容重排、分页裁剪与命中；其几何适配器复用 `caret-grid-layout`，但不依赖 `caret-math`。列表布局同样可以把标记列与正文列作为几何输入；编号、缩进、嵌套和跨页连续性仍归 [051](../../task/051-code-links-quotes-layout.md)。
+数学 `aligned` / `matrix` 的适配器处理 MathFlow 片段、数学字号与 OpenType MATH 度量，并把已测量网格交给 `caret-grid-layout` 定位。正文行度量通过 `caret-layout` 适配到同一共享行框 API；块级 Equation/Align 由 engine 提供正文行距输入，Align 逐行布局而不污染嵌套 matrix/cases 的数学策略。Caret 文档表格处理单元格块序列、可用宽度下的列宽求解、内容重排、分页裁剪与命中；其几何适配器复用 `caret-grid-layout`，但不依赖 `caret-math`。列表布局同样可以把标记列与正文列作为几何输入；编号、缩进、嵌套和跨页连续性由列表领域模型定义。
 
 数学字体的内置默认角色为 STIX Two Math（OFL），三平台不依赖本机字体。文档 `defaultMathFontFamily` 使用统一 `<default>` 字段值；布局与字体选择按[字体选择规范](font-selection.md)解析该标记、显式字体和缺字回退，并为不支持的选择提供诊断。未来扩大支持列表时，应另行处理字体度量、缺字回退、缓存与 `.cdoc` 重现性。
 
 
 ## 公式中的普通文本
 
-数学结构槽位中的 `\text{...}` 是 MathFlow 的文本分支，与数学源码编辑分支平级；InlineMath 根层的 `\text{...}` 按本页宿主规则提升为 Paragraph TextFlow。Paragraph 行内流使用 `Vec<ParagraphContent>`，包含 `Text(TextFlow)`、`Math(InlineMath)` 和 `Environment(InlineEnvironment<ParagraphContent>)`；Code 分支由代码模型任务定义。MathFlow 与 Paragraph 共用 TextFlow 载体，不建立第二套文本存储或编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
+数学结构槽位中的 `\text{...}` 是 MathFlow 的文本分支，与数学源码编辑分支平级；InlineMath 根层的 `\text{...}` 按本页宿主规则提升为 Paragraph TextFlow。Paragraph 行内流使用 `Vec<ParagraphContent>`，包含 `Text(TextFlow)`、`Math(InlineMath)` 和 `Environment(InlineEnvironment<ParagraphContent>)`；其他语义分支由各自的文档模型定义。MathFlow 与 Paragraph 共用 TextFlow 载体，不建立第二套文本存储或编辑器。TextFlow 只保存文本 Run；Math 和 InlineEnvironment 是同一父序列的其他分支。
 
 `TextFlow` 复用正文 Run、Run 属性、未知字段和字素边界；Paragraph 与 MathFlow 使用同一 TextFlow 文本、Run 属性、InlineEnvironment 和字素编辑适配器。Paragraph 与 MathFlow 宿主适配器只解析宿主路径、定位节点并提交各自的历史事务；MathEdit 不另实现一套文本格式语义。源码编辑映射属于临时视图，不是 TextFlow 或 MathTree 的持久字段。
 
@@ -102,7 +102,7 @@ split/merge 操作接收强类型有序流和宿主路径，由宿主适配器�
 
 ## 导航与编辑
 
-本节定义跨实现的用户行为；实现进度、验证命令和测试证据由[043](../../task/043-math-model-and-editing.md)记录。
+本节定义跨实现的数学编辑用户行为。
 
 活动 Equation/Align 的块背景与 TextFlow 焦点高亮属于画布交互投影，其几何和绘制复用规则统一见[画布与交互背景](../interface/canvas-highlighting.md#活动公式焦点)。
 
@@ -110,8 +110,8 @@ split/merge 操作接收强类型有序流和宿主路径，由宿主适配器�
 - 正文插入点输入 `$` 创建并聚焦一个空行内公式；它是编辑器的输入字符行为，不绑定物理 `Shift+4`。命令查询中的 `$` 保持查询文本，公式编辑中的 `$` 作为公式字符输入；`$...$` 仍是源码导入语法，不代表成对定界符的正文输入流程。`、`、`¥` 和 `￥` 均为普通文本。
 - 公式编辑状态记录目标公式、当前编辑分支和该分支的位置。源码模式使用 UTF-8 字节位置；TextFlow 模式使用正文文本位置语义。切换模式时，适配器用公式树位置映射恢复焦点；失败时保留原文档与有效位置。
 - 数学文本选区使用 UTF-8 字节偏移设置 anchor/focus；两端必须落在 grapheme 边界。输入和退格/删除替换选区，左右键将选区折叠到对应边界。仅在源码模式切换或提交时，若临时映射不连续或无法无损覆盖，操作原子拒绝。跨 TextFlow/InlineEnvironment 的选区由宿主路径映射到同一逻辑文本范围；公式原子与相邻文本之间必须保留可用 caret 边界。布局命中和选区绘制使用相同的 MathBox 几何。
-- 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与 Enter 可退出公式。
-- Up/Down 在 MathTree 中根据同一公式布局快照生成垂直候选，使用结构节点、分数槽位及脚本的实际基线和光标高度；候选只进入可见的正尺寸结构槽，必需 Placeholder 可在其前定位、不会生成其后的插入点。左右键跨入或离开 MathFlow 时也不会停在 Placeholder 后。Session 对鼠标命中、导航和输入统一约束紧邻 Placeholder 的非法边界，同时保留 Placeholder 后其他已有内容的合法位置。Align 同一行的不同 cell 不视为上下目标，跨行按宿主行和页面几何选择。Session 通过统一 `EditorKey` 入口校验目标公式与布局代际后提交。MathFlow 内 TextFlow 继续使用 Parley 正文文本移动语义并适配宿主路径。当前树位置只表示一个 MathFlow 路径，跨操作数的 Shift 扩展不能无损表示，因此保持原位置；普通正文与 TextFlow 的扩选状态仍由其各自宿主位置表达。
+- 左右键在花括号组、token 边界间移动；控制词整体跳过与删除。到达边界再按一次离开公式；方向键、鼠标、选区命令、Esc 与上下文允许的 Enter 可退出公式。显式 Esc/Enter 退出块级公式时，先按请求方向越过连续 Equation/Align，定位同级 Paragraph；该方向没有 Paragraph 时再查找反方向。查找遇到其他 Block 即停止，不跨过 Section 等非公式块；两个方向都没有合法 Paragraph 时保留原公式焦点。公式对象删除只删除焦点对象并按文档结构恢复焦点，不复用显式退出的公式链搜索。
+- Up/Down 在 MathTree 中根据同一公式布局快照生成垂直候选，使用结构节点、分数槽位及脚本的实际基线和光标高度；候选只进入可见的正尺寸结构槽，必需 Placeholder 可在其前定位、不会生成其后的插入点。左右键跨入或离开 MathFlow 时也不会停在 Placeholder 后。Session 对鼠标命中、导航和输入统一约束紧邻 Placeholder 的非法边界，同时保留 Placeholder 后其他已有内容的合法位置。Align 同一行的不同 cell 不视为上下目标，跨行按宿主行和页面几何选择。Session 通过统一 `EditorKey` 入口校验目标公式与布局代际后提交。MathFlow 内 TextFlow 继续使用 Parley 正文文本移动语义并适配宿主路径。MathTree 内部位置由数学适配器维护，选区端点保留完整树路径；跨出数学文本岛或公式宿主时映射为共享文档范围。MathTree/Source、MathText 与文档级范围使用同一选区协议衔接，不能因局部坐标不同而静默忽略扩选或丢失所选公式对象。
 - Equation/Align 的块边界进入/退出使用[结构导航](structure-navigation.md)规定的共享 Block 仲裁；数学适配器只提供 MathTree/MathText 内部移动候选和同代公式几何，不再维护公式专用块跳转状态。
 - InlineMath 是 Paragraph 内的 U+FFFC 原子 Inline。外部两侧及公式内部位置按[文档位置](document-model/document-position.md)映射；它通过共享 Inline 范围底座参加选区与删除，不使用复杂 Block 的边界停靠。Inline 高亮与空槽位规则以[画布高亮](../interface/canvas-highlighting.md)为准。
 - `_` 与 `^` 插入带空组的下标与上标，`{` 自动补 `}`，`}` 跳出组。

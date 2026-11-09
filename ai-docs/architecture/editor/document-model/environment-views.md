@@ -130,7 +130,7 @@ Equation、Align 是公式 Block，在文档结构中拥有稳定 ID；Section/C
 
 ## 候选选择与操作语义
 
-Inline 内可能有嵌套环境和交叉的 Run 属性范围，不强行拼成一棵环境树。折叠光标处的“当前 inline 环境”候选先按 `Affinity` 过滤，再依次按逻辑范围最短、真实 InlineEnvironment 深度最大、固定 kind 顺序、文档顺序选择。固定 kind 顺序为 Bold、Italic、Font、Underline。公式编辑焦点属于数学命令上下文；`InlineMath` 是原子内容而非格式环境，不进入格式环境候选。候选由本文件定义；Mod+Backspace 等键位何时消费候选由[键盘管理架构](../../interface/keyboard-shortcut-architecture.md)定义。
+Inline 内可能有嵌套环境和交叉的 Run 属性范围，不强行拼成一棵环境树。先按[文档位置](document-position.md)的共享三态位置与宿主身份解析内外状态和完整活动环境链；同一偏移的空 Inline 内部位置不能从二值 `Affinity` 推断。随后只在合法文本边界使用 `Affinity` 过滤候选，再依次按逻辑范围最短、真实 InlineEnvironment 深度最大、固定 kind 顺序、文档顺序选择。固定 kind 顺序为 Bold、Italic、Font、Underline。公式编辑焦点属于数学命令上下文；`InlineMath` 是原子内容而非格式环境，不进入格式环境候选。候选由本文件定义；Mod+Backspace 等键位何时消费候选由[键盘管理架构](../../interface/keyboard-shortcut-architecture.md)定义。
 
 格式事务先验证完整目标范围再提交；失败不改变文档、焦点、pending 样式和 Undo 状态。跨越 InlineMath 的普通文字格式选区保留公式节点，并继续格式化可处理的文字；只命中不可格式化对象时返回无变化。
 
