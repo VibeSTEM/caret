@@ -224,6 +224,7 @@ impl Session {
                 .unwrap_or(inherited);
             let before_pending_style = self.pending_inline_style.clone();
             let before_selection = self.selection.clone();
+            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
             let before_visual_affinity = self.selection_visual_affinity;
             let before_state_id = self.history_state_id;
             self.pending_inline_style
@@ -237,13 +238,15 @@ impl Session {
                     before_visual_affinity,
                     before_pending_style,
                     before_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity),
                 SessionHistoryState::new(
                     self.selection.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
                     after_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
             ));
             self.history_state_id = after_state_id;
             return Ok(Effect::default());
@@ -433,6 +436,7 @@ impl Session {
                 return Ok(Effect::default());
             }
             let before_selection = self.selection.clone();
+            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
             let before_visual_affinity = self.selection_visual_affinity;
             let before_state_id = self.history_state_id;
             self.pending_inline_style.font_family = Some(family.to_owned());
@@ -445,13 +449,15 @@ impl Session {
                     before_visual_affinity,
                     before_pending_style,
                     before_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity),
                 SessionHistoryState::new(
                     self.selection.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
                     after_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
             ));
             self.history_state_id = after_state_id;
             return Ok(Effect::default());
@@ -619,6 +625,7 @@ impl Session {
                 .unwrap_or(inherited_value);
             let before_pending_style = self.pending_inline_style.clone();
             let before_selection = self.selection.clone();
+            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
             let before_visual_affinity = self.selection_visual_affinity;
             let before_state_id = self.history_state_id;
             self.pending_inline_style.set(kind, !current)?;
@@ -631,13 +638,15 @@ impl Session {
                     before_visual_affinity,
                     before_pending_style,
                     before_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity),
                 SessionHistoryState::new(
                     self.selection.clone(),
                     self.selection_visual_affinity,
                     self.pending_inline_style.clone(),
                     after_state_id,
-                ),
+                )
+                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
             ));
             self.history_state_id = after_state_id;
             return Ok(Effect::default());

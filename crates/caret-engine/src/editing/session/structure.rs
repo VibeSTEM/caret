@@ -30,6 +30,7 @@ impl Session {
         updated_paragraph_index: super::super::paragraph_ops::ParagraphIndex,
         patch: DocumentPatch,
         before_selection: Selection,
+        before_anchor_visual_affinity: VisualAffinity,
         before_visual_affinity: VisualAffinity,
         before_state_id: u64,
     ) {
@@ -39,20 +40,27 @@ impl Session {
         self.advance_history_merge_epoch();
 
         let after_state_id = self.allocate_history_state_id();
+        let before_state = SessionHistoryState::new(
+            before_selection,
+            before_visual_affinity,
+            self.pending_inline_style.clone(),
+            before_state_id,
+        )
+        .with_anchor_visual_affinity(before_anchor_visual_affinity);
         self.record_history_edit(SessionHistoryEdit::new(
             patch,
-            SessionHistoryState::new(
-                before_selection,
-                before_visual_affinity,
-                self.pending_inline_style.clone(),
-                before_state_id,
-            ),
+            before_state,
             SessionHistoryState::new(
                 self.selection.clone(),
                 self.selection_visual_affinity,
                 self.pending_inline_style.clone(),
                 after_state_id,
             )
+            .with_anchor_visual_affinity(if self.selection.anchor == self.selection.focus {
+                self.selection_visual_affinity
+            } else {
+                self.selection_anchor_visual_affinity
+            })
             .with_math_edit(
                 self.math_edit
                     .as_ref()
@@ -103,6 +111,7 @@ impl Session {
         siblings.remove(environment_index);
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         self.finalize_structure_edit(
@@ -115,6 +124,7 @@ impl Session {
                 fallback_paragraph: None,
             },
             before_selection.clone(),
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );
@@ -225,6 +235,7 @@ impl Session {
         }
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let position = Pos {
@@ -239,6 +250,7 @@ impl Session {
         };
         self.block_environment_exit = None;
         self.selection_visual_affinity = VisualAffinity::Upstream;
+        self.selection_anchor_visual_affinity = VisualAffinity::Upstream;
         let paragraphs_estimated_bytes = paragraphs
             .iter()
             .map(history::paragraph_estimated_bytes)
@@ -252,6 +264,7 @@ impl Session {
                 paragraphs_estimated_bytes,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );
@@ -512,6 +525,7 @@ impl Session {
         };
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let next_position = Pos {
@@ -525,6 +539,7 @@ impl Session {
             focus: next_position,
         };
         self.selection_visual_affinity = VisualAffinity::Downstream;
+        self.selection_anchor_visual_affinity = VisualAffinity::Downstream;
         self.finalize_structure_edit(
             paragraph_index,
             DocumentPatch::Paragraphs {
@@ -534,6 +549,7 @@ impl Session {
                 merge_epoch: self.history_merge_epoch,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );

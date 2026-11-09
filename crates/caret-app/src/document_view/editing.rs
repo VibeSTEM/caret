@@ -31,7 +31,6 @@ impl DocumentViewRuntime {
             return self.layout_snapshot_json_after_composition_cancel();
         }
         if effect.selection_changed {
-            self.anchor_visual_affinity = self.session.selection_visual_affinity();
             self.preferred_visual_x_pt = None;
         }
         if effect.document_changed {
@@ -70,12 +69,11 @@ impl DocumentViewRuntime {
             "mod-backspace" => EditorKey::ModBackspace,
             _ => return Err("interaction.unknown_editor_key".to_owned()),
         };
-        let command = Command::EditorKey(key);
-        let error_context = command.id();
+        let error_context = Command::EditorKey(key.clone()).id();
         let layout = &self.layout;
         let effect = self
             .session
-            .run_command_line_with_font_choices_lazy(command, || {
+            .run_editor_key_with_font_choices_lazy(key, || {
                 (
                     layout.font_family_names(),
                     font_target_choices(layout.font_script_choices()),
@@ -139,7 +137,6 @@ impl DocumentViewRuntime {
             .run(command)
             .map_err(|error| format!("{context}: {error}"))?;
         let previous = self.last_snapshot.take();
-        self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
 
         let (Some(previous), Some(paragraph_id)) = (previous, effect.changed_paragraph_id) else {
@@ -205,14 +202,13 @@ impl DocumentViewRuntime {
         };
         let layout = &self.layout;
         self.session
-            .run_command_line_with_font_choices_lazy(Command::TextInput(text), || {
+            .run_text_input_with_font_choices_lazy(text, || {
                 (
                     layout.font_family_names(),
                     font_target_choices(layout.font_script_choices()),
                 )
             })
             .map_err(|error| format!("text.insert: {error}"))?;
-        self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
         let mut page_start_index = None;
         let mut base_generation = None;
@@ -315,7 +311,6 @@ impl DocumentViewRuntime {
             self.composition_snapshot = None;
             self.composition_range = None;
         }
-        self.anchor_visual_affinity = self.session.selection_visual_affinity();
         self.preferred_visual_x_pt = None;
         let mut delete_delta = None;
         if can_reuse_layout && let Some(paragraph_id) = reusable_paragraph_id.as_ref() {

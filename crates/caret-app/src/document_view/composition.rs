@@ -10,7 +10,6 @@ struct ImeCommitCheckpoint {
     session: caret_engine::SessionCheckpoint,
     last_snapshot: Option<caret_engine::DocumentLayoutSnapshot>,
     preferred_visual_x_pt: Option<f32>,
-    anchor_visual_affinity: caret_engine::VisualAffinity,
     composition_id: Option<u64>,
     next_composition_id: u64,
     preedit_cursor_position_utf16: usize,
@@ -26,7 +25,6 @@ impl ImeCommitCheckpoint {
             session: runtime.session.checkpoint(),
             last_snapshot: runtime.last_snapshot.clone(),
             preferred_visual_x_pt: runtime.preferred_visual_x_pt,
-            anchor_visual_affinity: runtime.anchor_visual_affinity,
             composition_id: runtime.composition_id,
             next_composition_id: runtime.next_composition_id,
             preedit_cursor_position_utf16: runtime.preedit_cursor_position_utf16,
@@ -44,7 +42,6 @@ impl ImeCommitCheckpoint {
         runtime.session.restore_checkpoint(self.session);
         runtime.last_snapshot = self.last_snapshot;
         runtime.preferred_visual_x_pt = self.preferred_visual_x_pt;
-        runtime.anchor_visual_affinity = self.anchor_visual_affinity;
         runtime.composition_id = self.composition_id;
         runtime.next_composition_id = self.next_composition_id;
         runtime.preedit_cursor_position_utf16 = self.preedit_cursor_position_utf16;
@@ -222,7 +219,6 @@ impl DocumentViewRuntime {
             self.composition_preview_session = None;
             self.composition_snapshot = None;
             self.composition_range = None;
-            self.anchor_visual_affinity = self.session.selection_visual_affinity();
             self.preferred_visual_x_pt = None;
         }
 

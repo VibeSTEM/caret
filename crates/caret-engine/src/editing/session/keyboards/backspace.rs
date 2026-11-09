@@ -7,7 +7,7 @@ use super::super::Session;
 use crate::editing::{Command, Direction, EditError, Effect};
 
 impl Session {
-    /// 删除当前焦点拥有者的前一个输入单元。
+    /// 先尊重组合输入与命令行焦点，再委托共享领域删除事务处理结构、公式或正文。
     pub(super) fn handle_backspace(&mut self) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Ok(Effect::default());

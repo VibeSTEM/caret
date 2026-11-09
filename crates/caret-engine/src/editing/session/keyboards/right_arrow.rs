@@ -4,7 +4,9 @@
 // 署名：Yuki Lu
 
 use super::super::Session;
-use crate::editing::{Direction, EditError, Effect, NavigationCandidate, NavigationIntent};
+use crate::editing::{
+    Command, Direction, EditError, Effect, MathEditBranch, NavigationCandidate, NavigationIntent,
+};
 
 impl Session {
     pub(super) fn handle_right_arrow(
@@ -12,11 +14,79 @@ impl Session {
         candidate: Option<NavigationCandidate>,
         extend: bool,
     ) -> Result<Effect, EditError> {
-        self.route_navigation_key(
-            NavigationIntent::Horizontal,
-            Some(Direction::Forward),
-            candidate,
-            extend,
-        )
+        if self.composition.is_some() {
+            return Ok(Effect::default());
+        }
+        self.ensure_math_edit_revision_current()?;
+        if self.command_line.is_some() {
+            return self.run(Command::MoveCommandLineCursor(Direction::Forward));
+        }
+        if let Some(edit) = self.math_edit.as_ref() {
+            return match &edit.branch {
+                MathEditBranch::Text { .. } => match candidate {
+                    Some(NavigationCandidate::MathText {
+                        focus,
+                        visual_affinity,
+                        generation,
+                    }) => self.commit_math_text_navigation_candidate(
+                        focus,
+                        visual_affinity,
+                        generation,
+                        extend,
+                    ),
+                    None => {
+                        let context = self
+                            .math_text_input_context()
+                            .ok_or(EditError::InvalidPosition)?;
+                        let text_len = context.surrounding_text.encode_utf16().count();
+                        if context.focus_utf16 == text_len && !extend {
+                            self.run(Command::MoveCaret(Direction::Forward))
+                        } else {
+                            Ok(Effect::default())
+                        }
+                    }
+                    Some(_) => Err(EditError::InvalidPosition),
+                },
+                MathEditBranch::Tree { .. } | MathEditBranch::Source => {
+                    if let Some(candidate) = candidate {
+                        match candidate {
+                            NavigationCandidate::Document { generation, .. } => {
+                                self.validate_navigation_generation(&generation)?
+                            }
+                            NavigationCandidate::MathText { .. }
+                            | NavigationCandidate::MathTextHit { .. }
+                            | NavigationCandidate::MathTreeHit { .. } => {
+                                return Err(EditError::InvalidPosition);
+                            }
+                        }
+                    }
+                    if extend {
+                        Ok(Effect::default())
+                    } else {
+                        self.run(Command::MoveCaret(Direction::Forward))
+                    }
+                }
+            };
+        }
+        match candidate {
+            Some(NavigationCandidate::Document {
+                focus,
+                visual_affinity,
+                generation,
+            }) => self.commit_document_navigation_candidate(
+                focus,
+                visual_affinity,
+                generation,
+                NavigationIntent::Horizontal,
+                Some(Direction::Forward),
+                extend,
+            ),
+            Some(
+                NavigationCandidate::MathText { .. }
+                | NavigationCandidate::MathTextHit { .. }
+                | NavigationCandidate::MathTreeHit { .. },
+            ) => Err(EditError::InvalidPosition),
+            None => self.complete_horizontal_document_edge(Direction::Forward, extend),
+        }
     }
 }

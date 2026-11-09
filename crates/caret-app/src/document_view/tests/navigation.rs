@@ -1543,6 +1543,79 @@ fn math_tree_vertical_navigation_escapes_nested_fraction_to_outer_sibling()
 }
 
 #[test]
+fn undo_restores_anchor_visual_side_at_a_soft_wrap_boundary()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    let original_text = "The quick brown fox jumps over the lazy dog. ".repeat(6);
+    runtime.insert_text_json(original_text.clone())?;
+    let paragraph_id = runtime.session.selection().focus.paragraph_id.to_string();
+    let hit_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let stops = hit_map["stops"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("paragraph has no visual caret stops"))?;
+    let boundary = stops.iter().find_map(|upstream| {
+        if upstream["position"]["paragraphId"] != paragraph_id
+            || upstream["visualAffinity"] != "upstream"
+        {
+            return None;
+        }
+        let offset = upstream["position"]["offsetUtf8"].as_str()?;
+        let downstream = stops.iter().find(|candidate| {
+            candidate["position"]["paragraphId"] == paragraph_id
+                && candidate["position"]["offsetUtf8"] == offset
+                && candidate["position"]["affinity"] == upstream["position"]["affinity"]
+                && candidate["visualAffinity"] == "downstream"
+        })?;
+        (upstream["y0Pt"] != downstream["y0Pt"]).then_some(upstream.clone())
+    });
+    let anchor_stop = boundary
+        .ok_or_else(|| std::io::Error::other("paragraph has no distinct soft-wrap caret sides"))?;
+    let boundary_offset = anchor_stop["position"]["offsetUtf8"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("soft-wrap stop has no offset"))?
+        .parse::<usize>()?;
+    let next_offset = boundary_offset + 1;
+    let focus_stop = stops
+        .iter()
+        .find(|stop| {
+            stop["position"]["paragraphId"] == paragraph_id
+                && stop["position"]["offsetUtf8"]
+                    .as_str()
+                    .and_then(|offset| offset.parse::<usize>().ok())
+                    == Some(next_offset)
+                && stop["visualAffinity"] == "downstream"
+        })
+        .ok_or_else(|| std::io::Error::other("caret after soft-wrap boundary is missing"))?;
+    let anchor = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": boundary_offset.to_string(),
+        "affinity": anchor_stop["position"]["affinity"],
+        "visualAffinity": "upstream"
+    });
+    let focus = serde_json::json!({
+        "paragraphId": paragraph_id,
+        "offsetUtf8": next_offset.to_string(),
+        "affinity": focus_stop["position"]["affinity"],
+        "visualAffinity": "downstream"
+    });
+    runtime
+        .set_selection_json(&serde_json::json!({"anchor": anchor, "focus": focus}).to_string())?;
+
+    runtime.insert_text_json("X".to_owned())?;
+    let restored: Value = serde_json::from_str(&runtime.undo_json()?)?;
+    assert_eq!(restored["paragraphs"][0]["text"], original_text);
+    assert_ne!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    let collapsed: Value = serde_json::from_str(&runtime.move_visual_caret_json(false, false)?)?;
+
+    assert_eq!(collapsed["caretGeometry"]["y0Pt"], anchor_stop["y0Pt"]);
+    assert_eq!(collapsed["caretGeometry"]["xPt"], anchor_stop["xPt"]);
+    Ok(())
+}
+
+#[test]
 fn math_textflow_vertical_navigation_enters_a_math_tree_operand()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut document, block_id) = fraction_document();

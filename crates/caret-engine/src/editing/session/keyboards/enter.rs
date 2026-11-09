@@ -9,6 +9,14 @@ use crate::editing::{Command, Direction, EditError, Effect, MathEditTarget};
 impl Session {
     /// 命令输入期间普通 Enter 接受候选，Shift+Enter 不误改正文；正文复用标准编辑命令。
     pub(super) fn handle_enter(&mut self, soft_break: bool) -> Result<Effect, EditError> {
+        self.handle_enter_with_font_choices(soft_break, || (Vec::new(), Vec::new()))
+    }
+
+    pub(super) fn handle_enter_with_font_choices(
+        &mut self,
+        soft_break: bool,
+        font_choices: impl FnOnce() -> (Vec<String>, Vec<(String, caret_doc::DocumentFontTarget)>),
+    ) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -16,7 +24,10 @@ impl Session {
             return if soft_break {
                 Ok(Effect::default())
             } else {
-                self.run_command_line(Command::AcceptCommandLine)
+                self.run_command_line_with_font_choices_lazy(
+                    Command::AcceptCommandLine,
+                    font_choices,
+                )
             };
         }
         if let Some(edit) = self.math_edit.as_ref() {

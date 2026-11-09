@@ -24,197 +24,37 @@ mod tab;
 mod up_arrow;
 
 use super::Session;
-use crate::editing::{
-    Command, Direction, EditError, EditorKey, Effect, MathEditBranch, NavigationCandidate,
-    NavigationGeneration, NavigationIntent, Selection,
-};
+use crate::editing::{EditError, EditorKey, Effect};
 
 impl Session {
-    /// 在具体按键处理器内核对焦点所有者并提交候选，不暴露可被调用方绕过的路由查询。
-    pub(super) fn route_navigation_key(
+    /// 编辑器键的应用入口；需要字体候选的键仍由对应 handler 决定何时取字体目录。
+    pub fn run_editor_key_with_font_choices_lazy(
         &mut self,
-        intent: NavigationIntent,
-        direction: Option<Direction>,
-        candidate: Option<NavigationCandidate>,
-        extend: bool,
+        key: EditorKey,
+        font_choices: impl FnOnce() -> (Vec<String>, Vec<(String, caret_doc::DocumentFontTarget)>),
     ) -> Result<Effect, EditError> {
-        if self.composition.is_some() {
-            return Ok(Effect::default());
-        }
-        self.ensure_math_edit_revision_current()?;
-        if self.command_line.is_some() {
-            let command = match intent {
-                NavigationIntent::Horizontal => {
-                    let direction = direction.ok_or(EditError::InvalidPosition)?;
-                    let _ = extend;
-                    Command::MoveCommandLineCursor(direction)
-                }
-                NavigationIntent::VisualLineEdge => {
-                    let _ = (direction, extend);
-                    return Ok(Effect::default());
-                }
-                NavigationIntent::Vertical => return Err(EditError::InvalidPosition),
-            };
-            return self.run(command);
-        }
-        if let Some(edit) = &self.math_edit {
-            return match &edit.branch {
-                MathEditBranch::Text { .. } => match candidate {
-                    Some(NavigationCandidate::MathText {
-                        focus,
-                        visual_affinity,
-                        generation,
-                    }) => {
-                        self.validate_navigation_generation(&generation)?;
-                        let context = self
-                            .math_text_input_context()
-                            .ok_or(EditError::InvalidPosition)?;
-                        let (anchor, anchor_visual_affinity) = if extend {
-                            (context.anchor, context.anchor_visual_affinity)
-                        } else {
-                            (focus.clone(), visual_affinity)
-                        };
-                        self.set_math_text_selection_positions_with_visual_affinities(
-                            anchor,
-                            focus,
-                            anchor_visual_affinity,
-                            visual_affinity,
-                        )
-                    }
-                    None if intent == NavigationIntent::Horizontal && !extend => {
-                        let context = self
-                            .math_text_input_context()
-                            .ok_or(EditError::InvalidPosition)?;
-                        let text_len = context.surrounding_text.encode_utf16().count();
-                        let direction = direction.ok_or(EditError::InvalidPosition)?;
-                        let is_exit_edge = match direction {
-                            Direction::Backward => context.focus_utf16 == 0,
-                            Direction::Forward => context.focus_utf16 == text_len,
-                        };
-                        if is_exit_edge {
-                            self.run(Command::MoveCaret(direction))
-                        } else {
-                            Ok(Effect::default())
-                        }
-                    }
-                    None => Ok(Effect::default()),
-                    Some(
-                        NavigationCandidate::Document { .. }
-                        | NavigationCandidate::MathTextHit { .. }
-                        | NavigationCandidate::MathTreeHit { .. },
-                    ) => Err(EditError::InvalidPosition),
-                },
-                MathEditBranch::Tree { .. } | MathEditBranch::Source => {
-                    match candidate {
-                        Some(NavigationCandidate::Document { generation, .. }) => {
-                            self.validate_navigation_generation(&generation)?;
-                        }
-                        Some(NavigationCandidate::MathText { .. })
-                        | Some(NavigationCandidate::MathTextHit { .. })
-                        | Some(NavigationCandidate::MathTreeHit { .. }) => {
-                            return Err(EditError::InvalidPosition);
-                        }
-                        None => {}
-                    }
-                    if intent == NavigationIntent::Horizontal && !extend {
-                        self.run(Command::MoveCaret(
-                            direction.ok_or(EditError::InvalidPosition)?,
-                        ))
-                    } else {
-                        Ok(Effect::default())
-                    }
-                }
-            };
-        }
-        match candidate {
-            Some(NavigationCandidate::Document {
-                focus,
-                visual_affinity,
-                generation,
-            }) => {
-                self.validate_navigation_generation(&generation)?;
-                let anchor = if extend {
-                    self.structure_selection
-                        .as_ref()
-                        .map(|selection| selection.anchor.clone())
-                        .unwrap_or_else(|| self.selection.anchor.clone())
-                } else {
-                    focus.clone()
+        self.run_session_operation(
+            crate::editing::Command::EditorKey(key),
+            move |session, command| {
+                let crate::editing::Command::EditorKey(key) = command else {
+                    unreachable!("the keyboard adapter always wraps an editor key")
                 };
-                return self.set_navigation_selection_with_direction(
-                    Selection { anchor, focus },
-                    visual_affinity,
-                    intent,
-                    if intent == NavigationIntent::Horizontal {
-                        direction
-                    } else {
-                        None
-                    },
-                );
-            }
-            Some(NavigationCandidate::MathText { .. })
-            | Some(NavigationCandidate::MathTextHit { .. })
-            | Some(NavigationCandidate::MathTreeHit { .. }) => {
-                return Err(EditError::InvalidPosition);
-            }
-            None => {}
-        }
-        if intent == NavigationIntent::Horizontal
-            && let Some(direction) = direction
-        {
-            if extend
-                && let Some(environment_id) =
-                    self.keyboards_block_environment_at(&self.selection.focus)
-            {
-                self.select_block_environment(environment_id)?;
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
-            }
-            if self.enter_adjacent_math_if_present(direction)? {
-                return Ok(Effect {
-                    selection_changed: true,
-                    ..Effect::default()
-                });
-            }
-            return self.run(Command::ExitBlockEnvironment(direction));
-        }
-        Ok(Effect::default())
+                session.run_editor_key_with_font_choices_inner(key, font_choices)
+            },
+        )
     }
 
-    /// 候选只能来自当前 Session 和当前文档代际；字体代际由 app 布局服务同步核验。
-    fn validate_navigation_generation(
-        &self,
-        generation: &NavigationGeneration,
-    ) -> Result<(), EditError> {
-        if generation.session_id != self.session_id
-            || generation.document_generation != self.document_generation
-        {
-            return Err(EditError::InvalidPosition);
+    pub(super) fn run_editor_key_with_font_choices_inner(
+        &mut self,
+        key: EditorKey,
+        font_choices: impl FnOnce() -> (Vec<String>, Vec<(String, caret_doc::DocumentFontTarget)>),
+    ) -> Result<Effect, EditError> {
+        match key {
+            EditorKey::Enter => self.handle_enter_with_font_choices(false, font_choices),
+            EditorKey::ShiftEnter => self.handle_enter_with_font_choices(true, font_choices),
+            EditorKey::Tab => self.handle_tab_with_font_choices(font_choices),
+            _ => self.run_editor_key(key),
         }
-        Ok(())
-    }
-
-    fn keyboards_block_environment_at(
-        &self,
-        position: &crate::editing::Pos,
-    ) -> Option<caret_doc::NodeId> {
-        let ordinal = self
-            .structure_index()
-            .paragraph_ordinal(&position.paragraph_id)?;
-        self.structure_index()
-            .at(&caret_structure::StructurePosition {
-                paragraph_id: position.paragraph_id.clone(),
-                offset_utf8: position.offset,
-            })
-            .into_iter()
-            .rev()
-            .find(|entry| {
-                entry.kind.is_block_environment()
-                    && entry.range.paragraph_ordinals.contains(&ordinal)
-            })
-            .map(|entry| entry.id.clone())
     }
 
     /// 在单一入口根据按键类型分派；每种按键的状态优先级独立维护。

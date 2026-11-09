@@ -470,6 +470,50 @@ fn math_source_disables_ime_and_rejects_late_input_atomically() -> Result<(), St
 }
 
 #[test]
+fn math_text_command_line_disables_ime_and_restores_math_text_hint() -> Result<(), String> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    enter_math_text(&mut runtime, r"\frac{1}{\text{alpha}}")?;
+    let enabled_snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(enabled_snapshot["inputMethodContext"]["enabled"], true);
+    assert_eq!(enabled_snapshot["inputMethodContext"]["preferLatin"], true);
+
+    runtime
+        .session
+        .run(Command::BeginCommandLine)
+        .map_err(|error| error.to_string())?;
+    let before_document = runtime.session.document().clone();
+    let before_math_edit = runtime.session.math_edit().cloned();
+    let before_command_line = runtime.session.command_line().cloned();
+    let snapshot: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(snapshot["inputMethodContext"]["enabled"], false);
+    assert_eq!(snapshot["inputMethodContext"]["preferLatin"], false);
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(interaction["inputMethodContext"]["enabled"], false);
+    assert_eq!(interaction["inputMethodContext"]["preferLatin"], false);
+    assert!(
+        runtime
+            .input_method_event_json("ni".to_owned(), "你".to_owned(), 0, 0, 2)
+            .is_err()
+    );
+    assert_eq!(runtime.session.document(), &before_document);
+    assert_eq!(runtime.session.math_edit().cloned(), before_math_edit);
+    assert_eq!(runtime.session.command_line().cloned(), before_command_line);
+
+    runtime
+        .session
+        .run(Command::CancelCommandLine)
+        .map_err(|error| error.to_string())?;
+    let restored: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(restored["inputMethodContext"]["enabled"], true);
+    assert_eq!(restored["inputMethodContext"]["preferLatin"], true);
+    Ok(())
+}
+
+#[test]
 fn math_textflow_ime_preedit_commit_and_cancel_use_tree_text_context() -> Result<(), String> {
     let source = r"\frac{1}{\text{A😀B}}";
     let mut runtime = DocumentViewRuntime::new_blank()?;

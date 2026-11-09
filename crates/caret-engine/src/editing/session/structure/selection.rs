@@ -91,6 +91,7 @@ impl Session {
         }
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         self.selection = Selection {
@@ -116,6 +117,7 @@ impl Session {
                 fallback_paragraph,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );
@@ -302,6 +304,7 @@ impl Session {
             .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)));
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let mut patches = Vec::with_capacity(1 + environment_deletions.len());
@@ -402,6 +405,7 @@ impl Session {
             updated_index,
             DocumentPatch::Compound(patches),
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );

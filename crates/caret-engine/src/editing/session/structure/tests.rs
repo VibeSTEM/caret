@@ -148,6 +148,50 @@ fn structural_navigation_moves_between_nested_paragraphs_and_exits_container()
 }
 
 #[test]
+fn current_environment_view_keeps_parent_after_virtual_inner_environment_exit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let inner_id = NodeId::generate();
+    let mut section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Environment(BlockEnvironment {
+            id: inner_id.clone(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph())],
+            extra: BTreeMap::new(),
+        })],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    section.title = Some(paragraph());
+    let section_id = section.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![Block::Environment(section)],
+        ..Document::blank()
+    })?;
+
+    session.run(Command::MoveStructure(Direction::Forward))?;
+    session.run(Command::ExitBlockEnvironment(Direction::Forward))?;
+    assert_eq!(
+        session.block_environment_exit().map(|(id, _)| id),
+        Some(inner_id.clone())
+    );
+
+    let view = session.current_environment_view()?;
+    assert_eq!(view.block().len(), 1);
+    assert_eq!(view.block()[0].id.as_ref(), Some(&section_id));
+    assert_eq!(
+        view.block()[0].kind,
+        crate::editing::EnvironmentKind::Section
+    );
+    assert!(view.inline().is_empty());
+    Ok(())
+}
+
+#[test]
 fn structural_navigation_at_document_edge_is_a_noop() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = Session::new(Document::blank())?;
     let before = session.selection().clone();
@@ -678,6 +722,91 @@ fn failed_navigation_selection_preserves_the_current_structure_selection()
             .map(|(anchor, focus)| (anchor, focus))
     );
     assert_eq!(session.selected_block_environment(), Some(&environment_id));
+    Ok(())
+}
+
+#[test]
+fn shifted_keyboard_navigation_into_block_keeps_anchor_visual_affinity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_text = "word ".repeat(80);
+    let before = paragraph_with_text(&before_text);
+    let before_id = before.id.clone();
+    let inside = paragraph_with_text("inside");
+    let inside_id = inside.id.clone();
+    let after = paragraph_with_text("after");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        environment(BlockEnvironmentKind::Custom, vec![Block::Paragraph(inside)]),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)?;
+    let anchor = Pos {
+        story: StoryId::Body,
+        paragraph_id: before_id,
+        offset: before_text.len() / 2,
+        affinity: Affinity::Downstream,
+    };
+    session.set_selection_with_visual_affinities(
+        Some(Selection {
+            anchor: anchor.clone(),
+            focus: anchor.clone(),
+        }),
+        VisualAffinity::Upstream,
+        VisualAffinity::Upstream,
+    )?;
+    let focus = Pos {
+        story: StoryId::Body,
+        paragraph_id: inside_id,
+        offset: "inside".len(),
+        affinity: Affinity::Downstream,
+    };
+
+    let generation = crate::editing::NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(crate::editing::NavigationCandidate::Document {
+            focus: focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation: generation.clone(),
+        }),
+        extend: true,
+    }))?;
+
+    let next_focus = Pos {
+        story: StoryId::Body,
+        paragraph_id: after_id,
+        offset: "after".len(),
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(crate::editing::NavigationCandidate::Document {
+            focus: next_focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation,
+        }),
+        extend: true,
+    }))?;
+
+    assert_eq!(session.selection().anchor, next_focus);
+    assert_eq!(session.selection().focus, next_focus);
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        VisualAffinity::Upstream
+    );
+    assert_eq!(
+        session.selection_visual_affinity(),
+        VisualAffinity::Downstream
+    );
+    let (structure_anchor, structure_focus) = session
+        .structure_selection()
+        .ok_or("keyboard extension should retain its structure selection range")?;
+    assert_eq!(structure_anchor, &anchor);
+    assert_eq!(structure_focus, &next_focus);
     Ok(())
 }
 

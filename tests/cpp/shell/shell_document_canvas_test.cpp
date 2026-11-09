@@ -704,7 +704,7 @@ void ShellLoadTest::documentCanvasMapsPageCoordinatesAndHitsPages() {
                   caret::shell_test::snapshot_from_theme_facade(theme_path, QColor(Qt::white), 16));
     caret::install_theme_snapshots(std::move(themes), QStringLiteral("light"));
     const QString empty_snapshot = QStringLiteral(
-        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true}})");
+        R"({"documentGeneration":"0","fontGeneration":"1","marginsPt":{"top":72,"right":72,"bottom":72,"left":72},"pages":[{"widthPt":600,"heightPt":800,"fragments":[{"paragraphId":"p1","firstLine":0,"lineEnd":1,"yOffsetPt":0}]}],"paragraphs":[{"paragraphId":"p1","text":"","lines":[{"sourceStart":0,"sourceEnd":0,"consumedStart":0,"consumedEnd":0,"topPt":0,"baselinePt":9,"heightPt":12,"advancePt":0,"overflowsWidth":false}]}],"inputMethodContext":{"surroundingText":"","cursorPosition":0,"anchorPosition":0,"enabled":true,"preferLatin":false}})");
     QString max_generation_snapshot = empty_snapshot;
     max_generation_snapshot.replace(
         QStringLiteral("\"documentGeneration\":\"0\""),

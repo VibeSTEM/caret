@@ -78,6 +78,7 @@ pub struct MathTextInputContext {
 pub struct Session {
     pub(super) document: Document,
     pub(super) selection: Selection,
+    selection_anchor_visual_affinity: VisualAffinity,
     selection_visual_affinity: VisualAffinity,
     session_id: NodeId,
     document_generation: u64,
@@ -105,6 +106,7 @@ impl Session {
         Self {
             document: self.document.clone(),
             selection: self.selection.clone(),
+            selection_anchor_visual_affinity: self.selection_anchor_visual_affinity,
             selection_visual_affinity: self.selection_visual_affinity,
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
@@ -149,6 +151,7 @@ impl Session {
                 anchor: pos.clone(),
                 focus: pos,
             },
+            selection_anchor_visual_affinity: VisualAffinity::Downstream,
             selection_visual_affinity: VisualAffinity::Downstream,
             session_id: NodeId::generate(),
             document_generation: 0,
@@ -283,6 +286,11 @@ impl Session {
         self.selection_visual_affinity
     }
 
+    /// 当前选区锚点的视觉侧；撤销后用于精确恢复换行边界上的光标端点。
+    pub fn selection_anchor_visual_affinity(&self) -> VisualAffinity {
+        self.selection_anchor_visual_affinity
+    }
+
     pub fn composition(&self) -> Option<&InputComposition> {
         self.composition.as_ref()
     }
@@ -413,6 +421,17 @@ impl Session {
         command: Command,
         focus_inserted_inline_math: bool,
     ) -> Result<Effect, EditError> {
+        self.run_session_operation(command, move |session, command| {
+            session.run_inner(command, focus_inserted_inline_math)
+        })
+    }
+
+    /// 包住所有公开输入适配入口，统一执行过时代际检查和成功后的 Session 同步。
+    fn run_session_operation(
+        &mut self,
+        command: Command,
+        operation: impl FnOnce(&mut Self, Command) -> Result<Effect, EditError>,
+    ) -> Result<Effect, EditError> {
         let stale_math_edit = self.ensure_math_edit_revision_current().is_err();
         if stale_math_edit {
             if self.command_line.is_some()
@@ -451,11 +470,14 @@ impl Session {
             .as_ref()
             .filter(|edit| !edit.source_draft_is_pending())
             .cloned();
-        let result = self.run_inner(command, focus_inserted_inline_math);
+        let result = operation(self, command);
         if result.is_err() && self.math_edit.is_none() {
             self.math_edit = previous_math_edit;
         }
         if result.is_ok() {
+            if self.selection.anchor == self.selection.focus && self.structure_selection.is_none() {
+                self.selection_anchor_visual_affinity = self.selection_visual_affinity;
+            }
             self.sync_math_edit_revision();
         }
         result
@@ -467,51 +489,14 @@ impl Session {
         focus_inserted_inline_math: bool,
     ) -> Result<Effect, EditError> {
         let command = match command {
-            Command::TextInput(text) => {
-                if self.command_line.is_some() {
-                    return self.run_command_line(Command::TypeCommandLine(text));
-                }
-                if text == "\\" {
-                    return self.run_editor_key(super::EditorKey::Backslash);
-                }
-                if text == "$" && self.math_edit.is_none() {
-                    return self.run_editor_key(super::EditorKey::Dollar);
-                }
-                Command::InsertText(text)
-            }
+            Command::TextInput(text) => return self.run_text_input(text),
             command => command,
         };
-        if self.math_edit.is_some()
-            && self.command_line.is_none()
-            && matches!(command, Command::Undo | Command::Redo)
-        {
-            let redo = command == Command::Redo;
-            if let Some(edit) = &mut self.math_edit {
-                let changed = if redo {
-                    edit.redo_source_draft()?
-                } else {
-                    edit.undo_source_draft()?
-                };
-                if changed {
-                    return Ok(Effect {
-                        selection_changed: true,
-                        ..Effect::default()
-                    });
-                }
-                if edit.source_draft_is_pending() {
-                    return Err(EditError::InvalidMath(
-                        "incomplete math source draft has no local undo step".to_owned(),
-                    ));
-                }
-                // 到达有效基线后转入文档历史，丢弃不再适用的草稿重做分支。
-                edit.source_draft = None;
-            }
-            let effect = self.restore_history(command == Command::Redo)?;
-            self.command_line = None;
-            return Ok(effect);
-        }
         if let Command::EditorKey(key) = command {
             return self.run_editor_key(key);
+        }
+        if matches!(command, Command::Undo | Command::Redo) {
+            return self.handle_history_command(command == Command::Redo);
         }
         if let Some(effect) = self.run_math_edit(&command)? {
             return Ok(effect);
@@ -565,16 +550,6 @@ impl Session {
                 Command::InsertSoftBreak => return self.insert_break_at_environment_exit(true),
                 _ => {}
             }
-        }
-        if command == Command::Undo {
-            let effect = self.restore_history(false)?;
-            self.command_line = None;
-            return Ok(effect);
-        }
-        if command == Command::Redo {
-            let effect = self.restore_history(true)?;
-            self.command_line = None;
-            return Ok(effect);
         }
         if !matches!(&command, Command::SetSelection(_)) {
             self.selected_block_environment = None;
@@ -649,6 +624,7 @@ impl Session {
             .as_ref()
             .is_some_and(|line| !line.preedit.is_empty());
         let before_visual_affinity = self.selection_visual_affinity;
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
         let before_math_edit = self.math_edit.as_ref().map(math_edit::history_position);
@@ -848,6 +824,7 @@ impl Session {
                     before_pending_style,
                     before_state_id,
                 )
+                .with_anchor_visual_affinity(before_anchor_visual_affinity)
                 .with_math_edit(before_math_edit),
                 SessionHistoryState::new(
                     self.selection.clone(),
@@ -855,6 +832,11 @@ impl Session {
                     self.pending_inline_style.clone(),
                     after_state_id,
                 )
+                .with_anchor_visual_affinity(if self.selection.anchor == self.selection.focus {
+                    self.selection_visual_affinity
+                } else {
+                    self.selection_anchor_visual_affinity
+                })
                 .with_math_edit(self.math_edit.as_ref().map(math_edit::history_position)),
             );
             self.record_history_edit(edit);
@@ -921,7 +903,7 @@ impl Session {
         state_id
     }
 
-    fn restore_history(&mut self, redo: bool) -> Result<Effect, EditError> {
+    pub(super) fn restore_history(&mut self, redo: bool) -> Result<Effect, EditError> {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
@@ -936,6 +918,7 @@ impl Session {
         let previous_math_edit = self.math_edit.clone();
         let (
             selection,
+            anchor_visual_affinity,
             visual_affinity,
             pending_style,
             state_id,
@@ -965,9 +948,11 @@ impl Session {
             None => None,
         };
         let selection_changed = self.selection != selection
+            || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
             || previous_math_edit != restored_math_edit;
         self.selection = selection;
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
         self.math_edit = restored_math_edit;

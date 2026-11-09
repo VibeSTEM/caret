@@ -24,7 +24,6 @@ impl DocumentViewRuntime {
             .run(command)
             .map_err(|error| format!("navigation.structure: {error}"))?;
         if effect.selection_changed {
-            self.anchor_visual_affinity = self.session.selection_visual_affinity();
             self.preferred_visual_x_pt = None;
         }
         if effect.document_changed {
@@ -67,7 +66,7 @@ impl DocumentViewRuntime {
             .cloned()
             .unwrap_or_else(|| current.anchor.clone());
         let current_visual = self.session.selection_visual_affinity();
-        let current_anchor_visual = self.anchor_visual_affinity;
+        let current_anchor_visual = self.session.selection_anchor_visual_affinity();
         let target = {
             let snapshot = self.current_snapshot()?;
             if !extend && current.anchor != current.focus {
@@ -253,7 +252,7 @@ impl DocumentViewRuntime {
             .cloned()
             .unwrap_or_else(|| current.anchor.clone());
         let current_visual = self.session.selection_visual_affinity();
-        let current_anchor_visual = self.anchor_visual_affinity;
+        let current_anchor_visual = self.session.selection_anchor_visual_affinity();
         let preferred_visual_x = self.preferred_visual_x_pt;
         let target = {
             let snapshot = self.current_snapshot()?;
@@ -398,7 +397,7 @@ impl DocumentViewRuntime {
         }
         let current = self.session.selection().clone();
         let current_visual = self.session.selection_visual_affinity();
-        let current_anchor_visual = self.anchor_visual_affinity;
+        let current_anchor_visual = self.session.selection_anchor_visual_affinity();
         let target = {
             let snapshot = self.current_snapshot()?;
             let paragraph = snapshot
@@ -958,13 +957,6 @@ fn commit_text_navigation<T: Clone>(
         anchor_visual,
         state.focus_visual,
     )?;
-    if effect.selection_changed {
-        runtime.anchor_visual_affinity = if state.extend {
-            anchor_visual
-        } else {
-            runtime.session.selection_visual_affinity()
-        };
-    }
     if effect.selection_changed {
         runtime.preferred_visual_x_pt = state.preferred_x;
     }

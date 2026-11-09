@@ -69,6 +69,7 @@ impl Session {
         }
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let position_map =
@@ -107,6 +108,7 @@ impl Session {
             paragraph_ops::build_paragraph_index(&self.document.body),
             patch,
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );
@@ -152,6 +154,7 @@ impl Session {
         }
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let title = environment
@@ -179,6 +182,7 @@ impl Session {
                 environment_estimated_bytes,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );
@@ -240,6 +244,7 @@ impl Session {
         siblings.splice(sibling_index..=sibling_index, promoted);
 
         let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
         let position_map = title_id.map(|paragraph_id| PositionMap::StoryChange {
@@ -261,6 +266,7 @@ impl Session {
                 environment_estimated_bytes,
             },
             before_selection,
+            before_anchor_visual_affinity,
             before_visual_affinity,
             before_state_id,
         );

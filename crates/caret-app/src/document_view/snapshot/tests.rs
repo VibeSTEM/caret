@@ -22,6 +22,121 @@ fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
 }
 
 #[test]
+fn structure_snapshot_keeps_parent_highlight_after_virtual_inner_exit() -> Result<(), String> {
+    use caret_doc::{Block, BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph};
+    use std::collections::BTreeMap;
+
+    let paragraph = || Paragraph::empty(NodeId::generate());
+    let inner = Block::Environment(BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: vec![Block::Paragraph(paragraph())],
+        extra: BTreeMap::new(),
+    });
+    let outer = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph()),
+        children: vec![inner],
+        extra: BTreeMap::new(),
+    };
+    let outer_node_id = outer.id.clone();
+    let outer_id = outer.id.to_string();
+    let mut runtime = DocumentViewRuntime::new(Document {
+        body: vec![Block::Environment(outer)],
+        ..Document::blank()
+    })
+    .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::MoveStructure(
+            caret_engine::Direction::Forward,
+        ))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::ExitBlockEnvironment(
+            caret_engine::Direction::Forward,
+        ))
+        .map_err(|error| error.to_string())?;
+
+    let state = super::current_structure_state(&runtime.session);
+    assert_eq!(state.as_array().map(Vec::len), Some(1));
+    assert_eq!(state[0]["id"], outer_id);
+    assert_eq!(state[0]["kind"], "section");
+
+    let layout: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    let expected_parent_rectangles: Vec<_> = runtime
+        .last_snapshot
+        .as_ref()
+        .into_iter()
+        .flat_map(|snapshot| &snapshot.environment_ranges)
+        .filter(|range| range.environment_id == outer_node_id)
+        .map(|range| {
+            serde_json::json!({
+                "pageIndex": range.page_index,
+                "x0Pt": range.x0_pt,
+                "y0Pt": range.y0_pt,
+                "x1Pt": range.x1_pt,
+                "y1Pt": range.y1_pt,
+            })
+        })
+        .collect();
+    assert!(!expected_parent_rectangles.is_empty());
+    let expected_parent_rectangles = Value::Array(expected_parent_rectangles);
+    assert_eq!(
+        layout["blockEnvironmentHighlightRects"],
+        expected_parent_rectangles
+    );
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"],
+        expected_parent_rectangles
+    );
+
+    let root_environment = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph()),
+        children: vec![Block::Paragraph(paragraph())],
+        extra: BTreeMap::new(),
+    };
+    let mut root_runtime = DocumentViewRuntime::new(Document {
+        body: vec![Block::Environment(root_environment)],
+        ..Document::blank()
+    })
+    .map_err(|error| error.to_string())?;
+    root_runtime
+        .session
+        .run(caret_engine::Command::MoveStructure(
+            caret_engine::Direction::Forward,
+        ))
+        .map_err(|error| error.to_string())?;
+    root_runtime
+        .session
+        .run(caret_engine::Command::ExitBlockEnvironment(
+            caret_engine::Direction::Forward,
+        ))
+        .map_err(|error| error.to_string())?;
+    let root_exit_layout: Value = serde_json::from_str(&root_runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        root_exit_layout["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+#[test]
 fn math_command_snapshot_enables_supported_inline_math_and_publishes_focus() -> Result<(), String> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;

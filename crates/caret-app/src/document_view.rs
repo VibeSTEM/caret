@@ -6,7 +6,7 @@
 use caret_doc::Document;
 use caret_engine::{
     CompositionRange, DocumentLayoutRuntime, DocumentLayoutSnapshot, EditError, MathEditTarget,
-    MathTextPosition, MathTreePosition, PageGlyphRasterizer, Session, VisualAffinity,
+    MathTextPosition, MathTreePosition, PageGlyphRasterizer, Session,
 };
 
 mod composition;
@@ -51,7 +51,6 @@ pub struct DocumentViewRuntime {
     glyph_rasterizer: PageGlyphRasterizer,
     last_snapshot: Option<DocumentLayoutSnapshot>,
     preferred_visual_x_pt: Option<f32>,
-    anchor_visual_affinity: VisualAffinity,
     composition_id: Option<u64>,
     next_composition_id: u64,
     preedit_cursor_position_utf16: usize,
@@ -76,7 +75,6 @@ impl DocumentViewRuntime {
             glyph_rasterizer: PageGlyphRasterizer::default(),
             last_snapshot: None,
             preferred_visual_x_pt: None,
-            anchor_visual_affinity: VisualAffinity::Downstream,
             composition_id: None,
             next_composition_id: 1,
             preedit_cursor_position_utf16: 0,

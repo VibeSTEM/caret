@@ -110,7 +110,6 @@ impl DocumentViewRuntime {
                     .session
                     .focus_math_text_hit(&hit, font_generation)
                     .map_err(|error| format!("selection.math_text_focus: {error}"))?;
-                self.anchor_visual_affinity = hit.visual_affinity;
                 self.preferred_visual_x_pt = None;
                 let mut result = serde_json::json!({
                     "valid": true,
@@ -134,14 +133,6 @@ impl DocumentViewRuntime {
                 self.session
                     .focus_math_structure_hit(&hit, font_generation)
                     .map_err(|error| format!("selection.math_structure_focus: {error}"))?;
-                self.anchor_visual_affinity = match hit.position.affinity {
-                    caret_engine::MathPositionAffinity::Upstream => {
-                        caret_engine::VisualAffinity::Upstream
-                    }
-                    caret_engine::MathPositionAffinity::Downstream => {
-                        caret_engine::VisualAffinity::Downstream
-                    }
-                };
                 self.preferred_visual_x_pt = None;
                 let result = serde_json::json!({
                     "valid": true,
@@ -171,7 +162,6 @@ impl DocumentViewRuntime {
                 hit.visual_affinity,
             )
             .map_err(|error| format!("selection.set: {error}"))?;
-        self.anchor_visual_affinity = hit.visual_affinity;
         self.preferred_visual_x_pt = None;
         if effect.composition_changed {
             self.composition_id = None;
