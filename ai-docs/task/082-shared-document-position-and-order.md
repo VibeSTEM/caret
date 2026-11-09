@@ -3,11 +3,11 @@
 - 状态：planned
 - 依赖：071、074、077、081
 - 优先级：P1
-- 创建 / 更新：2026-11-09 / 2026-11-09
+- 创建 / 更新：2026-11-09 / 2026-11-10
 
 ## 目标与背景
 
-段落 ordinal 不能表示连续 Equation/Align 与周边 Paragraph 的完整次序；数学块没有 Paragraph 停靠点，嵌套 Section、标题及空容器也不能用一个 Paragraph 锚点代替。现有 `find_block_path`、ParagraphLocation 和历史恢复 locator 重复实现，查询与变更的适用范围不同。082 在 081 的 Block/Inline 三态语义上建立共享文档位置、宿主全序和经过校验的定位契约，供 083 使用。
+段落 ordinal 不能表示连续 Equation/Align 与周边 Paragraph 的完整次序；数学块没有 Paragraph 停靠点，嵌套 Section、标题及空容器也不能用一个 Paragraph 锚点代替。现有 `find_block_path`、ParagraphLocation 和历史恢复 locator 重复实现，查询与变更的适用范围不同。082 消费 081 已定义的宿主身份、三态类别和宿主局部位置载体，在此基础上建立共享文档顺序、父链与经过校验的定位契约，供 083 使用；不重新定义或替换 081 的焦点载体。
 
 ## 必读
 
@@ -19,7 +19,7 @@
 
 ## 范围与非目标
 
-- 定义跨宿主位置身份、父链、同级次序、宿主局部坐标、外前/外后位置、Story 边界、document generation、失效映射和原子拒绝语义。
+- 在 081 的宿主相对三态位置载体上定义跨宿主父链、同级次序、全树顺序、Story 边界、document generation、失效映射和原子拒绝语义；外前/外后及内部位置的宿主身份和局部坐标继续遵循 081。
 - 为 Paragraph、Section 标题/子树、Equation、Align、InlineMath 和文本 Inline 提供可比较的文档顺序；段落 ordinal 只作为 Paragraph 导航派生值。
 - 合并/重用 ParagraphLocation、`find_block_path`、历史恢复等 locator 的共同定位语义；只读查询与可变事务路径各自保留适当职责，并共享身份、父链、generation 校验。
 - 审计位置、Session 与历史相关字段的构造、读取、投影和调用方；合并或删除有证据确认的重复/无消费者状态，同时保留稳定身份、历史语义和已有扩展契约。
@@ -30,7 +30,7 @@
 
 ## 前置条件与待决策
 
-- Task 081 的共享 Block/Inline 三态焦点协议完成。
+- Task 081 的共享 Block/Inline 三态焦点协议及宿主相对位置载体完成；本任务只扩展跨宿主顺序与定位。
 - 具体 Rust enum、排序 key 编码与 locator 模块边界由实现前设计决定；架构契约只规定可观察的身份、顺序、代际与失败行为。
 
 ## 实施步骤

@@ -29,7 +29,10 @@ impl Session {
             self.cancel_math_source_draft();
         }
         if self.math_edit.is_some() {
-            return self.exit_math_edit(Direction::Forward, true);
+            return self.exit_math_edit_for_navigation(Direction::Forward);
+        }
+        if self.block_boundary_exit.is_some() {
+            return Ok(Effect::default());
         }
         if self.selected_block_environment.take().is_some() {
             self.selected_block_environments.clear();

@@ -3,7 +3,7 @@
 - 状态：planned
 - 依赖：071、074、077、081、082
 - 优先级：P1
-- 创建 / 更新：2026-11-09 / 2026-11-09
+- 创建 / 更新：2026-11-09 / 2026-11-10
 
 ## 目标与背景
 
@@ -39,7 +39,7 @@
 
 1. 将 Shift+Left/Right/Up/Down、鼠标选择及选区折叠映射到 082 的共享文档位置；统一普通、MathText、MathTree/Source 与结构范围的 anchor/focus。
 2. 让结构删除/替换、复制和历史恢复消费同一范围；保持单个公式对象删除与结构选区删除各自的业务目标，但共享位置映射与事务底座。
-3. 修复块数学连续删除落点和 Section 邻接 Backspace；验证结构状态从真实宿主路径解析，不使用隐藏 Paragraph 锚点。显式 Escape 离开数学时继续跳过连续 Equation/Align 并寻找最近的同级 Paragraph；对象删除只移除目标对象，不复用 Escape 的连续公式链落点规则。
+3. 修复块数学连续删除落点和 Section 邻接 Backspace；验证结构状态从真实宿主路径解析，不使用隐藏 Paragraph 锚点。Escape 离开块级公式时落到当前块外后停靠，重复 Escape 保持该停靠；对象删除只移除目标对象，不复用 Escape 的边界转换。
 4. 让活动 Inline/Block 环境、高亮、命中与选区矩形由同一语义投影生成，并由完整快照、增量刷新和 Qt 使用同代结果。
 5. 覆盖跨 Paragraph、Block、InlineMath、嵌套 Section、反向选择、空槽位、连续公式链 Escape 与单对象删除、失败/Undo/Redo 的黑盒和领域用例。
 6. 运行影响范围内验证，委派 Terra/medium 分域评审；修复后由未参与实现的 Sol/medium 对最终 diff 独立只读评审。
@@ -53,7 +53,7 @@
 - [ ] Shift 四向键可在 Paragraph、复杂 Block 和 InlineMath 两侧扩选，anchor/focus 方向和文档范围一致；内部 MathTree/MathText 位置可正确映射。
 - [ ] 显示选中的范围可被删除/替换/复制，U+FFFC 和节点数据不丢失；成功、失败、Undo、Redo 后 caret、selection、历史状态有效。
 - [ ] 连续 Equation/Align 删除只移除目标宿主并落到最近有效边界；Section 邻接 Backspace 不产生 InvalidPosition，拒绝时无副作用。
-- [ ] Escape 沿既有语义越过连续 Equation/Align 查找同级 Paragraph；删除单个公式仅删除目标且采用独立的最近有效位置恢复。
+- [ ] Escape 离开块级公式时进入当前宿主外后停靠；连续 Escape 不跳过相邻 Block，方向键才继续按文档顺序移动。删除单个公式仅删除目标且采用独立的最近有效位置恢复。
 - [ ] 完整快照、增量刷新与 Qt 绘制复用同一 Environment/selection 语义投影和 document generation；Inline/Block 几何来源由 adapter 保留。
 - [ ] 公开环境查询 API 的调用方已盘点；兼容性与迁移路径有依据，不保留重复权威语义，也不因内部整理破坏外部消费者。
 - [ ] Block 环境单值/多值选择状态及 Math projection identity 的消费者和历史语义已审计；无丢失空块删除、失败回滚或 Undo/Redo 行为。

@@ -13485,82 +13485,80 @@ fn leaving_last_display_math_without_a_paragraph_keeps_an_outer_boundary_stop()
 }
 
 #[test]
-fn escape_leaves_last_equation_and_align_at_the_nearest_body_paragraph()
+fn escape_leaves_the_current_display_math_at_its_outer_after_boundary()
 -> Result<(), Box<dyn std::error::Error>> {
     for (align, source) in [(false, "a"), (true, "a&b")] {
         let mut document = caret_doc::Document::blank();
+        let current_math = display_math_block(align, source)?;
+        let current_id = match &current_math {
+            Block::Equation(equation) => equation.id.clone(),
+            Block::Align(align) => align.id.clone(),
+            _ => unreachable!("display_math_block creates a math block"),
+        };
         document.body = vec![
             Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
-            display_math_block(align, source)?,
+            current_math,
         ];
         let mut session = Session::new(document)?;
-        let paragraph_id = match session.document().body.first() {
-            Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
-            _ => panic!("document should start with a paragraph"),
-        };
         session.run(Command::EnterMath(Direction::Forward))?;
 
         session.run(Command::EditorKey(EditorKey::Escape))?;
 
         assert!(session.math_edit().is_none());
-        assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
-        assert_eq!(session.selection().focus.offset, 0);
+        assert_eq!(
+            session.block_boundary_exit(),
+            Some((current_id.clone(), Direction::Forward))
+        );
     }
     Ok(())
 }
 
 #[test]
-fn escape_skips_adjacent_formula_blocks_and_updates_paragraph_affinity()
+fn repeated_escape_stays_on_the_current_block_and_arrows_continue_to_adjacent_math()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut document = caret_doc::Document::blank();
+    let current_math = display_math_block(false, "a")?;
+    let current_id = match &current_math {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!("expected an Equation"),
+    };
+    let adjacent_math = display_math_block(true, "b&c")?;
+    let adjacent_id = match &adjacent_math {
+        Block::Align(align) => align.id.clone(),
+        _ => unreachable!("expected an Align"),
+    };
     document.body = vec![
         Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
-        display_math_block(false, "a")?,
-        display_math_block(true, "b&c")?,
+        current_math,
+        adjacent_math,
         Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
     ];
     let mut session = Session::new(document)?;
     session.run(Command::EnterMath(Direction::Forward))?;
     session.run(Command::EditorKey(EditorKey::Escape))?;
 
-    let Some(Block::Paragraph(after)) = session.document().body.last() else {
-        panic!("document should end with a paragraph");
-    };
     assert!(session.math_edit().is_none());
-    assert_eq!(session.selection().focus.paragraph_id, after.id);
-    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
     assert_eq!(
-        session.selection_visual_affinity(),
-        crate::VisualAffinity::Upstream
+        session.block_boundary_exit(),
+        Some((current_id.clone(), Direction::Forward))
     );
-    Ok(())
-}
-
-#[test]
-fn escape_uses_the_opposite_side_only_when_the_preferred_side_has_no_paragraph()
--> Result<(), Box<dyn std::error::Error>> {
-    let before = Paragraph::empty(NodeId::generate());
-    let after = Paragraph::empty(NodeId::generate());
-    let after_id = after.id.clone();
-    let mut document = caret_doc::Document::blank();
-    document.body = vec![
-        Block::Paragraph(before),
-        display_math_block(false, "x")?,
-        Block::Paragraph(after),
-    ];
-    let mut session = Session::new(document)?;
-    session.run(Command::EnterMath(Direction::Forward))?;
-    let Block::Paragraph(before) = &mut session.document.body[0] else {
-        panic!("document should start with the paragraph");
-    };
-    before.inlines = vec![ParagraphContent::Opaque(caret_doc::OpaqueNode {
-        raw: serde_json::json!({"type": "future_inline", "payload": "preserve"}),
-    })];
+    let parked_selection = session.selection().clone();
 
     session.run(Command::EditorKey(EditorKey::Escape))?;
 
     assert!(session.math_edit().is_none());
-    assert_eq!(session.selection().focus.paragraph_id, after_id);
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((current_id, Direction::Forward))
+    );
+    assert_eq!(session.selection(), &parked_selection);
+
+    session.run(Command::MoveCaret(Direction::Forward))?;
+
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { block_id, align: true }) if block_id == &adjacent_id
+    ));
     Ok(())
 }
 
