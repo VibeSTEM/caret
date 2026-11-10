@@ -1,6 +1,6 @@
 # 文字格式语义
 
-更新日期：2026-11-09。本文定义目标格式语义；当前开发实现与目标载体的差异由[环境视图](document-model/environment-views.md)标明。节点和字段现状以[文档模型](document-model.md)为准。本文维护格式解析、选择区操作和环境格式化规则；Block/Inline 交互底座见[块宿主交互](document-model/block-interaction.md)，字体候选另见[多文字体系字体选择](font-selection.md)。
+更新日期：2026-11-10。本文定义目标格式语义；当前开发实现与目标载体的差异由[环境视图](document-model/environment-views.md)标明。节点和字段现状以[文档模型](document-model.md)为准。本文维护格式解析、选择区操作和环境格式化规则；Block/Inline 交互底座见[块宿主交互](document-model/block-interaction.md)，字体候选另见[多文字体系字体选择](font-selection.md)。
 
 ## 格式解析
 
@@ -78,7 +78,7 @@ Font 环境可嵌套，内层字体覆盖外层。文档排版主题可定义可
 
 “无颜色”“自动”和白色不可混为一谈。主题色引用不能被静默改写为固定 RGB。
 
-下划线保存在 Run 的 `props.underline`，使用 `caret.text.underline` 能力；它不是可嵌套的 EnvironmentNode。043/044 的 engine 适配器将连续下划线范围投影为临时 Inline 语义候选，参与当前环境高亮和 Mod+Backspace；解除只清除目标范围的直接属性，保留文字和其他格式。投影以来源类型与逻辑范围定位目标，不生成持久化节点 ID。
+下划线保存在 Run 的 `props.underline`，使用 `caret.text.underline` 能力；它不是可嵌套的 EnvironmentNode。`true` 表示启用；`false` 与缺省都表示关闭。编辑器关闭下划线时删除该键，不写入 `false`；读取到既有 `false` 时视为关闭，并在无关编辑或保存中原样保留，不对整棵文档静默归一化。043/044 的 engine 适配器将连续下划线范围投影为临时 Inline 语义候选，参与当前环境高亮和 Mod+Backspace；解除只清除目标范围的直接属性，保留文字和其他格式。投影以来源类型与逻辑范围定位目标，不生成持久化节点 ID。
 
 实现只支持单线。线宽和偏移来自 Parley 当前字体 run 的 OpenType 度量；线宽缺失或非正时，以该字体字号的 `1/18` 回退。无法得到有限偏移的片段不生成装饰几何。
 

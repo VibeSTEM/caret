@@ -23,7 +23,7 @@
 - 为 Paragraph、Section 标题/子树、Equation、Align、InlineMath 和文本 Inline 提供可比较的文档顺序；段落 ordinal 只作为 Paragraph 导航派生值。
 - 合并/重用 ParagraphLocation、`find_block_path`、历史恢复等 locator 的共同定位语义；只读查询与可变事务路径各自保留适当职责，并共享身份、父链、generation 校验。
 - 审计位置、Session 与历史相关字段的构造、读取、投影和调用方；合并或删除有证据确认的重复/无消费者状态，同时保留稳定身份、历史语义和已有扩展契约。
-- 审计持久模型字段的序列化、布局、编辑、未知字段与扩展消费者，包括 Paragraph 的 language/layout/style/props/extra、环境 definition ID、节点 ID、Opaque 与 schema version；不能仅因单一路径未读就删除。
+- 审计持久模型字段的序列化、布局、编辑、未知字段与扩展消费者，包括 Paragraph 的 language/layout/style/props/extra、`DocumentSettings.defaultStyles` / `formatOverrides`、`ThemeSnapshot.namedStyles`、顶层媒体资源、环境 definition ID、节点 ID、Opaque 与各层 schema version；核对所有 crate 和外部构造调用方，不能仅因单一路径未读就删除。
 - 消除通过 ParagraphIndex 任取正文段落作为隐藏锚点、再从其祖先链推断活动 Block 的路径。环境状态须从有效宿主身份解析父链。
 - 审计 `ExplicitBreak` 与 `Opaque` 的定位需求；不为满足统一 key 形状而强制增加持久 ID，不把 Opaque 当作可编辑原子。
 - 不实现跨宿主选择/复制/删除命令与完整几何投影（083）；不预设 O(深度) 等未经基准验证的复杂度承诺。
@@ -40,7 +40,8 @@
 3. 建立按宿主 ID 查询父链的只读入口和经验证的可变事务定位入口；修复任意 Paragraph 隐藏锚点回退。
 4. 收敛重复路径查找，校验定位结果随事务、撤销/重做、移动、文档代际变化的有效性。
 5. 对 ExplicitBreak/Opaque 做稳定身份、未知数据 round-trip 和历史生命周期核查；仅有明确能力需求时调整模型。
-6. 为文档顺序与 locator 增加正反向、无效位置、事务回滚和重复构造等行为测试；完成 Terra/Sol 独立审查。
+6. 对候选无消费者字段逐项搜集构造、序列化、布局、编辑、扩展及调用方证据；只有确认不属于公开/外部契约且删除不破坏往返语义时才移除。
+7. 为文档顺序与 locator 增加正反向、无效位置、事务回滚和重复构造等行为测试；完成 Terra/Sol 独立审查。
 
 ## 预计改动
 
@@ -53,6 +54,7 @@
 - [ ] locator 统一共享身份、父链、排序与 generation 校验；只读查询与可变事务定位都使用正确且经验证的入口。
 - [ ] 位置/Session/历史字段审计有消费者和生命周期证据；冗余状态得到收敛，必要的扩展与兼容字段保留理由明确。
 - [ ] 持久模型字段逐项有序列化与领域消费者依据；拟删除字段已验证所有构造/读写/round-trip/兼容路径，未删除字段记录其扩展或未知数据契约。
+- [ ] `defaultStyles`、`formatOverrides`、`namedStyles` 和顶层媒体资源等候选字段均有完整消费者与调用方证据；仅在证明无契约、无消费者后删除。
 - [ ] Undo/Redo、删除、拆分、合并和跨容器移动后的映射保持有效；无法映射时原子拒绝并保留文档与会话状态。
 - [ ] 不因排序实现需要就为 ExplicitBreak/Opaque 添加 schema ID；若新增身份有明确需求和往返/兼容/历史证据，记录独立决策。
 - [ ] 性能目标有代表性文档与可复现基线；未测量时不宣称复杂度改进。
