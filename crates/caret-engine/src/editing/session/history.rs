@@ -881,10 +881,13 @@ impl ParagraphState {
         paragraph_id: &NodeId,
     ) -> Option<Self> {
         let location = paragraph_index.get(paragraph_id)?;
-        let paragraph = paragraph_at_location(&document.body, location)?.clone();
+        if location.paragraph_id != *paragraph_id {
+            return None;
+        }
+        let (paragraph, parent_environment_ids, sibling_index) =
+            paragraph_history_location(&document.body, location)?;
+        let paragraph = paragraph.clone();
         let estimated_paragraph_bytes = paragraph_estimated_bytes(&paragraph);
-        let (parent_environment_ids, sibling_index) =
-            parent_environment_path(&document.body, location)?;
         Some(Self {
             id: paragraph_id.clone(),
             paragraph,
@@ -1116,30 +1119,43 @@ fn apply_paragraph_insertion(
     }
 }
 
+fn paragraph_history_location<'a>(
+    blocks: &'a [Block],
+    location: &ParagraphLocation,
+) -> Option<(&'a Paragraph, Vec<NodeId>, usize)> {
+    let paragraph = paragraph_at_location(blocks, location)?;
+    let physical = caret_structure::find_block_node(blocks, &location.paragraph_id)?;
+    if physical.parent_environment_ids != location.parent_environment_ids {
+        return None;
+    }
+    if location.is_title {
+        let owner_id = physical.parent_environment_ids.last()?;
+        if physical.kind != caret_structure::DocumentNodeKind::EnvironmentTitle
+            || location.story != StoryId::EnvironmentTitle(owner_id.clone())
+        {
+            return None;
+        }
+        Some((paragraph, physical.parent_environment_ids, 0))
+    } else {
+        if physical.kind != caret_structure::DocumentNodeKind::Paragraph
+            || location.story != StoryId::Body
+        {
+            return None;
+        }
+        Some((
+            paragraph,
+            physical.parent_environment_ids,
+            physical.sibling_index?,
+        ))
+    }
+}
+
 pub(super) fn parent_environment_path(
     blocks: &[Block],
     location: &ParagraphLocation,
 ) -> Option<(Vec<NodeId>, usize)> {
-    let mut environment_ids = Vec::new();
-    let count = if location.is_title {
-        location.block_path.len()
-    } else {
-        location.block_path.len().checked_sub(1)?
-    };
-    let mut current = blocks;
-    for block_index in location.block_path.iter().take(count) {
-        let Block::Environment(environment) = current.get(*block_index)? else {
-            return None;
-        };
-        environment_ids.push(environment.id.clone());
-        current = &environment.children;
-    }
-    let sibling_index = if location.is_title {
-        0
-    } else {
-        *location.block_path.last()?
-    };
-    Some((environment_ids, sibling_index))
+    paragraph_history_location(blocks, location)
+        .map(|(_, parent_environment_ids, sibling_index)| (parent_environment_ids, sibling_index))
 }
 
 fn apply_environment_creation(
@@ -1794,7 +1810,8 @@ pub(super) fn restore_history_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use caret_doc::{MathContent, ParagraphContent, Run};
+    use crate::editing::paragraph_ops::build_paragraph_index;
+    use caret_doc::{BlockEnvironment, MathContent, ParagraphContent, Run};
     use caret_math::MathInputKind;
     use serde_json::json;
 
@@ -1817,6 +1834,174 @@ mod tests {
             sibling_index,
             is_title: false,
         }
+    }
+
+    #[test]
+    fn history_parent_locator_uses_physical_parent_ids_and_rejects_moved_paragraphs() {
+        let environment_id = NodeId::generate();
+        let title = Paragraph::empty(NodeId::generate());
+        let title_id = title.id.clone();
+        let child = Paragraph::empty(NodeId::generate());
+        let child_id = child.id.clone();
+        let nested_sibling = Paragraph::empty(NodeId::generate());
+        let trailing = Paragraph::empty(NodeId::generate());
+        let trailing_id = trailing.id.clone();
+        let mut document = Document {
+            body: vec![
+                Block::Environment(BlockEnvironment {
+                    id: environment_id.clone(),
+                    kind: BlockEnvironmentKind::Section,
+                    definition_id: None,
+                    props: Default::default(),
+                    title: Some(title),
+                    children: vec![Block::Paragraph(child), Block::Paragraph(nested_sibling)],
+                    extra: Default::default(),
+                }),
+                Block::Paragraph(trailing),
+            ],
+            ..Document::blank()
+        };
+        let index = build_paragraph_index(&document.body);
+        let title_location = index
+            .get(&title_id)
+            .unwrap_or_else(|| panic!("title location should exist"));
+        let child_location = index
+            .get(&child_id)
+            .unwrap_or_else(|| panic!("child location should exist"));
+        let trailing_location = index
+            .get(&trailing_id)
+            .unwrap_or_else(|| panic!("trailing location should exist"));
+
+        let mut mismatched_index = ParagraphIndex::new();
+        mismatched_index.insert(child_id.clone(), trailing_location.clone());
+        assert!(ParagraphState::capture(&document, &mismatched_index, &child_id).is_none());
+
+        assert_eq!(
+            paragraph_history_location(&document.body, title_location)
+                .map(|(_, parents, slot)| (parents, slot)),
+            Some((vec![environment_id.clone()], 0))
+        );
+        assert_eq!(
+            paragraph_history_location(&document.body, child_location)
+                .map(|(_, parents, slot)| (parents, slot)),
+            Some((vec![environment_id.clone()], 0))
+        );
+        assert_eq!(
+            paragraph_history_location(&document.body, trailing_location)
+                .map(|(_, parents, slot)| (parents, slot)),
+            Some((Vec::new(), 1))
+        );
+
+        {
+            let Block::Environment(environment) = &mut document.body[0] else {
+                panic!("first block should remain the Section");
+            };
+            environment.children.swap(0, 1);
+        }
+        assert!(ParagraphState::capture(&document, &index, &child_id).is_none());
+        assert!(paragraph_history_location(&document.body, child_location).is_none());
+        assert!(parent_environment_path(&document.body, child_location).is_none());
+        if let Block::Environment(environment) = &mut document.body[0] {
+            environment.children.swap(0, 1);
+        }
+
+        let Block::Environment(environment) = &mut document.body[0] else {
+            panic!("first block should remain the Section");
+        };
+        let Block::Paragraph(moved_child) = environment.children.remove(0) else {
+            panic!("Section child should be a paragraph");
+        };
+        document.body.push(Block::Paragraph(moved_child));
+        assert_eq!(
+            paragraph_history_location(&document.body, child_location),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_section_title_patch_restores_through_undo_and_redo() {
+        fn title_with_text(id: NodeId, value: &str) -> Paragraph {
+            let mut paragraph = Paragraph::empty(id);
+            paragraph
+                .inlines
+                .push(ParagraphContent::Text(caret_doc::TextFlow {
+                    runs: vec![Run {
+                        text: value.to_owned(),
+                        language: None,
+                        props: Default::default(),
+                        extra: Default::default(),
+                    }],
+                    extra: Default::default(),
+                }));
+            paragraph
+        }
+
+        let outer_id = NodeId::generate();
+        let inner_id = NodeId::generate();
+        let title_id = NodeId::generate();
+        let expected_parent_ids = vec![outer_id.clone(), inner_id.clone()];
+        let mut document = Document {
+            body: vec![Block::Environment(BlockEnvironment {
+                id: outer_id.clone(),
+                kind: BlockEnvironmentKind::Section,
+                definition_id: None,
+                props: Default::default(),
+                title: Some(Paragraph::empty(NodeId::generate())),
+                children: vec![Block::Environment(BlockEnvironment {
+                    id: inner_id.clone(),
+                    kind: BlockEnvironmentKind::Section,
+                    definition_id: None,
+                    props: Default::default(),
+                    title: Some(title_with_text(title_id.clone(), "before")),
+                    children: Vec::new(),
+                    extra: Default::default(),
+                })],
+                extra: Default::default(),
+            })],
+            ..Document::blank()
+        };
+        let before_index = build_paragraph_index(&document.body);
+        let before = ParagraphState::capture(&document, &before_index, &title_id)
+            .unwrap_or_else(|| panic!("nested title state should be captured"));
+
+        {
+            let Block::Environment(outer) = &mut document.body[0] else {
+                panic!("first block should be the outer Section");
+            };
+            let Block::Environment(inner) = &mut outer.children[0] else {
+                panic!("outer Section child should be the inner Section");
+            };
+            inner.title = Some(title_with_text(title_id.clone(), "after"));
+        }
+
+        let after_index = build_paragraph_index(&document.body);
+        let after = ParagraphState::capture(&document, &after_index, &title_id)
+            .unwrap_or_else(|| panic!("updated nested title state should be captured"));
+        assert_eq!(before.parent_environment_ids, expected_parent_ids);
+
+        let patch = DocumentPatch::Paragraphs {
+            before: vec![before.clone()],
+            after: vec![after.clone()],
+            merge_group: None,
+            merge_epoch: 0,
+        };
+        assert!(patch.undo(&mut document));
+        assert!(matches!(
+            &document.body[0],
+            Block::Environment(outer)
+                if matches!(&outer.children[0], Block::Environment(inner)
+                    if matches!(inner.title.as_ref().and_then(|title| title.inlines.first()),
+                        Some(ParagraphContent::Text(flow)) if flow.runs[0].text == "before"))
+        ));
+
+        assert!(patch.redo(&mut document));
+        assert!(matches!(
+            &document.body[0],
+            Block::Environment(outer)
+                if matches!(&outer.children[0], Block::Environment(inner)
+                    if matches!(inner.title.as_ref().and_then(|title| title.inlines.first()),
+                        Some(ParagraphContent::Text(flow)) if flow.runs[0].text == "after"))
+        ));
     }
 
     #[test]
