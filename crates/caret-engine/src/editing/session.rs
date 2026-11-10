@@ -1186,13 +1186,26 @@ impl Session {
         if self.composition.is_some() {
             return Err(EditError::CompositionPending);
         }
-        let transition = if redo {
-            self.edit_history.redo(&mut self.document)
-        } else {
-            self.edit_history.undo(&mut self.document)
-        };
-        let Some(transition) = transition else {
+        if redo && !self.edit_history.can_redo() || !redo && !self.edit_history.can_undo() {
             return Ok(Effect::default());
+        }
+        let mut next_document = self.document.clone();
+        let head = self.edit_history.head().index;
+        let edit_index = if redo {
+            head
+        } else {
+            head.checked_sub(1).ok_or(EditError::InvalidPosition)?
+        };
+        let mut candidate_edit = self
+            .edit_history
+            .get_entry(edit_index)
+            .ok_or(EditError::InvalidPosition)?
+            .as_ref()
+            .clone();
+        let transition = if redo {
+            undo::Edit::redo(&mut candidate_edit, &mut next_document)
+        } else {
+            undo::Edit::undo(&mut candidate_edit, &mut next_document)
         };
         let previous_math_edit = self.math_edit.clone();
         let history::RestoredHistoryTransition {
@@ -1205,33 +1218,125 @@ impl Session {
             document_changed,
             math_edit: math_edit_position,
             host_caret_position,
+            valid,
         } = history::restore_history_transition(transition);
+        if !valid {
+            return Err(EditError::InvalidPosition);
+        }
+        if document_changed && next_document == self.document {
+            return Err(EditError::InvalidPosition);
+        }
+        let next_paragraph_index = build_paragraph_index(&next_document.body);
+        for position in [&selection.anchor, &selection.focus] {
+            let location = next_paragraph_index
+                .get(&position.paragraph_id)
+                .ok_or(EditError::InvalidPosition)?;
+            if location.story != position.story {
+                return Err(EditError::WrongStory);
+            }
+            let paragraph = paragraph_at_location(&next_document.body, location)
+                .ok_or(EditError::InvalidPosition)?;
+            TextMap::new(paragraph)?.validate_pos(position)?;
+        }
         let restored_math_edit = match math_edit_position {
             Some(position) => {
                 let revision = self.current_math_edit_revision();
-                match math_edit::restore_math_edit(&self.document, position, revision) {
+                match math_edit::restore_math_edit(&next_document, position, revision) {
                     Some(edit) => Some(edit),
-                    None => {
-                        let reverted = if redo {
-                            self.edit_history.undo(&mut self.document)
-                        } else {
-                            self.edit_history.redo(&mut self.document)
-                        };
-                        debug_assert!(
-                            reverted.is_some(),
-                            "failed history restore must be reversible"
-                        );
-                        return Err(EditError::InvalidPosition);
-                    }
+                    None => return Err(EditError::InvalidPosition),
                 }
             }
             None => None,
         };
+        if let Some(position) = &host_caret_position {
+            match position {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Block,
+                }
+                | HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Block,
+                } => {
+                    if math_edit::find_block_path(&next_document.body, host_id).is_none() {
+                        return Err(EditError::InvalidPosition);
+                    }
+                }
+                HostCaretPosition::Inside {
+                    host_id,
+                    kind: HostCaretKind::Block,
+                    local,
+                } => {
+                    let location = next_paragraph_index
+                        .get(&local.paragraph_id)
+                        .ok_or(EditError::InvalidPosition)?;
+                    if location.story != local.story
+                        || !location.parent_environment_ids.contains(host_id)
+                    {
+                        return Err(EditError::InvalidPosition);
+                    }
+                    TextMap::new(
+                        paragraph_at_location(&next_document.body, location)
+                            .ok_or(EditError::InvalidPosition)?,
+                    )?
+                    .validate_pos(local)?;
+                }
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+                | HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                } => {
+                    let focus = &selection.focus;
+                    let location = next_paragraph_index
+                        .get(&focus.paragraph_id)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let paragraph = paragraph_at_location(&next_document.body, location)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let map = TextMap::new(paragraph)?;
+                    map.validate_pos(focus)?;
+                    if !map.is_empty_inline_environment(focus.offset, host_id) {
+                        return Err(EditError::InvalidPosition);
+                    }
+                }
+                HostCaretPosition::Inside {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                    local,
+                } => {
+                    if local != &selection.focus {
+                        return Err(EditError::InvalidPosition);
+                    }
+                    let location = next_paragraph_index
+                        .get(&local.paragraph_id)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let paragraph = paragraph_at_location(&next_document.body, location)
+                        .ok_or(EditError::InvalidPosition)?;
+                    let map = TextMap::new(paragraph)?;
+                    map.validate_pos(local)?;
+                    if !map.is_empty_inline_environment(local.offset, host_id) {
+                        return Err(EditError::InvalidPosition);
+                    }
+                }
+            }
+        }
         let selection_changed = self.selection != selection
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
             || previous_math_edit != restored_math_edit
             || self.host_caret_position != host_caret_position;
+        let applied_transition = if redo {
+            self.edit_history.redo(&mut self.document)
+        } else {
+            self.edit_history.undo(&mut self.document)
+        }
+        .ok_or(EditError::InvalidPosition)?;
+        if !applied_transition.valid {
+            return Err(EditError::InvalidPosition);
+        }
+        self.document = next_document;
         self.selection = selection;
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = visual_affinity;
@@ -1253,59 +1358,7 @@ impl Session {
                 self.document_generation = 0;
             }
         }
-        self.host_caret_position = match host_caret_position {
-            Some(
-                position @ HostCaretPosition::Before {
-                    kind: HostCaretKind::Block,
-                    ..
-                },
-            )
-            | Some(
-                position @ HostCaretPosition::After {
-                    kind: HostCaretKind::Block,
-                    ..
-                },
-            ) if math_edit::find_block_path(&self.document.body, position.host_id()).is_some() => {
-                Some(position)
-            }
-            Some(
-                position @ HostCaretPosition::Before {
-                    kind: HostCaretKind::Inline,
-                    ..
-                },
-            )
-            | Some(
-                position @ HostCaretPosition::After {
-                    kind: HostCaretKind::Inline,
-                    ..
-                },
-            ) => {
-                let focus = self.selection.focus.clone();
-                self.text_map_for(&focus)
-                    .ok()
-                    .is_some_and(|map| {
-                        map.is_empty_inline_environment(focus.offset, position.host_id())
-                    })
-                    .then_some(position)
-            }
-            Some(
-                position @ HostCaretPosition::Inside {
-                    kind: HostCaretKind::Inline,
-                    ..
-                },
-            ) => {
-                let HostCaretPosition::Inside { host_id, local, .. } = &position else {
-                    unreachable!("matched inside host caret position")
-                };
-                (local == &self.selection.focus
-                    && self
-                        .text_map_for(local)
-                        .ok()
-                        .is_some_and(|map| map.is_empty_inline_environment(local.offset, host_id)))
-                .then_some(position)
-            }
-            _ => None,
-        };
+        self.host_caret_position = host_caret_position;
         self.sync_math_edit_revision();
         Ok(Effect {
             document_changed,
@@ -1367,8 +1420,12 @@ impl Session {
         if location.story != pos.story {
             return Err(EditError::WrongStory);
         }
-        paragraph_at_location(&self.document.body, location)
-            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))
+        let paragraph = paragraph_at_location(&self.document.body, location)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
+        if paragraph.id != pos.paragraph_id {
+            return Err(EditError::UnknownParagraph(pos.paragraph_id.to_string()));
+        }
+        Ok(paragraph)
     }
 
     fn paragraph_for_mut(&mut self, pos: &Pos) -> Result<&mut Paragraph, EditError> {
@@ -1379,8 +1436,12 @@ impl Session {
         if location.story != pos.story {
             return Err(EditError::WrongStory);
         }
-        paragraph_at_location_mut(&mut self.document.body, location)
-            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))
+        let paragraph = paragraph_at_location_mut(&mut self.document.body, location)
+            .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
+        if paragraph.id != pos.paragraph_id {
+            return Err(EditError::UnknownParagraph(pos.paragraph_id.to_string()));
+        }
+        Ok(paragraph)
     }
 
     pub(super) fn text_map_for(&mut self, pos: &Pos) -> Result<&TextMap, EditError> {
@@ -1391,6 +1452,7 @@ impl Session {
                 paragraph_id == &pos.paragraph_id && story == &pos.story
             })
         {
+            self.paragraph_for(pos)?;
             if index > 0 {
                 let entry = self
                     .text_map_cache
@@ -1424,6 +1486,9 @@ impl Session {
             .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))?;
         if location.story != pos.story {
             return Err(EditError::WrongStory);
+        }
+        if location.paragraph_id != pos.paragraph_id || paragraph.id != pos.paragraph_id {
+            return Err(EditError::UnknownParagraph(pos.paragraph_id.to_string()));
         }
         *paragraph_at_location_mut(&mut self.document.body, location)
             .ok_or_else(|| EditError::UnknownParagraph(pos.paragraph_id.to_string()))? = paragraph;

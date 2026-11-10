@@ -329,9 +329,11 @@ impl Session {
             patch.redo(&mut planned_document);
         }
 
+        let mut fallback_paragraph_id = None;
         if paragraph_ops::build_paragraph_index(&planned_document.body).is_empty() {
             let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
             let sibling_index = planned_document.body.len();
+            fallback_paragraph_id = Some(paragraph.id.clone());
             planned_document
                 .body
                 .push(Block::Paragraph((*paragraph).clone()));
@@ -384,7 +386,9 @@ impl Session {
                     })
             })
             .or_else(|| {
-                updated_index.iter().next().map(|(id, location)| Pos {
+                let id = fallback_paragraph_id.as_ref()?;
+                let location = updated_index.get(id)?;
+                Some(Pos {
                     story: location.story.clone(),
                     paragraph_id: id.clone(),
                     offset: 0,

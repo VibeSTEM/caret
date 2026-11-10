@@ -238,22 +238,43 @@ impl Session {
                         Direction::Forward => Affinity::Upstream,
                     },
                 }
-            } else if let Some((paragraph_id, _)) =
-                self.paragraph_index.iter().find(|(paragraph_id, loc)| {
-                    *paragraph_id != &position.paragraph_id
-                        && loc.story == StoryId::Body
-                        && !loc.is_title
-                })
-            {
-                // 嵌套环境内可能没有同级段落；选择任一仍存活的正文段落作为隐藏 Session 锚点。
-                Pos {
-                    story: StoryId::Body,
-                    paragraph_id: paragraph_id.clone(),
-                    offset: 0,
-                    affinity: Affinity::Downstream,
-                }
             } else {
-                return Ok(None);
+                let ordinal = self
+                    .structure_index
+                    .paragraph_ordinal(&position.paragraph_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let previous = (0..ordinal).rev().find_map(|index| {
+                    let paragraph_id = self.structure_index.paragraph_id_at(index)?;
+                    (paragraph_id != &position.paragraph_id).then_some(paragraph_id)
+                });
+                let next = (ordinal + 1..self.structure_index.navigation_paragraphs().len())
+                    .find_map(|index| self.structure_index.paragraph_id_at(index));
+                let nearby = previous
+                    .map(|id| (id, Direction::Backward))
+                    .or_else(|| next.map(|id| (id, Direction::Forward)));
+                let Some((paragraph_id, direction)) = nearby else {
+                    return Ok(None);
+                };
+                let location = self
+                    .paragraph_index
+                    .get(paragraph_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let paragraph = paragraph_at_location(&self.document.body, location)
+                    .ok_or(EditError::InvalidPosition)?;
+                Pos {
+                    story: location.story.clone(),
+                    paragraph_id: paragraph_id.clone(),
+                    offset: if direction == Direction::Backward {
+                        TextMap::new(paragraph)?.text.len()
+                    } else {
+                        0
+                    },
+                    affinity: if direction == Direction::Backward {
+                        Affinity::Downstream
+                    } else {
+                        Affinity::Upstream
+                    },
+                }
             };
         let Some(siblings) = block_list_by_parent_ids_mut(&mut self.document.body, &parent_ids)
         else {

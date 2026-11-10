@@ -65,10 +65,11 @@ fn restore_document_font_family(
     document: &mut Document,
     target: &DocumentFontTarget,
     family: Option<String>,
-) {
+) -> bool {
     // 撤销记录只由已校验的编辑命令创建，重放时目标应始终有效。
     let restored = document.global_settings.set_font_family(target, family);
     debug_assert!(restored.is_ok(), "history contains an invalid font target");
+    restored.is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -304,6 +305,7 @@ pub(super) struct HistoryTransition {
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
     pub document_changed: bool,
+    pub valid: bool,
 }
 
 impl SessionHistoryEdit {
@@ -353,12 +355,12 @@ impl SessionHistoryEdit {
                 .map_or(0, |position| node_id_bytes(position.host_id()))
     }
 
-    fn apply_before(&self, document: &mut Document) {
-        self.patch.undo(document);
+    fn apply_before(&self, document: &mut Document) -> bool {
+        self.patch.undo(document)
     }
 
-    fn apply_after(&self, document: &mut Document) {
-        self.patch.redo(document);
+    fn apply_after(&self, document: &mut Document) -> bool {
+        self.patch.redo(document)
     }
 
     fn before_transition(&self) -> HistoryTransition {
@@ -372,6 +374,7 @@ impl SessionHistoryEdit {
             state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
+            valid: true,
         }
     }
 
@@ -386,6 +389,7 @@ impl SessionHistoryEdit {
             state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
+            valid: true,
         }
     }
 }
@@ -400,13 +404,15 @@ impl Edit for SessionHistoryEdit {
     }
 
     fn undo(&mut self, document: &mut Document) -> Self::Output {
-        self.apply_before(document);
-        self.before_transition()
+        let mut transition = self.before_transition();
+        transition.valid = self.apply_before(document);
+        transition
     }
 
     fn redo(&mut self, document: &mut Document) -> Self::Output {
-        self.apply_after(document);
-        self.after_transition()
+        let mut transition = self.after_transition();
+        transition.valid = self.apply_after(document);
+        transition
     }
 
     fn merge(&mut self, other: Self) -> Merged<Self> {
@@ -588,16 +594,77 @@ impl DocumentPatch {
         }
     }
 
-    pub(super) fn undo(&self, document: &mut Document) {
-        match self {
-            Self::PendingStyle => {}
-            Self::Compound(patches) => {
+    pub(super) fn undo(&self, document: &mut Document) -> bool {
+        self.apply_transactionally(document, true)
+    }
+
+    pub(super) fn redo(&self, document: &mut Document) -> bool {
+        self.apply_transactionally(document, false)
+    }
+
+    fn apply_transactionally(&self, document: &mut Document, undo: bool) -> bool {
+        if matches!(self, Self::PendingStyle) {
+            return true;
+        }
+        let mut candidate = document.clone();
+        let changed = if let Self::Compound(patches) = self {
+            if undo {
                 for patch in patches.iter().rev() {
-                    patch.undo(document);
+                    let mut next = candidate.clone();
+                    if !patch.apply_unchecked(&mut next, true) || next == candidate {
+                        return false;
+                    }
+                    candidate = next;
+                }
+            } else {
+                for patch in patches {
+                    let mut next = candidate.clone();
+                    if !patch.apply_unchecked(&mut next, false) || next == candidate {
+                        return false;
+                    }
+                    candidate = next;
                 }
             }
+            candidate != *document
+        } else {
+            self.apply_unchecked(&mut candidate, undo) && candidate != *document
+        };
+        if changed {
+            *document = candidate;
+        }
+        changed
+    }
+
+    fn apply_unchecked(&self, document: &mut Document, undo: bool) -> bool {
+        if let Self::Compound(patches) = self {
+            if undo {
+                for patch in patches.iter().rev() {
+                    if !patch.apply_transactionally(document, true) {
+                        return false;
+                    }
+                }
+            } else {
+                for patch in patches {
+                    if !patch.apply_transactionally(document, false) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        if undo {
+            self.undo_in_place(document)
+        } else {
+            self.redo_in_place(document)
+        }
+    }
+
+    fn undo_in_place(&self, document: &mut Document) -> bool {
+        match self {
+            Self::PendingStyle => true,
+            Self::Compound(_) => false,
             Self::Paragraphs { before, after, .. } => {
-                apply_paragraph_states(document, after, before)
+                apply_paragraph_states_in_place(document, after, before)
             }
             Self::ParagraphInsertion {
                 parent_environment_ids,
@@ -613,9 +680,10 @@ impl DocumentPatch {
             Self::PageGeometry { before, .. } => set_page_geometry(document, *before),
             Self::LatinFontFamily { before, .. } => {
                 before.restore(&mut document.global_settings);
+                true
             }
             Self::DocumentFontFamily { target, before, .. } => {
-                restore_document_font_family(document, target, before.clone());
+                restore_document_font_family(document, target, before.clone())
             }
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -698,16 +766,12 @@ impl DocumentPatch {
         }
     }
 
-    pub(super) fn redo(&self, document: &mut Document) {
+    fn redo_in_place(&self, document: &mut Document) -> bool {
         match self {
-            Self::PendingStyle => {}
-            Self::Compound(patches) => {
-                for patch in patches {
-                    patch.redo(document);
-                }
-            }
+            Self::PendingStyle => true,
+            Self::Compound(_) => false,
             Self::Paragraphs { before, after, .. } => {
-                apply_paragraph_states(document, before, after)
+                apply_paragraph_states_in_place(document, before, after)
             }
             Self::ParagraphInsertion {
                 parent_environment_ids,
@@ -723,9 +787,10 @@ impl DocumentPatch {
             Self::PageGeometry { after, .. } => set_page_geometry(document, *after),
             Self::LatinFontFamily { after, .. } => {
                 after.restore(&mut document.global_settings);
+                true
             }
             Self::DocumentFontFamily { target, after, .. } => {
-                restore_document_font_family(document, target, after.clone());
+                restore_document_font_family(document, target, after.clone())
             }
             Self::EnvironmentCreation {
                 parent_environment_ids,
@@ -886,21 +951,59 @@ pub(super) fn state_ids_from_position_map(map: &PositionMap, output: &mut Vec<No
     }
 }
 
-fn apply_paragraph_states(
+fn apply_paragraph_states_in_place(
     document: &mut Document,
     current: &[ParagraphState],
     target: &[ParagraphState],
-) {
-    for state in current {
-        remove_paragraph(&mut document.body, &state.id);
+) -> bool {
+    let current_ids = current
+        .iter()
+        .map(|state| state.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let target_ids = target
+        .iter()
+        .map(|state| state.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    if current_ids.len() != current.len() || target_ids.len() != target.len() {
+        return false;
+    }
+    let mut removals = current.iter().collect::<Vec<_>>();
+    removals.sort_by(|left, right| {
+        left.parent_environment_ids
+            .cmp(&right.parent_environment_ids)
+            .then_with(|| right.is_title.cmp(&left.is_title))
+            .then_with(|| right.sibling_index.cmp(&left.sibling_index))
+    });
+    for state in removals {
+        if !remove_paragraph_state(document, state) {
+            return false;
+        }
     }
     for state in target.iter().filter(|state| state.is_title) {
         let Some(environment_id) = state.parent_environment_ids.last() else {
-            continue;
+            return false;
         };
-        if let Some(environment) = find_environment_mut(&mut document.body, environment_id) {
-            environment.title = Some(state.paragraph.clone());
+        let Some(parents) = state
+            .parent_environment_ids
+            .get(..state.parent_environment_ids.len() - 1)
+        else {
+            return false;
+        };
+        let Some(siblings) = block_list_mut(&mut document.body, parents) else {
+            return false;
+        };
+        let Some(environment) = siblings.iter_mut().find_map(|block| match block {
+            Block::Environment(environment) if &environment.id == environment_id => {
+                Some(environment)
+            }
+            _ => None,
+        }) else {
+            return false;
+        };
+        if environment.title.is_some() {
+            return false;
         }
+        environment.title = Some(state.paragraph.clone());
     }
     let mut paragraphs = target
         .iter()
@@ -913,39 +1016,57 @@ fn apply_paragraph_states(
     });
     for state in paragraphs {
         let Some(blocks) = block_list_mut(&mut document.body, &state.parent_environment_ids) else {
-            continue;
+            return false;
         };
-        let index = state.sibling_index.min(blocks.len());
-        blocks.insert(index, Block::Paragraph(state.paragraph.clone()));
+        if state.sibling_index > blocks.len() {
+            return false;
+        }
+        blocks.insert(
+            state.sibling_index,
+            Block::Paragraph(state.paragraph.clone()),
+        );
     }
+    true
 }
 
-fn remove_paragraph(blocks: &mut Vec<Block>, paragraph_id: &NodeId) -> bool {
-    let mut index = 0;
-    while index < blocks.len() {
-        match &mut blocks[index] {
-            Block::Paragraph(paragraph) if &paragraph.id == paragraph_id => {
-                blocks.remove(index);
-                return true;
+fn remove_paragraph_state(document: &mut Document, state: &ParagraphState) -> bool {
+    if state.is_title {
+        let Some((environment_id, parent_ids)) = state.parent_environment_ids.split_last() else {
+            return false;
+        };
+        let Some(siblings) = block_list_mut(&mut document.body, parent_ids) else {
+            return false;
+        };
+        let Some(environment) = siblings.iter_mut().find_map(|block| match block {
+            Block::Environment(environment) if &environment.id == environment_id => {
+                Some(environment)
             }
-            Block::Environment(environment) => {
-                if environment
-                    .title
-                    .as_ref()
-                    .is_some_and(|title| &title.id == paragraph_id)
-                {
-                    environment.title = None;
-                    return true;
-                }
-                if remove_paragraph(&mut environment.children, paragraph_id) {
-                    return true;
-                }
-            }
-            _ => {}
+            _ => None,
+        }) else {
+            return false;
+        };
+        if !environment
+            .title
+            .as_ref()
+            .is_some_and(|title| title.id == state.id && title == &state.paragraph)
+        {
+            return false;
         }
-        index += 1;
+        environment.title = None;
+        return true;
     }
-    false
+
+    let Some(siblings) = block_list_mut(&mut document.body, &state.parent_environment_ids) else {
+        return false;
+    };
+    if !matches!(
+        siblings.get(state.sibling_index),
+        Some(Block::Paragraph(paragraph)) if paragraph.id == state.id && paragraph == &state.paragraph
+    ) {
+        return false;
+    }
+    siblings.remove(state.sibling_index);
+    true
 }
 
 fn block_list_mut<'a>(
@@ -955,7 +1076,10 @@ fn block_list_mut<'a>(
     let Some((environment_id, rest)) = environment_ids.split_first() else {
         return Some(blocks);
     };
-    let environment = find_environment_mut(blocks, environment_id)?;
+    let environment = blocks.iter_mut().find_map(|block| match block {
+        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
+        _ => None,
+    })?;
     block_list_mut(&mut environment.children, rest)
 }
 
@@ -965,42 +1089,31 @@ fn apply_paragraph_insertion(
     sibling_index: usize,
     paragraph: &Paragraph,
     insert: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     if insert {
         if blocks
             .iter()
             .any(|block| matches!(block, Block::Paragraph(existing) if existing.id == paragraph.id))
         {
-            return;
+            return false;
         }
         if sibling_index <= blocks.len() {
             blocks.insert(sibling_index, Block::Paragraph(paragraph.clone()));
+            true
+        } else {
+            false
         }
-    } else if let Some(index) = blocks.iter().position(
-        |block| matches!(block, Block::Paragraph(existing) if existing.id == paragraph.id),
-    ) {
+    } else if matches!(blocks.get(sibling_index), Some(Block::Paragraph(current)) if current == paragraph)
+    {
+        let index = sibling_index;
         blocks.remove(index);
+        true
+    } else {
+        false
     }
-}
-
-fn find_environment_mut<'a>(
-    blocks: &'a mut [Block],
-    environment_id: &NodeId,
-) -> Option<&'a mut BlockEnvironment> {
-    for block in blocks {
-        if let Block::Environment(environment) = block {
-            if &environment.id == environment_id {
-                return Some(environment);
-            }
-            if let Some(found) = find_environment_mut(&mut environment.children, environment_id) {
-                return Some(found);
-            }
-        }
-    }
-    None
 }
 
 pub(super) fn parent_environment_path(
@@ -1037,38 +1150,40 @@ fn apply_environment_creation(
     environment_id: &NodeId,
     kind: BlockEnvironmentKind,
     create: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     let Some(current) = blocks.get(sibling_index) else {
-        return;
+        return false;
+    };
+    let expected_environment = BlockEnvironment {
+        id: environment_id.clone(),
+        kind,
+        definition_id: None,
+        props: Default::default(),
+        title: (kind == BlockEnvironmentKind::Section).then(|| paragraph.clone()),
+        children: if kind == BlockEnvironmentKind::Custom {
+            vec![Block::Paragraph(paragraph.clone())]
+        } else {
+            Vec::new()
+        },
+        extra: Default::default(),
     };
     let expected = if create {
-        matches!(current, Block::Paragraph(value) if value.id == paragraph.id)
+        matches!(current, Block::Paragraph(value) if value == paragraph)
     } else {
-        matches!(current, Block::Environment(value) if &value.id == environment_id)
+        matches!(current, Block::Environment(value) if value == &expected_environment)
     };
     if !expected {
-        return;
+        return false;
     }
     blocks[sibling_index] = if create {
-        Block::Environment(BlockEnvironment {
-            id: environment_id.clone(),
-            kind,
-            definition_id: None,
-            props: Default::default(),
-            title: (kind == BlockEnvironmentKind::Section).then(|| paragraph.clone()),
-            children: if kind == BlockEnvironmentKind::Custom {
-                vec![Block::Paragraph(paragraph.clone())]
-            } else {
-                Vec::new()
-            },
-            extra: Default::default(),
-        })
+        Block::Environment(expected_environment)
     } else {
         Block::Paragraph(paragraph.clone())
     };
+    true
 }
 
 fn apply_environment_insertion(
@@ -1077,17 +1192,23 @@ fn apply_environment_insertion(
     sibling_index: usize,
     environment: &BlockEnvironment,
     insert: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     if insert {
         if sibling_index <= blocks.len() {
             blocks.insert(sibling_index, Block::Environment(environment.clone()));
+            true
+        } else {
+            false
         }
-    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value == environment)
     {
         blocks.remove(sibling_index);
+        true
+    } else {
+        false
     }
 }
 
@@ -1098,20 +1219,21 @@ fn apply_block_range(
     sibling_index: usize,
     current: &[Block],
     replacement: &[Block],
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     let Some(end) = sibling_index.checked_add(current.len()) else {
-        return;
+        return false;
     };
     if !blocks
         .get(sibling_index..end)
         .is_some_and(|actual| persisted_blocks_equal(actual, current))
     {
-        return;
+        return false;
     }
     blocks.splice(sibling_index..end, replacement.iter().cloned());
+    true
 }
 
 fn persisted_blocks_equal(left: &[Block], right: &[Block]) -> bool {
@@ -1131,9 +1253,9 @@ fn apply_environment_boundary_paragraphs(
     sibling_index: usize,
     paragraphs: &[Paragraph],
     insert: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     if insert {
         if sibling_index <= blocks.len() {
@@ -1141,6 +1263,9 @@ fn apply_environment_boundary_paragraphs(
                 sibling_index..sibling_index,
                 paragraphs.iter().cloned().map(Block::Paragraph),
             );
+            true
+        } else {
+            false
         }
     } else {
         let end = sibling_index.saturating_add(paragraphs.len());
@@ -1148,12 +1273,15 @@ fn apply_environment_boundary_paragraphs(
             match actual {
                 [] => false,
                 actual => actual.iter().zip(paragraphs).all(|(block, expected)| {
-                    matches!(block, Block::Paragraph(paragraph) if paragraph.id == expected.id)
+                    matches!(block, Block::Paragraph(paragraph) if paragraph == expected)
                 }),
             }
         });
         if matches_inserted {
             blocks.drain(sibling_index..end);
+            true
+        } else {
+            false
         }
     }
 }
@@ -1165,20 +1293,33 @@ fn apply_environment_deletion(
     environment: &BlockEnvironment,
     fallback_paragraph: Option<&Paragraph>,
     restore: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     if restore {
-        if fallback_paragraph.is_some_and(|paragraph| {
-            matches!(blocks.get(sibling_index), Some(Block::Paragraph(value)) if value.id == paragraph.id)
-        }) {
+        if let Some(paragraph) = fallback_paragraph {
+            if !matches!(blocks.get(sibling_index), Some(Block::Paragraph(value)) if value == paragraph)
+            {
+                return false;
+            }
             blocks.remove(sibling_index);
+        } else if sibling_index > blocks.len() {
+            return false;
+        }
+        if blocks
+            .iter()
+            .any(|block| matches!(block, Block::Environment(value) if value.id == environment.id))
+        {
+            return false;
         }
         if sibling_index <= blocks.len() {
             blocks.insert(sibling_index, Block::Environment(environment.clone()));
+            true
+        } else {
+            false
         }
-    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    } else if matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value == environment)
     {
         blocks.remove(sibling_index);
         if let Some(paragraph) = fallback_paragraph
@@ -1186,6 +1327,9 @@ fn apply_environment_deletion(
         {
             blocks.insert(sibling_index, Block::Paragraph(paragraph.clone()));
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -1195,9 +1339,9 @@ fn apply_environment_unwrap(
     sibling_index: usize,
     environment: &BlockEnvironment,
     restore: bool,
-) {
+) -> bool {
     let Some(blocks) = block_list_mut(&mut document.body, parent_environment_ids) else {
-        return;
+        return false;
     };
     if restore {
         let mut flattened = Vec::with_capacity(environment.children.len() + 1);
@@ -1211,12 +1355,13 @@ fn apply_environment_unwrap(
                 sibling_index..end,
                 [Block::Environment(environment.clone())],
             );
+            return true;
         }
-        return;
+        return false;
     }
-    if !matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value.id == environment.id)
+    if !matches!(blocks.get(sibling_index), Some(Block::Environment(value)) if value == environment)
     {
-        return;
+        return false;
     }
     let mut flattened = Vec::with_capacity(environment.children.len() + 1);
     if let Some(title) = &environment.title {
@@ -1224,12 +1369,14 @@ fn apply_environment_unwrap(
     }
     flattened.extend(environment.children.iter().cloned());
     blocks.splice(sibling_index..=sibling_index, flattened);
+    true
 }
 
-fn set_page_geometry(document: &mut Document, geometry: PageGeometry) {
+fn set_page_geometry(document: &mut Document, geometry: PageGeometry) -> bool {
     if let Some(section) = document.page_sections.first_mut() {
-        let _ = section.set_geometry(geometry);
+        return section.set_geometry(geometry).is_ok();
     }
+    false
 }
 
 pub(super) fn paragraph_estimated_bytes(paragraph: &Paragraph) -> usize {
@@ -1624,6 +1771,7 @@ pub(super) struct RestoredHistoryTransition {
     pub(super) document_changed: bool,
     pub(super) math_edit: Option<MathEditPosition>,
     pub(super) host_caret_position: Option<HostCaretPosition<Pos>>,
+    pub(super) valid: bool,
 }
 
 pub(super) fn restore_history_transition(
@@ -1639,13 +1787,14 @@ pub(super) fn restore_history_transition(
         document_changed: transition.document_changed,
         math_edit: transition.math_edit,
         host_caret_position: transition.host_caret_position,
+        valid: transition.valid,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use caret_doc::MathContent;
+    use caret_doc::{MathContent, ParagraphContent, Run};
     use caret_math::MathInputKind;
     use serde_json::json;
 
@@ -1656,6 +1805,226 @@ mod tests {
                 caret_math::ProjectedMath::Align(_) => panic!("expected a formula tree"),
             },
             Err(error) => panic!("test formula should parse: {error}"),
+        }
+    }
+
+    fn paragraph_state(paragraph: Paragraph, sibling_index: usize) -> ParagraphState {
+        ParagraphState {
+            id: paragraph.id.clone(),
+            estimated_paragraph_bytes: paragraph_estimated_bytes(&paragraph),
+            paragraph,
+            parent_environment_ids: Vec::new(),
+            sibling_index,
+            is_title: false,
+        }
+    }
+
+    #[test]
+    fn paragraph_history_restores_shared_id_and_rejects_invalid_slot_atomically() {
+        let mut before_paragraph = Paragraph::empty(NodeId::generate());
+        before_paragraph
+            .inlines
+            .push(ParagraphContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "before".to_owned(),
+                    language: None,
+                    props: Default::default(),
+                    extra: Default::default(),
+                }],
+                extra: Default::default(),
+            }));
+        let mut after_paragraph = before_paragraph.clone();
+        if let Some(ParagraphContent::Text(flow)) = after_paragraph.inlines.first_mut() {
+            flow.runs[0].text = "after".to_owned();
+        }
+        let current = paragraph_state(after_paragraph, 0);
+        let target = paragraph_state(before_paragraph.clone(), 0);
+        let mut document = Document {
+            body: vec![Block::Paragraph(current.paragraph.clone())],
+            ..Document::blank()
+        };
+
+        assert!(apply_paragraph_states_in_place(
+            &mut document,
+            std::slice::from_ref(&current),
+            std::slice::from_ref(&target)
+        ));
+        assert!(matches!(
+            &document.body[0],
+            Block::Paragraph(paragraph)
+                if paragraph.id == target.id
+                    && matches!(paragraph.inlines.first(), Some(ParagraphContent::Text(flow)) if flow.runs[0].text == "before")
+        ));
+
+        let invalid_current = paragraph_state(before_paragraph, 1);
+        let unchanged = document.clone();
+        assert!(!apply_paragraph_states_in_place(
+            &mut document,
+            std::slice::from_ref(&invalid_current),
+            &[]
+        ));
+        assert_eq!(document, unchanged);
+    }
+
+    #[test]
+    fn compound_history_rejects_partial_application_atomically() {
+        let mut before = Paragraph::empty(NodeId::generate());
+        before
+            .inlines
+            .push(ParagraphContent::Text(caret_doc::TextFlow {
+                runs: vec![Run {
+                    text: "before".to_owned(),
+                    language: None,
+                    props: Default::default(),
+                    extra: Default::default(),
+                }],
+                extra: Default::default(),
+            }));
+        let mut after = before.clone();
+        let Some(ParagraphContent::Text(flow)) = after.inlines.first_mut() else {
+            panic!("paragraph should contain text");
+        };
+        flow.runs[0].text = "after".to_owned();
+        let mut document = Document {
+            body: vec![Block::Paragraph(before.clone())],
+            ..Document::blank()
+        };
+        let patch = DocumentPatch::Compound(vec![
+            DocumentPatch::Paragraphs {
+                before: vec![paragraph_state(before, 0)],
+                after: vec![paragraph_state(after, 0)],
+                merge_group: None,
+                merge_epoch: 0,
+            },
+            DocumentPatch::ParagraphInsertion {
+                parent_environment_ids: vec![NodeId::generate()],
+                sibling_index: 0,
+                paragraph: Box::new(Paragraph::empty(NodeId::generate())),
+            },
+        ]);
+        let unchanged = document.clone();
+
+        assert!(!patch.redo(&mut document));
+        assert_eq!(document, unchanged);
+    }
+
+    #[test]
+    fn history_removals_reject_same_id_changed_snapshots() {
+        let paragraph = Paragraph::empty(NodeId::generate());
+        let boundary_patch = DocumentPatch::BlockBoundaryParagraphs {
+            parent_environment_ids: Vec::new(),
+            sibling_index: 1,
+            paragraphs: vec![paragraph.clone()],
+            paragraphs_estimated_bytes: paragraph_estimated_bytes(&paragraph),
+        };
+        let mut document = Document {
+            body: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+            ..Document::blank()
+        };
+        assert!(boundary_patch.redo(&mut document));
+        let Some(Block::Paragraph(changed)) = document.body.get_mut(1) else {
+            panic!("inserted boundary paragraph should exist");
+        };
+        changed.props.insert("changed".to_owned(), json!(true));
+        let unchanged = document.clone();
+        assert!(!boundary_patch.undo(&mut document));
+        assert_eq!(document, unchanged);
+
+        let source_paragraph = Paragraph::empty(NodeId::generate());
+        let environment_id = NodeId::generate();
+        let creation_patch = DocumentPatch::EnvironmentCreation {
+            parent_environment_ids: Vec::new(),
+            sibling_index: 0,
+            paragraph: Box::new(source_paragraph.clone()),
+            paragraph_estimated_bytes: paragraph_estimated_bytes(&source_paragraph),
+            environment_id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Custom,
+        };
+        let mut changed_paragraph = source_paragraph.clone();
+        changed_paragraph
+            .props
+            .insert("changed".to_owned(), json!(true));
+        let mut document = Document {
+            body: vec![Block::Paragraph(changed_paragraph)],
+            ..Document::blank()
+        };
+        let unchanged = document.clone();
+        assert!(!creation_patch.redo(&mut document));
+        assert_eq!(document, unchanged);
+
+        let mut changed_environment = BlockEnvironment {
+            id: environment_id,
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(source_paragraph)],
+            extra: Default::default(),
+        };
+        changed_environment
+            .props
+            .insert("changed".to_owned(), json!(true));
+        let mut document = Document {
+            body: vec![Block::Environment(changed_environment)],
+            ..Document::blank()
+        };
+        let unchanged = document.clone();
+        assert!(!creation_patch.undo(&mut document));
+        assert_eq!(document, unchanged);
+
+        let environment = BlockEnvironment {
+            id: NodeId::generate(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(Paragraph::empty(NodeId::generate()))],
+            extra: Default::default(),
+        };
+        let mut changed_environment = environment.clone();
+        changed_environment
+            .props
+            .insert("changed".to_owned(), json!(true));
+        let environment_patch = DocumentPatch::EnvironmentInsertion {
+            parent_environment_ids: Vec::new(),
+            sibling_index: 0,
+            environment: Box::new(environment.clone()),
+            environment_estimated_bytes: 0,
+        };
+        for (patch, undo) in [
+            (environment_patch, true),
+            (
+                DocumentPatch::EnvironmentDeletion {
+                    parent_environment_ids: Vec::new(),
+                    sibling_index: 0,
+                    environment: Box::new(environment.clone()),
+                    environment_estimated_bytes: 0,
+                    fallback_paragraph: None,
+                },
+                false,
+            ),
+            (
+                DocumentPatch::EnvironmentUnwrap {
+                    parent_environment_ids: Vec::new(),
+                    sibling_index: 0,
+                    environment: Box::new(environment),
+                    environment_estimated_bytes: 0,
+                },
+                false,
+            ),
+        ] {
+            let mut document = Document {
+                body: vec![Block::Environment(changed_environment.clone())],
+                ..Document::blank()
+            };
+            let unchanged = document.clone();
+            let applied = if undo {
+                patch.undo(&mut document)
+            } else {
+                patch.redo(&mut document)
+            };
+            assert!(!applied);
+            assert_eq!(document, unchanged);
         }
     }
 

@@ -5387,28 +5387,17 @@ fn find_inline_math_mut<'a>(
 
 /// 在块树中查找块 ID，返回父环境 ID 路径与同级下标。
 pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
-    for (index, block) in blocks.iter().enumerate() {
-        if block_id(block) == Some(id) {
-            return Some((Vec::new(), index));
-        }
-        if let Block::Environment(environment) = block
-            && let Some((mut path, child)) = find_block_path(&environment.children, id)
-        {
-            path.insert(0, environment.id.clone());
-            return Some((path, child));
-        }
+    let location = caret_structure::find_block_node(blocks, id)?;
+    if !matches!(
+        location.kind,
+        caret_structure::DocumentNodeKind::Paragraph
+            | caret_structure::DocumentNodeKind::Environment
+            | caret_structure::DocumentNodeKind::Equation
+            | caret_structure::DocumentNodeKind::Align
+    ) {
+        return None;
     }
-    None
-}
-
-fn block_id(block: &Block) -> Option<&NodeId> {
-    match block {
-        Block::Paragraph(value) => Some(&value.id),
-        Block::Environment(value) => Some(&value.id),
-        Block::Equation(value) => Some(&value.id),
-        Block::Align(value) => Some(&value.id),
-        Block::ExplicitBreak(_) | Block::Opaque(_) => None,
-    }
+    Some((location.parent_environment_ids, location.sibling_index?))
 }
 
 fn block_list<'a>(

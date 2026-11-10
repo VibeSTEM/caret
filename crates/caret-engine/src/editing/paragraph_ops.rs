@@ -10,16 +10,24 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub(super) struct ParagraphLocation {
+    pub(super) paragraph_id: NodeId,
     pub(super) story: StoryId,
     pub(super) block_path: Vec<usize>,
+    pub(super) parent_environment_ids: Vec<NodeId>,
     pub(super) is_title: bool,
 }
 
 impl ParagraphLocation {
-    pub(super) fn body(block_path: Vec<usize>) -> Self {
+    pub(super) fn body(
+        paragraph_id: NodeId,
+        block_path: Vec<usize>,
+        parent_environment_ids: Vec<NodeId>,
+    ) -> Self {
         Self {
+            paragraph_id,
             story: StoryId::Body,
             block_path,
+            parent_environment_ids,
             is_title: false,
         }
     }
@@ -49,18 +57,27 @@ pub(super) struct SectionTitleMergeResult {
 
 pub(super) fn build_paragraph_index(blocks: &[Block]) -> ParagraphIndex {
     let mut index = ParagraphIndex::new();
-    collect_locations(blocks, &mut Vec::new(), &mut index);
+    collect_locations(blocks, &mut Vec::new(), &mut Vec::new(), &mut index);
     index
 }
 
-fn collect_locations(blocks: &[Block], parent_path: &mut Vec<usize>, index: &mut ParagraphIndex) {
+fn collect_locations(
+    blocks: &[Block],
+    parent_path: &mut Vec<usize>,
+    parent_environment_ids: &mut Vec<NodeId>,
+    index: &mut ParagraphIndex,
+) {
     for (block_index, block) in blocks.iter().enumerate() {
         parent_path.push(block_index);
         match block {
             Block::Paragraph(paragraph) => {
                 index.insert(
                     paragraph.id.clone(),
-                    ParagraphLocation::body(parent_path.clone()),
+                    ParagraphLocation::body(
+                        paragraph.id.clone(),
+                        parent_path.clone(),
+                        parent_environment_ids.clone(),
+                    ),
                 );
             }
             Block::Environment(environment) => {
@@ -68,13 +85,26 @@ fn collect_locations(blocks: &[Block], parent_path: &mut Vec<usize>, index: &mut
                     index.insert(
                         title.id.clone(),
                         ParagraphLocation {
+                            paragraph_id: title.id.clone(),
                             story: StoryId::EnvironmentTitle(environment.id.clone()),
                             block_path: parent_path.clone(),
+                            parent_environment_ids: parent_environment_ids
+                                .iter()
+                                .cloned()
+                                .chain(std::iter::once(environment.id.clone()))
+                                .collect(),
                             is_title: true,
                         },
                     );
                 }
-                collect_locations(&environment.children, parent_path, index);
+                parent_environment_ids.push(environment.id.clone());
+                collect_locations(
+                    &environment.children,
+                    parent_path,
+                    parent_environment_ids,
+                    index,
+                );
+                parent_environment_ids.pop();
             }
             Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
         }
@@ -93,10 +123,23 @@ pub(super) fn update_index_after_split(
         else {
             return;
         };
-        collect_locations_from(&environment.children, &location.block_path, 1, index);
+        collect_locations_from(
+            &environment.children,
+            &location.block_path,
+            &location.parent_environment_ids,
+            1,
+            index,
+        );
         let mut right_path = location.block_path.clone();
         right_path.push(0);
-        index.insert(right_id.clone(), ParagraphLocation::body(right_path));
+        index.insert(
+            right_id.clone(),
+            ParagraphLocation::body(
+                right_id.clone(),
+                right_path,
+                location.parent_environment_ids.clone(),
+            ),
+        );
     } else {
         let Some((&source_index, parent_path)) = location.block_path.split_last() else {
             return;
@@ -104,10 +147,23 @@ pub(super) fn update_index_after_split(
         let Some(siblings) = block_list_at_path(blocks, parent_path) else {
             return;
         };
-        collect_locations_from(siblings, parent_path, source_index + 2, index);
+        collect_locations_from(
+            siblings,
+            parent_path,
+            &location.parent_environment_ids,
+            source_index + 2,
+            index,
+        );
         let mut right_path = parent_path.to_vec();
         right_path.push(source_index + 1);
-        index.insert(right_id.clone(), ParagraphLocation::body(right_path));
+        index.insert(
+            right_id.clone(),
+            ParagraphLocation::body(
+                right_id.clone(),
+                right_path,
+                location.parent_environment_ids.clone(),
+            ),
+        );
     }
 }
 
@@ -117,51 +173,92 @@ pub(super) fn update_index_after_merge(
     left_id: &NodeId,
     right_id: &NodeId,
 ) {
-    let Some((left_index, parent_path)) = index
-        .get(left_id)
-        .and_then(|location| location.block_path.split_last())
-        .map(|(&left_index, parent_path)| (left_index, parent_path.to_vec()))
+    let Some((left_index, parent_path, parent_environment_ids)) =
+        index.get(left_id).and_then(|location| {
+            location
+                .block_path
+                .split_last()
+                .map(|(&left_index, parent_path)| {
+                    (
+                        left_index,
+                        parent_path.to_vec(),
+                        location.parent_environment_ids.clone(),
+                    )
+                })
+        })
     else {
         return;
     };
     let Some(siblings) = block_list_at_path(blocks, &parent_path) else {
         return;
     };
-    collect_locations_from(siblings, &parent_path, left_index + 1, index);
+    collect_locations_from(
+        siblings,
+        &parent_path,
+        &parent_environment_ids,
+        left_index + 1,
+        index,
+    );
     index.remove(right_id);
 }
 
 fn collect_locations_from(
     blocks: &[Block],
     parent_path: &[usize],
+    parent_environment_ids: &[NodeId],
     start_index: usize,
     index: &mut ParagraphIndex,
 ) {
     for (block_index, block) in blocks.iter().enumerate().skip(start_index) {
         let mut path = parent_path.to_vec();
         path.push(block_index);
-        collect_block_locations(block, &path, index);
+        collect_block_locations(block, &path, parent_environment_ids, index);
     }
 }
 
-fn collect_block_locations(block: &Block, path: &[usize], index: &mut ParagraphIndex) {
+fn collect_block_locations(
+    block: &Block,
+    path: &[usize],
+    parent_environment_ids: &[NodeId],
+    index: &mut ParagraphIndex,
+) {
     match block {
         Block::Paragraph(paragraph) => {
-            index.insert(paragraph.id.clone(), ParagraphLocation::body(path.to_vec()));
+            index.insert(
+                paragraph.id.clone(),
+                ParagraphLocation::body(
+                    paragraph.id.clone(),
+                    path.to_vec(),
+                    parent_environment_ids.to_vec(),
+                ),
+            );
         }
         Block::Environment(environment) => {
             if let Some(title) = &environment.title {
                 index.insert(
                     title.id.clone(),
                     ParagraphLocation {
+                        paragraph_id: title.id.clone(),
                         story: StoryId::EnvironmentTitle(environment.id.clone()),
                         block_path: path.to_vec(),
+                        parent_environment_ids: parent_environment_ids
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once(environment.id.clone()))
+                            .collect(),
                         is_title: true,
                     },
                 );
             }
             let mut child_path = path.to_vec();
-            collect_locations(&environment.children, &mut child_path, index);
+            let mut child_parent_ids = parent_environment_ids.to_vec();
+            child_parent_ids.push(environment.id.clone());
+            collect_locations(
+                &environment.children,
+                &mut child_path,
+                &mut child_parent_ids,
+                index,
+            );
         }
         Block::ExplicitBreak(_) | Block::Opaque(_) | Block::Equation(_) | Block::Align(_) => {}
     }
@@ -187,18 +284,41 @@ pub(super) fn paragraph_at_location<'a>(
     blocks: &'a [Block],
     location: &ParagraphLocation,
 ) -> Option<&'a Paragraph> {
+    paragraph_at_location_any(blocks, location)
+        .filter(|paragraph| paragraph.id == location.paragraph_id)
+}
+
+pub(super) fn paragraph_at_location_any<'a>(
+    blocks: &'a [Block],
+    location: &ParagraphLocation,
+) -> Option<&'a Paragraph> {
     let mut current = blocks;
+    let mut parent_environment_ids = Vec::new();
     for (depth, block_index) in location.block_path.iter().enumerate() {
         let block = current.get(*block_index)?;
         if depth + 1 == location.block_path.len() {
             return match (block, location.is_title) {
-                (Block::Paragraph(paragraph), false) => Some(paragraph),
-                (Block::Environment(environment), true) => environment.title.as_ref(),
+                (Block::Paragraph(paragraph), false) if location.story == StoryId::Body => {
+                    (location.parent_environment_ids == parent_environment_ids).then_some(paragraph)
+                }
+                (Block::Environment(environment), true)
+                    if location.story == StoryId::EnvironmentTitle(environment.id.clone())
+                        && environment.title.is_some() =>
+                {
+                    let mut expected_parent_ids = parent_environment_ids;
+                    expected_parent_ids.push(environment.id.clone());
+                    (location.parent_environment_ids == expected_parent_ids)
+                        .then_some(environment.title.as_ref())
+                        .flatten()
+                }
                 _ => None,
             };
         }
         current = match block {
-            Block::Environment(environment) => &environment.children,
+            Block::Environment(environment) => {
+                parent_environment_ids.push(environment.id.clone());
+                &environment.children
+            }
             _ => return None,
         };
     }
@@ -213,23 +333,68 @@ pub(super) fn paragraph_at_location_mut<'a>(
         blocks: &'a mut [Block],
         path: &[usize],
         is_title: bool,
+        paragraph_id: &NodeId,
+        story: &StoryId,
+        expected_parent_ids: &[NodeId],
+        parent_ids: &mut Vec<NodeId>,
     ) -> Option<&'a mut Paragraph> {
         let (block_index, rest) = path.split_first()?;
         let block = blocks.get_mut(*block_index)?;
         if rest.is_empty() {
             return match (block, is_title) {
-                (Block::Paragraph(paragraph), false) => Some(paragraph),
-                (Block::Environment(environment), true) => environment.title.as_mut(),
+                (Block::Paragraph(paragraph), false)
+                    if *story == StoryId::Body
+                        && paragraph.id == *paragraph_id
+                        && expected_parent_ids == parent_ids.as_slice() =>
+                {
+                    Some(paragraph)
+                }
+                (Block::Environment(environment), true)
+                    if *story == StoryId::EnvironmentTitle(environment.id.clone())
+                        && environment
+                            .title
+                            .as_ref()
+                            .is_some_and(|title| title.id == *paragraph_id)
+                        && expected_parent_ids
+                            == parent_ids
+                                .iter()
+                                .cloned()
+                                .chain(std::iter::once(environment.id.clone()))
+                                .collect::<Vec<_>>() =>
+                {
+                    environment.title.as_mut()
+                }
                 _ => None,
             };
         }
         match block {
-            Block::Environment(environment) => visit(&mut environment.children, rest, is_title),
+            Block::Environment(environment) => {
+                parent_ids.push(environment.id.clone());
+                let result = visit(
+                    &mut environment.children,
+                    rest,
+                    is_title,
+                    paragraph_id,
+                    story,
+                    expected_parent_ids,
+                    parent_ids,
+                );
+                parent_ids.pop();
+                result
+            }
             _ => None,
         }
     }
 
-    visit(blocks, &location.block_path, location.is_title)
+    visit(
+        blocks,
+        &location.block_path,
+        location.is_title,
+        &location.paragraph_id,
+        &location.story,
+        &location.parent_environment_ids,
+        &mut Vec::new(),
+    )
 }
 
 pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)> {
@@ -255,16 +420,23 @@ pub(super) fn compare_positions(
     left: &Pos,
     right: &Pos,
 ) -> Result<std::cmp::Ordering, EditError> {
-    let left_path = &index
+    let left_location = index
         .get(&left.paragraph_id)
-        .ok_or_else(|| EditError::UnknownParagraph(left.paragraph_id.to_string()))?
-        .block_path;
-    let right_path = &index
+        .ok_or_else(|| EditError::UnknownParagraph(left.paragraph_id.to_string()))?;
+    let right_location = index
         .get(&right.paragraph_id)
-        .ok_or_else(|| EditError::UnknownParagraph(right.paragraph_id.to_string()))?
-        .block_path;
-    Ok(left_path
-        .cmp(right_path)
+        .ok_or_else(|| EditError::UnknownParagraph(right.paragraph_id.to_string()))?;
+    if left_location.paragraph_id != left.paragraph_id
+        || right_location.paragraph_id != right.paragraph_id
+    {
+        return Err(EditError::InvalidPosition);
+    }
+    if left_location.story != left.story || right_location.story != right.story {
+        return Err(EditError::WrongStory);
+    }
+    Ok(left_location
+        .block_path
+        .cmp(&right_location.block_path)
         .then_with(|| left.offset.cmp(&right.offset))
         .then_with(|| match (left.affinity, right.affinity) {
             (Affinity::Upstream, Affinity::Downstream) => std::cmp::Ordering::Less,

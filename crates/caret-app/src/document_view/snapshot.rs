@@ -99,10 +99,31 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
         .block_boundary_exit()
         .map(|(environment_id, _)| environment_id);
     let focus = &session.selection().focus;
-    let mut stack = session.structure_index().at(&StructurePosition {
-        paragraph_id: focus.paragraph_id.clone(),
-        offset_utf8: focus.offset,
-    });
+    let active_block_id = session
+        .current_math_edit_target()
+        .and_then(|target| match target {
+            caret_engine::MathEditTarget::Block { block_id, .. } => Some(block_id.clone()),
+            caret_engine::MathEditTarget::Inline { .. } => None,
+        })
+        .or_else(|| session.block_boundary_exit().map(|(id, _)| id));
+    if active_block_id
+        .as_ref()
+        .is_some_and(|block_id| session.structure_index().get(block_id).is_none())
+    {
+        return Value::Array(Vec::new());
+    }
+    let mut stack = match active_block_id.as_ref() {
+        Some(block_id) => session
+            .structure_index()
+            .stack_for_id(block_id)
+            .into_iter()
+            .filter(|entry| &entry.id != block_id)
+            .collect(),
+        None => session.structure_index().at(&StructurePosition {
+            paragraph_id: focus.paragraph_id.clone(),
+            offset_utf8: focus.offset,
+        }),
+    };
     if let Some(exited_environment_id) = exited_environment_id {
         stack.retain(|entry| entry.id != exited_environment_id);
         if !stack.iter().any(|entry| entry.kind.is_block_environment()) {
@@ -111,15 +132,10 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
     }
     let has_block_environment = stack.iter().any(|entry| entry.kind.is_block_environment());
     let mut entries = Vec::with_capacity(stack.len());
-    let mut previous_kind = None;
     for entry in stack {
         if has_block_environment && entry.kind.class() == StructureClass::Paragraph {
             continue;
         }
-        if previous_kind == Some(entry.kind) {
-            continue;
-        }
-        previous_kind = Some(entry.kind);
         let (kind, level) = match entry.kind {
             StructureKind::Paragraph => ("paragraph", None),
             StructureKind::Heading { level } => ("heading", Some(level)),
@@ -134,10 +150,8 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
         }
         entries.push(value);
     }
-    if let Some(caret_engine::MathEdit {
-        target: caret_engine::MathEditTarget::Block { block_id, align },
-        ..
-    }) = session.math_edit()
+    if let Some(caret_engine::MathEditTarget::Block { block_id, align }) =
+        session.current_math_edit_target()
     {
         let kind = if *align { "align" } else { "equation" };
         if !entries
@@ -160,17 +174,20 @@ fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeI
     ) {
         return None;
     }
-    let exited_environment_id = session
-        .block_boundary_exit()
-        .map(|(environment_id, _)| environment_id);
+    let active_block_id = session.block_boundary_exit().map(|(id, _)| id);
     let focus = &session.selection().focus;
-    let mut stack = session.structure_index().at(&StructurePosition {
-        paragraph_id: focus.paragraph_id.clone(),
-        offset_utf8: focus.offset,
-    });
-    if let Some(exited_environment_id) = exited_environment_id {
-        stack.retain(|entry| entry.id != exited_environment_id);
-    }
+    let stack = match active_block_id.as_ref() {
+        Some(block_id) => session
+            .structure_index()
+            .stack_for_id(block_id)
+            .into_iter()
+            .filter(|entry| &entry.id != block_id)
+            .collect(),
+        None => session.structure_index().at(&StructurePosition {
+            paragraph_id: focus.paragraph_id.clone(),
+            offset_utf8: focus.offset,
+        }),
+    };
     stack
         .iter()
         .rev()

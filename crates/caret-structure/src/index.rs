@@ -79,10 +79,9 @@ pub struct IndexedStructure {
     pub range: StructureRange,
 }
 
-/// 由文档树派生的只读结构索引。
+/// 由文档树派生的只读语义结构索引。
 ///
-/// 建立索引需要遍历文档块；位置查询通过稳定 ID 查找段落，再沿父链解析结构，
-/// 时间复杂度与嵌套深度相关，不随文档总段落数线性增长。
+/// 父链表达标题大纲语义；需要物理块父链与真实同级 slot 时使用 `find_document_node`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StructureIndex {
     structures: Vec<IndexedStructure>,
@@ -144,8 +143,27 @@ impl StructureIndex {
             return Vec::new();
         }
 
+        self.stack_for_index(paragraph_index, false)
+    }
+
+    /// 返回指定结构 ID 的语义祖先栈，可用于没有段落停靠点的活动块。
+    pub fn stack_for_id(&self, id: &NodeId) -> Vec<&IndexedStructure> {
+        let Some(&index) = self.structure_lookup.get(id) else {
+            return Vec::new();
+        };
+        self.stack_for_index(index, true)
+    }
+
+    fn stack_for_index(&self, index: usize, include_self: bool) -> Vec<&IndexedStructure> {
+        let Some(entry) = self.structures.get(index) else {
+            return Vec::new();
+        };
         let mut stack_indices = Vec::new();
-        let mut parent_index = paragraph.parent_index;
+        let mut parent_index = if include_self {
+            Some(index)
+        } else {
+            entry.parent_index
+        };
         while let Some(index) = parent_index {
             let Some(parent) = self.structures.get(index) else {
                 return Vec::new();
@@ -158,7 +176,9 @@ impl StructureIndex {
             .into_iter()
             .filter_map(|index| self.structures.get(index))
             .collect::<Vec<_>>();
-        stack.push(paragraph);
+        if !include_self {
+            stack.push(entry);
+        }
         stack
     }
 

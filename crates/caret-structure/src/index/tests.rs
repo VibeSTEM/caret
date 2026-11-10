@@ -1,7 +1,11 @@
 //! 验证结构索引的文档顺序、嵌套范围和标题派生范围。
 
 use super::*;
-use caret_doc::{BlockEnvironment, BlockEnvironmentKind, Document, NodeId, Paragraph, Run};
+use crate::{DocumentNodeKind, compare_document_nodes, find_document_node};
+use caret_doc::{
+    BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment, InlineEnvironmentKind,
+    InlineMath, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
+};
 use std::collections::BTreeMap;
 
 fn paragraph(text: &str, level: Option<u64>) -> Paragraph {
@@ -151,6 +155,188 @@ fn environment_title_is_a_navigation_paragraph_owned_by_its_environment() {
     assert_eq!(stack.len(), 2);
     assert_eq!(stack[0].id, environment_id);
     assert_eq!(stack[1].id, title_id);
+}
+
+#[test]
+fn physical_locations_keep_real_slots_and_order_titles_before_children() {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    let title = paragraph("title", None);
+    let title_id = title.id.clone();
+    let child = paragraph("child", None);
+    let child_id = child.id.clone();
+    let after = paragraph("after", None);
+    let after_id = after.id.clone();
+    let equation_id = NodeId::generate();
+    document.body = vec![
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(title),
+            children: vec![
+                Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+                Block::Opaque(caret_doc::OpaqueNode {
+                    raw: serde_json::json!({"type": "future"}),
+                }),
+                Block::Equation(caret_doc::Equation {
+                    id: equation_id.clone(),
+                    math_tree: caret_doc::MathTree {
+                        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                        root: caret_doc::MathFlow {
+                            id: NodeId::generate(),
+                            content: Vec::new(),
+                            extra: BTreeMap::new(),
+                        },
+                        extra: BTreeMap::new(),
+                    },
+                    extra: BTreeMap::new(),
+                }),
+                Block::Paragraph(child),
+            ],
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+
+    let Some(title_location) = find_document_node(&document, &title_id) else {
+        panic!("title is indexed");
+    };
+    let Some(equation_location) = find_document_node(&document, &equation_id) else {
+        panic!("equation is indexed");
+    };
+    let Some(child_location) = find_document_node(&document, &child_id) else {
+        panic!("paragraph is indexed");
+    };
+
+    assert_eq!(title_location.kind, DocumentNodeKind::EnvironmentTitle);
+    assert_eq!(
+        title_location.parent_environment_ids,
+        vec![environment_id.clone()]
+    );
+    assert_eq!(title_location.sibling_index, None);
+    assert_eq!(
+        equation_location.parent_environment_ids,
+        vec![environment_id.clone()]
+    );
+    assert_eq!(equation_location.sibling_index, Some(2));
+    assert_eq!(child_location.sibling_index, Some(3));
+    assert_eq!(
+        compare_document_nodes(&document, &title_id, &equation_id),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_nodes(&document, &equation_id, &child_id),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_nodes(&document, &child_id, &after_id),
+        Some(std::cmp::Ordering::Less)
+    );
+}
+
+#[test]
+fn semantic_stack_can_be_resolved_from_a_block_without_paragraph_anchor() {
+    let mut document = Document::blank();
+    let section_id = NodeId::generate();
+    let equation_id = NodeId::generate();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: section_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: vec![Block::Equation(caret_doc::Equation {
+            id: equation_id.clone(),
+            math_tree: caret_doc::MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: caret_doc::MathFlow {
+                    id: NodeId::generate(),
+                    content: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+
+    let index = StructureIndex::build(&document);
+    let ids = index
+        .stack_for_id(&equation_id)
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![section_id, equation_id]);
+}
+
+#[test]
+fn inline_math_and_format_environments_share_the_paragraph_order() {
+    let paragraph_id = NodeId::generate();
+    let inline_environment_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let inline_paragraph = Paragraph {
+        id: paragraph_id.clone(),
+        inlines: vec![ParagraphContent::Environment(InlineEnvironment {
+            id: inline_environment_id.clone(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![ParagraphContent::Math(InlineMath {
+                id: math_id.clone(),
+                math_tree: MathTree {
+                    schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                    root: MathFlow {
+                        id: NodeId::generate(),
+                        content: Vec::new(),
+                        extra: BTreeMap::new(),
+                    },
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        ..Paragraph::empty(paragraph_id.clone())
+    };
+    let after = paragraph("after", None);
+    let after_id = after.id.clone();
+    let document = Document {
+        body: vec![Block::Paragraph(inline_paragraph), Block::Paragraph(after)],
+        ..Document::blank()
+    };
+
+    let Some(environment_location) = find_document_node(&document, &inline_environment_id) else {
+        panic!("inline environment is indexed");
+    };
+    let Some(math_location) = find_document_node(&document, &math_id) else {
+        panic!("inline math is indexed");
+    };
+    assert_eq!(
+        environment_location.kind,
+        DocumentNodeKind::InlineEnvironment
+    );
+    assert_eq!(math_location.kind, DocumentNodeKind::InlineMath);
+    assert_eq!(math_location.paragraph_id, Some(paragraph_id.clone()));
+    assert!(!math_location.is_title);
+    assert_eq!(
+        math_location.parent_inline_environment_ids,
+        vec![inline_environment_id.clone()]
+    );
+    assert_eq!(
+        compare_document_nodes(&document, &paragraph_id, &inline_environment_id),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_nodes(&document, &inline_environment_id, &math_id),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_nodes(&document, &math_id, &after_id),
+        Some(std::cmp::Ordering::Less)
+    );
 }
 
 #[test]

@@ -26,6 +26,84 @@ fn text_flow(run: Run) -> ParagraphContent {
 }
 
 #[test]
+fn paragraph_locator_rejects_a_stale_path_that_points_to_another_paragraph() {
+    let first = Paragraph::empty(NodeId::generate());
+    let first_id = first.id.clone();
+    let second = Paragraph::empty(NodeId::generate());
+    let second_id = second.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![Block::Paragraph(first), Block::Paragraph(second)],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let Some(second_path) = session
+        .paragraph_index
+        .get(&second_id)
+        .map(|location| location.block_path.clone())
+    else {
+        panic!("second paragraph location exists");
+    };
+    let Some(first_location) = session.paragraph_index.get_mut(&first_id) else {
+        panic!("first paragraph location exists");
+    };
+    first_location.block_path = second_path;
+
+    assert!(session.paragraph_for(&session.selection().focus).is_err());
+}
+
+#[test]
+fn paragraph_locator_rejects_same_id_and_slot_after_parent_environment_changes() {
+    let paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    let first_environment_id = NodeId::generate();
+    let second_environment_id = NodeId::generate();
+    let first_environment = Block::Environment(BlockEnvironment {
+        id: first_environment_id.clone(),
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: vec![Block::Paragraph(paragraph)],
+        extra: Default::default(),
+    });
+    let second_environment = Block::Environment(BlockEnvironment {
+        id: second_environment_id,
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: Vec::new(),
+        extra: Default::default(),
+    });
+    let mut session = Session::new(Document {
+        body: vec![first_environment, second_environment],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+
+    let (first_block, rest) = session.document.body.split_at_mut(1);
+    let Block::Environment(first) = &mut first_block[0] else {
+        panic!("first block should be an environment");
+    };
+    let Block::Environment(second) = &mut rest[0] else {
+        panic!("second block should be an environment");
+    };
+    let Some(moved_paragraph) = first.children.pop() else {
+        panic!("paragraph exists");
+    };
+    second.children.push(moved_paragraph);
+    session.document.body.swap(0, 1);
+
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert!(session.paragraph_for(&position).is_err());
+}
+
+#[test]
 fn dollar_text_enters_inline_math_but_remains_query_text_in_command_line() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));

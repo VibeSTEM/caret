@@ -779,6 +779,56 @@ fn unknown_math_projection_names_remain_on_unrelated_nodes()
 }
 
 #[test]
+fn retained_style_and_media_fields_survive_open_save_reopen()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut envelope = blank_envelope()?;
+    envelope["document"]["globalSettings"]["defaultStyles"] =
+        json!({"paragraph": {"lineSpacing": {"kind": "multiple", "percent": 125}}});
+    envelope["document"]["globalSettings"]["formatOverrides"] =
+        json!({"heading": {"fontWeight": 600}});
+    envelope["document"]["globalSettings"]["theme"] = json!({
+        "formatVersion": 1,
+        "namedStyles": {"body": {"fontFamily": "Caret Test"}},
+        "environmentTemplates": {}
+    });
+    envelope["requiredFeatures"]
+        .as_array_mut()
+        .ok_or("requiredFeatures should be an array")?
+        .push(json!("caret.theme.snapshot"));
+    envelope["media"] = json!([{
+        "id": "asset-1",
+        "mediaType": "image/png",
+        "data": "AQID",
+        "vendorMetadata": {"keep": true}
+    }]);
+
+    let OpenedDocument::Editable(opened) = open(envelope.to_string().as_bytes())? else {
+        panic!("known style and media fields should remain editable");
+    };
+    let saved = opened.to_bytes()?;
+    let OpenedDocument::Editable(reopened) = open(&saved)? else {
+        panic!("saved document should reopen as editable");
+    };
+    let round_trip: Value = serde_json::from_slice(&reopened.to_bytes()?)?;
+
+    assert_eq!(
+        round_trip["document"]["globalSettings"]["defaultStyles"]["paragraph"]["lineSpacing"]["percent"],
+        125
+    );
+    assert_eq!(
+        round_trip["document"]["globalSettings"]["formatOverrides"]["heading"]["fontWeight"],
+        600
+    );
+    assert_eq!(
+        round_trip["document"]["globalSettings"]["theme"]["namedStyles"]["body"]["fontFamily"],
+        "Caret Test"
+    );
+    assert_eq!(round_trip["media"][0]["data"], "AQID");
+    assert_eq!(round_trip["media"][0]["vendorMetadata"]["keep"], true);
+    Ok(())
+}
+
+#[test]
 fn math_nodes_require_their_declared_capability() -> Result<(), Box<dyn std::error::Error>> {
     let cases = [
         (

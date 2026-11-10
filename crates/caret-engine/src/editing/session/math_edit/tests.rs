@@ -60,6 +60,31 @@ fn source_position_projection(
         .unwrap_or_else(|| panic!("source position is available only in source-edit mode"))
 }
 
+#[test]
+fn block_path_lookup_rejects_inline_host_ids() -> Result<(), EditError> {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("", caret_math::MathInputKind::Inline)
+            .map_err(|_| EditError::InvalidMath("empty inline fixture failed".to_owned()))?
+    else {
+        return Err(EditError::InvalidMath("expected inline math".to_owned()));
+    };
+    let inline_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines.push(ParagraphContent::Math(InlineMath {
+        id: inline_id.clone(),
+        math_tree,
+        extra: Default::default(),
+    }));
+    let blocks = vec![Block::Paragraph(paragraph)];
+
+    assert_eq!(
+        caret_structure::find_block_node(&blocks, &inline_id).map(|location| location.kind),
+        Some(caret_structure::DocumentNodeKind::InlineMath)
+    );
+    assert!(find_block_path(&blocks, &inline_id).is_none());
+    Ok(())
+}
+
 fn math_content_range_at(
     edit: &MathEdit,
     path: &[caret_doc::MathPathStep],
