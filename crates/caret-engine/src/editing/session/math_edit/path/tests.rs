@@ -107,6 +107,57 @@ fn text_position_order_validates_shared_flow_grapheme_boundaries() {
 }
 
 #[test]
+fn text_position_order_compares_distinct_flows_in_the_same_text_island() {
+    let mut tree = parsed_tree(r"\text{a}");
+    tree.root.content = vec![text_content("a"), text_content("b")];
+    let first_path = MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(0)], None);
+    let second_path = MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(1)], None);
+    let first_start =
+        MathTextPosition::new(first_path.clone(), 0, MathPositionAffinity::Downstream);
+    let first_end = MathTextPosition::new(first_path, 1, MathPositionAffinity::Upstream);
+    let second_start =
+        MathTextPosition::new(second_path.clone(), 0, MathPositionAffinity::Downstream);
+    let second_end = MathTextPosition::new(second_path, 1, MathPositionAffinity::Upstream);
+
+    assert_eq!(
+        first_start.compare_in_same_text_island(&second_end, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        first_end.compare_in_same_text_island(&second_start, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        second_end.compare_in_same_text_island(&first_start, &tree),
+        Some(std::cmp::Ordering::Greater)
+    );
+}
+
+#[test]
+fn text_position_order_keeps_empty_flows_between_neighboring_text_positions() {
+    let mut tree = parsed_tree(r"\text{a}");
+    tree.root.content = vec![text_content("a"), text_content(""), text_content("b")];
+    let path = |index| MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(index)], None);
+    let previous_end = MathTextPosition::new(path(0), 1, MathPositionAffinity::Upstream);
+    let empty_upstream = MathTextPosition::new(path(1), 0, MathPositionAffinity::Upstream);
+    let empty_downstream = MathTextPosition::new(path(1), 0, MathPositionAffinity::Downstream);
+    let next_start = MathTextPosition::new(path(2), 0, MathPositionAffinity::Downstream);
+
+    assert_eq!(
+        previous_end.compare_in_same_text_island(&empty_upstream, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        empty_upstream.compare_in_same_text_island(&empty_downstream, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        empty_downstream.compare_in_same_text_island(&next_start, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+}
+
+#[test]
 fn text_position_order_rejects_grapheme_split_across_environment_paths() {
     let mut tree = parsed_tree(r"\text{a}");
     tree.root.content = vec![

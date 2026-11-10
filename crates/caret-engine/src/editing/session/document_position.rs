@@ -35,7 +35,7 @@ impl Session {
                     DocumentCaretPosition::Host(_) => (host, true),
                     DocumentCaretPosition::Text(_) => (host, false),
                 };
-                let order = self.compare_text_with_inline_host(position, host_order)?;
+                let order = self.compare_text_with_host(position, host_order)?;
                 Ok(if reversed { order.reverse() } else { order })
             }
             (DocumentCaretPosition::Host(left), DocumentCaretPosition::Host(right)) => {

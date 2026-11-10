@@ -16,6 +16,18 @@ pub enum MathPositionAffinity {
     Downstream,
 }
 
+/// 返回数学位置亲和性的统一顺序。
+pub fn compare_math_position_affinity(
+    left: MathPositionAffinity,
+    right: MathPositionAffinity,
+) -> Ordering {
+    match (left, right) {
+        (MathPositionAffinity::Upstream, MathPositionAffinity::Downstream) => Ordering::Less,
+        (MathPositionAffinity::Downstream, MathPositionAffinity::Upstream) => Ordering::Greater,
+        _ => Ordering::Equal,
+    }
+}
+
 /// 标识位置所处的公式宿主；Align cell 使用行与单元格的稳定节点标识。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathPositionHost {
@@ -97,17 +109,7 @@ impl MathTreePosition {
         self.resolve(tree)?;
         other.resolve(tree)?;
         let ordering = math_tree_order_key(self).cmp(&math_tree_order_key(other));
-        Ok(
-            ordering.then_with(|| match (self.affinity, other.affinity) {
-                (MathPositionAffinity::Upstream, MathPositionAffinity::Downstream) => {
-                    Ordering::Less
-                }
-                (MathPositionAffinity::Downstream, MathPositionAffinity::Upstream) => {
-                    Ordering::Greater
-                }
-                _ => Ordering::Equal,
-            }),
-        )
+        Ok(ordering.then_with(|| compare_math_position_affinity(self.affinity, other.affinity)))
     }
 
     /// 将完整的 TextFlow 路径解析为所属 MathFlow 与文本内容索引。

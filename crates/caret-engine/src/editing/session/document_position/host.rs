@@ -7,7 +7,8 @@ mod inline;
 
 use super::super::{
     Affinity, EditError, HostCaretKind, HostCaretLocalPosition, HostCaretPosition,
-    MathCaretCoordinate, MathEditTarget, MathTextPosition, MathTreePosition, Pos, Session, TextMap,
+    MathCaretCoordinate, MathCaretLocalPosition, MathEditTarget, MathTextPosition,
+    MathTreePosition, Pos, Session, TextMap,
 };
 use crate::editing::paragraph_ops::compare_positions;
 use crate::editing::position::compare_affinity;
@@ -18,6 +19,26 @@ use caret_structure::{
 use std::cmp::Ordering;
 
 impl Session {
+    pub(in crate::editing::session::document_position) fn compare_text_with_host(
+        &self,
+        text: &Pos,
+        host: &HostCaretPosition<HostCaretLocalPosition>,
+    ) -> Result<Ordering, EditError> {
+        if let HostCaretPosition::Inside {
+            host_id,
+            local: HostCaretLocalPosition::Math(math),
+            ..
+        } = host
+            && matches!(math.target, MathEditTarget::Block { .. })
+        {
+            self.validate_host_caret(host)?;
+            return self
+                .compare_block_math_to_text(host_id, text)
+                .map(Ordering::reverse);
+        }
+        self.compare_text_with_inline_host(text, host)
+    }
+
     pub(super) fn compare_host_carets(
         &self,
         left: &HostCaretPosition<HostCaretLocalPosition>,
@@ -106,6 +127,18 @@ impl Session {
             }
             (
                 HostCaretPosition::Inside {
+                    host_id: left_id,
+                    local: HostCaretLocalPosition::Math(_),
+                    ..
+                },
+                HostCaretPosition::Inside {
+                    host_id: right_id,
+                    local: HostCaretLocalPosition::Math(_),
+                    ..
+                },
+            ) => self.compare_math_host_ranges(left_id, right_id),
+            (
+                HostCaretPosition::Inside {
                     local: HostCaretLocalPosition::Math(math),
                     ..
                 },
@@ -127,6 +160,52 @@ impl Session {
                 },
             ) if matches!(math.target, MathEditTarget::Inline { .. }) => self
                 .compare_inline_math_to_paragraph(math, paragraph)
+                .map(Ordering::reverse),
+            (
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+                HostCaretPosition::Inside {
+                    local: HostCaretLocalPosition::Paragraph(paragraph),
+                    ..
+                },
+            ) if matches!(math.target, MathEditTarget::Block { .. }) => {
+                self.compare_block_math_to_text(host_id, paragraph)
+            }
+            (
+                HostCaretPosition::Inside {
+                    local: HostCaretLocalPosition::Paragraph(paragraph),
+                    ..
+                },
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+            ) if matches!(math.target, MathEditTarget::Block { .. }) => self
+                .compare_block_math_to_text(host_id, paragraph)
+                .map(Ordering::reverse),
+            (
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+                outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
+            ) if matches!(math.target, MathEditTarget::Block { .. }) => {
+                self.compare_block_math_to_host_edge(host_id, outside)
+            }
+            (
+                outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+            ) if matches!(math.target, MathEditTarget::Block { .. }) => self
+                .compare_block_math_to_host_edge(host_id, outside)
                 .map(Ordering::reverse),
             (
                 HostCaretPosition::Before {
@@ -252,6 +331,104 @@ impl Session {
         Err(EditError::InvalidPosition)
     }
 
+    fn compare_math_host_ranges(
+        &self,
+        left_host_id: &NodeId,
+        right_host_id: &NodeId,
+    ) -> Result<Ordering, EditError> {
+        let left_after_to_right_before = compare_document_node_edges(
+            &self.document,
+            left_host_id,
+            DocumentNodeEdge::After,
+            right_host_id,
+            DocumentNodeEdge::Before,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if left_after_to_right_before != Ordering::Greater {
+            return Ok(Ordering::Less);
+        }
+        let right_after_to_left_before = compare_document_node_edges(
+            &self.document,
+            right_host_id,
+            DocumentNodeEdge::After,
+            left_host_id,
+            DocumentNodeEdge::Before,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if right_after_to_left_before != Ordering::Greater {
+            return Ok(Ordering::Greater);
+        }
+        Err(EditError::InvalidPosition)
+    }
+
+    fn compare_block_math_to_text(
+        &self,
+        block_id: &NodeId,
+        text: &Pos,
+    ) -> Result<Ordering, EditError> {
+        let map = self.text_map_for_caret(text)?;
+        map.validate_pos(text)?;
+        let block_after_to_text_start = compare_document_node_edges(
+            &self.document,
+            block_id,
+            DocumentNodeEdge::After,
+            &text.paragraph_id,
+            DocumentNodeEdge::Before,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if block_after_to_text_start != Ordering::Greater {
+            return Ok(Ordering::Less);
+        }
+        let block_before_to_text_end = compare_document_node_edges(
+            &self.document,
+            block_id,
+            DocumentNodeEdge::Before,
+            &text.paragraph_id,
+            DocumentNodeEdge::After,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if block_before_to_text_end != Ordering::Less {
+            return Ok(Ordering::Greater);
+        }
+        Err(EditError::InvalidPosition)
+    }
+
+    fn compare_block_math_to_host_edge(
+        &self,
+        block_id: &NodeId,
+        outside: &HostCaretPosition<HostCaretLocalPosition>,
+    ) -> Result<Ordering, EditError> {
+        let external_id = outside.host_id();
+        let external_edge = match outside {
+            HostCaretPosition::Before { .. } => DocumentNodeEdge::Before,
+            HostCaretPosition::After { .. } => DocumentNodeEdge::After,
+            HostCaretPosition::Inside { .. } => return Err(EditError::InvalidPosition),
+        };
+        let block_after_to_external = compare_document_node_edges(
+            &self.document,
+            block_id,
+            DocumentNodeEdge::After,
+            external_id,
+            external_edge,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if block_after_to_external != Ordering::Greater {
+            return Ok(Ordering::Less);
+        }
+        let block_before_to_external = compare_document_node_edges(
+            &self.document,
+            block_id,
+            DocumentNodeEdge::Before,
+            external_id,
+            external_edge,
+        )
+        .ok_or(EditError::InvalidPosition)?;
+        if block_before_to_external != Ordering::Less {
+            return Ok(Ordering::Greater);
+        }
+        Err(EditError::InvalidPosition)
+    }
+
     fn ensure_block_edge_mapping_is_unambiguous(
         &self,
         host_id: &NodeId,
@@ -278,9 +455,39 @@ impl Session {
                 compare_positions(&self.document.body, &self.paragraph_index, left, right)
             }
             (HostCaretLocalPosition::Math(left), HostCaretLocalPosition::Math(right)) => {
-                self.compare_math_local(left, right)
+                if !matches!(&left.target, MathEditTarget::Block { align: true, .. }) {
+                    return self.compare_math_local(left, right);
+                }
+                if left.target != right.target {
+                    return Err(EditError::InvalidPosition);
+                }
+                let left_cell = self.align_cell_for_math_coordinate(left)?;
+                let right_cell = self.align_cell_for_math_coordinate(right)?;
+                match (left_cell, right_cell) {
+                    (Some(left_cell), Some(right_cell)) if left_cell != right_cell => {
+                        Ok(left_cell.cmp(&right_cell))
+                    }
+                    (Some(_), Some(_)) | (None, None) => self.compare_math_local(left, right),
+                    _ => Err(EditError::InvalidPosition),
+                }
             }
             _ => Err(EditError::InvalidPosition),
+        }
+    }
+
+    fn align_cell_for_math_coordinate(
+        &self,
+        local: &MathCaretLocalPosition,
+    ) -> Result<Option<(usize, usize)>, EditError> {
+        match &local.coordinate {
+            MathCaretCoordinate::SourceUtf8 { .. } => Ok(None),
+            MathCaretCoordinate::TreeBoundary { host, .. } => {
+                self.align_cell_for_target_and_host(&local.target, host)
+            }
+            MathCaretCoordinate::TextFlowUtf8 { path, .. } => {
+                self.math_position_host_for_text_path(path, &local.target)?;
+                Ok(path.align_cell())
+            }
         }
     }
 

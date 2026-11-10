@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::math_edit::MathTextFlowBoundary;
+use super::super::math_edit::compare_math_position_affinity;
 use super::super::{
     EditError, MathCaretCoordinate, MathCaretLocalPosition, MathEdit, MathEditBranch,
-    MathEditTarget, MathPositionHost, MathTextFlowPath, MathTextPosition, MathTreePosition,
-    Session,
+    MathEditTarget, MathPositionAffinity, MathPositionHost, MathTextFlowPath, MathTextPosition,
+    MathTreePosition, Session,
 };
 use crate::editing::grapheme::GraphemeMap;
 use std::cmp::Ordering;
@@ -117,17 +119,161 @@ impl Session {
                     offset: right_offset,
                     affinity: right_affinity,
                 },
-            ) if left_path == right_path => {
-                let (tree, _) = self.math_tree_for_caret_from_path(left_path, &left.target)?;
+            ) => {
+                let (tree, left_cell) =
+                    self.math_tree_for_caret_from_path(left_path, &left.target)?;
+                if self
+                    .math_tree_for_caret_from_path(right_path, &right.target)?
+                    .1
+                    != left_cell
+                {
+                    return Err(EditError::InvalidPosition);
+                }
                 MathTextPosition::new(left_path.clone(), *left_offset, *left_affinity)
-                    .compare_in_same_flow(
+                    .compare_in_same_text_island(
                         &MathTextPosition::new(right_path.clone(), *right_offset, *right_affinity),
                         tree,
                     )
                     .ok_or(EditError::InvalidPosition)
             }
+            (
+                MathCaretCoordinate::TreeBoundary {
+                    host,
+                    path,
+                    index,
+                    affinity,
+                },
+                MathCaretCoordinate::TextFlowUtf8 {
+                    path: text_path,
+                    offset,
+                    affinity: text_affinity,
+                },
+            ) => self.compare_tree_to_math_text(
+                &MathTreePosition {
+                    host: host.clone(),
+                    path: path.clone(),
+                    offset: *index,
+                    affinity: *affinity,
+                },
+                text_path,
+                *offset,
+                *text_affinity,
+                &left.target,
+            ),
+            (
+                MathCaretCoordinate::TextFlowUtf8 {
+                    path: text_path,
+                    offset,
+                    affinity: text_affinity,
+                },
+                MathCaretCoordinate::TreeBoundary {
+                    host,
+                    path,
+                    index,
+                    affinity,
+                },
+            ) => self
+                .compare_tree_to_math_text(
+                    &MathTreePosition {
+                        host: host.clone(),
+                        path: path.clone(),
+                        offset: *index,
+                        affinity: *affinity,
+                    },
+                    text_path,
+                    *offset,
+                    *text_affinity,
+                    &left.target,
+                )
+                .map(Ordering::reverse),
             _ => Err(EditError::InvalidPosition),
         }
+    }
+
+    fn compare_tree_to_math_text(
+        &self,
+        tree_position: &MathTreePosition,
+        text_path: &MathTextFlowPath,
+        text_offset: usize,
+        text_affinity: MathPositionAffinity,
+        target: &MathEditTarget,
+    ) -> Result<Ordering, EditError> {
+        let (tree, align_cell) = self.math_tree_for_caret_from_path(text_path, target)?;
+        let host = self.math_position_host_for_text_path(text_path, target)?;
+        let start = MathTreePosition::from_text_flow_boundary(
+            tree,
+            host.clone(),
+            text_path.steps(),
+            align_cell,
+            MathTextFlowBoundary::Start,
+            text_affinity,
+        )
+        .map_err(|_| EditError::InvalidPosition)?;
+        let end = MathTreePosition::from_text_flow_boundary(
+            tree,
+            host,
+            text_path.steps(),
+            align_cell,
+            MathTextFlowBoundary::End,
+            text_affinity,
+        )
+        .map_err(|_| EditError::InvalidPosition)?;
+        let text_len = super::super::math_edit::math_text_flow_display_len(tree, text_path)
+            .ok_or(EditError::InvalidPosition)?;
+        if tree_position.path == start.path && tree_position.offset == start.offset {
+            if text_offset == 0
+                && super::super::math_edit::math_text_flow_boundary_is_shared(
+                    tree,
+                    text_path,
+                    MathTextFlowBoundary::Start,
+                )
+                .ok_or(EditError::InvalidPosition)?
+            {
+                return Err(EditError::InvalidPosition);
+            }
+            if text_len == 0 && text_affinity == MathPositionAffinity::Downstream {
+                return Ok(Ordering::Less);
+            }
+            return Ok(if text_offset == 0 {
+                compare_math_position_affinity(tree_position.affinity, text_affinity)
+            } else {
+                Ordering::Less
+            });
+        }
+        if tree_position.path == end.path && tree_position.offset == end.offset {
+            if text_offset == text_len
+                && super::super::math_edit::math_text_flow_boundary_is_shared(
+                    tree,
+                    text_path,
+                    MathTextFlowBoundary::End,
+                )
+                .ok_or(EditError::InvalidPosition)?
+            {
+                return Err(EditError::InvalidPosition);
+            }
+            if text_len == 0 && text_affinity == MathPositionAffinity::Upstream {
+                return Ok(Ordering::Greater);
+            }
+            return Ok(if text_offset == text_len {
+                compare_math_position_affinity(tree_position.affinity, text_affinity)
+            } else {
+                Ordering::Greater
+            });
+        }
+
+        let before = tree_position
+            .compare_in_tree(&start, tree)
+            .map_err(|_| EditError::InvalidPosition)?;
+        if before == Ordering::Less {
+            return Ok(Ordering::Less);
+        }
+        let after = tree_position
+            .compare_in_tree(&end, tree)
+            .map_err(|_| EditError::InvalidPosition)?;
+        if after == Ordering::Greater {
+            return Ok(Ordering::Greater);
+        }
+        Err(EditError::InvalidPosition)
     }
 
     pub(super) fn math_tree_for_caret<'a>(

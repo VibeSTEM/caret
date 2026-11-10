@@ -55,6 +55,7 @@ pub use tree_position::{
     MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTreePosition,
     MathTreePositionError,
 };
+pub(super) use tree_position::{MathTextFlowBoundary, compare_math_position_affinity};
 use tree_position::{MathTreeCaretMove, advance_math_tree_position, child_sequence_path};
 
 enum MathTextCaretStep {
@@ -64,6 +65,45 @@ enum MathTextCaretStep {
 }
 
 type MathTreeTextBoundary<'a> = (&'a MathTree, MathTreePosition, Option<(usize, usize)>);
+
+pub(super) fn math_text_flow_display_len(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+) -> Option<usize> {
+    path.resolve_structurally(tree)?
+        .runs
+        .iter()
+        .try_fold(0usize, |length, run| length.checked_add(run.text.len()))
+}
+
+pub(super) fn math_text_flow_boundary_is_shared(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    boundary: MathTextFlowBoundary,
+) -> Option<bool> {
+    let island = path::contiguous_text_flow_text(tree, path)?;
+    let (sequence_path, text_index) =
+        MathTreePosition::sequence_boundary_from_text_path(path.steps()).ok()?;
+    let boundary_index = match boundary {
+        MathTextFlowBoundary::Start => text_index,
+        MathTextFlowBoundary::End => text_index.checked_add(1)?,
+    };
+    let mut matches = 0;
+    for candidate in &island.paths {
+        let (candidate_path, candidate_index) =
+            MathTreePosition::sequence_boundary_from_text_path(candidate.steps()).ok()?;
+        if candidate_path == sequence_path && candidate_index == boundary_index {
+            matches += 1;
+        }
+        if candidate_path == sequence_path && candidate_index.checked_add(1)? == boundary_index {
+            matches += 1;
+        }
+        if matches > 1 {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
 
 struct DisplayMathInsertPlan {
     parent_environment_ids: Vec<NodeId>,
