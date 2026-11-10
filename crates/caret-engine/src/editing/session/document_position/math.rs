@@ -130,7 +130,7 @@ impl Session {
                     return Err(EditError::InvalidPosition);
                 }
                 MathTextPosition::new(left_path.clone(), *left_offset, *left_affinity)
-                    .compare_in_same_text_island(
+                    .compare_in_same_sequence(
                         &MathTextPosition::new(right_path.clone(), *right_offset, *right_affinity),
                         tree,
                     )

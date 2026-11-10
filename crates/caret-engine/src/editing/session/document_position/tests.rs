@@ -528,6 +528,304 @@ fn session_caret_comparison_orders_distinct_math_text_flows_in_one_island() {
 }
 
 #[test]
+fn session_caret_comparison_orders_text_islands_by_shared_math_flow_sequence() {
+    let block_id = NodeId::generate();
+    let text_flow = |text: &str| {
+        caret_doc::MathContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: text.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![
+                text_flow("é"),
+                caret_doc::MathContent::Math(caret_doc::MathNode {
+                    id: NodeId::generate(),
+                    kind: caret_doc::MathNodeKind::Symbol,
+                    text: Some("+".to_owned()),
+                    attributes: Default::default(),
+                    children: Vec::new(),
+                    extra: Default::default(),
+                }),
+                text_flow("b"),
+            ],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let session = Session::new(Document {
+        body: vec![
+            Block::Equation(caret_doc::Equation {
+                id: block_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            }),
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        ],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let target = MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let caret = |index, offset, affinity| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TextFlowUtf8 {
+                        path: MathTextFlowPath::from_interaction_path(
+                            vec![MathTextFlowPathStep::Content(index)],
+                            None,
+                        ),
+                        offset,
+                        affinity,
+                    },
+                }),
+            }),
+        )
+    };
+    let tree_boundary = |index, affinity| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::Equation {
+                            owner_id: block_id.clone(),
+                        },
+                        path: MathSequencePath::root(),
+                        index,
+                        affinity,
+                    },
+                }),
+            }),
+        )
+    };
+    let before_separator = caret(0, 2, MathPositionAffinity::Upstream);
+    let after_separator = caret(2, 0, MathPositionAffinity::Downstream);
+    assert_eq!(
+        session.compare_caret_snapshots(&before_separator, &after_separator),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&after_separator, &before_separator),
+        Ok(std::cmp::Ordering::Greater)
+    );
+    let boundary_after_separator = tree_boundary(2, MathPositionAffinity::Upstream);
+    let after_separator_upstream = caret(2, 0, MathPositionAffinity::Upstream);
+    assert_eq!(
+        session.compare_caret_snapshots(&before_separator, &boundary_after_separator),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&boundary_after_separator, &after_separator_upstream),
+        Ok(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&before_separator, &after_separator_upstream),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(
+            &caret(0, 0, MathPositionAffinity::Downstream),
+            &caret(2, 1, MathPositionAffinity::Upstream),
+        ),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(
+            &caret(0, 1, MathPositionAffinity::Downstream),
+            &after_separator,
+        ),
+        Err(EditError::InvalidPosition)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(
+            &before_separator,
+            &caret(2, 2, MathPositionAffinity::Upstream),
+        ),
+        Err(EditError::InvalidPosition)
+    );
+}
+
+#[test]
+fn session_caret_comparison_orders_empty_math_text_island_edges_by_structure() {
+    let block_id = NodeId::generate();
+    let tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![
+                caret_doc::MathContent::Text(caret_doc::TextFlow::default()),
+                caret_doc::MathContent::SoftBreak(caret_doc::SoftBreak::default()),
+                caret_doc::MathContent::Text(caret_doc::TextFlow {
+                    runs: vec![Run {
+                        text: "b".to_owned(),
+                        language: None,
+                        props: Default::default(),
+                        extra: Default::default(),
+                    }],
+                    extra: Default::default(),
+                }),
+            ],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let session = Session::new(Document {
+        body: vec![
+            Block::Equation(caret_doc::Equation {
+                id: block_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            }),
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        ],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let target = MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let caret = |index, offset, affinity| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TextFlowUtf8 {
+                        path: MathTextFlowPath::from_interaction_path(
+                            vec![MathTextFlowPathStep::Content(index)],
+                            None,
+                        ),
+                        offset,
+                        affinity,
+                    },
+                }),
+            }),
+        )
+    };
+    let empty_upstream = caret(0, 0, MathPositionAffinity::Upstream);
+    let empty_downstream = caret(0, 0, MathPositionAffinity::Downstream);
+    let next_start = caret(2, 0, MathPositionAffinity::Upstream);
+    let next_end = caret(2, 1, MathPositionAffinity::Downstream);
+
+    assert_eq!(
+        session.compare_caret_snapshots(&empty_upstream, &next_start),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&empty_downstream, &next_end),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&next_start, &empty_downstream),
+        Ok(std::cmp::Ordering::Greater)
+    );
+}
+
+#[test]
+fn session_caret_comparison_rejects_cross_operand_text_island_ordering() {
+    let block_id = NodeId::generate();
+    let flow = |text: &str| caret_doc::MathFlow {
+        id: NodeId::generate(),
+        content: vec![caret_doc::MathContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: text.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })],
+        extra: Default::default(),
+    };
+    let tree = caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                id: NodeId::generate(),
+                kind: caret_doc::MathNodeKind::Fraction,
+                text: None,
+                attributes: std::collections::BTreeMap::from([(
+                    "style".to_owned(),
+                    "frac".to_owned(),
+                )]),
+                children: vec![flow("numerator"), flow("denominator")],
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let session = Session::new(Document {
+        body: vec![
+            Block::Equation(caret_doc::Equation {
+                id: block_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            }),
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        ],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let target = MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let caret = |operand_index| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TextFlowUtf8 {
+                        path: MathTextFlowPath::from_interaction_path(
+                            vec![
+                                MathTextFlowPathStep::Content(0),
+                                MathTextFlowPathStep::Operand(operand_index),
+                                MathTextFlowPathStep::Content(0),
+                            ],
+                            None,
+                        ),
+                        offset: 0,
+                        affinity: MathPositionAffinity::Downstream,
+                    },
+                }),
+            }),
+        )
+    };
+
+    assert_eq!(
+        session.compare_caret_snapshots(&caret(0), &caret(1)),
+        Err(EditError::InvalidPosition)
+    );
+}
+
+#[test]
 fn session_caret_comparison_orders_math_tree_boundaries_with_text_flow_positions() {
     let block_id = NodeId::generate();
     let tree = caret_doc::MathTree {

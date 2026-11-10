@@ -153,6 +153,30 @@ impl MathTextPosition {
     ) -> Option<std::cmp::Ordering> {
         contiguous_text_flow_text(tree, &self.path)?.compare_positions(self, other)
     }
+
+    /// 比较同一 MathFlow 序列中的文本位置；文本岛之间按结构项顺序比较。
+    ///
+    /// 两个位置先分别验证为其文本岛中的合法字素边界。只有序列路径相同且
+    /// TextFlow 内容索引不同，才用结构索引确定跨岛顺序；不同操作数等嵌套序列
+    /// 仍交由更高层 adapter 处理。
+    pub(crate) fn compare_in_same_sequence(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Option<std::cmp::Ordering> {
+        if let Some(ordering) = self.compare_in_same_text_island(other, tree) {
+            return Some(ordering);
+        }
+
+        self.compare_in_same_text_island(self, tree)?;
+        other.compare_in_same_text_island(other, tree)?;
+        let (left_sequence, left_index) =
+            super::MathTreePosition::sequence_boundary_from_text_path(self.path.steps()).ok()?;
+        let (right_sequence, right_index) =
+            super::MathTreePosition::sequence_boundary_from_text_path(other.path.steps()).ok()?;
+        (left_sequence == right_sequence && left_index != right_index)
+            .then(|| left_index.cmp(&right_index))
+    }
 }
 
 fn source_map_covers_text(text: &TextFlow, source_map: &MathTextSourceMap) -> bool {
