@@ -53,10 +53,10 @@
 | --- | --- | --- |
 | `DocumentSettings.defaultStyles`、`formatOverrides` | 当前没有样式解析器读取这两项；它们仍是 `.cdoc` 的已知 JSON 字段，文档结构图列明，存储往返测试和 App 保存重开测试验证保留。类型化 map 要求 JSON 对象，缺失值反序列化为空 map 并按默认序列化输出空对象。 | 暂留为显式字段；改放 `extra` 会改变缺省序列化和无效类型的接受行为，即使保留非空对象的 wire 内容也不等价。 |
 | `ThemeSnapshot.namedStyles` | 当前无排版/编辑器运行时读取；主题快照 DTO 将其定义为已知字段，存储与 App 保存重开测试验证往返。类型化 map 要求 JSON 对象，缺失值采用默认空 map。 | 暂留为主题快照已知字段；改放 `extra` 会放宽无效类型接受行为，且其主题格式/未来消费者尚未完成审计。 |
-| 顶层 `CdocFile.media` 与 `Media` | 打开/保存校验媒体 ID、类型和数据大小；`DocumentSession` 保存快照携带媒体数组；task 052 规定图片内容后续使用该资源容器；存储与 App 测试验证媒体和未知元数据往返。 | 保留；已有持久化、验证和会话消费者。 |
+| 顶层 `CdocFile.media` 与 `Media` | 打开/保存校验 ID 非空且唯一、`mediaType` 非空、`data` 为标准 Base64 且解码不超过 32 MiB；`DocumentSession` 保存快照携带媒体数组；task 052 规定图片内容后续使用该资源容器；存储与 App 测试验证媒体和未知元数据往返。当前没有图片解码、格式识别或像素尺寸校验。 | 保留；已有持久化、输入验证和会话消费者，图片语义校验留在 052 范围。 |
 | Paragraph `language` / `layout` / `markStyle` / `props` / `extra` | language 参与 shaping；layout 进入排版与分页；markStyle 参与段落合并兼容性判断，空行需要 mark metrics 且存在非空 markStyle 时明确拒绝当前不支持的样式；props 的 `outlineLevel` 被结构索引消费；extra 在序列化中保留，并在不支持无损变换时阻止编辑。 | 保留；运行时、校验、未知字段兼容及事务保护均有实际消费者。 |
-| 环境 `definitionId` | 两类 ID 均经 codec 读写；能力收集器为 Block 推导 `caret.env.templates`，为 Inline 另推导 `caret.env.inline-text-templates.v1`。只有 Inline 模板能力被要求显式声明并验证 variant；Block 暂无模板解析器，也无同等的模板引用/能力声明强制校验。行内格式/数学转换保留 variant ID，历史内存估算计入环境 ID。 | 保留；明确区分已实现的行内语义与仅持久化/能力推导的块环境字段，后者待块模板设计再赋予运行时解释。 |
-| 节点 ID、`Opaque`、`extra`、格式/主题/MathTree schema version | 节点 ID 参与文档唯一性验证、物理索引、编辑与历史；Opaque/extra 用于未知内容往返及安全拒绝有损编辑；版本字段和 required features 驱动格式/能力验证与只读安全预览。 | 保留；属于身份、前向兼容和版本解释边界，不是无消费者的缓存字段。 |
+| 环境 `definitionId` | 两类 ID 均经 codec 读写；能力收集器为 Block 推导 `caret.env.templates`，为 Inline 另推导 `caret.env.inline-text-templates.v1`。打开 `.cdoc` 时，只有声明能力均受支持、Inline 能力已声明且主题版本有效才执行模板语义验证；缺少 Inline 能力声明时进入安全预览。Block 暂无模板解析器，也无同等的模板引用/能力声明强制校验。行内格式/数学转换保留 variant ID，历史内存估算计入 `definitionId`。 | 保留；明确区分已实现的行内语义与仅持久化/能力推导的块环境字段，后者待块模板设计再赋予运行时解释。 |
+| 节点 ID、`Opaque`、`extra`、格式/主题/MathTree schema version | 节点 ID 参与文档唯一性验证、物理索引、编辑与历史；Opaque/extra 用于未知内容往返及安全拒绝有损编辑。外层文档版本不兼容时拒绝打开；主题快照未知版本进入安全预览；旧 MathTree schema 拒绝，未来 schema 保持 Opaque 并按安全预览规则处理。 | 保留；属于身份、前向兼容和版本解释边界，不是无消费者的缓存字段。 |
 
 ## 验收标准
 
@@ -101,7 +101,6 @@
 
 - 2026-11-09：从 080 拆分 Issue #126 的 H1、M1、M3、M4 相关工作；不照搬固定 enum、直接改 `StructureIndex` 为可变索引、给 Opaque/ExplicitBreak 统一加 ID 或未测 O(深度) 承诺。
 - 2026-11-10：实现前审查确认 `StructureIndex` 的 heading 父链表示大纲语义，不是文档树物理父链；新增/复用定位契约时必须保留两者的区别。物理路径保留每一层真实同级 slot，包括没有稳定 ID 的 ExplicitBreak/Opaque；这些节点不得因此获得持久 ID 或编辑能力。
-- 2026-11-10：第一方持久字段消费者审计未发现可安全删除字段。未读取的样式映射、主题命名样式和 definition ID 仍属公开 DTO / `.cdoc` 兼容契约；后续补非空值打开、编辑、保存、重开验证，不以仓内无语义消费者推断字段无用。
 - 2026-11-10：物理定位入口落在 `caret-structure`，保留 `StructureIndex` 的大纲语义；公式块路径和活动环境父链改用宿主 ID 查询，Paragraph 缓存与历史路径核对完整父环境链及真实 slot。无 ID 的显式分页和 Opaque 仍只占 slot，不创建持久身份。
 - 2026-11-10：历史补丁重放在候选文档上事务应用；复合补丁中任何一项路径、slot 或快照不匹配时拒绝整个撤销/重做，不推进 Session 历史游标。Paragraph 快照删除要求 ID 与完整值同时匹配。
 - 2026-11-10：段落位置比较现校验当前文档上的目标 ID、Story、完整物理路径及 TextMap 合法边界后才排序；Story 错配、越界偏移和陈旧路径均拒绝。此比较仅覆盖 Paragraph 文本位置，不能代表 Inline/Block 宿主状态或数学局部位置的通用全序。
