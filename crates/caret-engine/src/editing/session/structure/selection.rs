@@ -106,7 +106,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.finalize_structure_edit(
             super::super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::EnvironmentDeletion {
@@ -399,7 +399,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.finalize_structure_edit(
             updated_index,
             DocumentPatch::Compound(patches),

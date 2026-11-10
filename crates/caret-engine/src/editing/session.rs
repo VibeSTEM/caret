@@ -35,8 +35,9 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, CommandLine, Direction, EditError, Effect, InputComposition, Pos,
-    PositionMap, Selection, StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind,
+    HostCaretLocalPosition, HostCaretPosition, InputComposition, MathCaretCoordinate,
+    MathCaretLocalPosition, Pos, PositionMap, Selection, StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -90,7 +91,7 @@ pub struct Session {
     pending_inline_style: PendingInlineStyle,
     command_line: Option<CommandLine>,
     math_edit: Option<MathEdit>,
-    block_boundary_exit: Option<(NodeId, Direction)>,
+    host_caret_position: Option<HostCaretPosition<Pos>>,
     selected_block_environment: Option<NodeId>,
     selected_block_environments: Vec<NodeId>,
     structure_selection: Option<StructureSelection>,
@@ -118,7 +119,7 @@ impl Session {
             pending_inline_style: self.pending_inline_style.clone(),
             command_line: self.command_line.clone(),
             math_edit: self.math_edit.clone(),
-            block_boundary_exit: self.block_boundary_exit.clone(),
+            host_caret_position: self.host_caret_position.clone(),
             selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
             structure_selection: self.structure_selection.clone(),
@@ -163,7 +164,7 @@ impl Session {
             pending_inline_style: PendingInlineStyle::default(),
             command_line: None,
             math_edit: None,
-            block_boundary_exit: None,
+            host_caret_position: None,
             selected_block_environment: None,
             selected_block_environments: Vec::new(),
             structure_selection: None,
@@ -301,6 +302,11 @@ impl Session {
         self.selection_visual_affinity
     }
 
+    /// 当前空光标处是否有等待输入的行内格式。
+    pub fn has_pending_inline_style(&self) -> bool {
+        self.pending_inline_style.shows_insertion_slot()
+    }
+
     /// 当前选区锚点的视觉侧；撤销后用于精确恢复换行边界上的光标端点。
     pub fn selection_anchor_visual_affinity(&self) -> VisualAffinity {
         self.selection_anchor_visual_affinity
@@ -317,7 +323,201 @@ impl Session {
 
     /// 当前光标是否停在可编辑块的外侧，而不为导航插入可见空段落。
     pub fn block_boundary_exit(&self) -> Option<(NodeId, Direction)> {
-        self.block_boundary_exit.clone()
+        self.host_caret_position
+            .as_ref()
+            .filter(|position| position.kind() == HostCaretKind::Block)
+            .and_then(HostCaretPosition::as_outside)
+            .map(|(host_id, direction)| (host_id.clone(), direction))
+    }
+
+    /// 投影当前有效宿主的位置；返回 `None` 表示没有可验证的宿主焦点。
+    ///
+    /// 数学局部坐标仅对当前 Session 与文档代际有效，不能作为持久或跨代 locator。
+    pub fn active_host_caret_position(
+        &mut self,
+    ) -> Option<HostCaretPosition<HostCaretLocalPosition>> {
+        if let Some(position) = self.host_caret_position.clone() {
+            match &position {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Block,
+                }
+                | HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Block,
+                } if math_edit::find_block_path(&self.document.body, host_id).is_some() => {
+                    return Some(match &position {
+                        HostCaretPosition::Before { .. } => HostCaretPosition::Before {
+                            host_id: host_id.clone(),
+                            kind: HostCaretKind::Block,
+                        },
+                        _ => HostCaretPosition::After {
+                            host_id: host_id.clone(),
+                            kind: HostCaretKind::Block,
+                        },
+                    });
+                }
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+                | HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+                | HostCaretPosition::Inside {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                    ..
+                } => {
+                    let focus = self.selection.focus.clone();
+                    let map = self.text_map_for(&focus).ok()?;
+                    let local_matches = match &position {
+                        HostCaretPosition::Inside { local, .. } => local == &focus,
+                        _ => true,
+                    };
+                    if local_matches && map.is_empty_inline_environment(focus.offset, host_id) {
+                        return Some(match &position {
+                            HostCaretPosition::Before { .. } => HostCaretPosition::Before {
+                                host_id: host_id.clone(),
+                                kind: HostCaretKind::Inline,
+                            },
+                            HostCaretPosition::After { .. } => HostCaretPosition::After {
+                                host_id: host_id.clone(),
+                                kind: HostCaretKind::Inline,
+                            },
+                            HostCaretPosition::Inside { local, .. } => HostCaretPosition::Inside {
+                                host_id: host_id.clone(),
+                                kind: HostCaretKind::Inline,
+                                local: HostCaretLocalPosition::Paragraph(local.clone()),
+                            },
+                        });
+                    }
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+        if self.math_edit.is_some() {
+            self.ensure_math_edit_revision_current().ok()?;
+            let edit = self.math_edit.as_ref()?;
+            let host_id = match &edit.target {
+                MathEditTarget::Inline { math_id, .. } => math_id.clone(),
+                MathEditTarget::Block { block_id, .. } => block_id.clone(),
+            };
+            let kind = match edit.target {
+                MathEditTarget::Inline { .. } => HostCaretKind::Inline,
+                MathEditTarget::Block { .. } => HostCaretKind::Block,
+            };
+            return Some(HostCaretPosition::Inside {
+                host_id,
+                kind,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: edit.target.clone(),
+                    coordinate: match &edit.branch {
+                        MathEditBranch::Source => MathCaretCoordinate::SourceUtf8 {
+                            offset: edit.cursor,
+                        },
+                        MathEditBranch::Text { path, .. } => MathCaretCoordinate::TextFlowUtf8 {
+                            path: path.clone(),
+                            offset: edit.cursor,
+                        },
+                        MathEditBranch::Tree { path, anchor } => {
+                            MathCaretCoordinate::TreeBoundary {
+                                host: anchor.host.clone(),
+                                path: path.clone(),
+                                index: edit.cursor,
+                            }
+                        }
+                    },
+                }),
+            });
+        }
+
+        let focus = self.selection.focus.clone();
+        let map = self.text_map_for(&focus).ok()?;
+        if let Some(span) = map.object_spans.iter().find(|span| {
+            (span.start == focus.offset && focus.affinity == Affinity::Upstream)
+                || (span.end == focus.offset && focus.affinity == Affinity::Downstream)
+        }) && let Some(host_id) = span.id.clone()
+        {
+            return Some(if span.start == focus.offset {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            } else {
+                HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            });
+        }
+        if let Some((host_id, _, _)) = map.inline_environment_at(focus.offset, focus.affinity) {
+            return Some(HostCaretPosition::Inside {
+                host_id,
+                kind: HostCaretKind::Inline,
+                local: HostCaretLocalPosition::Paragraph(focus.clone()),
+            });
+        }
+        if let Some(host_id) = map
+            .empty_inline_environment_stack_at(focus.offset, focus.affinity)
+            .last()
+            .and_then(|span| span.id.clone())
+        {
+            return Some(if focus.affinity == Affinity::Upstream {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            } else {
+                HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            });
+        }
+        if let Some(span) = map
+            .environment_spans
+            .iter()
+            .filter(|span| {
+                span.start < span.end
+                    && ((span.start == focus.offset && focus.affinity == Affinity::Upstream)
+                        || (span.end == focus.offset && focus.affinity == Affinity::Downstream))
+            })
+            .max_by_key(|span| span.depth)
+            && let Some(host_id) = span.id.clone()
+        {
+            return Some(if focus.affinity == Affinity::Upstream {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            } else {
+                HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            });
+        }
+        self.structure_index
+            .at(&caret_structure::StructurePosition {
+                paragraph_id: focus.paragraph_id.clone(),
+                offset_utf8: focus.offset,
+            })
+            .into_iter()
+            .rfind(|entry| {
+                matches!(
+                    entry.kind,
+                    caret_structure::StructureKind::Section
+                        | caret_structure::StructureKind::Custom
+                )
+            })
+            .map(|entry| HostCaretPosition::Inside {
+                host_id: entry.id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Paragraph(focus),
+            })
     }
 
     /// 返回当前以完整页内几何表示的块环境结构选区。
@@ -376,7 +576,7 @@ impl Session {
             anchor: self.selection.focus.clone(),
             focus: self.selection.focus.clone(),
         });
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         Ok(Effect {
             selection_changed: changed,
             ..Effect::default()
@@ -447,6 +647,12 @@ impl Session {
         command: Command,
         operation: impl FnOnce(&mut Self, Command) -> Result<Effect, EditError>,
     ) -> Result<Effect, EditError> {
+        let preserve_inline_outer_stop = matches!(
+            &command,
+            Command::MoveCaret(_)
+                | Command::EditorKey(super::EditorKey::LeftArrow { .. })
+                | Command::EditorKey(super::EditorKey::RightArrow { .. })
+        );
         let stale_math_edit = self.ensure_math_edit_revision_current().is_err();
         if stale_math_edit {
             if self.command_line.is_some()
@@ -490,12 +696,45 @@ impl Session {
             self.math_edit = previous_math_edit;
         }
         if result.is_ok() {
+            self.clear_stale_empty_inline_focus(preserve_inline_outer_stop);
             if self.selection.anchor == self.selection.focus && self.structure_selection.is_none() {
                 self.selection_anchor_visual_affinity = self.selection_visual_affinity;
             }
             self.sync_math_edit_revision();
         }
         result
+    }
+
+    fn clear_stale_empty_inline_focus(&mut self, preserve_inline_outer_stop: bool) {
+        let Some(position) = self.host_caret_position.clone() else {
+            return;
+        };
+        let HostCaretPosition::Inside {
+            host_id,
+            kind: HostCaretKind::Inline,
+            local,
+        } = position
+        else {
+            if position.kind() == HostCaretKind::Inline {
+                let focus = self.selection.focus.clone();
+                let is_current_inline_boundary = preserve_inline_outer_stop
+                    && self.text_map_for(&focus).ok().is_some_and(|map| {
+                        map.is_empty_inline_environment(focus.offset, position.host_id())
+                    });
+                if !is_current_inline_boundary {
+                    self.host_caret_position = None;
+                }
+            }
+            return;
+        };
+        let is_still_active = local == self.selection.focus
+            && self
+                .text_map_for(&local)
+                .ok()
+                .is_some_and(|map| map.is_empty_inline_environment(local.offset, &host_id));
+        if !is_still_active {
+            self.host_caret_position = None;
+        }
     }
 
     fn run_inner(
@@ -515,7 +754,7 @@ impl Session {
         }
         if matches!(&command, Command::Delete(Direction::Backward))
             && self.math_edit.is_none()
-            && self.block_boundary_exit.is_none()
+            && self.block_boundary_exit().is_none()
             && self.composition.is_none()
             && self.command_line.is_none()
             && self.selection.anchor == self.selection.focus
@@ -546,7 +785,7 @@ impl Session {
             _ => None,
         };
         if let Some(text) = inserted_text
-            && self.block_boundary_exit.is_some()
+            && self.block_boundary_exit().is_some()
         {
             return self.insert_text_at_block_boundary(text);
         }
@@ -566,11 +805,11 @@ impl Session {
             return self.delete_selected_block_environment();
         }
         if let Command::CommitComposition { id, text } = &command
-            && self.block_boundary_exit.is_some()
+            && self.block_boundary_exit().is_some()
         {
             return self.commit_composition(*id, text);
         }
-        if self.block_boundary_exit.is_some() {
+        if self.block_boundary_exit().is_some() {
             match command {
                 Command::InsertParagraphBreak => {
                     return self.insert_break_at_block_boundary(false);
@@ -587,10 +826,12 @@ impl Session {
         if self.command_line.is_some() && matches!(&command, Command::Delete(Direction::Backward)) {
             return self.run_command_line(Command::BackspaceCommandLine);
         }
-        if self.block_boundary_exit.is_some() && matches!(&command, Command::Delete(_)) {
+        if self.block_boundary_exit().is_some() && matches!(&command, Command::Delete(_)) {
             let (block_id, exit_direction) = self
-                .block_boundary_exit
-                .clone()
+                .host_caret_position
+                .as_ref()
+                .and_then(HostCaretPosition::as_outside)
+                .map(|(block_id, direction)| (block_id.clone(), direction))
                 .ok_or(EditError::InvalidPosition)?;
             let deletes_adjacent_environment = matches!(
                 (exit_direction, &command),
@@ -656,6 +897,7 @@ impl Session {
         let before_pending_style = self.pending_inline_style.clone();
         let before_state_id = self.history_state_id;
         let before_math_edit = self.math_edit.as_ref().map(math_edit::history_position);
+        let before_host_caret_position = self.host_caret_position.clone();
         let adjacent_delete_paragraph = match &command {
             Command::Delete(direction) if before_selection.anchor == before_selection.focus => {
                 self.adjacent_paragraph_for_delete(*direction)?
@@ -664,6 +906,7 @@ impl Session {
         };
         let edit_group = history::edit_group(&command);
         let breaks_history_merge = edit_group.is_none();
+        let is_move_caret = matches!(&command, Command::MoveCaret(_));
         let resets_pending_style =
             matches!(&command, Command::MoveCaret(_) | Command::SetSelection(_));
         let mut before_paragraph_states = if is_paragraph_edit(&command) {
@@ -715,7 +958,7 @@ impl Session {
             }
             _ => None,
         };
-        let mut effect = match command {
+        let effect = match command {
             Command::TextInput(_) => unreachable!("text input is resolved before command dispatch"),
             Command::InsertText(text) => self.insert_text(&text),
             Command::InsertOneCharacterWidthSpace => self.insert_text("\u{2003}"),
@@ -772,13 +1015,19 @@ impl Session {
             | Command::AcceptCommandLine
             | Command::CancelCommandLine => unreachable!("command-line commands returned above"),
             Command::Undo | Command::Redo => unreachable!("history commands returned above"),
-        }?;
+        };
+        if effect.is_ok() {
+            self.clear_stale_empty_inline_focus(is_move_caret);
+        }
+        let mut effect = effect?;
         effect.composition_changed |= cancels_command_line_preedit;
         self.command_line = None;
         if effect.selection_changed && resets_pending_style {
             self.pending_inline_style.clear();
         }
-        if breaks_history_merge {
+        if breaks_history_merge
+            && (!is_move_caret || effect.selection_changed || effect.document_changed)
+        {
             self.advance_history_merge_epoch();
         }
         if effect.selection_changed {
@@ -853,7 +1102,8 @@ impl Session {
                     before_state_id,
                 )
                 .with_anchor_visual_affinity(before_anchor_visual_affinity)
-                .with_math_edit(before_math_edit),
+                .with_math_edit(before_math_edit)
+                .with_host_caret_position(before_host_caret_position),
                 SessionHistoryState::new(
                     self.selection.clone(),
                     self.selection_visual_affinity,
@@ -865,7 +1115,8 @@ impl Session {
                 } else {
                     self.selection_anchor_visual_affinity
                 })
-                .with_math_edit(self.math_edit.as_ref().map(math_edit::history_position)),
+                .with_math_edit(self.math_edit.as_ref().map(math_edit::history_position))
+                .with_host_caret_position(self.host_caret_position.clone()),
             );
             self.record_history_edit(edit);
             self.history_state_id = after_state_id;
@@ -953,7 +1204,7 @@ impl Session {
             changed_paragraph_id,
             document_changed,
             math_edit: math_edit_position,
-            block_boundary_exit,
+            host_caret_position,
         } = history::restore_history_transition(transition);
         let restored_math_edit = match math_edit_position {
             Some(position) => {
@@ -980,7 +1231,7 @@ impl Session {
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != visual_affinity
             || previous_math_edit != restored_math_edit
-            || self.block_boundary_exit != block_boundary_exit;
+            || self.host_caret_position != host_caret_position;
         self.selection = selection;
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = visual_affinity;
@@ -989,9 +1240,6 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_boundary_exit = block_boundary_exit.filter(|(block_id, _)| {
-            math_edit::find_block_path(&self.document.body, block_id).is_some()
-        });
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         if document_changed {
@@ -1005,6 +1253,59 @@ impl Session {
                 self.document_generation = 0;
             }
         }
+        self.host_caret_position = match host_caret_position {
+            Some(
+                position @ HostCaretPosition::Before {
+                    kind: HostCaretKind::Block,
+                    ..
+                },
+            )
+            | Some(
+                position @ HostCaretPosition::After {
+                    kind: HostCaretKind::Block,
+                    ..
+                },
+            ) if math_edit::find_block_path(&self.document.body, position.host_id()).is_some() => {
+                Some(position)
+            }
+            Some(
+                position @ HostCaretPosition::Before {
+                    kind: HostCaretKind::Inline,
+                    ..
+                },
+            )
+            | Some(
+                position @ HostCaretPosition::After {
+                    kind: HostCaretKind::Inline,
+                    ..
+                },
+            ) => {
+                let focus = self.selection.focus.clone();
+                self.text_map_for(&focus)
+                    .ok()
+                    .is_some_and(|map| {
+                        map.is_empty_inline_environment(focus.offset, position.host_id())
+                    })
+                    .then_some(position)
+            }
+            Some(
+                position @ HostCaretPosition::Inside {
+                    kind: HostCaretKind::Inline,
+                    ..
+                },
+            ) => {
+                let HostCaretPosition::Inside { host_id, local, .. } = &position else {
+                    unreachable!("matched inside host caret position")
+                };
+                (local == &self.selection.focus
+                    && self
+                        .text_map_for(local)
+                        .ok()
+                        .is_some_and(|map| map.is_empty_inline_environment(local.offset, host_id)))
+                .then_some(position)
+            }
+            _ => None,
+        };
         self.sync_math_edit_revision();
         Ok(Effect {
             document_changed,

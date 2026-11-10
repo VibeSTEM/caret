@@ -496,7 +496,7 @@ impl Session {
         self.selected_block_environment = selected.first().cloned();
         self.selected_block_environments = selected;
         self.structure_selection = Some(super::StructureSelection { anchor, focus });
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         if cancels_command_line_preedit {
             self.command_line = None;
         }
@@ -580,11 +580,11 @@ impl Session {
         });
         self.validate_selection(&next)?;
         let changed = self.selection != next
-            || self.block_boundary_exit.is_some()
+            || self.host_caret_position.is_some()
             || self.selected_block_environment.is_some()
             || !self.selected_block_environments.is_empty()
             || self.structure_selection.is_some();
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;

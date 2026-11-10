@@ -4,7 +4,7 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
-use super::super::{Direction, PositionMap, Selection, StoryId};
+use super::super::{HostCaretPosition, Pos, PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use super::math_edit::{MathEdit, MathEditBranch, MathEditTarget};
 use caret_doc::{
@@ -173,7 +173,7 @@ pub(super) struct SessionHistoryState {
     visual_affinity: VisualAffinity,
     pending_style: PendingInlineStyle,
     math_edit: Option<MathEditPosition>,
-    block_boundary_exit: Option<(NodeId, Direction)>,
+    host_caret_position: Option<HostCaretPosition<Pos>>,
     state_id: u64,
 }
 
@@ -266,16 +266,16 @@ impl SessionHistoryState {
             visual_affinity,
             pending_style,
             math_edit: None,
-            block_boundary_exit: None,
+            host_caret_position: None,
             state_id,
         }
     }
 
-    pub(super) fn with_block_boundary_exit(
+    pub(super) fn with_host_caret_position(
         mut self,
-        block_boundary_exit: Option<(NodeId, Direction)>,
+        host_caret_position: Option<HostCaretPosition<Pos>>,
     ) -> Self {
-        self.block_boundary_exit = block_boundary_exit;
+        self.host_caret_position = host_caret_position;
         self
     }
 
@@ -300,7 +300,7 @@ pub(super) struct HistoryTransition {
     pub visual_affinity: VisualAffinity,
     pub pending_style: PendingInlineStyle,
     pub math_edit: Option<MathEditPosition>,
-    pub block_boundary_exit: Option<(NodeId, Direction)>,
+    pub host_caret_position: Option<HostCaretPosition<Pos>>,
     pub state_id: u64,
     pub changed_paragraph_id: Option<NodeId>,
     pub document_changed: bool,
@@ -343,14 +343,14 @@ impl SessionHistoryEdit {
                 .map_or(0, |position| position.estimated_bytes(seen_projections))
             + self
                 .before
-                .block_boundary_exit
+                .host_caret_position
                 .as_ref()
-                .map_or(0, |(id, _)| node_id_bytes(id))
+                .map_or(0, |position| node_id_bytes(position.host_id()))
             + self
                 .after
-                .block_boundary_exit
+                .host_caret_position
                 .as_ref()
-                .map_or(0, |(id, _)| node_id_bytes(id))
+                .map_or(0, |position| node_id_bytes(position.host_id()))
     }
 
     fn apply_before(&self, document: &mut Document) {
@@ -368,7 +368,7 @@ impl SessionHistoryEdit {
             visual_affinity: self.before.visual_affinity,
             pending_style: self.before.pending_style.clone(),
             math_edit: self.before.math_edit.clone(),
-            block_boundary_exit: self.before.block_boundary_exit.clone(),
+            host_caret_position: self.before.host_caret_position.clone(),
             state_id: self.before.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -382,7 +382,7 @@ impl SessionHistoryEdit {
             visual_affinity: self.after.visual_affinity,
             pending_style: self.after.pending_style.clone(),
             math_edit: self.after.math_edit.clone(),
-            block_boundary_exit: self.after.block_boundary_exit.clone(),
+            host_caret_position: self.after.host_caret_position.clone(),
             state_id: self.after.state_id,
             changed_paragraph_id: self.patch.single_changed_paragraph_id(),
             document_changed: self.patch.affects_document(),
@@ -1623,7 +1623,7 @@ pub(super) struct RestoredHistoryTransition {
     pub(super) changed_paragraph_id: Option<NodeId>,
     pub(super) document_changed: bool,
     pub(super) math_edit: Option<MathEditPosition>,
-    pub(super) block_boundary_exit: Option<(NodeId, Direction)>,
+    pub(super) host_caret_position: Option<HostCaretPosition<Pos>>,
 }
 
 pub(super) fn restore_history_transition(
@@ -1638,7 +1638,7 @@ pub(super) fn restore_history_transition(
         changed_paragraph_id: transition.changed_paragraph_id,
         document_changed: transition.document_changed,
         math_edit: transition.math_edit,
-        block_boundary_exit: transition.block_boundary_exit,
+        host_caret_position: transition.host_caret_position,
     }
 }
 

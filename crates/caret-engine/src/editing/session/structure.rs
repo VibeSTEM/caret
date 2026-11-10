@@ -5,7 +5,8 @@
 
 use super::super::text_map::TextMap;
 use super::super::{
-    Affinity, Command, Direction, EditError, Effect, Pos, PositionMap, Selection, StoryId,
+    Affinity, Command, Direction, EditError, Effect, HostCaretPosition, Pos, PositionMap,
+    Selection, StoryId,
 };
 use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
@@ -28,7 +29,7 @@ struct StructureEditBeforeState {
     anchor_visual_affinity: VisualAffinity,
     visual_affinity: VisualAffinity,
     state_id: u64,
-    block_boundary_exit: Option<(NodeId, Direction)>,
+    host_caret_position: Option<HostCaretPosition<Pos>>,
 }
 
 impl Session {
@@ -50,7 +51,7 @@ impl Session {
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,
                 state_id: before_state_id,
-                block_boundary_exit: None,
+                host_caret_position: None,
             },
         );
     }
@@ -74,7 +75,7 @@ impl Session {
             before.state_id,
         )
         .with_anchor_visual_affinity(before.anchor_visual_affinity)
-        .with_block_boundary_exit(before.block_boundary_exit);
+        .with_host_caret_position(before.host_caret_position);
         self.record_history_edit(SessionHistoryEdit::new(
             patch,
             before_state,
@@ -93,7 +94,8 @@ impl Session {
                 self.math_edit
                     .as_ref()
                     .map(super::math_edit::history_position),
-            ),
+            )
+            .with_host_caret_position(self.host_caret_position.clone()),
         ));
         self.history_state_id = after_state_id;
         self.advance_document_generation();
@@ -169,7 +171,7 @@ impl Session {
         if position.story != StoryId::Body
             || position.offset != 0
             || self.math_edit.is_some()
-            || self.block_boundary_exit.is_some()
+            || self.block_boundary_exit().is_some()
             || self.composition.is_some()
             || self.command_line.is_some()
             || self.selection.anchor != self.selection.focus
@@ -274,7 +276,7 @@ impl Session {
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
-        let before_block_boundary_exit = self.block_boundary_exit.clone();
+        let before_block_boundary_exit = self.host_caret_position.clone();
         self.selection = Selection {
             anchor: selection_position.clone(),
             focus: selection_position.clone(),
@@ -285,7 +287,7 @@ impl Session {
         };
         self.selection_anchor_visual_affinity = self.selection_visual_affinity;
         self.math_edit = Some(edit);
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.finalize_structure_edit_with_boundary(
             super::super::paragraph_ops::build_paragraph_index(&self.document.body),
             DocumentPatch::BlockRange {
@@ -299,7 +301,7 @@ impl Session {
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,
                 state_id: before_state_id,
-                block_boundary_exit: before_block_boundary_exit,
+                host_caret_position: before_block_boundary_exit,
             },
         );
         Ok(Some(Effect {
@@ -366,14 +368,22 @@ impl Session {
         &mut self,
         mut paragraphs: Vec<Paragraph>,
     ) -> Result<Effect, EditError> {
-        let Some((block_id, direction)) = self.block_boundary_exit.clone() else {
+        let Some(position) = self.host_caret_position.clone() else {
+            return Ok(Effect::default());
+        };
+        if position.kind() != super::super::HostCaretKind::Block {
+            return Ok(Effect::default());
+        }
+        let Some((block_id, direction)) = position
+            .as_outside()
+            .map(|(host_id, direction)| (host_id.clone(), direction))
+        else {
             return Ok(Effect::default());
         };
         let Some((parent_environment_ids, block_index)) =
             super::math_edit::find_block_path(&self.document.body, &block_id)
         else {
-            self.block_boundary_exit = None;
-            return Ok(Effect::default());
+            return Err(EditError::InvalidPosition);
         };
         let inline_depth = parent_environment_ids.len() + 1;
         for paragraph in &mut paragraphs {
@@ -414,7 +424,7 @@ impl Session {
         let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
         let before_visual_affinity = self.selection_visual_affinity;
         let before_state_id = self.history_state_id;
-        let before_block_boundary_exit = self.block_boundary_exit.clone();
+        let before_block_boundary_exit = self.host_caret_position.clone();
         let position = Pos {
             story: StoryId::Body,
             paragraph_id: final_paragraph_id.clone(),
@@ -425,7 +435,7 @@ impl Session {
             anchor: position.clone(),
             focus: position,
         };
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.selection_visual_affinity = VisualAffinity::Upstream;
         self.selection_anchor_visual_affinity = VisualAffinity::Upstream;
         let paragraphs_estimated_bytes = paragraphs
@@ -445,7 +455,7 @@ impl Session {
                 anchor_visual_affinity: before_anchor_visual_affinity,
                 visual_affinity: before_visual_affinity,
                 state_id: before_state_id,
-                block_boundary_exit: before_block_boundary_exit,
+                host_caret_position: before_block_boundary_exit,
             },
         );
         Ok(Effect {
@@ -516,11 +526,16 @@ impl Session {
                     &self.selection.focus.paragraph_id,
                     *direction == Direction::Forward,
                 ) {
-                    let is_repeating_exit = self.block_boundary_exit.as_ref().is_some_and(
-                        |(active_id, active_direction)| {
-                            active_id == &environment.id && active_direction == direction
-                        },
-                    );
+                    let is_repeating_exit =
+                        self.host_caret_position.as_ref().is_some_and(|position| {
+                            position.kind() == super::super::HostCaretKind::Block
+                                && position.as_outside().is_some_and(
+                                    |(active_id, active_direction)| {
+                                        active_id == &environment.id
+                                            && active_direction == *direction
+                                    },
+                                )
+                        });
                     if is_repeating_exit {
                         let story = self
                             .structure_index
@@ -545,36 +560,52 @@ impl Session {
                             Affinity::Upstream => VisualAffinity::Upstream,
                             Affinity::Downstream => VisualAffinity::Downstream,
                         };
-                        self.block_boundary_exit = None;
+                        self.host_caret_position = None;
                         return Ok(Effect {
                             selection_changed: true,
                             ..Effect::default()
                         });
                     }
                 }
-                if let Some((active_environment_id, active_direction)) =
-                    self.block_boundary_exit.clone()
+                if let Some(position) = self.host_caret_position.clone()
+                    && position.kind() == super::super::HostCaretKind::Block
+                    && let Some(active_environment_id) =
+                        position.as_outside().map(|(id, _)| id.clone())
                     && active_environment_id == environment.id
                 {
-                    if active_direction == *direction {
-                        return Ok(Effect::default());
+                    let transition = position.horizontal_transition(
+                        *direction == Direction::Forward,
+                        true,
+                        true,
+                    );
+                    match transition {
+                        super::super::HostCaretTransition::MoveOutside => {
+                            return Ok(Effect::default());
+                        }
+                        super::super::HostCaretTransition::EnterStart
+                        | super::super::HostCaretTransition::EnterEnd => {
+                            self.host_caret_position = None;
+                            self.selection.focus.affinity = match direction {
+                                Direction::Forward => Affinity::Downstream,
+                                Direction::Backward => Affinity::Upstream,
+                            };
+                            self.selection.anchor = self.selection.focus.clone();
+                            self.selection_visual_affinity = match self.selection.focus.affinity {
+                                Affinity::Upstream => VisualAffinity::Upstream,
+                                Affinity::Downstream => VisualAffinity::Downstream,
+                            };
+                            return Ok(Effect {
+                                selection_changed: true,
+                                ..Effect::default()
+                            });
+                        }
+                        _ => return Ok(Effect::default()),
                     }
-                    self.block_boundary_exit = None;
-                    self.selection.focus.affinity = match direction {
-                        Direction::Forward => Affinity::Downstream,
-                        Direction::Backward => Affinity::Upstream,
-                    };
-                    self.selection.anchor = self.selection.focus.clone();
-                    self.selection_visual_affinity = match self.selection.focus.affinity {
-                        Affinity::Upstream => VisualAffinity::Upstream,
-                        Affinity::Downstream => VisualAffinity::Downstream,
-                    };
-                    return Ok(Effect {
-                        selection_changed: true,
-                        ..Effect::default()
-                    });
                 }
-                self.block_boundary_exit = Some((environment.id.clone(), *direction));
+                self.host_caret_position = Some(HostCaretPosition::outside(
+                    environment.id.clone(),
+                    *direction,
+                ));
                 self.selection.focus.affinity = match direction {
                     Direction::Backward => Affinity::Upstream,
                     Direction::Forward => Affinity::Downstream,
@@ -637,7 +668,7 @@ impl Session {
             anchor: target.clone(),
             focus: target,
         };
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;

@@ -85,6 +85,119 @@ fn block_environment_highlight_geometry_tracks_the_active_block_environment()
 }
 
 #[test]
+fn empty_inline_and_pending_format_carets_publish_visible_highlight_slots()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut pending_runtime = DocumentViewRuntime::new_blank()?;
+    pending_runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Bold,
+        ))?;
+    let pending: Value = serde_json::from_str(&pending_runtime.layout_snapshot_json()?)?;
+    let pending_rectangles = pending["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("pending style slot was omitted"))?;
+    assert_eq!(pending_rectangles.len(), 1);
+    assert!(pending_rectangles[0]["x1Pt"].as_f64() > pending_rectangles[0]["x0Pt"].as_f64());
+    assert!(pending_rectangles[0]["y1Pt"].as_f64() > pending_rectangles[0]["y0Pt"].as_f64());
+    pending_runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Bold,
+        ))?;
+    let inactive: Value = serde_json::from_str(&pending_runtime.layout_snapshot_json()?)?;
+    assert_eq!(
+        inactive["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+
+    let mut formatted_document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut formatted_document.body[0] else {
+        return Err(std::io::Error::other("blank document has no paragraph").into());
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+        children: vec![ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "ab".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut formatted_runtime = DocumentViewRuntime::new(formatted_document)?;
+    let mut position = formatted_runtime.session.selection().focus.clone();
+    position.offset = 1;
+    position.affinity = caret_engine::Affinity::Downstream;
+    formatted_runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))?;
+    formatted_runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Italic,
+        ))?;
+    let formatted: Value = serde_json::from_str(&formatted_runtime.layout_snapshot_json()?)?;
+    assert!(
+        formatted["inlineEnvironmentHighlightRects"]
+            .as_array()
+            .is_some_and(|rects| {
+                rects.len() >= 2
+                    && rects.iter().all(|rectangle| {
+                        rectangle["x1Pt"].as_f64() > rectangle["x0Pt"].as_f64()
+                            && rectangle["y1Pt"].as_f64() > rectangle["y0Pt"].as_f64()
+                    })
+            })
+    );
+
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        return Err(std::io::Error::other("blank document has no paragraph").into());
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Italic,
+        definition_id: None,
+        props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+        children: Vec::new(),
+        extra: BTreeMap::new(),
+    })];
+    let mut empty_runtime = DocumentViewRuntime::new(document)?;
+    let mut outside = empty_runtime.session.selection().focus.clone();
+    outside.affinity = caret_engine::Affinity::Upstream;
+    empty_runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: outside.clone(),
+                focus: outside,
+            },
+        )))?;
+    empty_runtime.session.run(caret_engine::Command::MoveCaret(
+        caret_engine::Direction::Forward,
+    ))?;
+    let empty: Value = serde_json::from_str(&empty_runtime.layout_snapshot_json()?)?;
+    let empty_rectangles = empty["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("empty inline slot was omitted"))?;
+    assert_eq!(empty_rectangles.len(), 1);
+    assert!(empty_rectangles[0]["x1Pt"].as_f64() > empty_rectangles[0]["x0Pt"].as_f64());
+    assert!(empty_rectangles[0]["y1Pt"].as_f64() > empty_rectangles[0]["y0Pt"].as_f64());
+    Ok(())
+}
+
+#[test]
 fn clicking_math_text_installs_tree_focus_and_publishes_its_caret()
 -> Result<(), Box<dyn std::error::Error>> {
     let math_tree = caret_doc::MathTree {

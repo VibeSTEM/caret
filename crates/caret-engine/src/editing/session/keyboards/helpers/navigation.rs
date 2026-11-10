@@ -24,6 +24,38 @@ impl Session {
         Ok(())
     }
 
+    /// 仅在布局候选确实停留于当前逻辑/视觉边界时运行空行内宿主迁移。
+    pub(in crate::editing::session::keyboards) fn empty_inline_boundary_candidate_matches(
+        &mut self,
+        candidate: Option<&NavigationCandidate>,
+    ) -> Result<bool, EditError> {
+        match candidate {
+            None => Ok(true),
+            Some(NavigationCandidate::Document {
+                focus,
+                visual_affinity,
+                generation,
+            }) => {
+                self.validate_navigation_generation(generation)?;
+                let current_focus = self.selection.focus.clone();
+                let current_visual_affinity = self.selection_visual_affinity;
+                let map = self.text_map_for(focus)?;
+                map.validate_pos(focus)?;
+                if focus.paragraph_id != current_focus.paragraph_id
+                    || focus.story != current_focus.story
+                {
+                    return Ok(false);
+                }
+                Ok(if focus.offset == current_focus.offset {
+                    *visual_affinity == current_visual_affinity
+                } else {
+                    map.has_empty_inline_environment_between(focus.offset, current_focus.offset)
+                })
+            }
+            Some(_) => Ok(false),
+        }
+    }
+
     /// 提交正文候选；锚点根据调用方已选择的扩展状态构造。
     pub(in crate::editing::session::keyboards) fn commit_document_navigation_candidate(
         &mut self,
@@ -35,6 +67,34 @@ impl Session {
         extend: bool,
     ) -> Result<Effect, EditError> {
         self.validate_navigation_generation(&generation)?;
+        let retained_empty_inline_host = if !extend
+            && focus.paragraph_id == self.selection.focus.paragraph_id
+            && focus.story == self.selection.focus.story
+            && focus.offset == self.selection.focus.offset
+        {
+            let position = self.host_caret_position.clone();
+            let map = self.text_map_for(&focus)?;
+            position.filter(|position| {
+                position.kind() == crate::editing::HostCaretKind::Inline
+                    && map.is_empty_inline_environment(focus.offset, position.host_id())
+            })
+        } else {
+            None
+        };
+        if !extend
+            && self.selection.anchor == self.selection.focus
+            && focus == self.selection.focus
+            && visual_affinity != self.selection_visual_affinity
+        {
+            let changed = self.selection_visual_affinity != visual_affinity
+                || self.selection_anchor_visual_affinity != visual_affinity;
+            self.selection_visual_affinity = visual_affinity;
+            self.selection_anchor_visual_affinity = visual_affinity;
+            return Ok(Effect {
+                selection_changed: changed,
+                ..Effect::default()
+            });
+        }
         let anchor = if extend {
             self.structure_selection
                 .as_ref()
@@ -43,12 +103,27 @@ impl Session {
         } else {
             focus.clone()
         };
-        self.set_navigation_selection_with_direction(
-            Selection { anchor, focus },
+        let result = self.set_navigation_selection_with_direction(
+            Selection {
+                anchor,
+                focus: focus.clone(),
+            },
             visual_affinity,
             intent,
             direction,
-        )
+        );
+        if result.is_ok()
+            && let Some(position) = retained_empty_inline_host
+            && self.math_edit.is_none()
+            && self.selection.focus == focus
+            && self
+                .host_caret_position
+                .as_ref()
+                .is_none_or(|current| current == &position)
+        {
+            self.host_caret_position = Some(position);
+        }
+        result
     }
 
     /// 提交 MathText 候选并保留树内逻辑锚点与视觉亲和性。

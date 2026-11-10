@@ -31,7 +31,7 @@ impl Session {
         if self.math_edit.is_some() {
             return self.exit_math_edit_for_navigation(Direction::Forward);
         }
-        if self.block_boundary_exit.is_some() {
+        if self.host_caret_position.is_some() {
             return Ok(Effect::default());
         }
         if self.selected_block_environment.take().is_some() {

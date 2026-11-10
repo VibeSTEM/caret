@@ -33,10 +33,41 @@ impl Session {
         };
         let insert_offset = anchor.offset.min(focus.offset);
         let mut paragraph = self.paragraph_for(&anchor)?.clone();
+        let entered_empty_inline_environment =
+            self.host_caret_position
+                .as_ref()
+                .is_some_and(|position| match position {
+                    crate::editing::HostCaretPosition::Inside {
+                        host_id,
+                        kind: crate::editing::HostCaretKind::Inline,
+                        local,
+                    } if local == start => TextMap::new(&paragraph)
+                        .ok()
+                        .is_some_and(|map| map.is_empty_inline_environment(insert_offset, host_id)),
+                    _ => false,
+                });
+        let empty_inline_host_id =
+            self.host_caret_position
+                .as_ref()
+                .and_then(|position| match position {
+                    crate::editing::HostCaretPosition::Inside {
+                        host_id,
+                        kind: crate::editing::HostCaretKind::Inline,
+                        local,
+                    } if local == start && anchor.offset == focus.offset => Some(host_id.clone()),
+                    _ => None,
+                });
         if anchor.offset == focus.offset {
             let map = TextMap::new(&paragraph)?;
             map.validate_pos(&anchor)?;
-            map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
+            let inserted_in_empty_environment = if let Some(host_id) = &empty_inline_host_id {
+                map.insert_into_empty_environment(&mut paragraph, host_id, text)?
+            } else {
+                false
+            };
+            if !inserted_in_empty_environment {
+                map.insert_text(&mut paragraph, insert_offset, start.affinity, text)?;
+            }
         } else {
             let map = TextMap::new(&paragraph)?;
             map.validate_pos(&anchor)?;
@@ -69,7 +100,8 @@ impl Session {
         let position_offset =
             result_map.snap_to_grapheme_boundary(insert_offset + text.len(), Affinity::Downstream);
         let result_boundaries = result_map.grapheme_boundaries.clone();
-        let affinity = if self.pending_inline_style.is_active() {
+        let affinity = if self.pending_inline_style.is_active() || entered_empty_inline_environment
+        {
             Affinity::Upstream
         } else {
             start.affinity

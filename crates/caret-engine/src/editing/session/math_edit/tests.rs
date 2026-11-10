@@ -5149,19 +5149,23 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
     };
     let id = align.id.clone();
     let row_id = align.rows[0].id.clone();
+    let first_cell_id = align.rows[0].cells[0].root.id.clone();
     let cell_id = align.rows[0].cells[1].root.id.clone();
     let mut document = Document::blank();
     document.body.push(Block::Align(align));
     let mut session = Session::new(document)?;
     let position = MathTreePosition {
-        host: MathPositionHost::AlignCell { row_id, cell_id },
+        host: MathPositionHost::AlignCell {
+            row_id: row_id.clone(),
+            cell_id: cell_id.clone(),
+        },
         path: MathSequencePath::root(),
         offset: 0,
         affinity: MathPositionAffinity::Downstream,
     };
     session.math_edit = Some(MathEdit {
         target: MathEditTarget::Block {
-            block_id: id,
+            block_id: id.clone(),
             align: true,
         },
         source_projection: None,
@@ -5173,6 +5177,55 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
             anchor: position,
         },
     });
+
+    let second_cell_position = session
+        .active_host_caret_position()
+        .ok_or(EditError::InvalidPosition)?;
+    assert!(matches!(
+        &second_cell_position,
+        super::super::super::HostCaretPosition::Inside {
+            local: super::super::super::HostCaretLocalPosition::Math(
+                super::super::super::MathCaretLocalPosition {
+                    coordinate: super::super::super::MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::AlignCell { cell_id: active_cell_id, .. },
+                        ..
+                    },
+                    ..
+                }
+            ),
+            ..
+        } if active_cell_id == &cell_id
+    ));
+    let mut first_cell_session = Session::new(session.document().clone())?;
+    let first_cell_position = MathTreePosition {
+        host: MathPositionHost::AlignCell {
+            row_id: row_id.clone(),
+            cell_id: first_cell_id.clone(),
+        },
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    first_cell_session.math_edit = Some(MathEdit {
+        target: MathEditTarget::Block {
+            block_id: id.clone(),
+            align: true,
+        },
+        source_projection: None,
+        source_draft: None,
+        revision: first_cell_session.current_math_edit_revision(),
+        cursor: 0,
+        branch: MathEditBranch::Tree {
+            path: first_cell_position.path.clone(),
+            anchor: first_cell_position,
+        },
+    });
+    assert_ne!(
+        second_cell_position,
+        first_cell_session
+            .active_host_caret_position()
+            .ok_or(EditError::InvalidPosition)?
+    );
 
     session.run(Command::Delete(Direction::Backward))?;
     let align = first_align(&session)?;
@@ -13442,6 +13495,13 @@ fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std:
         session.math_edit().map(|edit| &edit.target),
         Some(MathEditTarget::Block { align: false, .. })
     ));
+    assert!(matches!(
+        session.active_host_caret_position(),
+        Some(super::super::super::HostCaretPosition::Inside {
+            local: super::super::super::HostCaretLocalPosition::Math(_),
+            ..
+        })
+    ));
 
     session.run(Command::MoveCaret(Direction::Forward))?;
     session.run(Command::MoveCaret(Direction::Forward))?;
@@ -13463,6 +13523,253 @@ fn caret_moves_between_adjacent_display_math_blocks() -> Result<(), Box<dyn std:
         Some(MathEditTarget::Block { align: false, .. })
     ));
     assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(1));
+    Ok(())
+}
+
+#[test]
+fn leaving_empty_inline_at_formula_boundary_stops_before_adjacent_block() -> Result<(), EditError> {
+    let inline_id = NodeId::generate();
+    let mut paragraph = caret_doc::Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![caret_doc::ParagraphContent::Environment(
+        caret_doc::InlineEnvironment {
+            id: inline_id,
+            kind: caret_doc::InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+    )];
+    let Block::Equation(equation) = display_math_block(false, "x")? else {
+        return Err(EditError::InvalidPosition);
+    };
+    let equation_id = equation.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph), Block::Equation(equation)];
+    let mut session = Session::new(document)?;
+
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::After {
+            kind: HostCaretKind::Inline,
+            ..
+        })
+    ));
+    let candidate = crate::editing::NavigationCandidate::Document {
+        focus: session.selection().focus.clone(),
+        visual_affinity: session.selection_visual_affinity(),
+        generation: crate::editing::NavigationGeneration {
+            session_id: session.session_id().clone(),
+            document_generation: session.document_generation(),
+            font_generation: 0,
+        },
+    };
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(candidate),
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::Before {
+            host_id,
+            kind: HostCaretKind::Block,
+        }) if host_id == &equation_id
+    ));
+    assert!(session.math_edit().is_none());
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { block_id, align: false }) if block_id == &equation_id
+    ));
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::Before {
+            host_id,
+            kind: HostCaretKind::Block,
+        }) if host_id == &equation_id
+    ));
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::After {
+            kind: HostCaretKind::Inline,
+            ..
+        })
+    ));
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::Inside {
+            kind: HostCaretKind::Inline,
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn adjacent_block_after_stop_returns_to_the_following_paragraph() -> Result<(), EditError> {
+    let mut document = Document::blank();
+    let Block::Equation(equation) = display_math_block(false, "x")? else {
+        return Err(EditError::InvalidPosition);
+    };
+    let equation_id = equation.id.clone();
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let inline_id = NodeId::generate();
+    paragraph.inlines = vec![ParagraphContent::Environment(
+        caret_doc::InlineEnvironment {
+            id: inline_id.clone(),
+            kind: caret_doc::InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        },
+    )];
+    let paragraph_id = paragraph.id.clone();
+    document.body = vec![Block::Equation(equation), Block::Paragraph(paragraph)];
+    let mut session = Session::new(document)?;
+    let paragraph_start = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Upstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: paragraph_start.clone(),
+        focus: paragraph_start.clone(),
+    })))?;
+
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::After {
+            host_id,
+            kind: HostCaretKind::Block,
+        }) if host_id == &equation_id
+    ));
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Block { block_id, align: false }) if block_id == &equation_id
+    ));
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::After {
+            host_id,
+            kind: HostCaretKind::Block,
+        }) if host_id == &equation_id
+    ));
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert_eq!(session.selection().focus, paragraph_start);
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::Before {
+            host_id,
+            kind: HostCaretKind::Inline,
+        }) if host_id == &inline_id
+    ));
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::Inside {
+            host_id,
+            kind: HostCaretKind::Inline,
+            ..
+        }) if host_id == &inline_id
+    ));
+    Ok(())
+}
+
+#[test]
+fn empty_inline_boundary_can_enter_adjacent_inline_math() -> Result<(), EditError> {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Inline)
+            .map_err(|_| EditError::InvalidMath("inline math fixture failed".to_owned()))?
+    else {
+        return Err(EditError::InvalidMath("expected inline math".to_owned()));
+    };
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![
+        ParagraphContent::Environment(caret_doc::InlineEnvironment {
+            id: NodeId::generate(),
+            kind: caret_doc::InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut session = Session::new(document)?;
+
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(HostCaretPosition::After {
+            kind: HostCaretKind::Inline,
+            ..
+        })
+    ));
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(MathEditTarget::Inline { .. })
+    ));
+    assert!(session.host_caret_position.is_none());
     Ok(())
 }
 

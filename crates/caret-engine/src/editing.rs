@@ -12,6 +12,7 @@ mod flow_edit;
 mod flow_format;
 mod flow_map;
 mod grapheme;
+mod host_caret;
 mod navigation;
 mod paragraph_ops;
 mod position;
@@ -28,6 +29,10 @@ pub use environment::{
     EnvironmentSource, InlineSpan,
 };
 pub use error::EditError;
+pub use host_caret::{
+    HostCaretKind, HostCaretLocalPosition, HostCaretPosition, HostCaretTransition,
+    MathCaretCoordinate, MathCaretLocalPosition,
+};
 pub use navigation::NavigationIntent;
 pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
 pub use session::{
