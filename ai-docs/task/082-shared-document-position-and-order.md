@@ -47,14 +47,25 @@
 
 预计涉及 `caret-structure` 文档索引与宿主定位、`caret-engine` Session/paragraph/history locator、必要的模型 adapter 及 Rust 行为测试。除非证明稳定独立职责，不新建 crate，不变更 `.cdoc` schema。
 
+## 模型字段审计记录
+
+| 字段 | 运行时消费者 / 持久契约 | 决定 |
+| --- | --- | --- |
+| `DocumentSettings.defaultStyles`、`formatOverrides` | 当前没有样式解析器读取这两项；它们仍是 `.cdoc` 的已知 JSON 字段，文档结构图列明，存储往返测试和 App 保存重开测试验证保留。类型化 map 要求 JSON 对象，缺失值反序列化为空 map 并按默认序列化输出空对象。 | 暂留为显式字段；改放 `extra` 会改变缺省序列化和无效类型的接受行为，即使保留非空对象的 wire 内容也不等价。 |
+| `ThemeSnapshot.namedStyles` | 当前无排版/编辑器运行时读取；主题快照 DTO 将其定义为已知字段，存储与 App 保存重开测试验证往返。类型化 map 要求 JSON 对象，缺失值采用默认空 map。 | 暂留为主题快照已知字段；改放 `extra` 会放宽无效类型接受行为，且其主题格式/未来消费者尚未完成审计。 |
+| 顶层 `CdocFile.media` 与 `Media` | 打开/保存校验媒体 ID、类型和数据大小；`DocumentSession` 保存快照携带媒体数组；task 052 规定图片内容后续使用该资源容器；存储与 App 测试验证媒体和未知元数据往返。 | 保留；已有持久化、验证和会话消费者。 |
+| Paragraph `language` / `layout` / `markStyle` / `props` / `extra` | language 参与 shaping；layout 进入排版与分页；markStyle 参与段落合并兼容性判断，空行需要 mark metrics 且存在非空 markStyle 时明确拒绝当前不支持的样式；props 的 `outlineLevel` 被结构索引消费；extra 在序列化中保留，并在不支持无损变换时阻止编辑。 | 保留；运行时、校验、未知字段兼容及事务保护均有实际消费者。 |
+| 环境 `definitionId` | 两类 ID 均经 codec 读写；能力收集器为 Block 推导 `caret.env.templates`，为 Inline 另推导 `caret.env.inline-text-templates.v1`。只有 Inline 模板能力被要求显式声明并验证 variant；Block 暂无模板解析器，也无同等的模板引用/能力声明强制校验。行内格式/数学转换保留 variant ID，历史内存估算计入环境 ID。 | 保留；明确区分已实现的行内语义与仅持久化/能力推导的块环境字段，后者待块模板设计再赋予运行时解释。 |
+| 节点 ID、`Opaque`、`extra`、格式/主题/MathTree schema version | 节点 ID 参与文档唯一性验证、物理索引、编辑与历史；Opaque/extra 用于未知内容往返及安全拒绝有损编辑；版本字段和 required features 驱动格式/能力验证与只读安全预览。 | 保留；属于身份、前向兼容和版本解释边界，不是无消费者的缓存字段。 |
+
 ## 验收标准
 
 - [ ] 有效文档位置在嵌套块、标题、空容器、连续公式块、InlineMath 与 Paragraph 文本之间可确定顺序；稳定 ID 只作身份，Paragraph ordinal 不充当全树排序键。
 - [x] 按任意有效宿主 ID 查询到正确父链和同级次序；活动结构状态不从任取 Paragraph 推断。
 - [ ] locator 统一共享身份、父链、排序与 generation 校验；只读查询与可变事务定位都使用正确且经验证的入口。
 - [ ] 位置/Session/历史字段审计有消费者和生命周期证据；冗余状态得到收敛，必要的扩展与兼容字段保留理由明确。
-- [ ] 持久模型字段逐项有序列化与领域消费者依据；拟删除字段已验证所有构造/读写/round-trip/兼容路径，未删除字段记录其扩展或未知数据契约。
-- [ ] `defaultStyles`、`formatOverrides`、`namedStyles` 和顶层媒体资源等候选字段均有完整消费者与调用方证据；仅在证明无契约、无消费者后删除。
+- [ ] 持久模型字段逐项有序列化与领域消费者或兼容契约依据；拟删除字段已验证所有构造/读写/round-trip/兼容路径，未删除字段记录其扩展或未知数据契约。
+- [x] 已审计 `defaultStyles`、`formatOverrides`、`namedStyles` 和顶层媒体候选字段；明确标记无运行时解释的已知 wire 字段并保留，确认媒体资源存在校验、会话快照和往返消费者。
 - [ ] Undo/Redo、删除、拆分、合并和跨容器移动后的映射保持有效；无法映射时原子拒绝并保留文档与会话状态。
 - [x] 不因排序实现需要就为 ExplicitBreak/Opaque 添加 schema ID；若新增身份有明确需求和往返/兼容/历史证据，记录独立决策。
 - [ ] 性能目标有代表性文档与可复现基线；未测量时不宣称复杂度改进。
