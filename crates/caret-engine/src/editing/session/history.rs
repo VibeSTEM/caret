@@ -1076,14 +1076,7 @@ fn block_list_mut<'a>(
     blocks: &'a mut Vec<Block>,
     environment_ids: &[NodeId],
 ) -> Option<&'a mut Vec<Block>> {
-    let Some((environment_id, rest)) = environment_ids.split_first() else {
-        return Some(blocks);
-    };
-    let environment = blocks.iter_mut().find_map(|block| match block {
-        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
-        _ => None,
-    })?;
-    block_list_mut(&mut environment.children, rest)
+    caret_structure::block_list_by_environment_ids_mut(blocks, environment_ids)
 }
 
 fn apply_paragraph_insertion(

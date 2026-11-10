@@ -1,10 +1,15 @@
 //! 验证结构索引的文档顺序、嵌套范围和标题派生范围。
 
 use super::*;
-use crate::{DocumentNodeEdge, DocumentNodeKind, compare_document_node_edges, find_document_node};
+use crate::{
+    DocumentNodeEdge, DocumentNodeKind, block_list_by_environment_ids,
+    block_list_by_environment_ids_mut, compare_document_node_edges, find_block_node,
+    find_document_node,
+};
 use caret_doc::{
-    BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment, InlineEnvironmentKind,
-    InlineMath, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
+    Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
+    InlineEnvironmentKind, InlineMath, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent,
+    Run,
 };
 use std::collections::BTreeMap;
 
@@ -599,6 +604,118 @@ fn equation_and_align_blocks_are_indexed_without_navigation_stops() {
     assert!(align.kind.is_math_block());
     assert!(!align.kind.is_block_environment());
     assert_eq!(index.navigation_paragraphs(), &[before.id, after.id]);
+}
+
+#[test]
+fn environment_parent_paths_share_read_and_write_block_list_resolution() {
+    let outer_id = NodeId::generate();
+    let inner_id = NodeId::generate();
+    let paragraph_id = NodeId::generate();
+    let blocks = vec![Block::Environment(BlockEnvironment {
+        id: outer_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: vec![Block::Environment(BlockEnvironment {
+            id: inner_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: vec![Block::Paragraph(Paragraph::empty(paragraph_id.clone()))],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    assert_eq!(
+        block_list_by_environment_ids(&blocks, &[]),
+        Some(blocks.as_slice())
+    );
+    let nested = block_list_by_environment_ids(&blocks, &[outer_id.clone(), inner_id.clone()])
+        .unwrap_or_else(|| panic!("nested environment path should resolve"));
+    assert!(matches!(nested, [Block::Paragraph(paragraph)] if paragraph.id == paragraph_id));
+
+    let mut edited = blocks.clone();
+    let nested =
+        block_list_by_environment_ids_mut(&mut edited, &[outer_id.clone(), inner_id.clone()])
+            .unwrap_or_else(|| panic!("mutable nested environment path should resolve"));
+    nested.push(Block::Paragraph(Paragraph::empty(NodeId::generate())));
+    assert_eq!(
+        block_list_by_environment_ids(&edited, &[outer_id, inner_id]).map(<[Block]>::len),
+        Some(2)
+    );
+    assert_eq!(blocks.len(), 1);
+}
+
+#[test]
+fn environment_parent_paths_reject_wrong_missing_and_ambiguous_ids() {
+    let environment = BlockEnvironment {
+        id: NodeId::generate(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: Vec::new(),
+        extra: BTreeMap::new(),
+    };
+    let paragraph = Paragraph::empty(NodeId::generate());
+    let wrong_kind_id = paragraph.id.clone();
+    let environment_id = environment.id.clone();
+    let missing_id = NodeId::generate();
+    let blocks = vec![
+        Block::Environment(environment.clone()),
+        Block::Paragraph(paragraph),
+    ];
+    assert!(block_list_by_environment_ids(&blocks, &[wrong_kind_id]).is_none());
+    assert!(block_list_by_environment_ids(&blocks, &[missing_id]).is_none());
+    assert!(
+        block_list_by_environment_ids(&blocks, &[environment_id.clone(), environment_id.clone()])
+            .is_none()
+    );
+
+    let duplicate_blocks = vec![
+        Block::Environment(environment.clone()),
+        Block::Environment(environment),
+    ];
+    assert!(
+        block_list_by_environment_ids(&duplicate_blocks, std::slice::from_ref(&environment_id))
+            .is_none()
+    );
+    let mut duplicate_blocks = duplicate_blocks;
+    assert!(block_list_by_environment_ids_mut(&mut duplicate_blocks, &[environment_id]).is_none());
+    assert_eq!(duplicate_blocks.len(), 2);
+}
+
+#[test]
+fn environment_parent_location_uses_physical_parent_path_and_real_slot() {
+    let outer_id = NodeId::generate();
+    let target_id = NodeId::generate();
+    let blocks = vec![Block::Environment(BlockEnvironment {
+        id: outer_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: vec![
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+            Block::Environment(BlockEnvironment {
+                id: target_id.clone(),
+                kind: BlockEnvironmentKind::Section,
+                definition_id: None,
+                props: BTreeMap::new(),
+                title: None,
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            }),
+        ],
+        extra: BTreeMap::new(),
+    })];
+    let location = find_block_node(&blocks, &target_id)
+        .unwrap_or_else(|| panic!("target environment should be indexed"));
+    assert_eq!(location.kind, DocumentNodeKind::Environment);
+    assert_eq!(location.parent_environment_ids, vec![outer_id]);
+    assert_eq!(location.sibling_index, Some(1));
 }
 
 fn text_flow(run: Run) -> caret_doc::ParagraphContent {

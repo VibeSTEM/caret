@@ -61,6 +61,50 @@ pub fn find_block_node(blocks: &[Block], id: &NodeId) -> Option<DocumentNodeLoca
     find_in_blocks(blocks, id, &mut Vec::new(), &mut Vec::new())
 }
 
+/// 按父环境 ID 路径取得块序列；空路径返回根块序列。
+///
+/// 每一级父 ID 必须在当前块序列的直接 BlockEnvironment 子项中唯一匹配。调用者仍须校验目标节点、slot 与文档代际。
+pub fn block_list_by_environment_ids<'a>(
+    blocks: &'a [Block],
+    environment_ids: &[NodeId],
+) -> Option<&'a [Block]> {
+    let Some((environment_id, rest)) = environment_ids.split_first() else {
+        return Some(blocks);
+    };
+    let mut matches = blocks.iter().filter_map(|block| match block {
+        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
+        _ => None,
+    });
+    let environment = matches.next()?;
+    matches.next().is_none().then_some(())?;
+    block_list_by_environment_ids(&environment.children, rest)
+}
+
+/// 按父环境 ID 路径可变取得块序列，不修改路径上的文档内容。
+///
+/// 每一级父 ID 必须在当前块序列的直接 BlockEnvironment 子项中唯一匹配。调用者仍须校验目标节点、slot 与文档代际。
+pub fn block_list_by_environment_ids_mut<'a>(
+    blocks: &'a mut Vec<Block>,
+    environment_ids: &[NodeId],
+) -> Option<&'a mut Vec<Block>> {
+    let Some((environment_id, rest)) = environment_ids.split_first() else {
+        return Some(blocks);
+    };
+    let mut matching_index = None;
+    for (index, block) in blocks.iter().enumerate() {
+        if matches!(block, Block::Environment(environment) if &environment.id == environment_id)
+            && matching_index.replace(index).is_some()
+        {
+            return None;
+        }
+    }
+    let index = matching_index?;
+    let Block::Environment(environment) = blocks.get_mut(index)? else {
+        return None;
+    };
+    block_list_by_environment_ids_mut(&mut environment.children, rest)
+}
+
 /// 比较同一文档快照中两个节点的外侧边界。
 ///
 /// 同一有序序列中的相邻节点共享的间隙会得到相等结果；无 ID 节点仍占据 slot。

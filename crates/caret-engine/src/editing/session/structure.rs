@@ -947,14 +947,7 @@ fn block_list_by_parent_ids<'a>(
     blocks: &'a [Block],
     environment_ids: &[NodeId],
 ) -> Option<&'a [Block]> {
-    let Some((environment_id, rest)) = environment_ids.split_first() else {
-        return Some(blocks);
-    };
-    let environment = blocks.iter().find_map(|block| match block {
-        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
-        _ => None,
-    })?;
-    block_list_by_parent_ids(&environment.children, rest)
+    caret_structure::block_list_by_environment_ids(blocks, environment_ids)
 }
 
 fn environment_has_content(environment: &BlockEnvironment) -> Result<bool, EditError> {
@@ -1003,43 +996,16 @@ fn environment_parent_location(
     blocks: &[Block],
     target_id: &NodeId,
 ) -> Option<(Vec<NodeId>, usize)> {
-    fn find(
-        blocks: &[Block],
-        target_id: &NodeId,
-        parent_ids: &mut Vec<NodeId>,
-    ) -> Option<(Vec<NodeId>, usize)> {
-        for (index, block) in blocks.iter().enumerate() {
-            let Block::Environment(environment) = block else {
-                continue;
-            };
-            if &environment.id == target_id {
-                return Some((parent_ids.clone(), index));
-            }
-            parent_ids.push(environment.id.clone());
-            let result = find(&environment.children, target_id, parent_ids);
-            parent_ids.pop();
-            if result.is_some() {
-                return result;
-            }
-        }
-        None
-    }
-
-    find(blocks, target_id, &mut Vec::new())
+    let location = caret_structure::find_block_node(blocks, target_id)?;
+    (location.kind == caret_structure::DocumentNodeKind::Environment)
+        .then_some((location.parent_environment_ids, location.sibling_index?))
 }
 
 fn block_list_by_parent_ids_mut<'a>(
     blocks: &'a mut Vec<Block>,
     environment_ids: &[NodeId],
 ) -> Option<&'a mut Vec<Block>> {
-    let Some((environment_id, remaining_ids)) = environment_ids.split_first() else {
-        return Some(blocks);
-    };
-    let environment = blocks.iter_mut().find_map(|block| match block {
-        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
-        _ => None,
-    })?;
-    block_list_by_parent_ids_mut(&mut environment.children, remaining_ids)
+    caret_structure::block_list_by_environment_ids_mut(blocks, environment_ids)
 }
 
 fn replace_block_at_location(

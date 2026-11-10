@@ -5431,34 +5431,16 @@ fn block_list<'a>(
     blocks: &'a mut Vec<Block>,
     parent_ids: &[NodeId],
 ) -> Result<&'a mut Vec<Block>, EditError> {
-    let Some((first, rest)) = parent_ids.split_first() else {
-        return Ok(blocks);
-    };
-    let environment = blocks
-        .iter_mut()
-        .find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == first => Some(environment),
-            _ => None,
-        })
-        .ok_or(EditError::InvalidPosition)?;
-    block_list(&mut environment.children, rest)
+    caret_structure::block_list_by_environment_ids_mut(blocks, parent_ids)
+        .ok_or(EditError::InvalidPosition)
 }
 
 fn block_list_ref<'a>(
     blocks: &'a [Block],
     parent_ids: &[NodeId],
 ) -> Result<&'a [Block], EditError> {
-    let Some((first, rest)) = parent_ids.split_first() else {
-        return Ok(blocks);
-    };
-    let environment = blocks
-        .iter()
-        .find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == first => Some(environment),
-            _ => None,
-        })
-        .ok_or(EditError::InvalidPosition)?;
-    block_list_ref(&environment.children, rest)
+    caret_structure::block_list_by_environment_ids(blocks, parent_ids)
+        .ok_or(EditError::InvalidPosition)
 }
 
 #[cfg(test)]
