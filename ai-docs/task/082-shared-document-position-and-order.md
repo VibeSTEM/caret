@@ -66,6 +66,8 @@
 | --- | --- | --- | --- |
 | 2026-11-10 | `cargo test -p caret-structure --locked` | StructureIndex 导航语义与物理父链/slot 顺序回归通过 | 8 项通过；物理节点顺序可查，但尚未覆盖任意 Paragraph caret 与 InlineMath 局部位置的全序 |
 | 2026-11-10 | `cargo test -p caret-engine --locked` | locator、撤销重做与失效映射回归通过 | 710 项通过；复合历史补丁部分失配及同 ID 内容变化时原子拒绝 |
+| 2026-11-10 | 段落位置比较的 Story、locator 与 TextMap 边界回归 | 无效位置不参与排序，段落内 text/InlineMath 占位偏移保持真实顺序 | wrong Story、越界 offset 和失效 block path 定向测试通过；通用宿主 caret 全序仍未实现 |
+| 2026-11-10 | `cargo test -p caret-engine --locked` 与 `cargo clippy -p caret-engine --all-targets --locked -- -D warnings` | 校验后的段落位置排序调用链通过 | 713 项测试与 Clippy 均通过；覆盖 InlineMath 占位符前后、标题在子段落前、跨段落 IME 选区及无效 Story/offset/path |
 | 2026-11-10 | `cargo test -p caret-app -p caret-doc --locked` | 文档编辑与格式/未知数据往返通过 | 285 项 App、78 项 Doc 通过；包含打开、编辑、保存、重开后保留样式映射、主题命名样式和媒体 |
 | — | 代表性文档定位基准 | 提供性能基线，不先定复杂度结论 | 未执行；不宣称性能改进 |
 | 2026-11-10 | `cargo format --check`、`cargo quality` | 格式、lint、依赖审计与全 workspace 测试通过 | 通过；cargo quality 在沙盒外运行以访问只读保护的 cargo advisory 数据库 |
@@ -82,6 +84,7 @@
 - 2026-11-10：第一方持久字段消费者审计未发现可安全删除字段。未读取的样式映射、主题命名样式和 definition ID 仍属公开 DTO / `.cdoc` 兼容契约；后续补非空值打开、编辑、保存、重开验证，不以仓内无语义消费者推断字段无用。
 - 2026-11-10：物理定位入口落在 `caret-structure`，保留 `StructureIndex` 的大纲语义；公式块路径和活动环境父链改用宿主 ID 查询，Paragraph 缓存与历史路径核对完整父环境链及真实 slot。无 ID 的显式分页和 Opaque 仍只占 slot，不创建持久身份。
 - 2026-11-10：历史补丁重放在候选文档上事务应用；复合补丁中任何一项路径、slot 或快照不匹配时拒绝整个撤销/重做，不推进 Session 历史游标。Paragraph 快照删除要求 ID 与完整值同时匹配。
+- 2026-11-10：段落位置比较现校验当前文档上的目标 ID、Story、完整物理路径及 TextMap 合法边界后才排序；Story 错配、越界偏移和陈旧路径均拒绝。此比较仅覆盖 Paragraph 文本位置，不能代表 Inline/Block 宿主状态或数学局部位置的通用全序。
 - 2026-11-10：尚未实现通用 caret 全序，尤其是同一 Paragraph 中文本偏移与 InlineMath/InlineEnvironment 结构边界之间的排序；共享物理节点顺序不能替代宿主局部位置转换。082 保持 in-progress，待补齐该位置层和对应测试。
 
 ## 完成摘要

@@ -391,6 +391,7 @@ impl Session {
             }
             let mut effects = Vec::with_capacity(2);
             let selection_is_nonempty = compare_positions(
+                &candidate.document.body,
                 &candidate.paragraph_index,
                 &candidate.selection.anchor,
                 &candidate.selection.focus,
@@ -587,6 +588,7 @@ impl Session {
             );
         }
         let mut composition_start = if compare_positions(
+            &self.document.body,
             &self.paragraph_index,
             &self.selection.anchor,
             &self.selection.focus,

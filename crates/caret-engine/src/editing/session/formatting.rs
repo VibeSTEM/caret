@@ -259,7 +259,8 @@ impl Session {
             return Ok(Effect::default());
         }
 
-        let ordering = compare_positions(&self.paragraph_index, &anchor, &focus)?;
+        let ordering =
+            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
         let (start, end) = if ordering.is_le() {
             (anchor, focus)
         } else {
@@ -470,7 +471,8 @@ impl Session {
             return Ok(Effect::default());
         }
 
-        let ordering = compare_positions(&self.paragraph_index, &anchor, &focus)?;
+        let ordering =
+            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
         let (start, end) = if ordering.is_le() {
             (anchor, focus)
         } else {
@@ -659,7 +661,8 @@ impl Session {
             return Ok(Effect::default());
         }
 
-        let ordering = compare_positions(&self.paragraph_index, &anchor, &focus)?;
+        let ordering =
+            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
         let (start, end) = if ordering.is_le() {
             (anchor, focus)
         } else {

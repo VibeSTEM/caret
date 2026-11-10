@@ -821,6 +821,7 @@ impl Session {
         );
 
         let (current_start, current_end) = if compare_positions(
+            &self.document.body,
             &self.paragraph_index,
             &self.selection.anchor,
             &self.selection.focus,
@@ -843,15 +844,27 @@ impl Session {
             if start.story != location.story || end.story != location.story {
                 continue;
             }
-            let contains_current =
-                !compare_positions(&self.paragraph_index, &start, current_start)?.is_gt()
-                    && !compare_positions(&self.paragraph_index, &end, current_end)?.is_lt();
+            let contains_current = !compare_positions(
+                &self.document.body,
+                &self.paragraph_index,
+                &start,
+                current_start,
+            )?
+            .is_gt()
+                && !compare_positions(
+                    &self.document.body,
+                    &self.paragraph_index,
+                    &end,
+                    current_end,
+                )?
+                .is_lt();
             let expands_current = start != *current_start || end != *current_end;
             if !contains_current || !expands_current {
                 continue;
             }
 
             let forward = !compare_positions(
+                &self.document.body,
                 &self.paragraph_index,
                 &self.selection.anchor,
                 &self.selection.focus,

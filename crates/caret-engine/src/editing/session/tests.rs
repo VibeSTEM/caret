@@ -48,6 +48,21 @@ fn paragraph_locator_rejects_a_stale_path_that_points_to_another_paragraph() {
     };
     first_location.block_path = second_path;
 
+    let stale = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert_eq!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &stale,
+            &stale,
+        ),
+        Err(EditError::InvalidPosition)
+    );
     assert!(session.paragraph_for(&session.selection().focus).is_err());
 }
 
@@ -1727,6 +1742,112 @@ fn session_with_inline_math(source: &str) -> Session {
     run_ok(&mut session, Command::InsertInlineMath(source.to_owned()));
     run_ok(&mut session, Command::EnterMath(Direction::Backward));
     session
+}
+
+#[test]
+fn paragraph_position_order_crosses_inline_math_object_span() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath("x".to_owned()));
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    run_ok(&mut session, Command::EditorKey(EditorKey::Escape));
+    run_ok(&mut session, Command::InsertText("b".to_owned()));
+
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    let map = TextMap::new(paragraph)
+        .unwrap_or_else(|error| panic!("text map construction failed: {error}"));
+    assert_eq!(
+        map.text,
+        format!("a{}b", super::super::text_map::OBJECT_REPLACEMENT)
+    );
+    let before_math = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph.id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let after_math = Pos {
+        offset: 1 + super::super::text_map::OBJECT_REPLACEMENT.len_utf8(),
+        ..before_math.clone()
+    };
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &before_math,
+            &after_math,
+        )
+        .unwrap_or_else(|error| panic!("paragraph positions should compare: {error}"))
+        .is_lt()
+    );
+}
+
+#[test]
+fn paragraph_position_order_places_environment_title_before_nested_children() {
+    let environment_id = NodeId::generate();
+    let mut title = Paragraph::empty(NodeId::generate());
+    title.inlines.push(text_flow(Run {
+        text: "title".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    }));
+    let title_id = title.id.clone();
+    let mut child = Paragraph::empty(NodeId::generate());
+    child.inlines.push(text_flow(Run {
+        text: "child".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    }));
+    let child_id = child.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: Default::default(),
+        title: Some(title),
+        children: vec![Block::Paragraph(child)],
+        extra: Default::default(),
+    })];
+    let session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let title_position = Pos {
+        story: StoryId::EnvironmentTitle(environment_id),
+        paragraph_id: title_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let child_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: child_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &title_position,
+            &child_position,
+        )
+        .unwrap_or_else(|error| panic!("title and child positions should compare: {error}"))
+        .is_lt()
+    );
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &child_position,
+            &title_position,
+        )
+        .unwrap_or_else(|error| panic!("child and title positions should compare: {error}"))
+        .is_gt()
+    );
 }
 
 #[test]

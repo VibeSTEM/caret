@@ -108,7 +108,9 @@ impl Session {
             } else {
                 (end_index, end.offset, start_index, start.offset)
             }
-        } else if compare_positions(&self.paragraph_index, &start, &end)?.is_gt() {
+        } else if compare_positions(&self.document.body, &self.paragraph_index, &start, &end)?
+            .is_gt()
+        {
             (end_index, end.offset, start_index, start.offset)
         } else {
             (start_index, start.offset, end_index, end.offset)
@@ -342,6 +344,7 @@ impl Session {
             return self.run(Command::ExitBlockEnvironment(direction));
         }
         let ordering = compare_positions(
+            &self.document.body,
             &self.paragraph_index,
             &self.selection.focus,
             &selection.focus,

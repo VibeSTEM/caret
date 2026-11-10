@@ -415,7 +415,9 @@ pub(super) fn first_paragraph(blocks: &[Block]) -> Option<(&Paragraph, StoryId)>
     None
 }
 
+/// 校验段落身份、Story、物理路径和 TextMap 边界，再按文档顺序比较位置。
 pub(super) fn compare_positions(
+    blocks: &[Block],
     index: &ParagraphIndex,
     left: &Pos,
     right: &Pos,
@@ -433,6 +435,18 @@ pub(super) fn compare_positions(
     }
     if left_location.story != left.story || right_location.story != right.story {
         return Err(EditError::WrongStory);
+    }
+    let left_paragraph =
+        paragraph_at_location(blocks, left_location).ok_or(EditError::InvalidPosition)?;
+    if left.paragraph_id == right.paragraph_id {
+        let map = TextMap::new(left_paragraph)?;
+        map.validate_pos(left)?;
+        map.validate_pos(right)?;
+    } else {
+        let right_paragraph =
+            paragraph_at_location(blocks, right_location).ok_or(EditError::InvalidPosition)?;
+        TextMap::new(left_paragraph)?.validate_pos(left)?;
+        TextMap::new(right_paragraph)?.validate_pos(right)?;
     }
     Ok(left_location
         .block_path
