@@ -744,7 +744,7 @@ fn session_caret_comparison_orders_empty_math_text_island_edges_by_structure() {
 }
 
 #[test]
-fn session_caret_comparison_rejects_cross_operand_text_island_ordering() {
+fn session_caret_comparison_orders_cross_operand_text_islands_by_tree_order() {
     let block_id = NodeId::generate();
     let flow = |text: &str| caret_doc::MathFlow {
         id: NodeId::generate(),
@@ -818,10 +818,42 @@ fn session_caret_comparison_rejects_cross_operand_text_island_ordering() {
             }),
         )
     };
+    let root_boundary = |index| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::Equation {
+                            owner_id: block_id.clone(),
+                        },
+                        path: MathSequencePath::root(),
+                        index,
+                        affinity: MathPositionAffinity::Upstream,
+                    },
+                }),
+            }),
+        )
+    };
 
     assert_eq!(
         session.compare_caret_snapshots(&caret(0), &caret(1)),
-        Err(EditError::InvalidPosition)
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&caret(1), &caret(0)),
+        Ok(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&root_boundary(0), &caret(0)),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&caret(1), &root_boundary(1)),
+        Ok(std::cmp::Ordering::Less)
     );
 }
 

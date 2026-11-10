@@ -87,6 +87,7 @@
 | 2026-11-10 | `cargo test -p caret-engine --locked`、`cargo clippy --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff HEAD --check` | 验证 InlineMath 内部位置与其他宿主外边界之间可证明的物理次序 | engine 747 项测试、caret-engine Clippy、格式与差异检查通过；新增覆盖相邻空 Inline、嵌套 Inline 与 Section 边界的双向比较、相邻公式与 affinity 次序，以及越界 MathTree 坐标/宿主错配拒绝。 |
 | 2026-11-10 | `cargo test -p caret-engine session_caret_comparison --locked`、跨岛文本位置定向测试 | 验证同一 MathFlow 序列中被结构项隔开的 MathTextFlow 位置可按真实内容次序比较，且无效文本边界拒绝 | 22 项 Session 比较器测试通过；新增覆盖分隔符两侧双向次序、affinity 不改变跨岛结构次序、空 TextFlow、SoftBreak、UTF-8 字素内部偏移和超界偏移拒绝、不同操作数拒绝及 TreeBoundary 传递性。 |
 | 2026-11-10 | `cargo test -p caret-engine --locked`、`cargo clippy --locked -p caret-engine --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 验证同序列跨文本岛排序增量与整个 caret-engine crate | 750 项 engine 测试、caret-engine Clippy、格式与差异检查通过；全 workspace App/native/QML 测试待 082 收敛后验证。 |
+| 2026-11-10 | `cargo test -p caret-engine session_caret_comparison --locked`、`cargo test -p caret-engine --locked`、caret-engine Clippy、格式与差异检查 | 验证 MathTree 嵌套操作数文本岛与结构边界使用同一树顺序键 | 22 项 Session 比较器测试及 750 项 engine 测试通过；覆盖分数上下操作数按 children 次序、其与根 TreeBoundary 的跨层传递，以及此前的空流和 affinity 用例。 |
 | 2026-11-10 | `cargo test --workspace --locked` | 全 workspace Rust、文档集成及 native/QML 测试通过 | 737 项 engine、10 项 structure 测试及其他 workspace/native/doc 测试通过；1 项注明的受控 crash 子进程测试保持 ignored。 |
 | 2026-11-10 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 全 workspace lint、格式与差异检查通过 | 全部通过。 |
 | 2026-11-10 | `cargo test -p caret-engine --locked`、`cargo test -p caret-structure --locked`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、格式与差异检查 | 验证新增跨宿主块数学位置与 Align 行列顺序，不回归 locator/结构逻辑 | engine 739 项、structure 10 项通过；workspace Clippy、`cargo fmt --all -- --check`、`git diff --check` 通过。此后新增同一公式文本岛跨 TextFlow 路径比较，验证待本轮收敛后重跑。尚未重跑 workspace App/native/QML 测试。 |
@@ -117,9 +118,10 @@
 - 2026-11-10：Session 全序比较新增 Equation/Align 内部位置与 Paragraph 文本、其他数学宿主及块外边界的物理顺序映射；Align 内部跨行/列位置按文档实际 cell 序号排序，同一单元格继续使用数学局部 adapter。映射依赖当前已校验的节点外边界，不用稳定 ID 推测顺序；相交或无法证明唯一顺序的位置仍拒绝比较。定向覆盖真实 `current_caret_snapshot` 产生的不同 Align 行焦点。
 - 2026-11-10：数学宿主内部位置与不同宿主的外前/外后边界复用物理区间比较；Equation/Align 及 InlineMath 内部 caret 都可与其外部相邻或包围宿主排序，Inside 严格位于自身 Before/After 之间，无法证明区间先后的情况仍拒绝。相邻 Inline 外侧边界的既有 affinity 次序保持独立，不由数学宿主比较重写。
 - 2026-11-10：同一 MathFlow 序列中被结构项隔开的 TextFlow 位置可按各自文本索引排序；先分别验证路径、UTF-8/字素边界，再比较所属序列和内容索引。不同嵌套序列、不同操作数及无法证明同一序列的位置仍拒绝，不从路径编码或 affinity 推断跨分支顺序。
+- 2026-11-10：跨不同数学文本岛的位置共用 MathTree 序列顺序键；操作数与环境子流按模型有序子项次序，TextFlow 首尾映射到对应结构边界，内部位置位于该内容项的严格区间，空 TextFlow 的 affinity 决定落在前/后边界。相同文本岛仍优先使用展平后的字素顺序，以保留相邻 TextFlow 共享边界的既有亲和语义；不同宿主、树代际或无法验证的局部坐标仍拒绝。
 - 2026-11-10：同一连续数学文本岛中的跨 TextFlow 比较复用文本岛展平结果、全局字节偏移和字素边界校验；数学结构边界与文本流按 TextFlow 的结构起止边界映射比较。若同一结构边界对应多个 TextFlow 端点，且待比较 TreeBoundary 正好位于该边界，则拒绝歧义映射，避免比较相等关系不传递；远离该边界的位置仍按结构顺序比较。空 TextFlow 的 Upstream/Downstream 分别归属其前后边界。MathTree 与文本路径必须解析到相同目标树和 Align cell。
 - 2026-11-10：Paragraph locator 的共享校验入口归入 `editing::paragraph_ops`：同时校验 ParagraphIndex 缓存路径、ID、标题/正文类型、Story 和完整稳定父链，并返回段落与当前父链/slot。历史捕获直接复用该结果；结构操作与数学编辑经 `paragraph_parent_path` 复用同一校验，不再从 history 模块获取定位职责。标题父链保留所属环境 ID，供历史恢复定位 owner；ParagraphIndex 仍负责历史快照定位。当前先按缓存路径校验段落，再按 ID 查询物理 locator；没有性能基准，不宣称降低遍历成本。
-- 2026-11-10：Session 比较器仍是明确受限的可比较子集，不代表完整跨宿主全序。同一 MathTree 的 TreeBoundary/TextFlow、同一文本岛的不同 TextFlow 路径，以及同一 MathFlow 序列内由结构项分隔的文本岛现可排序；不同嵌套序列中的跨岛位置、Source 与树/文本坐标混合、复杂 Block 父子内部坐标尚无统一无歧义 adapter。不同数学宿主仅在物理节点范围能证明不相交时可排序，重叠或映射含糊时拒绝。082 保持 in-progress，继续处理共享 locator、跨宿主组合和剩余字段/消费者审计。
+- 2026-11-10：Session 比较器仍是明确受限的可比较子集，不代表完整跨宿主全序。同一 MathTree 的 TreeBoundary/TextFlow 与不同嵌套数学序列的文本位置现使用统一结构顺序；同一文本岛的 TextFlow 位置保留展平字素顺序。Source 与树/文本坐标混合、复杂 Block 父子内部坐标尚无统一 adapter。不同数学宿主仅在物理节点范围能证明不相交时可排序，重叠或映射含糊时拒绝。082 保持 in-progress，继续处理跨宿主组合和剩余字段/消费者审计。
 
 ## 完成摘要
 

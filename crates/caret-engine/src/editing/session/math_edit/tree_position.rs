@@ -284,9 +284,9 @@ impl MathTreePosition {
     }
 }
 
-fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
-    let mut key = Vec::with_capacity(position.path.steps().len() * 2 + 1);
-    for step in position.path.steps() {
+pub(super) fn math_sequence_order_key(path: &MathSequencePath) -> Vec<usize> {
+    let mut key = Vec::with_capacity(path.steps().len() * 2);
+    for step in path.steps() {
         match *step {
             MathSequenceStep::Operand {
                 content_index,
@@ -301,6 +301,12 @@ fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
             }
         }
     }
+    key
+}
+
+fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
+    let mut key = math_sequence_order_key(&position.path);
+    key.reserve(1);
     key.push(position.offset * 2);
     key
 }

@@ -154,12 +154,12 @@ impl MathTextPosition {
         contiguous_text_flow_text(tree, &self.path)?.compare_positions(self, other)
     }
 
-    /// 比较同一 MathFlow 序列中的文本位置；文本岛之间按结构项顺序比较。
+    /// 按 MathTree 的有序子流比较不同文本岛中的位置。
     ///
-    /// 两个位置先分别验证为其文本岛中的合法字素边界。只有序列路径相同且
-    /// TextFlow 内容索引不同，才用结构索引确定跨岛顺序；不同操作数等嵌套序列
-    /// 仍交由更高层 adapter 处理。
-    pub(crate) fn compare_in_same_sequence(
+    /// 两个位置先分别验证为其文本岛中的合法字素边界，再按数学节点操作数、行内
+    /// 环境子项和 TextFlow 内容索引构造结构顺序。文本首尾映射到相邻结构边界，
+    /// 空 TextFlow 按 affinity 归属前后边界；同一文本岛仍使用其展平后的字素顺序。
+    pub(crate) fn compare_in_tree_order(
         &self,
         other: &Self,
         tree: &MathTree,
@@ -170,12 +170,42 @@ impl MathTextPosition {
 
         self.compare_in_same_text_island(self, tree)?;
         other.compare_in_same_text_island(other, tree)?;
-        let (left_sequence, left_index) =
+        let left_key = self.position_order_key(tree)?;
+        let right_key = other.position_order_key(tree)?;
+        Some(
+            left_key
+                .cmp(&right_key)
+                .then_with(|| super::compare_math_position_affinity(self.affinity, other.affinity)),
+        )
+    }
+
+    fn position_order_key(&self, tree: &MathTree) -> Option<Vec<usize>> {
+        let (sequence, content_index) =
             super::MathTreePosition::sequence_boundary_from_text_path(self.path.steps()).ok()?;
-        let (right_sequence, right_index) =
-            super::MathTreePosition::sequence_boundary_from_text_path(other.path.steps()).ok()?;
-        (left_sequence == right_sequence && left_index != right_index)
-            .then(|| left_index.cmp(&right_index))
+        let text = self.path.resolve_structurally(tree)?;
+        let length = text_flow_display_len(text)?;
+        if self.offset > length {
+            return None;
+        }
+
+        let mut key = super::tree_position::math_sequence_order_key(&sequence);
+        let start = content_index.checked_mul(2)?;
+        if length == 0 {
+            let boundary = if self.affinity == MathPositionAffinity::Upstream {
+                start
+            } else {
+                start.checked_add(2)?
+            };
+            key.push(boundary);
+        } else if self.offset == 0 {
+            key.push(start);
+        } else if self.offset == length {
+            key.push(start.checked_add(2)?);
+        } else {
+            key.push(start.checked_add(1)?);
+            key.push(self.offset);
+        }
+        Some(key)
     }
 }
 
