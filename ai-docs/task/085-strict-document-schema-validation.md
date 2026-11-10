@@ -24,6 +24,7 @@
 - 对 Run、Paragraph、InlineEnvironment、MathNode、主题/模板及其他持久化 `props` 定义允许键、值类型和值域，并保证 validator、能力推导、序列化和实际布局/编辑消费者一致。
 - 复核 `Paragraph.markStyle` 与 `ExplicitBreak.kind`：只接受布局真正实现的值；若应删字段，先证明没有 DTO、测试夹具或外部构造消费者。
 - 明确已知节点未知字段政策；若采用拒绝策略，先修改 `.cdoc` 权威兼容契约，并定义显式扩展/未知节点的数据保留边界，再调整 DTO 与 Rust 调用方。
+- 下划线值域须兼顾已存在的 `underline: false`：按关闭语义读取并在无关保存中保留；新编辑器关闭操作删除属性。非布尔值对应的扩展能力处理需与未知 `requiredFeatures` 策略一致，不得擅自把现有兼容路径改成静默丢弃。
 - 不删除模型字段候选（由 082 证据审计）；不把 `.cdoc` version、MathTree schemaVersion、theme formatVersion 与 `requiredFeatures` 合并为一层。若接受的不兼容变更要求升级 `.cdoc` 主版本，按其独立格式语义处理。
 - 不把紧凑 JSON 或字节级输出一致当作文档语义；序列化体积优化须有独立用户价值和测量依据。
 
@@ -52,6 +53,7 @@
 - [ ] 当前 schema 已知数学节点缺字段、参数个数错误、槽位类型错误或属性值非法时返回稳定错误；未来未知 kind 不被误当成已知格式损坏，也不被错误地编辑。
 - [ ] 数学槽主类型判定仅一份权威实现，codec、validator、feature 推导与能力检查一致。
 - [ ] 每个允许的 `props` 键具有类型和值域；Paragraph、Run、环境、MathNode、markStyle 与 ExplicitBreak 的校验和布局/编辑能力一致。
+- [ ] `Run.props.underline` 的布尔语义、缺省/`false` 等价关闭、局部编辑与未触及属性的往返保留规则明确；下划线扩展值不会被误当作已支持格式。
 - [ ] DTO/额外字段变化完成所有公开 API 和跨 crate 调用方审计；所有调用方编译通过，破坏性迁移已明确。
 - [ ] `.cdoc` 主版本、MathTree schema、theme formatVersion 和 requiredFeatures 各自保持清楚语义；无错误的单版本替代。
 - [ ] 错误文件打开不部分编辑或覆盖源文件；SafePreview、存储往返和失败原子性测试通过。
