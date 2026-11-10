@@ -195,7 +195,7 @@ impl Session {
                 },
                 outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
             ) if matches!(math.target, MathEditTarget::Block { .. }) => {
-                self.compare_block_math_to_host_edge(host_id, outside)
+                self.compare_math_host_to_host_edge(host_id, outside)
             }
             (
                 outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
@@ -205,7 +205,27 @@ impl Session {
                     ..
                 },
             ) if matches!(math.target, MathEditTarget::Block { .. }) => self
-                .compare_block_math_to_host_edge(host_id, outside)
+                .compare_math_host_to_host_edge(host_id, outside)
+                .map(Ordering::reverse),
+            (
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+                outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
+            ) if matches!(math.target, MathEditTarget::Inline { .. }) => {
+                self.compare_math_host_to_host_edge(host_id, outside)
+            }
+            (
+                outside @ (HostCaretPosition::Before { .. } | HostCaretPosition::After { .. }),
+                HostCaretPosition::Inside {
+                    host_id,
+                    local: HostCaretLocalPosition::Math(math),
+                    ..
+                },
+            ) if matches!(math.target, MathEditTarget::Inline { .. }) => self
+                .compare_math_host_to_host_edge(host_id, outside)
                 .map(Ordering::reverse),
             (
                 HostCaretPosition::Before {
@@ -393,9 +413,9 @@ impl Session {
         Err(EditError::InvalidPosition)
     }
 
-    fn compare_block_math_to_host_edge(
+    fn compare_math_host_to_host_edge(
         &self,
-        block_id: &NodeId,
+        math_id: &NodeId,
         outside: &HostCaretPosition<HostCaretLocalPosition>,
     ) -> Result<Ordering, EditError> {
         let external_id = outside.host_id();
@@ -404,26 +424,26 @@ impl Session {
             HostCaretPosition::After { .. } => DocumentNodeEdge::After,
             HostCaretPosition::Inside { .. } => return Err(EditError::InvalidPosition),
         };
-        let block_after_to_external = compare_document_node_edges(
+        let math_after_to_external = compare_document_node_edges(
             &self.document,
-            block_id,
+            math_id,
             DocumentNodeEdge::After,
             external_id,
             external_edge,
         )
         .ok_or(EditError::InvalidPosition)?;
-        if block_after_to_external != Ordering::Greater {
+        if math_after_to_external != Ordering::Greater {
             return Ok(Ordering::Less);
         }
-        let block_before_to_external = compare_document_node_edges(
+        let math_before_to_external = compare_document_node_edges(
             &self.document,
-            block_id,
+            math_id,
             DocumentNodeEdge::Before,
             external_id,
             external_edge,
         )
         .ok_or(EditError::InvalidPosition)?;
-        if block_before_to_external != Ordering::Less {
+        if math_before_to_external != Ordering::Less {
             return Ok(Ordering::Greater);
         }
         Err(EditError::InvalidPosition)

@@ -1402,6 +1402,27 @@ fn session_caret_comparison_does_not_merge_adjacent_inline_host_edges() {
             }),
         )
     };
+    let math_inside = |math_id: NodeId| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: math_id.clone(),
+                kind: HostCaretKind::Inline,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: MathEditTarget::Inline {
+                        paragraph_id: paragraph_id.clone(),
+                        math_id: math_id.clone(),
+                    },
+                    coordinate: MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::InlineMath { owner_id: math_id },
+                        path: MathSequencePath::root(),
+                        index: 0,
+                        affinity: MathPositionAffinity::Downstream,
+                    },
+                }),
+            }),
+        )
+    };
     let text = |affinity| {
         caret_snapshot(
             &session,
@@ -1413,8 +1434,10 @@ fn session_caret_comparison_does_not_merge_adjacent_inline_host_edges() {
             }),
         )
     };
+    let first_inside = math_inside(first_math_id.clone());
     let first_after = edge(first_math_id, true);
-    let second_before = edge(second_math_id, false);
+    let second_before = edge(second_math_id.clone(), false);
+    let second_inside = math_inside(second_math_id);
     let upstream = text(Affinity::Upstream);
     let downstream = text(Affinity::Downstream);
     assert_eq!(
@@ -1427,6 +1450,18 @@ fn session_caret_comparison_does_not_merge_adjacent_inline_host_edges() {
     );
     assert_eq!(
         session.compare_caret_snapshots(&second_before, &first_after),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&first_inside, &second_before),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&first_after, &second_inside),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&second_before, &second_inside),
         Ok(std::cmp::Ordering::Less)
     );
 }
@@ -1802,5 +1837,180 @@ fn session_caret_comparison_orders_inline_math_with_paragraph_text_and_neighbors
     assert_eq!(
         session.compare_caret_snapshots(&text_at_first_end_downstream, &first_after),
         Ok(std::cmp::Ordering::Equal)
+    );
+}
+
+#[test]
+fn session_caret_comparison_orders_inline_math_inside_positions_with_other_host_edges() {
+    let paragraph_id = NodeId::generate();
+    let section_id = NodeId::generate();
+    let first_math_id = NodeId::generate();
+    let empty_environment_id = NodeId::generate();
+    let outer_environment_id = NodeId::generate();
+    let nested_math_id = NodeId::generate();
+    let empty_tree = || caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let math = |id: NodeId| {
+        ParagraphContent::Math(caret_doc::InlineMath {
+            id,
+            math_tree: empty_tree(),
+            extra: Default::default(),
+        })
+    };
+    let paragraph = Paragraph {
+        id: paragraph_id.clone(),
+        inlines: vec![
+            math(first_math_id.clone()),
+            ParagraphContent::Environment(InlineEnvironment {
+                id: empty_environment_id.clone(),
+                kind: InlineEnvironmentKind::Bold,
+                definition_id: None,
+                props: Default::default(),
+                children: Vec::new(),
+                extra: Default::default(),
+            }),
+            ParagraphContent::Environment(InlineEnvironment {
+                id: outer_environment_id.clone(),
+                kind: InlineEnvironmentKind::Italic,
+                definition_id: None,
+                props: Default::default(),
+                children: vec![math(nested_math_id.clone())],
+                extra: Default::default(),
+            }),
+        ],
+        ..Paragraph::empty(paragraph_id.clone())
+    };
+    let session = Session::new(Document {
+        body: vec![Block::Environment(BlockEnvironment {
+            id: section_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: Default::default(),
+            title: None,
+            children: vec![Block::Paragraph(paragraph)],
+            extra: Default::default(),
+        })],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let math_inside = |math_id: NodeId| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: math_id.clone(),
+                kind: HostCaretKind::Inline,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: MathEditTarget::Inline {
+                        paragraph_id: paragraph_id.clone(),
+                        math_id: math_id.clone(),
+                    },
+                    coordinate: MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::InlineMath { owner_id: math_id },
+                        path: MathSequencePath::root(),
+                        index: 0,
+                        affinity: MathPositionAffinity::Downstream,
+                    },
+                }),
+            }),
+        )
+    };
+    let inline_edge = |host_id, before| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(if before {
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            } else {
+                HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                }
+            }),
+        )
+    };
+    let section_edge = |before| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(if before {
+                HostCaretPosition::Before {
+                    host_id: section_id.clone(),
+                    kind: HostCaretKind::Block,
+                }
+            } else {
+                HostCaretPosition::After {
+                    host_id: section_id.clone(),
+                    kind: HostCaretKind::Block,
+                }
+            }),
+        )
+    };
+
+    let first_inside = math_inside(first_math_id.clone());
+    let empty_before = inline_edge(empty_environment_id.clone(), true);
+    let empty_after = inline_edge(empty_environment_id, false);
+    let outer_before = inline_edge(outer_environment_id.clone(), true);
+    let outer_after = inline_edge(outer_environment_id, false);
+    let nested_inside = math_inside(nested_math_id.clone());
+    let section_before = section_edge(true);
+    let section_after = section_edge(false);
+
+    for (index, (earlier, later)) in [
+        (&first_inside, &empty_before),
+        (&first_inside, &empty_after),
+        (&outer_before, &nested_inside),
+        (&nested_inside, &outer_after),
+        (&section_before, &nested_inside),
+        (&nested_inside, &section_after),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            session.compare_caret_snapshots(earlier, later),
+            Ok(std::cmp::Ordering::Less),
+            "ordered pair {index}"
+        );
+        assert_eq!(
+            session.compare_caret_snapshots(later, earlier),
+            Ok(std::cmp::Ordering::Greater)
+        );
+    }
+    assert_eq!(
+        session.compare_caret_snapshots(&empty_before, &empty_after),
+        Ok(std::cmp::Ordering::Less)
+    );
+
+    let mut invalid_coordinate = nested_inside.clone();
+    if let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+        local: HostCaretLocalPosition::Math(math),
+        ..
+    }) = &mut invalid_coordinate.position
+        && let MathCaretCoordinate::TreeBoundary { index, .. } = &mut math.coordinate
+    {
+        *index = 1;
+    }
+    assert_eq!(
+        session.compare_caret_snapshots(&invalid_coordinate, &outer_after),
+        Err(EditError::InvalidPosition)
+    );
+
+    let mut mismatched_host = nested_inside.clone();
+    if let DocumentCaretPosition::Host(HostCaretPosition::Inside { host_id, .. }) =
+        &mut mismatched_host.position
+    {
+        *host_id = first_math_id;
+    }
+    assert_eq!(
+        session.compare_caret_snapshots(&mismatched_host, &outer_after),
+        Err(EditError::InvalidPosition)
     );
 }
