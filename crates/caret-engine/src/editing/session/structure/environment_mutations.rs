@@ -31,7 +31,7 @@ impl Session {
             .ok_or_else(|| EditError::UnknownParagraph(position.paragraph_id.to_string()))?
             .clone();
         let (parent_environment_ids, sibling_index) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_ops::paragraph_parent_path(&self.document.body, &location)
                 .ok_or(EditError::InvalidPosition)?;
         if kind == BlockEnvironmentKind::Section && !TextMap::new(&paragraph)?.text.is_empty() {
             return self.insert_section_after_content(

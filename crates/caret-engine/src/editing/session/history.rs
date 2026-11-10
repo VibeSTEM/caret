@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::paragraph_ops::{ParagraphIndex, ParagraphLocation, paragraph_at_location};
+use super::super::paragraph_ops::{ParagraphIndex, validated_paragraph_location};
 use super::super::{HostCaretPosition, Pos, PositionMap, Selection, StoryId};
 use super::formatting::PendingInlineStyle;
 use super::math_edit::{MathEdit, MathEditBranch, MathEditTarget};
@@ -885,7 +885,7 @@ impl ParagraphState {
             return None;
         }
         let (paragraph, parent_environment_ids, sibling_index) =
-            paragraph_history_location(&document.body, location)?;
+            validated_paragraph_location(&document.body, location)?;
         let paragraph = paragraph.clone();
         let estimated_paragraph_bytes = paragraph_estimated_bytes(&paragraph);
         Some(Self {
@@ -1117,45 +1117,6 @@ fn apply_paragraph_insertion(
     } else {
         false
     }
-}
-
-fn paragraph_history_location<'a>(
-    blocks: &'a [Block],
-    location: &ParagraphLocation,
-) -> Option<(&'a Paragraph, Vec<NodeId>, usize)> {
-    let paragraph = paragraph_at_location(blocks, location)?;
-    let physical = caret_structure::find_block_node(blocks, &location.paragraph_id)?;
-    if physical.parent_environment_ids != location.parent_environment_ids {
-        return None;
-    }
-    if location.is_title {
-        let owner_id = physical.parent_environment_ids.last()?;
-        if physical.kind != caret_structure::DocumentNodeKind::EnvironmentTitle
-            || location.story != StoryId::EnvironmentTitle(owner_id.clone())
-        {
-            return None;
-        }
-        Some((paragraph, physical.parent_environment_ids, 0))
-    } else {
-        if physical.kind != caret_structure::DocumentNodeKind::Paragraph
-            || location.story != StoryId::Body
-        {
-            return None;
-        }
-        Some((
-            paragraph,
-            physical.parent_environment_ids,
-            physical.sibling_index?,
-        ))
-    }
-}
-
-pub(super) fn parent_environment_path(
-    blocks: &[Block],
-    location: &ParagraphLocation,
-) -> Option<(Vec<NodeId>, usize)> {
-    paragraph_history_location(blocks, location)
-        .map(|(_, parent_environment_ids, sibling_index)| (parent_environment_ids, sibling_index))
 }
 
 fn apply_environment_creation(
@@ -1810,7 +1771,7 @@ pub(super) fn restore_history_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editing::paragraph_ops::build_paragraph_index;
+    use crate::editing::paragraph_ops::{build_paragraph_index, paragraph_parent_path};
     use caret_doc::{BlockEnvironment, MathContent, ParagraphContent, Run};
     use caret_math::MathInputKind;
     use serde_json::json;
@@ -1877,17 +1838,17 @@ mod tests {
         assert!(ParagraphState::capture(&document, &mismatched_index, &child_id).is_none());
 
         assert_eq!(
-            paragraph_history_location(&document.body, title_location)
+            validated_paragraph_location(&document.body, title_location)
                 .map(|(_, parents, slot)| (parents, slot)),
             Some((vec![environment_id.clone()], 0))
         );
         assert_eq!(
-            paragraph_history_location(&document.body, child_location)
+            validated_paragraph_location(&document.body, child_location)
                 .map(|(_, parents, slot)| (parents, slot)),
             Some((vec![environment_id.clone()], 0))
         );
         assert_eq!(
-            paragraph_history_location(&document.body, trailing_location)
+            validated_paragraph_location(&document.body, trailing_location)
                 .map(|(_, parents, slot)| (parents, slot)),
             Some((Vec::new(), 1))
         );
@@ -1899,8 +1860,8 @@ mod tests {
             environment.children.swap(0, 1);
         }
         assert!(ParagraphState::capture(&document, &index, &child_id).is_none());
-        assert!(paragraph_history_location(&document.body, child_location).is_none());
-        assert!(parent_environment_path(&document.body, child_location).is_none());
+        assert!(validated_paragraph_location(&document.body, child_location).is_none());
+        assert!(paragraph_parent_path(&document.body, child_location).is_none());
         if let Block::Environment(environment) = &mut document.body[0] {
             environment.children.swap(0, 1);
         }
@@ -1913,7 +1874,7 @@ mod tests {
         };
         document.body.push(Block::Paragraph(moved_child));
         assert_eq!(
-            paragraph_history_location(&document.body, child_location),
+            validated_paragraph_location(&document.body, child_location),
             None
         );
     }

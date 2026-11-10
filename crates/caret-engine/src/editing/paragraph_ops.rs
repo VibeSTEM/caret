@@ -289,6 +289,47 @@ pub(super) fn paragraph_at_location<'a>(
         .filter(|paragraph| paragraph.id == location.paragraph_id)
 }
 
+/// 校验缓存段落位置并返回段落、真实父链和同级位置；标题父链包含所属环境，标题槽返回 `0`。
+pub(super) fn validated_paragraph_location<'a>(
+    blocks: &'a [Block],
+    location: &ParagraphLocation,
+) -> Option<(&'a Paragraph, Vec<NodeId>, usize)> {
+    let paragraph = paragraph_at_location(blocks, location)?;
+    let physical = caret_structure::find_block_node(blocks, &location.paragraph_id)?;
+    if physical.parent_environment_ids != location.parent_environment_ids {
+        return None;
+    }
+    if location.is_title {
+        let owner_id = physical.parent_environment_ids.last()?;
+        if physical.kind != caret_structure::DocumentNodeKind::EnvironmentTitle
+            || location.story != StoryId::EnvironmentTitle(owner_id.clone())
+        {
+            return None;
+        }
+        Some((paragraph, physical.parent_environment_ids, 0))
+    } else {
+        if physical.kind != caret_structure::DocumentNodeKind::Paragraph
+            || location.story != StoryId::Body
+        {
+            return None;
+        }
+        Some((
+            paragraph,
+            physical.parent_environment_ids,
+            physical.sibling_index?,
+        ))
+    }
+}
+
+/// 返回已校验段落的父链与定位 slot；标题的 `0` 表示标题槽，不是正文 children 下标。
+pub(super) fn paragraph_parent_path(
+    blocks: &[Block],
+    location: &ParagraphLocation,
+) -> Option<(Vec<NodeId>, usize)> {
+    validated_paragraph_location(blocks, location)
+        .map(|(_, parent_environment_ids, sibling_index)| (parent_environment_ids, sibling_index))
+}
+
 pub(super) fn paragraph_at_location_any<'a>(
     blocks: &'a [Block],
     location: &ParagraphLocation,

@@ -27,6 +27,7 @@ mod text_inline_environment;
 mod text_run_property;
 mod text_run_split;
 mod tree_position;
+use super::super::paragraph_ops::paragraph_parent_path;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
@@ -1532,9 +1533,8 @@ impl Session {
         if location.is_title {
             return Err(EditError::InvalidPosition);
         }
-        let (parent_ids, sibling_index) =
-            history::parent_environment_path(&self.document.body, &location)
-                .ok_or(EditError::InvalidPosition)?;
+        let (parent_ids, sibling_index) = paragraph_parent_path(&self.document.body, &location)
+            .ok_or(EditError::InvalidPosition)?;
         let paragraph = self.paragraph_for(&focus)?.clone();
         let paragraph_map = TextMap::new(&paragraph)?;
         paragraph_map.validate_pos(&focus)?;
@@ -1662,12 +1662,12 @@ impl Session {
             return Ok(None);
         };
         let Some((current_parents, current_index)) =
-            history::parent_environment_path(&self.document.body, current_location)
+            paragraph_parent_path(&self.document.body, current_location)
         else {
             return Ok(None);
         };
         let Some((target_parents, target_index)) =
-            history::parent_environment_path(&self.document.body, target_location)
+            paragraph_parent_path(&self.document.body, target_location)
         else {
             return Ok(None);
         };
@@ -1780,7 +1780,7 @@ impl Session {
             return Ok(false);
         }
         let Some((parent_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, location)
+            paragraph_parent_path(&self.document.body, location)
         else {
             return Ok(false);
         };
@@ -1983,7 +1983,7 @@ impl Session {
             return Ok(Effect::default());
         }
         let Some((parent_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(Effect::default());
         };

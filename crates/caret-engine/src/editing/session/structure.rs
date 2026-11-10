@@ -10,7 +10,9 @@ use super::super::{
 };
 use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
-use crate::editing::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
+use crate::editing::paragraph_ops::{
+    ParagraphLocation, compare_positions, paragraph_at_location, paragraph_parent_path,
+};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run, SoftBreak, TextFlow,
 };
@@ -113,7 +115,7 @@ impl Session {
             return Ok(None);
         };
         let Some((parent_environment_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(None);
         };
@@ -186,7 +188,7 @@ impl Session {
             return Ok(None);
         }
         let Some((parent_ids, paragraph_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(None);
         };
