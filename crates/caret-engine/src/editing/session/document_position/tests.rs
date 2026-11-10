@@ -6,7 +6,7 @@
 use super::super::*;
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment,
-    InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineEnvironmentKind, MathContent, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
 };
 
 fn text_flow(run: Run) -> ParagraphContent {
@@ -21,6 +21,39 @@ fn caret_snapshot(session: &Session, position: DocumentCaretPosition) -> Session
         session_id: session.session_id.clone(),
         document_generation: session.document_generation,
         position,
+    }
+}
+
+fn collect_math_text_paths(
+    contents: &[MathContent],
+    environment_children: bool,
+    path: &mut Vec<MathTextFlowPathStep>,
+    paths: &mut Vec<(Vec<MathTextFlowPathStep>, String)>,
+) {
+    for (index, content) in contents.iter().enumerate() {
+        path.push(if environment_children {
+            MathTextFlowPathStep::EnvironmentChild(index)
+        } else {
+            MathTextFlowPathStep::Content(index)
+        });
+        match content {
+            MathContent::Text(text) => paths.push((
+                path.clone(),
+                text.runs.iter().map(|run| run.text.as_str()).collect(),
+            )),
+            MathContent::Math(node) => {
+                for (operand, flow) in node.children.iter().enumerate() {
+                    path.push(MathTextFlowPathStep::Operand(operand));
+                    collect_math_text_paths(&flow.content, false, path, paths);
+                    path.pop();
+                }
+            }
+            MathContent::Environment(environment) => {
+                collect_math_text_paths(&environment.children, true, path, paths);
+            }
+            MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
+        }
+        path.pop();
     }
 }
 
@@ -855,6 +888,70 @@ fn session_caret_comparison_orders_cross_operand_text_islands_by_tree_order() {
         session.compare_caret_snapshots(&caret(1), &root_boundary(1)),
         Ok(std::cmp::Ordering::Less)
     );
+}
+
+#[test]
+fn session_caret_comparison_uses_parsed_fraction_operand_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let parsed = caret_math::parse_projection(
+        r"\frac{\text{n}}{\text{d}}",
+        caret_math::MathInputKind::Equation,
+    )?;
+    let (caret_math::ProjectedMath::Tree(tree), _) = parsed.into_parts() else {
+        return Err("fraction should parse to a MathTree".into());
+    };
+    let mut paths = Vec::new();
+    collect_math_text_paths(&tree.root.content, false, &mut Vec::new(), &mut paths);
+    let numerator_path = paths
+        .iter()
+        .find(|(path, text)| path.contains(&MathTextFlowPathStep::Operand(0)) && text == "n")
+        .map(|(path, _)| path.clone())
+        .ok_or("parsed fraction has no numerator TextFlow")?;
+    let denominator_path = paths
+        .iter()
+        .find(|(path, text)| path.contains(&MathTextFlowPathStep::Operand(1)) && text == "d")
+        .map(|(path, _)| path.clone())
+        .ok_or("parsed fraction has no denominator TextFlow")?;
+
+    let block_id = NodeId::generate();
+    let session = Session::new(Document {
+        body: vec![
+            Block::Equation(caret_doc::Equation {
+                id: block_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            }),
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        ],
+        ..Document::blank()
+    })?;
+    let target = MathEditTarget::Block {
+        block_id: block_id.clone(),
+        align: false,
+    };
+    let caret = |path| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: block_id.clone(),
+                kind: HostCaretKind::Block,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TextFlowUtf8 {
+                        path: MathTextFlowPath::from_interaction_path(path, None),
+                        offset: 0,
+                        affinity: MathPositionAffinity::Downstream,
+                    },
+                }),
+            }),
+        )
+    };
+
+    assert_eq!(
+        session.compare_caret_snapshots(&caret(numerator_path), &caret(denominator_path)),
+        Ok(std::cmp::Ordering::Less)
+    );
+    Ok(())
 }
 
 #[test]
