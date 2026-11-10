@@ -20,7 +20,7 @@ pub enum DocumentNodeKind {
 
 /// 仅供同一文档顺序查询内部比较的路径键。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DocumentOrderKey(Vec<usize>);
+struct DocumentOrderKey(Vec<usize>);
 
 /// 稳定 ID 节点的物理父链、同级 slot 与文档顺序。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,17 @@ pub struct DocumentNodeLocation {
     order: DocumentOrderKey,
 }
 
+/// 稳定节点内容的外侧边界。
+///
+/// 这是物理顺序锚点，不单独声明该边界是用户可到达的光标位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentNodeEdge {
+    /// 节点内容之前。
+    Before,
+    /// 节点内容之后。
+    After,
+}
+
 /// 在完整文档树中查找节点；ExplicitBreak 与 Opaque 保留真实 slot，但不产生身份。
 pub fn find_document_node(document: &Document, id: &NodeId) -> Option<DocumentNodeLocation> {
     find_block_node(&document.body, id)
@@ -50,15 +61,42 @@ pub fn find_block_node(blocks: &[Block], id: &NodeId) -> Option<DocumentNodeLoca
     find_in_blocks(blocks, id, &mut Vec::new(), &mut Vec::new())
 }
 
-/// 比较同一文档快照中的两个稳定节点 ID；缺失任一节点时不提供次序。
-pub fn compare_document_nodes(
+/// 比较同一文档快照中两个节点的外侧边界。
+///
+/// 同一有序序列中的相邻节点共享的间隙会得到相等结果；无 ID 节点仍占据 slot。
+/// 父节点的外侧边界会包围标题和后代块。位置键只在本次快照中有效，不应跨代复用。
+pub fn compare_document_node_edges(
     document: &Document,
     left_id: &NodeId,
+    left_edge: DocumentNodeEdge,
     right_id: &NodeId,
+    right_edge: DocumentNodeEdge,
 ) -> Option<Ordering> {
     let left = find_document_node(document, left_id)?;
     let right = find_document_node(document, right_id)?;
-    Some(left.order.0.cmp(&right.order.0))
+    let left_key = edge_order_key(&left, left_edge)?;
+    let right_key = edge_order_key(&right, right_edge)?;
+    Some(left_key.cmp(&right_key))
+}
+
+fn edge_order_key(location: &DocumentNodeLocation, edge: DocumentNodeEdge) -> Option<Vec<usize>> {
+    let mut key = location.order.0.clone();
+    match location.kind {
+        DocumentNodeKind::EnvironmentTitle => {
+            key.push(match edge {
+                DocumentNodeEdge::Before => 0,
+                DocumentNodeEdge::After => 2,
+            });
+        }
+        _ => {
+            let slot = key.last_mut()?;
+            *slot = match edge {
+                DocumentNodeEdge::Before => slot.checked_sub(1)?,
+                DocumentNodeEdge::After => slot.checked_add(1)?,
+            };
+        }
+    }
+    Some(key)
 }
 
 fn find_in_blocks(

@@ -64,14 +64,17 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-11-10 | `cargo test -p caret-structure --locked` | StructureIndex 导航语义与物理父链/slot 顺序回归通过 | 8 项通过；物理节点顺序可查，但尚未覆盖任意 Paragraph caret 与 InlineMath 局部位置的全序 |
+| 2026-11-10 | `cargo test -p caret-structure --locked` | StructureIndex 导航语义与物理父链/slot 顺序回归通过 | 10 项通过；物理节点及嵌套内容外边界可比较，但尚未覆盖任意 Paragraph caret 与 InlineMath 局部位置的全序 |
 | 2026-11-10 | `cargo test -p caret-engine --locked` | locator、撤销重做与失效映射回归通过 | 710 项通过；复合历史补丁部分失配及同 ID 内容变化时原子拒绝 |
 | 2026-11-10 | 段落位置比较的 Story、locator 与 TextMap 边界回归 | 无效位置不参与排序，段落内 text/InlineMath 占位偏移保持真实顺序 | wrong Story、越界 offset 和失效 block path 定向测试通过；通用宿主 caret 全序仍未实现 |
-| 2026-11-10 | `cargo test -p caret-engine --locked` 与 `cargo clippy -p caret-engine --all-targets --locked -- -D warnings` | 校验后的段落位置排序调用链通过 | 713 项测试与 Clippy 均通过；覆盖 InlineMath 占位符前后、标题在子段落前、跨段落 IME 选区及无效 Story/offset/path |
+| 2026-11-10 | `cargo test -p caret-engine --locked`、`cargo test -p caret-structure --locked` 与两 crate Clippy | 校验后的段落、物理边界及数学局部排序通过 | 729 项 engine、10 项 structure 测试及 Clippy 通过；覆盖 InlineMath 占位符、标题/IME、嵌套 MathTree、跨 TextFlow 组合字素、草稿修订、失效位置及同宿主比较 |
+| 2026-11-10 | `cargo test -p caret-engine session_caret_comparison --locked` | 文本亲和性、空段落与宿主边界排序保持一致；Section 正文焦点及 InlineMath/InlineEnvironment 能映射到段落边界 | 13 项定向测试通过；覆盖空段落中前后 Equation 边界传递性、空 Inline 外侧与两种 affinity、相邻 InlineMath 边界的 affinity 顺序、嵌套 Inline 同侧边界的歧义拒绝、InlineMath 与文本位置、Section 正文的真实 Session 焦点及歧义映射拒绝。完整 workspace 验证待本轮实现收敛后重跑 |
+| 2026-11-10 | `cargo test --workspace --locked` | 全 workspace Rust、文档集成及 native/QML 测试通过 | 737 项 engine、10 项 structure 测试及其他 workspace/native/doc 测试通过；1 项注明的受控 crash 子进程测试保持 ignored。 |
+| 2026-11-10 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` | 全 workspace lint、格式与差异检查通过 | 全部通过。 |
 | 2026-11-10 | `cargo test -p caret-app -p caret-doc --locked` | 文档编辑与格式/未知数据往返通过 | 285 项 App、78 项 Doc 通过；包含打开、编辑、保存、重开后保留样式映射、主题命名样式和媒体 |
 | — | 代表性文档定位基准 | 提供性能基线，不先定复杂度结论 | 未执行；不宣称性能改进 |
 | 2026-11-10 | `cargo format --check`、`cargo quality` | 格式、lint、依赖审计与全 workspace 测试通过 | 通过；cargo quality 在沙盒外运行以访问只读保护的 cargo advisory 数据库 |
-| 2026-11-10 | Terra 领域审查与 Sol 最终审查 | 共享定位语义正确，无身份回归 | Terra 分领域初审完成；Sol 对完整 staged diff 复审通过，历史同 ID 失配发现已修复并补回归 |
+| 2026-11-10 | Terra 位置比较器领域复审 | 宿主身份、坐标范围、字素边界与顺序等价保持一致 | 复核发现 Section 内 Paragraph 焦点被拒绝，以及空段落可能令块边界“相等”不传递；已修复验证和 tie-break，并增加 Section、空段落、Inline 边界测试。第二轮只读复核与完整 final review 待完成 |
 
 ## 风险与回退
 
@@ -85,7 +88,14 @@
 - 2026-11-10：物理定位入口落在 `caret-structure`，保留 `StructureIndex` 的大纲语义；公式块路径和活动环境父链改用宿主 ID 查询，Paragraph 缓存与历史路径核对完整父环境链及真实 slot。无 ID 的显式分页和 Opaque 仍只占 slot，不创建持久身份。
 - 2026-11-10：历史补丁重放在候选文档上事务应用；复合补丁中任何一项路径、slot 或快照不匹配时拒绝整个撤销/重做，不推进 Session 历史游标。Paragraph 快照删除要求 ID 与完整值同时匹配。
 - 2026-11-10：段落位置比较现校验当前文档上的目标 ID、Story、完整物理路径及 TextMap 合法边界后才排序；Story 错配、越界偏移和陈旧路径均拒绝。此比较仅覆盖 Paragraph 文本位置，不能代表 Inline/Block 宿主状态或数学局部位置的通用全序。
-- 2026-11-10：尚未实现通用 caret 全序，尤其是同一 Paragraph 中文本偏移与 InlineMath/InlineEnvironment 结构边界之间的排序；共享物理节点顺序不能替代宿主局部位置转换。082 保持 in-progress，待补齐该位置层和对应测试。
+- 2026-11-10：结构层新增同一文档快照内的节点外前/外后比较；同一有序序列中相邻节点共享间隙，无 ID 节点仍占 slot，父块外侧包围标题和后代。该入口只比较宿主物理外边界，不替代 Paragraph、Inline 或 Math adapter 的宿主内部坐标比较。
+- 2026-11-10：MathTree adapter 可比较同一宿主标签下的结构序列位置，路径及局部 offset 必须都能解析；调用方仍负责证明 host、目标树及文档代际一致。该排序不等价于源码偏移或 TextFlow 路径顺序。
+- 2026-11-10：同一 TextFlow 路径的局部位置先映射到连续数学文本岛，再校验组合字素边界；相邻 TextFlow 或 InlineEnvironment 两侧的局部边界若落在同一字素簇内部则拒绝。该局部比较不负责排序不同 TextFlow 路径。
+- 2026-11-10：数学宿主位置投影保留 TextFlow/MathTree 的逻辑 affinity；源码位置绑定其已提交投影 ID，未解析草稿则绑定 Session 内草稿 ID 与内容修订；所有快照仍须校验 Session 与文档 generation。
+- 2026-11-10：新增临时 `SessionCaretSnapshot` 包装当前文本或宿主三态位置，并校验 Session/document generation 与源码草稿修订；它不替代宿主路径、Story 或局部坐标 adapter 的验证。
+- 2026-11-10：新增 Session 级只读比较入口，已接入段落位置比较、块外前/外后物理边界、Section 子树中的 Paragraph 位置、InlineEnvironment 段落位置与边界、InlineMath 内部/外侧与 TextMap 边界，以及同一数学宿主中的 MathTree、TextFlow 和源码位置。文本同偏移按 `Upstream < Downstream` 排序；可比较的宿主起点/终点分别与起点 Upstream、终点 Downstream 规范为同一顺序位置。相邻 Inline 外侧边界在同一物理间隙时按相应 affinity 次序区分；嵌套宿主同偏移的多个外侧边界不强行合并到一个文本位置；空段落和空 Inline 保留左右边界，不折叠到同一个位置。源码比较严格使用 Align 可编辑区间和字素边界；MathTree 路径拒绝不可达的可选占位槽。错误宿主类型、目标 ID、Story、节点路径、局部范围和修订身份均拒绝。
+- 2026-11-10：比较器按宿主/坐标适配拆为 Session 分派、Inline span resolver 和数学 adapter；affinity 次序复用位置模块唯一实现，Align 的 target/host 与 row/cell identity 解析统一供结构命中、文本岛边界导航和比较器使用；源码 draft/projection 版本匹配由单一 helper 负责，局部位置 adapter 继续校验 body 范围和字素边界。移除仓内仅测试调用的节点起点公开比较 API，测试直接覆盖外侧边界查询。定向测试放入对应 `document_position/tests.rs`，不继续扩大会话杂项测试文件。
+- 2026-11-10：Session 比较器仍是明确受限的可比较子集，不代表完整跨宿主全序。不同公式宿主的内部位置、不同 MathTextFlow 路径、Tree/TextFlow/Source 混合坐标、InlineMath 内部与另一宿主外侧位置、复杂 Block 父子内部坐标尚无统一无歧义 adapter；这些组合会拒绝排序。082 保持 in-progress，继续处理共享 locator、跨宿主组合和剩余字段/消费者审计。
 
 ## 完成摘要
 

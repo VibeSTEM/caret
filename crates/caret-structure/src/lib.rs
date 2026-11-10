@@ -12,6 +12,6 @@ pub use index::{
     StructureRange,
 };
 pub use physical::{
-    DocumentNodeKind, DocumentNodeLocation, compare_document_nodes, find_block_node,
-    find_document_node,
+    DocumentNodeEdge, DocumentNodeKind, DocumentNodeLocation, compare_document_node_edges,
+    find_block_node, find_document_node,
 };

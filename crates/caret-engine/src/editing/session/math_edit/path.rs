@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::super::grapheme::GraphemeMap;
 use super::MathPositionAffinity;
 use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
 use caret_math::{MathContentSourceMap, MathSourceMap, MathTextSourceMap, MathTreeSourceMap};
@@ -126,6 +127,40 @@ impl MathTextPosition {
             offset,
             affinity,
         }
+    }
+
+    /// 比较同一 MathTree TextFlow 中的合法字素边界。
+    ///
+    /// 不同 TextFlow、MathTree、宿主或文档代际需要由外层 adapter 解析，不能直接比较路径或偏移。
+    pub fn compare_in_same_flow(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Option<std::cmp::Ordering> {
+        if self.path != other.path {
+            return None;
+        }
+        let island = contiguous_text_flow_text(tree, &self.path)?;
+        let self_offset = island.global_offset(self)?;
+        let other_offset = island.global_offset(other)?;
+        if !GraphemeMap::is_boundary_in(island.display(), self_offset)
+            || !GraphemeMap::is_boundary_in(island.display(), other_offset)
+        {
+            return None;
+        }
+        Some(
+            self_offset
+                .cmp(&other_offset)
+                .then_with(|| match (self.affinity, other.affinity) {
+                    (MathPositionAffinity::Upstream, MathPositionAffinity::Downstream) => {
+                        std::cmp::Ordering::Less
+                    }
+                    (MathPositionAffinity::Downstream, MathPositionAffinity::Upstream) => {
+                        std::cmp::Ordering::Greater
+                    }
+                    _ => std::cmp::Ordering::Equal,
+                }),
+        )
     }
 }
 

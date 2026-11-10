@@ -284,6 +284,38 @@ fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {
 }
 
 #[test]
+fn caret_snapshot_rejects_another_session_or_document_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    let snapshot = session
+        .current_caret_snapshot()
+        .unwrap_or_else(|error| panic!("current caret snapshot failed: {error}"));
+    assert_eq!(session.validate_caret_snapshot_revision(&snapshot), Ok(()));
+
+    let cloned_session = session.clone();
+    assert_eq!(
+        cloned_session.validate_caret_snapshot_revision(&snapshot),
+        Err(EditError::InvalidPosition)
+    );
+
+    session
+        .run(Command::InsertText("changed".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    assert_eq!(
+        session.validate_caret_snapshot_revision(&snapshot),
+        Err(EditError::InvalidPosition)
+    );
+}
+
+#[test]
+fn caret_snapshot_does_not_fall_back_for_an_invalid_text_position() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session.selection.focus.offset = usize::MAX;
+    assert!(session.current_caret_snapshot().is_err());
+}
+
+#[test]
 fn failed_editor_command_keeps_the_active_command_query() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session rejected: {error}"));

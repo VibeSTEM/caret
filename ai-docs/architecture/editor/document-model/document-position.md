@@ -16,7 +16,7 @@ InlineMath 使用相同的外前｜内部｜外后三态；外侧是 Paragraph/T
 
 Paragraph 与 MathFlow 的连续 TextFlow 均按拼接后的 Unicode 文本计算字素边界，Run、InlineEnvironment 与相邻 TextFlow 边界不打断字素分段；可编辑结构原子（Paragraph 中的 `InlineMath`、MathFlow 中的 MathNode）和显式 `SoftBreak` 两侧设置强制停靠点。即使拼接后的文本会把结构占位符/换行与邻接字符组成扩展字素，caret 仍可停在这些结构项两边，结构项和换行可独立选择/删除。Opaque 节点不提供编辑位置。其他简单 LTR 移动按相邻字素边界进行。鼠标命中按布局给出的相邻字素簇边缘选择亲和性；若点击精确落在无法区分两侧的边界，确定性地选择逻辑 `Downstream`。工具栏格式命令保留原光标亲和性；Paragraph 文本选区保留锚点和焦点的完整 `Pos`；跨宿主选区保留共享文档位置及各自宿主局部位置，并在事务改写后通过位置映射恢复。对于 bidi 或换行处同一逻辑位置存在不同视觉 caret 候选时，方向键优先移动到相邻视觉候选并记录其 `VisualAffinity`；只有没有不同视觉候选时，才按[结构导航边界转移](../structure-navigation.md#inline-与-block-的边界转移)在同一逻辑位置切换宿主状态。移动始终落在合法字素边界，不允许三态边界转换制造字素内部 caret。混合方向文本不能按屏幕左/右推断逻辑 upstream/downstream。鼠标命中测试和结构命令也必须明确提交逻辑侧。Paragraph 选区端点携带完整 `Pos`；跨宿主端点使用共享文档位置包装及宿主局部位置，因此选区方向和两端边界语义都能保留。
 
-选区记住锚点和焦点。公式编辑会话记录宿主、活动分支和分支内位置；显式源码草稿的位置是 UTF-8 字节偏移，TextFlow 模式使用共享文本位置，二者都不直接等同于宿主段落 `Pos`。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，行内公式使用 `ParagraphContent::Math` 并在 `TextMap` 中占 U+FFFC 原子位置；Equation/Align 还带公式块及 Align 行列定位。实际目标调用链见[内容节点代码链路](content-code-path.md)。MathFlow 与 Paragraph 的 TextFlow 事务共用文本位置原语，并通过各自宿主路径映射回文档位置；事务失败时保留原文档和有效焦点。多个 InlineEnvironment 边界若重合在同一合法字素位置，位置携带完整环境链并一次转换，不按包装层数增加 caret stop；具体方向转移见[结构导航](../structure-navigation.md)。
+选区记住锚点和焦点。公式编辑会话记录宿主、活动分支和分支内位置；公式源码 UTF-8 偏移须绑定来源：未解析草稿绑定所属 Session 内的草稿身份与内容修订，已提交源码绑定投影身份。document generation 不会随每次草稿编辑变化，草稿身份也不能脱离 Session 全局比较。TextFlow 模式使用共享文本位置，二者都不直接等同于宿主段落 `Pos`。`Paragraph.inlines` 是 `Vec<ParagraphContent>`，行内公式使用 `ParagraphContent::Math` 并在 `TextMap` 中占 U+FFFC 原子位置；Equation/Align 还带公式块及 Align 行列定位。实际目标调用链见[内容节点代码链路](content-code-path.md)。MathFlow 与 Paragraph 的 TextFlow 事务共用文本位置原语，并通过各自宿主路径映射回文档位置；事务失败时保留原文档和有效焦点。多个 InlineEnvironment 边界若重合在同一合法字素位置，位置携带完整环境链并一次转换，不按包装层数增加 caret stop；具体方向转移见[结构导航](../structure-navigation.md)。
 
 Paragraph 是 `Block` 的简单变体，使用完整的 Paragraph/TextMap 位置；不能将复杂 Block 的边界编码成 Paragraph 零长度文本偏移，也不能因为共享 Block 协议而替 Paragraph 加入虚拟块停靠点。InlineMath 外部两侧是 U+FFFC 前后两个位置；非空 InlineEnvironment 的边界归属可由逻辑 affinity 表示，空环境内部位置则由环境身份或等价的显式宿主状态表达。Section、Equation、Align 等复杂 Block 的外部位置由会话持有稳定 Block ID 和前/后侧，内部位置由各自适配器提供（例如 Section 子树位置、Equation 焦点或 Align 行列）。共享选区保留有序 anchor/focus 及方向，并映射到同一文档顺序；各宿主坐标无需相同，也不能在缺少邻接 Paragraph 时凭空构造一个段落位置。Paragraph 的成熟文本编辑行为是抽取共享不变量的基准，但其 paragraph_id/UTF-8 坐标和文本历史映射不是其他 Block 的通用表示。具体移动、停靠和几何规则见[块宿主交互](block-interaction.md)与[结构导航](../structure-navigation.md)。
 
@@ -26,9 +26,17 @@ Paragraph 是 `Block` 的简单变体，使用完整的 Paragraph/TextMap 位置
 
 文档选区的 anchor 与 focus 都引用完整的可解析位置，并保留方向。共享层必须能确定其文档顺序、构造范围、跨宿主移动两端，并在事务位置映射后恢复位置。`Affinity` 表示同一文本边界的逻辑侧，`VisualAffinity` 表示排版候选的视觉侧；二者不能被混作范围顺序。两个交互停靠状态可以共享同一个文本偏移或排序边界，但只要用户可分别到达或执行不同操作，就不能在状态解析时误合并。
 
+在可比较的文本边界上，同一 UTF-8 偏移的 `Upstream` 排在 `Downstream` 之前。能够唯一映射到文本间隙的 Inline/Block 外侧边界，分别与宿主起点的 `Upstream` 或终点的 `Downstream` 规范为同一顺序位置；宿主内部位置严格位于两侧外部边界之间。相邻 Inline 宿主共用一个物理间隙时，前一宿主的外后对应 Downstream，后一宿主的外前对应 Upstream，因此仍按两个不同的可到达停靠位置排序。映射按段落真实内容和物理邻接关系解析；空段落、空 Inline 保留前后两侧顺序，不得把两侧外部边界折叠到一个无侧向文本位置。若局部宿主状态无法唯一落到该顺序，比较应拒绝。
+
+跨宿主比较的两个端点必须绑定同一个 Session 与 document generation。快照在事务后失效；映射成功后重新构造快照再比较，不得把旧快照只按 ID 或偏移重新解析。源码草稿还须匹配所属 Session 内的草稿身份与内容修订，因草稿改动不推进 document generation。
+
 顺序由文档树的父级路径、同级顺序和宿主内坐标共同推导。多个宿主边界若指向同一编辑间隙且没有不同的操作目标，应规范为一个文档位置（例如 Section 最后子块的外后与 Section 内部终点、相邻 Block 之间的前后侧）。需要通过方向进入特定宿主时，由转换器结合相邻顺序恢复目标；父容器自身的外侧边界仍与子树边界可区分。段落序号可用于 Paragraph 导航，但不是全树全序；稳定 ID 用于身份而不是排序。索引或位置解析器必须覆盖嵌套块、标题、空容器、连续公式块及其边界；对于不属于同一可排序 Story、结构已变化或代际不匹配的位置，应显式映射或原子拒绝，不能靠任取一个 Paragraph、ID 字典序或全树临时猜测顺序。
 
-物理块/行内节点顺序从真实内容树的父链与同级 slot 推导；`StructureIndex` 的父链另表达标题大纲语义，不能替代物理祖先。结构索引可按节点 ID 解析 Paragraph、环境标题、Equation、Align、InlineMath 与 InlineEnvironment 的物理位置；比较入口必须以同一文档快照解析两端，不能把裸顺序键跨 Session 或文档代际复用。宿主内部坐标由该宿主适配器解析；跨宿主比较先比较物理节点位置，再按同宿主的局部位置规则比较。无 ID 的显式分页与未知节点仍占据所在序列的实际 slot，但不因此获得稳定身份或可编辑位置。Session 消费映射前还须校验会话身份、文档代际及目标 ID；缓存命中也不能绕过目标路径校验。
+物理节点的外前/外后顺序从节点真实 slot 推导，同一有序序列里两个相邻节点的外侧边界可归一为同一间隙；父节点外后必须排在其所有后代之后。该物理边界次序本身不证明光标可到达，实际位置还须通过对应宿主 adapter 校验。MathTree 内部先按类型化 MathSequencePath 和所属内容序列边界比较；同一 Math TextFlow 内按合法字素边界比较 UTF-8 偏移，不同 TextFlow 通过结构路径比较。源码 UTF-8 偏移、TextFlow 路径及 MathTree 位置属于不同坐标载体，只有 adapter 证明同一宿主、同一代且映射唯一时才能跨载体比较，禁止直接比较裸偏移或节点 ID。
+
+物理块/行内节点顺序从真实内容树的父链与同级 slot 推导；`StructureIndex` 的父链另表达标题大纲语义，不能替代物理祖先。结构索引可按节点 ID 解析 Paragraph、环境标题、Equation、Align、InlineMath 与 InlineEnvironment 的物理位置；比较入口必须以同一文档快照解析两端，不能把裸顺序键跨 Session 或文档代际复用。宿主内部坐标由该宿主适配器解析；跨宿主比较先比较物理节点位置，再按同宿主的局部位置规则比较。没有明确且唯一的坐标映射时，比较必须拒绝，不能通过节点 ID、裸偏移或局部宿主起点推测顺序。无 ID 的显式分页与未知节点仍占据所在序列的实际 slot，但不因此获得稳定身份或可编辑位置。Session 消费映射前还须校验会话身份、文档代际及目标 ID；缓存命中也不能绕过目标路径校验。
+
+公式源码位置使用当前公式可编辑源码区间的 UTF-8 偏移；Align 不包含 `aligned` 包围命令的偏移。源码端点必须匹配所属 Session 的草稿 ID 与内容修订，或当前已提交源码投影身份，并落在合法字素边界。MathTree 结构路径还必须指向键盘可达的位置；键盘导航跳过的可选占位操作数不能作为文档 caret 顺序端点。
 
 `ExplicitBreak` 与 `Opaque` 当前不都具有可用节点 ID，且 Opaque 可能承载必须保留的未知数据。位置协议不应仅为满足某种键形状就给持久化 DTO 增加 ID，也不应把未知节点假定为可编辑原子。只有当具体编辑能力要求稳定导航、选择或事务定位时，才单独评估其身份、兼容、往返与历史语义。顺序查找的性能目标应由真实文档基准验证；本规范不预先承诺 O(深度) 或任何未测量的复杂度。
 

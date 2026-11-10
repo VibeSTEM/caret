@@ -11,6 +11,7 @@ mod composition;
 pub use checkpoint::SessionCheckpoint;
 pub use composition::{CompositionRange, CompositionUpdateCandidate};
 mod current_environment;
+mod document_position;
 mod formatting;
 mod history;
 mod inline_content;
@@ -35,9 +36,10 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind,
-    HostCaretLocalPosition, HostCaretPosition, InputComposition, MathCaretCoordinate,
-    MathCaretLocalPosition, Pos, PositionMap, Selection, StoryId,
+    Affinity, Command, CommandLine, Direction, DocumentCaretPosition, EditError, Effect,
+    HostCaretKind, HostCaretLocalPosition, HostCaretPosition, InputComposition,
+    MathCaretCoordinate, MathCaretLocalPosition, Pos, PositionMap, Selection, SessionCaretSnapshot,
+    StoryId,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -253,9 +255,27 @@ impl Session {
     }
 
     fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {
+        let projection_id = self
+            .math_edit
+            .as_ref()
+            .filter(|edit| {
+                edit.revision.session_id == self.session_id
+                    && edit.revision.document_generation == self.document_generation
+            })
+            .map(|edit| edit.revision.projection_id.clone())
+            .unwrap_or_else(NodeId::generate);
         math_edit::MathEditRevision {
             session_id: self.session_id.clone(),
             document_generation: self.document_generation,
+            projection_id,
+        }
+    }
+
+    fn new_math_edit_revision(&self) -> math_edit::MathEditRevision {
+        math_edit::MathEditRevision {
+            session_id: self.session_id.clone(),
+            document_generation: self.document_generation,
+            projection_id: NodeId::generate(),
         }
     }
 
@@ -277,12 +297,72 @@ impl Session {
             edit.revision = math_edit::MathEditRevision {
                 session_id: self.session_id.clone(),
                 document_generation: self.document_generation,
+                projection_id: edit.revision.projection_id.clone(),
             };
         }
     }
 
+    pub(super) fn refresh_math_edit_revision(&self, edit: &mut math_edit::MathEdit) {
+        edit.revision.session_id = self.session_id.clone();
+        edit.revision.document_generation = self.document_generation;
+    }
+
     pub fn selection(&self) -> &Selection {
         &self.selection
+    }
+
+    /// 为当前焦点创建绑定到本 Session 与文档代际的位置快照。
+    pub fn current_caret_snapshot(&mut self) -> Result<SessionCaretSnapshot, EditError> {
+        let has_scoped_position = self.host_caret_position.is_some() || self.math_edit.is_some();
+        let position = match self.active_host_caret_position() {
+            Some(position) => DocumentCaretPosition::Host(position),
+            None if !has_scoped_position => {
+                let focus = self.selection.focus.clone();
+                self.text_map_for(&focus)?.validate_pos(&focus)?;
+                DocumentCaretPosition::Text(focus)
+            }
+            None => return Err(EditError::InvalidPosition),
+        };
+        Ok(SessionCaretSnapshot {
+            session_id: self.session_id.clone(),
+            document_generation: self.document_generation,
+            position,
+        })
+    }
+
+    /// 校验快照的 Session、文档代际和源码草稿修订身份。
+    ///
+    /// 宿主路径、Story 与局部坐标仍须由具体 adapter 解析和校验。
+    pub fn validate_caret_snapshot_revision(
+        &self,
+        snapshot: &SessionCaretSnapshot,
+    ) -> Result<(), EditError> {
+        if snapshot.session_id != self.session_id
+            || snapshot.document_generation != self.document_generation
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        if let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+            local:
+                HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target,
+                    coordinate:
+                        MathCaretCoordinate::SourceUtf8 {
+                            draft_revision,
+                            projection_id,
+                            ..
+                        },
+                }),
+            ..
+        }) = &snapshot.position
+        {
+            self.resolve_math_source_revision(
+                target,
+                draft_revision.as_ref(),
+                projection_id.as_ref(),
+            )?;
+        }
+        Ok(())
     }
 
     /// 按稳定段落 ID 返回 Rust 索引中的正文或环境标题归属。
@@ -417,16 +497,30 @@ impl Session {
                     coordinate: match &edit.branch {
                         MathEditBranch::Source => MathCaretCoordinate::SourceUtf8 {
                             offset: edit.cursor,
+                            draft_revision: edit
+                                .source_draft
+                                .as_ref()
+                                .map(|draft| (draft.id().clone(), draft.revision())),
+                            projection_id: edit
+                                .source_draft
+                                .is_none()
+                                .then(|| edit.revision.projection_id.clone()),
                         },
-                        MathEditBranch::Text { path, .. } => MathCaretCoordinate::TextFlowUtf8 {
+                        MathEditBranch::Text {
+                            path,
+                            focus_affinity,
+                            ..
+                        } => MathCaretCoordinate::TextFlowUtf8 {
                             path: path.clone(),
                             offset: edit.cursor,
+                            affinity: *focus_affinity,
                         },
                         MathEditBranch::Tree { path, anchor } => {
                             MathCaretCoordinate::TreeBoundary {
                                 host: anchor.host.clone(),
                                 path: path.clone(),
                                 index: edit.cursor,
+                                affinity: anchor.affinity,
                             }
                         }
                     },
@@ -1240,7 +1334,7 @@ impl Session {
         }
         let restored_math_edit = match math_edit_position {
             Some(position) => {
-                let revision = self.current_math_edit_revision();
+                let revision = self.new_math_edit_revision();
                 match math_edit::restore_math_edit(&next_document, position, revision) {
                     Some(edit) => Some(edit),
                     None => return Err(EditError::InvalidPosition),
@@ -1507,6 +1601,7 @@ impl Clone for Session {
                 edit.revision = math_edit::MathEditRevision {
                     session_id: session_id.clone(),
                     document_generation: 0,
+                    projection_id: edit.revision.projection_id.clone(),
                 };
             }
         }

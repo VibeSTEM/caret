@@ -5,6 +5,8 @@
 
 use caret_doc::NodeId;
 
+use super::host_caret::{HostCaretLocalPosition, HostCaretPosition};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StoryId {
     Body,
@@ -15,6 +17,14 @@ pub enum StoryId {
 pub enum Affinity {
     Upstream,
     Downstream,
+}
+
+pub(super) fn compare_affinity(left: Affinity, right: Affinity) -> std::cmp::Ordering {
+    match (left, right) {
+        (Affinity::Upstream, Affinity::Downstream) => std::cmp::Ordering::Less,
+        (Affinity::Downstream, Affinity::Upstream) => std::cmp::Ordering::Greater,
+        _ => std::cmp::Ordering::Equal,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +39,42 @@ pub struct Pos {
 pub struct Selection {
     pub anchor: Pos,
     pub focus: Pos,
+}
+
+/// 当前会话和文档代际内的一种完整 caret 位置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentCaretPosition {
+    /// Paragraph/TextMap 中的位置。
+    Text(Pos),
+    /// Block 或 Inline 宿主中的三态位置。
+    Host(HostCaretPosition<HostCaretLocalPosition>),
+}
+
+/// 将 caret 位置绑定到产生它的 Session 与文档代际。
+///
+/// 该值是短期比较/解析凭据，不持久化；事务后须通过位置映射重新取得。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCaretSnapshot {
+    pub(super) session_id: NodeId,
+    pub(super) document_generation: u64,
+    pub(super) position: DocumentCaretPosition,
+}
+
+impl SessionCaretSnapshot {
+    /// 返回绑定的会话身份。
+    pub fn session_id(&self) -> &NodeId {
+        &self.session_id
+    }
+
+    /// 返回绑定的文档代际。
+    pub fn document_generation(&self) -> u64 {
+        self.document_generation
+    }
+
+    /// 返回该快照中的文本或宿主位置。
+    pub fn position(&self) -> &DocumentCaretPosition {
+        &self.position
+    }
 }
 
 /// 当前插入点所在的行内环境范围，使用段落内 UTF-8 半开偏移。

@@ -28,6 +28,18 @@ fn projected_tree_map(source: &str) -> caret_math::MathTreeSourceMap {
     }
 }
 
+fn text_content(value: &str) -> MathContent {
+    MathContent::Text(caret_doc::TextFlow {
+        runs: vec![caret_doc::Run {
+            text: value.to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        }],
+        extra: Default::default(),
+    })
+}
+
 #[test]
 fn text_flow_path_resolves_through_math_operand_and_environment() {
     let mut tree = parsed_tree(r"\frac{\text{a\textbf{b}}}{y}");
@@ -48,6 +60,83 @@ fn text_flow_path_resolves_through_math_operand_and_environment() {
         path.resolve(&tree).map(|flow| flow.runs[0].text.as_str()),
         Some("c")
     );
+}
+
+#[test]
+fn text_position_order_validates_shared_flow_grapheme_boundaries() {
+    let mut tree = parsed_tree(r"\text{ab}");
+    let path = MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(0)], None);
+    let Some(text) = path.resolve_structurally_mut(&mut tree) else {
+        panic!("TextFlow path should resolve");
+    };
+    text.runs = vec![
+        caret_doc::Run {
+            text: "a".to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        },
+        caret_doc::Run {
+            text: "\u{301}b".to_owned(),
+            language: None,
+            props: Default::default(),
+            extra: Default::default(),
+        },
+    ];
+    let start = MathTextPosition::new(path.clone(), 0, MathPositionAffinity::Downstream);
+    let end = MathTextPosition::new(path.clone(), 4, MathPositionAffinity::Upstream);
+    let inside_combining_cluster =
+        MathTextPosition::new(path.clone(), 1, MathPositionAffinity::Downstream);
+
+    assert_eq!(
+        start.compare_in_same_flow(&end, &tree),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        start.compare_in_same_flow(&inside_combining_cluster, &tree),
+        None
+    );
+    assert_eq!(
+        MathTextPosition::new(path.clone(), 3, MathPositionAffinity::Upstream)
+            .compare_in_same_flow(
+                &MathTextPosition::new(path, 3, MathPositionAffinity::Downstream),
+                &tree,
+            ),
+        Some(std::cmp::Ordering::Less)
+    );
+}
+
+#[test]
+fn text_position_order_rejects_grapheme_split_across_environment_paths() {
+    let mut tree = parsed_tree(r"\text{a}");
+    tree.root.content = vec![
+        text_content("a"),
+        MathContent::Environment(caret_doc::InlineEnvironment {
+            id: caret_doc::NodeId::generate(),
+            kind: caret_doc::InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: Default::default(),
+            children: vec![text_content("\u{301}b")],
+            extra: Default::default(),
+        }),
+    ];
+    let first_path = MathTextFlowPath::new(vec![MathTextFlowPathStep::Content(0)], None);
+    let second_path = MathTextFlowPath::new(
+        vec![
+            MathTextFlowPathStep::Content(1),
+            MathTextFlowPathStep::EnvironmentChild(0),
+        ],
+        None,
+    );
+    let first_flow_edge =
+        MathTextPosition::new(first_path.clone(), 1, MathPositionAffinity::Upstream);
+    let second_flow_edge =
+        MathTextPosition::new(second_path.clone(), 0, MathPositionAffinity::Downstream);
+    let start = MathTextPosition::new(first_path, 0, MathPositionAffinity::Downstream);
+    let end = MathTextPosition::new(second_path, 3, MathPositionAffinity::Upstream);
+
+    assert_eq!(first_flow_edge.compare_in_same_flow(&start, &tree), None);
+    assert_eq!(second_flow_edge.compare_in_same_flow(&end, &tree), None);
 }
 
 #[test]

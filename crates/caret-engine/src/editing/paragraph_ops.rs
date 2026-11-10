@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::position::compare_affinity;
 use super::text_map::{TextMap, inline_length};
-use super::{Affinity, Direction, EditError, Pos, StoryId};
+use super::{Direction, EditError, Pos, StoryId};
 use caret_doc::{Block, FlowContent, NodeId, Paragraph, ParagraphContent};
 use std::collections::HashMap;
 
@@ -452,11 +453,7 @@ pub(super) fn compare_positions(
         .block_path
         .cmp(&right_location.block_path)
         .then_with(|| left.offset.cmp(&right.offset))
-        .then_with(|| match (left.affinity, right.affinity) {
-            (Affinity::Upstream, Affinity::Downstream) => std::cmp::Ordering::Less,
-            (Affinity::Downstream, Affinity::Upstream) => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
-        }))
+        .then_with(|| compare_affinity(left.affinity, right.affinity)))
 }
 
 pub(super) fn insert_paragraph_after(

@@ -445,6 +445,7 @@ struct MathSourceWriteOptions {
 pub(super) struct MathEditRevision {
     pub(super) session_id: NodeId,
     pub(super) document_generation: u64,
+    pub(super) projection_id: NodeId,
 }
 
 /// 公式编辑状态：目标、源码投影、当前编辑载体和载体定义的位置坐标。不属于文档修订。
@@ -474,6 +475,14 @@ impl PartialEq for MathEdit {
 impl Eq for MathEdit {}
 
 impl MathEdit {
+    pub(super) fn replace_source_projection(
+        &mut self,
+        projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
+    ) {
+        self.source_projection = projection;
+        self.revision.projection_id = NodeId::generate();
+    }
+
     fn required_source_projection(&self) -> Result<&caret_math::MathSourceMap<'static>, EditError> {
         self.source_projection
             .as_deref()
@@ -832,7 +841,7 @@ fn history_projection_for_target(
     }
 }
 
-fn math_tree_for_target<'a>(
+pub(super) fn math_tree_for_target<'a>(
     document: &'a caret_doc::Document,
     target: &MathEditTarget,
     align_cell: Option<(usize, usize)>,
@@ -861,6 +870,10 @@ fn math_tree_for_target<'a>(
     }
 }
 
+pub(super) fn math_source_body_range(edit: &MathEdit) -> Option<Range<usize>> {
+    navigation::math_input_body_range(edit)
+}
+
 pub(super) fn history_position(edit: &MathEdit) -> MathEditPosition {
     MathEditPosition::from_edit(edit)
 }
@@ -884,7 +897,7 @@ fn find_inline_math_in_blocks<'a>(
     })
 }
 
-fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
+pub(super) fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
     let (parents, index) = find_block_path(blocks, id)?;
     block_list_ref(blocks, &parents).ok()?.get(index)
 }
@@ -957,49 +970,7 @@ impl Session {
         {
             return Err(EditError::InvalidPosition);
         }
-        let align_cell = match (&hit.target, &hit.position.host) {
-            (MathEditTarget::Inline { math_id, .. }, MathPositionHost::InlineMath { owner_id })
-                if math_id == owner_id =>
-            {
-                None
-            }
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: false,
-                },
-                MathPositionHost::Equation { owner_id },
-            ) if block_id == owner_id => None,
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: true,
-                },
-                MathPositionHost::AlignCell { row_id, cell_id },
-            ) => {
-                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
-                    .ok_or(EditError::InvalidPosition)?
-                else {
-                    return Err(EditError::InvalidPosition);
-                };
-                let row_index = align
-                    .rows
-                    .iter()
-                    .position(|row| row.id == *row_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                let row = align
-                    .rows
-                    .get(row_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                let cell_index = row
-                    .cells
-                    .iter()
-                    .position(|cell| cell.root.id == *cell_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                Some((row_index, cell_index))
-            }
-            _ => return Err(EditError::InvalidPosition),
-        };
+        let align_cell = self.align_cell_for_target_and_host(&hit.target, &hit.position.host)?;
         let tree = math_tree_for_target(&self.document, &hit.target, align_cell)
             .ok_or(EditError::InvalidPosition)?;
         let contents = hit
@@ -2156,7 +2127,7 @@ impl Session {
             let source_cursor = inline_root_source_cursor(&tree, source_map, edit.cursor, source)
                 .ok_or(EditError::InvalidPosition)?;
             let source_edit = self.math_edit.as_mut().ok_or(EditError::InvalidPosition)?;
-            source_edit.source_projection = Some(Arc::new(projection));
+            source_edit.replace_source_projection(Some(Arc::new(projection)));
             source_edit.cursor = source_cursor;
             source_edit.branch = MathEditBranch::Source;
             let result = self.math_insert_raw_with_range(
@@ -3453,46 +3424,7 @@ impl Session {
     ) -> Result<MathTreeTextBoundary<'a>, EditError> {
         let align_cell = path.align_cell();
         let tree = self.math_tree_for_edit(edit, align_cell)?;
-        let host = match (&edit.target, align_cell) {
-            (MathEditTarget::Inline { math_id, .. }, None) => MathPositionHost::InlineMath {
-                owner_id: math_id.clone(),
-            },
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: false,
-                },
-                None,
-            ) => MathPositionHost::Equation {
-                owner_id: block_id.clone(),
-            },
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: true,
-                },
-                Some((row_index, cell_index)),
-            ) => {
-                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
-                    .ok_or(EditError::InvalidPosition)?
-                else {
-                    return Err(EditError::InvalidPosition);
-                };
-                let row = align
-                    .rows
-                    .get(row_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                let cell = row
-                    .cells
-                    .get(cell_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                MathPositionHost::AlignCell {
-                    row_id: row.id.clone(),
-                    cell_id: cell.root.id.clone(),
-                }
-            }
-            _ => return Err(EditError::InvalidPosition),
-        };
+        let host = self.math_position_host_for_target(&edit.target, align_cell)?;
         let boundary = match direction {
             Direction::Backward => tree_position::MathTextFlowBoundary::Start,
             Direction::Forward => tree_position::MathTextFlowBoundary::End,
@@ -3518,7 +3450,15 @@ impl Session {
         edit: &MathEdit,
         position: &MathTreePosition,
     ) -> Result<Option<(usize, usize)>, EditError> {
-        match (&edit.target, &position.host) {
+        self.align_cell_for_target_and_host(&edit.target, &position.host)
+    }
+
+    pub(super) fn align_cell_for_target_and_host(
+        &self,
+        target: &MathEditTarget,
+        host: &MathPositionHost,
+    ) -> Result<Option<(usize, usize)>, EditError> {
+        match (target, host) {
             (MathEditTarget::Inline { math_id, .. }, MathPositionHost::InlineMath { owner_id })
                 if math_id == owner_id =>
             {
@@ -3561,6 +3501,53 @@ impl Session {
         }
     }
 
+    pub(super) fn math_position_host_for_target(
+        &self,
+        target: &MathEditTarget,
+        align_cell: Option<(usize, usize)>,
+    ) -> Result<MathPositionHost, EditError> {
+        match (target, align_cell) {
+            (MathEditTarget::Inline { math_id, .. }, None) => Ok(MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            }),
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: false,
+                },
+                None,
+            ) => Ok(MathPositionHost::Equation {
+                owner_id: block_id.clone(),
+            }),
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: true,
+                },
+                Some((row_index, cell_index)),
+            ) => {
+                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
+                    .ok_or(EditError::InvalidPosition)?
+                else {
+                    return Err(EditError::InvalidPosition);
+                };
+                let row = align
+                    .rows
+                    .get(row_index)
+                    .ok_or(EditError::InvalidPosition)?;
+                let cell = row
+                    .cells
+                    .get(cell_index)
+                    .ok_or(EditError::InvalidPosition)?;
+                Ok(MathPositionHost::AlignCell {
+                    row_id: row.id.clone(),
+                    cell_id: cell.root.id.clone(),
+                })
+            }
+            _ => Err(EditError::InvalidPosition),
+        }
+    }
+
     fn apply_math_tree_caret_move(
         &mut self,
         edit: &MathEdit,
@@ -3574,7 +3561,7 @@ impl Session {
                     .resolve(self.math_tree_for_edit(edit, align_cell)?)
                     .map_err(|_| EditError::InvalidPosition)?;
                 if let Some(current) = &mut self.math_edit {
-                    current.source_projection = None;
+                    current.replace_source_projection(None);
                     current.source_draft = None;
                     current.cursor = position.offset;
                     current.branch = MathEditBranch::Tree {
@@ -3598,7 +3585,7 @@ impl Session {
                     return Err(EditError::InvalidPosition);
                 }
                 if let Some(current) = &mut self.math_edit {
-                    current.source_projection = None;
+                    current.replace_source_projection(None);
                     current.source_draft = None;
                     current.cursor = cursor;
                     let anchor = MathTextPosition::new(
@@ -3696,7 +3683,7 @@ impl Session {
         let (cursor, branch) =
             math_tree_edge_position(cell, host, direction, Some((row_index, cell_index)))?;
         let next = self.math_edit.as_mut().ok_or(EditError::InvalidPosition)?;
-        next.source_projection = None;
+        next.replace_source_projection(None);
         next.source_draft = None;
         next.cursor = cursor;
         next.branch = branch;
@@ -3808,7 +3795,7 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         let _ = projected_target;
-        edit.source_projection = Some(Arc::new(projection));
+        edit.replace_source_projection(Some(Arc::new(projection)));
         edit.branch = MathEditBranch::Text {
             path,
             anchor,
@@ -3905,7 +3892,7 @@ impl Session {
     fn enter_math_text_branch(&mut self, path: MathTextFlowPath, cursor: usize) {
         self.pending_inline_style.clear();
         if let Some(edit) = &mut self.math_edit {
-            edit.source_projection = None;
+            edit.replace_source_projection(None);
             edit.source_draft = None;
             edit.cursor = cursor;
             let anchor =
@@ -4719,7 +4706,7 @@ impl Session {
                     source_cursor,
                     source_projection.source(),
                 )?;
-                next_edit.source_projection = Some(Arc::new(source_projection));
+                next_edit.replace_source_projection(Some(Arc::new(source_projection)));
                 if let Some(split) = split {
                     let inline_start = inline_math_slots(&paragraph)?
                         .into_iter()
@@ -5101,7 +5088,7 @@ impl Session {
                         "edited formula cannot be rebound to its source map".to_owned(),
                     ));
                 }
-                next_edit.source_projection = Some(Arc::new(source_projection));
+                next_edit.replace_source_projection(Some(Arc::new(source_projection)));
                 let (parent_ids, index) = find_block_path(&self.document.body, block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let blocks = block_list(&mut self.document.body, &parent_ids)?;

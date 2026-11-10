@@ -272,7 +272,7 @@ pub(super) fn commit_align_tree_edit(
     session.text_map_cache.clear();
     session.pending_inline_style.clear();
     let mut after_edit = edit;
-    after_edit.source_projection = None;
+    after_edit.replace_source_projection(None);
     after_edit.source_draft = None;
     after_edit.cursor = cursor;
     after_edit.branch = branch;
@@ -289,7 +289,7 @@ pub(super) fn commit_align_tree_edit(
         Some(history_position(&after_edit)),
         before_pending_style,
     );
-    after_edit.revision = session.current_math_edit_revision();
+    session.refresh_math_edit_revision(&mut after_edit);
     session.math_edit = Some(after_edit);
     Ok(Effect {
         document_changed: true,

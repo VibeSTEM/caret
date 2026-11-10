@@ -5,12 +5,16 @@
 
 use std::sync::Arc;
 
+use caret_doc::NodeId;
+
 use super::EditError;
 
 /// 未解析源码只供当前会话编辑，绝不覆盖绑定的已提交源码投影。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::editing::session) struct MathSourceDraft {
     source: Arc<String>,
+    id: NodeId,
+    revision: u64,
     base_cursor: usize,
     undo: Vec<MathSourceChange>,
     redo: Vec<MathSourceChange>,
@@ -35,6 +39,8 @@ impl MathSourceDraft {
     pub(super) fn new(source: String, base_cursor: usize) -> Self {
         Self {
             source: Arc::new(source),
+            id: NodeId::generate(),
+            revision: 0,
             base_cursor,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -42,8 +48,16 @@ impl MathSourceDraft {
         }
     }
 
-    pub(super) fn source(&self) -> &str {
+    pub(in crate::editing::session) fn source(&self) -> &str {
         self.source.as_str()
+    }
+
+    pub(in crate::editing::session) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(in crate::editing::session) fn id(&self) -> &NodeId {
+        &self.id
     }
 
     pub(super) fn base_cursor(&self) -> usize {
@@ -53,6 +67,8 @@ impl MathSourceDraft {
     pub(super) fn command_snapshot(&self) -> Self {
         Self {
             source: Arc::clone(&self.source),
+            id: self.id.clone(),
+            revision: self.revision,
             base_cursor: self.base_cursor,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -69,10 +85,18 @@ impl MathSourceDraft {
         let (old_range, new_range) =
             super::changed_source_range(self.source.as_str(), &next_source)
                 .ok_or(EditError::InvalidPosition)?;
+        let source_changed = old_range.start != old_range.end || new_range.start != new_range.end;
+        let next_revision = if source_changed {
+            self.revision
+                .checked_add(1)
+                .ok_or(EditError::InvalidPosition)?
+        } else {
+            self.revision
+        };
         if cursor_after > next_source.len() || !next_source.is_char_boundary(cursor_after) {
             return Err(EditError::InvalidPosition);
         }
-        if old_range.start != old_range.end || new_range.start != new_range.end {
+        if source_changed {
             let removed = self.source[old_range.clone()].to_owned();
             let inserted = next_source[new_range].to_owned();
             self.history_bytes = self
@@ -90,6 +114,7 @@ impl MathSourceDraft {
             self.trim_history();
         }
         self.source = Arc::new(next_source);
+        self.revision = next_revision;
         Ok(())
     }
 
@@ -100,6 +125,10 @@ impl MathSourceDraft {
         let end = change
             .start
             .checked_add(change.inserted.len())
+            .ok_or(EditError::InvalidPosition)?;
+        let next_revision = self
+            .revision
+            .checked_add(1)
             .ok_or(EditError::InvalidPosition)?;
         if self.source.get(change.start..end) != Some(change.inserted.as_str()) {
             return Err(EditError::InvalidPosition);
@@ -112,6 +141,7 @@ impl MathSourceDraft {
             .saturating_sub(change.inserted.len());
         let cursor = change.cursor_before;
         self.redo.push(change);
+        self.revision = next_revision;
         Ok(Some(cursor))
     }
 
@@ -122,6 +152,10 @@ impl MathSourceDraft {
         let end = change
             .start
             .checked_add(change.removed.len())
+            .ok_or(EditError::InvalidPosition)?;
+        let next_revision = self
+            .revision
+            .checked_add(1)
             .ok_or(EditError::InvalidPosition)?;
         if self.source.get(change.start..end) != Some(change.removed.as_str()) {
             return Err(EditError::InvalidPosition);
@@ -135,6 +169,7 @@ impl MathSourceDraft {
         let cursor = change.cursor_after;
         self.undo.push(change);
         self.trim_history();
+        self.revision = next_revision;
         Ok(Some(cursor))
     }
 

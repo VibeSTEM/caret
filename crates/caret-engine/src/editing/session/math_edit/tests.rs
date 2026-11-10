@@ -5,10 +5,71 @@
 
 use super::text_branch::{text_source_boundary_from_map, text_source_range_from_map};
 use super::*;
+use crate::editing::{
+    DocumentCaretPosition, HostCaretKind, HostCaretLocalPosition, HostCaretPosition,
+    MathCaretCoordinate, SessionCaretSnapshot,
+};
 
 fn source_text(edit: &MathEdit) -> &str {
     edit.source()
         .unwrap_or_else(|| panic!("source text is available only in source-edit mode"))
+}
+
+#[test]
+fn math_source_draft_revision_tracks_content_and_history_changes() -> Result<(), EditError> {
+    let mut draft = source_draft::MathSourceDraft::new("x".to_owned(), 1);
+    let draft_id = draft.id().clone();
+    assert_eq!(draft.revision(), 0);
+    draft.record("xy".to_owned(), 1, 2)?;
+    assert_eq!(draft.revision(), 1);
+    let snapshot = draft.command_snapshot();
+    assert_eq!(snapshot.id(), &draft_id);
+    assert_eq!(snapshot.revision(), 1);
+    assert_eq!(draft.undo()?, Some(1));
+    assert_eq!(draft.revision(), 2);
+    assert_eq!(draft.redo()?, Some(2));
+    assert_eq!(draft.revision(), 3);
+    draft.record("xy".to_owned(), 2, 2)?;
+    assert_eq!(draft.revision(), 3);
+    let replacement = source_draft::MathSourceDraft::new("xy".to_owned(), 2);
+    assert_ne!(replacement.id(), &draft_id);
+    Ok(())
+}
+
+#[test]
+fn caret_snapshot_rejects_a_rebuilt_source_projection_in_the_same_generation()
+-> Result<(), EditError> {
+    let block_id = NodeId::generate();
+    let (block, projection) = display_math_block_with_projection(false, "x", block_id.clone())?;
+    let mut document = Document::blank();
+    document.body.push(block);
+    let mut session = Session::new(document)?;
+    session.math_edit = Some(MathEdit {
+        target: MathEditTarget::Block {
+            block_id: block_id.clone(),
+            align: false,
+        },
+        source_projection: Some(Arc::new(projection)),
+        source_draft: None,
+        revision: session.current_math_edit_revision(),
+        cursor: 1,
+        branch: MathEditBranch::Source,
+    });
+
+    let snapshot = session.current_caret_snapshot()?;
+    session.validate_caret_snapshot_revision(&snapshot)?;
+
+    let (_, rebuilt_projection) = display_math_block_with_projection(false, "x", block_id)?;
+    session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .replace_source_projection(Some(Arc::new(rebuilt_projection)));
+    assert_eq!(
+        session.validate_caret_snapshot_revision(&snapshot),
+        Err(EditError::InvalidPosition)
+    );
+    Ok(())
 }
 
 fn first_align(session: &Session) -> Result<&Align, EditError> {
@@ -5213,6 +5274,7 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
                 super::super::super::MathCaretLocalPosition {
                     coordinate: super::super::super::MathCaretCoordinate::TreeBoundary {
                         host: MathPositionHost::AlignCell { cell_id: active_cell_id, .. },
+                        affinity: MathPositionAffinity::Downstream,
                         ..
                     },
                     ..
@@ -11014,6 +11076,209 @@ fn stale_math_edit_revision_rejects_input_without_losing_the_projection()
 }
 
 #[test]
+fn caret_comparison_rejects_an_invalid_source_position_on_either_side() -> Result<(), EditError> {
+    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    session.run(Command::InsertInlineMath("x".to_owned()))?;
+    enter_source_edit(&mut session, Direction::Backward)?;
+    let inside = session.current_caret_snapshot()?;
+    let mut invalid_inside = inside.clone();
+    let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+        local: HostCaretLocalPosition::Math(local),
+        ..
+    }) = &mut invalid_inside.position
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let MathCaretCoordinate::SourceUtf8 { offset, .. } = &mut local.coordinate else {
+        return Err(EditError::InvalidPosition);
+    };
+    *offset = usize::MAX;
+    let MathEditTarget::Inline { math_id, .. } = &session
+        .math_edit
+        .as_ref()
+        .ok_or(EditError::InvalidPosition)?
+        .target
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    let outside = SessionCaretSnapshot {
+        session_id: session.session_id.clone(),
+        document_generation: session.document_generation,
+        position: DocumentCaretPosition::Host(HostCaretPosition::Before {
+            host_id: math_id.clone(),
+            kind: HostCaretKind::Inline,
+        }),
+    };
+    assert_eq!(
+        session.compare_caret_snapshots(&outside, &invalid_inside),
+        Err(EditError::InvalidPosition)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&invalid_inside, &outside),
+        Err(EditError::InvalidPosition)
+    );
+    Ok(())
+}
+
+#[test]
+fn caret_comparison_uses_align_edit_source_and_valid_utf8_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let parsed = caret_math::parse_projection(
+        r"\begin{aligned}é&x\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )?;
+    let (caret_math::ProjectedMath::Align(align), source_projection) = parsed.into_parts() else {
+        return Err("aligned source should project to an Align".into());
+    };
+    let full_source_len = source_projection.source().len();
+    let align_id = align.id.clone();
+    let mut session = Session::new(caret_doc::Document {
+        body: vec![
+            Block::Align(align),
+            Block::Paragraph(Paragraph::empty(NodeId::generate())),
+        ],
+        ..caret_doc::Document::blank()
+    })?;
+    session.math_edit = Some(MathEdit {
+        target: MathEditTarget::Block {
+            block_id: align_id,
+            align: true,
+        },
+        source_projection: Some(std::sync::Arc::new(source_projection)),
+        source_draft: None,
+        revision: session.current_math_edit_revision(),
+        cursor: 0,
+        branch: MathEditBranch::Source,
+    });
+    let start = session.current_caret_snapshot()?;
+    if let Some(edit) = session.math_edit.as_mut() {
+        edit.cursor = "é".len();
+    } else {
+        return Err(EditError::InvalidPosition.into());
+    }
+    let after_multibyte = session.current_caret_snapshot()?;
+    assert_eq!(
+        session.compare_caret_snapshots(&start, &after_multibyte),
+        Ok(std::cmp::Ordering::Less)
+    );
+
+    let mut outside_edit_range = start.clone();
+    let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+        local: HostCaretLocalPosition::Math(local),
+        ..
+    }) = &mut outside_edit_range.position
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let MathCaretCoordinate::SourceUtf8 { offset, .. } = &mut local.coordinate else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    *offset = full_source_len - 1;
+    assert_eq!(
+        session.compare_caret_snapshots(&outside_edit_range, &after_multibyte),
+        Err(EditError::InvalidPosition)
+    );
+    Ok(())
+}
+
+#[test]
+fn caret_comparison_rejects_source_delimiter_positions_but_accepts_body_edges()
+-> Result<(), Box<dyn std::error::Error>> {
+    let parsed = caret_math::parse_projection("\\(\u{301}x\\)", caret_math::MathInputKind::Inline)?;
+    let (caret_math::ProjectedMath::Tree(tree), source_projection) = parsed.into_parts() else {
+        return Err("inline source should project to a MathTree".into());
+    };
+    let paragraph_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut session = Session::new(caret_doc::Document {
+        body: vec![Block::Paragraph(Paragraph {
+            id: paragraph_id.clone(),
+            inlines: vec![ParagraphContent::Math(caret_doc::InlineMath {
+                id: math_id.clone(),
+                math_tree: tree,
+                extra: Default::default(),
+            })],
+            language: None,
+            layout: None,
+            mark_style: Default::default(),
+            props: Default::default(),
+            extra: Default::default(),
+        })],
+        ..caret_doc::Document::blank()
+    })?;
+    session.math_edit = Some(MathEdit {
+        target: MathEditTarget::Inline {
+            paragraph_id,
+            math_id,
+        },
+        source_projection: Some(std::sync::Arc::new(source_projection)),
+        source_draft: None,
+        revision: session.current_math_edit_revision(),
+        cursor: 0,
+        branch: MathEditBranch::Source,
+    });
+    let range = super::navigation::math_input_body_range(
+        session
+            .math_edit
+            .as_ref()
+            .ok_or(EditError::InvalidPosition)?,
+    )
+    .ok_or(EditError::InvalidPosition)?;
+    assert!(range.start > 0);
+    if let Some(edit) = session.math_edit.as_mut() {
+        edit.cursor = range.start;
+    } else {
+        return Err(EditError::InvalidPosition.into());
+    }
+    let body_start = session.current_caret_snapshot()?;
+    if let Some(edit) = session.math_edit.as_mut() {
+        edit.cursor = range.end;
+    } else {
+        return Err(EditError::InvalidPosition.into());
+    }
+    let body_end = session.current_caret_snapshot()?;
+    assert_eq!(
+        session.compare_caret_snapshots(&body_start, &body_end),
+        Ok(std::cmp::Ordering::Less)
+    );
+
+    let mut before_body = body_start.clone();
+    let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+        local: HostCaretLocalPosition::Math(local),
+        ..
+    }) = &mut before_body.position
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let MathCaretCoordinate::SourceUtf8 { offset, .. } = &mut local.coordinate else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    *offset = range.start - 1;
+    assert_eq!(
+        session.compare_caret_snapshots(&before_body, &body_start),
+        Err(EditError::InvalidPosition)
+    );
+
+    let mut after_body = body_end.clone();
+    let DocumentCaretPosition::Host(HostCaretPosition::Inside {
+        local: HostCaretLocalPosition::Math(local),
+        ..
+    }) = &mut after_body.position
+    else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let MathCaretCoordinate::SourceUtf8 { offset, .. } = &mut local.coordinate else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    *offset = range.end + 1;
+    assert_eq!(
+        session.compare_caret_snapshots(&after_body, &body_end),
+        Err(EditError::InvalidPosition)
+    );
+    Ok(())
+}
+
+#[test]
 fn stale_math_revision_keeps_pending_draft_until_explicit_escape()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut session = session_with_text("")?;
@@ -12499,6 +12764,7 @@ fn backspace_removes_empty_construct_in_align_cell_and_history_restores_it()
         revision: MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
+            projection_id: NodeId::generate(),
         },
         cursor,
         branch: MathEditBranch::Source,
@@ -12626,6 +12892,7 @@ fn deleting_the_last_align_cell_content_preserves_the_trailing_row_through_histo
         revision: MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
+            projection_id: NodeId::generate(),
         },
         cursor,
         branch: MathEditBranch::Source,
@@ -12688,6 +12955,7 @@ fn backspace_in_empty_fraction_argument_keeps_nonempty_sibling_recoverable()
         revision: MathEditRevision {
             session_id: session.session_id.clone(),
             document_generation: session.document_generation,
+            projection_id: NodeId::generate(),
         },
         cursor: r"\frac{a}{".len(),
         branch: MathEditBranch::Source,

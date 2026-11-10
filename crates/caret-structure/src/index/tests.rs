@@ -1,7 +1,7 @@
 //! 验证结构索引的文档顺序、嵌套范围和标题派生范围。
 
 use super::*;
-use crate::{DocumentNodeKind, compare_document_nodes, find_document_node};
+use crate::{DocumentNodeEdge, DocumentNodeKind, compare_document_node_edges, find_document_node};
 use caret_doc::{
     BlockEnvironment, BlockEnvironmentKind, Document, InlineEnvironment, InlineEnvironmentKind,
     InlineMath, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
@@ -22,6 +22,22 @@ fn paragraph(text: &str, level: Option<u64>) -> Paragraph {
             .insert("outlineLevel".to_owned(), serde_json::json!(level));
     }
     paragraph
+}
+
+fn empty_inline_math(id: NodeId) -> ParagraphContent {
+    ParagraphContent::Math(InlineMath {
+        id,
+        math_tree: MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: Vec::new(),
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    })
 }
 
 #[test]
@@ -223,16 +239,205 @@ fn physical_locations_keep_real_slots_and_order_titles_before_children() {
     assert_eq!(equation_location.sibling_index, Some(2));
     assert_eq!(child_location.sibling_index, Some(3));
     assert_eq!(
-        compare_document_nodes(&document, &title_id, &equation_id),
+        compare_document_node_edges(
+            &document,
+            &title_id,
+            DocumentNodeEdge::Before,
+            &equation_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
     );
     assert_eq!(
-        compare_document_nodes(&document, &equation_id, &child_id),
+        compare_document_node_edges(
+            &document,
+            &equation_id,
+            DocumentNodeEdge::Before,
+            &child_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
     );
     assert_eq!(
-        compare_document_nodes(&document, &child_id, &after_id),
+        compare_document_node_edges(
+            &document,
+            &child_id,
+            DocumentNodeEdge::Before,
+            &after_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
+    );
+}
+
+#[test]
+fn physical_node_edges_order_nested_content_and_share_adjacent_gaps() {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    let inline_environment_id = NodeId::generate();
+    let inline_math_id = NodeId::generate();
+    let mut title = paragraph("title", None);
+    title.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: inline_environment_id.clone(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![ParagraphContent::Math(InlineMath {
+            id: inline_math_id.clone(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let title_id = title.id.clone();
+    let child = paragraph("child", None);
+    let child_id = child.id.clone();
+    let next = paragraph("next", None);
+    let next_id = next.id.clone();
+    document.body = vec![
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(title),
+            children: vec![Block::Paragraph(child)],
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(next),
+    ];
+
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &environment_id,
+            DocumentNodeEdge::Before,
+            &title_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &title_id,
+            DocumentNodeEdge::After,
+            &child_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &title_id,
+            DocumentNodeEdge::Before,
+            &inline_environment_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &inline_environment_id,
+            DocumentNodeEdge::After,
+            &inline_math_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &inline_math_id,
+            DocumentNodeEdge::After,
+            &title_id,
+            DocumentNodeEdge::After,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &child_id,
+            DocumentNodeEdge::After,
+            &environment_id,
+            DocumentNodeEdge::After,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &environment_id,
+            DocumentNodeEdge::After,
+            &next_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Equal)
+    );
+}
+
+#[test]
+fn inline_node_edges_preserve_gaps_around_unidentified_content() {
+    let first_id = NodeId::generate();
+    let after_opaque_id = NodeId::generate();
+    let adjacent_id = NodeId::generate();
+    let paragraph = Paragraph {
+        id: NodeId::generate(),
+        inlines: vec![
+            empty_inline_math(first_id.clone()),
+            ParagraphContent::Opaque(caret_doc::OpaqueNode {
+                raw: serde_json::json!({"type": "futureInline"}),
+            }),
+            empty_inline_math(after_opaque_id.clone()),
+            empty_inline_math(adjacent_id.clone()),
+        ],
+        ..Paragraph::empty(NodeId::generate())
+    };
+    let document = Document {
+        body: vec![Block::Paragraph(paragraph)],
+        ..Document::blank()
+    };
+
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &first_id,
+            DocumentNodeEdge::After,
+            &after_opaque_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &after_opaque_id,
+            DocumentNodeEdge::After,
+            &adjacent_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Equal)
+    );
+    assert_eq!(
+        compare_document_node_edges(
+            &document,
+            &adjacent_id,
+            DocumentNodeEdge::After,
+            &after_opaque_id,
+            DocumentNodeEdge::Before,
+        ),
+        Some(std::cmp::Ordering::Greater)
     );
 }
 
@@ -326,15 +531,33 @@ fn inline_math_and_format_environments_share_the_paragraph_order() {
         vec![inline_environment_id.clone()]
     );
     assert_eq!(
-        compare_document_nodes(&document, &paragraph_id, &inline_environment_id),
+        compare_document_node_edges(
+            &document,
+            &paragraph_id,
+            DocumentNodeEdge::Before,
+            &inline_environment_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
     );
     assert_eq!(
-        compare_document_nodes(&document, &inline_environment_id, &math_id),
+        compare_document_node_edges(
+            &document,
+            &inline_environment_id,
+            DocumentNodeEdge::Before,
+            &math_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
     );
     assert_eq!(
-        compare_document_nodes(&document, &math_id, &after_id),
+        compare_document_node_edges(
+            &document,
+            &math_id,
+            DocumentNodeEdge::Before,
+            &after_id,
+            DocumentNodeEdge::Before
+        ),
         Some(std::cmp::Ordering::Less)
     );
 }
