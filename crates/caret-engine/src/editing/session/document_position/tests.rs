@@ -955,6 +955,111 @@ fn session_caret_comparison_uses_parsed_fraction_operand_order()
 }
 
 #[test]
+fn session_caret_comparison_rejects_mixed_source_and_semantic_script_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let parsed = caret_math::parse_projection("x^a_b", caret_math::MathInputKind::Inline)?;
+    let (caret_math::ProjectedMath::Tree(tree), source_projection) = parsed.into_parts() else {
+        return Err("script expression should parse to a MathTree".into());
+    };
+    let Some(MathContent::Math(script)) = tree.root.content.first() else {
+        return Err("parsed script should be a math node".into());
+    };
+    assert_eq!(script.kind, caret_doc::MathNodeKind::SubSup);
+    assert_eq!(script.children.len(), 3);
+    let slot_symbol = |index: usize| {
+        let [MathContent::Math(symbol)] = script.children.get(index)?.content.as_slice() else {
+            return None;
+        };
+        symbol.text.as_deref()
+    };
+    assert_eq!(slot_symbol(1), Some("b"));
+    assert_eq!(slot_symbol(2), Some("a"));
+    let source_map = source_projection
+        .tree()
+        .and_then(|map| map.content_at(&[caret_doc::MathPathStep::Content(0)]))
+        .ok_or("parsed script source map is missing")?;
+    let operand_maps = source_map
+        .operands()
+        .ok_or("parsed script should expose operand source maps")?;
+    let subscript_range = operand_maps
+        .get(1)
+        .and_then(caret_math::MathFlowSourceMap::range)
+        .ok_or("subscript source range is missing")?;
+    let superscript_range = operand_maps
+        .get(2)
+        .and_then(caret_math::MathFlowSourceMap::range)
+        .ok_or("superscript source range is missing")?;
+    assert!(superscript_range.start < subscript_range.start);
+
+    let paragraph_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: tree,
+            extra: Default::default(),
+        }));
+    let mut session = Session::new(Document {
+        body: vec![Block::Paragraph(paragraph)],
+        ..Document::blank()
+    })?;
+    let target = MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    session.math_edit = Some(MathEdit {
+        target: target.clone(),
+        source_projection: Some(std::sync::Arc::new(source_projection)),
+        source_draft: None,
+        revision: session.current_math_edit_revision(),
+        cursor: 0,
+        branch: MathEditBranch::Source,
+    });
+    let source_position = session.current_caret_snapshot()?;
+    let tree_position = |operand_index| {
+        caret_snapshot(
+            &session,
+            DocumentCaretPosition::Host(HostCaretPosition::Inside {
+                host_id: math_id.clone(),
+                kind: HostCaretKind::Inline,
+                local: HostCaretLocalPosition::Math(MathCaretLocalPosition {
+                    target: target.clone(),
+                    coordinate: MathCaretCoordinate::TreeBoundary {
+                        host: MathPositionHost::InlineMath {
+                            owner_id: math_id.clone(),
+                        },
+                        path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+                            content_index: 0,
+                            operand_index,
+                        }]),
+                        index: 0,
+                        affinity: MathPositionAffinity::Downstream,
+                    },
+                }),
+            }),
+        )
+    };
+    let subscript = tree_position(1);
+    let superscript = tree_position(2);
+
+    assert_eq!(
+        session.compare_caret_snapshots(&subscript, &superscript),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&source_position, &subscript),
+        Err(EditError::InvalidPosition)
+    );
+    assert_eq!(
+        session.compare_caret_snapshots(&subscript, &source_position),
+        Err(EditError::InvalidPosition)
+    );
+    Ok(())
+}
+
+#[test]
 fn session_caret_comparison_orders_math_tree_boundaries_with_text_flow_positions() {
     let block_id = NodeId::generate();
     let tree = caret_doc::MathTree {
