@@ -4,8 +4,12 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::compare_positions;
-use super::super::{Affinity, Direction, EditError, Effect, Pos, Selection};
+use super::super::{
+    Affinity, Direction, EditError, Effect, HostCaretKind, HostCaretPosition, HostCaretTransition,
+    Pos, Selection,
+};
 use super::Session;
+use caret_layout::VisualAffinity;
 
 #[cfg(test)]
 #[path = "navigation/tests.rs"]
@@ -40,15 +44,52 @@ impl Session {
                 ..Effect::default()
             });
         }
+        if let Some(effect) = self.move_empty_inline_host_boundary(direction)? {
+            return Ok(effect);
+        }
+        if matches!(
+            self.host_caret_position.as_ref(),
+            Some(
+                HostCaretPosition::Before {
+                    kind: HostCaretKind::Inline,
+                    ..
+                } | HostCaretPosition::After {
+                    kind: HostCaretKind::Inline,
+                    ..
+                }
+            )
+        ) {
+            if self.enter_adjacent_math_if_present(direction)? {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            let pos = self.selection.focus.clone();
+            let map = self.text_map_for(&pos)?;
+            let next_offset = match direction {
+                Direction::Backward => map.previous_boundary(pos.offset),
+                Direction::Forward => map.next_boundary(pos.offset),
+            };
+            if next_offset == pos.offset {
+                return Ok(Effect::default());
+            }
+        }
         if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
             return Ok(effect);
         }
         let pos = self.selection.focus.clone();
         let map = self.text_map_for(&pos)?;
         map.validate_pos(&pos)?;
-        if direction == Direction::Forward
+        let forward = direction == Direction::Forward;
+        let boundary_transition =
+            map.horizontal_environment_transition(pos.offset, pos.affinity, forward);
+        if forward
             && pos.affinity == Affinity::Upstream
-            && map.has_environment_end(pos.offset)
+            && matches!(
+                boundary_transition,
+                Some(HostCaretTransition::EnterStart | HostCaretTransition::LeaveAfter)
+            )
         {
             let target = Pos {
                 affinity: Affinity::Downstream,
@@ -63,9 +104,12 @@ impl Session {
                 ..Effect::default()
             });
         }
-        if direction == Direction::Backward
+        if !forward
             && pos.affinity == Affinity::Downstream
-            && map.has_environment_start(pos.offset)
+            && matches!(
+                boundary_transition,
+                Some(HostCaretTransition::EnterEnd | HostCaretTransition::LeaveBefore)
+            )
         {
             let target = Pos {
                 affinity: Affinity::Upstream,
@@ -106,5 +150,150 @@ impl Session {
             selection_changed: changed,
             ..Effect::default()
         })
+    }
+
+    /// 处理零长度 InlineEnvironment 的唯一内部插入点及两侧退出。
+    pub(super) fn move_empty_inline_host_boundary(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Option<Effect>, EditError> {
+        let focus = self.selection.focus.clone();
+        let host_position = self.host_caret_position.clone();
+        let map = self.text_map_for(&focus)?;
+        let forward = direction == Direction::Forward;
+        if let Some(position) = host_position {
+            match position {
+                HostCaretPosition::Inside {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                    local,
+                } if local == focus && map.is_empty_inline_environment(focus.offset, &host_id) => {
+                    let transition = HostCaretPosition::Inside {
+                        host_id: host_id.clone(),
+                        kind: HostCaretKind::Inline,
+                        local: focus.clone(),
+                    }
+                    .horizontal_transition(forward, true, true);
+                    let (outside, affinity) = match transition {
+                        HostCaretTransition::LeaveBefore => {
+                            (Direction::Backward, Affinity::Upstream)
+                        }
+                        HostCaretTransition::LeaveAfter => {
+                            (Direction::Forward, Affinity::Downstream)
+                        }
+                        _ => return Ok(None),
+                    };
+                    self.host_caret_position = Some(HostCaretPosition::outside_with_kind(
+                        host_id,
+                        outside,
+                        HostCaretKind::Inline,
+                    ));
+                    self.selection.focus.affinity = affinity;
+                    self.selection.anchor = self.selection.focus.clone();
+                    self.selection_visual_affinity = match affinity {
+                        Affinity::Upstream => VisualAffinity::Upstream,
+                        Affinity::Downstream => VisualAffinity::Downstream,
+                    };
+                    return Ok(Some(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    }));
+                }
+                HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                } if map.is_empty_inline_environment(focus.offset, &host_id) => {
+                    let transition = HostCaretPosition::<Pos>::Before {
+                        host_id: host_id.clone(),
+                        kind: HostCaretKind::Inline,
+                    }
+                    .horizontal_transition(forward, true, true);
+                    let toward_host = matches!(transition, HostCaretTransition::EnterStart);
+                    let adjacent = if toward_host {
+                        None
+                    } else {
+                        map.adjacent_empty_inline_environment(focus.offset, &host_id, false)
+                    };
+                    let target_id = if toward_host { Some(host_id) } else { adjacent };
+                    if let Some(host_id) = target_id {
+                        self.host_caret_position = Some(HostCaretPosition::Inside {
+                            host_id,
+                            kind: HostCaretKind::Inline,
+                            local: focus,
+                        });
+                        return Ok(Some(Effect {
+                            selection_changed: true,
+                            ..Effect::default()
+                        }));
+                    }
+                    return Ok(None);
+                }
+                HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                } if map.is_empty_inline_environment(focus.offset, &host_id) => {
+                    let transition = HostCaretPosition::<Pos>::After {
+                        host_id: host_id.clone(),
+                        kind: HostCaretKind::Inline,
+                    }
+                    .horizontal_transition(forward, true, true);
+                    let toward_host = matches!(transition, HostCaretTransition::EnterEnd);
+                    let adjacent = if toward_host {
+                        None
+                    } else {
+                        map.adjacent_empty_inline_environment(focus.offset, &host_id, true)
+                    };
+                    let target_id = if toward_host { Some(host_id) } else { adjacent };
+                    if let Some(host_id) = target_id {
+                        self.host_caret_position = Some(HostCaretPosition::Inside {
+                            host_id,
+                            kind: HostCaretKind::Inline,
+                            local: focus,
+                        });
+                        return Ok(Some(Effect {
+                            selection_changed: true,
+                            ..Effect::default()
+                        }));
+                    }
+                    return Ok(None);
+                }
+                HostCaretPosition::Inside { .. } => return Ok(None),
+                HostCaretPosition::Before { .. } | HostCaretPosition::After { .. } => {
+                    return Ok(None);
+                }
+            }
+        }
+
+        let empty_environment = map.empty_inline_environment_stack_at(focus.offset, focus.affinity);
+        let Some(host_id) = empty_environment.last().and_then(|span| span.id.clone()) else {
+            return Ok(None);
+        };
+        let outside_position = match focus.affinity {
+            Affinity::Upstream => HostCaretPosition::<Pos>::Before {
+                host_id: host_id.clone(),
+                kind: HostCaretKind::Inline,
+            },
+            Affinity::Downstream => HostCaretPosition::<Pos>::After {
+                host_id: host_id.clone(),
+                kind: HostCaretKind::Inline,
+            },
+        };
+        let transition = outside_position.horizontal_transition(forward, true, true);
+        let entering = matches!(
+            transition,
+            HostCaretTransition::EnterStart | HostCaretTransition::EnterEnd
+        );
+        if !entering {
+            return Ok(None);
+        }
+        self.host_caret_position = Some(HostCaretPosition::Inside {
+            host_id,
+            kind: HostCaretKind::Inline,
+            local: focus,
+        });
+        Ok(Some(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        }))
     }
 }

@@ -174,6 +174,14 @@ fn current_environment_view_keeps_parent_after_virtual_inner_block_boundary_stop
     })?;
 
     session.run(Command::MoveStructure(Direction::Forward))?;
+    assert!(matches!(
+        session.active_host_caret_position(),
+        Some(crate::editing::HostCaretPosition::Inside {
+            host_id,
+            local: crate::editing::HostCaretLocalPosition::Paragraph(_),
+            ..
+        }) if host_id == inner_id
+    ));
     session.run(Command::ExitBlockEnvironment(Direction::Forward))?;
     assert_eq!(
         session.block_boundary_exit().map(|(id, _)| id),
@@ -188,6 +196,33 @@ fn current_environment_view_keeps_parent_after_virtual_inner_block_boundary_stop
         crate::editing::EnvironmentKind::Section
     );
     assert!(view.inline().is_empty());
+    Ok(())
+}
+
+#[test]
+fn active_host_position_projects_section_internal_position()
+-> Result<(), Box<dyn std::error::Error>> {
+    let section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph())],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    let section_id = section.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![Block::Environment(section)],
+        ..Document::blank()
+    })?;
+    session.run(Command::MoveStructure(Direction::Forward))?;
+    assert!(matches!(
+        session.active_host_caret_position(),
+        Some(crate::editing::HostCaretPosition::Inside {
+            host_id,
+            local: crate::editing::HostCaretLocalPosition::Paragraph(_),
+            ..
+        }) if host_id == section_id
+    ));
     Ok(())
 }
 

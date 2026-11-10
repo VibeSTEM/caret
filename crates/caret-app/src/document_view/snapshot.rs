@@ -389,11 +389,20 @@ fn math_text_highlight_rects(
 /// 将当前最内层行内环境投影为布局层选区矩形。
 fn inline_environment_highlight_rects(
     range: Option<&caret_engine::InlineSpan>,
+    pending_style: bool,
+    focus: &Pos,
+    visual_affinity: caret_engine::VisualAffinity,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
     let Some(range) = range else {
+        if pending_style {
+            return insertion_slot_rect(focus, visual_affinity, snapshot);
+        }
         return Value::Array(Vec::new());
     };
+    if range.start_utf8 == range.end_utf8 {
+        return insertion_slot_rect(focus, visual_affinity, snapshot);
+    }
     let selection = Selection {
         anchor: Pos {
             story: range.story.clone(),
@@ -408,22 +417,67 @@ fn inline_environment_highlight_rects(
             affinity: Affinity::Upstream,
         },
     };
-    Value::Array(
-        snapshot
-            .selection_geometry(&selection)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|rectangle| {
-                json!({
-                    "pageIndex": rectangle.page_index,
-                    "x0Pt": rectangle.x0_pt,
-                    "y0Pt": rectangle.y0_pt,
-                    "x1Pt": rectangle.x1_pt,
-                    "y1Pt": rectangle.y1_pt,
-                })
+    let mut rectangles = snapshot
+        .selection_geometry(&selection)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rectangle| {
+            json!({
+                "pageIndex": rectangle.page_index,
+                "x0Pt": rectangle.x0_pt,
+                "y0Pt": rectangle.y0_pt,
+                "x1Pt": rectangle.x1_pt,
+                "y1Pt": rectangle.y1_pt,
             })
-            .collect(),
-    )
+        })
+        .collect::<Vec<_>>();
+    if pending_style
+        && let Some(slot) = insertion_slot_rect(focus, visual_affinity, snapshot).as_array()
+    {
+        rectangles.extend(slot.iter().cloned());
+    }
+    Value::Array(rectangles)
+}
+
+/// 以当前行高和字号为零长度格式范围生成可见插入槽高亮。
+fn insertion_slot_rect(
+    focus: &Pos,
+    visual_affinity: caret_engine::VisualAffinity,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
+    let Some(caret) = snapshot.caret_geometry(focus, visual_affinity) else {
+        return Value::Array(Vec::new());
+    };
+    let Some(font_size) = snapshot.font_size_centipoints_at(focus, visual_affinity) else {
+        return Value::Array(Vec::new());
+    };
+    let Some(page) = snapshot.pages.get(caret.page_index) else {
+        return Value::Array(Vec::new());
+    };
+    let width = (f64::from(font_size) / 100.0 * 0.5)
+        .max(4.0)
+        .min(page.width_pt);
+    let x = caret.x_pt.clamp(0.0, page.width_pt);
+    let (x0, x1) = insertion_slot_horizontal_bounds(x, page.width_pt, width);
+    let y0 = caret.y0_pt.clamp(0.0, page.height_pt);
+    let y1 = caret.y1_pt.clamp(0.0, page.height_pt);
+    if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) || x1 <= x0 || y1 <= y0 {
+        return Value::Array(Vec::new());
+    }
+    Value::Array(vec![json!({
+        "pageIndex": caret.page_index,
+        "x0Pt": x0,
+        "y0Pt": y0,
+        "x1Pt": x1,
+        "y1Pt": y1,
+    })])
+}
+
+/// 在字形视觉光标两侧居中放置空槽，并在页面边缘整体内移。
+fn insertion_slot_horizontal_bounds(x: f64, page_width: f64, width: f64) -> (f64, f64) {
+    let width = width.min(page_width);
+    let x0 = (x - width / 2.0).clamp(0.0, page_width - width);
+    (x0, x0 + width)
 }
 
 #[cfg(test)]
@@ -470,12 +524,18 @@ impl DocumentViewRuntime {
             .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
         let math_block_target = current_math_block_target(highlight_session);
-        let inline_environment = (math_block_target.is_none()
+        let inline_context = math_block_target.is_none()
             && highlight_session.selected_block_environment().is_none()
-            && highlight_session.structure_selection().is_none())
-        .then(|| environment_view.innermost_inline())
-        .flatten()
-        .and_then(|entry| entry.inline_range.as_ref());
+            && highlight_session.structure_selection().is_none();
+        let inline_environment = inline_context
+            .then(|| environment_view.innermost_inline())
+            .flatten()
+            .and_then(|entry| entry.inline_range.as_ref());
+        let pending_inline_slot = inline_context
+            && highlight_session.has_pending_inline_style()
+            && highlight_session.selection().anchor == highlight_session.selection().focus;
+        let inline_focus = highlight_session.selection().focus.clone();
+        let inline_visual_affinity = highlight_session.selection_visual_affinity();
         let math_text_context = math_block_target
             .as_ref()
             .and_then(|_| highlight_session.math_text_input_context());
@@ -539,7 +599,13 @@ impl DocumentViewRuntime {
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "inlineEnvironmentHighlightRects".to_owned(),
-                inline_environment_highlight_rects(inline_environment, snapshot),
+                inline_environment_highlight_rects(
+                    inline_environment,
+                    pending_inline_slot,
+                    &inline_focus,
+                    inline_visual_affinity,
+                    snapshot,
+                ),
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -767,12 +833,18 @@ impl DocumentViewRuntime {
             .as_ref()
             .unwrap_or(&self.session);
         let math_block_target = current_math_block_target(highlight_session);
-        let inline_environment = (math_block_target.is_none()
+        let inline_context = math_block_target.is_none()
             && highlight_session.selected_block_environment().is_none()
-            && highlight_session.structure_selection().is_none())
-        .then(|| environment_view.innermost_inline())
-        .flatten()
-        .and_then(|entry| entry.inline_range.as_ref());
+            && highlight_session.structure_selection().is_none();
+        let inline_environment = inline_context
+            .then(|| environment_view.innermost_inline())
+            .flatten()
+            .and_then(|entry| entry.inline_range.as_ref());
+        let pending_inline_slot = inline_context
+            && highlight_session.has_pending_inline_style()
+            && highlight_session.selection().anchor == highlight_session.selection().focus;
+        let inline_focus = highlight_session.selection().focus.clone();
+        let inline_visual_affinity = highlight_session.selection_visual_affinity();
         let math_text_highlight_context = math_block_target
             .as_ref()
             .and_then(|_| highlight_session.math_text_input_context());
@@ -794,8 +866,13 @@ impl DocumentViewRuntime {
             .structure_selection()
             .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
         let snapshot = self.current_snapshot()?;
-        let inline_environment_rectangles =
-            inline_environment_highlight_rects(inline_environment, snapshot);
+        let inline_environment_rectangles = inline_environment_highlight_rects(
+            inline_environment,
+            pending_inline_slot,
+            &inline_focus,
+            inline_visual_affinity,
+            snapshot,
+        );
         let math_block_rectangles =
             math_block_highlight_rects(math_block_target.as_ref(), snapshot);
         let math_text_rectangles =

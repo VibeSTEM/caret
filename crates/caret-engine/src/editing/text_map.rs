@@ -13,7 +13,7 @@ use super::flow_edit::{
 pub(crate) use super::flow_map::OBJECT_REPLACEMENT;
 use super::flow_map::{FlowPath, FlowPathOptions, FlowSpanKind, build_flow_map_with_spans};
 use super::grapheme::GraphemeMap;
-use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, Pos};
+use super::{Affinity, EditError, EnvironmentKind, EnvironmentSource, HostCaretTransition, Pos};
 use caret_doc::{
     FlowContent, InlineEnvironment, InlineMath, NodeId, OpaqueNode, Paragraph, ParagraphContent,
     Run, SoftBreak, TextFlow,
@@ -181,6 +181,8 @@ pub(super) struct EnvironmentSpan {
     pub(super) end: usize,
     pub(super) kind: EnvironmentKind,
     pub(super) depth: usize,
+    pub(super) ancestors: Vec<NodeId>,
+    pub(super) flow_path: Option<FlowPath>,
 }
 
 fn span_contains_offset(span: &EnvironmentSpan, offset: usize, affinity: Affinity) -> bool {
@@ -226,6 +228,8 @@ impl TextMap {
                             end: span.range.end,
                             kind: INLINE_MATH_ADAPTER.kind,
                             depth: span.environment_depth,
+                            ancestors: Vec::new(),
+                            flow_path: None,
                         });
                         true
                     }
@@ -254,6 +258,8 @@ impl TextMap {
                     end: environment.range.end,
                     kind: adapter.kind,
                     depth: environment.depth,
+                    ancestors: environment.ancestors,
+                    flow_path: environment.path,
                 }
             })
             .collect::<Vec<_>>();
@@ -320,6 +326,167 @@ impl TextMap {
             .find(|span| span.id.as_ref() == Some(id))
     }
 
+    /// 返回当前位置处合法且为空的真实行内环境，按嵌套顺序由外到内排列。
+    pub(super) fn empty_inline_environment_stack_at(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+    ) -> Vec<&EnvironmentSpan> {
+        if self.grapheme_boundaries.binary_search(&offset).is_err() {
+            return Vec::new();
+        }
+        let mut spans = self
+            .environment_spans
+            .iter()
+            .filter(|span| span.start == offset && span.end == offset && span.id.is_some())
+            .collect::<Vec<_>>();
+        spans.sort_by(|left, right| {
+            left.flow_path
+                .as_ref()
+                .map(|path| &path.content_indices)
+                .cmp(&right.flow_path.as_ref().map(|path| &path.content_indices))
+        });
+        let leaves = spans
+            .iter()
+            .copied()
+            .filter(|span| {
+                !spans.iter().any(|candidate| {
+                    candidate
+                        .ancestors
+                        .iter()
+                        .any(|ancestor| Some(ancestor) == span.id.as_ref())
+                })
+            })
+            .collect::<Vec<_>>();
+        let leaf = match affinity {
+            Affinity::Upstream => leaves.first(),
+            Affinity::Downstream => leaves.last(),
+        };
+        let Some(leaf) = leaf else {
+            return Vec::new();
+        };
+        let leaf_id = leaf.id.as_ref();
+        let mut chain = spans
+            .into_iter()
+            .filter(|span| {
+                span.id.as_ref() == leaf_id
+                    || span
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| leaf.ancestors.contains(id))
+            })
+            .collect::<Vec<_>>();
+        chain.sort_by_key(|span| span.depth);
+        chain
+    }
+
+    pub(super) fn is_empty_inline_environment(&self, offset: usize, host_id: &NodeId) -> bool {
+        self.environment_spans.iter().any(|span| {
+            span.id.as_ref() == Some(host_id) && span.start == offset && span.end == offset
+        })
+    }
+
+    pub(super) fn has_empty_inline_environment_between(&self, start: usize, end: usize) -> bool {
+        let lower = start.min(end);
+        let upper = start.max(end);
+        self.environment_spans
+            .iter()
+            .any(|span| span.start == span.end && (lower..=upper).contains(&span.start))
+    }
+
+    pub(super) fn empty_inline_environment_stack_for_host(
+        &self,
+        offset: usize,
+        host_id: &NodeId,
+    ) -> Vec<&EnvironmentSpan> {
+        let Some(host) = self.environment_spans.iter().find(|span| {
+            span.id.as_ref() == Some(host_id) && span.start == offset && span.end == offset
+        }) else {
+            return Vec::new();
+        };
+        let ancestors = host.ancestors.clone();
+        let mut chain = self
+            .environment_spans
+            .iter()
+            .filter(|span| {
+                span.start == offset
+                    && span.end == offset
+                    && (span.id.as_ref() == Some(host_id)
+                        || span.id.as_ref().is_some_and(|id| ancestors.contains(id)))
+            })
+            .collect::<Vec<_>>();
+        chain.sort_by_key(|span| span.depth);
+        chain
+    }
+
+    pub(super) fn adjacent_empty_inline_environment(
+        &self,
+        offset: usize,
+        host_id: &NodeId,
+        forward: bool,
+    ) -> Option<NodeId> {
+        let mut leaves = self
+            .environment_spans
+            .iter()
+            .filter(|span| span.start == offset && span.end == offset && span.id.is_some())
+            .filter(|span| {
+                !self.environment_spans.iter().any(|candidate| {
+                    candidate.start == offset
+                        && candidate.end == offset
+                        && candidate
+                            .ancestors
+                            .iter()
+                            .any(|ancestor| Some(ancestor) == span.id.as_ref())
+                })
+            })
+            .collect::<Vec<_>>();
+        leaves.sort_by(|left, right| {
+            left.flow_path
+                .as_ref()
+                .map(|path| &path.content_indices)
+                .cmp(&right.flow_path.as_ref().map(|path| &path.content_indices))
+        });
+        let index = leaves
+            .iter()
+            .position(|span| span.id.as_ref() == Some(host_id))?;
+        let neighbour = if forward {
+            leaves.get(index.checked_add(1)?)
+        } else {
+            index.checked_sub(1).and_then(|index| leaves.get(index))
+        }?;
+        neighbour.id.clone()
+    }
+
+    /// 将输入直接写入指定空环境，避免同偏移的相邻正文抢占插入点。
+    pub(super) fn insert_into_empty_environment(
+        &self,
+        paragraph: &mut Paragraph,
+        host_id: &NodeId,
+        text: &str,
+    ) -> Result<bool, EditError> {
+        let Some(environment) = self
+            .environment_spans
+            .iter()
+            .find(|span| span.id.as_ref() == Some(host_id) && span.start == span.end)
+        else {
+            return Ok(false);
+        };
+        let Some(path) = environment.flow_path.as_ref() else {
+            return Err(EditError::InvalidPosition);
+        };
+        let Some(FlowContent::Environment(target)) = content_at_path(&paragraph.inlines, path)
+        else {
+            return Err(EditError::InvalidPosition);
+        };
+        if target.id != *host_id {
+            return Err(EditError::InvalidPosition);
+        }
+        let children = environment_children_at_path_mut(&mut paragraph.inlines, path)
+            .ok_or(EditError::InvalidPosition)?;
+        children.push(FlowContent::Text(single_run_text_flow(text)));
+        Ok(true)
+    }
+
     pub(super) fn has_environment_start(&self, offset: usize) -> bool {
         self.environment_spans
             .iter()
@@ -338,6 +505,39 @@ impl TextMap {
 
     pub(super) fn has_environment_boundary(&self, offset: usize) -> bool {
         self.has_environment_start(offset) || self.has_environment_end(offset)
+    }
+
+    /// 按宿主三态仲裁格式环境的同偏移水平边界转换。
+    pub(super) fn horizontal_environment_transition(
+        &self,
+        offset: usize,
+        affinity: Affinity,
+        forward: bool,
+    ) -> Option<HostCaretTransition> {
+        let spans = self
+            .environment_spans
+            .iter()
+            .chain(self.property_spans.iter())
+            .collect::<Vec<_>>();
+        let at_start = spans.iter().any(|span| span.start == offset);
+        let at_end = spans.iter().any(|span| span.end == offset);
+        if !at_start && !at_end {
+            return None;
+        }
+        let inside_nonempty_host = spans.iter().any(|span| {
+            span.start < span.end
+                && if forward {
+                    span.end == offset && affinity == Affinity::Upstream
+                } else {
+                    span.start == offset && affinity == Affinity::Downstream
+                }
+        });
+        Some(HostCaretTransition::for_text_boundary(
+            forward,
+            inside_nonempty_host,
+            at_start,
+            at_end,
+        ))
     }
 
     pub(super) fn snap_to_grapheme_boundary(&self, offset: usize, affinity: Affinity) -> usize {
@@ -780,6 +980,27 @@ fn single_run_text_flow(text: &str) -> TextFlow {
     }
 }
 
+fn environment_children_at_path_mut<'a>(
+    contents: &'a mut [ParagraphContent],
+    path: &FlowPath,
+) -> Option<&'a mut Vec<ParagraphContent>> {
+    fn descend<'a>(
+        contents: &'a mut [ParagraphContent],
+        indices: &[usize],
+    ) -> Option<&'a mut Vec<ParagraphContent>> {
+        let (&index, rest) = indices.split_first()?;
+        let FlowContent::Environment(environment) = contents.get_mut(index)? else {
+            return None;
+        };
+        if rest.is_empty() {
+            Some(&mut environment.children)
+        } else {
+            descend(&mut environment.children, rest)
+        }
+    }
+    descend(contents, &path.content_indices)
+}
+
 fn validate_paragraph_text_flows(contents: &[ParagraphContent]) -> Result<(), EditError> {
     for content in contents {
         match content {
@@ -817,6 +1038,8 @@ fn collect_paragraph_run_property_spans(
                     end: offset,
                     kind: property.adapter.kind,
                     depth: 0,
+                    ancestors: Vec::new(),
+                    flow_path: None,
                 });
             }
         };
@@ -874,6 +1097,8 @@ fn collect_paragraph_run_property_spans(
                 end: offset,
                 kind: property.adapter.kind,
                 depth: 0,
+                ancestors: Vec::new(),
+                flow_path: None,
             });
         }
     };

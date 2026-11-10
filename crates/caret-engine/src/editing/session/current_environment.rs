@@ -28,10 +28,34 @@ impl Session {
         }
 
         let focus = self.selection().focus.clone();
-        let Some((environment_id, start_utf8, end_utf8)) = self
-            .text_map_for(&focus)?
-            .inline_environment_at(focus.offset, focus.affinity)
-        else {
+        let host_caret_position = self.host_caret_position.clone();
+        let map = self.text_map_for(&focus)?;
+        let empty_focus_id = host_caret_position
+            .as_ref()
+            .and_then(|position| match position {
+                crate::editing::HostCaretPosition::Inside {
+                    host_id,
+                    kind: crate::editing::HostCaretKind::Inline,
+                    local,
+                } if local == &focus
+                    && map
+                        .empty_inline_environment_stack_for_host(focus.offset, host_id)
+                        .iter()
+                        .any(|span| span.id.as_ref() == Some(host_id)) =>
+                {
+                    Some(host_id.clone())
+                }
+                _ => None,
+            });
+        let range = empty_focus_id
+            .and_then(|id| {
+                map.empty_inline_environment_stack_for_host(focus.offset, &id)
+                    .into_iter()
+                    .find(|span| span.id.as_ref() == Some(&id))
+                    .map(|span| (id, span.start, span.end))
+            })
+            .or_else(|| map.inline_environment_at(focus.offset, focus.affinity));
+        let Some((environment_id, start_utf8, end_utf8)) = range else {
             return Ok(None);
         };
 
@@ -110,6 +134,7 @@ impl Session {
             MathEditTarget::Inline { math_id, .. } => Some(math_id.clone()),
             MathEditTarget::Block { .. } => None,
         });
+        let host_caret_position = self.host_caret_position.clone();
         let map = self.text_map_for(&focus)?;
         let mut inline = map
             .inline_environment_stack_at(focus.offset, focus.affinity)
@@ -131,6 +156,30 @@ impl Session {
                 depth: span.depth,
             })
             .collect::<Vec<_>>();
+        if let Some(crate::editing::HostCaretPosition::Inside {
+            host_id,
+            kind: crate::editing::HostCaretKind::Inline,
+            local,
+        }) = host_caret_position.as_ref()
+            && local == &focus
+        {
+            inline.extend(
+                map.empty_inline_environment_stack_for_host(focus.offset, host_id)
+                    .into_iter()
+                    .map(|span| EnvironmentEntry {
+                        id: span.id.clone(),
+                        kind: span.kind,
+                        source: span.source,
+                        inline_range: Some(InlineSpan {
+                            paragraph_id: focus.paragraph_id.clone(),
+                            story: focus.story.clone(),
+                            start_utf8: span.start,
+                            end_utf8: span.end,
+                        }),
+                        depth: span.depth,
+                    }),
+            );
+        }
         if let Some(math_id) = active_inline_math_id
             && !inline.iter().any(|entry| {
                 entry.source == EnvironmentSource::InlineMath && entry.id.as_ref() == Some(&math_id)

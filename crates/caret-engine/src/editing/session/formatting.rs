@@ -114,6 +114,13 @@ impl PendingInlineStyle {
             || !self.run_properties.is_empty()
             || self.font_family.is_some()
     }
+
+    pub(super) fn shows_insertion_slot(&self) -> bool {
+        self.bold == Some(true)
+            || self.italic == Some(true)
+            || self.run_properties.values().any(|enabled| *enabled)
+            || self.font_family.is_some()
+    }
 }
 
 impl Session {

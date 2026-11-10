@@ -1,8 +1,12 @@
 use super::super::super::{
-    ClipboardAction, Command, Direction, EditorKey, MathEditBranch, NavigationCandidate,
-    NavigationGeneration, Session,
+    Affinity, ClipboardAction, Command, Direction, EditorKey, EnvironmentKind, MathEditBranch,
+    NavigationCandidate, NavigationGeneration, Pos, Selection, Session,
 };
-use caret_doc::Document;
+use caret_doc::{
+    Block, Document, InlineEnvironment, InlineEnvironmentKind, NodeId, ParagraphContent, Run,
+    TextFlow,
+};
+use std::collections::BTreeMap;
 
 #[test]
 fn editor_key_prioritizes_command_line_over_coexisting_math_edit() {
@@ -57,7 +61,7 @@ fn editor_key_prioritizes_command_line_over_coexisting_math_edit() {
         visual_affinity: caret_layout::VisualAffinity::Downstream,
         generation: NavigationGeneration {
             session_id: session.session_id().clone(),
-            document_generation: session.document_generation().saturating_sub(1),
+            document_generation: session.document_generation().saturating_add(1),
             font_generation: 0,
         },
     });
@@ -176,6 +180,831 @@ fn shift_horizontal_navigation_does_not_exit_math_text_at_text_island_edges() {
             .map(|context| context.focus),
         Some(end_position)
     );
+}
+
+#[test]
+fn horizontal_navigation_enters_and_leaves_both_inline_environment_edges() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session initialization failed: {error}"));
+    session
+        .run(Command::InsertText("ab".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    let paragraph_id = session.selection().focus.paragraph_id.clone();
+    let story = session.selection().focus.story.clone();
+    let position = |offset, affinity| Pos {
+        story: story.clone(),
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: position(0, Affinity::Downstream),
+            focus: position(1, Affinity::Upstream),
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    session
+        .run(Command::ToggleInlineFormat(
+            caret_doc::InlineEnvironmentKind::Bold,
+        ))
+        .unwrap_or_else(|error| panic!("inline format failed: {error}"));
+
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: position(0, Affinity::Upstream),
+            focus: position(0, Affinity::Upstream),
+        })))
+        .unwrap_or_else(|error| panic!("start boundary setup failed: {error}"));
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("entering the inline start failed: {error}"));
+    assert_eq!(session.selection().focus, position(0, Affinity::Downstream));
+    assert!(
+        session
+            .current_environment_view()
+            .unwrap_or_default()
+            .inline()
+            .iter()
+            .any(|entry| entry.kind == EnvironmentKind::Bold)
+    );
+
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("moving inside the inline environment failed: {error}"));
+    assert_eq!(session.selection().focus, position(1, Affinity::Upstream));
+    session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| panic!("leaving the inline end failed: {error}"));
+    assert_eq!(session.selection().focus, position(1, Affinity::Downstream));
+
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("entering the inline end failed: {error}"));
+    assert_eq!(session.selection().focus, position(1, Affinity::Upstream));
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| {
+            panic!("moving backward inside the inline environment failed: {error}")
+        });
+    assert_eq!(session.selection().focus, position(0, Affinity::Downstream));
+    session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| panic!("leaving the inline start failed: {error}"));
+    assert_eq!(session.selection().focus, position(0, Affinity::Upstream));
+}
+
+#[test]
+fn empty_inline_environment_has_one_editable_internal_caret_stop() {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: environment_id.clone(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+        children: vec![ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: String::new(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("empty environment session failed: {error}"));
+    let mut outside = session.selection().focus.clone();
+    outside.affinity = Affinity::Upstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: outside.clone(),
+            focus: outside,
+        })))
+        .unwrap_or_else(|error| panic!("outside caret setup failed: {error}"));
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("entering empty environment failed: {error}"));
+    assert_eq!(session.selection().focus.offset, 0);
+    let visual_affinity = match session.selection_visual_affinity() {
+        caret_layout::VisualAffinity::Upstream => caret_layout::VisualAffinity::Downstream,
+        caret_layout::VisualAffinity::Downstream => caret_layout::VisualAffinity::Upstream,
+    };
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(NavigationCandidate::Document {
+                focus: session.selection().focus.clone(),
+                visual_affinity,
+                generation: NavigationGeneration {
+                    session_id: session.session_id().clone(),
+                    document_generation: session.document_generation(),
+                    font_generation: 0,
+                },
+            }),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("visual caret switch inside empty environment failed: {error}")
+        });
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(crate::editing::HostCaretPosition::Inside {
+            host_id,
+            kind: crate::editing::HostCaretKind::Inline,
+            ..
+        }) if host_id == &environment_id
+    ));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("empty inline environment lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("empty inline environment was not active"))
+            .environment_id,
+        environment_id
+    );
+    assert!(matches!(
+        session.active_host_caret_position(),
+        Some(crate::editing::HostCaretPosition::Inside {
+            local: crate::editing::HostCaretLocalPosition::Paragraph(_),
+            ..
+        })
+    ));
+    assert_eq!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .len(),
+        1
+    );
+    let document_before_preedit = session.document().clone();
+    session
+        .run(Command::UpdateComposition {
+            id: 94,
+            preedit: "ni".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("empty inline preedit failed: {error}"));
+    session
+        .run(Command::CancelComposition { id: 94 })
+        .unwrap_or_else(|error| panic!("empty inline preedit cancellation failed: {error}"));
+    assert_eq!(session.document(), &document_before_preedit);
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!(
+                "inline environment after preedit cancel failed: {error}"
+            ))
+            .unwrap_or_else(|| panic!("preedit cancellation lost empty inline focus"))
+            .environment_id,
+        environment_id
+    );
+
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("leaving toward the empty environment's before side failed: {error}")
+        });
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+    assert!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .is_empty()
+    );
+    let outside_visual_affinity = match session.selection_visual_affinity() {
+        caret_layout::VisualAffinity::Upstream => caret_layout::VisualAffinity::Downstream,
+        caret_layout::VisualAffinity::Downstream => caret_layout::VisualAffinity::Upstream,
+    };
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(NavigationCandidate::Document {
+                focus: session.selection().focus.clone(),
+                visual_affinity: outside_visual_affinity,
+                generation: NavigationGeneration {
+                    session_id: session.session_id().clone(),
+                    document_generation: session.document_generation(),
+                    font_generation: 0,
+                },
+            }),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("visual caret switch outside empty environment failed: {error}")
+        });
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(crate::editing::HostCaretPosition::Before {
+            kind: crate::editing::HostCaretKind::Inline,
+            ..
+        })
+    ));
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("leaving the empty host at document start failed: {error}"));
+    assert!(matches!(
+        session.host_caret_position.as_ref(),
+        Some(crate::editing::HostCaretPosition::Before {
+            kind: crate::editing::HostCaretKind::Inline,
+            ..
+        })
+    ));
+    let before_edge_position = session.selection().clone();
+    let before_edge_host = session.host_caret_position.clone();
+    let before_edge_history = session.history_state_id();
+    let before_edge_merge_epoch = session.history_merge_epoch;
+    let before_edge_effect = session
+        .run(Command::MoveCaret(Direction::Backward))
+        .unwrap_or_else(|error| {
+            panic!("moving before the inline host at document start failed: {error}")
+        });
+    assert!(!before_edge_effect.selection_changed && !before_edge_effect.document_changed);
+    assert_eq!(session.selection(), &before_edge_position);
+    assert_eq!(session.host_caret_position, before_edge_host);
+    assert_eq!(session.history_state_id(), before_edge_history);
+    assert_eq!(session.history_merge_epoch, before_edge_merge_epoch);
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("re-entering the empty environment failed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("leaving toward the empty environment's after side failed: {error}")
+        });
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
+    assert!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .is_empty()
+    );
+    let after_edge_position = session.selection().clone();
+    let after_edge_host = session.host_caret_position.clone();
+    let after_edge_history = session.history_state_id();
+    let after_edge_merge_epoch = session.history_merge_epoch;
+    let after_edge_effect = session
+        .run(Command::MoveCaret(Direction::Forward))
+        .unwrap_or_else(|error| {
+            panic!("moving after the inline host at document end failed: {error}")
+        });
+    assert!(!after_edge_effect.selection_changed && !after_edge_effect.document_changed);
+    assert_eq!(session.selection(), &after_edge_position);
+    assert_eq!(session.host_caret_position, after_edge_host);
+    assert_eq!(session.history_state_id(), after_edge_history);
+    assert_eq!(session.history_merge_epoch, after_edge_merge_epoch);
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| {
+            panic!("entering from the empty environment's after side failed: {error}")
+        });
+    assert_eq!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .len(),
+        1
+    );
+
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("typing into empty environment failed: {error}"));
+    assert!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .iter()
+            .any(|entry| {
+                entry.source == crate::editing::EnvironmentSource::InlineEnvironment
+                    && entry.id.as_ref() == Some(&environment_id)
+            })
+    );
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo after typing into empty inline failed: {error}"));
+    assert!(
+        session
+            .current_environment_view()
+            .unwrap_or_else(|error| panic!("environment view lookup failed: {error}"))
+            .inline()
+            .iter()
+            .any(|entry| {
+                entry.source == crate::editing::EnvironmentSource::InlineEnvironment
+                    && entry.id.as_ref() == Some(&environment_id)
+            })
+    );
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo after typing into empty inline failed: {error}"));
+}
+
+#[test]
+fn empty_inline_host_does_not_swallow_invalid_or_visual_only_candidates() {
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: NodeId::generate(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: String::new(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("empty environment session failed: {error}"));
+    let before = session.selection().clone();
+    let generation = NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    let invalid = NavigationCandidate::Document {
+        focus: Pos {
+            offset: 1,
+            ..before.focus.clone()
+        },
+        visual_affinity: session.selection_visual_affinity(),
+        generation: generation.clone(),
+    };
+    assert_eq!(
+        session.run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(invalid),
+            extend: false,
+        })),
+        Err(crate::editing::EditError::InvalidPosition)
+    );
+    assert_eq!(session.selection(), &before);
+    assert!(session.host_caret_position.is_none());
+
+    let alternate_visual_affinity = match session.selection_visual_affinity() {
+        caret_layout::VisualAffinity::Upstream => caret_layout::VisualAffinity::Downstream,
+        caret_layout::VisualAffinity::Downstream => caret_layout::VisualAffinity::Upstream,
+    };
+    let alternate = NavigationCandidate::Document {
+        focus: before.focus,
+        visual_affinity: alternate_visual_affinity,
+        generation,
+    };
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(alternate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("visual-only candidate was rejected: {error}"));
+    assert_eq!(
+        session.selection_visual_affinity(),
+        alternate_visual_affinity
+    );
+    assert!(session.host_caret_position.is_none());
+}
+
+#[test]
+fn typing_at_empty_inline_environment_between_text_stays_inside_its_host() {
+    let mut document = Document::blank();
+    let environment_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    let run = |text: &str| {
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: text.to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })
+    };
+    paragraph.inlines = vec![
+        run("a"),
+        ParagraphContent::Environment(InlineEnvironment {
+            id: environment_id.clone(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        }),
+        run("b"),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("adjacent empty environment session failed: {error}"));
+    let mut before_environment = session.selection().focus.clone();
+    before_environment.offset = 1;
+    before_environment.affinity = Affinity::Upstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: before_environment.clone(),
+            focus: before_environment,
+        })))
+        .unwrap_or_else(|error| panic!("before-environment caret setup failed: {error}"));
+    let focus_before_stale_candidate = session.selection().clone();
+    let stale_candidate = NavigationCandidate::Document {
+        focus: focus_before_stale_candidate.focus.clone(),
+        visual_affinity: caret_layout::VisualAffinity::Downstream,
+        generation: NavigationGeneration {
+            session_id: session.session_id().clone(),
+            document_generation: session.document_generation().saturating_add(1),
+            font_generation: 0,
+        },
+    };
+    assert!(
+        session
+            .run(Command::EditorKey(EditorKey::RightArrow {
+                candidate: Some(stale_candidate),
+                extend: false,
+            }))
+            .is_err()
+    );
+    assert_eq!(session.selection(), &focus_before_stale_candidate);
+    let mut visual_target = focus_before_stale_candidate.focus.clone();
+    visual_target.offset = 2;
+    visual_target.affinity = Affinity::Downstream;
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(NavigationCandidate::Document {
+                focus: visual_target,
+                visual_affinity: caret_layout::VisualAffinity::Downstream,
+                generation: NavigationGeneration {
+                    session_id: session.session_id().clone(),
+                    document_generation: session.document_generation(),
+                    font_generation: 0,
+                },
+            }),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("visual candidate skipped the empty environment: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("empty inline environment lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("visual navigation did not enter the inline environment"))
+            .environment_id,
+        environment_id
+    );
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("typing inside empty environment failed: {error}"));
+
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        panic!("document paragraph unexpectedly changed type");
+    };
+    let Some(ParagraphContent::Environment(environment)) = paragraph.inlines.get(1) else {
+        panic!("empty inline environment was not preserved");
+    };
+    assert_eq!(environment.id, environment_id);
+    assert!(
+        matches!(environment.children.first(), Some(ParagraphContent::Text(flow)) if flow.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "x")
+    );
+    assert!(
+        matches!(paragraph.inlines.first(), Some(ParagraphContent::Text(flow)) if flow.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "a")
+    );
+    assert!(
+        matches!(paragraph.inlines.get(2), Some(ParagraphContent::Text(flow)) if flow.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "b")
+    );
+}
+
+#[test]
+fn empty_sibling_inline_hosts_are_reached_from_both_directions() {
+    let first_id = NodeId::generate();
+    let second_id = NodeId::generate();
+    let empty_environment = |id: NodeId, kind| {
+        ParagraphContent::Environment(InlineEnvironment {
+            id,
+            kind,
+            definition_id: None,
+            props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        })
+    };
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![
+        empty_environment(first_id.clone(), InlineEnvironmentKind::Bold),
+        empty_environment(second_id.clone(), InlineEnvironmentKind::Italic),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("sibling empty environment session failed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("entering right sibling from the right failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("right sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("right sibling did not become active"))
+            .environment_id,
+        second_id
+    );
+    session
+        .run(Command::InsertText("r".to_owned()))
+        .unwrap_or_else(|error| panic!("typing into right sibling failed: {error}"));
+
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![
+        empty_environment(first_id.clone(), InlineEnvironmentKind::Bold),
+        empty_environment(second_id.clone(), InlineEnvironmentKind::Italic),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("sibling empty environment session failed: {error}"));
+    let mut before = session.selection().focus.clone();
+    before.affinity = Affinity::Upstream;
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: before.clone(),
+            focus: before,
+        })))
+        .unwrap_or_else(|error| panic!("left sibling boundary setup failed: {error}"));
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("entering left sibling from the left failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("left sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("left sibling did not become active"))
+            .environment_id,
+        first_id
+    );
+    session
+        .run(Command::InsertText("l".to_owned()))
+        .unwrap_or_else(|error| panic!("typing into left sibling failed: {error}"));
+}
+
+#[test]
+fn empty_inline_host_identity_survives_three_sibling_navigation_and_history() {
+    let host_ids = [NodeId::generate(), NodeId::generate(), NodeId::generate()];
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = host_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            ParagraphContent::Environment(InlineEnvironment {
+                id: id.clone(),
+                kind: [
+                    InlineEnvironmentKind::Bold,
+                    InlineEnvironmentKind::Italic,
+                    InlineEnvironmentKind::Font,
+                ][index],
+                definition_id: None,
+                props: BTreeMap::from([("enabled".to_owned(), serde_json::Value::Bool(true))]),
+                children: Vec::new(),
+                extra: BTreeMap::new(),
+            })
+        })
+        .collect();
+    let mut projection_session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("empty sibling projection session failed: {error}"));
+    assert!(matches!(
+        projection_session.active_host_caret_position(),
+        Some(crate::editing::HostCaretPosition::After {
+            host_id,
+            kind: crate::editing::HostCaretKind::Inline,
+        }) if host_id == host_ids[2]
+    ));
+    let mut before = projection_session.selection().focus.clone();
+    before.affinity = Affinity::Upstream;
+    projection_session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: before.clone(),
+            focus: before,
+        })))
+        .unwrap_or_else(|error| panic!("empty sibling leading boundary setup failed: {error}"));
+    assert!(matches!(
+        projection_session.active_host_caret_position(),
+        Some(crate::editing::HostCaretPosition::Before {
+            host_id,
+            kind: crate::editing::HostCaretKind::Inline,
+        }) if host_id == host_ids[0]
+    ));
+    let mut session = Session::new(document.clone())
+        .unwrap_or_else(|error| panic!("empty sibling session failed: {error}"));
+
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("entering the last empty sibling failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("last sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("last sibling did not become active"))
+            .environment_id,
+        host_ids[2]
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("leaving the last empty sibling failed: {error}"));
+    assert!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("outside sibling lookup failed: {error}"))
+            .is_none()
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("entering the middle empty sibling failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("middle sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("middle sibling did not become active"))
+            .environment_id,
+        host_ids[1]
+    );
+    session
+        .run(Command::InsertText("x".to_owned()))
+        .unwrap_or_else(|error| panic!("typing into the middle sibling failed: {error}"));
+    session
+        .run(Command::Undo)
+        .unwrap_or_else(|error| panic!("undo in the middle sibling failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("undo sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("undo lost the active sibling"))
+            .environment_id,
+        host_ids[1]
+    );
+    session
+        .run(Command::Redo)
+        .unwrap_or_else(|error| panic!("redo in the middle sibling failed: {error}"));
+    assert_eq!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("redo sibling lookup failed: {error}"))
+            .unwrap_or_else(|| panic!("redo lost the active sibling"))
+            .environment_id,
+        host_ids[1]
+    );
+
+    let mut forward_session = Session::new(document)
+        .unwrap_or_else(|error| panic!("forward sibling session failed: {error}"));
+    let mut before = forward_session.selection().focus.clone();
+    before.affinity = Affinity::Upstream;
+    forward_session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: before.clone(),
+            focus: before,
+        })))
+        .unwrap_or_else(|error| panic!("left sibling boundary setup failed: {error}"));
+    for _ in 0..3 {
+        forward_session
+            .run(Command::EditorKey(EditorKey::RightArrow {
+                candidate: None,
+                extend: false,
+            }))
+            .unwrap_or_else(|error| panic!("moving to the middle sibling failed: {error}"));
+    }
+    for text in ["x", "y"] {
+        forward_session
+            .run(Command::InsertText(text.to_owned()))
+            .unwrap_or_else(|error| panic!("consecutive middle sibling input failed: {error}"));
+        assert_eq!(
+            forward_session
+                .current_inline_environment()
+                .unwrap_or_else(|error| panic!("middle sibling lookup failed: {error}"))
+                .unwrap_or_else(|| panic!("typing left the middle sibling"))
+                .environment_id,
+            host_ids[1]
+        );
+    }
+}
+
+#[test]
+fn nonempty_inline_environment_projects_three_host_states() {
+    let host_id = NodeId::generate();
+    let mut document = Document::blank();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: host_id.clone(),
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "x".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let paragraph_id = paragraph.id.clone();
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("nonempty inline session failed: {error}"));
+
+    for (offset, affinity, expected_inside) in [
+        (0, Affinity::Upstream, false),
+        (0, Affinity::Downstream, true),
+        (1, Affinity::Upstream, true),
+        (1, Affinity::Downstream, false),
+    ] {
+        let position = Pos {
+            story: crate::editing::StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset,
+            affinity,
+        };
+        session
+            .run(Command::SetSelection(Some(Selection {
+                anchor: position.clone(),
+                focus: position,
+            })))
+            .unwrap_or_else(|error| panic!("setting inline boundary selection failed: {error}"));
+        let projected = session.active_host_caret_position();
+        match (affinity, expected_inside, projected) {
+            (
+                Affinity::Upstream,
+                false,
+                Some(crate::editing::HostCaretPosition::Before {
+                    host_id: projected_id,
+                    kind: crate::editing::HostCaretKind::Inline,
+                }),
+            ) if offset == 0 && projected_id == host_id => {}
+            (
+                Affinity::Downstream,
+                false,
+                Some(crate::editing::HostCaretPosition::After {
+                    host_id: projected_id,
+                    kind: crate::editing::HostCaretKind::Inline,
+                }),
+            ) if offset == 1 && projected_id == host_id => {}
+            (
+                _,
+                true,
+                Some(crate::editing::HostCaretPosition::Inside {
+                    host_id: projected_id,
+                    kind: crate::editing::HostCaretKind::Inline,
+                    ..
+                }),
+            ) if projected_id == host_id => {}
+            (_, _, actual) => panic!("unexpected inline host projection: {actual:?}"),
+        }
+    }
 }
 
 #[test]

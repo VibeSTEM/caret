@@ -4,6 +4,18 @@ use super::DocumentViewRuntime;
 use serde_json::Value;
 
 #[test]
+fn insertion_slot_stays_visible_at_page_edges_and_centers_on_the_caret() {
+    let (left_x0, left_x1) = super::insertion_slot_horizontal_bounds(0.0, 600.0, 6.0);
+    assert_eq!((left_x0, left_x1), (0.0, 6.0));
+
+    let (right_x0, right_x1) = super::insertion_slot_horizontal_bounds(600.0, 600.0, 6.0);
+    assert_eq!((right_x0, right_x1), (594.0, 600.0));
+
+    let (middle_x0, middle_x1) = super::insertion_slot_horizontal_bounds(120.0, 600.0, 6.0);
+    assert_eq!((middle_x0, middle_x1), (117.0, 123.0));
+}
+
+#[test]
 fn command_candidate_snapshot_omits_search_only_labels() -> Result<(), String> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime.command_line_command_json("begin", String::new())?;

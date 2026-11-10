@@ -50,6 +50,7 @@ pub(super) struct FlowEnvironmentRange {
     pub(super) kind: InlineEnvironmentKind,
     pub(super) range: Range<usize>,
     pub(super) depth: usize,
+    pub(super) ancestors: Vec<NodeId>,
     pub(super) path: Option<FlowPath>,
 }
 
@@ -74,6 +75,7 @@ struct FlowPosition<'a> {
 struct FlowPaths {
     physical: Vec<usize>,
     legacy_edit: Vec<usize>,
+    environment_ancestors: Vec<NodeId>,
 }
 
 /// 按宿主规则投影一个 FlowContent 流；固定 MathFlow 槽位由宿主分别投影。
@@ -145,6 +147,7 @@ fn visit<T, AtomTag, SpanData>(
                 paths.physical.push(content_index);
                 paths.legacy_edit.push(logical_index);
                 let start = map.text.len();
+                paths.environment_ancestors.push(environment.id.clone());
                 visit(
                     &environment.children,
                     paths,
@@ -154,11 +157,13 @@ fn visit<T, AtomTag, SpanData>(
                     path_mode,
                     environment_depth + 1,
                 )?;
+                paths.environment_ancestors.pop();
                 map.environments.push(FlowEnvironmentRange {
                     id: environment.id.clone(),
                     kind: environment.kind,
                     range: start..map.text.len(),
                     depth: environment_depth,
+                    ancestors: paths.environment_ancestors.clone(),
                     path: path_mode.physical.then(|| FlowPath {
                         content_indices: paths.physical.clone(),
                         run_index: None,

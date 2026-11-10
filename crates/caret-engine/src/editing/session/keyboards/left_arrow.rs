@@ -67,6 +67,29 @@ impl Session {
                 }
             };
         }
+        if !extend
+            && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?
+            && let Some(effect) = self.move_empty_inline_host_boundary(Direction::Backward)?
+        {
+            return Ok(effect);
+        }
+        if !extend
+            && candidate.is_none()
+            && matches!(
+                self.host_caret_position.as_ref(),
+                Some(
+                    crate::editing::HostCaretPosition::Before {
+                        kind: crate::editing::HostCaretKind::Inline,
+                        ..
+                    } | crate::editing::HostCaretPosition::After {
+                        kind: crate::editing::HostCaretKind::Inline,
+                        ..
+                    }
+                )
+            )
+        {
+            return self.run(Command::MoveCaret(Direction::Backward));
+        }
         match candidate {
             Some(NavigationCandidate::Document {
                 focus,

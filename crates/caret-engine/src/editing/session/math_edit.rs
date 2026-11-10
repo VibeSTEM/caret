@@ -29,8 +29,8 @@ mod text_run_split;
 mod tree_position;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
-    Affinity, Command, CommandLine, Direction, EditError, Effect, Pos, PositionMap, Selection,
-    StoryId,
+    Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
+    HostCaretTransition, Pos, PositionMap, Selection, StoryId,
 };
 use super::Session;
 use super::history::{
@@ -1054,7 +1054,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
@@ -1206,7 +1206,7 @@ impl Session {
         self.selected_block_environment = None;
         self.selected_block_environments.clear();
         self.structure_selection = None;
-        self.block_boundary_exit = None;
+        self.host_caret_position = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
@@ -1691,7 +1691,11 @@ impl Session {
 
     /// 返回当前停靠点关联的公式块，供 app 在生成视觉导航候选前委托 Session 仲裁。
     pub fn math_block_boundary_exit(&self) -> Option<(NodeId, Direction)> {
-        let (block_id, direction) = self.block_boundary_exit.as_ref()?;
+        let position = self.host_caret_position.as_ref()?;
+        if position.kind() != HostCaretKind::Block {
+            return None;
+        }
+        let (block_id, direction) = position.as_outside()?;
         let (parent_ids, index) = find_block_path(&self.document.body, block_id)?;
         matches!(
             block_list_ref(&self.document.body, &parent_ids)
@@ -1699,7 +1703,7 @@ impl Session {
                 .get(index),
             Some(Block::Equation(_) | Block::Align(_))
         )
-        .then(|| (block_id.clone(), *direction))
+        .then(|| (block_id.clone(), direction))
     }
 
     /// 仅当当前正文焦点紧邻受支持的公式对象时进入该公式。
@@ -1738,7 +1742,7 @@ impl Session {
         let focus = self.selection.focus.clone();
         let paragraph = self.paragraph_for(&focus)?;
         let object_len = OBJECT_REPLACEMENT.len_utf8();
-        if self.block_boundary_exit.is_none()
+        if self.block_boundary_exit().is_none()
             && include_inline
             && inline_math_slots(paragraph)?
                 .iter()
@@ -1792,18 +1796,49 @@ impl Session {
             Direction::Backward => Direction::Forward,
             Direction::Forward => Direction::Backward,
         };
-        match self.block_boundary_exit.clone() {
-            Some((active_id, exit_direction)) if active_id == target_id => {
-                if direction == exit_direction {
+        match self.host_caret_position.clone() {
+            Some(position) if position.kind() == HostCaretKind::Inline => {
+                if position.outside_direction() != Some(direction) {
+                    return Ok(false);
+                }
+                if stop_before_entering {
+                    self.host_caret_position =
+                        Some(HostCaretPosition::outside(target_id, opposite));
+                    self.advance_history_merge_epoch();
                     return Ok(true);
                 }
-                self.block_boundary_exit = None;
+                if let Some(edit) = self.math_edit_at_block(&target_id, direction)? {
+                    self.math_edit = Some(edit);
+                    self.host_caret_position = None;
+                    self.advance_history_merge_epoch();
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
-            Some(_) => return Ok(false),
+            Some(position)
+                if position.kind() == HostCaretKind::Block && position.host_id() == &target_id =>
+            {
+                if let Some((_, exit_direction)) = position.as_outside() {
+                    if direction == exit_direction {
+                        Ok(true)
+                    } else if let Some(edit) = self.math_edit_at_block(&target_id, direction)? {
+                        self.host_caret_position = None;
+                        self.math_edit = Some(edit);
+                        self.advance_history_merge_epoch();
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    Ok(false)
+                }
+            }
+            Some(_) => Ok(false),
             None if stop_before_entering => {
-                self.block_boundary_exit = Some((target_id, opposite));
+                self.host_caret_position = Some(HostCaretPosition::outside(target_id, opposite));
                 self.advance_history_merge_epoch();
-                return Ok(true);
+                Ok(true)
             }
             None => {
                 let edit = self
@@ -1811,18 +1846,18 @@ impl Session {
                     .ok_or(EditError::InvalidPosition)?;
                 self.math_edit = Some(edit);
                 self.advance_history_merge_epoch();
-                return Ok(true);
+                Ok(true)
             }
         }
-        self.enter_math_with_constraints(direction, include_inline, require_text_edge)?;
-        Ok(self.math_edit.is_some())
     }
 
     pub(super) fn enter_math(&mut self, direction: Direction) -> Result<Effect, EditError> {
-        if let Some((block_id, _)) = self.block_boundary_exit.clone()
-            && let Some(edit) = self.math_edit_at_block(&block_id, direction)?
+        if let Some(position) = self.host_caret_position.clone()
+            && position.kind() == HostCaretKind::Block
+            && let Some((block_id, _)) = position.as_outside()
+            && let Some(edit) = self.math_edit_at_block(block_id, direction)?
         {
-            self.block_boundary_exit = None;
+            self.host_caret_position = None;
             self.math_edit = Some(edit);
             self.advance_history_merge_epoch();
             return Ok(Effect {
@@ -1852,7 +1887,6 @@ impl Session {
             || !self.selected_block_environments.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
-            || self.block_boundary_exit.is_some()
         {
             return Ok(Effect::default());
         }
@@ -1868,6 +1902,17 @@ impl Session {
         } else {
             None
         };
+        if let Some(position) = self.host_caret_position.clone() {
+            let can_enter_adjacent_inline_math = slot.is_some()
+                && position.kind() == HostCaretKind::Inline
+                && position.outside_direction() == Some(direction)
+                && self
+                    .text_map_for(&focus)?
+                    .is_empty_inline_environment(focus.offset, position.host_id());
+            if !can_enter_adjacent_inline_math {
+                return Ok(Effect::default());
+            }
+        }
         if let Some((start, math_id)) = slot {
             let tree = find_inline_math(&paragraph.inlines, &math_id)
                 .ok_or(EditError::InvalidPosition)?
@@ -1892,6 +1937,7 @@ impl Session {
                 focus: position,
             };
             self.selection_visual_affinity = VisualAffinity::Upstream;
+            self.host_caret_position = None;
             let target = MathEditTarget::Inline {
                 paragraph_id: paragraph.id.clone(),
                 math_id,
@@ -3972,7 +4018,8 @@ impl Session {
                         self.set_math_exit_selection(position);
                     }
                     if keep_block_boundary_stop {
-                        self.block_boundary_exit = Some((block_id.clone(), direction));
+                        self.host_caret_position =
+                            Some(HostCaretPosition::outside(block_id.clone(), direction));
                     }
                 }
             }
@@ -4079,18 +4126,29 @@ impl Session {
         &mut self,
         direction: Direction,
     ) -> Result<Option<Effect>, EditError> {
-        let Some((block_id, exit_direction)) = self.block_boundary_exit.clone() else {
+        let Some(position) = self.host_caret_position.clone() else {
+            return Ok(None);
+        };
+        if position.kind() != HostCaretKind::Block {
+            return Ok(None);
+        }
+        let Some((block_id, exit_direction)) = position.as_outside() else {
             return Ok(None);
         };
         let entry_direction = match exit_direction {
             Direction::Backward => Direction::Forward,
             Direction::Forward => Direction::Backward,
         };
-        let Some(target_edit) = self.math_edit_at_block(&block_id, entry_direction)? else {
+        let transition =
+            position.horizontal_transition(direction == Direction::Forward, false, false);
+        let Some(target_edit) = self.math_edit_at_block(block_id, entry_direction)? else {
             return Ok(None);
         };
-        if direction != exit_direction {
-            self.block_boundary_exit = None;
+        if matches!(
+            transition,
+            HostCaretTransition::EnterStart | HostCaretTransition::EnterEnd
+        ) {
+            self.host_caret_position = None;
             self.math_edit = Some(target_edit);
             self.advance_history_merge_epoch();
             return Ok(Some(Effect {
@@ -4099,19 +4157,41 @@ impl Session {
             }));
         }
 
-        let next_edit = self.math_edit_beside_block(&block_id, direction)?;
+        let next_edit = self.math_edit_beside_block(block_id, direction)?;
         if let Some(next_edit) = next_edit {
             self.math_edit = Some(next_edit);
-            self.block_boundary_exit = None;
+            self.host_caret_position = None;
             self.advance_history_merge_epoch();
             return Ok(Some(Effect {
                 selection_changed: true,
                 ..Effect::default()
             }));
         }
-        if let Some(position) = self.paragraph_beside_block(&block_id, direction)? {
-            self.set_math_exit_selection(position);
-            self.block_boundary_exit = None;
+        if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
+            let empty_inline_host = self
+                .text_map_for(&position)?
+                .empty_inline_environment_stack_at(position.offset, position.affinity)
+                .last()
+                .and_then(|span| span.id.clone());
+            let visual_affinity = match position.affinity {
+                Affinity::Upstream => VisualAffinity::Upstream,
+                Affinity::Downstream => VisualAffinity::Downstream,
+            };
+            self.selection = Selection {
+                anchor: position.clone(),
+                focus: position.clone(),
+            };
+            self.selection_visual_affinity = visual_affinity;
+            self.host_caret_position = empty_inline_host.map(|host_id| match position.affinity {
+                Affinity::Upstream => HostCaretPosition::Before {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                },
+                Affinity::Downstream => HostCaretPosition::After {
+                    host_id,
+                    kind: HostCaretKind::Inline,
+                },
+            });
             self.advance_history_merge_epoch();
             return Ok(Some(Effect {
                 selection_changed: true,
