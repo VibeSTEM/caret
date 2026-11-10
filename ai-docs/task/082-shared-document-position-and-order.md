@@ -120,6 +120,7 @@
 - 2026-11-10：数学宿主内部位置与不同宿主的外前/外后边界复用物理区间比较；Equation/Align 及 InlineMath 内部 caret 都可与其外部相邻或包围宿主排序，Inside 严格位于自身 Before/After 之间，无法证明区间先后的情况仍拒绝。相邻 Inline 外侧边界的既有 affinity 次序保持独立，不由数学宿主比较重写。
 - 2026-11-10：同一 MathFlow 序列中被结构项隔开的 TextFlow 位置可按各自文本索引排序；先分别验证路径、UTF-8/字素边界，再比较所属序列和内容索引。不同嵌套序列、不同操作数及无法证明同一序列的位置仍拒绝，不从路径编码或 affinity 推断跨分支顺序。
 - 2026-11-10：跨不同数学文本岛的位置共用 MathTree 序列顺序键；操作数与环境子流按模型有序子项次序，TextFlow 首尾映射到对应结构边界，内部位置位于该内容项的严格区间，空 TextFlow 的 affinity 决定落在前/后边界。相同文本岛仍优先使用展平后的字素顺序，以保留相邻 TextFlow 共享边界的既有亲和语义；不同宿主、树代际或无法验证的局部坐标仍拒绝。
+- 2026-11-11：MathTree 操作数顺序代表语义槽位顺序，和水平树导航及 TreeBoundary 比较保持一致；不能据此推断所有节点的 LaTeX 源码顺序。源码映射明确允许部分节点的语法范围顺序不同于 children 槽位，因此 SourceUtf8 与 Tree/Text 坐标混合时继续拒绝，直到存在能验证同代投影、唯一映射及两种顺序关系的 adapter。
 - 2026-11-10：同一连续数学文本岛中的跨 TextFlow 比较复用文本岛展平结果、全局字节偏移和字素边界校验；数学结构边界与文本流按 TextFlow 的结构起止边界映射比较。若同一结构边界对应多个 TextFlow 端点，且待比较 TreeBoundary 正好位于该边界，则拒绝歧义映射，避免比较相等关系不传递；远离该边界的位置仍按结构顺序比较。空 TextFlow 的 Upstream/Downstream 分别归属其前后边界。MathTree 与文本路径必须解析到相同目标树和 Align cell。
 - 2026-11-10：Paragraph locator 的共享校验入口归入 `editing::paragraph_ops`：同时校验 ParagraphIndex 缓存路径、ID、标题/正文类型、Story 和完整稳定父链，并返回段落与当前父链/slot。历史捕获直接复用该结果；结构操作与数学编辑经 `paragraph_parent_path` 复用同一校验，不再从 history 模块获取定位职责。标题父链保留所属环境 ID，供历史恢复定位 owner；ParagraphIndex 仍负责历史快照定位。当前先按缓存路径校验段落，再按 ID 查询物理 locator；没有性能基准，不宣称降低遍历成本。
 - 2026-11-10：Session 比较器仍是明确受限的可比较子集，不代表完整跨宿主全序。同一 MathTree 的 TreeBoundary/TextFlow 与不同嵌套数学序列的文本位置现使用统一结构顺序；同一文本岛的 TextFlow 位置保留展平字素顺序。Source 与树/文本坐标混合、复杂 Block 父子内部坐标尚无统一 adapter。不同数学宿主仅在物理节点范围能证明不相交时可排序，重叠或映射含糊时拒绝。082 保持 in-progress，继续处理跨宿主组合和剩余字段/消费者审计。
