@@ -113,7 +113,7 @@
 | 079 | 数学交互 | [数学多行换行与删除事务](task/079-math-multiline-break-deletion.md) | P1 | 071、074、076 | M | implemented |
 | 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083 | L | planned |
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
-| 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | in-progress |
+| 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | planned |
 | 084 | 文档模型 | [行内与数学内容形状及容器边界](task/084-document-content-shapes-and-boundaries.md) | P1 | 025、032、081、082 | L | planned |
 | 085 | 文档存储 | [已知节点严格字段与消费者校验](task/085-strict-document-schema-validation.md) | P1 | 025、032、084 | L | draft |

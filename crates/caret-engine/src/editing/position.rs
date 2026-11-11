@@ -87,6 +87,11 @@ pub struct InlineEnvironmentRange {
     pub end_utf8: usize,
 }
 
+/// 将编辑事务中的 Paragraph 位置映射到结果文档坐标。
+///
+/// 这是纯坐标变换，不携带 Session、文档代际或来源快照，也不证明输入位置有效。
+/// 生产者须依据事务前文档构造映射；消费者若要将结果安装为当前 caret，仍须按结果
+/// 文档验证 Story、段落、偏移和字素边界。跨文档重用映射不受支持。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PositionMap {
     Composite(Vec<PositionMap>),
@@ -128,6 +133,10 @@ pub enum PositionMap {
 }
 
 impl PositionMap {
+    /// 应用坐标变换；未匹配映射规则的位置原样返回。
+    ///
+    /// 本方法不检查输入是否属于映射来源文档，也不校验映射结果；调用方负责校验其
+    /// 来源和目标文档契约。
     pub fn map(&self, position: &Pos) -> Pos {
         match self {
             Self::Composite(maps) => maps

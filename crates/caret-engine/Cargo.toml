@@ -32,5 +32,10 @@ name = "math_edit_criterion"
 path = "../../tests/performance/rust/cpu/math_edit_criterion.rs"
 harness = false
 
+[[bench]]
+name = "document_position_criterion"
+path = "../../tests/performance/rust/cpu/document_position_criterion.rs"
+harness = false
+
 [lints]
 workspace = true
