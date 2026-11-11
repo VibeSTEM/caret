@@ -107,8 +107,8 @@ fn editor_key_prioritizes_command_line_over_coexisting_math_edit() {
     );
 }
 
-#[test]
-fn shift_horizontal_navigation_does_not_exit_math_text_at_text_island_edges() {
+/// 在行内公式的 MathText 文本岛内部创建可扩展的公式会话。
+fn session_in_inline_math_text_island() -> Session {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("blank session initialization failed: {error}"));
     session
@@ -133,15 +133,109 @@ fn shift_horizontal_navigation_does_not_exit_math_text_at_text_island_edges() {
         Some(MathEditBranch::Text { .. })
     ));
     session
+}
+
+/// 在行内公式的根级 MathTree 内部创建可扩展的公式会话（无根级文本岛）。
+fn session_in_inline_math_tree(source: &str) -> Session {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session initialization failed: {error}"));
+    session
+        .run(Command::InsertInlineMath(source.to_owned()))
+        .unwrap_or_else(|error| panic!("inline formula insertion failed: {error}"));
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .unwrap_or_else(|error| panic!("formula focus failed: {error}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+    session
+}
+
+#[test]
+fn shift_right_at_inline_math_tree_end_converts_to_inline_math_range() {
+    let mut session = session_in_inline_math_tree("x+y");
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("shift-right at tree end failed: {error}"));
+
+    assert!(session.math_edit().is_none());
+    let (anchor, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("inline math range missing"));
+    // U+FFFC 占三个 UTF-8 字节；正向范围从对象前侧到对象后侧。
+    assert!(matches!(
+        anchor,
+        super::super::super::DocumentRangeEndpoint::Text(position)
+            if position.offset == 0 && position.affinity == Affinity::Upstream
+    ));
+    assert!(matches!(
+        focus,
+        super::super::super::DocumentRangeEndpoint::Text(position)
+            if position.offset == 3 && position.affinity == Affinity::Downstream
+    ));
+    let text = session
+        .selected_text()
+        .unwrap_or_else(|error| panic!("selected text failed: {error}"));
+    assert!(
+        text.contains('\u{FFFC}'),
+        "inline math conversion should keep the placeholder: {text:?}"
+    );
+}
+
+#[test]
+fn shift_left_at_inline_math_tree_start_converts_to_inline_math_range() {
+    let mut session = session_in_inline_math_tree("x+y");
+    for _ in 0..3 {
+        session
+            .run(Command::MoveCaret(Direction::Backward))
+            .unwrap_or_else(|error| panic!("math caret movement failed: {error}"));
+    }
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(0));
+
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("shift-left at tree start failed: {error}"));
+
+    assert!(session.math_edit().is_none());
+    let (anchor, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("inline math range missing"));
+    assert!(matches!(
+        anchor,
+        super::super::super::DocumentRangeEndpoint::Text(position)
+            if position.offset == 3 && position.affinity == Affinity::Downstream
+    ));
+    assert!(matches!(
+        focus,
+        super::super::super::DocumentRangeEndpoint::Text(position)
+            if position.offset == 0 && position.affinity == Affinity::Upstream
+    ));
+    let text = session
+        .selected_text()
+        .unwrap_or_else(|error| panic!("selected text failed: {error}"));
+    assert!(
+        text.contains('\u{FFFC}'),
+        "inline math conversion should keep the placeholder: {text:?}"
+    );
+}
+
+#[test]
+fn shift_left_at_nested_math_text_island_stays_local_without_whole_object_range() {
+    let mut session = session_in_inline_math_text_island();
+    session
         .run(Command::SetMathTextSelection {
             anchor: 0,
             focus: 0,
         })
         .unwrap_or_else(|error| panic!("math text selection failed: {error}"));
-    let initial_position = session
-        .math_text_input_context()
-        .unwrap_or_else(|| panic!("math text context missing"))
-        .focus;
 
     session
         .run(Command::EditorKey(EditorKey::LeftArrow {
@@ -149,37 +243,34 @@ fn shift_horizontal_navigation_does_not_exit_math_text_at_text_island_edges() {
             extend: true,
         }))
         .unwrap_or_else(|error| panic!("shift-left at text edge failed: {error}"));
-    assert!(session.math_edit().is_some());
-    assert_eq!(
-        session
-            .math_text_input_context()
-            .map(|context| context.focus),
-        Some(initial_position.clone())
-    );
 
+    // `\text{}` 位于分式操作数内部，不是公式宿主的边界；继续本地树导航，
+    // 不能仅凭文本岛端点提前把整个 InlineMath 纳入结构范围。
+    assert!(session.math_edit().is_some());
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
+}
+
+#[test]
+fn shift_right_at_nested_math_text_island_stays_local_without_whole_object_range() {
+    let mut session = session_in_inline_math_text_island();
     session
         .run(Command::SetMathTextSelection {
             anchor: 2,
             focus: 2,
         })
         .unwrap_or_else(|error| panic!("math text selection failed: {error}"));
-    let end_position = session
-        .math_text_input_context()
-        .unwrap_or_else(|| panic!("math text context missing"))
-        .focus;
+
     session
         .run(Command::EditorKey(EditorKey::RightArrow {
             candidate: None,
             extend: true,
         }))
         .unwrap_or_else(|error| panic!("shift-right at text edge failed: {error}"));
+
     assert!(session.math_edit().is_some());
-    assert_eq!(
-        session
-            .math_text_input_context()
-            .map(|context| context.focus),
-        Some(end_position)
-    );
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
 }
 
 #[test]

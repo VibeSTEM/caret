@@ -38,10 +38,16 @@ impl Session {
                         let context = self
                             .math_text_input_context()
                             .ok_or(EditError::InvalidPosition)?;
-                        if context.focus_utf16 == 0 && !extend {
+                        if context.focus_utf16 != 0 {
+                            return Ok(Effect::default());
+                        }
+                        if !extend {
                             self.run(Command::MoveCaret(Direction::Backward))
+                        } else if self.math_text_at_host_edge(Direction::Backward)? {
+                            self.convert_math_host_to_structure_range(Direction::Backward)
                         } else {
-                            Ok(Effect::default())
+                            // Align 中间 cell 的文本岛边缘：沿用本地移动语义，不伪造整块范围。
+                            self.run(Command::MoveCaret(Direction::Backward))
                         }
                     }
                     Some(_) => Err(EditError::InvalidPosition),
@@ -59,10 +65,17 @@ impl Session {
                             }
                         }
                     }
-                    if extend {
-                        Ok(Effect::default())
-                    } else {
-                        self.run(Command::MoveCaret(Direction::Backward))
+                    match &edit.branch {
+                        MathEditBranch::Tree { .. } if extend => {
+                            self.extend_math_tree_selection(Direction::Backward)
+                        }
+                        MathEditBranch::Tree { .. } => {
+                            self.run(Command::MoveCaret(Direction::Backward))
+                        }
+                        // 源码分支没有本地选区；扩选沿用非扩选的光标移动（已知限制）。
+                        MathEditBranch::Source => self.run(Command::MoveCaret(Direction::Backward)),
+                        // 文本分支已由外层处理；FFI 路径不制造 panic，改为可恢复错误。
+                        MathEditBranch::Text { .. } => Err(EditError::InvalidPosition),
                     }
                 }
             };

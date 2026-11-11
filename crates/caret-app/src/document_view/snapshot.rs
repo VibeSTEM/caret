@@ -164,39 +164,28 @@ pub(super) fn current_structure_state(session: &caret_engine::Session) -> Value 
     Value::Array(entries)
 }
 
-fn current_block_environment_id(session: &caret_engine::Session) -> Option<NodeId> {
-    if session.selected_block_environment().is_some() || session.structure_selection().is_some() {
-        return None;
-    }
+/// 从统一环境视图投影活动块环境；视图已按结构选区与公式块宿主归零。
+fn current_block_environment_id(
+    session: &caret_engine::Session,
+    environment_view: &caret_engine::CurrentEnvironmentView,
+) -> Option<NodeId> {
+    // 活动块公式只由公式块高亮层呈现，不再推导其外层环境。
     if matches!(
         session.current_math_edit_target(),
         Some(MathEditTarget::Block { .. })
     ) {
         return None;
     }
-    let active_block_id = session.block_boundary_exit().map(|(id, _)| id);
-    let focus = &session.selection().focus;
-    let stack = match active_block_id.as_ref() {
-        Some(block_id) => session
-            .structure_index()
-            .stack_for_id(block_id)
-            .into_iter()
-            .filter(|entry| &entry.id != block_id)
-            .collect(),
-        None => session.structure_index().at(&StructurePosition {
-            paragraph_id: focus.paragraph_id.clone(),
-            offset_utf8: focus.offset,
-        }),
-    };
-    stack
+    environment_view
+        .block()
         .iter()
         .rev()
-        .find(|entry| entry.kind.is_block_environment())
-        .map(|entry| entry.id.clone())
+        .find(|entry| entry.source == caret_engine::EnvironmentSource::BlockEnvironment)
+        .and_then(|entry| entry.id.clone())
 }
 
 fn current_math_block_target(session: &caret_engine::Session) -> Option<MathEditTarget> {
-    if session.selected_block_environment().is_some() || session.structure_selection().is_some() {
+    if session.selected_block_environment().is_some() || session.has_structure_selection() {
         return None;
     }
     match session.current_math_edit_target()? {
@@ -231,46 +220,70 @@ fn math_text_selection_json(
     ))
 }
 
+/// 发布前校验：选区与高亮几何只能来自当前会话、文档代际与字体代际。
+///
+/// 非组合路径的 `base_snapshot()` 已会在过期时重排，因此该检查主要保护缓存的
+/// 组合预览快照（以及未来异步发布）不被迟到结果使用；它不负责检测文档内容过期。
+/// 失败码 `layout.stale_highlight_snapshot` 表示快照代际与会话不一致。
+fn require_current_snapshot(
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    session: &caret_engine::Session,
+    font_generation: u64,
+) -> Result<(), String> {
+    snapshot
+        .is_current_for(session, font_generation)
+        .then_some(())
+        .ok_or_else(|| "layout.stale_highlight_snapshot".to_owned())
+}
+
+/// 将页面局部矩形序列化为选区/高亮层共享的界面结构。
+fn rectangle_values(
+    rectangles: impl IntoIterator<Item = caret_engine::PageSelectionRect>,
+) -> Value {
+    Value::Array(
+        rectangles
+            .into_iter()
+            .map(|rectangle| {
+                json!({
+                    "pageIndex": rectangle.page_index,
+                    "x0Pt": rectangle.x0_pt,
+                    "y0Pt": rectangle.y0_pt,
+                    "x1Pt": rectangle.x1_pt,
+                    "y1Pt": rectangle.y1_pt,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// 将结构或普通选区投影为选区层矩形；结构范围同时包含块环境与公式块对象。
+///
+/// 结构选区存在却无法提供文本端点时拒绝发布，不能退回普通文本选区而静默发布空数组。
+/// 选中的公式宿主不在本代快照中同样拒绝，避免覆盖上一份有效选区。
 fn selection_rectangles_json(
     selection: &caret_engine::Selection,
-    structure_selection: Option<(&caret_engine::Pos, &caret_engine::Pos)>,
+    structure_text_bounds: Option<(Pos, Pos)>,
+    has_structure_selection: bool,
     selected_environment_ids: &[NodeId],
+    selected_math_block_ids: &[NodeId],
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Value {
-    let mut rectangles = if let Some((anchor, focus)) = structure_selection {
+) -> Result<Value, String> {
+    let rectangles = if let Some((anchor, focus)) = structure_text_bounds {
         snapshot
-            .structure_selection_geometry(anchor, focus, selected_environment_ids)
-            .unwrap_or_default()
+            .structure_selection_rectangles(
+                &anchor,
+                &focus,
+                selected_environment_ids,
+                selected_math_block_ids,
+            )
+            .ok_or_else(|| "layout.stale_selection_geometry".to_owned())?
+    } else if has_structure_selection {
+        // 结构选区没有可用文本端点：拒绝发布，而不是回落到普通选区发布空数组。
+        return Err("layout.stale_selection_geometry".to_owned());
     } else {
         snapshot.selection_geometry(selection).unwrap_or_default()
-    }
-    .into_iter()
-    .map(|rectangle| {
-        json!({
-            "pageIndex": rectangle.page_index,
-            "x0Pt": rectangle.x0_pt,
-            "y0Pt": rectangle.y0_pt,
-            "x1Pt": rectangle.x1_pt,
-            "y1Pt": rectangle.y1_pt,
-        })
-    })
-    .collect::<Vec<_>>();
-    rectangles.extend(
-        snapshot
-            .environment_ranges
-            .iter()
-            .filter(|range| selected_environment_ids.contains(&range.environment_id))
-            .map(|range| {
-                json!({
-                    "pageIndex": range.page_index,
-                    "x0Pt": range.x0_pt,
-                    "y0Pt": range.y0_pt,
-                    "x1Pt": range.x1_pt,
-                    "y1Pt": range.y1_pt,
-                })
-            }),
-    );
-    Value::Array(rectangles)
+    };
+    Ok(rectangle_values(rectangles))
 }
 
 /// 将虚拟块外停靠点应用到所有返回路径共享的光标几何。
@@ -310,49 +323,22 @@ fn block_environment_highlight_rects(
     )
 }
 
-/// 以活动 Equation/Align 的 MathFragment 定位整段版心背景。
+/// 以活动 Equation/Align 的整栏公式几何生成块层高亮；几何来自同一代布局快照。
+///
+/// 活动块公式目标必然在本代排版中产生分页片段；找不到时按过期投影拒绝发布，
+/// 而不是发布空高亮覆盖上一份有效状态。
 fn math_block_highlight_rects(
     target: Option<&MathEditTarget>,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
-) -> Value {
+) -> Result<Value, String> {
     let Some(MathEditTarget::Block { block_id, .. }) = target else {
-        return Value::Array(Vec::new());
+        return Ok(Value::Array(Vec::new()));
     };
-    let rectangles = snapshot
-        .pages
-        .iter()
-        .enumerate()
-        .flat_map(|(page_index, page)| {
-            let x0 = page.margin_left_pt;
-            let x1 = page.width_pt - page.margin_right_pt;
-            page.layout
-                .math_fragments
-                .iter()
-                .filter(|fragment| &fragment.math_id == block_id)
-                .filter_map(move |fragment| {
-                    let page_index = i64::try_from(page_index).ok()?;
-                    let y0 = (page.margin_top_pt + f64::from(fragment.y_offset_pt))
-                        .clamp(0.0, page.height_pt);
-                    let y1 = (page.margin_top_pt
-                        + f64::from(fragment.y_offset_pt)
-                        + f64::from(fragment.height_pt))
-                    .clamp(0.0, page.height_pt);
-                    (x0.is_finite() && x1.is_finite() && y0.is_finite() && y1.is_finite())
-                        .then_some((page_index, x0, y0, x1, y1))
-                        .filter(|(_, x0, y0, x1, y1)| x1 > x0 && y1 > y0)
-                        .map(|(page_index, x0, y0, x1, y1)| {
-                            json!({
-                                "pageIndex": page_index,
-                                "x0Pt": x0,
-                                "y0Pt": y0,
-                                "x1Pt": x1,
-                                "y1Pt": y1,
-                            })
-                        })
-                })
-        })
-        .collect::<Vec<_>>();
-    Value::Array(rectangles)
+    Ok(rectangle_values(
+        snapshot
+            .math_block_geometry(std::slice::from_ref(block_id))
+            .ok_or_else(|| "layout.stale_math_highlight_geometry".to_owned())?,
+    ))
 }
 
 /// 将活动数学 TextFlow island 投影为粉色高亮几何，并裁切到页面边界。
@@ -543,7 +529,7 @@ impl DocumentViewRuntime {
         let math_block_target = current_math_block_target(highlight_session);
         let inline_context = math_block_target.is_none()
             && highlight_session.selected_block_environment().is_none()
-            && highlight_session.structure_selection().is_none();
+            && !highlight_session.has_structure_selection();
         let inline_environment = inline_context
             .then(|| environment_view.innermost_inline())
             .flatten()
@@ -556,13 +542,13 @@ impl DocumentViewRuntime {
         let math_text_context = math_block_target
             .as_ref()
             .and_then(|_| highlight_session.math_text_input_context());
-        let focus_environment_id = current_block_environment_id(highlight_session);
+        let focus_environment_id =
+            current_block_environment_id(highlight_session, &environment_view);
         let selection = self.session.selection().clone();
+        let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
-        let structure_selection = self
-            .session
-            .structure_selection()
-            .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+        let selected_math_block_ids = self.session.selected_math_blocks().to_vec();
+        let structure_text_bounds = self.session.structure_selection_text_bounds();
         let snapshot = if composing {
             self.composition_snapshot
                 .as_ref()
@@ -572,6 +558,8 @@ impl DocumentViewRuntime {
                 .as_ref()
                 .ok_or_else(|| "layout.snapshot_unavailable".to_owned())?
         };
+        let expected_font_generation = self.layout.font_generation();
+        require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
         let mut view = match changed_paragraph {
             Some((paragraph_id, page_start_index, base_generation)) => serde_json::to_value(
                 DocumentLayoutDeltaView::for_paragraph(
@@ -604,7 +592,7 @@ impl DocumentViewRuntime {
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "mathBlockHighlightRects".to_owned(),
-                math_block_highlight_rects(math_block_target.as_ref(), snapshot),
+                math_block_highlight_rects(math_block_target.as_ref(), snapshot)?,
             );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -653,12 +641,12 @@ impl DocumentViewRuntime {
         } else {
             selection_rectangles_json(
                 &selection,
-                structure_selection
-                    .as_ref()
-                    .map(|(anchor, focus)| (anchor, focus)),
+                structure_text_bounds.clone(),
+                has_structure_selection,
                 &selected_environment_ids,
+                &selected_math_block_ids,
                 snapshot,
-            )
+            )?
         };
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
@@ -852,7 +840,7 @@ impl DocumentViewRuntime {
         let math_block_target = current_math_block_target(highlight_session);
         let inline_context = math_block_target.is_none()
             && highlight_session.selected_block_environment().is_none()
-            && highlight_session.structure_selection().is_none();
+            && !highlight_session.has_structure_selection();
         let inline_environment = inline_context
             .then(|| environment_view.innermost_inline())
             .flatten()
@@ -865,7 +853,8 @@ impl DocumentViewRuntime {
         let math_text_highlight_context = math_block_target
             .as_ref()
             .and_then(|_| highlight_session.math_text_input_context());
-        let focus_environment_id = current_block_environment_id(highlight_session);
+        let focus_environment_id =
+            current_block_environment_id(highlight_session, &environment_view);
         let math_geometry_context = self
             .composition_preview_session
             .as_ref()
@@ -877,12 +866,15 @@ impl DocumentViewRuntime {
             .and_then(caret_engine::Session::math_tree_input_context)
             .or_else(|| math_tree_context.clone());
         let block_boundary_exit = self.session.block_boundary_exit();
+        let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
-        let structure_selection = self
-            .session
-            .structure_selection()
-            .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
-        let snapshot = self.current_snapshot()?;
+        let selected_math_block_ids = self.session.selected_math_blocks().to_vec();
+        let structure_text_bounds = self.session.structure_selection_text_bounds();
+        // 先确保基础快照与当前代际一致，再以不可变借用做同代校验和几何投影。
+        self.base_snapshot()?;
+        let expected_font_generation = self.layout.font_generation();
+        let snapshot = self.current_snapshot_ref()?;
+        require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
         let inline_environment_rectangles = inline_environment_highlight_rects(
             inline_environment,
             pending_inline_slot,
@@ -891,17 +883,17 @@ impl DocumentViewRuntime {
             snapshot,
         );
         let math_block_rectangles =
-            math_block_highlight_rects(math_block_target.as_ref(), snapshot);
+            math_block_highlight_rects(math_block_target.as_ref(), snapshot)?;
         let math_text_rectangles =
             math_text_highlight_rects(math_text_highlight_context.as_ref(), snapshot);
         let body_rectangles = selection_rectangles_json(
             &selection,
-            structure_selection
-                .as_ref()
-                .map(|(anchor, focus)| (anchor, focus)),
+            structure_text_bounds,
+            has_structure_selection,
             &selected_environment_ids,
+            &selected_math_block_ids,
             snapshot,
-        );
+        )?;
         let rectangles = if let Some(context) = &math_geometry_context {
             math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
         } else if math_tree_context.is_some() {

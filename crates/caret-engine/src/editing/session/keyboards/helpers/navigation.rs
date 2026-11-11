@@ -95,10 +95,21 @@ impl Session {
                 ..Effect::default()
             });
         }
+        if extend
+            && self.has_structure_selection()
+            && self.structure_selection_anchor().is_none()
+            && let Some(direction) = direction
+        {
+            // 锚点是块外侧边界时继续按文档单位扩展，避免丢失已覆盖的块对象。
+            return self.extend_structure_selection(direction);
+        }
         let anchor = if extend {
-            self.structure_selection
-                .as_ref()
-                .map(|selection| selection.anchor.clone())
+            self.structure_selection_anchor()
+                .cloned()
+                .or_else(|| {
+                    self.structure_selection_text_bounds()
+                        .map(|(start, _)| start)
+                })
                 .unwrap_or_else(|| self.selection.anchor.clone())
         } else {
             focus.clone()
@@ -198,15 +209,12 @@ impl Session {
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
-        if !extend && let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
-            return Ok(effect);
+        if extend {
+            // 布局没有给出候选时，扩选仍按共享文档单元前进，跨入相邻 Equation/Align。
+            return self.extend_structure_selection(direction);
         }
-        if extend && let Some(environment_id) = self.block_environment_at(&self.selection.focus) {
-            self.select_block_environment(environment_id)?;
-            return Ok(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            });
+        if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+            return Ok(effect);
         }
         if self.enter_adjacent_math_if_present(direction)? {
             return Ok(Effect {
@@ -223,14 +231,35 @@ impl Session {
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
-        if !extend && let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
-            return Ok(effect);
+        if !extend {
+            if let Some(effect) = self.move_from_math_block_boundary_stop(direction)? {
+                return Ok(effect);
+            }
+            if self.enter_adjacent_block_math_if_present(direction)? {
+                return Ok(Effect {
+                    selection_changed: true,
+                    ..Effect::default()
+                });
+            }
+            return Ok(Effect::default());
         }
-        if !extend && self.enter_adjacent_block_math_if_present(direction)? {
-            return Ok(Effect {
-                selection_changed: true,
-                ..Effect::default()
-            });
+        // 块外侧端点（例如选中公式后的焦点）按共享文档单元继续移动。
+        if self.has_structure_selection() && self.structure_selection_anchor().is_none() {
+            return self.extend_structure_selection(direction);
+        }
+        // 没有视觉行候选时，只有焦点已停在段落边界且相邻块是显示公式，才按文档
+        // 单元扩选；其余纵向扩选需要布局候选，不能用一个字素步长伪造视觉行移动。
+        let focus = self.selection.focus.clone();
+        let text_len = self.text_map_for(&focus)?.text.len();
+        let at_paragraph_edge = match direction {
+            Direction::Backward => focus.offset == 0,
+            Direction::Forward => focus.offset == text_len,
+        };
+        if self.selection.anchor == self.selection.focus
+            && at_paragraph_edge
+            && self.paragraph_beside_block_math(&focus, direction)?
+        {
+            return self.extend_structure_selection(direction);
         }
         Ok(Effect::default())
     }

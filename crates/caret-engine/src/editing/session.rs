@@ -26,6 +26,7 @@ mod navigation;
 mod paragraph_edit;
 mod paragraph_formatting;
 mod range_edit;
+mod range_extension;
 mod selection;
 mod structure;
 mod text_edit;
@@ -36,10 +37,10 @@ use super::paragraph_ops::{
 };
 use super::text_map::TextMap;
 use super::{
-    Affinity, Command, CommandLine, Direction, DocumentCaretPosition, EditError, Effect,
-    HostCaretKind, HostCaretLocalPosition, HostCaretPosition, InputComposition,
+    Affinity, Command, CommandLine, Direction, DocumentCaretPosition, DocumentRangeEndpoint,
+    EditError, Effect, HostCaretKind, HostCaretLocalPosition, HostCaretPosition, InputComposition,
     MathCaretCoordinate, MathCaretLocalPosition, Pos, PositionMap, Selection, SessionCaretSnapshot,
-    StoryId,
+    StoryId, StructureSelection,
 };
 use caret_doc::{Document, NodeId, PageGeometry, Paragraph};
 use caret_layout::VisualAffinity;
@@ -51,13 +52,6 @@ use self::formatting::PendingInlineStyle;
 use self::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
-
-/// 保存跨越多个正文 Story 的结构选区锚点与焦点。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StructureSelection {
-    pub anchor: Pos,
-    pub focus: Pos,
-}
 
 /// 数学 TextFlow 提供给输入法查询的文本与宿主端点。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,8 +88,8 @@ pub struct Session {
     command_line: Option<CommandLine>,
     math_edit: Option<MathEdit>,
     host_caret_position: Option<HostCaretPosition<Pos>>,
-    selected_block_environment: Option<NodeId>,
     selected_block_environments: Vec<NodeId>,
+    selected_math_blocks: Vec<NodeId>,
     structure_selection: Option<StructureSelection>,
     last_committed_composition: Option<u64>,
     text_map_cache: VecDeque<(NodeId, StoryId, TextMap)>,
@@ -122,8 +116,8 @@ impl Session {
             command_line: self.command_line.clone(),
             math_edit: self.math_edit.clone(),
             host_caret_position: self.host_caret_position.clone(),
-            selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
+            selected_math_blocks: self.selected_math_blocks.clone(),
             structure_selection: self.structure_selection.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),
@@ -167,8 +161,8 @@ impl Session {
             command_line: None,
             math_edit: None,
             host_caret_position: None,
-            selected_block_environment: None,
             selected_block_environments: Vec::new(),
+            selected_math_blocks: Vec::new(),
             structure_selection: None,
             last_committed_composition: None,
             text_map_cache: VecDeque::new(),
@@ -614,9 +608,9 @@ impl Session {
             })
     }
 
-    /// 返回当前以完整页内几何表示的块环境结构选区。
+    /// 返回当前结构选区覆盖的首个块环境；没有选中块环境时为 `None`。
     pub fn selected_block_environment(&self) -> Option<&NodeId> {
-        self.selected_block_environment.as_ref()
+        self.selected_block_environments.first()
     }
 
     /// 返回当前结构选区覆盖的块环境，按文档顺序排列。
@@ -624,18 +618,79 @@ impl Session {
         &self.selected_block_environments
     }
 
-    /// 返回跨 Story 结构选区的原始锚点，用于连续 Shift 导航。
-    pub fn structure_selection_anchor(&self) -> Option<&Pos> {
-        self.structure_selection
-            .as_ref()
-            .map(|selection| &selection.anchor)
+    /// 返回当前结构选区覆盖的 Equation/Align 块，按文档顺序排列。
+    pub fn selected_math_blocks(&self) -> &[NodeId] {
+        &self.selected_math_blocks
     }
 
-    /// 返回结构选区两端，用于生成跨段、跨 Story 的可见文本选区。
+    /// 当前是否存在结构选区；包含两端为块外侧边界的范围。
+    pub fn has_structure_selection(&self) -> bool {
+        self.structure_selection.is_some()
+    }
+
+    /// 返回结构选区中的原始文本锚点；任一端是块外侧边界时返回 `None`。
+    pub fn structure_selection_anchor(&self) -> Option<&Pos> {
+        match &self.structure_selection.as_ref()?.anchor {
+            DocumentRangeEndpoint::Text(anchor) => Some(anchor),
+            DocumentRangeEndpoint::BlockEdge { .. } => None,
+        }
+    }
+
+    /// 返回全部由文本位置表达的结构选区两端；含块外侧边界时返回 `None`。
     pub fn structure_selection(&self) -> Option<(&Pos, &Pos)> {
+        let selection = self.structure_selection.as_ref()?;
+        match (&selection.anchor, &selection.focus) {
+            (DocumentRangeEndpoint::Text(anchor), DocumentRangeEndpoint::Text(focus)) => {
+                Some((anchor, focus))
+            }
+            _ => None,
+        }
+    }
+
+    /// 返回结构选区的完整文档端点；包含 BlockEdge 端点。
+    pub fn structure_selection_range(
+        &self,
+    ) -> Option<(&DocumentRangeEndpoint, &DocumentRangeEndpoint)> {
         self.structure_selection
             .as_ref()
             .map(|selection| (&selection.anchor, &selection.focus))
+    }
+
+    /// 清除结构选区及其派生列表；单值选择从多值派生，不单独维护。
+    pub(super) fn clear_structure_selection_state(&mut self) {
+        self.selected_block_environments.clear();
+        self.selected_math_blocks.clear();
+        self.structure_selection = None;
+    }
+
+    /// 安装结构选区，并从范围覆盖结果派生块环境与公式块列表。
+    ///
+    /// 这是结构选区派生状态的唯一写入入口：端点必须能在当前文档中排序，
+    /// 派生失败时不改变任何选区状态。
+    pub(super) fn install_structure_selection(
+        &mut self,
+        selection: StructureSelection,
+    ) -> Result<(), EditError> {
+        let (start, end) =
+            match self.compare_range_endpoints(&selection.anchor, &selection.focus)? {
+                std::cmp::Ordering::Greater => (&selection.focus, &selection.anchor),
+                _ => (&selection.anchor, &selection.focus),
+            };
+        let (environments, math_blocks) = self.covered_block_nodes(start, end)?;
+        self.assign_structure_selection_state(selection, environments, math_blocks);
+        Ok(())
+    }
+
+    /// 结构选区派生状态的唯一赋值点；调用方须先完成端点校验与列表派生。
+    fn assign_structure_selection_state(
+        &mut self,
+        selection: StructureSelection,
+        environments: Vec<NodeId>,
+        math_blocks: Vec<NodeId>,
+    ) {
+        self.selected_block_environments = environments;
+        self.selected_math_blocks = math_blocks;
+        self.structure_selection = Some(selection);
     }
 
     /// 将普通文本选区无法跨越的环境边界表示为结构选区投影。
@@ -661,15 +716,25 @@ impl Session {
         if !exists {
             return Err(EditError::InvalidPosition);
         }
+        let selection = StructureSelection {
+            anchor: DocumentRangeEndpoint::BlockEdge {
+                block_id: environment_id.clone(),
+                side: Direction::Backward,
+            },
+            focus: DocumentRangeEndpoint::BlockEdge {
+                block_id: environment_id,
+                side: Direction::Forward,
+            },
+        };
+        let previous_selection = self.structure_selection.clone();
+        let previous_environments = self.selected_block_environments.clone();
+        let previous_math_blocks = self.selected_math_blocks.clone();
+        // 目标与范围均有效后，才切换离开公式编辑状态。
+        self.install_structure_selection(selection)?;
+        let changed = self.structure_selection != previous_selection
+            || self.selected_block_environments != previous_environments
+            || self.selected_math_blocks != previous_math_blocks;
         self.math_edit = None;
-        let changed = self.selected_block_environment.as_ref() != Some(&environment_id);
-        self.selected_block_environment = Some(environment_id);
-        self.selected_block_environments =
-            self.selected_block_environment.iter().cloned().collect();
-        self.structure_selection = Some(StructureSelection {
-            anchor: self.selection.focus.clone(),
-            focus: self.selection.focus.clone(),
-        });
         self.host_caret_position = None;
         Ok(Effect {
             selection_changed: changed,
@@ -846,11 +911,14 @@ impl Session {
         if matches!(command, Command::Undo | Command::Redo) {
             return self.handle_history_command(command == Command::Redo);
         }
+        // 结构选区必须先按范围事务整体消费；相邻空段落的公式邻接特例只在没有结构范围时成立。
         if matches!(&command, Command::Delete(Direction::Backward))
             && self.math_edit.is_none()
             && self.block_boundary_exit().is_none()
             && self.composition.is_none()
             && self.command_line.is_none()
+            && !self.has_structure_selection()
+            && self.selected_math_blocks.is_empty()
             && self.selection.anchor == self.selection.focus
             && self.selection.focus.offset == 0
         {
@@ -878,25 +946,65 @@ impl Session {
             Command::InsertTwoCharacterWidthSpace => Some("\u{2003}\u{2003}"),
             _ => None,
         };
+        // 结构选区由同一文档范围消费：删除、替换与块边界输入都不得落在被删除的宿主内。
+        if self.has_structure_selection() {
+            if matches!(&command, Command::Delete(_)) {
+                if let Some(effect) = self.delete_selected_structure_range()? {
+                    return Ok(effect);
+                }
+                // 范围计划为空时清除隐藏状态，继续普通删除分派而不是永久拒绝按键。
+                self.clear_structure_selection_state();
+            }
+            if let Command::CommitComposition { id, text } = &command
+                && let Some(mut effect) = self.commit_composition_replacing_structure(*id, text)?
+            {
+                effect.composition_changed = true;
+                return Ok(effect);
+            }
+            if let Some(text) = inserted_text {
+                // 空文本不构成替换：不消费结构范围，也不产生文档或历史变化。
+                if text.is_empty() {
+                    return Ok(Effect::default());
+                }
+                let replaced = if text.contains(['\n', '\r']) {
+                    self.replace_structure_selection(|session| session.paste_text(text))?
+                } else {
+                    self.replace_structure_selection(|session| session.insert_text(text))?
+                };
+                if let Some(effect) = replaced {
+                    return Ok(effect);
+                }
+            }
+            if matches!(&command, Command::InsertParagraphBreak)
+                && let Some(effect) = self.replace_structure_selection(Session::split_paragraph)?
+            {
+                return Ok(effect);
+            }
+            if matches!(&command, Command::InsertSoftBreak)
+                && let Some(effect) =
+                    self.replace_structure_selection(Session::insert_soft_break)?
+            {
+                return Ok(effect);
+            }
+        }
+        // 结构范围已由范围事务消费或无法映射到该范围；块边界输入前清理隐藏状态，
+        // 否则范围会跨文档修改存活并吞掉后续按键。
+        let block_boundary_mutation = inserted_text.is_some()
+            || matches!(&command, Command::CommitComposition { .. })
+            || matches!(
+                &command,
+                Command::InsertParagraphBreak | Command::InsertSoftBreak
+            );
+        if self.has_structure_selection()
+            && self.block_boundary_exit().is_some()
+            && block_boundary_mutation
+        {
+            self.clear_structure_selection_state();
+        }
         if let Some(text) = inserted_text
             && self.block_boundary_exit().is_some()
         {
             return self.insert_text_at_block_boundary(text);
-        }
-        if matches!(&command, Command::Delete(_))
-            && !self.selected_block_environments.is_empty()
-            && (self.selected_block_environments.len() > 1
-                || self
-                    .structure_selection
-                    .as_ref()
-                    .is_some_and(|selection| selection.anchor != selection.focus))
-        {
-            return self
-                .delete_selected_structure_range()?
-                .ok_or(EditError::InvalidPosition);
-        }
-        if matches!(&command, Command::Delete(_)) && self.selected_block_environments.len() == 1 {
-            return self.delete_selected_block_environment();
         }
         if let Command::CommitComposition { id, text } = &command
             && self.block_boundary_exit().is_some()
@@ -912,10 +1020,12 @@ impl Session {
                 _ => {}
             }
         }
-        if !matches!(&command, Command::SetSelection(_)) {
-            self.selected_block_environment = None;
-            self.selected_block_environments.clear();
-            self.structure_selection = None;
+        // IME 预览不改变文档，必须保留结构范围供最终 CommitComposition 作为一次替换消费。
+        if !matches!(
+            &command,
+            Command::SetSelection(_) | Command::UpdateComposition { .. }
+        ) {
+            self.clear_structure_selection_state();
         }
         if self.command_line.is_some() && matches!(&command, Command::Delete(Direction::Backward)) {
             return self.run_command_line(Command::BackspaceCommandLine);
@@ -935,7 +1045,16 @@ impl Session {
             if deletes_adjacent_environment
                 && !structure::environment_has_content_at(&self.document.body, &block_id)?
             {
-                self.selected_block_environment = Some(block_id);
+                self.install_structure_selection(StructureSelection {
+                    anchor: DocumentRangeEndpoint::BlockEdge {
+                        block_id: block_id.clone(),
+                        side: Direction::Backward,
+                    },
+                    focus: DocumentRangeEndpoint::BlockEdge {
+                        block_id,
+                        side: Direction::Forward,
+                    },
+                })?;
                 return self.delete_selected_block_environment();
             }
             return Ok(Effect::default());
@@ -1436,9 +1555,7 @@ impl Session {
         self.selection_visual_affinity = visual_affinity;
         self.pending_inline_style = pending_style;
         self.math_edit = restored_math_edit;
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.clear_structure_selection_state();
         self.history_state_id = state_id;
         self.advance_history_merge_epoch();
         if document_changed {

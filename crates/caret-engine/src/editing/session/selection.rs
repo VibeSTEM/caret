@@ -4,9 +4,10 @@
 // 署名：Yuki Lu
 
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
-use super::super::text_map::TextMap;
+use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{
-    Affinity, Command, Direction, EditError, Effect, NavigationIntent, Pos, Selection, StoryId,
+    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, NavigationIntent, Pos,
+    Selection, StoryId, StructureSelection,
 };
 use super::Session;
 use caret_doc::NodeId;
@@ -14,48 +15,15 @@ use caret_layout::VisualAffinity;
 
 impl Session {
     /// 按文档顺序提取当前正文选区的纯文本，段落之间以换行连接。
+    ///
+    /// 结构选区按同一文档范围遍历物理块序列：覆盖环境的全部段落完整复制，
+    /// Equation/Align 与行内公式一致输出 U+FFFC，范围两端的普通文字只取切口。
     pub fn selected_text(&self) -> Result<String, EditError> {
-        let structural_range = self
-            .structure_selection
-            .as_ref()
-            .map(|selection| (&selection.anchor, &selection.focus));
-        let (start, end) = match structural_range {
-            Some((anchor, focus)) => (anchor.clone(), focus.clone()),
-            None => self.edit_range()?,
-        };
-        if start == end
-            && structural_range.is_some()
-            && !self.selected_block_environments.is_empty()
-        {
-            let mut paragraphs: Vec<_> = self.paragraph_index.iter().collect();
-            paragraphs.sort_by(|(_, left), (_, right)| {
-                left.block_path
-                    .cmp(&right.block_path)
-                    .then_with(|| left.is_title.cmp(&right.is_title).reverse())
-            });
-            let selected_ranges: Vec<_> = self
-                .selected_block_environments
-                .iter()
-                .filter_map(|id| self.structure_index.get(id))
-                .map(|entry| entry.range.paragraph_ordinals.clone())
-                .collect();
-            let mut text = String::new();
-            let mut first = true;
-            for (ordinal, (paragraph_id, location)) in paragraphs.iter().enumerate() {
-                if !selected_ranges.iter().any(|range| range.contains(&ordinal)) {
-                    continue;
-                }
-                let paragraph = paragraph_at_location(&self.document.body, location)
-                    .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
-                if !first {
-                    text.push('\n');
-                }
-                text.push_str(&TextMap::new(paragraph)?.text);
-                first = false;
-            }
-            return Ok(text);
+        if self.has_structure_selection() {
+            return self.structure_selection_text();
         }
-        if structural_range.is_none() && start.story != end.story {
+        let (start, end) = self.edit_range()?;
+        if start.story != end.story {
             return Err(EditError::CrossParagraphSelection);
         }
         if start == end {
@@ -76,9 +44,7 @@ impl Session {
                 .map(str::to_owned)
                 .ok_or(EditError::InvalidPosition);
         }
-        if structural_range.is_none()
-            && (start.story != StoryId::Body || end.story != StoryId::Body)
-        {
+        if start.story != StoryId::Body || end.story != StoryId::Body {
             return Err(EditError::CrossParagraphSelection);
         }
         let end_map = TextMap::new(self.paragraph_for(&end)?)?;
@@ -87,7 +53,7 @@ impl Session {
         let mut paragraphs: Vec<_> = self
             .paragraph_index
             .iter()
-            .filter(|(_, location)| structural_range.is_some() || location.story == StoryId::Body)
+            .filter(|(_, location)| location.story == StoryId::Body)
             .collect();
         paragraphs.sort_by(|(_, left), (_, right)| {
             left.block_path
@@ -102,59 +68,33 @@ impl Session {
             .iter()
             .position(|(id, _)| *id == &end.paragraph_id)
             .ok_or_else(|| EditError::UnknownParagraph(end.paragraph_id.to_string()))?;
-        let (start_index, start_offset, end_index, end_offset) = if structural_range.is_some() {
-            if (start_index, start.offset) <= (end_index, end.offset) {
-                (start_index, start.offset, end_index, end.offset)
-            } else {
+        let (start_index, start_offset, end_index, end_offset) =
+            if compare_positions(&self.document.body, &self.paragraph_index, &start, &end)?.is_gt()
+            {
                 (end_index, end.offset, start_index, start.offset)
-            }
-        } else if compare_positions(&self.document.body, &self.paragraph_index, &start, &end)?
-            .is_gt()
-        {
-            (end_index, end.offset, start_index, start.offset)
-        } else {
-            (start_index, start.offset, end_index, end.offset)
-        };
+            } else {
+                (start_index, start.offset, end_index, end.offset)
+            };
         if start_index == end_index && start_offset == end_offset {
             return Ok(String::new());
         }
-
-        let selected_environment_ranges: Vec<_> = self
-            .selected_block_environments
-            .iter()
-            .filter_map(|id| self.structure_index.get(id))
-            .map(|entry| entry.range.paragraph_ordinals.clone())
-            .collect();
-        let (included_start_index, included_end_index) = selected_environment_ranges
-            .iter()
-            .filter(|range| range.start <= end_index && range.end > start_index)
-            .fold((start_index, end_index), |(start, end), range| {
-                (start.min(range.start), end.max(range.end.saturating_sub(1)))
-            });
 
         let mut text = String::new();
         for (index, (paragraph_id, location)) in paragraphs
             .iter()
             .enumerate()
-            .take(included_end_index + 1)
-            .skip(included_start_index)
+            .take(end_index + 1)
+            .skip(start_index)
         {
             let paragraph = paragraph_at_location(&self.document.body, location)
                 .ok_or_else(|| EditError::UnknownParagraph(paragraph_id.to_string()))?;
             let paragraph_text = TextMap::new(paragraph)?.text;
-            let selected_as_whole = selected_environment_ranges
-                .iter()
-                .any(|range| range.contains(&index));
-            let fragment_start = if selected_as_whole {
-                0
-            } else if index == start_index {
+            let fragment_start = if index == start_index {
                 start_offset
             } else {
                 0
             };
-            let fragment_end = if selected_as_whole {
-                paragraph_text.len()
-            } else if index == end_index {
+            let fragment_end = if index == end_index {
                 end_offset
             } else {
                 paragraph_text.len()
@@ -162,12 +102,137 @@ impl Session {
             let fragment = paragraph_text
                 .get(fragment_start..fragment_end)
                 .ok_or(EditError::InvalidPosition)?;
-            if index != included_start_index {
+            if index != start_index {
                 text.push('\n');
             }
             text.push_str(fragment);
         }
         Ok(text)
+    }
+
+    /// 结构选区的纯文本投影；块公式与行内公式统一输出 U+FFFC。
+    fn structure_selection_text(&self) -> Result<String, EditError> {
+        // 端点必须可在当前文档排序；投影本身只用覆盖列表与文本边界。
+        self.ordered_structure_selection()?;
+        let (environments, math_blocks) = self.structure_range_block_nodes()?;
+        // 只覆盖块对象时没有可复制文字，两端最近段落会交错，此时不按段落切口复制。
+        let bounds = self.usable_structure_text_bounds()?.map(
+            |(start_position, end_position, start_ordinal, end_ordinal)| {
+                (
+                    start_ordinal,
+                    end_ordinal,
+                    start_position.offset,
+                    end_position.offset,
+                )
+            },
+        );
+        let mut text = String::new();
+        let mut first = true;
+        self.collect_structure_selection_text(
+            &self.document.body,
+            bounds,
+            &environments,
+            &math_blocks,
+            false,
+            &mut text,
+            &mut first,
+        )?;
+        Ok(text)
+    }
+
+    /// 按物理块顺序汇集结构选区文本；`whole` 表示当前位于被覆盖环境内部。
+    #[allow(clippy::too_many_arguments)]
+    fn collect_structure_selection_text(
+        &self,
+        blocks: &[caret_doc::Block],
+        bounds: Option<(usize, usize, usize, usize)>,
+        environments: &[NodeId],
+        math_blocks: &[NodeId],
+        whole: bool,
+        text: &mut String,
+        first: &mut bool,
+    ) -> Result<(), EditError> {
+        for block in blocks {
+            match block {
+                caret_doc::Block::Paragraph(paragraph) => {
+                    self.push_structure_paragraph(paragraph, bounds, whole, text, first)?;
+                }
+                caret_doc::Block::Environment(environment) => {
+                    let covered = whole || environments.contains(&environment.id);
+                    if let Some(title) = &environment.title {
+                        self.push_structure_paragraph(title, bounds, covered, text, first)?;
+                    }
+                    self.collect_structure_selection_text(
+                        &environment.children,
+                        bounds,
+                        environments,
+                        math_blocks,
+                        covered,
+                        text,
+                        first,
+                    )?;
+                }
+                caret_doc::Block::Equation(equation)
+                    if whole || math_blocks.contains(&equation.id) =>
+                {
+                    push_structure_selection_unit(text, first, None);
+                }
+                caret_doc::Block::Align(align) if whole || math_blocks.contains(&align.id) => {
+                    push_structure_selection_unit(text, first, None);
+                }
+                caret_doc::Block::Equation(_)
+                | caret_doc::Block::Align(_)
+                | caret_doc::Block::ExplicitBreak(_)
+                | caret_doc::Block::Opaque(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// 汇集单个段落片段；整段复制时忽略范围切口。
+    fn push_structure_paragraph(
+        &self,
+        paragraph: &caret_doc::Paragraph,
+        bounds: Option<(usize, usize, usize, usize)>,
+        whole: bool,
+        text: &mut String,
+        first: &mut bool,
+    ) -> Result<(), EditError> {
+        let map = TextMap::new(paragraph)?;
+        let (from, to, emit) = if whole {
+            (0, map.text.len(), true)
+        } else {
+            let Some((start_ordinal, end_ordinal, start_offset, end_offset)) = bounds else {
+                return Ok(());
+            };
+            let Some(ordinal) = self.structure_index.paragraph_ordinal(&paragraph.id) else {
+                return Ok(());
+            };
+            if ordinal < start_ordinal || ordinal > end_ordinal {
+                return Ok(());
+            }
+            let text_len = map.text.len();
+            let from = if ordinal == start_ordinal {
+                start_offset.min(text_len)
+            } else {
+                0
+            };
+            let to = if ordinal == end_ordinal {
+                end_offset.min(text_len)
+            } else {
+                text_len
+            };
+            let to = to.max(from);
+            // 范围边界上的空片段不产生空行；范围内整段落即使为空也保留段落分隔。
+            let boundary = ordinal == start_ordinal || ordinal == end_ordinal;
+            (from, to, !boundary || to > from)
+        };
+        if !emit {
+            return Ok(());
+        }
+        let fragment = map.text.get(from..to).ok_or(EditError::InvalidPosition)?;
+        push_structure_selection_unit(text, first, Some(fragment));
+        Ok(())
     }
 
     /// 将布局命中得到的视觉侧与同一 Rust 选区一起提交。
@@ -205,7 +270,10 @@ impl Session {
         Ok(effect)
     }
 
-    /// 统一提交鼠标产生的文本范围，并在跨越块环境时提升为结构选区。
+    /// 统一提交鼠标产生的文本范围，并在覆盖或跨越块宿主时提升为结构选区。
+    ///
+    /// 提升判定与键盘导航共用同一覆盖投影，避免鼠标拖选跨过公式块时留下无法
+    /// 删除、复制也丢失对象的普通文本范围。
     pub fn set_pointer_selection_range(
         &mut self,
         anchor: Pos,
@@ -213,20 +281,62 @@ impl Session {
         anchor_visual_affinity: VisualAffinity,
         visual_affinity: VisualAffinity,
     ) -> Result<Effect, EditError> {
-        if self.range_requires_block_environment_selection(&anchor, &focus) {
-            self.select_block_environments_from_range_with_anchor_affinity(
+        if self.range_requires_structure_selection(&anchor, &focus)? {
+            return self.promote_text_range_to_structure(
                 anchor,
                 focus,
                 anchor_visual_affinity,
                 visual_affinity,
-            )
-        } else {
-            self.set_selection_with_visual_affinities(
-                Some(Selection { anchor, focus }),
-                anchor_visual_affinity,
-                visual_affinity,
-            )
+            );
         }
+        self.set_selection_with_visual_affinities(
+            Some(Selection { anchor, focus }),
+            anchor_visual_affinity,
+            visual_affinity,
+        )
+    }
+
+    /// 判定文本范围是否需要提升为结构选区。
+    ///
+    /// 范围完整覆盖块环境或 Equation/Align 时提升；只跨越环境边界但未完整包含时
+    /// 沿用既有的环境提升规则，保证选中块环境仍以整块环境为目标。
+    fn range_requires_structure_selection(
+        &self,
+        anchor: &Pos,
+        focus: &Pos,
+    ) -> Result<bool, EditError> {
+        if anchor == focus {
+            return Ok(false);
+        }
+        let (environments, math_blocks) = self.covered_block_nodes_for_text_pair(anchor, focus)?;
+        if !environments.is_empty() || !math_blocks.is_empty() {
+            return Ok(true);
+        }
+        Ok(self.range_requires_block_environment_selection(anchor, focus))
+    }
+
+    /// 提升文本范围为结构选区；环境范围沿用环境投影，其余由覆盖投影派生。
+    fn promote_text_range_to_structure(
+        &mut self,
+        anchor: Pos,
+        focus: Pos,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        if self.range_requires_block_environment_selection(&anchor, &focus) {
+            return self.select_block_environments_from_range_with_anchor_affinity(
+                anchor,
+                focus,
+                anchor_visual_affinity,
+                focus_visual_affinity,
+            );
+        }
+        self.install_block_node_range_selection(
+            anchor,
+            focus,
+            anchor_visual_affinity,
+            focus_visual_affinity,
+        )
     }
 
     fn range_requires_block_environment_selection(&self, anchor: &Pos, focus: &Pos) -> bool {
@@ -291,15 +401,15 @@ impl Session {
         {
             return Ok(effect);
         }
-        if self.range_requires_block_environment_selection(&selection.anchor, &selection.focus) {
-            let anchor_visual_affinity = if self.selection.anchor == self.selection.focus
-                && self.structure_selection.is_none()
-            {
-                self.selection_visual_affinity
-            } else {
-                self.selection_anchor_visual_affinity
-            };
-            return self.select_block_environments_from_range_with_anchor_affinity(
+        let anchor_visual_affinity = if self.selection.anchor == self.selection.focus
+            && self.structure_selection.is_none()
+        {
+            self.selection_visual_affinity
+        } else {
+            self.selection_anchor_visual_affinity
+        };
+        if self.range_requires_structure_selection(&selection.anchor, &selection.focus)? {
+            return self.promote_text_range_to_structure(
                 selection.anchor,
                 selection.focus,
                 anchor_visual_affinity,
@@ -472,33 +582,36 @@ impl Session {
         }
         self.text_map_for(&anchor)?.validate_pos(&anchor)?;
         self.text_map_for(&focus)?.validate_pos(&focus)?;
-        let selected = self.block_environments_in_range(&anchor, &focus);
-        if selected.is_empty() {
+        // 环境范围投影必须至少覆盖一个块环境；公式块由同一范围按覆盖派生。
+        let environments = self.block_environments_in_range(&anchor, &focus);
+        if environments.is_empty() {
             return Err(EditError::InvalidPosition);
         }
+        // 端点扩展到整个环境外侧边界，使结构范围与派生列表描述同一范围。
+        let structure_selection =
+            self.normalized_environment_range(&anchor, &focus, &environments)?;
+        let previous_selection = self.structure_selection.clone();
+        let previous_environments = self.selected_block_environments.clone();
+        let previous_math_blocks = self.selected_math_blocks.clone();
         // 目标与范围均有效后，才切换离开公式编辑状态。
-        self.math_edit = None;
+        self.install_structure_selection(structure_selection)?;
         let cancels_command_line_preedit = self
             .command_line
             .as_ref()
             .is_some_and(|line| !line.preedit.is_empty());
-        let changed = self.selected_block_environments != selected
-            || self
-                .structure_selection
-                .as_ref()
-                .is_none_or(|selection| selection.anchor != anchor || selection.focus != focus)
+        let changed = self.structure_selection != previous_selection
+            || self.selected_block_environments != previous_environments
+            || self.selected_math_blocks != previous_math_blocks
             || self.selection.focus != focus
             || self.selection_anchor_visual_affinity != anchor_visual_affinity
             || self.selection_visual_affinity != focus_visual_affinity;
+        self.math_edit = None;
         self.selection = Selection {
             anchor: focus.clone(),
             focus: focus.clone(),
         };
         self.selection_anchor_visual_affinity = anchor_visual_affinity;
         self.selection_visual_affinity = focus_visual_affinity;
-        self.selected_block_environment = selected.first().cloned();
-        self.selected_block_environments = selected;
-        self.structure_selection = Some(super::StructureSelection { anchor, focus });
         self.host_caret_position = None;
         if cancels_command_line_preedit {
             self.command_line = None;
@@ -506,6 +619,46 @@ impl Session {
         Ok(Effect {
             selection_changed: changed,
             composition_changed: cancels_command_line_preedit,
+            ..Effect::default()
+        })
+    }
+
+    /// 候选范围完整跨越块环境或 Equation/Align 时记录结构范围并折叠光标。
+    ///
+    /// 覆盖列表由 `install_structure_selection` 统一派生；调用方已通过共享提升判定，
+    /// 因此这里只负责安装与提交光标/视觉状态。
+    fn install_block_node_range_selection(
+        &mut self,
+        anchor: Pos,
+        focus: Pos,
+        anchor_visual_affinity: VisualAffinity,
+        focus_visual_affinity: VisualAffinity,
+    ) -> Result<Effect, EditError> {
+        self.validate_selection(&Selection {
+            anchor: anchor.clone(),
+            focus: focus.clone(),
+        })?;
+        let structure_selection = StructureSelection {
+            anchor: DocumentRangeEndpoint::Text(anchor),
+            focus: DocumentRangeEndpoint::Text(focus.clone()),
+        };
+        let previous_selection = self.structure_selection.clone();
+        let previous_environments = self.selected_block_environments.clone();
+        let previous_math_blocks = self.selected_math_blocks.clone();
+        self.install_structure_selection(structure_selection)?;
+        let changed = self.structure_selection != previous_selection
+            || self.selected_block_environments != previous_environments
+            || self.selected_math_blocks != previous_math_blocks;
+        self.math_edit = None;
+        self.selection = Selection {
+            anchor: focus.clone(),
+            focus,
+        };
+        self.selection_anchor_visual_affinity = anchor_visual_affinity;
+        self.selection_visual_affinity = focus_visual_affinity;
+        self.host_caret_position = None;
+        Ok(Effect {
+            selection_changed: changed,
             ..Effect::default()
         })
     }
@@ -584,13 +737,11 @@ impl Session {
         self.validate_selection(&next)?;
         let changed = self.selection != next
             || self.host_caret_position.is_some()
-            || self.selected_block_environment.is_some()
+            || self.has_structure_selection()
             || !self.selected_block_environments.is_empty()
-            || self.structure_selection.is_some();
+            || !self.selected_math_blocks.is_empty();
         self.host_caret_position = None;
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.clear_structure_selection_state();
         self.selection = next;
         Ok(Effect {
             selection_changed: changed,
@@ -611,3 +762,19 @@ impl Session {
         Ok(())
     }
 }
+
+/// 追加一个结构选区文本单元；`None` 表示块级公式对象，与行内公式一样输出 U+FFFC。
+fn push_structure_selection_unit(text: &mut String, first: &mut bool, fragment: Option<&str>) {
+    if !*first {
+        text.push('\n');
+    }
+    match fragment {
+        Some(fragment) => text.push_str(fragment),
+        None => text.push(OBJECT_REPLACEMENT),
+    }
+    *first = false;
+}
+
+#[cfg(test)]
+#[path = "selection/tests.rs"]
+mod tests;

@@ -31,16 +31,17 @@ impl Session {
         if self.math_edit.is_some() {
             return self.exit_math_edit_for_navigation(Direction::Forward);
         }
-        if self.host_caret_position.is_some() {
-            return Ok(Effect::default());
-        }
-        if self.selected_block_environment.take().is_some() {
-            self.selected_block_environments.clear();
-            self.structure_selection = None;
+        // 结构选区优先于块外停靠：整体范围折叠后仍保留当前光标与其宿主停靠。
+        if self.has_structure_selection() {
+            self.clear_structure_selection_state();
+            self.advance_history_merge_epoch();
             return Ok(Effect {
                 selection_changed: true,
                 ..Effect::default()
             });
+        }
+        if self.host_caret_position.is_some() {
+            return Ok(Effect::default());
         }
         if self.selection.anchor != self.selection.focus {
             self.advance_history_merge_epoch();

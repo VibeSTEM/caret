@@ -1,7 +1,7 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
-use crate::editing::EditorKey;
+use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
@@ -2233,4 +2233,85 @@ fn environment_stack_reports_math_and_mod_backspace_downgrades_it() {
             if environment.kind == InlineEnvironmentKind::Bold
                 && text.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "!"
     ));
+}
+
+#[test]
+fn current_inline_environment_is_the_view_projection_for_innermost_inline_environment() {
+    let mut document = Document::blank();
+    let outer_id = NodeId::generate();
+    let inner_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: outer_id,
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![ParagraphContent::Environment(InlineEnvironment {
+            id: inner_id.clone(),
+            kind: InlineEnvironmentKind::Italic,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![text_flow(Run {
+                text: "inside".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+
+    let projected = session
+        .current_inline_environment()
+        .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+        .unwrap_or_else(|| panic!("caret should inherit nested inline environments"));
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view failed: {error}"));
+    let innermost = view
+        .inline()
+        .iter()
+        .rev()
+        .find(|entry| entry.source == EnvironmentSource::InlineEnvironment)
+        .unwrap_or_else(|| panic!("view should expose the inline environment"));
+    let range = innermost
+        .inline_range
+        .as_ref()
+        .unwrap_or_else(|| panic!("view entry should carry an inline range"));
+    assert_eq!(Some(projected.environment_id), innermost.id);
+    assert_eq!(projected.paragraph_id, range.paragraph_id);
+    assert_eq!(projected.start_utf8, range.start_utf8);
+    assert_eq!(projected.end_utf8, range.end_utf8);
+
+    // 结构选区期间视图没有行内候选，投影必须一致地返回空。
+    let Block::Paragraph(paragraph) = &session.document.body[0] else {
+        panic!("document should keep its paragraph");
+    };
+    let paragraph_id = paragraph.id.clone();
+    let anchor = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::Text(anchor.clone()),
+            focus: DocumentRangeEndpoint::Text(Pos {
+                offset: "inside".len(),
+                ..anchor
+            }),
+        })
+        .unwrap_or_else(|error| panic!("structure selection failed: {error}"));
+    assert!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+            .is_none()
+    );
 }

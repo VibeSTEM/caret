@@ -82,6 +82,11 @@ pub(super) struct ParagraphState {
     pub is_title: bool,
 }
 
+/// 公式源码投影在历史位置中的身份值；只用于同进程内的投影同一性比较。
+pub(super) fn projection_identity(projection: &Arc<caret_math::MathSourceMap<'static>>) -> usize {
+    Arc::as_ptr(projection) as usize
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum DocumentPatch {
     PendingStyle,
@@ -189,34 +194,16 @@ pub(super) struct MathEditPosition {
 
 impl MathEditPosition {
     pub(super) fn from_edit(edit: &MathEdit) -> Self {
-        let source_branch = matches!(&edit.branch, MathEditBranch::Source);
-        Self {
-            target: edit.target.clone(),
-            projection_identity: source_branch
-                .then(|| {
-                    edit.source_projection
-                        .as_ref()
-                        .map(|projection| Arc::as_ptr(projection) as usize)
-                })
-                .flatten(),
-            cursor: edit.cursor,
-            branch: edit.branch.clone(),
-            source_projection: source_branch
-                .then(|| edit.source_projection.clone())
-                .flatten(),
-        }
+        Self::with_edit_state(edit, edit.cursor, edit.branch.clone())
     }
 
     pub(super) fn with_edit_state(edit: &MathEdit, cursor: usize, branch: MathEditBranch) -> Self {
+        // 只有源码分支需要保存投影；结构/文本分支的投影身份必须为空。
         let source_branch = matches!(&branch, MathEditBranch::Source);
         Self {
             target: edit.target.clone(),
             projection_identity: source_branch
-                .then(|| {
-                    edit.source_projection
-                        .as_ref()
-                        .map(|projection| Arc::as_ptr(projection) as usize)
-                })
+                .then(|| edit.source_projection.as_ref().map(projection_identity))
                 .flatten(),
             cursor,
             branch,

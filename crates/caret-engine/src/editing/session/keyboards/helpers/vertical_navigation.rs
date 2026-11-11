@@ -150,9 +150,12 @@ impl Session {
             }) => {
                 self.validate_navigation_generation(&generation)?;
                 let anchor = if extend {
-                    self.structure_selection
-                        .as_ref()
-                        .map(|selection| selection.anchor.clone())
+                    self.structure_selection_anchor()
+                        .cloned()
+                        .or_else(|| {
+                            self.structure_selection_text_bounds()
+                                .map(|(start, _)| start)
+                        })
                         .unwrap_or_else(|| self.selection.anchor.clone())
                 } else {
                     focus.clone()

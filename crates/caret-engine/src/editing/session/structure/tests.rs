@@ -1,7 +1,7 @@
 //! 验证结构命令跨段落导航及离开嵌套环境的可观察行为。
 
 use super::*;
-use crate::editing::EditorKey;
+use crate::editing::{DocumentRangeEndpoint, EditorKey, StructureSelection};
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathAlignRow,
     MathContent, MathFlow, MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
@@ -690,8 +690,14 @@ fn delete_key_deletes_selected_environment_and_mod_backspace_keeps_structure_sel
     );
     assert_eq!(session.selection().focus, first_body_position);
     assert_eq!(
-        session.structure_selection().ok_or("结构选区应保留")?.0,
-        &first_body_position
+        session
+            .structure_selection_range()
+            .ok_or("结构选区应保留")?
+            .0,
+        &crate::editing::DocumentRangeEndpoint::BlockEdge {
+            block_id: second_environment_id.clone(),
+            side: Direction::Backward,
+        }
     );
 
     let deleted = session.run(Command::Delete(Direction::Forward))?;
@@ -773,7 +779,7 @@ fn failed_navigation_selection_preserves_the_current_structure_selection()
     let selection_before = session.selection().clone();
     let selected_environments_before = session.selected_block_environments().to_vec();
     let structure_selection_before = session
-        .structure_selection()
+        .structure_selection_range()
         .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
     let invalid_position = Pos {
         story: StoryId::Body,
@@ -799,7 +805,7 @@ fn failed_navigation_selection_preserves_the_current_structure_selection()
         selected_environments_before
     );
     assert_eq!(
-        session.structure_selection(),
+        session.structure_selection_range(),
         structure_selection_before
             .as_ref()
             .map(|(anchor, focus)| (anchor, focus))
@@ -2019,5 +2025,786 @@ fn environment_creation_rejects_nesting_overflow_without_partial_mutation()
     assert_eq!(session.selection(), &before_selection);
     assert_eq!(session.document_generation(), before_generation);
     assert!(!session.can_undo());
+    Ok(())
+}
+
+fn equation_block() -> Block {
+    Block::Equation(Equation {
+        id: NodeId::generate(),
+        math_tree: math_tree(Some("x")),
+        extra: BTreeMap::new(),
+    })
+}
+
+fn align_block() -> Block {
+    Block::Align(Align {
+        id: NodeId::generate(),
+        rows: vec![MathAlignRow {
+            id: NodeId::generate(),
+            cells: vec![math_tree(Some("y"))],
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })
+}
+
+fn block_id(block: &Block) -> NodeId {
+    match block {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        Block::Environment(environment) => environment.id.clone(),
+        Block::Equation(equation) => equation.id.clone(),
+        Block::Align(align) => align.id.clone(),
+        Block::ExplicitBreak(_) | Block::Opaque(_) => {
+            unreachable!("测试块均有稳定身份")
+        }
+    }
+}
+
+fn body_position(paragraph: &Paragraph, offset: usize, affinity: Affinity) -> Pos {
+    Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph.id.clone(),
+        offset,
+        affinity,
+    }
+}
+
+fn select_text_endpoints(session: &mut Session, anchor: Pos, focus: Pos) -> Result<(), EditError> {
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::Text(anchor),
+        focus: DocumentRangeEndpoint::Text(focus),
+    })
+}
+
+fn select_block_object(session: &mut Session, block_id: NodeId) -> Result<(), EditError> {
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: block_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: Direction::Forward,
+        },
+    })
+}
+
+fn paragraph_at_block(block: &Block) -> &Paragraph {
+    match block {
+        Block::Paragraph(paragraph) => paragraph,
+        _ => panic!("期望段落块"),
+    }
+}
+
+#[test]
+fn deleting_cross_host_range_removes_math_block_and_range_text_in_one_step()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let original_selection = session.selection().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    let effect = session.run(Command::Delete(Direction::Backward))?;
+
+    assert!(effect.document_changed);
+    assert!(effect.selection_changed);
+    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[1])),
+        "d"
+    );
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, 1, Affinity::Downstream)
+    );
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_block_environments().is_empty());
+    assert_eq!(session.document_generation(), 1);
+
+    let generation_after_delete = session.document_generation();
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.selection(), &original_selection);
+    assert!(!session.has_structure_selection());
+    assert_ne!(session.document_generation(), generation_after_delete);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, 1, Affinity::Downstream)
+    );
+    Ok(())
+}
+
+#[test]
+fn deleting_range_spanning_equation_align_and_section_undoes_as_one_operation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let align = align_block();
+    let equation_id = block_id(&equation);
+    let align_id = block_id(&align);
+    let mut section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph_with_text("body"))],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    section.title = Some(paragraph_with_text("title"));
+    let section_id = section.id.clone();
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Environment(section),
+        align,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    assert_eq!(
+        session.selected_block_environments(),
+        std::slice::from_ref(&section_id)
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[1])),
+        "d"
+    );
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn deleting_selected_math_block_object_keeps_neighbouring_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let after = paragraph_with_text("after");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)?;
+    select_block_object(&mut session, equation_id)?;
+    assert!(session.selected_block_environments().is_empty());
+
+    session.run(Command::Delete(Direction::Forward))?;
+
+    assert_eq!(session.document().body.len(), 2);
+    // 对象删除只移除公式块，落点为相邻段落末尾而不是切分文字。
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, "before".len(), Affinity::Upstream)
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_math_range_deletion_keeps_document_generation_and_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation = equation_block();
+    let mut after = paragraph_with_text("after");
+    after
+        .inlines
+        .push(ParagraphContent::SoftBreak(caret_doc::SoftBreak {
+            extra: BTreeMap::from([("futureMetadata".to_owned(), serde_json::Value::Bool(true))]),
+        }));
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 0, Affinity::Downstream),
+        body_position(&after, "after\n".len(), Affinity::Upstream),
+    )?;
+    let selected_document = session.document().clone();
+    let selected_selection = session.selection().clone();
+    let selected_generation = session.document_generation();
+    let selected_math = session.selected_math_blocks().to_vec();
+
+    assert_eq!(
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::UnsupportedOpaqueContent)
+    );
+
+    assert_eq!(session.document(), &selected_document);
+    assert_eq!(session.selection(), &selected_selection);
+    assert_eq!(session.document_generation(), selected_generation);
+    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert!(session.has_structure_selection());
+    assert!(!session.can_undo());
+    Ok(())
+}
+
+#[test]
+fn typing_over_cross_host_structure_selection_replaces_range_in_one_step()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+
+    let effect = session.run(Command::InsertText("Z".to_owned()))?;
+
+    assert!(effect.document_changed);
+    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "aZ"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[1])),
+        "d"
+    );
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert!(!session.has_structure_selection());
+    session.run(Command::Redo)?;
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "aZ"
+    );
+    Ok(())
+}
+
+#[test]
+fn pasting_multiline_text_over_structure_selection_uses_shared_paste_path()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+
+    session.run(Command::PasteText("1\n2".to_owned()))?;
+
+    assert_eq!(session.document().body.len(), 3);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a1"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[1])),
+        "2"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[2])),
+        "d"
+    );
+    assert!(!session.has_structure_selection());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn copied_structure_range_keeps_block_math_as_object_and_environment_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    assert_eq!(session.selected_text()?, "b\n\u{fffc}\nc");
+
+    select_block_object(&mut session, equation_id)?;
+    assert_eq!(session.selected_text()?, "\u{fffc}");
+
+    let mut section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph_with_text("body text"))],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    section.title = Some(paragraph_with_text("Section title"));
+    let section_id = section.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(section)];
+    let mut session = Session::new(document)?;
+    session.select_block_environment(section_id)?;
+    assert_eq!(session.selected_text()?, "Section title\nbody text");
+    Ok(())
+}
+
+#[test]
+fn escape_clears_structure_selection_while_block_stop_is_active()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before.clone()), equation];
+    let mut session = Session::new(document)?;
+    select_block_object(&mut session, equation_id.clone())?;
+    session.selection = Selection {
+        anchor: body_position(&before, "before".len(), Affinity::Upstream),
+        focus: body_position(&before, "before".len(), Affinity::Upstream),
+    };
+    session.host_caret_position = Some(HostCaretPosition::outside(equation_id, Direction::Forward));
+
+    let effect = session.run(Command::EditorKey(EditorKey::Escape))?;
+
+    assert!(effect.selection_changed);
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_block_environments().is_empty());
+    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.block_boundary_exit().is_some());
+    Ok(())
+}
+
+#[test]
+fn deleting_document_start_math_block_falls_back_to_the_following_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let following = paragraph_with_text("after");
+    let mut document = Document::blank();
+    document.body = vec![equation, Block::Paragraph(following.clone())];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_block_object(&mut session, equation_id)?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "after"
+    );
+    // 文档开头没有前置段落，落点退到范围终点一侧的段落起点。
+    assert_eq!(
+        session.selection().focus,
+        body_position(&following, 0, Affinity::Downstream)
+    );
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn typing_over_selected_math_block_inserts_at_the_neighbour_and_keeps_one_undo_step()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before.clone()), equation];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_block_object(&mut session, equation_id)?;
+
+    session.run(Command::InsertText("Z".to_owned()))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "beforeZ"
+    );
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn backspace_after_shift_extension_consumes_the_range_before_the_math_adjacency_special_case()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("a");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let following = paragraph();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(following.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let caret = body_position(&before, "a".len(), Affinity::Upstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: caret.clone(),
+        focus: caret,
+    })))?;
+
+    // 第一键：整块覆盖公式；第二键：焦点移到公式后的空段落起点。
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(
+        session.selection().focus,
+        body_position(&following, 0, Affinity::Downstream)
+    );
+    let selection_before_delete = session.selection().clone();
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 范围事务而不是公式邻接特例：空段落保留，公式按对象删除。
+    assert_eq!(session.document().body.len(), 2);
+    assert!(matches!(session.document().body[0], Block::Paragraph(_)));
+    assert!(matches!(session.document().body[1], Block::Paragraph(_)));
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_block_environments().is_empty());
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document().body.len(), 3);
+    assert!(matches!(
+        session.document().body[1],
+        Block::Equation(ref equation) if equation.id == equation_id
+    ));
+    assert_eq!(session.selection(), &selection_before_delete);
+    Ok(())
+}
+
+#[test]
+fn empty_insertion_over_structure_selection_is_a_plain_noop()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let generation = session.document_generation();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    let selected_math = session.selected_math_blocks().to_vec();
+
+    let effect = session.run(Command::InsertText(String::new()))?;
+
+    assert!(!effect.document_changed);
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.document_generation(), generation);
+    assert!(session.has_structure_selection());
+    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert!(session.selected_text()?.contains('\u{fffc}'));
+
+    let pasted = session.run(Command::PasteText(String::new()))?;
+    assert!(!pasted.document_changed);
+    assert_eq!(session.document(), &original);
+    assert!(session.has_structure_selection());
+    Ok(())
+}
+
+#[test]
+fn deleting_selected_equation_between_two_math_hosts_keeps_the_neighbour_and_restores_nearest_caret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p0");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let align = align_block();
+    let align_id = block_id(&align);
+    let after = paragraph_with_text("p1");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        align.clone(),
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    // 相邻公式块的持久化内容必须逐字节保留。
+    let align_before = serde_json::to_value(&align)?;
+    select_block_object(&mut session, equation_id)?;
+    let selection_before_delete = session.selection().clone();
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 3);
+    assert_eq!(
+        serde_json::to_value(&session.document().body[1])?,
+        align_before
+    );
+    assert_eq!(block_id(&session.document().body[1]), align_id);
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, "p0".len(), Affinity::Upstream)
+    );
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+    let deleted_document = session.document().clone();
+    let selection_after_delete = session.selection().clone();
+
+    // 只有一个历史条目：一次撤销即可完整恢复，且不再有更早的步骤。
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.selection(), &selection_before_delete);
+    assert!(!session.can_undo());
+    assert!(session.can_redo());
+
+    session.run(Command::Redo)?;
+    assert_eq!(session.document(), &deleted_document);
+    assert_eq!(session.selection(), &selection_after_delete);
+    Ok(())
+}
+
+#[test]
+fn deleting_range_covering_adjacent_equation_and_align_removes_both_in_one_transaction()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p0");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let align = align_block();
+    let align_id = block_id(&align);
+    let after = paragraph_with_text("p1");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        align,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let caret = body_position(&before, "p0".len(), Affinity::Upstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: caret.clone(),
+        focus: caret,
+    })))?;
+
+    // 两键扩选：第一键覆盖 Equation，第二键把相邻 Align 一并纳入同一范围。
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 2);
+    assert!(
+        session
+            .document()
+            .body
+            .iter()
+            .all(|block| matches!(block, Block::Paragraph(_)))
+    );
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+    let deleted_document = session.document().clone();
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert!(!session.can_undo());
+    session.run(Command::Redo)?;
+    assert_eq!(session.document(), &deleted_document);
+    Ok(())
+}
+
+#[test]
+fn failed_replace_over_structure_selection_rolls_back_every_interaction_field()
+-> Result<(), Box<dyn std::error::Error>> {
+    // 标题段落的省略多行粘贴会在删除计划已应用后失败（UnsupportedNewline），
+    // 用于验证替换事务的完整回滚。
+    let title = paragraph_with_text("title");
+    let title_id = title.id.clone();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let section_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: section_id,
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(title),
+        children: vec![equation],
+        extra: BTreeMap::new(),
+    })];
+    let mut session = Session::new(document)?;
+    // 让待用行内样式处于活动状态，回滚后必须原样保留而不是被静默清空。
+    session.run(Command::ToggleInlineFormat(
+        caret_doc::InlineEnvironmentKind::Bold,
+    ))?;
+    assert!(session.has_pending_inline_style());
+    select_block_object(&mut session, equation_id.clone())?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert!(session.selected_block_environments().is_empty());
+    let document_before = session.document().clone();
+    let selection_before = session.selection().clone();
+    let anchor_affinity_before = session.selection_anchor_visual_affinity();
+    let visual_affinity_before = session.selection_visual_affinity();
+    let structure_index_before = session.structure_index().clone();
+    let story_before = session.story_for_paragraph(&title_id);
+    let ordinal_before = session.structure_index().paragraph_ordinal(&title_id);
+    let host_caret_before = session.block_boundary_exit();
+    let generation_before = session.document_generation();
+    let state_id_before = session.history_state_id();
+    let pending_style_before = session.has_pending_inline_style();
+    let can_undo_before = session.can_undo();
+    let can_redo_before = session.can_redo();
+    assert_eq!(session.selected_text()?, "\u{fffc}");
+
+    assert_eq!(
+        session.run(Command::PasteText("a\nb".to_owned())),
+        Err(EditError::UnsupportedNewline)
+    );
+
+    assert_eq!(session.document(), &document_before);
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        anchor_affinity_before
+    );
+    assert_eq!(session.selection_visual_affinity(), visual_affinity_before);
+    assert_eq!(session.structure_index(), &structure_index_before);
+    assert_eq!(session.story_for_paragraph(&title_id), story_before);
+    assert_eq!(
+        session.structure_index().paragraph_ordinal(&title_id),
+        ordinal_before
+    );
+    assert_eq!(session.block_boundary_exit(), host_caret_before);
+    // 历史记账与文档代际同样不得被失败的替换推进。
+    assert_eq!(session.history_state_id(), state_id_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.has_pending_inline_style(), pending_style_before);
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert!(session.selected_block_environments().is_empty());
+    assert_eq!(session.selected_text()?, "\u{fffc}");
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.document_generation(), generation_before);
+    // 历史可用性保持失败前的状态（此前设置待用样式已经产生一个历史条目）。
+    assert_eq!(session.can_undo(), can_undo_before);
+    assert_eq!(session.can_redo(), can_redo_before);
+    assert!(session.has_pending_inline_style());
+
+    // 回滚后同一结构范围仍可被后续事务正常消费。
+    session.run(Command::Delete(Direction::Backward))?;
+    assert_eq!(session.document().body.len(), 1);
+    let Block::Environment(section) = &session.document().body[0] else {
+        return Err("回滚后删除应保留 Section 环境".into());
+    };
+    assert!(section.children.is_empty());
     Ok(())
 }

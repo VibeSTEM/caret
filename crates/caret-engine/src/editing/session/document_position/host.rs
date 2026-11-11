@@ -298,7 +298,7 @@ impl Session {
         }
     }
 
-    fn compare_text_with_block_host_edge(
+    pub(super) fn compare_text_with_block_host_edge(
         &self,
         host_id: &NodeId,
         host: &HostCaretPosition<HostCaretLocalPosition>,
@@ -518,12 +518,7 @@ impl Session {
         let location = find_document_node(&self.document, position.host_id())
             .ok_or(EditError::InvalidPosition)?;
         let valid_kind = match position.kind() {
-            HostCaretKind::Block => matches!(
-                location.kind,
-                DocumentNodeKind::Environment
-                    | DocumentNodeKind::Equation
-                    | DocumentNodeKind::Align
-            ),
+            HostCaretKind::Block => location.kind.is_range_block(),
             HostCaretKind::Inline => matches!(
                 location.kind,
                 DocumentNodeKind::InlineEnvironment | DocumentNodeKind::InlineMath

@@ -21,6 +21,7 @@ mod metadata;
 mod multiline;
 mod navigation;
 mod path;
+mod selection_extension;
 mod source_draft;
 mod text_branch;
 mod text_inline_environment;
@@ -629,6 +630,14 @@ impl MathEdit {
     }
 }
 
+/// 历史位置记录的源码投影身份是否与当前投影一致。
+fn projection_identity_matches(
+    identity: Option<usize>,
+    projection: &Arc<caret_math::MathSourceMap<'static>>,
+) -> bool {
+    identity == Some(history::projection_identity(projection))
+}
+
 pub(super) fn restore_math_edit(
     document: &caret_doc::Document,
     position: MathEditPosition,
@@ -748,14 +757,14 @@ pub(super) fn restore_math_edit(
         return None;
     };
     let stored_projection = position.source_projection.as_ref()?;
-    if position.projection_identity != Some(Arc::as_ptr(stored_projection) as usize) {
+    if !projection_identity_matches(position.projection_identity, stored_projection) {
         return None;
     }
     let (kind, projected_target) =
         history_projection_for_target(document, &position.target, stored_projection)?;
     let source_projection = stored_projection;
     if source_projection.kind() != kind
-        || position.projection_identity != Some(Arc::as_ptr(source_projection) as usize)
+        || !projection_identity_matches(position.projection_identity, source_projection)
     {
         return None;
     }
@@ -1063,9 +1072,7 @@ impl Session {
             },
         });
         self.pending_inline_style.clear();
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.clear_structure_selection_state();
         self.host_caret_position = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
@@ -1215,9 +1222,7 @@ impl Session {
             },
         });
         self.pending_inline_style.clear();
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.clear_structure_selection_state();
         self.host_caret_position = None;
         self.advance_history_merge_epoch();
         Ok(Effect {
@@ -1742,9 +1747,9 @@ impl Session {
     ) -> Result<bool, EditError> {
         if self.selection.anchor != self.selection.focus
             || self.math_edit.is_some()
-            || self.structure_selection.is_some()
-            || self.selected_block_environment.is_some()
+            || self.has_structure_selection()
             || !self.selected_block_environments.is_empty()
+            || !self.selected_math_blocks.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
         {
@@ -1893,9 +1898,9 @@ impl Session {
     ) -> Result<Effect, EditError> {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
-            || self.structure_selection.is_some()
-            || self.selected_block_environment.is_some()
+            || self.has_structure_selection()
             || !self.selected_block_environments.is_empty()
+            || !self.selected_math_blocks.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
         {
@@ -5415,13 +5420,9 @@ fn find_inline_math_mut<'a>(
 /// 在块树中查找块 ID，返回父环境 ID 路径与同级下标。
 pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
     let location = caret_structure::find_block_node(blocks, id)?;
-    if !matches!(
-        location.kind,
-        caret_structure::DocumentNodeKind::Paragraph
-            | caret_structure::DocumentNodeKind::Environment
-            | caret_structure::DocumentNodeKind::Equation
-            | caret_structure::DocumentNodeKind::Align
-    ) {
+    if location.kind != caret_structure::DocumentNodeKind::Paragraph
+        && !location.kind.is_range_block()
+    {
         return None;
     }
     Some((location.parent_environment_ids, location.sibling_index?))

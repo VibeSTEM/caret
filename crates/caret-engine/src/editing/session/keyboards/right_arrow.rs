@@ -39,10 +39,16 @@ impl Session {
                             .math_text_input_context()
                             .ok_or(EditError::InvalidPosition)?;
                         let text_len = context.surrounding_text.encode_utf16().count();
-                        if context.focus_utf16 == text_len && !extend {
+                        if context.focus_utf16 != text_len {
+                            return Ok(Effect::default());
+                        }
+                        if !extend {
                             self.run(Command::MoveCaret(Direction::Forward))
+                        } else if self.math_text_at_host_edge(Direction::Forward)? {
+                            self.convert_math_host_to_structure_range(Direction::Forward)
                         } else {
-                            Ok(Effect::default())
+                            // Align 中间 cell 的文本岛边缘：沿用本地移动语义，不伪造整块范围。
+                            self.run(Command::MoveCaret(Direction::Forward))
                         }
                     }
                     Some(_) => Err(EditError::InvalidPosition),
@@ -60,10 +66,17 @@ impl Session {
                             }
                         }
                     }
-                    if extend {
-                        Ok(Effect::default())
-                    } else {
-                        self.run(Command::MoveCaret(Direction::Forward))
+                    match &edit.branch {
+                        MathEditBranch::Tree { .. } if extend => {
+                            self.extend_math_tree_selection(Direction::Forward)
+                        }
+                        MathEditBranch::Tree { .. } => {
+                            self.run(Command::MoveCaret(Direction::Forward))
+                        }
+                        // 源码分支没有本地选区；扩选沿用非扩选的光标移动（已知限制）。
+                        MathEditBranch::Source => self.run(Command::MoveCaret(Direction::Forward)),
+                        // 文本分支已由外层处理；FFI 路径不制造 panic，改为可恢复错误。
+                        MathEditBranch::Text { .. } => Err(EditError::InvalidPosition),
                     }
                 }
             };

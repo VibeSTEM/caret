@@ -3125,22 +3125,39 @@ fn shift_horizontal_keeps_the_original_paragraph_anchor_when_entering_a_section(
 
     assert_eq!(
         runtime.session.selected_block_environments(),
-        &[environment_id]
+        std::slice::from_ref(&environment_id)
     );
-    assert_eq!(
-        runtime
-            .session
-            .structure_selection_anchor()
-            .ok_or_else(|| std::io::Error::other("structure selection anchor is missing"))?
-            .paragraph_id,
-        outside_id
-    );
-    let focus = runtime
+    assert!(runtime.session.has_structure_selection());
+    // 环境完整覆盖时，环境外的文本锚点保持原段落位置；焦点停到环境外后边界。
+    let (anchor, focus) = runtime
         .session
-        .structure_selection()
-        .ok_or_else(|| std::io::Error::other("structure selection is missing"))?
-        .1;
-    assert_eq!(focus.paragraph_id, title_id);
+        .structure_selection_range()
+        .ok_or_else(|| std::io::Error::other("structure selection range is missing"))?;
+    assert!(
+        matches!(
+            anchor,
+            caret_engine::DocumentRangeEndpoint::Text(position)
+                if position.paragraph_id == outside_id
+                    && position.offset == 7
+                    && position.affinity == caret_engine::Affinity::Upstream
+        ),
+        "the original paragraph anchor must survive environment promotion"
+    );
+    assert!(
+        matches!(
+            focus,
+            caret_engine::DocumentRangeEndpoint::BlockEdge {
+                block_id,
+                side: caret_engine::Direction::Forward,
+            } if block_id == &environment_id
+        ),
+        "the structure focus must be the environment forward edge"
+    );
+    // 停靠光标位于环境标题起点，不属于结构端点本身。
+    let parked = runtime.session.selection();
+    assert_eq!(parked.anchor, parked.focus);
+    assert_eq!(parked.focus.paragraph_id, title_id);
+    assert_eq!(parked.focus.offset, 0);
     Ok(())
 }
 

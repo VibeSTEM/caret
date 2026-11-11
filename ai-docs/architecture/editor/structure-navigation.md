@@ -1,6 +1,6 @@
 # 结构导航
 
-更新日期：2026-11-10。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
+更新日期：2026-11-11。键位见[快捷键](../interface/keyboard-shortcuts.md)，命令入口见[命令](commands.md)。
 
 ## 结构语义与界面类别
 
@@ -65,10 +65,12 @@ crates/caret-structure/src/
 
 crates/caret-engine/src/editing/session/
 ├── structure.rs                    # 结构命令入口与事务边界
-└── structure/
-    ├── environment_mutations.rs     # 块环境删除、解除等结构变更
-    ├── selection.rs                 # 块环境结构选区与操作
-    └── tests.rs                     # Session 结构行为测试
+├── range_extension.rs              # Shift 结构范围单元扩选
+├── document_position/range.rs      # 结构范围端点比较与覆盖派生
+├── structure/
+│   ├── environment_mutations.rs     # 块环境删除、解除等结构变更
+│   ├── selection.rs                 # 结构范围删除、替换与落点
+│   └── tests.rs                     # Session 结构行为测试
 
 crates/caret-app/src/document_view/  # 生成当前结构与同代布局几何的只读投影
 native/viewmodels/document/         # 校验、保存和发布 Rust 快照
@@ -171,9 +173,11 @@ Block 的邻接外侧停靠只在相邻内容实际存在且属于同一有效�
 
 规范边界保留足以恢复宿主及方向的稳定身份，不依赖 Paragraph ordinal 或 ID 字典序。若两个宿主边界在位置相同但插入/编辑目标不同，则它们不是同一规范间隙，适配器必须给出可区分的局部位置。
 
-Escape 离开当前活动的复杂 Block 时进入该 Block 的外后停靠；重复 Escape 保持在同一停靠，不越过相邻 Block。需要继续浏览或进入相邻宿主时使用方向键，由共享文档顺序仲裁；宿主适配器不搜索远处 Paragraph 作为 Escape 的替代落点。
+Escape 离开当前活动的复杂 Block 时进入该 Block 的外后停靠；重复 Escape 保持在同一停靠，不越过相邻 Block。结构选区存在时，Escape 先折叠该范围并保留当前光标与块外侧停靠，不进入相邻宿主。需要继续浏览或进入相邻宿主时使用方向键，由共享文档顺序仲裁；宿主适配器不搜索远处 Paragraph 作为 Escape 的替代落点。
 
 Paragraph 继续使用其真实 TextMap 首尾，不套用复杂 Block 的虚拟停靠。Shift 扩选跨越宿主时使用共享文档顺序和稳定宿主范围，不从普通移动次数推导选区边界；位置比较、选区范围和删除事务协议见[块宿主交互](document-model/block-interaction.md)。
+
+Shift+水平键扩展结构范围时按文档单元前进：段落内部按字素边界，Section/Custom 与 Equation/Align 作为原子对象一次进入范围，相邻公式块逐个纳入而不跳过。范围与块环境边界相交时扩展到整棵环境，与鼠标跨越环境边界一致；该扩展仍由 Session 仲裁，布局候选只决定普通文本的视觉邻接。公式宿主内部的扩选先按 MathTree/MathText 局部语义移动，到达宿主边界后才转换为覆盖整个公式对象的结构范围。Shift+垂直键需要布局给出的相邻视觉行候选；没有候选时只在相邻块是显示公式时纳入该对象，不用字素步长伪造视觉行移动。
 
 结构索引从任意有效宿主 ID 解析稳定父链和同级顺序。只读查询与可变内容事务使用各自经过校验的定位入口，并共享同一身份、父链、顺序与文档代际语义。关于身份、顺序、代际与无法比较时的处理见[文档位置](document-model/document-position.md#跨宿主位置与顺序)。
 

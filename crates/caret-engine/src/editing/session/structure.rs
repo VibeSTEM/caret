@@ -692,9 +692,7 @@ impl Session {
             focus: target,
         };
         self.host_caret_position = None;
-        self.selected_block_environment = None;
-        self.selected_block_environments.clear();
-        self.structure_selection = None;
+        self.clear_structure_selection_state();
         self.selection_visual_affinity = if move_to_end {
             caret_layout::VisualAffinity::Upstream
         } else {

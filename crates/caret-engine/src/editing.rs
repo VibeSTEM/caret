@@ -35,8 +35,8 @@ pub use host_caret::{
 };
 pub use navigation::NavigationIntent;
 pub use position::{
-    Affinity, DocumentCaretPosition, InlineEnvironmentRange, Pos, PositionMap, Selection,
-    SessionCaretSnapshot, StoryId,
+    Affinity, DocumentCaretPosition, DocumentRangeEndpoint, InlineEnvironmentRange, Pos,
+    PositionMap, Selection, SessionCaretSnapshot, StoryId, StructureSelection,
 };
 pub use session::{
     CompositionRange, CompositionUpdateCandidate, MathEdit, MathEditBranch, MathEditTarget,

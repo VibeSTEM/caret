@@ -5,6 +5,7 @@
 
 use caret_doc::NodeId;
 
+use super::command::Direction;
 use super::host_caret::{HostCaretLocalPosition, HostCaretPosition};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -39,6 +40,25 @@ pub struct Pos {
 pub struct Selection {
     pub anchor: Pos,
     pub focus: Pos,
+}
+
+/// 结构选区端点的文档位置；行内对象两侧仍用段落 U+FFFC 偏移表达。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentRangeEndpoint {
+    /// Paragraph 或环境标题中的文本位置。
+    Text(Pos),
+    /// 结构范围落在复杂 Block 的外侧边界；相邻文本仅在 caret/几何投影时归一化。
+    ///
+    /// `Backward` 表示节点外前边界，`Forward` 表示节点外后边界；边界本身不承诺
+    /// 该侧一定有可编辑段落。
+    BlockEdge { block_id: NodeId, side: Direction },
+}
+
+/// 跨宿主的文档级结构选区；锚点与焦点各自保留完整文档位置和方向。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructureSelection {
+    pub anchor: DocumentRangeEndpoint,
+    pub focus: DocumentRangeEndpoint,
 }
 
 /// 当前会话和文档代际内的一种完整 caret 位置。

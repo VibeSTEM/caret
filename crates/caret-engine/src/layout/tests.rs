@@ -45,6 +45,36 @@ fn paragraph(text: &str) -> Paragraph {
     paragraph
 }
 
+/// 只包含一个文本片段的公式树，用于公式块几何测试。
+fn text_math_tree(text: &str) -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Text(TextFlow {
+                runs: vec![Run {
+                    text: text.to_owned(),
+                    language: None,
+                    props: BTreeMap::new(),
+                    extra: BTreeMap::new(),
+                }],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+fn layout_document(document: &Document) -> super::DocumentLayoutSnapshot {
+    let mut service = DocumentLayoutService::new();
+    let mut catalog =
+        FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+    service
+        .layout(document, 1, &mut catalog, &ShapingStyle::new(1200))
+        .unwrap_or_else(|error| panic!("document layout failed: {error}"))
+}
+
 #[test]
 fn math_text_base_language_uses_paragraph_then_document_then_base_priority() {
     let mut document = Document::blank();
@@ -3062,6 +3092,216 @@ fn body_selection_geometry_skips_environment_title_stories() {
         !rectangles
             .iter()
             .any(|rectangle| { rectangle.y0_pt <= title_y && title_y < rectangle.y1_pt })
+    );
+}
+
+#[test]
+fn structural_selection_geometry_combines_text_environment_and_math_hosts() {
+    let before = paragraph("before");
+    let before_id = before.id.clone();
+    let after = paragraph("after");
+    let after_id = after.id.clone();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Equation(Equation {
+            id: math_id.clone(),
+            math_tree: text_math_tree("x"),
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let snapshot = layout_document(&document);
+
+    // 跨 Paragraph -> Equation -> Paragraph 的结构范围：两侧文字加公式对象整栏矩形。
+    let rectangles = snapshot
+        .structure_selection_rectangles(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: before_id.clone(),
+                offset: 0,
+                affinity: Affinity::Downstream,
+            },
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: after_id.clone(),
+                offset: "after".len(),
+                affinity: Affinity::Upstream,
+            },
+            &[],
+            std::slice::from_ref(&math_id),
+        )
+        .unwrap_or_else(|| panic!("cross-host structural selection geometry failed"));
+    let math_fragment = snapshot
+        .pages
+        .iter()
+        .enumerate()
+        .find_map(|(page_index, page)| {
+            page.layout
+                .math_fragments
+                .iter()
+                .find(|fragment| fragment.math_id == math_id)
+                .map(|fragment| (page_index, page, fragment))
+        })
+        .unwrap_or_else(|| panic!("equation fragment is missing"));
+    let (math_page_index, math_page, math_fragment) = math_fragment;
+    // 两侧端点段落各一个文字矩形，公式宿主自身不产生文字矩形。
+    assert_eq!(rectangles.len(), 3);
+    let math_rectangles = rectangles
+        .iter()
+        .filter(|rectangle| {
+            rectangle.page_index == math_page_index
+                && (rectangle.x0_pt - math_page.margin_left_pt).abs() < 1e-9
+                && (rectangle.x1_pt - (math_page.width_pt - math_page.margin_right_pt)).abs() < 1e-9
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(math_rectangles.len(), 1);
+    let math_rect = math_rectangles[0];
+    let expected_y0 = math_page.margin_top_pt + f64::from(math_fragment.y_offset_pt);
+    assert!((math_rect.y0_pt - expected_y0).abs() < 1e-9);
+
+    // 选中整个块环境时正文文字被排除，只保留环境范围。
+    let section_id = NodeId::generate();
+    let title = paragraph("title");
+    let title_id = title.id.clone();
+    let child = paragraph("inside");
+    let child_id = child.id.clone();
+    let mut environment_document = Document::blank();
+    environment_document.body = vec![Block::Environment(BlockEnvironment {
+        id: section_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(title),
+        children: vec![Block::Paragraph(child)],
+        extra: BTreeMap::new(),
+    })];
+    let environment_snapshot = layout_document(&environment_document);
+    let rectangles = environment_snapshot
+        .structure_selection_rectangles(
+            &Pos {
+                story: StoryId::EnvironmentTitle(section_id.clone()),
+                paragraph_id: title_id,
+                offset: 0,
+                affinity: Affinity::Downstream,
+            },
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: child_id,
+                offset: "inside".len(),
+                affinity: Affinity::Upstream,
+            },
+            std::slice::from_ref(&section_id),
+            &[],
+        )
+        .unwrap_or_else(|| panic!("whole environment selection geometry failed"));
+    assert_eq!(
+        rectangles.len(),
+        environment_snapshot.environment_ranges.len()
+    );
+    assert!(
+        rectangles
+            .iter()
+            .all(|rectangle| rectangle.x1_pt > rectangle.x0_pt && rectangle.y1_pt > rectangle.y0_pt)
+    );
+}
+
+#[test]
+fn structural_selection_geometry_rejects_math_hosts_missing_from_the_snapshot() {
+    let before = paragraph("before");
+    let before_id = before.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before)];
+    let snapshot = layout_document(&document);
+
+    // 旧快照不知道新选中的公式宿主：整体拒绝，而不是返回半截选区。
+    assert!(
+        snapshot
+            .structure_selection_rectangles(
+                &Pos {
+                    story: StoryId::Body,
+                    paragraph_id: before_id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                },
+                &Pos {
+                    story: StoryId::Body,
+                    paragraph_id: before_id,
+                    offset: "before".len(),
+                    affinity: Affinity::Upstream,
+                },
+                &[],
+                &[NodeId::generate()],
+            )
+            .is_none()
+    );
+    // 端点越界同样拒绝。
+    assert!(
+        snapshot
+            .structure_selection_rectangles(
+                &Pos {
+                    story: StoryId::Body,
+                    paragraph_id: snapshot.paragraphs[0].id.clone(),
+                    offset: "before".len() + 1,
+                    affinity: Affinity::Downstream,
+                },
+                &Pos {
+                    story: StoryId::Body,
+                    paragraph_id: snapshot.paragraphs[0].id.clone(),
+                    offset: "before".len(),
+                    affinity: Affinity::Upstream,
+                },
+                &[],
+                &[],
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_highlight() {
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: math_id.clone(),
+        math_tree: text_math_tree("x"),
+        extra: BTreeMap::new(),
+    }));
+    let snapshot = layout_document(&document);
+    let (page_index, page, fragment) = snapshot
+        .pages
+        .iter()
+        .enumerate()
+        .find_map(|(page_index, page)| {
+            page.layout
+                .math_fragments
+                .iter()
+                .find(|fragment| fragment.math_id == math_id)
+                .map(|fragment| (page_index, page, fragment))
+        })
+        .unwrap_or_else(|| panic!("equation fragment is missing"));
+
+    let rectangles = snapshot
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .unwrap_or_else(|| panic!("selected equation geometry is missing"));
+    assert_eq!(rectangles.len(), 1);
+    let rectangle = rectangles[0];
+    assert_eq!(rectangle.page_index, page_index);
+    assert_eq!(rectangle.x0_pt, page.margin_left_pt);
+    assert_eq!(rectangle.x1_pt, page.width_pt - page.margin_right_pt);
+    assert_eq!(
+        rectangle.y0_pt,
+        (page.margin_top_pt + f64::from(fragment.y_offset_pt)).clamp(0.0, page.height_pt)
+    );
+    assert!(rectangle.y1_pt <= page.height_pt);
+    assert!(rectangle.y1_pt > rectangle.y0_pt);
+
+    assert_eq!(snapshot.math_block_geometry(&[]), Some(Vec::new()));
+    assert!(
+        snapshot
+            .math_block_geometry(&[NodeId::generate()])
+            .is_none()
     );
 }
 

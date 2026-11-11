@@ -2270,7 +2270,7 @@ impl DocumentLayoutSnapshot {
     }
 
     /// 返回跨 Story 结构选区中环境外文字的几何；选中的块环境由环境矩形单独绘制。
-    pub fn structure_selection_geometry(
+    fn structure_selection_geometry(
         &self,
         anchor: &Pos,
         focus: &Pos,
@@ -2304,6 +2304,82 @@ impl DocumentLayoutSnapshot {
             None,
             selected_environment_ids,
         )
+    }
+
+    /// 返回选中块级公式在同一代布局中的整栏矩形。
+    ///
+    /// 每个矩形横跨页面版心宽度，纵向采用该公式片段的 MathBox 范围并裁切到页面，
+    /// 供选区层与活动公式高亮共用同一几何来源；不进入公式内部 MathBox。
+    /// 任一公式 ID 在当前快照中没有任何分页片段时返回 `None`，让调用方拒绝过期投影。
+    pub fn math_block_geometry(&self, block_ids: &[NodeId]) -> Option<Vec<PageSelectionRect>> {
+        if block_ids.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut found = vec![false; block_ids.len()];
+        let mut rectangles = Vec::new();
+        for (page_index, page) in self.pages.iter().enumerate() {
+            let x0_pt = page.margin_left_pt;
+            let x1_pt = page.width_pt - page.margin_right_pt;
+            if !x0_pt.is_finite() || !x1_pt.is_finite() || x1_pt <= x0_pt {
+                return None;
+            }
+            for fragment in &page.layout.math_fragments {
+                let Some(index) = block_ids
+                    .iter()
+                    .position(|block_id| block_id == &fragment.math_id)
+                else {
+                    continue;
+                };
+                let y0_pt = (page.margin_top_pt + f64::from(fragment.y_offset_pt))
+                    .clamp(0.0, page.height_pt);
+                let y1_pt = (page.margin_top_pt
+                    + f64::from(fragment.y_offset_pt)
+                    + f64::from(fragment.height_pt))
+                .clamp(0.0, page.height_pt);
+                if !y0_pt.is_finite() || !y1_pt.is_finite() || y1_pt <= y0_pt {
+                    continue;
+                }
+                // 只有真正产出矩形后才标记该 ID 已定位，退化片段不能让整体误判为成功。
+                found[index] = true;
+                rectangles.push(PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                });
+            }
+        }
+        found.iter().all(|found| *found).then_some(rectangles)
+    }
+
+    /// 返回结构选区在同一代布局中的全部可见矩形：环境外正文、被选块环境与公式块。
+    ///
+    /// 文本端点必须与本快照同代；选中的公式 ID 任一缺少分页片段时整体
+    /// 返回 `None`。空块环境没有排版内容，因此没有环境矩形，这不视为过期投影。
+    pub fn structure_selection_rectangles(
+        &self,
+        anchor: &Pos,
+        focus: &Pos,
+        selected_environment_ids: &[NodeId],
+        selected_math_block_ids: &[NodeId],
+    ) -> Option<Vec<PageSelectionRect>> {
+        let mut rectangles =
+            self.structure_selection_geometry(anchor, focus, selected_environment_ids)?;
+        rectangles.extend(
+            self.environment_ranges
+                .iter()
+                .filter(|range| selected_environment_ids.contains(&range.environment_id))
+                .map(|range| PageSelectionRect {
+                    page_index: range.page_index,
+                    x0_pt: range.x0_pt,
+                    y0_pt: range.y0_pt,
+                    x1_pt: range.x1_pt,
+                    y1_pt: range.y1_pt,
+                }),
+        );
+        rectangles.extend(self.math_block_geometry(selected_math_block_ids)?);
+        Some(rectangles)
     }
 
     fn range_geometry(

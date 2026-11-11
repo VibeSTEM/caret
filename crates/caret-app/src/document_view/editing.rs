@@ -186,14 +186,17 @@ impl DocumentViewRuntime {
             .math_text_input_context()
             .map(|context| context.target);
         let math_edit_active = self.session.math_edit().is_some();
+        // 结构选区（含只覆盖 Equation/Align 的范围）会被一次事务替换，不能只复用单段布局。
+        let has_structure_selection = self.session.has_structure_selection()
+            || !self.session.selected_math_blocks().is_empty();
         let (reusable_paragraph_id, reuse_all_paragraphs) = match math_text_target.as_ref() {
             Some(caret_engine::MathEditTarget::Inline { paragraph_id, .. }) => {
                 (Some(paragraph_id.clone()), false)
             }
             Some(caret_engine::MathEditTarget::Block { .. }) => (None, true),
             None if !math_edit_active
+                && !has_structure_selection
                 && self.session.block_boundary_exit().is_none()
-                && self.session.selected_block_environment().is_none()
                 && selection.anchor.paragraph_id == selection.focus.paragraph_id =>
             {
                 (Some(selection.focus.paragraph_id.clone()), false)
@@ -285,8 +288,11 @@ impl DocumentViewRuntime {
     ) -> Result<String, String> {
         let selection = self.session.selection();
         let math_edit_active = self.session.math_edit().is_some();
+        // 结构选区可能只覆盖公式块而没有块环境；此时命令会跨块替换节点，只能发布完整快照。
+        let has_structure_selection = self.session.has_structure_selection()
+            || !self.session.selected_math_blocks().is_empty();
         let reusable_paragraph_id = (!math_edit_active
-            && self.session.selected_block_environment().is_none()
+            && !has_structure_selection
             && selection.anchor.paragraph_id == selection.focus.paragraph_id)
             .then(|| selection.focus.paragraph_id.clone());
         let delete_is_paragraph_local = matches!(&command, Command::Delete(Direction::Backward))
