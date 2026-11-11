@@ -27,6 +27,7 @@ mod text_inline_environment;
 mod text_run_property;
 mod text_run_split;
 mod tree_position;
+use super::super::paragraph_ops::paragraph_parent_path;
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap, inline_length, split_inline_nodes};
 use super::super::{
     Affinity, Command, CommandLine, Direction, EditError, Effect, HostCaretKind, HostCaretPosition,
@@ -55,6 +56,7 @@ pub use tree_position::{
     MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTreePosition,
     MathTreePositionError,
 };
+pub(super) use tree_position::{MathTextFlowBoundary, compare_math_position_affinity};
 use tree_position::{MathTreeCaretMove, advance_math_tree_position, child_sequence_path};
 
 enum MathTextCaretStep {
@@ -64,6 +66,45 @@ enum MathTextCaretStep {
 }
 
 type MathTreeTextBoundary<'a> = (&'a MathTree, MathTreePosition, Option<(usize, usize)>);
+
+pub(super) fn math_text_flow_display_len(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+) -> Option<usize> {
+    path.resolve_structurally(tree)?
+        .runs
+        .iter()
+        .try_fold(0usize, |length, run| length.checked_add(run.text.len()))
+}
+
+pub(super) fn math_text_flow_boundary_is_shared(
+    tree: &MathTree,
+    path: &MathTextFlowPath,
+    boundary: MathTextFlowBoundary,
+) -> Option<bool> {
+    let island = path::contiguous_text_flow_text(tree, path)?;
+    let (sequence_path, text_index) =
+        MathTreePosition::sequence_boundary_from_text_path(path.steps()).ok()?;
+    let boundary_index = match boundary {
+        MathTextFlowBoundary::Start => text_index,
+        MathTextFlowBoundary::End => text_index.checked_add(1)?,
+    };
+    let mut matches = 0;
+    for candidate in &island.paths {
+        let (candidate_path, candidate_index) =
+            MathTreePosition::sequence_boundary_from_text_path(candidate.steps()).ok()?;
+        if candidate_path == sequence_path && candidate_index == boundary_index {
+            matches += 1;
+        }
+        if candidate_path == sequence_path && candidate_index.checked_add(1)? == boundary_index {
+            matches += 1;
+        }
+        if matches > 1 {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
 
 struct DisplayMathInsertPlan {
     parent_environment_ids: Vec<NodeId>,
@@ -445,6 +486,7 @@ struct MathSourceWriteOptions {
 pub(super) struct MathEditRevision {
     pub(super) session_id: NodeId,
     pub(super) document_generation: u64,
+    pub(super) projection_id: NodeId,
 }
 
 /// 公式编辑状态：目标、源码投影、当前编辑载体和载体定义的位置坐标。不属于文档修订。
@@ -474,6 +516,14 @@ impl PartialEq for MathEdit {
 impl Eq for MathEdit {}
 
 impl MathEdit {
+    pub(super) fn replace_source_projection(
+        &mut self,
+        projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
+    ) {
+        self.source_projection = projection;
+        self.revision.projection_id = NodeId::generate();
+    }
+
     fn required_source_projection(&self) -> Result<&caret_math::MathSourceMap<'static>, EditError> {
         self.source_projection
             .as_deref()
@@ -832,7 +882,7 @@ fn history_projection_for_target(
     }
 }
 
-fn math_tree_for_target<'a>(
+pub(super) fn math_tree_for_target<'a>(
     document: &'a caret_doc::Document,
     target: &MathEditTarget,
     align_cell: Option<(usize, usize)>,
@@ -861,6 +911,10 @@ fn math_tree_for_target<'a>(
     }
 }
 
+pub(super) fn math_source_body_range(edit: &MathEdit) -> Option<Range<usize>> {
+    navigation::math_input_body_range(edit)
+}
+
 pub(super) fn history_position(edit: &MathEdit) -> MathEditPosition {
     MathEditPosition::from_edit(edit)
 }
@@ -884,7 +938,7 @@ fn find_inline_math_in_blocks<'a>(
     })
 }
 
-fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
+pub(super) fn find_block_by_id<'a>(blocks: &'a [Block], id: &NodeId) -> Option<&'a Block> {
     let (parents, index) = find_block_path(blocks, id)?;
     block_list_ref(blocks, &parents).ok()?.get(index)
 }
@@ -957,49 +1011,7 @@ impl Session {
         {
             return Err(EditError::InvalidPosition);
         }
-        let align_cell = match (&hit.target, &hit.position.host) {
-            (MathEditTarget::Inline { math_id, .. }, MathPositionHost::InlineMath { owner_id })
-                if math_id == owner_id =>
-            {
-                None
-            }
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: false,
-                },
-                MathPositionHost::Equation { owner_id },
-            ) if block_id == owner_id => None,
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: true,
-                },
-                MathPositionHost::AlignCell { row_id, cell_id },
-            ) => {
-                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
-                    .ok_or(EditError::InvalidPosition)?
-                else {
-                    return Err(EditError::InvalidPosition);
-                };
-                let row_index = align
-                    .rows
-                    .iter()
-                    .position(|row| row.id == *row_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                let row = align
-                    .rows
-                    .get(row_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                let cell_index = row
-                    .cells
-                    .iter()
-                    .position(|cell| cell.root.id == *cell_id)
-                    .ok_or(EditError::InvalidPosition)?;
-                Some((row_index, cell_index))
-            }
-            _ => return Err(EditError::InvalidPosition),
-        };
+        let align_cell = self.align_cell_for_target_and_host(&hit.target, &hit.position.host)?;
         let tree = math_tree_for_target(&self.document, &hit.target, align_cell)
             .ok_or(EditError::InvalidPosition)?;
         let contents = hit
@@ -1521,9 +1533,8 @@ impl Session {
         if location.is_title {
             return Err(EditError::InvalidPosition);
         }
-        let (parent_ids, sibling_index) =
-            history::parent_environment_path(&self.document.body, &location)
-                .ok_or(EditError::InvalidPosition)?;
+        let (parent_ids, sibling_index) = paragraph_parent_path(&self.document.body, &location)
+            .ok_or(EditError::InvalidPosition)?;
         let paragraph = self.paragraph_for(&focus)?.clone();
         let paragraph_map = TextMap::new(&paragraph)?;
         paragraph_map.validate_pos(&focus)?;
@@ -1651,12 +1662,12 @@ impl Session {
             return Ok(None);
         };
         let Some((current_parents, current_index)) =
-            history::parent_environment_path(&self.document.body, current_location)
+            paragraph_parent_path(&self.document.body, current_location)
         else {
             return Ok(None);
         };
         let Some((target_parents, target_index)) =
-            history::parent_environment_path(&self.document.body, target_location)
+            paragraph_parent_path(&self.document.body, target_location)
         else {
             return Ok(None);
         };
@@ -1769,7 +1780,7 @@ impl Session {
             return Ok(false);
         }
         let Some((parent_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, location)
+            paragraph_parent_path(&self.document.body, location)
         else {
             return Ok(false);
         };
@@ -1972,7 +1983,7 @@ impl Session {
             return Ok(Effect::default());
         }
         let Some((parent_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(Effect::default());
         };
@@ -2156,7 +2167,7 @@ impl Session {
             let source_cursor = inline_root_source_cursor(&tree, source_map, edit.cursor, source)
                 .ok_or(EditError::InvalidPosition)?;
             let source_edit = self.math_edit.as_mut().ok_or(EditError::InvalidPosition)?;
-            source_edit.source_projection = Some(Arc::new(projection));
+            source_edit.replace_source_projection(Some(Arc::new(projection)));
             source_edit.cursor = source_cursor;
             source_edit.branch = MathEditBranch::Source;
             let result = self.math_insert_raw_with_range(
@@ -3453,46 +3464,7 @@ impl Session {
     ) -> Result<MathTreeTextBoundary<'a>, EditError> {
         let align_cell = path.align_cell();
         let tree = self.math_tree_for_edit(edit, align_cell)?;
-        let host = match (&edit.target, align_cell) {
-            (MathEditTarget::Inline { math_id, .. }, None) => MathPositionHost::InlineMath {
-                owner_id: math_id.clone(),
-            },
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: false,
-                },
-                None,
-            ) => MathPositionHost::Equation {
-                owner_id: block_id.clone(),
-            },
-            (
-                MathEditTarget::Block {
-                    block_id,
-                    align: true,
-                },
-                Some((row_index, cell_index)),
-            ) => {
-                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
-                    .ok_or(EditError::InvalidPosition)?
-                else {
-                    return Err(EditError::InvalidPosition);
-                };
-                let row = align
-                    .rows
-                    .get(row_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                let cell = row
-                    .cells
-                    .get(cell_index)
-                    .ok_or(EditError::InvalidPosition)?;
-                MathPositionHost::AlignCell {
-                    row_id: row.id.clone(),
-                    cell_id: cell.root.id.clone(),
-                }
-            }
-            _ => return Err(EditError::InvalidPosition),
-        };
+        let host = self.math_position_host_for_target(&edit.target, align_cell)?;
         let boundary = match direction {
             Direction::Backward => tree_position::MathTextFlowBoundary::Start,
             Direction::Forward => tree_position::MathTextFlowBoundary::End,
@@ -3518,7 +3490,15 @@ impl Session {
         edit: &MathEdit,
         position: &MathTreePosition,
     ) -> Result<Option<(usize, usize)>, EditError> {
-        match (&edit.target, &position.host) {
+        self.align_cell_for_target_and_host(&edit.target, &position.host)
+    }
+
+    pub(super) fn align_cell_for_target_and_host(
+        &self,
+        target: &MathEditTarget,
+        host: &MathPositionHost,
+    ) -> Result<Option<(usize, usize)>, EditError> {
+        match (target, host) {
             (MathEditTarget::Inline { math_id, .. }, MathPositionHost::InlineMath { owner_id })
                 if math_id == owner_id =>
             {
@@ -3561,6 +3541,53 @@ impl Session {
         }
     }
 
+    pub(super) fn math_position_host_for_target(
+        &self,
+        target: &MathEditTarget,
+        align_cell: Option<(usize, usize)>,
+    ) -> Result<MathPositionHost, EditError> {
+        match (target, align_cell) {
+            (MathEditTarget::Inline { math_id, .. }, None) => Ok(MathPositionHost::InlineMath {
+                owner_id: math_id.clone(),
+            }),
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: false,
+                },
+                None,
+            ) => Ok(MathPositionHost::Equation {
+                owner_id: block_id.clone(),
+            }),
+            (
+                MathEditTarget::Block {
+                    block_id,
+                    align: true,
+                },
+                Some((row_index, cell_index)),
+            ) => {
+                let Block::Align(align) = find_block_by_id(&self.document.body, block_id)
+                    .ok_or(EditError::InvalidPosition)?
+                else {
+                    return Err(EditError::InvalidPosition);
+                };
+                let row = align
+                    .rows
+                    .get(row_index)
+                    .ok_or(EditError::InvalidPosition)?;
+                let cell = row
+                    .cells
+                    .get(cell_index)
+                    .ok_or(EditError::InvalidPosition)?;
+                Ok(MathPositionHost::AlignCell {
+                    row_id: row.id.clone(),
+                    cell_id: cell.root.id.clone(),
+                })
+            }
+            _ => Err(EditError::InvalidPosition),
+        }
+    }
+
     fn apply_math_tree_caret_move(
         &mut self,
         edit: &MathEdit,
@@ -3574,7 +3601,7 @@ impl Session {
                     .resolve(self.math_tree_for_edit(edit, align_cell)?)
                     .map_err(|_| EditError::InvalidPosition)?;
                 if let Some(current) = &mut self.math_edit {
-                    current.source_projection = None;
+                    current.replace_source_projection(None);
                     current.source_draft = None;
                     current.cursor = position.offset;
                     current.branch = MathEditBranch::Tree {
@@ -3598,7 +3625,7 @@ impl Session {
                     return Err(EditError::InvalidPosition);
                 }
                 if let Some(current) = &mut self.math_edit {
-                    current.source_projection = None;
+                    current.replace_source_projection(None);
                     current.source_draft = None;
                     current.cursor = cursor;
                     let anchor = MathTextPosition::new(
@@ -3696,7 +3723,7 @@ impl Session {
         let (cursor, branch) =
             math_tree_edge_position(cell, host, direction, Some((row_index, cell_index)))?;
         let next = self.math_edit.as_mut().ok_or(EditError::InvalidPosition)?;
-        next.source_projection = None;
+        next.replace_source_projection(None);
         next.source_draft = None;
         next.cursor = cursor;
         next.branch = branch;
@@ -3808,7 +3835,7 @@ impl Session {
             return Err(EditError::InvalidPosition);
         }
         let _ = projected_target;
-        edit.source_projection = Some(Arc::new(projection));
+        edit.replace_source_projection(Some(Arc::new(projection)));
         edit.branch = MathEditBranch::Text {
             path,
             anchor,
@@ -3905,7 +3932,7 @@ impl Session {
     fn enter_math_text_branch(&mut self, path: MathTextFlowPath, cursor: usize) {
         self.pending_inline_style.clear();
         if let Some(edit) = &mut self.math_edit {
-            edit.source_projection = None;
+            edit.replace_source_projection(None);
             edit.source_draft = None;
             edit.cursor = cursor;
             let anchor =
@@ -4719,7 +4746,7 @@ impl Session {
                     source_cursor,
                     source_projection.source(),
                 )?;
-                next_edit.source_projection = Some(Arc::new(source_projection));
+                next_edit.replace_source_projection(Some(Arc::new(source_projection)));
                 if let Some(split) = split {
                     let inline_start = inline_math_slots(&paragraph)?
                         .into_iter()
@@ -5101,7 +5128,7 @@ impl Session {
                         "edited formula cannot be rebound to its source map".to_owned(),
                     ));
                 }
-                next_edit.source_projection = Some(Arc::new(source_projection));
+                next_edit.replace_source_projection(Some(Arc::new(source_projection)));
                 let (parent_ids, index) = find_block_path(&self.document.body, block_id)
                     .ok_or(EditError::InvalidPosition)?;
                 let blocks = block_list(&mut self.document.body, &parent_ids)?;
@@ -5387,62 +5414,33 @@ fn find_inline_math_mut<'a>(
 
 /// 在块树中查找块 ID，返回父环境 ID 路径与同级下标。
 pub(crate) fn find_block_path(blocks: &[Block], id: &NodeId) -> Option<(Vec<NodeId>, usize)> {
-    for (index, block) in blocks.iter().enumerate() {
-        if block_id(block) == Some(id) {
-            return Some((Vec::new(), index));
-        }
-        if let Block::Environment(environment) = block
-            && let Some((mut path, child)) = find_block_path(&environment.children, id)
-        {
-            path.insert(0, environment.id.clone());
-            return Some((path, child));
-        }
+    let location = caret_structure::find_block_node(blocks, id)?;
+    if !matches!(
+        location.kind,
+        caret_structure::DocumentNodeKind::Paragraph
+            | caret_structure::DocumentNodeKind::Environment
+            | caret_structure::DocumentNodeKind::Equation
+            | caret_structure::DocumentNodeKind::Align
+    ) {
+        return None;
     }
-    None
-}
-
-fn block_id(block: &Block) -> Option<&NodeId> {
-    match block {
-        Block::Paragraph(value) => Some(&value.id),
-        Block::Environment(value) => Some(&value.id),
-        Block::Equation(value) => Some(&value.id),
-        Block::Align(value) => Some(&value.id),
-        Block::ExplicitBreak(_) | Block::Opaque(_) => None,
-    }
+    Some((location.parent_environment_ids, location.sibling_index?))
 }
 
 fn block_list<'a>(
     blocks: &'a mut Vec<Block>,
     parent_ids: &[NodeId],
 ) -> Result<&'a mut Vec<Block>, EditError> {
-    let Some((first, rest)) = parent_ids.split_first() else {
-        return Ok(blocks);
-    };
-    let environment = blocks
-        .iter_mut()
-        .find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == first => Some(environment),
-            _ => None,
-        })
-        .ok_or(EditError::InvalidPosition)?;
-    block_list(&mut environment.children, rest)
+    caret_structure::block_list_by_environment_ids_mut(blocks, parent_ids)
+        .ok_or(EditError::InvalidPosition)
 }
 
 fn block_list_ref<'a>(
     blocks: &'a [Block],
     parent_ids: &[NodeId],
 ) -> Result<&'a [Block], EditError> {
-    let Some((first, rest)) = parent_ids.split_first() else {
-        return Ok(blocks);
-    };
-    let environment = blocks
-        .iter()
-        .find_map(|block| match block {
-            Block::Environment(environment) if &environment.id == first => Some(environment),
-            _ => None,
-        })
-        .ok_or(EditError::InvalidPosition)?;
-    block_list_ref(&environment.children, rest)
+    caret_structure::block_list_by_environment_ids(blocks, parent_ids)
+        .ok_or(EditError::InvalidPosition)
 }
 
 #[cfg(test)]

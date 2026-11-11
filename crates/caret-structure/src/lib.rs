@@ -5,8 +5,14 @@
 
 mod atoms;
 mod index;
+mod physical;
 
 pub use index::{
     IndexedStructure, StructureClass, StructureIndex, StructureKind, StructurePosition,
     StructureRange,
+};
+pub use physical::{
+    DocumentNodeEdge, DocumentNodeKind, DocumentNodeLocation, block_list_by_environment_ids,
+    block_list_by_environment_ids_mut, compare_document_node_edges, find_block_node,
+    find_document_node,
 };

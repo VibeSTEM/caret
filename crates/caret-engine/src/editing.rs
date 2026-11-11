@@ -34,7 +34,10 @@ pub use host_caret::{
     MathCaretCoordinate, MathCaretLocalPosition,
 };
 pub use navigation::NavigationIntent;
-pub use position::{Affinity, InlineEnvironmentRange, Pos, PositionMap, Selection, StoryId};
+pub use position::{
+    Affinity, DocumentCaretPosition, InlineEnvironmentRange, Pos, PositionMap, Selection,
+    SessionCaretSnapshot, StoryId,
+};
 pub use session::{
     CompositionRange, CompositionUpdateCandidate, MathEdit, MathEditBranch, MathEditTarget,
     MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTextFlowPath,

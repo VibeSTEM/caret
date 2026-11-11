@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
+use super::super::paragraph_ops::{compare_positions, paragraph_at_location_any};
 use super::super::text_map::{utf8_offset_to_utf16, utf16_offset_to_utf8};
 use super::super::{
     Affinity, Command, EditError, Effect, HostCaretPosition, InputComposition, Pos, PositionMap,
@@ -391,6 +391,7 @@ impl Session {
             }
             let mut effects = Vec::with_capacity(2);
             let selection_is_nonempty = compare_positions(
+                &candidate.document.body,
                 &candidate.paragraph_index,
                 &candidate.selection.anchor,
                 &candidate.selection.focus,
@@ -587,6 +588,7 @@ impl Session {
             );
         }
         let mut composition_start = if compare_positions(
+            &self.document.body,
             &self.paragraph_index,
             &self.selection.anchor,
             &self.selection.focus,
@@ -685,7 +687,7 @@ impl Session {
         *sibling_index = sibling_index
             .checked_sub(lines_after_cursor)
             .ok_or(EditError::InvalidPosition)?;
-        let paragraph_id = paragraph_at_location(&preview.document.body, &location)
+        let paragraph_id = paragraph_at_location_any(&preview.document.body, &location)
             .ok_or(EditError::InvalidPosition)?
             .id
             .clone();

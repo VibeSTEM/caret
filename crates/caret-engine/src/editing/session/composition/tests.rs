@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
-use super::super::{Affinity, Command, Direction, EditError, MathEditBranch, Session};
+use super::super::{
+    Affinity, Command, Direction, EditError, MathEditBranch, Pos, Selection, Session, StoryId,
+};
+use crate::editing::EditorKey;
 use caret_doc::{Block, Document, InlineMath, NodeId, ParagraphContent};
 
 fn math_text_session(source: &str) -> Result<Session, EditError> {
@@ -297,5 +300,36 @@ fn paragraph_replacement_advances_generation_once_across_overflow() -> Result<()
         session.run(Command::Undo)?;
         assert_eq!(paragraph_text(&session), "abc");
     }
+    Ok(())
+}
+
+#[test]
+fn paragraph_ime_replacement_orders_a_cross_paragraph_selection() -> Result<(), EditError> {
+    let mut session = Session::new(Document::blank())?;
+    session.run(Command::InsertText("abc".to_owned()))?;
+    session.run(Command::EditorKey(EditorKey::Enter))?;
+    session.run(Command::InsertText("def".to_owned()))?;
+    let [Block::Paragraph(first), Block::Paragraph(second)] = session.document().body.as_slice()
+    else {
+        return Err(EditError::InvalidPosition);
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: first.id.clone(),
+            offset: 1,
+            affinity: Affinity::Upstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: second.id.clone(),
+            offset: 2,
+            affinity: Affinity::Downstream,
+        },
+    })))?;
+
+    session.commit_composition_replacement(None, 30, 31, 0, 0, "X")?;
+
+    assert_eq!(paragraph_text(&session), "aXf");
     Ok(())
 }

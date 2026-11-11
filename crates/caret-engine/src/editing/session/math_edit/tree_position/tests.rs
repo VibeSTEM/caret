@@ -112,6 +112,137 @@ fn resolves_nested_operand_and_empty_fixed_slot() {
 }
 
 #[test]
+fn tree_position_order_wraps_nested_operands_and_rejects_other_hosts() {
+    let fraction_tree = tree(vec![node(
+        MathNodeKind::Fraction,
+        vec![flow(vec![node(MathNodeKind::Row, vec![])]), flow(vec![])],
+    )]);
+    let owner_id = NodeId::generate();
+    let host = MathPositionHost::Equation { owner_id };
+    let at_start = MathTreePosition {
+        host: host.clone(),
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let numerator = MathTreePosition {
+        host: host.clone(),
+        path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let denominator = MathTreePosition {
+        host: host.clone(),
+        path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 1,
+        }]),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let after_fraction = MathTreePosition {
+        host,
+        path: MathSequencePath::root(),
+        offset: 1,
+        affinity: MathPositionAffinity::Upstream,
+    };
+
+    assert_eq!(
+        at_start.compare_in_tree(&numerator, &fraction_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        numerator.compare_in_tree(&denominator, &fraction_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        denominator.compare_in_tree(&after_fraction, &fraction_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        after_fraction.compare_in_tree(&numerator, &fraction_tree),
+        Ok(std::cmp::Ordering::Greater)
+    );
+
+    let upstream = MathTreePosition {
+        affinity: MathPositionAffinity::Upstream,
+        ..numerator.clone()
+    };
+    assert_eq!(
+        upstream.compare_in_tree(&numerator, &fraction_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+    let invalid = MathTreePosition {
+        offset: 2,
+        ..numerator.clone()
+    };
+    assert_eq!(
+        invalid.compare_in_tree(&denominator, &fraction_tree),
+        Err(MathTreePositionError::OffsetOutOfBounds {
+            offset: 2,
+            content_len: 1,
+        })
+    );
+
+    let other_host = MathTreePosition {
+        host: MathPositionHost::Equation {
+            owner_id: NodeId::generate(),
+        },
+        ..numerator.clone()
+    };
+    assert_eq!(
+        numerator.compare_in_tree(&other_host, &fraction_tree),
+        Err(MathTreePositionError::HostMismatch)
+    );
+
+    let environment_tree = tree(vec![
+        MathContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![text("inside")],
+            extra: BTreeMap::new(),
+        }),
+        node(MathNodeKind::Row, vec![]),
+    ]);
+    let host = MathPositionHost::Equation {
+        owner_id: NodeId::generate(),
+    };
+    let before_environment = MathTreePosition {
+        host: host.clone(),
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let inside_environment = MathTreePosition {
+        host: host.clone(),
+        path: MathSequencePath::new(vec![MathSequenceStep::EnvironmentChildren {
+            content_index: 0,
+        }]),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let after_environment = MathTreePosition {
+        host,
+        path: MathSequencePath::root(),
+        offset: 1,
+        affinity: MathPositionAffinity::Upstream,
+    };
+    assert_eq!(
+        before_environment.compare_in_tree(&inside_environment, &environment_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+    assert_eq!(
+        inside_environment.compare_in_tree(&after_environment, &environment_tree),
+        Ok(std::cmp::Ordering::Less)
+    );
+}
+
+#[test]
 fn resolves_environment_children() {
     let tree = tree(vec![MathContent::Environment(InlineEnvironment {
         id: NodeId::generate(),
@@ -441,6 +572,28 @@ fn movement_skips_invisible_optional_placeholder_operands() {
     };
     assert!(before_sum.path.steps().is_empty());
     assert_eq!(before_sum.offset, 0);
+}
+
+#[test]
+fn reachable_position_validation_rejects_an_optional_placeholder_operand() {
+    let radical_tree = tree(vec![node(
+        MathNodeKind::Radical,
+        vec![
+            flow(vec![node(MathNodeKind::Placeholder, vec![])]),
+            flow(vec![text("x")]),
+        ],
+    )]);
+    let optional_index = position(
+        vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }],
+        0,
+    );
+    assert_eq!(
+        optional_index.validate_reachable(&radical_tree),
+        Err(MathTreePositionError::UnreachableOptionalPlaceholder { depth: 0 })
+    );
 }
 
 #[test]

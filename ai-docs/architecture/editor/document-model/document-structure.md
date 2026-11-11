@@ -47,7 +47,8 @@ crates/caret-doc/src/model/inline.rs    TextFlow、ParagraphContent / MathConten
 crates/caret-doc/src/model/inline_environment.rs 行内环境类型、kind 注册及存储能力
 crates/caret-engine/src/editing/        命令会话、事务和文档编辑
 crates/caret-structure/src/atoms/       段落/标题与块环境等结构原子
-crates/caret-structure/src/index.rs     唯一结构索引装配入口
+crates/caret-structure/src/index.rs     标题大纲语义与导航索引
+crates/caret-structure/src/physical.rs  物理节点父链、slot 与文档顺序查询
 ```
 
 ## 页面层级与内容块形态

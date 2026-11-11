@@ -1,15 +1,15 @@
-# 082 — 共享文档位置、全序与宿主定位
+# 082 — 共享文档位置、顺序与宿主定位
 
-- 状态：planned
+- 状态：done
 - 依赖：071、074、077、081
 - 优先级：P1
-- 创建 / 更新：2026-11-09 / 2026-11-10
+- 创建 / 更新：2026-11-09 / 2026-11-11
 
-## 目标与背景
+## 目标
 
-段落 ordinal 不能表示连续 Equation/Align 与周边 Paragraph 的完整次序；数学块没有 Paragraph 停靠点，嵌套 Section、标题及空容器也不能用一个 Paragraph 锚点代替。现有 `find_block_path`、ParagraphLocation 和历史恢复 locator 重复实现，查询与变更的适用范围不同。082 消费 081 已定义的宿主身份、三态类别和宿主局部位置载体，在此基础上建立共享文档顺序、父链与经过校验的定位契约，供 083 使用；不重新定义或替换 081 的焦点载体。
+在 081 的 Paragraph/Block/Inline 宿主位置协议上，建立经过校验的物理父链、宿主间顺序和局部位置比较；供 083 的选择与编辑命令使用。消除任取 Paragraph 当隐藏锚点、重复实现父链遍历，以及把稳定 ID 或段落 ordinal 当全树顺序的做法。082 不重新定义 081 的焦点载体。
 
-## 必读
+## 相关权威文档
 
 - [文档位置与限制](../architecture/editor/document-model/document-position.md)
 - [文档树与结构](../architecture/editor/document-model/document-structure.md)
@@ -17,66 +17,58 @@
 - [块宿主交互协议](../architecture/editor/document-model/block-interaction.md)
 - [验证与评审标准](../standards/validation-and-review.md)
 
-## 范围与非目标
+## 范围与规则
 
-- 在 081 的宿主相对三态位置载体上定义跨宿主父链、同级次序、全树顺序、Story 边界、document generation、失效映射和原子拒绝语义；外前/外后及内部位置的宿主身份和局部坐标继续遵循 081。
-- 为 Paragraph、Section 标题/子树、Equation、Align、InlineMath 和文本 Inline 提供可比较的文档顺序；段落 ordinal 只作为 Paragraph 导航派生值。
-- 合并/重用 ParagraphLocation、`find_block_path`、历史恢复等 locator 的共同定位语义；只读查询与可变事务路径各自保留适当职责，并共享身份、父链、generation 校验。
-- 审计位置、Session 与历史相关字段的构造、读取、投影和调用方；合并或删除有证据确认的重复/无消费者状态，同时保留稳定身份、历史语义和已有扩展契约。
-- 审计持久模型字段的序列化、布局、编辑、未知字段与扩展消费者，包括 Paragraph 的 language/layout/style/props/extra、`DocumentSettings.defaultStyles` / `formatOverrides`、`ThemeSnapshot.namedStyles`、顶层媒体资源、环境 definition ID、节点 ID、Opaque 与各层 schema version；核对所有 crate 和外部构造调用方，不能仅因单一路径未读就删除。
-- 消除通过 ParagraphIndex 任取正文段落作为隐藏锚点、再从其祖先链推断活动 Block 的路径。环境状态须从有效宿主身份解析父链。
-- 审计 `ExplicitBreak` 与 `Opaque` 的定位需求；不为满足统一 key 形状而强制增加持久 ID，不把 Opaque 当作可编辑原子。
-- 不实现跨宿主选择/复制/删除命令与完整几何投影（083）；不预设 O(深度) 等未经基准验证的复杂度承诺。
+- 顺序从当前文档的真实结构、slot 与已验证局部坐标推导；ID 只标识节点，Paragraph ordinal 只服务段落导航。
+- 比较前验证 Session、document generation、宿主/目标类型、Story、父链、slot、路径、偏移和字素边界；找不到唯一映射时原子拒绝。
+- `StructureIndex` 的大纲父链和文档树物理父链语义不同，必须分别维护。
+- `ExplicitBreak` 与 `Opaque` 占据物理 slot，但不因此获得持久 ID 或编辑能力。
+- 只合并已证明重复的状态/定位逻辑；保留 Undo/Redo、未知字段、schema 版本及外部序列化契约。
+- 不实现跨宿主选择、复制、删除命令和完整几何投影（083）；不宣称未经基准验证的复杂度收益。
 
-## 前置条件与待决策
+## 当前实现与明确边界
 
-- Task 081 的共享 Block/Inline 三态焦点协议及宿主相对位置载体完成；本任务只扩展跨宿主顺序与定位。
-- 具体 Rust enum、排序 key 编码与 locator 模块边界由实现前设计决定；架构契约只规定可观察的身份、顺序、代际与失败行为。
+- `caret-structure` 提供稳定 ID 节点的物理位置、父环境链、真实同级 slot、节点边界顺序，以及按父环境 ID 解析只读/可变块列表的共享入口。父 ID 在每一级只匹配当前块序列的直接 Environment；整树唯一 ID 由已验证的 Document 契约保证。`math_edit`、`structure`、`history` 继续负责各自的错误转换、目标校验、快照匹配与事务回滚。
+- `caret-engine` 的 Session 比较器覆盖段落文本、块与行内宿主边界、Section 内段落、Equation/Align 内部与周边位置、InlineMath、MathTree/MathTextFlow，以及同一树内的嵌套操作数文本位置。比较沿文档树/MathTree 的实际结构顺序；同一连续数学文本岛使用展平后的字素顺序和既有 affinity 规则。
+- 空段落、空 Inline、相邻宿主共享边界和相邻文本岛保留可区分的 affinity；重叠、边界映射不唯一或坐标无效时不猜测次序。
+- MathTree 操作数按语义槽位排序，不代表所有节点的 LaTeX 源码顺序。解析器的 SubSup `x^a_b` 中，上标源码在下标前，而树槽位仍为下标后上标。故 `SourceUtf8` 与 Tree/Text 混合比较继续拒绝，直到 adapter 能证明同代投影、唯一映射及两种顺序的关系。
+- 样式映射、主题命名样式和媒体等字段审计结论见“持久模型字段审计”；当前没有证据支持删除这些 wire 字段。
 
-## 实施步骤
+## 持久模型字段审计
 
-1. 绘制现有 Pos、MathEdit、Block 外侧位置、StructureIndex、ParagraphIndex、ParagraphLocation 与历史 locator 的关系，标明共享值和各自语义。
-2. 设计并实现可比较的宿主位置和文档顺序；覆盖嵌套 Section、title、连续/空公式块、InlineMath、同 ordinal 条目及不可排序 Story。
-3. 建立按宿主 ID 查询父链的只读入口和经验证的可变事务定位入口；修复任意 Paragraph 隐藏锚点回退。
-4. 收敛重复路径查找，校验定位结果随事务、撤销/重做、移动、文档代际变化的有效性。
-5. 对 ExplicitBreak/Opaque 做稳定身份、未知数据 round-trip 和历史生命周期核查；仅有明确能力需求时调整模型。
-6. 对候选无消费者字段逐项搜集构造、序列化、布局、编辑、扩展及调用方证据；只有确认不属于公开/外部契约且删除不破坏往返语义时才移除。
-7. 为文档顺序与 locator 增加正反向、无效位置、事务回滚和重复构造等行为测试；完成 Terra/Sol 独立审查。
+| 字段 | 消费者或兼容依据 | 决定 |
+| --- | --- | --- |
+| `DocumentSettings` 的语言、字体、字号、段落默认值；`ThemeSnapshot` 的版本、样式和环境模板 | 字体解析、文本塑形、段落布局、环境样式解析和 capability 扫描直接读取；已知 `defaultStyles`、`formatOverrides`、`namedStyles` 虽暂未运行时解析，仍是已发布 DTO/wire 字段并有打开/保存/重开往返测试。类型化 map 与 `extra` 的兼容语义不同。 | 全部保留；未知主题/字段按当前安全预览及兼容规则处理。 |
+| `Document.pageSections` / `PageSection` | 页几何与分页读取；Document 验证要求当前唯一页面节，文件往返与几何原子更新测试覆盖。 | 保留。 |
+| Paragraph、Run、TextFlow、SoftBreak | 段落文本/索引、语言 shaping、局部格式、换行、历史和未知字段拒绝有明确消费者；未知 `extra` 往返测试覆盖。 | 保留。 |
+| Block/Inline 环境、Equation/Align、MathTree/Flow/Node | 父链、slot、模板样式、MathTree 导航/布局/源码 adapter、节点/schema 校验和历史映射均消费身份与结构；已知 DTO 与顺序字段不能仅因单一路径未读而删除。 | 保留；未知数据和 schema 版本按兼容契约处理。 |
+| `CdocFile.media` / `Media` | 打开校验唯一非空 ID、非空类型、标准 Base64 和 32 MiB 解码上限；Session 保存快照携带媒体，测试验证未知元数据往返。图片解码/尺寸校验属于 task 052。 | 保留。 |
+| Inline/Block `definitionId` | 两类均序列化；Inline 参与格式/数学模板语义，Block 当前仅持久化并推导 capability。打开 `.cdoc` 仅在能力和主题版本可完整校验时调用完整文档验证，否则进入安全预览；直接 `Document::validate()` 始终完整验证。 | 保留，等待 Block 模板语义设计。 |
+| 节点 ID、Opaque/`extra`、格式/主题/MathTree schema version | 唯一性、物理定位、编辑/历史身份、未知内容往返、安全拒绝有损变换及版本兼容均依赖这些字段。 | 保留；不为统一位置 key 给 Opaque/ExplicitBreak 增加 ID。 |
 
-## 预计改动
-
-预计涉及 `caret-structure` 文档索引与宿主定位、`caret-engine` Session/paragraph/history locator、必要的模型 adapter 及 Rust 行为测试。除非证明稳定独立职责，不新建 crate，不变更 `.cdoc` schema。
+Session 位置与生命周期审计未发现可安全删除的重复字段：逻辑 `Pos` 与 anchor/focus `VisualAffinity` 分别表示文档坐标和排版候选；`session_id`/`document_generation` 绑定快照，源码草稿另校验 draft revision/projection identity；`math_edit` 与 `host_caret_position` 分别承载数学分支和共享宿主三态；单个选中环境、文档序结构选区及其 anchor/focus 各有删除/扩展语义；`paragraph_index`、大纲 `structure_index` 与 LRU `text_map_cache` 是不同派生视图；Undo/Redo 的 state ID、下一个 ID、估算字节和 merge epoch 各用于保存点身份、分配、容量与分组。`PositionMap::map` 是事务生成的纯坐标变换，不携带来源 Session/generation，也不替代结果位置验证；跨文档复用不受支持。
 
 ## 验收标准
 
-- [ ] 有效文档位置在嵌套块、标题、空容器、连续公式块、InlineMath 与 Paragraph 文本之间可确定顺序；稳定 ID 只作身份，Paragraph ordinal 不充当全树排序键。
-- [ ] 按任意有效宿主 ID 查询到正确父链和同级次序；活动结构状态不从任取 Paragraph 推断。
-- [ ] locator 统一共享身份、父链、排序与 generation 校验；只读查询与可变事务定位都使用正确且经验证的入口。
-- [ ] 位置/Session/历史字段审计有消费者和生命周期证据；冗余状态得到收敛，必要的扩展与兼容字段保留理由明确。
-- [ ] 持久模型字段逐项有序列化与领域消费者依据；拟删除字段已验证所有构造/读写/round-trip/兼容路径，未删除字段记录其扩展或未知数据契约。
-- [ ] `defaultStyles`、`formatOverrides`、`namedStyles` 和顶层媒体资源等候选字段均有完整消费者与调用方证据；仅在证明无契约、无消费者后删除。
-- [ ] Undo/Redo、删除、拆分、合并和跨容器移动后的映射保持有效；无法映射时原子拒绝并保留文档与会话状态。
-- [ ] 不因排序实现需要就为 ExplicitBreak/Opaque 添加 schema ID；若新增身份有明确需求和往返/兼容/历史证据，记录独立决策。
-- [ ] 性能目标有代表性文档与可复现基线；未测量时不宣称复杂度改进。
-- [ ] 相关格式/lint、行为测试和独立评审通过；未执行验证明确标记。
+- [x] 嵌套块、标题、空容器、连续公式块、InlineMath 和 Paragraph 文本之间的所有可证明位置有一致顺序；稳定 ID 和 ordinal 不充当排序键。歧义边界、跨源/树次序冲突和跨代位置明确拒绝。
+- [x] 活动结构父链可按有效宿主 ID 查询；不从任取 Paragraph 推断 Block 状态。
+- [x] 只读与可变 locator 按当前块树解析唯一父环境 ID 路径；目标节点、slot、Session 与文档代际由调用方校验。
+- [x] Session/历史位置字段有完整消费者和生命周期证据；可合并的重复状态已收敛。
+- [x] 所有候选模型字段均完成消费者/往返审计；保留的 wire 字段有兼容理由，未发现可安全删除项。
+- [x] Undo/Redo、删除、拆分、合并及跨容器移动后的映射有效；失败时原子拒绝且保留文档/Session 状态。
+- [x] ExplicitBreak/Opaque 的物理 slot 与无稳定 ID 语义已核对，不为排序添加持久 ID。
+- [x] 代表性性能基线完成；当前只测一组深层父链/宽根序列负载，不代表所有载体或规模；无前后对照时不宣称性能提升。
+- [x] 最终相关测试、lint、格式和独立评审通过；全 workspace 验证已在本轮代码改动结束后重跑。
 
-## 验证计划与结果
+## 验证记录
 
-| 日期 | 环境 / 命令 | 预期 | 实际结果 |
-| --- | --- | --- | --- |
-| — | StructureIndex 全树顺序与父链测试 | 顺序和祖先与文档树一致 | 未执行 |
-| — | locator 的 mutation/undo/generation 测试 | 位置更新有效，失败原子 | 未执行 |
-| — | 代表性文档定位基准 | 提供性能基线，不先定复杂度结论 | 未执行 |
-| — | Terra/Sol 独立审查 | 共享定位语义正确，无身份回归 | 未执行 |
+- **2026-11-11 当前分支验证：** `cargo test --workspace --locked` 全部通过（Engine 752、App 285、Doc 78、Structure 13、native/QML 聚合 11 及其他 crate/doc tests；1 项受控 crash 子进程测试 ignored）；执行期间还通过 `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check` 与 `git diff HEAD --check`。Criterion 基线命令和结果见[Rust 性能范围](../../tests/performance/rust/README.md)。
+
+## 独立评审
+
+- Terra 领域审查覆盖位置比较、载体映射、宿主路径及 Session/历史生命周期；未发现阻断问题。TreeBoundary 无法唯一映射到相邻 TextFlow 两侧时继续拒绝，避免制造顺序。
+- Sol 对最终完整 diff 做只读复核，先指出基准计时范围和 locator 验收描述两项问题；修正后确认无剩余 findings。基准目标现位于 512 个根层段落之后，验收明确由调用方校验目标节点、slot、Session 和文档代际。
 
 ## 风险与回退
 
-错误文档顺序会影响焦点、Shift 范围和删除落点；错误 locator 会指向已移动或已删除节点。任何无法校验的路径都必须拒绝，不回退到任意 Paragraph 或按 ID 字典序猜测。
-
-## 决策与工作记录
-
-- 2026-11-09：从 080 拆分 Issue #126 的 H1、M1、M3、M4 相关工作；不照搬固定 enum、直接改 `StructureIndex` 为可变索引、给 Opaque/ExplicitBreak 统一加 ID 或未测 O(深度) 承诺。
-
-## 完成摘要
-
-未完成。
+错误顺序会影响焦点、Shift 范围和删除落点；陈旧 locator 会指向已移动或已删除节点。任何不能验证唯一映射的坐标都必须拒绝。共享父链查询只解析当前物理路径，不代替 ParagraphLocation 的 Story、文本偏移、document generation、目标 slot 和事务快照校验。

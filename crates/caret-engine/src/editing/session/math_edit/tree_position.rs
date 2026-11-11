@@ -7,12 +7,25 @@ use super::MathTextFlowPathStep;
 use super::optional_placeholder_operand;
 use super::path::MathTextFlowPath;
 use caret_doc::{MathContent, MathTree, NodeId};
+use std::cmp::Ordering;
 
 /// 位置在相邻结构边界间的归属方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MathPositionAffinity {
     Upstream,
     Downstream,
+}
+
+/// 返回数学位置亲和性的统一顺序。
+pub fn compare_math_position_affinity(
+    left: MathPositionAffinity,
+    right: MathPositionAffinity,
+) -> Ordering {
+    match (left, right) {
+        (MathPositionAffinity::Upstream, MathPositionAffinity::Downstream) => Ordering::Less,
+        (MathPositionAffinity::Downstream, MathPositionAffinity::Upstream) => Ordering::Greater,
+        _ => Ordering::Equal,
+    }
 }
 
 /// 标识位置所处的公式宿主；Align cell 使用行与单元格的稳定节点标识。
@@ -80,6 +93,25 @@ pub struct MathTreePosition {
 }
 
 impl MathTreePosition {
+    /// 在同一数学宿主标签下校验并比较 MathTree 结构边界。
+    ///
+    /// 树路径与内容序列边界共同决定顺序；不同宿主不能仅凭局部路径比较。本方法
+    /// 只校验宿主标签相等与局部路径可解析，不证明该位置可由导航到达。调用方仍须
+    /// 验证宿主身份、目标树和文档代际的对应关系，并检查宿主 adapter 的可达性规则。
+    pub fn compare_in_tree(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Result<Ordering, MathTreePositionError> {
+        if self.host != other.host {
+            return Err(MathTreePositionError::HostMismatch);
+        }
+        self.resolve(tree)?;
+        other.resolve(tree)?;
+        let ordering = math_tree_order_key(self).cmp(&math_tree_order_key(other));
+        Ok(ordering.then_with(|| compare_math_position_affinity(self.affinity, other.affinity)))
+    }
+
     /// 将完整的 TextFlow 路径解析为所属 MathFlow 与文本内容索引。
     pub(crate) fn sequence_boundary_from_text_path(
         text_path: &[MathTextFlowPathStep],
@@ -209,6 +241,36 @@ impl MathTreePosition {
         Ok(content)
     }
 
+    /// 校验路径不会进入键盘导航跳过的可选占位操作数。
+    pub fn validate_reachable(&self, tree: &MathTree) -> Result<(), MathTreePositionError> {
+        self.resolve(tree)?;
+        let mut prefix = Vec::new();
+        for (depth, step) in self.path.steps.iter().enumerate() {
+            if let MathSequenceStep::Operand {
+                content_index,
+                operand_index,
+            } = *step
+            {
+                let parent_path = MathSequencePath::new(prefix.clone());
+                let parent = MathTreePosition {
+                    host: self.host.clone(),
+                    path: parent_path,
+                    offset: content_index,
+                    affinity: self.affinity,
+                }
+                .resolve(tree)?;
+                let Some(MathContent::Math(node)) = parent.get(content_index) else {
+                    return Err(MathTreePositionError::InvalidPath { depth });
+                };
+                if optional_placeholder_operand(node, operand_index) {
+                    return Err(MathTreePositionError::UnreachableOptionalPlaceholder { depth });
+                }
+            }
+            prefix.push(*step);
+        }
+        Ok(())
+    }
+
     pub(in crate::editing::session) fn estimated_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.path.estimated_bytes()
@@ -220,6 +282,33 @@ impl MathTreePosition {
                 }
             }
     }
+}
+
+pub(super) fn math_sequence_order_key(path: &MathSequencePath) -> Vec<usize> {
+    let mut key = Vec::with_capacity(path.steps().len() * 2);
+    for step in path.steps() {
+        match *step {
+            MathSequenceStep::Operand {
+                content_index,
+                operand_index,
+            } => {
+                key.push(content_index * 2 + 1);
+                key.push(operand_index * 2 + 1);
+            }
+            MathSequenceStep::EnvironmentChildren { content_index } => {
+                key.push(content_index * 2 + 1);
+                key.push(1);
+            }
+        }
+    }
+    key
+}
+
+fn math_tree_order_key(position: &MathTreePosition) -> Vec<usize> {
+    let mut key = math_sequence_order_key(&position.path);
+    key.reserve(1);
+    key.push(position.offset * 2);
+    key
 }
 
 pub(super) enum MathTreeCaretMove {
@@ -580,6 +669,7 @@ pub enum MathTreePositionError {
     HostMismatch,
     InvalidTextFlowPath { depth: usize },
     InvalidPath { depth: usize },
+    UnreachableOptionalPlaceholder { depth: usize },
     OffsetOutOfBounds { offset: usize, content_len: usize },
 }
 

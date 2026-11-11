@@ -5,7 +5,9 @@
 
 use caret_doc::NodeId;
 
-use super::{MathEditTarget, MathPositionHost, MathSequencePath, MathTextFlowPath, Pos};
+use super::{
+    MathEditTarget, MathPositionAffinity, MathPositionHost, MathSequencePath, MathTextFlowPath, Pos,
+};
 
 /// 活动宿主内部由对应领域 adapter 持有的位置。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +31,18 @@ pub struct MathCaretLocalPosition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathCaretCoordinate {
     /// LaTeX 源码中的 UTF-8 字节偏移。
-    SourceUtf8 { offset: usize },
+    SourceUtf8 {
+        offset: usize,
+        /// 未解析草稿身份及内容修订；已提交源码投影没有独立草稿修订。
+        draft_revision: Option<(NodeId, u64)>,
+        /// 已提交源码投影身份；未解析草稿位置由草稿身份绑定。
+        projection_id: Option<NodeId>,
+    },
     /// 数学 TextFlow 中的 UTF-8 偏移及其流路径。
     TextFlowUtf8 {
         path: MathTextFlowPath,
         offset: usize,
+        affinity: MathPositionAffinity,
     },
     /// MathTree 内容序列中的边界索引及其结构路径。
     TreeBoundary {
@@ -41,6 +50,7 @@ pub enum MathCaretCoordinate {
         host: MathPositionHost,
         path: MathSequencePath,
         index: usize,
+        affinity: MathPositionAffinity,
     },
 }
 

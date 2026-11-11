@@ -10,7 +10,9 @@ use super::super::{
 };
 use super::Session;
 use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
-use crate::editing::paragraph_ops::{ParagraphLocation, compare_positions, paragraph_at_location};
+use crate::editing::paragraph_ops::{
+    ParagraphLocation, compare_positions, paragraph_at_location, paragraph_parent_path,
+};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run, SoftBreak, TextFlow,
 };
@@ -113,7 +115,7 @@ impl Session {
             return Ok(None);
         };
         let Some((parent_environment_ids, sibling_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(None);
         };
@@ -186,7 +188,7 @@ impl Session {
             return Ok(None);
         }
         let Some((parent_ids, paragraph_index)) =
-            history::parent_environment_path(&self.document.body, &location)
+            paragraph_parent_path(&self.document.body, &location)
         else {
             return Ok(None);
         };
@@ -238,22 +240,43 @@ impl Session {
                         Direction::Forward => Affinity::Upstream,
                     },
                 }
-            } else if let Some((paragraph_id, _)) =
-                self.paragraph_index.iter().find(|(paragraph_id, loc)| {
-                    *paragraph_id != &position.paragraph_id
-                        && loc.story == StoryId::Body
-                        && !loc.is_title
-                })
-            {
-                // 嵌套环境内可能没有同级段落；选择任一仍存活的正文段落作为隐藏 Session 锚点。
-                Pos {
-                    story: StoryId::Body,
-                    paragraph_id: paragraph_id.clone(),
-                    offset: 0,
-                    affinity: Affinity::Downstream,
-                }
             } else {
-                return Ok(None);
+                let ordinal = self
+                    .structure_index
+                    .paragraph_ordinal(&position.paragraph_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let previous = (0..ordinal).rev().find_map(|index| {
+                    let paragraph_id = self.structure_index.paragraph_id_at(index)?;
+                    (paragraph_id != &position.paragraph_id).then_some(paragraph_id)
+                });
+                let next = (ordinal + 1..self.structure_index.navigation_paragraphs().len())
+                    .find_map(|index| self.structure_index.paragraph_id_at(index));
+                let nearby = previous
+                    .map(|id| (id, Direction::Backward))
+                    .or_else(|| next.map(|id| (id, Direction::Forward)));
+                let Some((paragraph_id, direction)) = nearby else {
+                    return Ok(None);
+                };
+                let location = self
+                    .paragraph_index
+                    .get(paragraph_id)
+                    .ok_or(EditError::InvalidPosition)?;
+                let paragraph = paragraph_at_location(&self.document.body, location)
+                    .ok_or(EditError::InvalidPosition)?;
+                Pos {
+                    story: location.story.clone(),
+                    paragraph_id: paragraph_id.clone(),
+                    offset: if direction == Direction::Backward {
+                        TextMap::new(paragraph)?.text.len()
+                    } else {
+                        0
+                    },
+                    affinity: if direction == Direction::Backward {
+                        Affinity::Downstream
+                    } else {
+                        Affinity::Upstream
+                    },
+                }
             };
         let Some(siblings) = block_list_by_parent_ids_mut(&mut self.document.body, &parent_ids)
         else {
@@ -800,6 +823,7 @@ impl Session {
         );
 
         let (current_start, current_end) = if compare_positions(
+            &self.document.body,
             &self.paragraph_index,
             &self.selection.anchor,
             &self.selection.focus,
@@ -822,15 +846,27 @@ impl Session {
             if start.story != location.story || end.story != location.story {
                 continue;
             }
-            let contains_current =
-                !compare_positions(&self.paragraph_index, &start, current_start)?.is_gt()
-                    && !compare_positions(&self.paragraph_index, &end, current_end)?.is_lt();
+            let contains_current = !compare_positions(
+                &self.document.body,
+                &self.paragraph_index,
+                &start,
+                current_start,
+            )?
+            .is_gt()
+                && !compare_positions(
+                    &self.document.body,
+                    &self.paragraph_index,
+                    &end,
+                    current_end,
+                )?
+                .is_lt();
             let expands_current = start != *current_start || end != *current_end;
             if !contains_current || !expands_current {
                 continue;
             }
 
             let forward = !compare_positions(
+                &self.document.body,
                 &self.paragraph_index,
                 &self.selection.anchor,
                 &self.selection.focus,
@@ -911,14 +947,7 @@ fn block_list_by_parent_ids<'a>(
     blocks: &'a [Block],
     environment_ids: &[NodeId],
 ) -> Option<&'a [Block]> {
-    let Some((environment_id, rest)) = environment_ids.split_first() else {
-        return Some(blocks);
-    };
-    let environment = blocks.iter().find_map(|block| match block {
-        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
-        _ => None,
-    })?;
-    block_list_by_parent_ids(&environment.children, rest)
+    caret_structure::block_list_by_environment_ids(blocks, environment_ids)
 }
 
 fn environment_has_content(environment: &BlockEnvironment) -> Result<bool, EditError> {
@@ -967,43 +996,16 @@ fn environment_parent_location(
     blocks: &[Block],
     target_id: &NodeId,
 ) -> Option<(Vec<NodeId>, usize)> {
-    fn find(
-        blocks: &[Block],
-        target_id: &NodeId,
-        parent_ids: &mut Vec<NodeId>,
-    ) -> Option<(Vec<NodeId>, usize)> {
-        for (index, block) in blocks.iter().enumerate() {
-            let Block::Environment(environment) = block else {
-                continue;
-            };
-            if &environment.id == target_id {
-                return Some((parent_ids.clone(), index));
-            }
-            parent_ids.push(environment.id.clone());
-            let result = find(&environment.children, target_id, parent_ids);
-            parent_ids.pop();
-            if result.is_some() {
-                return result;
-            }
-        }
-        None
-    }
-
-    find(blocks, target_id, &mut Vec::new())
+    let location = caret_structure::find_block_node(blocks, target_id)?;
+    (location.kind == caret_structure::DocumentNodeKind::Environment)
+        .then_some((location.parent_environment_ids, location.sibling_index?))
 }
 
 fn block_list_by_parent_ids_mut<'a>(
     blocks: &'a mut Vec<Block>,
     environment_ids: &[NodeId],
 ) -> Option<&'a mut Vec<Block>> {
-    let Some((environment_id, remaining_ids)) = environment_ids.split_first() else {
-        return Some(blocks);
-    };
-    let environment = blocks.iter_mut().find_map(|block| match block {
-        Block::Environment(environment) if &environment.id == environment_id => Some(environment),
-        _ => None,
-    })?;
-    block_list_by_parent_ids_mut(&mut environment.children, remaining_ids)
+    caret_structure::block_list_by_environment_ids_mut(blocks, environment_ids)
 }
 
 fn replace_block_at_location(

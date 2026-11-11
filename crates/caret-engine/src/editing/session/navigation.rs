@@ -22,6 +22,7 @@ impl Session {
         }
         if self.selection.anchor != self.selection.focus {
             let ordering = compare_positions(
+                &self.document.body,
                 &self.paragraph_index,
                 &self.selection.anchor,
                 &self.selection.focus,

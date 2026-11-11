@@ -297,7 +297,7 @@ impl Session {
         let before_selection = (self.selection.clone(), self.selection_visual_affinity);
         let before_pending_style = self.pending_inline_style.clone();
         let mut after_edit = edit.clone();
-        after_edit.source_projection = None;
+        after_edit.replace_source_projection(None);
         after_edit.source_draft = None;
         after_edit.cursor = cursor;
         after_edit.branch = branch;
@@ -403,7 +403,7 @@ impl Session {
                 );
             }
         }
-        after_edit.revision = self.current_math_edit_revision();
+        self.refresh_math_edit_revision(&mut after_edit);
         self.math_edit = Some(after_edit);
         Ok(Effect {
             document_changed: true,

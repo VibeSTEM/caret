@@ -70,6 +70,7 @@ impl Session {
 
     /// 从编辑状态推导 Inline 和 Block 候选；此查询不依赖布局快照。
     pub fn current_environment_view(&mut self) -> Result<CurrentEnvironmentView, EditError> {
+        self.ensure_math_edit_revision_current()?;
         if self.selected_block_environment().is_some()
             || !self.selected_block_environments().is_empty()
         {
@@ -79,14 +80,31 @@ impl Session {
             .block_boundary_exit()
             .map(|(environment_id, _)| environment_id.clone());
         let focus = self.selection().focus.clone();
-        let structure_stack = self
-            .structure_index()
-            .at(&StructurePosition {
+        let active_block_id = self
+            .current_math_edit_target()
+            .and_then(|target| match target {
+                MathEditTarget::Block { block_id, .. } => Some(block_id.clone()),
+                MathEditTarget::Inline { .. } => None,
+            })
+            .or_else(|| self.block_boundary_exit().map(|(id, _)| id));
+        let structure_index = self.structure_index();
+        if active_block_id
+            .as_ref()
+            .is_some_and(|block_id| structure_index.get(block_id).is_none())
+        {
+            return Err(EditError::InvalidPosition);
+        }
+        let structure_stack = match active_block_id.as_ref() {
+            Some(block_id) => structure_index
+                .stack_for_id(block_id)
+                .into_iter()
+                .filter(|entry| &entry.id != block_id)
+                .collect(),
+            None => structure_index.at(&StructurePosition {
                 paragraph_id: focus.paragraph_id.clone(),
                 offset_utf8: focus.offset,
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+            }),
+        };
         let mut block = Vec::new();
         for entry in structure_stack {
             if exited_environment_id.as_ref() == Some(&entry.id) {
@@ -106,9 +124,7 @@ impl Session {
             });
         }
 
-        if let Some(edit) = self.math_edit()
-            && let MathEditTarget::Block { block_id, align } = &edit.target
-        {
+        if let Some(MathEditTarget::Block { block_id, align }) = self.current_math_edit_target() {
             let adapter = for_math_block(*align);
             block.push(EnvironmentEntry {
                 id: Some(block_id.clone()),
@@ -124,16 +140,18 @@ impl Session {
         }
 
         if matches!(
-            self.math_edit().map(|edit| &edit.target),
+            self.current_math_edit_target(),
             Some(MathEditTarget::Block { .. })
         ) {
             return Ok(CurrentEnvironmentView::new(Vec::new(), block));
         }
 
-        let active_inline_math_id = self.math_edit().and_then(|edit| match &edit.target {
-            MathEditTarget::Inline { math_id, .. } => Some(math_id.clone()),
-            MathEditTarget::Block { .. } => None,
-        });
+        let active_inline_math_id =
+            self.current_math_edit_target()
+                .and_then(|target| match target {
+                    MathEditTarget::Inline { math_id, .. } => Some(math_id.clone()),
+                    MathEditTarget::Block { .. } => None,
+                });
         let host_caret_position = self.host_caret_position.clone();
         let map = self.text_map_for(&focus)?;
         let mut inline = map

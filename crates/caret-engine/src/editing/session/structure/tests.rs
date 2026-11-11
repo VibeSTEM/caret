@@ -200,6 +200,54 @@ fn current_environment_view_keeps_parent_after_virtual_inner_block_boundary_stop
 }
 
 #[test]
+fn formula_block_exit_uses_host_parent_not_hidden_paragraph_anchor()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut first_section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![Block::Paragraph(paragraph())],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    first_section.title = Some(paragraph());
+    let first_section_id = first_section.id.clone();
+
+    let formula_id = NodeId::generate();
+    let second_section = match environment(
+        BlockEnvironmentKind::Section,
+        vec![
+            Block::Equation(Equation {
+                id: formula_id.clone(),
+                math_tree: math_tree(None),
+                extra: BTreeMap::new(),
+            }),
+            Block::Paragraph(paragraph()),
+        ],
+    ) {
+        Block::Environment(section) => section,
+        _ => unreachable!(),
+    };
+    let second_section_id = second_section.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![
+            Block::Environment(first_section),
+            Block::Environment(second_section),
+        ],
+        ..Document::blank()
+    })?;
+    session.host_caret_position = Some(crate::editing::HostCaretPosition::outside(
+        formula_id,
+        Direction::Forward,
+    ));
+
+    let view = session.current_environment_view()?;
+    assert_eq!(view.block().len(), 1);
+    assert_eq!(view.block()[0].id.as_ref(), Some(&second_section_id));
+    assert_ne!(view.block()[0].id.as_ref(), Some(&first_section_id));
+    Ok(())
+}
+
+#[test]
 fn active_host_position_projects_section_internal_position()
 -> Result<(), Box<dyn std::error::Error>> {
     let section = match environment(

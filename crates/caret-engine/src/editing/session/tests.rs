@@ -26,6 +26,99 @@ fn text_flow(run: Run) -> ParagraphContent {
 }
 
 #[test]
+fn paragraph_locator_rejects_a_stale_path_that_points_to_another_paragraph() {
+    let first = Paragraph::empty(NodeId::generate());
+    let first_id = first.id.clone();
+    let second = Paragraph::empty(NodeId::generate());
+    let second_id = second.id.clone();
+    let mut session = Session::new(Document {
+        body: vec![Block::Paragraph(first), Block::Paragraph(second)],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let Some(second_path) = session
+        .paragraph_index
+        .get(&second_id)
+        .map(|location| location.block_path.clone())
+    else {
+        panic!("second paragraph location exists");
+    };
+    let Some(first_location) = session.paragraph_index.get_mut(&first_id) else {
+        panic!("first paragraph location exists");
+    };
+    first_location.block_path = second_path;
+
+    let stale = Pos {
+        story: StoryId::Body,
+        paragraph_id: first_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert_eq!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &stale,
+            &stale,
+        ),
+        Err(EditError::InvalidPosition)
+    );
+    assert!(session.paragraph_for(&session.selection().focus).is_err());
+}
+
+#[test]
+fn paragraph_locator_rejects_same_id_and_slot_after_parent_environment_changes() {
+    let paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    let first_environment_id = NodeId::generate();
+    let second_environment_id = NodeId::generate();
+    let first_environment = Block::Environment(BlockEnvironment {
+        id: first_environment_id.clone(),
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: vec![Block::Paragraph(paragraph)],
+        extra: Default::default(),
+    });
+    let second_environment = Block::Environment(BlockEnvironment {
+        id: second_environment_id,
+        kind: BlockEnvironmentKind::Custom,
+        definition_id: None,
+        props: Default::default(),
+        title: None,
+        children: Vec::new(),
+        extra: Default::default(),
+    });
+    let mut session = Session::new(Document {
+        body: vec![first_environment, second_environment],
+        ..Document::blank()
+    })
+    .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+
+    let (first_block, rest) = session.document.body.split_at_mut(1);
+    let Block::Environment(first) = &mut first_block[0] else {
+        panic!("first block should be an environment");
+    };
+    let Block::Environment(second) = &mut rest[0] else {
+        panic!("second block should be an environment");
+    };
+    let Some(moved_paragraph) = first.children.pop() else {
+        panic!("paragraph exists");
+    };
+    second.children.push(moved_paragraph);
+    session.document.body.swap(0, 1);
+
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert!(session.paragraph_for(&position).is_err());
+}
+
+#[test]
 fn dollar_text_enters_inline_math_but_remains_query_text_in_command_line() {
     let mut session = Session::new(Document::blank())
         .unwrap_or_else(|error| panic!("session creation failed: {error}"));
@@ -188,6 +281,38 @@ fn revision_overflow_rotates_session_identity_before_reusing_generation_zero() {
     assert_eq!(session.document_generation(), 0);
     assert_ne!(session.session_id(), &old_session_id);
     assert_eq!(session.selection().focus.offset, "new revision".len());
+}
+
+#[test]
+fn caret_snapshot_rejects_another_session_or_document_generation() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    let snapshot = session
+        .current_caret_snapshot()
+        .unwrap_or_else(|error| panic!("current caret snapshot failed: {error}"));
+    assert_eq!(session.validate_caret_snapshot_revision(&snapshot), Ok(()));
+
+    let cloned_session = session.clone();
+    assert_eq!(
+        cloned_session.validate_caret_snapshot_revision(&snapshot),
+        Err(EditError::InvalidPosition)
+    );
+
+    session
+        .run(Command::InsertText("changed".to_owned()))
+        .unwrap_or_else(|error| panic!("text insertion failed: {error}"));
+    assert_eq!(
+        session.validate_caret_snapshot_revision(&snapshot),
+        Err(EditError::InvalidPosition)
+    );
+}
+
+#[test]
+fn caret_snapshot_does_not_fall_back_for_an_invalid_text_position() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session rejected: {error}"));
+    session.selection.focus.offset = usize::MAX;
+    assert!(session.current_caret_snapshot().is_err());
 }
 
 #[test]
@@ -1649,6 +1774,112 @@ fn session_with_inline_math(source: &str) -> Session {
     run_ok(&mut session, Command::InsertInlineMath(source.to_owned()));
     run_ok(&mut session, Command::EnterMath(Direction::Backward));
     session
+}
+
+#[test]
+fn paragraph_position_order_crosses_inline_math_object_span() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertText("a".to_owned()));
+    run_ok(&mut session, Command::InsertInlineMath("x".to_owned()));
+    run_ok(&mut session, Command::EnterMath(Direction::Backward));
+    run_ok(&mut session, Command::EditorKey(EditorKey::Escape));
+    run_ok(&mut session, Command::InsertText("b".to_owned()));
+
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    let map = TextMap::new(paragraph)
+        .unwrap_or_else(|error| panic!("text map construction failed: {error}"));
+    assert_eq!(
+        map.text,
+        format!("a{}b", super::super::text_map::OBJECT_REPLACEMENT)
+    );
+    let before_math = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph.id.clone(),
+        offset: 1,
+        affinity: Affinity::Downstream,
+    };
+    let after_math = Pos {
+        offset: 1 + super::super::text_map::OBJECT_REPLACEMENT.len_utf8(),
+        ..before_math.clone()
+    };
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &before_math,
+            &after_math,
+        )
+        .unwrap_or_else(|error| panic!("paragraph positions should compare: {error}"))
+        .is_lt()
+    );
+}
+
+#[test]
+fn paragraph_position_order_places_environment_title_before_nested_children() {
+    let environment_id = NodeId::generate();
+    let mut title = Paragraph::empty(NodeId::generate());
+    title.inlines.push(text_flow(Run {
+        text: "title".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    }));
+    let title_id = title.id.clone();
+    let mut child = Paragraph::empty(NodeId::generate());
+    child.inlines.push(text_flow(Run {
+        text: "child".to_owned(),
+        language: None,
+        props: Default::default(),
+        extra: Default::default(),
+    }));
+    let child_id = child.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: Default::default(),
+        title: Some(title),
+        children: vec![Block::Paragraph(child)],
+        extra: Default::default(),
+    })];
+    let session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    let title_position = Pos {
+        story: StoryId::EnvironmentTitle(environment_id),
+        paragraph_id: title_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    let child_position = Pos {
+        story: StoryId::Body,
+        paragraph_id: child_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &title_position,
+            &child_position,
+        )
+        .unwrap_or_else(|error| panic!("title and child positions should compare: {error}"))
+        .is_lt()
+    );
+    assert!(
+        super::super::paragraph_ops::compare_positions(
+            &session.document.body,
+            &session.paragraph_index,
+            &child_position,
+            &title_position,
+        )
+        .unwrap_or_else(|error| panic!("child and title positions should compare: {error}"))
+        .is_gt()
+    );
 }
 
 #[test]

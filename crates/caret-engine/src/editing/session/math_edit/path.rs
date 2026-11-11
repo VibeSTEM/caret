@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
+use super::super::super::grapheme::GraphemeMap;
 use super::MathPositionAffinity;
 use caret_doc::{MathContent, MathFlow, MathTree, TextFlow};
 use caret_math::{MathContentSourceMap, MathSourceMap, MathTextSourceMap, MathTreeSourceMap};
@@ -126,6 +127,85 @@ impl MathTextPosition {
             offset,
             affinity,
         }
+    }
+
+    /// 比较同一 MathTree TextFlow 中的合法字素边界。
+    ///
+    /// 不同 TextFlow、MathTree、宿主或文档代际需要由外层 adapter 解析，不能直接比较路径或偏移。
+    pub fn compare_in_same_flow(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Option<std::cmp::Ordering> {
+        if self.path != other.path {
+            return None;
+        }
+        self.compare_in_same_text_island(other, tree)
+    }
+
+    /// 比较同一连续数学文本岛中的合法字素边界。
+    ///
+    /// 不同 MathTree、宿主或文档代际需要由外层 adapter 解析，不能直接比较路径或偏移。
+    pub fn compare_in_same_text_island(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Option<std::cmp::Ordering> {
+        contiguous_text_flow_text(tree, &self.path)?.compare_positions(self, other)
+    }
+
+    /// 按 MathTree 的有序子流比较不同文本岛中的位置。
+    ///
+    /// 两个位置先分别验证为其文本岛中的合法字素边界，再按数学节点操作数、行内
+    /// 环境子项和 TextFlow 内容索引构造结构顺序。文本首尾映射到相邻结构边界，
+    /// 空 TextFlow 按 affinity 归属前后边界；同一文本岛仍使用其展平后的字素顺序。
+    pub(crate) fn compare_in_tree_order(
+        &self,
+        other: &Self,
+        tree: &MathTree,
+    ) -> Option<std::cmp::Ordering> {
+        if let Some(ordering) = self.compare_in_same_text_island(other, tree) {
+            return Some(ordering);
+        }
+
+        self.compare_in_same_text_island(self, tree)?;
+        other.compare_in_same_text_island(other, tree)?;
+        let left_key = self.position_order_key(tree)?;
+        let right_key = other.position_order_key(tree)?;
+        Some(
+            left_key
+                .cmp(&right_key)
+                .then_with(|| super::compare_math_position_affinity(self.affinity, other.affinity)),
+        )
+    }
+
+    fn position_order_key(&self, tree: &MathTree) -> Option<Vec<usize>> {
+        let (sequence, content_index) =
+            super::MathTreePosition::sequence_boundary_from_text_path(self.path.steps()).ok()?;
+        let text = self.path.resolve_structurally(tree)?;
+        let length = text_flow_display_len(text)?;
+        if self.offset > length {
+            return None;
+        }
+
+        let mut key = super::tree_position::math_sequence_order_key(&sequence);
+        let start = content_index.checked_mul(2)?;
+        if length == 0 {
+            let boundary = if self.affinity == MathPositionAffinity::Upstream {
+                start
+            } else {
+                start.checked_add(2)?
+            };
+            key.push(boundary);
+        } else if self.offset == 0 {
+            key.push(start);
+        } else if self.offset == length {
+            key.push(start.checked_add(2)?);
+        } else {
+            key.push(start.checked_add(1)?);
+            key.push(self.offset);
+        }
+        Some(key)
     }
 }
 
@@ -352,6 +432,41 @@ impl TextIslandSnapshot {
     /// 返回同一连续文本岛的拼接显示文本。
     pub fn display(&self) -> &str {
         &self.display
+    }
+
+    fn compare_positions(
+        &self,
+        left: &MathTextPosition,
+        right: &MathTextPosition,
+    ) -> Option<std::cmp::Ordering> {
+        let left_key = self.position_order_key(left)?;
+        let right_key = self.position_order_key(right)?;
+        if !GraphemeMap::is_boundary_in(&self.display, left_key.0)
+            || !GraphemeMap::is_boundary_in(&self.display, right_key.0)
+        {
+            return None;
+        }
+        Some(left_key.cmp(&right_key))
+    }
+
+    fn position_order_key(&self, position: &MathTextPosition) -> Option<(usize, usize, u8)> {
+        let index = self.paths.iter().position(|path| path == &position.path)?;
+        let range = self.ranges.get(index)?;
+        let flow_len = range.end.checked_sub(range.start)?;
+        if position.offset > flow_len {
+            return None;
+        }
+        let side = if flow_len == 0 {
+            u8::from(position.affinity == MathPositionAffinity::Downstream)
+        } else {
+            u8::from(position.offset == flow_len)
+        };
+        let affinity = u8::from(position.affinity == MathPositionAffinity::Downstream);
+        Some((
+            range.start.checked_add(position.offset)?,
+            index * 2 + usize::from(side),
+            affinity,
+        ))
     }
 
     /// 将具体 TextFlow 端点转换为文本岛拼接后的 UTF-8 字节偏移。

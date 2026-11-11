@@ -716,6 +716,68 @@ fn editing_and_saving_preserves_unknown_optional_envelope_fields() -> Result<(),
 }
 
 #[test]
+fn edit_save_reopen_preserves_style_maps_named_styles_and_media() -> Result<(), String> {
+    let file = CdocFile::new(caret_doc::Document::blank()).map_err(|error| error.to_string())?;
+    let mut envelope: Value =
+        serde_json::from_slice(&file.to_bytes().map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    envelope["document"]["globalSettings"]["defaultStyles"] =
+        json!({"paragraph": {"lineSpacing": {"kind": "multiple", "percent": 125}}});
+    envelope["document"]["globalSettings"]["formatOverrides"] =
+        json!({"heading": {"fontWeight": 600}});
+    envelope["document"]["globalSettings"]["theme"] = json!({
+        "formatVersion": 1,
+        "namedStyles": {"body": {"fontFamily": "Caret Test"}},
+        "environmentTemplates": {}
+    });
+    envelope["requiredFeatures"]
+        .as_array_mut()
+        .ok_or_else(|| "requiredFeatures should be an array".to_owned())?
+        .push(json!("caret.theme.snapshot"));
+    envelope["media"] = json!([{
+        "id": "asset-1",
+        "mediaType": "image/png",
+        "data": "AQID",
+        "vendorMetadata": {"keep": true}
+    }]);
+    let bytes = serde_json::to_vec(&envelope).map_err(|error| error.to_string())?;
+
+    let mut service = DocumentSessionService::new_blank()?;
+    service.open_bytes(&bytes, std::path::Path::new("styles.cdoc"), 1, 0)?;
+    service.view_mut().insert_text_json("edited".to_owned())?;
+    let snapshot = service.save_snapshot()?;
+
+    let mut reopened = DocumentSessionService::new_blank()?;
+    reopened.open_bytes(
+        &snapshot.bytes,
+        std::path::Path::new("styles-reopened.cdoc"),
+        1,
+        0,
+    )?;
+    let saved: Value = serde_json::from_slice(&reopened.save_snapshot()?.bytes)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(
+        saved["document"]["globalSettings"]["defaultStyles"]["paragraph"]["lineSpacing"]["percent"],
+        125
+    );
+    assert_eq!(
+        saved["document"]["globalSettings"]["formatOverrides"]["heading"]["fontWeight"],
+        600
+    );
+    assert_eq!(
+        saved["document"]["globalSettings"]["theme"]["namedStyles"]["body"]["fontFamily"],
+        "Caret Test"
+    );
+    assert_eq!(saved["media"][0]["data"], "AQID");
+    assert_eq!(saved["media"][0]["vendorMetadata"]["keep"], true);
+    assert_eq!(
+        saved["document"]["body"][0]["inlines"][0]["runs"][0]["text"],
+        "edited"
+    );
+    Ok(())
+}
+
+#[test]
 fn recovery_session_stays_dirty_and_retains_its_original_recovery_binding() -> Result<(), String> {
     let file = CdocFile::new(caret_doc::Document::blank()).map_err(|error| error.to_string())?;
     let bytes = file.to_bytes().map_err(|error| error.to_string())?;

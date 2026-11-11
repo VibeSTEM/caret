@@ -2,6 +2,8 @@
 
 Rust suite 只测 CPU：文档模型、Unicode 文本、字体回退、Parley 排版、分页和编辑后的重排都由 Rust 执行。GPU 绘制由 Qt Quick / RHI 负责，对应的无头基准位于 `tests/performance/qt/gpu/`。
 
+`document_position_criterion` 测共享物理父环境路径查询，以及深层嵌套 Section 位置与其前方根层段落位置的比较。目标环境位于 512 个根层段落之后，内部段落位于 16 层 Section 中；文档、Session、位置快照和身份路径均在计时外准备。父链查询组计时从宽根序列扫描到目标环境并解析整条父链；比较组覆盖快照代际校验、段落定位和跨父链顺序。复现命令：`cargo bench --locked -p caret-engine --bench document_position_criterion -- rust/document_position --sample-size 10 --warm-up-time 1 --measurement-time 1`。2026-11-11 macOS 27.2 arm64、`rustc 1.99.0`、Criterion release、10 样本下，父链查询为 180.26–186.77 ns；深层位置比较为 6.1476–6.2367 μs。CPU 型号读取受系统权限限制。这是当前单机的一组深层/宽根负载基线，不涵盖其他 carrier 或规模；不含宿主布局/绘制，不与旧实现对照，也不宣称性能提升。
+
 长文档基准读取 `tests/performance/fixtures/novel-1m-multilingual.txt`，包含 5,000 段、共 1,000,000 个 Unicode 字符，语言覆盖中文、英文、法文、阿拉伯文、俄文、希腊文和日文。该 UTF-8 纯文本也可在 Word 中单独打开作本机对照。基准覆盖整篇首次排版、单段编辑后重排、打开与删除、撤销/重做以及保存快照序列化。
 
 `document_history_save_criterion` 使用相同语料的前 500 段（100,000 个正文 Unicode 字符）和全部 5,000 段（1,000,000 个正文 Unicode 字符），分别测撤销、重做和 `.cdoc` 保存快照序列化。会话打开、光标定位和编辑状态准备在 Criterion 计时区间外；撤销/重做计时包含 Rust 布局更新及 UI 快照生成，不包含 Qt 渲染或磁盘 I/O。该基准用于比较 history 操作规模，不设置吞吐量，因为每次只撤销或重做一项编辑。

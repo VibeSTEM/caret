@@ -1251,6 +1251,31 @@ fn cached_text_map_does_not_accept_a_wrong_story() {
         offset: 0,
         affinity: Affinity::Downstream,
     };
+    let index = super::paragraph_ops::build_paragraph_index(&session.document().body);
+    assert_eq!(
+        super::paragraph_ops::compare_positions(
+            &session.document().body,
+            &index,
+            &invalid,
+            &invalid
+        ),
+        Err(EditError::WrongStory)
+    );
+    let invalid_offset = Pos {
+        story: StoryId::Body,
+        paragraph_id: invalid.paragraph_id.clone(),
+        offset: 5,
+        affinity: Affinity::Downstream,
+    };
+    assert_eq!(
+        super::paragraph_ops::compare_positions(
+            &session.document().body,
+            &index,
+            &invalid_offset,
+            &invalid_offset,
+        ),
+        Err(EditError::InvalidPosition)
+    );
     assert_eq!(
         session.run(Command::SetSelection(Some(Selection {
             anchor: invalid.clone(),
