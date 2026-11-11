@@ -323,6 +323,30 @@ pub(super) fn advance_math_tree_position(
     forward: bool,
     align_cell: Option<(usize, usize)>,
 ) -> Result<MathTreeCaretMove, MathTreePositionError> {
+    advance_math_tree_position_mode(tree, position, forward, align_cell, true)
+}
+
+/// 扩选专用的单层移动：只在当前序列层内前进或后退。
+///
+/// 与普通导航不同，扩选不得进入嵌套 Math/Environment，否则焦点路径会偏离锚点所
+/// 在序列而无法用同一 anchor 表达范围；嵌套结构整体作为一个原子步进。返回父序列
+/// 位置表示焦点离开当前序列，调用方须把公式宿主转换为文档结构范围。
+pub(super) fn advance_math_tree_selection_position(
+    tree: &MathTree,
+    position: &MathTreePosition,
+    forward: bool,
+    align_cell: Option<(usize, usize)>,
+) -> Result<MathTreeCaretMove, MathTreePositionError> {
+    advance_math_tree_position_mode(tree, position, forward, align_cell, false)
+}
+
+fn advance_math_tree_position_mode(
+    tree: &MathTree,
+    position: &MathTreePosition,
+    forward: bool,
+    align_cell: Option<(usize, usize)>,
+    descend: bool,
+) -> Result<MathTreeCaretMove, MathTreePositionError> {
     let contents = position.resolve(tree)?;
     let adjacent_index = if forward {
         (position.offset < contents.len()).then_some(position.offset)
@@ -347,6 +371,16 @@ pub(super) fn advance_math_tree_position(
                 };
                 Ok(MathTreeCaretMove::TextFlow(path, cursor))
             }
+            MathContent::Environment(environment)
+                if !environment.children.is_empty() && !descend =>
+            {
+                Ok(atomic_sequence_step(
+                    position,
+                    contents,
+                    content_index,
+                    forward,
+                ))
+            }
             MathContent::Environment(environment) if !environment.children.is_empty() => {
                 let path = child_sequence_path(
                     position,
@@ -355,6 +389,9 @@ pub(super) fn advance_math_tree_position(
                 let child_contents = environment.children.as_slice();
                 enter_sequence_edge(position, path, child_contents, forward, align_cell)
             }
+            MathContent::Math(node) if !node.children.is_empty() && !descend => Ok(
+                atomic_sequence_step(position, contents, content_index, forward),
+            ),
             MathContent::Math(node) if !node.children.is_empty() => {
                 let operand_index = if forward {
                     (0..node.children.len())
@@ -406,14 +443,26 @@ pub(super) fn advance_math_tree_position(
                     if let Some(index) = next {
                         let next_content_position =
                             position_at(position, position.path.clone(), index);
-                        advance_math_tree_position(tree, &next_content_position, true, align_cell)
+                        advance_math_tree_position_mode(
+                            tree,
+                            &next_content_position,
+                            true,
+                            align_cell,
+                            descend,
+                        )
                     } else {
                         climb_math_tree_position(tree, position, forward, align_cell)
                     }
                 } else if let Some(index) = previous {
                     let previous_content_position =
                         position_at(position, position.path.clone(), index + 1);
-                    advance_math_tree_position(tree, &previous_content_position, false, align_cell)
+                    advance_math_tree_position_mode(
+                        tree,
+                        &previous_content_position,
+                        false,
+                        align_cell,
+                        descend,
+                    )
                 } else {
                     climb_math_tree_position(tree, position, forward, align_cell)
                 }
@@ -462,6 +511,25 @@ pub(super) fn resolve_sequence_mut<'a>(
         };
     }
     Some(contents)
+}
+
+/// 把当前序列中的一项当作原子：正向移动到该项之后，反向移动到该项之前。
+fn atomic_sequence_step(
+    position: &MathTreePosition,
+    contents: &[MathContent],
+    content_index: usize,
+    forward: bool,
+) -> MathTreeCaretMove {
+    let offset = if forward {
+        content_index + 1
+    } else {
+        content_index
+    };
+    MathTreeCaretMove::Position(position_at(
+        position,
+        position.path.clone(),
+        normalize_placeholder_boundary(contents, offset),
+    ))
 }
 
 fn enter_sequence_edge(

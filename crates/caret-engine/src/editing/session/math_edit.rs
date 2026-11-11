@@ -1748,8 +1748,6 @@ impl Session {
         if self.selection.anchor != self.selection.focus
             || self.math_edit.is_some()
             || self.has_structure_selection()
-            || !self.selected_block_environments.is_empty()
-            || !self.selected_math_blocks.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
         {
@@ -1899,8 +1897,6 @@ impl Session {
         let focus = self.selection.focus.clone();
         if self.selection.anchor != focus
             || self.has_structure_selection()
-            || !self.selected_block_environments.is_empty()
-            || !self.selected_math_blocks.is_empty()
             || self.composition.is_some()
             || self.command_line.is_some()
         {

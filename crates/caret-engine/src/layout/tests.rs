@@ -5,9 +5,9 @@ use crate::{
     MathTextPosition, Pos, Selection, Session, StoryId,
 };
 use caret_doc::{
-    Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak, NodeId,
-    OpaqueNode, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph, ParagraphContent,
-    Run, SoftBreak, TextFlow,
+    Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
+    MathAlignRow, NodeId, OpaqueNode, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph,
+    ParagraphContent, Run, SoftBreak, TextFlow,
 };
 use caret_layout::{FontCatalog, FontCatalogError, HitAffinity, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -60,6 +60,19 @@ fn text_math_tree(text: &str) -> caret_doc::MathTree {
                 }],
                 extra: BTreeMap::new(),
             })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+/// 内容为空的公式树，用于验证退化公式宿主仍产出正高度宿主行框。
+fn empty_math_tree() -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
             extra: BTreeMap::new(),
         },
         extra: BTreeMap::new(),
@@ -3303,6 +3316,60 @@ fn math_block_geometry_uses_the_same_full_width_page_rect_for_selection_and_high
             .math_block_geometry(&[NodeId::generate()])
             .is_none()
     );
+}
+
+#[test]
+fn empty_equation_and_align_keep_positive_math_block_geometry() {
+    let equation_id = NodeId::generate();
+    let align_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Equation(Equation {
+            id: equation_id.clone(),
+            math_tree: empty_math_tree(),
+            extra: BTreeMap::new(),
+        }),
+        Block::Align(Align {
+            id: align_id.clone(),
+            rows: vec![MathAlignRow {
+                id: NodeId::generate(),
+                cells: vec![empty_math_tree()],
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let snapshot = layout_document(&document);
+
+    for block_id in [&equation_id, &align_id] {
+        let (page_index, page, fragment) = snapshot
+            .pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.layout
+                    .math_fragments
+                    .iter()
+                    .find(|fragment| &fragment.math_id == block_id)
+                    .map(|fragment| (page_index, page, fragment))
+            })
+            .unwrap_or_else(|| panic!("empty math host should still produce a page fragment"));
+        // 空公式内容的 MathLayout ascent/descent 可能为零，但宿主行框由正文行网格或
+        // Align 的宿主行网格撑开，因此不产生零高度片段。
+        assert!(
+            fragment.height_pt > 0.0,
+            "empty math host must not collapse into a zero-height fragment"
+        );
+        let rectangles = snapshot
+            .math_block_geometry(std::slice::from_ref(block_id))
+            .unwrap_or_else(|| panic!("empty math host geometry must not look stale"));
+        assert_eq!(rectangles.len(), 1);
+        let rectangle = rectangles[0];
+        assert_eq!(rectangle.page_index, page_index);
+        assert_eq!(rectangle.x0_pt, page.margin_left_pt);
+        assert_eq!(rectangle.x1_pt, page.width_pt - page.margin_right_pt);
+        assert!(rectangle.y1_pt > rectangle.y0_pt);
+    }
 }
 
 #[test]

@@ -59,6 +59,25 @@ impl DocumentViewRuntime {
             return move_math_visual(self, forward, extend)
                 .unwrap_or_else(|| self.interaction_state_json());
         }
+        // 结构范围是文档级选区：普通方向键交给引擎折叠到范围一侧并消费按键，
+        // 不能按折叠在焦点端的文本光标再算一个视觉候选。
+        if !extend && self.session.has_structure_selection() {
+            return dispatch_navigation_key(
+                self,
+                if forward {
+                    EditorKey::RightArrow {
+                        candidate: None,
+                        extend: false,
+                    }
+                } else {
+                    EditorKey::LeftArrow {
+                        candidate: None,
+                        extend: false,
+                    }
+                },
+                "navigation.structure_collapse",
+            );
+        }
         let current = self.session.selection().clone();
         let selection_anchor = self
             .session

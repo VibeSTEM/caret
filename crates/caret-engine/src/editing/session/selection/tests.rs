@@ -2,7 +2,7 @@
 
 use super::super::{Command, Direction, Pos, Selection, Session, StoryId};
 use crate::VisualAffinity;
-use crate::editing::{Affinity, DocumentRangeEndpoint};
+use crate::editing::{Affinity, DocumentRangeEndpoint, EditorKey, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, MathContent, MathFlow,
     MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
@@ -175,7 +175,25 @@ fn pointer_range_across_equation_promotes_and_delete_removes_it_atomically() {
             .iter()
             .any(|block| matches!(block, Block::Equation(equation) if equation.id == equation_id))
     );
-    assert_eq!(session.document().body.len(), 2);
+    // 两端都是文本端点时按纯文本跨段删除语义合并：公式块与终点段落一并移除。
+    assert_eq!(session.document().body.len(), 1);
+    let Block::Paragraph(merged) = &session.document().body[0] else {
+        panic!("删除后应只剩合并段落");
+    };
+    let merged_text = merged
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            ParagraphContent::Text(flow) => Some(
+                flow.runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(merged_text, "beforeafter");
     assert!(session.selected_math_blocks().is_empty());
     assert!(!session.has_structure_selection());
     assert!(session.can_undo());
@@ -260,4 +278,377 @@ fn pointer_drag_out_of_section_promotes_and_normalizes_environment_range() {
         |block| matches!(block, Block::Environment(environment) if environment.id == section_id)
     ));
     assert!(session.selected_block_environments().is_empty());
+}
+
+fn document_range_selection(
+    anchor: DocumentRangeEndpoint,
+    focus: DocumentRangeEndpoint,
+) -> StructureSelection {
+    StructureSelection { anchor, focus }
+}
+
+fn select_cross_equation_range(
+    session: &mut Session,
+    start: Pos,
+    end: Pos,
+) -> Result<(), Box<dyn std::error::Error>> {
+    session.install_structure_selection(document_range_selection(
+        DocumentRangeEndpoint::Text(start),
+        DocumentRangeEndpoint::Text(end),
+    ))?;
+    Ok(())
+}
+
+#[test]
+fn plain_right_collapses_structure_selection_to_its_document_end()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before.clone()),
+            equation_block,
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_end(&before),
+    );
+    // 反向选择：anchor 在终点、focus 在起点，折叠必须按文档顺序取终点而不是焦点端。
+    select_cross_equation_range(&mut session, paragraph_end(&after), paragraph_end(&before))?;
+    assert!(session.has_structure_selection());
+
+    let jumped_candidate = Pos {
+        offset: 4,
+        affinity: Affinity::Downstream,
+        ..paragraph_end(&after)
+    };
+    let generation = crate::editing::NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    let effect = session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: Some(crate::editing::NavigationCandidate::Document {
+            focus: jumped_candidate.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation,
+        }),
+        extend: false,
+    }))?;
+
+    assert!(effect.selection_changed);
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+    assert_eq!(session.selection().anchor, paragraph_end(&after));
+    assert_eq!(session.selection().focus, paragraph_end(&after));
+    assert_ne!(session.selection().focus, jumped_candidate);
+    Ok(())
+}
+
+#[test]
+fn plain_left_collapses_structure_selection_to_its_document_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before.clone()),
+            equation_block,
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_end(&after),
+    );
+    select_cross_equation_range(&mut session, paragraph_end(&before), paragraph_end(&after))?;
+
+    let jumped_candidate = Pos {
+        offset: 1,
+        affinity: Affinity::Upstream,
+        ..paragraph_end(&before)
+    };
+    let generation = crate::editing::NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: Some(crate::editing::NavigationCandidate::Document {
+            focus: jumped_candidate.clone(),
+            visual_affinity: VisualAffinity::Upstream,
+            generation,
+        }),
+        extend: false,
+    }))?;
+
+    assert!(!session.has_structure_selection());
+    assert_eq!(session.selection().anchor, paragraph_end(&before));
+    assert_eq!(session.selection().focus, paragraph_end(&before));
+    assert_ne!(session.selection().focus, jumped_candidate);
+    Ok(())
+}
+
+#[test]
+fn plain_right_collapses_block_edge_structure_selection_to_the_brace_after_the_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before.clone()),
+            equation_block,
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_end(&before),
+    );
+    session.install_structure_selection(document_range_selection(
+        DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+        },
+        DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id,
+            side: Direction::Forward,
+        },
+    ))?;
+
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+
+    // 块外侧边界终点由共享停靠策略投影到相邻段落起点，并保留块外后停靠。
+    assert!(!session.has_structure_selection());
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(session.selection().focus.paragraph_id, after.id);
+    assert_eq!(session.selection().focus.offset, 0);
+    assert!(session.block_boundary_exit().is_some());
+    Ok(())
+}
+
+fn block_edge_equation_selection(equation_id: &NodeId) -> StructureSelection {
+    document_range_selection(
+        DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+        },
+        DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Forward,
+        },
+    )
+}
+
+#[test]
+fn vertical_extend_from_block_edge_anchor_keeps_the_covered_equation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before.clone()),
+            equation_block,
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_end(&before),
+    );
+    session.install_structure_selection(block_edge_equation_selection(&equation_id))?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    let generation = crate::editing::NavigationGeneration {
+        session_id: session.session_id().clone(),
+        document_generation: session.document_generation(),
+        font_generation: 0,
+    };
+    let focus = Pos {
+        offset: 2,
+        affinity: Affinity::Downstream,
+        ..paragraph_start(&after)
+    };
+
+    session.run(Command::EditorKey(EditorKey::DownArrow {
+        candidate: Some(crate::editing::NavigationCandidate::Document {
+            focus: focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation,
+        }),
+        extend: true,
+        structure: false,
+    }))?;
+
+    // 块外侧边界锚点投影到块前文本位置后仍完整覆盖公式对象，不得清掉结构范围。
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert_eq!(session.selection().focus, focus);
+    Ok(())
+}
+
+#[test]
+fn visual_line_edge_extend_from_block_edge_anchor_keeps_the_covered_equation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let after = paragraph_with_text("after");
+    let cases = [
+        (
+            true,
+            Pos {
+                offset: "after".len(),
+                affinity: Affinity::Upstream,
+                ..paragraph_start(&after)
+            },
+        ),
+        (false, paragraph_start(&after)),
+    ];
+    for (end, focus) in cases {
+        let mut session = session_with_body(
+            vec![
+                Block::Paragraph(before.clone()),
+                equation_block.clone(),
+                Block::Paragraph(after.clone()),
+            ],
+            paragraph_end(&before),
+        );
+        session.install_structure_selection(block_edge_equation_selection(&equation_id))?;
+        let generation = crate::editing::NavigationGeneration {
+            session_id: session.session_id().clone(),
+            document_generation: session.document_generation(),
+            font_generation: 0,
+        };
+        let candidate = Some(crate::editing::NavigationCandidate::Document {
+            focus: focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation,
+        });
+        let key = if end {
+            EditorKey::End {
+                candidate,
+                extend: true,
+            }
+        } else {
+            EditorKey::Home {
+                candidate,
+                extend: true,
+            }
+        };
+        session.run(Command::EditorKey(key))?;
+
+        assert!(session.has_structure_selection());
+        assert_eq!(
+            session.selected_math_blocks(),
+            std::slice::from_ref(&equation_id)
+        );
+        assert_eq!(session.selection().focus, focus);
+    }
+    Ok(())
+}
+
+#[test]
+fn plain_left_collapses_block_edge_range_to_the_paragraph_before_the_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("before");
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before.clone()),
+            equation_block,
+            Block::Paragraph(after),
+        ],
+        paragraph_end(&before),
+    );
+    session.install_structure_selection(block_edge_equation_selection(&equation_id))?;
+
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: false,
+    }))?;
+
+    // 起点侧是块外前边界：折叠落点为块前段落末尾并保留块外前停靠。
+    assert!(!session.has_structure_selection());
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(session.selection().focus.paragraph_id, before.id);
+    assert_eq!(session.selection().focus.offset, "before".len());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id, Direction::Backward))
+    );
+    Ok(())
+}
+
+#[test]
+fn block_at_document_start_keeps_covered_equation_when_anchor_has_no_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation_block = equation("x");
+    let equation_id = match &equation_block {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    let after = paragraph_with_text("after");
+    for vertical in [true, false] {
+        let mut session = Session::new(Document {
+            body: vec![equation_block.clone(), Block::Paragraph(after.clone())],
+            ..Document::blank()
+        })?;
+        session.install_structure_selection(block_edge_equation_selection(&equation_id))?;
+        let generation = crate::editing::NavigationGeneration {
+            session_id: session.session_id().clone(),
+            document_generation: session.document_generation(),
+            font_generation: 0,
+        };
+        let focus = Pos {
+            offset: 2,
+            affinity: Affinity::Downstream,
+            ..paragraph_start(&after)
+        };
+        let candidate = Some(crate::editing::NavigationCandidate::Document {
+            focus: focus.clone(),
+            visual_affinity: VisualAffinity::Downstream,
+            generation,
+        });
+        let key = if vertical {
+            EditorKey::DownArrow {
+                candidate,
+                extend: true,
+                structure: false,
+            }
+        } else {
+            EditorKey::End {
+                candidate,
+                extend: true,
+            }
+        };
+        session.run(Command::EditorKey(key))?;
+
+        // 块前没有段落时锚点无法投影到所求侧：退回文档单元扩展而不是丢失公式覆盖。
+        assert!(session.has_structure_selection());
+        assert_eq!(
+            session.selected_math_blocks(),
+            std::slice::from_ref(&equation_id)
+        );
+        assert_eq!(session.selection().focus.paragraph_id, after.id);
+    }
+    Ok(())
 }

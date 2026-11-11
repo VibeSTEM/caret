@@ -686,12 +686,10 @@ fn backspace_deletes_the_entire_paragraph_section_paragraph_selection()
 
     runtime.delete_backward_json()?;
 
-    assert_eq!(runtime.document().body.len(), 2);
+    // 两端文本端点按纯文本跨段删除语义合并：Section 与终点段落移除，只剩合并段落。
+    assert_eq!(runtime.document().body.len(), 1);
     assert!(
         matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
-    );
-    assert!(
-        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
     );
     runtime.undo_json()?;
     assert_eq!(runtime.document().body.len(), 3);
@@ -704,12 +702,9 @@ fn backspace_deletes_the_entire_paragraph_section_paragraph_selection()
     );
 
     runtime.redo_json()?;
-    assert_eq!(runtime.document().body.len(), 2);
+    assert_eq!(runtime.document().body.len(), 1);
     assert!(
         matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
-    );
-    assert!(
-        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
     );
     Ok(())
 }

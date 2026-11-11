@@ -10,7 +10,7 @@ impl Session {
     /// 优先处理 IME/命令行和数学焦点，再解除光标所在最内层可解除环境。
     pub(super) fn handle_mod_backspace(&mut self) -> Result<Effect, EditError> {
         // 结构选区由退格/删除作为整体处理，不得把保留的文字光标解释为解除其他块环境。
-        if self.has_structure_selection() || !self.selected_math_blocks.is_empty() {
+        if self.has_structure_selection() {
             return Ok(Effect::default());
         }
         if self.composition.is_some() {

@@ -50,6 +50,22 @@ impl Session {
         }
     }
 
+    /// 结构选区端点落点：文本端点保持原位置，块外侧边界复用共享宿主停靠策略。
+    pub(in crate::editing::session) fn park_at_range_endpoint(
+        &mut self,
+        endpoint: &DocumentRangeEndpoint,
+    ) -> Result<(Pos, Option<HostCaretPosition<Pos>>), EditError> {
+        if let DocumentRangeEndpoint::Text(position) = endpoint {
+            self.text_map_for(position)?.validate_pos(position)?;
+            return Ok((position.clone(), None));
+        }
+        let DocumentRangeEndpoint::BlockEdge { block_id, side } = endpoint else {
+            return Err(EditError::InvalidPosition);
+        };
+        let (caret, host) = self.park_beside_block_host(block_id, *side)?;
+        Ok((caret, Some(host)))
+    }
+
     /// 把块公式等复杂宿主停靠到其外侧边界：优先同方向相邻段落，否则同侧最近文本边界。
     ///
     /// 返回落点 TextMap 位置和共享外后/外前停靠状态；任何验证失败都返回

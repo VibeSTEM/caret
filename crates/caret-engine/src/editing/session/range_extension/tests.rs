@@ -655,7 +655,7 @@ fn vertical_shift_down_covers_adjacent_equation_without_layout_candidate() {
 }
 
 #[test]
-fn shift_right_walks_align_cells_then_converts_to_whole_block_range() {
+fn shift_right_at_align_cell_boundary_converts_to_whole_block_range() {
     let before = paragraph_with_text("before");
     let align_block = align_with_cells(&["x", "y"]);
     let align_id = block_id(&align_block);
@@ -696,32 +696,8 @@ fn shift_right_walks_align_cells_then_converts_to_whole_block_range() {
     assert_eq!(edit.cursor, 1);
     assert!(session.structure_selection_range().is_none());
 
-    // 第二步越过当前单元格边界，进入下一个单元格起点（重新坍缩）。
-    shift_right(&mut session);
-    let edit = session
-        .math_edit()
-        .unwrap_or_else(|| panic!("second shift should move to the next align cell"));
-    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
-        panic!("expected align math tree branch");
-    };
-    assert_eq!(current_align_cell(&session), Some(cells[1].clone()));
-    assert_eq!(anchor.offset, 0);
-    assert_eq!(edit.cursor, 0);
-
-    // 第三步在最后一个单元格内扩展，仍不产生文档结构范围。
-    shift_right(&mut session);
-    let edit = session
-        .math_edit()
-        .unwrap_or_else(|| panic!("third shift left the last align cell"));
-    let MathEditBranch::Tree { anchor, .. } = &edit.branch else {
-        panic!("expected align math tree branch");
-    };
-    assert_eq!(current_align_cell(&session), Some(cells[1].clone()));
-    assert_eq!(anchor.offset, 0);
-    assert_eq!(edit.cursor, 1);
-    assert!(session.structure_selection_range().is_none());
-
-    // 第四步到达最后一个单元格的宿主边界，转换为整块 Align 结构范围。
+    // 第二步越过当前单元格边界：焦点离开锚点所在序列，转换为整块 Align 结构范围；
+    // 扩选不跨 cell 游走，避免分支与锚点落在不同单元格而无法恢复。
     shift_right(&mut session);
     assert!(session.math_edit().is_none());
     assert_eq!(
@@ -1223,4 +1199,64 @@ fn ime_commit_replaces_selected_equation_as_one_transaction() {
         .run(Command::Undo)
         .unwrap_or_else(|error| panic!("undo failed: {error}"));
     assert_eq!(session.document(), &document_before);
+}
+
+#[test]
+fn shift_left_at_align_cell_boundary_converts_to_whole_block_range() {
+    let before = paragraph_with_text("before");
+    let align_block = align_with_cells(&["x", "y", "z"]);
+    let align_id = block_id(&align_block);
+    let cells = align_cell_ids(&align_block);
+    assert_eq!(cells.len(), 3);
+    let after = paragraph_with_text("after");
+    let mut session = session_with_body(
+        vec![
+            Block::Paragraph(before),
+            align_block,
+            Block::Paragraph(after.clone()),
+        ],
+        paragraph_start(&after),
+    );
+    session
+        .run(Command::EnterMath(Direction::Backward))
+        .unwrap_or_else(|error| panic!("entering align math failed: {error}"));
+    let edit = session
+        .math_edit()
+        .unwrap_or_else(|| panic!("align math edit missing"));
+    assert_eq!(current_align_cell(&session), Some(cells[2].clone()));
+    assert_eq!(edit.cursor, 1);
+
+    // 第一步在本单元格内反向移动光标，锚点留在原位。
+    shift_left(&mut session);
+    let edit = session
+        .math_edit()
+        .unwrap_or_else(|| panic!("first shift left the align host"));
+    assert_eq!(current_align_cell(&session), Some(cells[2].clone()));
+    assert_eq!(edit.cursor, 0);
+    assert!(session.structure_selection_range().is_none());
+
+    // 第二步越过最后一个单元格边界：转换为整块 Align 结构范围，反向扩选不逐 cell 游走。
+    shift_left(&mut session);
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&align_id)
+    );
+    let (anchor, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("structural range missing"));
+    assert!(matches!(
+        anchor,
+        DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: Direction::Forward,
+        } if block_id == &align_id
+    ));
+    assert!(matches!(
+        focus,
+        DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: Direction::Backward,
+        } if block_id == &align_id
+    ));
 }

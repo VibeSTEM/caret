@@ -44,7 +44,7 @@ impl Session {
                         if !extend {
                             self.run(Command::MoveCaret(Direction::Backward))
                         } else if self.math_text_at_host_edge(Direction::Backward)? {
-                            self.convert_math_host_to_structure_range(Direction::Backward)
+                            self.convert_math_host_to_document_selection(Direction::Backward)
                         } else {
                             // Align 中间 cell 的文本岛边缘：沿用本地移动语义，不伪造整块范围。
                             self.run(Command::MoveCaret(Direction::Backward))
@@ -79,6 +79,11 @@ impl Session {
                     }
                 }
             };
+        }
+        // 结构范围是文档级选区：普通 Left 先折叠到范围起点并消费按键，不能沿用
+        // 折叠在焦点端的文本光标继续后移一个步长。
+        if !extend && self.has_structure_selection() {
+            return self.collapse_structure_selection(Direction::Backward);
         }
         if !extend
             && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?

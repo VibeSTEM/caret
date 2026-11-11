@@ -153,7 +153,7 @@ fn session_in_inline_math_tree(source: &str) -> Session {
 }
 
 #[test]
-fn shift_right_at_inline_math_tree_end_converts_to_inline_math_range() {
+fn shift_right_at_inline_math_tree_end_uses_a_plain_object_text_selection() {
     let mut session = session_in_inline_math_tree("x+y");
 
     session
@@ -163,21 +163,17 @@ fn shift_right_at_inline_math_tree_end_converts_to_inline_math_range() {
         }))
         .unwrap_or_else(|error| panic!("shift-right at tree end failed: {error}"));
 
+    // InlineMath 只是段落文本里的一个 U+FFFC 对象字符：越界后写普通文本选区，
+    // 不安装覆盖不到任何块/公式块的空结构范围。
     assert!(session.math_edit().is_none());
-    let (anchor, focus) = session
-        .structure_selection_range()
-        .unwrap_or_else(|| panic!("inline math range missing"));
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
+    let selection = session.selection().clone();
     // U+FFFC 占三个 UTF-8 字节；正向范围从对象前侧到对象后侧。
-    assert!(matches!(
-        anchor,
-        super::super::super::DocumentRangeEndpoint::Text(position)
-            if position.offset == 0 && position.affinity == Affinity::Upstream
-    ));
-    assert!(matches!(
-        focus,
-        super::super::super::DocumentRangeEndpoint::Text(position)
-            if position.offset == 3 && position.affinity == Affinity::Downstream
-    ));
+    assert_eq!(selection.anchor.offset, 0);
+    assert_eq!(selection.anchor.affinity, Affinity::Upstream);
+    assert_eq!(selection.focus.offset, 3);
+    assert_eq!(selection.focus.affinity, Affinity::Downstream);
     let text = session
         .selected_text()
         .unwrap_or_else(|error| panic!("selected text failed: {error}"));
@@ -185,10 +181,21 @@ fn shift_right_at_inline_math_tree_end_converts_to_inline_math_range() {
         text.contains('\u{FFFC}'),
         "inline math conversion should keep the placeholder: {text:?}"
     );
+
+    // 下一次 Shift 继续按普通文档文本扩选，不报 InvalidPosition。
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("shift-right after conversion failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().anchor.offset, 0);
+    assert_eq!(session.selection().focus.offset, 3);
 }
 
 #[test]
-fn shift_left_at_inline_math_tree_start_converts_to_inline_math_range() {
+fn shift_left_at_inline_math_tree_start_uses_a_plain_object_text_selection() {
     let mut session = session_in_inline_math_tree("x+y");
     for _ in 0..3 {
         session
@@ -205,19 +212,13 @@ fn shift_left_at_inline_math_tree_start_converts_to_inline_math_range() {
         .unwrap_or_else(|error| panic!("shift-left at tree start failed: {error}"));
 
     assert!(session.math_edit().is_none());
-    let (anchor, focus) = session
-        .structure_selection_range()
-        .unwrap_or_else(|| panic!("inline math range missing"));
-    assert!(matches!(
-        anchor,
-        super::super::super::DocumentRangeEndpoint::Text(position)
-            if position.offset == 3 && position.affinity == Affinity::Downstream
-    ));
-    assert!(matches!(
-        focus,
-        super::super::super::DocumentRangeEndpoint::Text(position)
-            if position.offset == 0 && position.affinity == Affinity::Upstream
-    ));
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
+    let selection = session.selection().clone();
+    assert_eq!(selection.anchor.offset, 3);
+    assert_eq!(selection.anchor.affinity, Affinity::Downstream);
+    assert_eq!(selection.focus.offset, 0);
+    assert_eq!(selection.focus.affinity, Affinity::Upstream);
     let text = session
         .selected_text()
         .unwrap_or_else(|error| panic!("selected text failed: {error}"));
@@ -225,6 +226,17 @@ fn shift_left_at_inline_math_tree_start_converts_to_inline_math_range() {
         text.contains('\u{FFFC}'),
         "inline math conversion should keep the placeholder: {text:?}"
     );
+
+    // 下一次 Shift+Left 继续按普通文档文本扩选，不报 InvalidPosition。
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("shift-left after conversion failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().anchor.offset, 3);
+    assert_eq!(session.selection().focus.offset, 0);
 }
 
 #[test]

@@ -4,8 +4,8 @@
 // 署名：Yuki Lu
 
 use super::super::{
-    Affinity, Direction, DocumentRangeEndpoint, EditError, Effect, HostCaretPosition, Pos,
-    Selection, Session, StructureSelection,
+    Affinity, Direction, DocumentRangeEndpoint, EditError, Effect, Pos, Selection, Session,
+    StructureSelection,
 };
 use super::document_position::{visual_affinity_for, visual_affinity_for_block_edge};
 use super::math_edit::find_block_path;
@@ -38,6 +38,8 @@ impl Session {
         let (anchor, focus) = self.normalize_environment_range(anchor, focus)?;
         let selection = StructureSelection { anchor, focus };
         // 先派生覆盖列表：空覆盖范围绝不能安装成结构选区，否则隐藏范围会吞掉按键。
+        // 结构选区安装入口还有同一空覆盖守卫；这里提前判断是为了回落到普通选区，
+        // 而不是让安装失败。
         let (start, end) =
             match self.compare_range_endpoints(&selection.anchor, &selection.focus)? {
                 std::cmp::Ordering::Greater => (&selection.focus, &selection.anchor),
@@ -361,22 +363,6 @@ impl Session {
             neighbour.and_then(|index| siblings.get(index)),
             Some(Block::Equation(_) | Block::Align(_))
         ))
-    }
-
-    /// 结构选区端点落点：文本端点保持原位置，块外侧边界复用共享宿主停靠策略。
-    fn park_at_range_endpoint(
-        &mut self,
-        focus: &DocumentRangeEndpoint,
-    ) -> Result<(Pos, Option<HostCaretPosition<Pos>>), EditError> {
-        if let DocumentRangeEndpoint::Text(position) = focus {
-            self.text_map_for(position)?.validate_pos(position)?;
-            return Ok((position.clone(), None));
-        }
-        let DocumentRangeEndpoint::BlockEdge { block_id, side } = focus else {
-            return Err(EditError::InvalidPosition);
-        };
-        let (caret, host) = self.park_beside_block_host(block_id, *side)?;
-        Ok((caret, Some(host)))
     }
 }
 

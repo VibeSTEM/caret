@@ -2311,6 +2311,12 @@ impl DocumentLayoutSnapshot {
     /// 每个矩形横跨页面版心宽度，纵向采用该公式片段的 MathBox 范围并裁切到页面，
     /// 供选区层与活动公式高亮共用同一几何来源；不进入公式内部 MathBox。
     /// 任一公式 ID 在当前快照中没有任何分页片段时返回 `None`，让调用方拒绝过期投影。
+    ///
+    /// 退化片段（零高度或裁切后纵向区间为空）在当前布局契约下不可达：Equation
+    /// 无 soft break 时宿主行框由正文行网格撑开正高度（`calculate_math_host_metrics`），
+    /// 含 soft break 的 Equation 与 Align 由 `calculate_math_align_host_metrics`
+    /// 拒绝非正高度，分页再拒绝负高度；即使公式行高于整页，页边距校验也保证裁切后
+    /// 仍为正高度。因此下面的跳过分支只是防御性检查，不应据此断言快照过期。
     pub fn math_block_geometry(&self, block_ids: &[NodeId]) -> Option<Vec<PageSelectionRect>> {
         if block_ids.is_empty() {
             return Some(Vec::new());
@@ -2340,6 +2346,7 @@ impl DocumentLayoutSnapshot {
                     continue;
                 }
                 // 只有真正产出矩形后才标记该 ID 已定位，退化片段不能让整体误判为成功。
+                // 当前布局契约保证片段高度为正且裁切区间非空，见函数文档。
                 found[index] = true;
                 rectangles.push(PageSelectionRect {
                     page_index,

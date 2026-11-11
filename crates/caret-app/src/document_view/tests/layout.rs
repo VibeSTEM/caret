@@ -2289,8 +2289,9 @@ fn replacing_an_equation_only_structural_range_publishes_a_full_snapshot()
         .iter()
         .map(|paragraph| paragraph["text"].as_str().unwrap_or_default().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(paragraphs, ["beforeZ", "after"]);
-    // 文档中不再有公式块，替换后的插入点折叠在原段落末尾。
+    // 两端文本端点与纯文本跨段替换一致：合并两端段落后在切口插入，公式块移除。
+    assert_eq!(paragraphs, ["beforeZafter"]);
+    // 文档中不再有公式块，替换后的插入点折叠在合并段落切口处。
     assert!(
         runtime
             .session
@@ -2305,6 +2306,7 @@ fn replacing_an_equation_only_structural_range_publishes_a_full_snapshot()
     assert_eq!(selection.anchor, selection.focus);
     assert_eq!(selection.focus.paragraph_id, before_id);
     assert_eq!(selection.focus.offset, "beforeZ".len());
+    assert_eq!(runtime.document().body.len(), 1);
     Ok(())
 }
 
@@ -2355,5 +2357,91 @@ fn incremental_and_full_snapshots_publish_equal_structural_selection_geometry()
         delta["inlineEnvironmentHighlightRects"],
         full["inlineEnvironmentHighlightRects"]
     );
+    Ok(())
+}
+
+#[test]
+fn plain_arrow_collapses_a_structural_selection_instead_of_moving_from_its_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+
+    // 布局候选路径的 Shift+Right 把公式对象纳入文本范围：终点是公式后段落起点。
+    runtime.move_visual_caret_json(true, true)?;
+    assert!(runtime.session.has_structure_selection());
+
+    let collapsed: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+
+    // 普通 Right 折叠到范围终点并停靠在公式后边界，而不是从焦点再前移一个字符。
+    assert!(!runtime.session.has_structure_selection());
+    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert_eq!(
+        collapsed["selectionRects"],
+        serde_json::json!([]),
+        "折叠后不应继续绘制结构选区矩形"
+    );
+
+    // 折叠消费了本次按键；再从折叠落点按 Right 正常前进一个视觉步长。
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 1);
+    Ok(())
+}
+
+#[test]
+fn plain_left_collapses_a_text_structural_selection_to_its_document_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+    // 两次 Shift+Right：先覆盖公式，再把焦点写进后一段文字。
+    runtime.move_visual_caret_json(true, true)?;
+    runtime.move_visual_caret_json(true, true)?;
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+
+    runtime.move_visual_caret_json(false, false)?;
+
+    // Left 折叠到结构范围起点（前一端段落末尾），而不是从焦点向左退一个字符。
+    assert!(!runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, before_id);
+    assert_eq!(runtime.session.selection().focus.offset, "before".len());
     Ok(())
 }

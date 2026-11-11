@@ -9,7 +9,8 @@ use super::super::math_edit::find_block_path;
 use super::super::{DocumentRangeEndpoint, MathEdit, StructureSelection};
 use super::*;
 use crate::editing::paragraph_ops::{
-    ParagraphIndex, build_paragraph_index, paragraph_at_location_mut,
+    ParagraphIndex, ParagraphLocation, build_paragraph_index, merge_paragraph_range,
+    paragraph_at_location_mut,
 };
 use crate::editing::session::history::{self, ParagraphState};
 use caret_doc::Document;
@@ -19,8 +20,9 @@ use std::collections::VecDeque;
 /// 结构范围删除计划：先完整校验端点、覆盖节点与文字切口，再一次性提交。
 ///
 /// 节点移除 patch 按同级下标降序排列，顺序应用即可保持下标有效；段落 `before`
-/// 快照取自节点移除后的文档，`after` 快照取自文字截断后的文档，因此两端各自对应
-/// 一侧的块布局，不依赖被删除节点的原始下标。
+/// 快照取自节点移除后的文档，`after` 快照取自文字合并/截断后的文档，因此两端各自
+/// 对应一侧的块布局，不依赖被删除节点的原始下标。范围两端都是普通文本段落时按
+/// 纯文本跨段删除语义合并，`before` 快照还包含合并时删除的终点与中间段落。
 struct StructureRangeDeletion {
     node_patches: Vec<DocumentPatch>,
     /// 仅移除覆盖节点（及补位空段落）后的文档，范围文字尚未截断。
@@ -32,19 +34,29 @@ struct StructureRangeDeletion {
     caret: Pos,
 }
 
-impl Session {
-    /// 删除结构选区中的整个块环境子树，并将插入点移至相邻段落。
-    pub(in crate::editing::session) fn delete_selected_block_environment(
-        &mut self,
-    ) -> Result<Effect, EditError> {
-        self.delete_selected_structure_range()?
-            .ok_or(EditError::InvalidPosition)
-    }
+/// 范围文字处理结果：最终文档与 `Paragraphs` 补丁两侧快照所需的段落 ID。
+struct StructureRangeTextPlan {
+    document: Document,
+    /// 节点移除后文档中需要 `before` 快照的段落，包含因合并或中间段移除而删除的段落。
+    before_ids: Vec<NodeId>,
+    /// 最终文档中保留并需要 `after` 快照的段落。
+    surviving_ids: Vec<NodeId>,
+}
 
+/// 对象删除语义下的文字切口与需整段移除的中间段落。
+struct StructureRangeTextEdits {
+    text_edits: Vec<(NodeId, usize, usize)>,
+    removed_ids: Vec<NodeId>,
+}
+
+impl Session {
     /// 删除结构选区覆盖的文字与块节点，并作为一个历史操作提交。
     ///
-    /// 覆盖的 Section/Custom 以整棵环境删除，Equation/Align 作为原子块删除；范围两端
-    /// 的普通文字只截断切口。校验失败时文档、选区、代际与历史均不改变。
+    /// 覆盖的 Section/Custom 以整棵环境删除，Equation/Align 作为原子块删除；范围
+    /// 中间与终点侧的普通文本段落按纯文本跨段删除语义并入起点段落。端点不是文本
+    /// （含块外侧边界）或两端结构上不可合并（不同容器、标题段落、中间夹有不可合并
+    /// 块等）时退回对象删除语义，仅截断两端文字并移除中间段落。校验失败时文档、
+    /// 选区、代际与历史均不改变。
     pub(in crate::editing::session) fn delete_selected_structure_range(
         &mut self,
     ) -> Result<Option<Effect>, EditError> {
@@ -55,7 +67,9 @@ impl Session {
             return Ok(None);
         };
         let mut patches = plan.node_patches;
-        if !plan.after_paragraphs.is_empty() {
+        // 合并或中间段删除可能只登记 before 快照（after 为空即删除段落），因此不能
+        // 只在 after 非空时补丁；否则重做无法删除段落、撤销也会与文档状态不一致。
+        if !plan.before_paragraphs.is_empty() || !plan.after_paragraphs.is_empty() {
             patches.push(DocumentPatch::Paragraphs {
                 before: plan.before_paragraphs,
                 after: plan.after_paragraphs,
@@ -259,10 +273,6 @@ impl Session {
         };
         let (environments, math_blocks) = self.structure_range_block_nodes()?;
         let text_bounds = self.usable_structure_text_bounds()?;
-        let text_edits = self.structure_range_text_edits(&text_bounds, &environments)?;
-        if text_edits.is_empty() && environments.is_empty() && math_blocks.is_empty() {
-            return Ok(None);
-        }
 
         let mut node_patches = self.structure_node_deletion_patches(&environments, &math_blocks)?;
         let mut document_after_nodes = self.document.clone();
@@ -291,40 +301,55 @@ impl Session {
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
 
         let after_nodes_index = build_paragraph_index(&document_after_nodes.body);
-        let mut before_paragraphs = Vec::with_capacity(text_edits.len());
-        for (paragraph_id, _, _) in &text_edits {
-            before_paragraphs.push(
-                ParagraphState::capture(&document_after_nodes, &after_nodes_index, paragraph_id)
-                    .ok_or(EditError::InvalidPosition)?,
-            );
-        }
-
-        let mut document = document_after_nodes.clone();
-        for (paragraph_id, from, to) in &text_edits {
-            let location = after_nodes_index
-                .get(paragraph_id)
-                .cloned()
-                .ok_or(EditError::InvalidPosition)?;
-            let current = paragraph_at_location(&document.body, &location)
-                .ok_or(EditError::InvalidPosition)?
-                .clone();
-            let map = TextMap::new(&current)?;
-            let mut updated = current;
-            map.delete_range(&mut updated, *from, *to)?;
-            let slot = paragraph_at_location_mut(&mut document.body, &location)
-                .ok_or(EditError::InvalidPosition)?;
-            *slot = updated;
+        let StructureRangeTextPlan {
+            mut document,
+            before_ids,
+            surviving_ids,
+        } = self.plan_structure_range_text(
+            &start,
+            &end,
+            &text_bounds,
+            &environments,
+            &document_after_nodes,
+        )?;
+        // 移除范围中间的普通段落也可能再次清空文档；与节点删除一样补一个可编辑空段落。
+        let fallback_paragraph_id = if build_paragraph_index(&document.body).is_empty() {
+            let paragraph = Box::new(Paragraph::empty(NodeId::generate()));
+            // 补位段落追加在节点删除后文档的末尾，重放顺序才与 before 快照一致。
+            let sibling_index = document_after_nodes.body.len();
+            document.body.push(Block::Paragraph((*paragraph).clone()));
+            document_after_nodes
+                .body
+                .push(Block::Paragraph((*paragraph).clone()));
+            node_patches.push(DocumentPatch::ParagraphInsertion {
+                parent_environment_ids: Vec::new(),
+                sibling_index,
+                paragraph: paragraph.clone(),
+            });
+            Some(paragraph.id.clone())
+        } else {
+            fallback_paragraph_id
+        };
+        if node_patches.is_empty() && before_ids.is_empty() {
+            return Ok(None);
         }
         document
             .validate()
             .map_err(|error| EditError::InvalidDocument(error.to_string()))?;
+
+        let before_paragraphs = history::paragraph_states_for_ids(
+            &document_after_nodes,
+            &after_nodes_index,
+            before_ids.clone(),
+        );
+        if before_paragraphs.len() != before_ids.len() {
+            return Err(EditError::InvalidPosition);
+        }
         let after_index = build_paragraph_index(&document.body);
-        let mut after_paragraphs = Vec::with_capacity(before_paragraphs.len());
-        for state in &before_paragraphs {
-            after_paragraphs.push(
-                ParagraphState::capture(&document, &after_index, &state.id)
-                    .ok_or(EditError::InvalidPosition)?,
-            );
+        let after_paragraphs =
+            history::paragraph_states_for_ids(&document, &after_index, surviving_ids.clone());
+        if after_paragraphs.len() != surviving_ids.len() {
+            return Err(EditError::InvalidPosition);
         }
         let caret = self.structure_range_caret(
             &start,
@@ -343,6 +368,94 @@ impl Session {
             caret,
         }))
     }
+
+    /// 在节点移除后的文档上规划范围文字处理，返回结果文档与段落补丁所需 ID。
+    ///
+    /// 有序范围两端都是同一正文容器内的普通文本段落时，按纯文本跨段删除语义合并：
+    /// 保留起点段落，删除起点段落尾部与终点段落头部，把终点段落剩余 inlines 拼到
+    /// 起点段落之后，并移除终点与全部中间段落。其余情况保持对象删除语义：只截断
+    /// 两端文字，并把范围中间的普通段落整段移除。`before_ids` 取自节点移除后的
+    /// 文档（包含被删除段落），`surviving_ids` 只包含最终文档中保留的段落，两者共同
+    /// 让 `Paragraphs` 补丁能够删除与恢复段落。
+    fn plan_structure_range_text(
+        &self,
+        start: &DocumentRangeEndpoint,
+        end: &DocumentRangeEndpoint,
+        text_bounds: &Option<(Pos, Pos, usize, usize)>,
+        environments: &[NodeId],
+        document_after_nodes: &Document,
+    ) -> Result<StructureRangeTextPlan, EditError> {
+        let after_nodes_index = build_paragraph_index(&document_after_nodes.body);
+        let mut document = document_after_nodes.clone();
+        let merge_locations = structure_range_merge_locations(start, end, &after_nodes_index);
+        if let Some((start_location, end_location)) = merge_locations {
+            let (start_position, end_position) = match text_bounds {
+                Some((start_position, end_position, _, _)) => (start_position, end_position),
+                None => return Err(EditError::InvalidPosition),
+            };
+            match merge_paragraph_range(
+                &mut document.body,
+                &start_location,
+                start_position.offset,
+                &end_location,
+                end_position.offset,
+            ) {
+                Ok(result) => {
+                    let mut before_ids = Vec::with_capacity(result.removed_ids.len() + 1);
+                    before_ids.push(result.paragraph_id.clone());
+                    before_ids.extend(result.removed_ids.iter().cloned());
+                    return Ok(StructureRangeTextPlan {
+                        document,
+                        before_ids,
+                        surviving_ids: vec![result.paragraph_id],
+                    });
+                }
+                Err(EditError::CrossParagraphSelection) => {
+                    // 结构上不能合并（例如两端不在同一容器、端点含标题，或中间夹有
+                    // 不可合并块）时退回对象删除语义；合并函数在写入前拒绝，文档未变。
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let StructureRangeTextEdits {
+            text_edits,
+            removed_ids,
+        } = self.structure_range_text_plan(start, end, text_bounds, environments)?;
+        for (paragraph_id, from, to) in &text_edits {
+            let location = after_nodes_index
+                .get(paragraph_id)
+                .cloned()
+                .ok_or(EditError::InvalidPosition)?;
+            let current = paragraph_at_location(&document.body, &location)
+                .ok_or(EditError::InvalidPosition)?
+                .clone();
+            let map = TextMap::new(&current)?;
+            let mut updated = current;
+            map.delete_range(&mut updated, *from, *to)?;
+            let slot = paragraph_at_location_mut(&mut document.body, &location)
+                .ok_or(EditError::InvalidPosition)?;
+            *slot = updated;
+        }
+        remove_range_paragraphs(&mut document, &after_nodes_index, &removed_ids)?;
+        let mut before_ids = text_edits
+            .iter()
+            .map(|(paragraph_id, _, _)| paragraph_id.clone())
+            .collect::<Vec<_>>();
+        before_ids.extend(removed_ids);
+        let surviving_ids = text_edits
+            .iter()
+            .map(|(paragraph_id, _, _)| paragraph_id.clone())
+            .collect();
+        Ok(StructureRangeTextPlan {
+            document,
+            before_ids,
+            surviving_ids,
+        })
+    }
+
+    // 合并可行性由 `paragraph_ops::merge_paragraph_range` 单一判定：这里只把两端
+    // 文本端点解析成节点移除后的文档位置，不同容器、标题段落、样式不兼容、未知
+    // opaque 内容等条件全部交给合并函数返回 `CrossParagraphSelection` 或具体错误。
 
     /// 当前结构选区覆盖的块节点，按文档顺序返回最外层环境与未被环境包含的公式块。
     ///
@@ -433,18 +546,40 @@ impl Session {
         )))
     }
 
-    /// 计算范围两端普通文字的截断切口；被覆盖环境内部的段落整体随环境删除。
-    fn structure_range_text_edits(
+    /// 计算对象删除语义下的文字切口与需整段移除的中间段落。
+    ///
+    /// 文本端点所在的普通段落只截断保留一侧文字（起点保留前缀、终点保留后缀）；
+    /// 完全落在范围内部的普通段落记录为待删除 ID，交给 `Paragraphs` 补丁整段移除。
+    /// 端点被规范到相邻段落时（例如块外侧边界投影）该段落只是切口载体，不能仅凭
+    /// 序号把它当作端点段落。被覆盖环境内部的段落随环境整体删除，不单独处理。
+    fn structure_range_text_plan(
         &self,
+        start: &DocumentRangeEndpoint,
+        end: &DocumentRangeEndpoint,
         text_bounds: &Option<(Pos, Pos, usize, usize)>,
         environments: &[NodeId],
-    ) -> Result<Vec<(NodeId, usize, usize)>, EditError> {
-        let Some((start_position, end_position, start_ordinal, end_ordinal)) = text_bounds else {
-            return Ok(Vec::new());
+    ) -> Result<StructureRangeTextEdits, EditError> {
+        let Some((_, _, start_ordinal, end_ordinal)) = text_bounds else {
+            return Ok(StructureRangeTextEdits {
+                text_edits: Vec::new(),
+                removed_ids: Vec::new(),
+            });
         };
-        let (start_ordinal, end_ordinal) = (*start_ordinal, *end_ordinal);
+        let start_paragraph = match start {
+            DocumentRangeEndpoint::Text(position) => {
+                Some((&position.paragraph_id, position.offset))
+            }
+            DocumentRangeEndpoint::BlockEdge { .. } => None,
+        };
+        let end_paragraph = match end {
+            DocumentRangeEndpoint::Text(position) => {
+                Some((&position.paragraph_id, position.offset))
+            }
+            DocumentRangeEndpoint::BlockEdge { .. } => None,
+        };
         let mut text_edits = Vec::new();
-        for ordinal in start_ordinal..=end_ordinal {
+        let mut removed_ids = Vec::new();
+        for ordinal in *start_ordinal..=*end_ordinal {
             let Some(paragraph_id) = self.structure_index.paragraph_id_at(ordinal).cloned() else {
                 continue;
             };
@@ -452,23 +587,51 @@ impl Session {
                 continue;
             }
             let text_len = self.paragraph_text_len(&paragraph_id)?;
-            let from = if ordinal == start_ordinal {
-                start_position.offset
-            } else {
-                0
+            let is_start = start_paragraph.is_some_and(|(id, _)| id == &paragraph_id);
+            let is_end = end_paragraph.is_some_and(|(id, _)| id == &paragraph_id);
+            if is_start || is_end {
+                let from = start_paragraph
+                    .filter(|(id, _)| *id == &paragraph_id)
+                    .map_or(0, |(_, offset)| offset);
+                let to = end_paragraph
+                    .filter(|(id, _)| *id == &paragraph_id)
+                    .map_or(text_len, |(_, offset)| offset);
+                let to = to.min(text_len);
+                let from = from.min(to);
+                if from < to {
+                    text_edits.push((paragraph_id, from, to));
+                }
+                continue;
+            }
+            let story = self
+                .story_for_paragraph(&paragraph_id)
+                .ok_or(EditError::InvalidPosition)?;
+            let paragraph_start = Pos {
+                story: story.clone(),
+                paragraph_id: paragraph_id.clone(),
+                offset: 0,
+                affinity: Affinity::Downstream,
             };
-            let to = if ordinal == end_ordinal {
-                end_position.offset
-            } else {
-                text_len
+            let paragraph_end = Pos {
+                story,
+                paragraph_id: paragraph_id.clone(),
+                offset: text_len,
+                affinity: Affinity::Upstream,
             };
-            let to = to.min(text_len);
-            let from = from.min(to);
-            if from < to {
-                text_edits.push((paragraph_id, from, to));
+            let starts_inside = !self
+                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_start), start)?
+                .is_lt();
+            let ends_inside = !self
+                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_end), end)?
+                .is_gt();
+            if starts_inside && ends_inside {
+                removed_ids.push(paragraph_id);
             }
         }
-        Ok(text_edits)
+        Ok(StructureRangeTextEdits {
+            text_edits,
+            removed_ids,
+        })
     }
 
     /// 段落是否位于任一被覆盖环境内部；这类段落不单独截断文字。
@@ -637,6 +800,69 @@ struct StructureEditRestorePoint {
     history_state_id: u64,
     history_merge_epoch: u64,
     document_generation: u64,
+}
+
+/// 把有序范围两端的文本端点解析为节点移除后的段落位置。
+///
+/// 只接受两端都是文本端点且位于不同段落；可合并性（容器、标题、样式、opaque 内容）
+/// 由 `merge_paragraph_range` 统一判定，避免在 Session 复制同一组前置条件。
+fn structure_range_merge_locations(
+    start: &DocumentRangeEndpoint,
+    end: &DocumentRangeEndpoint,
+    after_nodes_index: &ParagraphIndex,
+) -> Option<(ParagraphLocation, ParagraphLocation)> {
+    let (DocumentRangeEndpoint::Text(start_position), DocumentRangeEndpoint::Text(end_position)) =
+        (start, end)
+    else {
+        return None;
+    };
+    if start_position.paragraph_id == end_position.paragraph_id {
+        return None;
+    }
+    let start_location = after_nodes_index.get(&start_position.paragraph_id)?.clone();
+    let end_location = after_nodes_index.get(&end_position.paragraph_id)?.clone();
+    Some((start_location, end_location))
+}
+
+/// 从结果文档中移除范围中间的普通段落。
+///
+/// `index` 是移除节点后的段落索引；同一父容器内按同级下标降序移除，避免前面的
+/// 删除影响后续下标。记录身份与文档不一致时返回错误，交由调用方保持失败原子性。
+fn remove_range_paragraphs(
+    document: &mut Document,
+    index: &ParagraphIndex,
+    paragraph_ids: &[NodeId],
+) -> Result<(), EditError> {
+    let mut locations = paragraph_ids
+        .iter()
+        .map(|paragraph_id| {
+            index
+                .get(paragraph_id)
+                .cloned()
+                .ok_or(EditError::InvalidPosition)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    locations.sort_by(|left, right| {
+        left.parent_environment_ids
+            .cmp(&right.parent_environment_ids)
+            .then_with(|| right.block_path.cmp(&left.block_path))
+    });
+    for location in locations {
+        let Some((&sibling_index, _)) = location.block_path.split_last() else {
+            return Err(EditError::InvalidPosition);
+        };
+        let siblings =
+            block_list_by_parent_ids_mut(&mut document.body, &location.parent_environment_ids)
+                .ok_or(EditError::InvalidPosition)?;
+        if !matches!(
+            siblings.get(sibling_index),
+            Some(Block::Paragraph(paragraph)) if paragraph.id == location.paragraph_id
+        ) {
+            return Err(EditError::InvalidPosition);
+        }
+        siblings.remove(sibling_index);
+    }
+    Ok(())
 }
 
 /// 在结果文档中校验并收紧落点偏移；段落已被删除时返回 `None`。

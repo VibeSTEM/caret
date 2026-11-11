@@ -1,4 +1,4 @@
-//! 校验选区位置并维护逻辑亲和性与视觉亲和性。
+//! 校验选区位置、维护逻辑/视觉亲和性，并折叠结构范围到文档端点。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
@@ -10,6 +10,7 @@ use super::super::{
     Selection, StoryId, StructureSelection,
 };
 use super::Session;
+use super::document_position::{visual_affinity_for, visual_affinity_for_block_edge};
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
 
@@ -370,6 +371,50 @@ impl Session {
                     && entry.range.paragraph_ordinals.contains(&ordinal)
             })
             .map(|entry| entry.id.clone())
+    }
+
+    /// 把结构选区折叠到方向对应的一侧并消费按键：Forward 到范围终点、Backward 到起点。
+    ///
+    /// 结构范围的逻辑 Selection 始终折叠在焦点端，若直接沿用普通文本候选会从焦点再
+    /// 移动一个视觉步长，导致落点漂移或越出范围。这里先按文档顺序取端点并复用共享
+    /// 停靠策略，再清除结构状态；任何端点校验失败都在写入前返回。
+    pub(super) fn collapse_structure_selection(
+        &mut self,
+        direction: Direction,
+    ) -> Result<Effect, EditError> {
+        let (start, end) = {
+            let (start, end) = self.ordered_structure_selection()?;
+            (start.clone(), end.clone())
+        };
+        let visual_affinity = |endpoint: &DocumentRangeEndpoint| match endpoint {
+            DocumentRangeEndpoint::Text(position) => visual_affinity_for(position.affinity),
+            DocumentRangeEndpoint::BlockEdge { side, .. } => visual_affinity_for_block_edge(*side),
+        };
+        let (endpoint, visual_affinity) = match direction {
+            Direction::Forward => {
+                let visual_affinity = visual_affinity(&end);
+                (end, visual_affinity)
+            }
+            Direction::Backward => {
+                let visual_affinity = visual_affinity(&start);
+                (start, visual_affinity)
+            }
+        };
+        let (caret, host_caret_position) = self.park_at_range_endpoint(&endpoint)?;
+        self.clear_structure_selection_state();
+        self.selection = Selection {
+            anchor: caret.clone(),
+            focus: caret,
+        };
+        self.selection_visual_affinity = visual_affinity;
+        self.selection_anchor_visual_affinity = visual_affinity;
+        self.host_caret_position = host_caret_position;
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            selection_changed: true,
+            ..Effect::default()
+        })
     }
 
     /// 提交键盘导航产生的位置，并按逻辑移动方向更新环境边界亲和性。

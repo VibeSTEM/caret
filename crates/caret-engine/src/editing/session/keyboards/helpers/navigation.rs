@@ -5,8 +5,8 @@
 
 use super::super::super::Session;
 use crate::editing::{
-    Command, Direction, EditError, Effect, MathEditBranch, MathTextPosition, NavigationCandidate,
-    NavigationGeneration, NavigationIntent, Pos, Selection,
+    Command, Direction, DocumentRangeEndpoint, EditError, Effect, MathEditBranch, MathTextPosition,
+    NavigationCandidate, NavigationGeneration, NavigationIntent, Pos, Selection,
 };
 use caret_layout::VisualAffinity;
 
@@ -103,13 +103,31 @@ impl Session {
             // 锚点是块外侧边界时继续按文档单位扩展，避免丢失已覆盖的块对象。
             return self.extend_structure_selection(direction);
         }
+        if extend
+            && self.has_structure_selection()
+            && self.structure_selection_text_anchor().is_none()
+        {
+            // 块外侧锚点两侧都没有可映射的文本落点（文档边缘的块）：按候选相对当前
+            // 焦点的文档方向继续按单元扩展，避免把已覆盖块对象投影出范围。
+            let current_focus = self
+                .structure_selection_range()
+                .map(|(_, focus)| focus.clone())
+                .ok_or(EditError::InvalidPosition)?;
+            let inferred = if self
+                .compare_range_endpoints(
+                    &DocumentRangeEndpoint::Text(focus.clone()),
+                    &current_focus,
+                )?
+                .is_gt()
+            {
+                Direction::Forward
+            } else {
+                Direction::Backward
+            };
+            return self.extend_structure_selection(direction.unwrap_or(inferred));
+        }
         let anchor = if extend {
-            self.structure_selection_anchor()
-                .cloned()
-                .or_else(|| {
-                    self.structure_selection_text_bounds()
-                        .map(|(start, _)| start)
-                })
+            self.structure_selection_text_anchor()
                 .unwrap_or_else(|| self.selection.anchor.clone())
         } else {
             focus.clone()

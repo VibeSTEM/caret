@@ -190,6 +190,33 @@ impl Session {
         }
     }
 
+    /// 结构选区的文本锚点：文本端点原样返回，块外侧边界投影到该侧最近的文本位置。
+    ///
+    /// 供 Home/End 与纵向候选等只接受文本锚点的扩展路径使用；投影保留边界侧向，
+    /// 并校验结果确实位于边界所求一侧，使扩展后的文本范围仍覆盖原块对象。
+    pub(in crate::editing::session) fn structure_selection_text_anchor(&self) -> Option<Pos> {
+        let selection = self.structure_selection.as_ref()?;
+        match &selection.anchor {
+            DocumentRangeEndpoint::Text(position) => Some(position.clone()),
+            endpoint @ DocumentRangeEndpoint::BlockEdge { side, .. } => {
+                let projected = self.text_endpoint_clamped(endpoint)?;
+                let ordering = self
+                    .compare_range_endpoints(
+                        &DocumentRangeEndpoint::Text(projected.clone()),
+                        endpoint,
+                    )
+                    .ok()?;
+                // 兜底投影可能落到边界另一侧的最近段落；只有仍位于所求侧时才可用，
+                // 否则扩展范围会把原块对象移出覆盖。
+                let on_requested_side = match side {
+                    Direction::Backward => !ordering.is_gt(),
+                    Direction::Forward => !ordering.is_lt(),
+                };
+                on_requested_side.then_some(projected)
+            }
+        }
+    }
+
     /// 将单个端点映射到同侧最近的段落位置；文本端点原样返回。
     pub(in crate::editing::session) fn text_endpoint_clamped(
         &self,

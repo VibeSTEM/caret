@@ -185,7 +185,7 @@ fn current_block_environment_id(
 }
 
 fn current_math_block_target(session: &caret_engine::Session) -> Option<MathEditTarget> {
-    if session.selected_block_environment().is_some() || session.has_structure_selection() {
+    if session.has_structure_selection() {
         return None;
     }
     match session.current_math_edit_target()? {
@@ -527,9 +527,8 @@ impl DocumentViewRuntime {
             .current_environment_view()
             .map_err(|error| format!("layout.inline_environment: {error}"))?;
         let math_block_target = current_math_block_target(highlight_session);
-        let inline_context = math_block_target.is_none()
-            && highlight_session.selected_block_environment().is_none()
-            && !highlight_session.has_structure_selection();
+        let inline_context =
+            math_block_target.is_none() && !highlight_session.has_structure_selection();
         let inline_environment = inline_context
             .then(|| environment_view.innermost_inline())
             .flatten()
@@ -838,9 +837,8 @@ impl DocumentViewRuntime {
             .as_ref()
             .unwrap_or(&self.session);
         let math_block_target = current_math_block_target(highlight_session);
-        let inline_context = math_block_target.is_none()
-            && highlight_session.selected_block_environment().is_none()
-            && !highlight_session.has_structure_selection();
+        let inline_context =
+            math_block_target.is_none() && !highlight_session.has_structure_selection();
         let inline_environment = inline_context
             .then(|| environment_view.innermost_inline())
             .flatten()

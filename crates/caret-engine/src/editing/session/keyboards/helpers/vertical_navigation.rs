@@ -38,7 +38,7 @@ impl Session {
         if candidate.is_none() {
             return self.complete_vertical_document_edge(direction, extend);
         }
-        self.commit_document_vertical_navigation_candidate(candidate, extend)
+        self.commit_document_vertical_navigation_candidate(candidate, extend, direction)
     }
 
     /// 提交当前数学焦点下的上下键候选。
@@ -138,9 +138,17 @@ impl Session {
         &mut self,
         candidate: Option<NavigationCandidate>,
         extend: bool,
+        direction: Direction,
     ) -> Result<Effect, EditError> {
         if self.math_edit.is_some() {
             return Err(EditError::InvalidPosition);
+        }
+        if extend
+            && self.has_structure_selection()
+            && self.structure_selection_text_anchor().is_none()
+        {
+            // 文档边缘的块对象没有同侧文本锚点：按文档方向继续扩展，保持已覆盖对象。
+            return self.extend_structure_selection(direction);
         }
         match candidate {
             Some(NavigationCandidate::Document {
@@ -150,12 +158,7 @@ impl Session {
             }) => {
                 self.validate_navigation_generation(&generation)?;
                 let anchor = if extend {
-                    self.structure_selection_anchor()
-                        .cloned()
-                        .or_else(|| {
-                            self.structure_selection_text_bounds()
-                                .map(|(start, _)| start)
-                        })
+                    self.structure_selection_text_anchor()
                         .unwrap_or_else(|| self.selection.anchor.clone())
                 } else {
                     focus.clone()

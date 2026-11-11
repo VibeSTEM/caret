@@ -48,7 +48,7 @@ impl Session {
     /// 从编辑状态推导 Inline 和 Block 候选；此查询不依赖布局快照。
     pub fn current_environment_view(&mut self) -> Result<CurrentEnvironmentView, EditError> {
         self.ensure_math_edit_revision_current()?;
-        if self.has_structure_selection() || !self.selected_math_blocks().is_empty() {
+        if self.has_structure_selection() {
             return Ok(CurrentEnvironmentView::default());
         }
         let exited_environment_id = self

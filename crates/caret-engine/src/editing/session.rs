@@ -666,7 +666,9 @@ impl Session {
     /// 安装结构选区，并从范围覆盖结果派生块环境与公式块列表。
     ///
     /// 这是结构选区派生状态的唯一写入入口：端点必须能在当前文档中排序，
-    /// 派生失败时不改变任何选区状态。
+    /// 派生失败时不改变任何选区状态。空覆盖（既没有块环境也没有 Equation/Align）
+    /// 不是结构选区，必须在这里拒绝；否则会出现不可见、无法被删除消费且吞掉
+    /// 后续按键的伪结构范围。
     pub(super) fn install_structure_selection(
         &mut self,
         selection: StructureSelection,
@@ -677,6 +679,9 @@ impl Session {
                 _ => (&selection.anchor, &selection.focus),
             };
         let (environments, math_blocks) = self.covered_block_nodes(start, end)?;
+        if environments.is_empty() && math_blocks.is_empty() {
+            return Err(EditError::InvalidPosition);
+        }
         self.assign_structure_selection_state(selection, environments, math_blocks);
         Ok(())
     }
@@ -918,7 +923,6 @@ impl Session {
             && self.composition.is_none()
             && self.command_line.is_none()
             && !self.has_structure_selection()
-            && self.selected_math_blocks.is_empty()
             && self.selection.anchor == self.selection.focus
             && self.selection.focus.offset == 0
         {
@@ -1055,7 +1059,9 @@ impl Session {
                         side: Direction::Forward,
                     },
                 })?;
-                return self.delete_selected_block_environment();
+                return self
+                    .delete_selected_structure_range()?
+                    .ok_or(EditError::InvalidPosition);
             }
             return Ok(Effect::default());
         }

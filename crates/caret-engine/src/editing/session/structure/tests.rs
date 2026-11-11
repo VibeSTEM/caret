@@ -2126,14 +2126,11 @@ fn deleting_cross_host_range_removes_math_block_and_range_text_in_one_step()
 
     assert!(effect.document_changed);
     assert!(effect.selection_changed);
-    assert_eq!(session.document().body.len(), 2);
+    // 两端文本段落按纯文本跨段删除语义合并，公式块与范围中间的段落一并移除。
+    assert_eq!(session.document().body.len(), 1);
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[0])),
-        "a"
-    );
-    assert_eq!(
-        paragraph_text(paragraph_at_block(&session.document().body[1])),
-        "d"
+        "ad"
     );
     assert_eq!(
         session.selection().focus,
@@ -2151,7 +2148,11 @@ fn deleting_cross_host_range_removes_math_block_and_range_text_in_one_step()
     assert!(!session.has_structure_selection());
     assert_ne!(session.document_generation(), generation_after_delete);
     session.run(Command::Redo)?;
-    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "ad"
+    );
     assert_eq!(
         session.selection().focus,
         body_position(&before, 1, Affinity::Downstream)
@@ -2200,20 +2201,236 @@ fn deleting_range_spanning_equation_align_and_section_undoes_as_one_operation()
 
     session.run(Command::Delete(Direction::Backward))?;
 
-    assert_eq!(session.document().body.len(), 2);
+    // 公式块与环境删除后，两端文本段落按纯文本跨段删除语义合并。
+    assert_eq!(session.document().body.len(), 1);
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[0])),
-        "a"
-    );
-    assert_eq!(
-        paragraph_text(paragraph_at_block(&session.document().body[1])),
-        "d"
+        "ad"
     );
 
     session.run(Command::Undo)?;
     assert_eq!(session.document(), &original);
     session.run(Command::Redo)?;
-    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(session.document().body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn deleting_cross_host_range_with_equation_and_middle_paragraph_merges_like_text_deletion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("abc");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let middle = paragraph_with_text("mid");
+    let after = paragraph_with_text("xyz");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(middle.clone()),
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let original_selection = session.selection().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 两端文本段落合并为一段，中间段落与公式块一并移除。
+    assert_eq!(session.document().body.len(), 1);
+    let merged = paragraph_at_block(&session.document().body[0]);
+    assert_eq!(merged.id, before.id);
+    assert_eq!(paragraph_text(merged), "ayz");
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, 1, Affinity::Downstream)
+    );
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+    assert!(session.selected_block_environments().is_empty());
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.selection(), &original_selection);
+    assert!(!session.has_structure_selection());
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "ayz"
+    );
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, 1, Affinity::Downstream)
+    );
+    Ok(())
+}
+
+#[test]
+fn deleting_cross_host_range_merges_endpoints_and_removes_all_middle_paragraphs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("left");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let align = align_block();
+    let align_id = block_id(&align);
+    let first_middle = paragraph_with_text("m1");
+    let second_middle = paragraph_with_text("m2");
+    let after = paragraph_with_text("right");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(first_middle),
+        align,
+        Block::Paragraph(second_middle),
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 2, Affinity::Downstream),
+        body_position(&after, 3, Affinity::Upstream),
+    )?;
+    assert_eq!(session.selected_math_blocks(), &[equation_id, align_id]);
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 所有中间段落（包括两个公式块之间与之后的段落）都随合并移除。
+    assert_eq!(session.document().body.len(), 1);
+    let merged = paragraph_at_block(&session.document().body[0]);
+    assert_eq!(merged.id, before.id);
+    assert_eq!(paragraph_text(merged), "leht");
+    assert_eq!(
+        session.selection().focus,
+        body_position(&before, 2, Affinity::Downstream)
+    );
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert!(!session.can_undo());
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "leht"
+    );
+    Ok(())
+}
+
+#[test]
+fn incompatible_endpoint_paragraph_styles_keep_structure_deletion_atomic()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("abc");
+    let equation = equation_block();
+    let middle = paragraph_with_text("mid");
+    let mut after = paragraph_with_text("xyz");
+    // 端点段落样式不一致时沿用纯文本合并的兼容规则。
+    after
+        .mark_style
+        .insert("bold".to_owned(), serde_json::Value::Bool(true));
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(middle),
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    let selected_document = session.document().clone();
+    let selected_selection = session.selection().clone();
+    let selected_generation = session.document_generation();
+    let selected_math = session.selected_math_blocks().to_vec();
+    let selected_environments = session.selected_block_environments().to_vec();
+
+    assert_eq!(
+        session.run(Command::Delete(Direction::Backward)),
+        Err(EditError::IncompatibleParagraphMerge)
+    );
+
+    assert_eq!(session.document(), &selected_document);
+    assert_eq!(session.selection(), &selected_selection);
+    assert_eq!(session.document_generation(), selected_generation);
+    assert_eq!(session.selected_math_blocks(), selected_math.as_slice());
+    assert_eq!(
+        session.selected_block_environments(),
+        selected_environments.as_slice()
+    );
+    assert!(session.has_structure_selection());
+    assert!(!session.can_undo());
+    Ok(())
+}
+
+#[test]
+fn deleting_block_edge_range_removes_middle_paragraphs_instead_of_clearing_them()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first = environment(
+        BlockEnvironmentKind::Custom,
+        vec![Block::Paragraph(paragraph_with_text("first"))],
+    );
+    let first_id = block_id(&first);
+    let middle = paragraph_with_text("middle");
+    let middle_id = middle.id.clone();
+    let second = environment(
+        BlockEnvironmentKind::Custom,
+        vec![Block::Paragraph(paragraph_with_text("second"))],
+    );
+    let second_id = block_id(&second);
+    let mut document = Document::blank();
+    document.body = vec![first, Block::Paragraph(middle), second];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: first_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::BlockEdge {
+            block_id: second_id.clone(),
+            side: Direction::Forward,
+        },
+    })?;
+    assert_eq!(
+        session.selected_block_environments(),
+        &[first_id, second_id]
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 块外侧边界端点保持对象删除语义；范围中间的普通段落整段移除而不是清空。
+    assert_eq!(session.document().body.len(), 1);
+    let Block::Paragraph(placeholder) = &session.document().body[0] else {
+        return Err("删除全部块后应保留可编辑空段落".into());
+    };
+    assert!(TextMap::new(placeholder)?.text.is_empty());
+    assert_ne!(placeholder.id, middle_id);
+    assert!(!session.has_structure_selection());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(session.document().body[0], Block::Paragraph(_)));
     Ok(())
 }
 
@@ -2310,14 +2527,11 @@ fn typing_over_cross_host_structure_selection_replaces_range_in_one_step()
     let effect = session.run(Command::InsertText("Z".to_owned()))?;
 
     assert!(effect.document_changed);
-    assert_eq!(session.document().body.len(), 2);
+    // 范围先按纯文本跨段删除合并为 "ad"，再从合并落点插入替换文字。
+    assert_eq!(session.document().body.len(), 1);
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[0])),
-        "aZ"
-    );
-    assert_eq!(
-        paragraph_text(paragraph_at_block(&session.document().body[1])),
-        "d"
+        "aZd"
     );
     assert!(!session.has_structure_selection());
     assert!(session.selected_math_blocks().is_empty());
@@ -2328,7 +2542,7 @@ fn typing_over_cross_host_structure_selection_replaces_range_in_one_step()
     session.run(Command::Redo)?;
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[0])),
-        "aZ"
+        "aZd"
     );
     Ok(())
 }
@@ -2355,18 +2569,15 @@ fn pasting_multiline_text_over_structure_selection_uses_shared_paste_path()
 
     session.run(Command::PasteText("1\n2".to_owned()))?;
 
-    assert_eq!(session.document().body.len(), 3);
+    // 范围先合并为 "ad"，多行粘贴再在合并落点拆分为两段。
+    assert_eq!(session.document().body.len(), 2);
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[0])),
         "a1"
     );
     assert_eq!(
         paragraph_text(paragraph_at_block(&session.document().body[1])),
-        "2"
-    );
-    assert_eq!(
-        paragraph_text(paragraph_at_block(&session.document().body[2])),
-        "d"
+        "2d"
     );
     assert!(!session.has_structure_selection());
 
@@ -2543,10 +2754,13 @@ fn backspace_after_shift_extension_consumes_the_range_before_the_math_adjacency_
 
     session.run(Command::Delete(Direction::Backward))?;
 
-    // 范围事务而不是公式邻接特例：空段落保留，公式按对象删除。
-    assert_eq!(session.document().body.len(), 2);
+    // 范围事务而不是公式邻接特例：两端文本段落合并，公式与空终点段落一并移除。
+    assert_eq!(session.document().body.len(), 1);
     assert!(matches!(session.document().body[0], Block::Paragraph(_)));
-    assert!(matches!(session.document().body[1], Block::Paragraph(_)));
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a"
+    );
     assert!(session.math_edit().is_none());
     assert!(!session.has_structure_selection());
     assert!(session.selected_math_blocks().is_empty());
@@ -2806,5 +3020,304 @@ fn failed_replace_over_structure_selection_rolls_back_every_interaction_field()
         return Err("回滚后删除应保留 Section 环境".into());
     };
     assert!(section.children.is_empty());
+    Ok(())
+}
+
+#[test]
+fn block_edge_range_removes_paragraph_between_two_math_blocks()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p0");
+    let first = equation_block();
+    let first_id = block_id(&first);
+    let middle = paragraph_with_text("middle");
+    let middle_id = middle.id.clone();
+    let second = equation_block();
+    let second_id = block_id(&second);
+    let after = paragraph_with_text("p3");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        first,
+        Block::Paragraph(middle),
+        second,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: first_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::BlockEdge {
+            block_id: second_id.clone(),
+            side: Direction::Forward,
+        },
+    })?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 双块外侧边界范围没有文本合并目标：被完全覆盖的中间段落整段移除，
+    // 而不是清空成空段落占位。
+    assert_eq!(session.document().body.len(), 2);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "p0"
+    );
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[1])),
+        "p3"
+    );
+    assert!(!session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.id == middle_id)
+    }));
+    assert!(!session.document().body.iter().any(|block| {
+        matches!(block, Block::Equation(equation)
+            if equation.id == first_id || equation.id == second_id)
+    }));
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn block_edge_start_removes_paragraphs_before_the_text_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let first = paragraph_with_text("one");
+    let first_id = first.id.clone();
+    let second = paragraph_with_text("two");
+    let second_id = second.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        equation,
+        Block::Paragraph(first),
+        Block::Paragraph(second.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::Text(body_position(&second, 1, Affinity::Downstream)),
+    })?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 起点是块外侧边界时没有起点段落可保留：公式与焦点段之前的整段段落移除，
+    // 焦点段只保留切口之后的文字。
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "wo"
+    );
+    assert!(
+        !session.document().body.iter().any(|block| {
+            matches!(block, Block::Paragraph(paragraph) if paragraph.id == first_id)
+        })
+    );
+    assert!(matches!(
+        session.document().body.as_slice(),
+        [Block::Paragraph(paragraph)] if paragraph.id == second_id
+    ));
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn block_edge_end_removes_paragraphs_after_the_text_start() -> Result<(), Box<dyn std::error::Error>>
+{
+    let first = paragraph_with_text("one");
+    let second = paragraph_with_text("two");
+    let second_id = second.id.clone();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(first.clone()),
+        Block::Paragraph(second),
+        equation,
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::Text(body_position(&first, 1, Affinity::Downstream)),
+        focus: DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Forward,
+        },
+    })?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 终点是块外侧边界时没有终点段落可合并：起点段保留前缀，中间整段段落与
+    // 公式一并移除。
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "o"
+    );
+    assert!(!session.document().body.iter().any(|block| {
+        matches!(block, Block::Paragraph(paragraph) if paragraph.id == second_id)
+    }));
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn deleting_equation_range_inside_an_environment_merges_child_paragraphs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first = paragraph_with_text("aa");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let second = paragraph_with_text("bb");
+    let environment = match environment(
+        BlockEnvironmentKind::Custom,
+        vec![
+            Block::Paragraph(first.clone()),
+            equation,
+            Block::Paragraph(second.clone()),
+        ],
+    ) {
+        Block::Environment(environment) => environment,
+        _ => unreachable!(),
+    };
+    let environment_id = environment.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(environment)];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&first, "aa".len(), Affinity::Downstream),
+        body_position(&second, 0, Affinity::Downstream),
+    )?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 同一环境容器内的两端段落按跨段删除合并，环境本身保留。
+    let Block::Environment(environment) = &session.document().body[0] else {
+        return Err("删除后应保留 Custom 环境".into());
+    };
+    assert_eq!(environment.id, environment_id);
+    assert_eq!(environment.children.len(), 1);
+    assert_eq!(
+        paragraph_text(match &environment.children[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            _ => return Err("环境内应只剩合并段落".into()),
+        }),
+        "aabb"
+    );
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn unmergeable_text_range_falls_back_to_object_deletion_and_keeps_break()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let after = paragraph_with_text("cd");
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        Block::ExplicitBreak(caret_doc::ExplicitBreak::default()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 中间夹有不可合并的 ExplicitBreak：退回对象删除语义，两端段落不合并。
+    assert_eq!(session.document().body.len(), 3);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a"
+    );
+    assert!(matches!(
+        session.document().body[1],
+        Block::ExplicitBreak(_)
+    ));
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[2])),
+        "d"
+    );
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn commit_composition_replacing_structure_range_is_one_undoable_edit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("ab");
+    let equation = equation_block();
+    let after = paragraph_with_text("cd");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before.clone()),
+        equation,
+        Block::Paragraph(after.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let original_selection = session.selection().clone();
+    select_text_endpoints(
+        &mut session,
+        body_position(&before, 1, Affinity::Downstream),
+        body_position(&after, 1, Affinity::Upstream),
+    )?;
+    let generation_before = session.document_generation();
+    session.run(Command::UpdateComposition {
+        id: 9,
+        preedit: "中".to_owned(),
+    })?;
+
+    let committed = session.run(Command::CommitComposition {
+        id: 9,
+        text: "中".to_owned(),
+    })?;
+
+    assert!(committed.document_changed);
+    assert_eq!(session.document_generation(), generation_before + 1);
+    assert_eq!(session.document().body.len(), 1);
+    assert_eq!(
+        paragraph_text(paragraph_at_block(&session.document().body[0])),
+        "a中d"
+    );
+    assert!(!session.has_structure_selection());
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.selection(), &original_selection);
     Ok(())
 }

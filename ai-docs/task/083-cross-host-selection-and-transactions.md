@@ -71,7 +71,10 @@
 | 2026-11-11 | `cargo test --workspace --locked` | 全 workspace 通过 | 通过（Engine 797、App 296、workspace 1719；其余 crate 与 native/QML 聚合通过，exit 0） |
 | 2026-11-11 | `cargo clippy --workspace --all-targets -- -D warnings` | 无警告 | 通过 |
 | 2026-11-11 | `cargo fmt --all -- --check`、`git diff HEAD --check` | 无格式/空白错误 | 通过 |
-| 2026-11-11 | Terra 分域（行为/架构）与 Sol final review | 无阻断发现 | 通过；发现项与修复见“独立评审” |
+| 2026-11-11 | PR #136 评审修复回归（`cargo test --locked -p caret-engine`、`-p caret-app`） | 公式扩选/删除合并/InlineMath/折叠行为通过 | 通过：Engine 819 passed、App 298 passed，0 failed（含新增回归） |
+| 2026-11-11 | `cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check` | 无警告/格式错误 | 通过 |
+| 2026-11-11 | `cargo test --workspace --locked` | 全 workspace 通过 | 通过（exit 0，含 native/QML/CTest 聚合；Engine 823、App 298、native/QML 聚合均通过） |
+| 2026-11-11 | 分域只读评审（行为/状态/测试、架构/分层/文档） | 无阻断发现 | 通过；建议项与修复见“独立评审” |
 | — | nightly `cargo coverage` 85% 门槛、Qt 桌面手工/平台验收 | 覆盖率与真实绘制/输入 | 未执行：本地未运行 nightly 覆盖率与 Qt 手工交互；记录为未验证项 |
 
 ## 风险与回退
@@ -92,6 +95,15 @@
 - 2026-11-11：Table/Figure 扩展：`caret-structure` 提供 `is_range_block`/`is_math_block`，Session 用 `block_range_unit` 统一单元端点。剩余按 `Block` 变体的固有分派（公式邻接、删除 patch 身份、环境内容判定、覆盖递归、Align cell 判定等）列在未来 adapter 接入清单；现阶段不引入 trait adapter，也不宣称 Table/Figure 已接入。
 - 2026-11-11：性能未做基准：端点夹取与覆盖派生在每次显示/扩选时扫描段落/块，复杂度随文档增长；记录为待验证项，未宣称性能提升。
 - 2026-11-11：环境没有可用的 gpt-6.1-terra/sol；分域与 final review 使用 deepseek-v4.1-flash subagent，保持只读、未参与实现的独立角色，并按同一检查项输出报告。
+- 2026-11-11：PR #136 评审拍板改变结构范围删除语义：跨 Block 结构删除与纯文本跨段删除统一为“两端文本段落合并、中间普通段落移除”，不再保留“中间段落只截断不合并”的旧语义。实现改为在节点移除后的文档上调用 `paragraph_ops::merge_paragraph_range` 合并两端段落，被删除段落全部进入 `Paragraphs` 补丁 `before` 快照（`after` 只含幸存段落），历史仍是单个 `DocumentPatch::Compound`；两端不都是文本（含 BlockEdge）时保持对象删除语义但把中间普通段落改为整段移除。同步更新 `block-interaction.md` 删除契约与回归测试（含“abc|Eq|mid|xyz → 单段 ayz”、多中间段、段落样式不兼容失败原子性、Undo/Redo）。旧评审中“中间段落只截断”的结论由本条取代。
+- 2026-11-11：PR #136 高危问题修复：公式内 Shift 扩选进入嵌套结构后，Tree 分支焦点路径偏离 anchor，后续扩选返回 `InvalidPosition` 并卡死。改为扩选单层移动（嵌套 Math/Environment 作为原子步进），焦点离开 anchor 所在序列或到达 root/Align cell 边界时转换为整公式宿主结构范围，保持 focus 与 anchor 同路径、可被历史恢复；非扩选导航仍可下钻。补前进/反向/嵌套锚点/非扩选下钻回归测试。
+- 2026-11-11：PR #136 中危问题修复：InlineMath 越界曾安装空覆盖结构选区（`math=[]`），产生隐藏范围并吞键。`install_structure_selection` 成为空覆盖唯一守卫（写状态前拒绝）；InlineMath 越界改写普通段落文本 Selection 覆盖 U+FFFC，下一次方向键按普通文本扩选；Align cell 边界扩选统一转换为整块 Align 结构范围，不再逐 cell 游走。同步 navigation/range_extension 旧断言。
+- 2026-11-11：PR #136 低危项处理：结构选区下普通 Left/Right 改为折叠到文档顺序起点/终点并消费按键（新增 `collapse_structure_selection`；BlockEdge 端点复用块外停靠；app `move_visual_caret_json` 在候选计算前下发无候选按键并补 app 行为测试），不再从焦点端多移动一个视觉步长；清理 `selected_block_environment`/`selected_math_blocks` 已被 `has_structure_selection` 包含的冗余判断与 `delete_selected_block_environment` 单层包装；实证空 Equation/Align 会排出正高度 `math_fragment`、零高度退化在当前布局契约下不可达，保留防御分支并补空公式几何回归测试。
+- 2026-11-11：结构范围对象删除语义的中间段判定改为几何“完全位于范围内”：BlockEdge 端点投影到的相邻段落只是切口载体，不能被当成端点段落；[Eq1,p,Eq2] 双块外侧边界删除时 p 整段移除，BlockEdge 起点后、文本焦点前的段落整段移除。补三条 BlockEdge 中间段回归测试。
+- 2026-11-11：PR #136 修复的分域只读评审（独立 deepseek-v4.1-flash subagent，行为/状态/测试与架构/分层/文档两组）结论均通过、无阻断。按建议收敛实现与文档：结构范围合并可行性只由 `paragraph_ops::merge_paragraph_range` 判定，Session 仅解析端点位置并移除无效文档克隆；`convert_math_host_to_structure_range` 更名为 `convert_math_host_to_document_selection` 并注明 Block/InlineMath 两种结果；`park_at_range_endpoint` 移入 `document_position.rs` 作为共享端点落点；`block-interaction.md`、`structure-navigation.md` 补齐不可合并回落、MathText 局部扩选与 Align cell 边界转换、普通 Left/Right 折叠规则；加强扩选锚点固定/范围非空的断言与空覆盖守卫的既有结构选区前置断言，并补环境内段落合并、ExplicitBreak 不可合并回落、IME 提交替换结构范围、Align 反向多 cell 边界测试。
+- 2026-11-11：保留项与未验证风险：结构删除新增“几何完全包含”判定按候选段落做端点比较、`remove_range_paragraphs` 做定位排序，属删除路径非逐字符热路径，未做基准（与既有覆盖派生同阶，纳入 041 基准范围考虑）；`selected_block_environment()` 清理后已无生产消费者，保留为单值派生/测试查询（同 `current_inline_environment` 先例）；无段落文档在 `Session::new` 的文档校验阶段即被拒绝，普通左右键折叠无需额外降级分支；MathTree→TextFlow 迁移时 Tree 锚点被替换、已累积 Tree 选区静默丢弃属既有行为，非本次引入，记录为后续单独评估项。
+- 2026-11-11：brooks-review 门禁发现的两条 Warning 已处理：结构选区块外侧边界锚点在 Home/End 与纵向候选扩展时按 `text_endpoint_clamped` 侧向投影为文本锚点（新增 `structure_selection_text_anchor`，横向/纵向/Home/End 共用，删除两处重复投影回退），补 Shift+Down/Home/End 覆盖公式对象回归与块外前边界的普通 Left 折叠测试；MathText 文本岛转换规则按实现语义收敛文档——同侧再无其它文本岛即转换为整公式对象（即使之后仍有符号/环境等非文本内容），补 `x	ext{ab}y` 正向转换测试与 `	ext{ab}` 块公式用例；InlineMath 根文本岛在文档校验阶段即被拒绝（必须提升为段落文本），不作为有效转换场景。
+
 
 ## 独立评审
 
@@ -100,6 +112,8 @@
 - brooks-review（PR 门禁，只读）：终审前复评 Health Score **97/100**，无 Critical/Warning；上一轮 3 条 Warning（鼠标/键盘晋级规则、落点/亲和性重复、安装写路径）已收敛，剩余 3 条 Suggestion（删除计划函数偏长、覆盖/端点二次扫描、`Direction` 兼任块外侧边）记录为后续重构项，其中扫描复杂度建议纳入 041 基准。终审随后发现空 BlockEdge 范围 Critical（见下），修复后全量复验通过。
 - brooks-test（测试质量，只读）：Health Score 81/100；3 条 Warning（相邻数学宿主删除缺回归、旧快照只测私有守卫、Align 遍历测试空转）全部补齐真实行为用例；Suggestion 中的失败错误种类、Escape 公共路径、陈旧几何断言、替换回滚均修复；测试夹具重复保留为测试维护性建议。
 - Sol final review（未参与实现的只读 subagent，最终树）：结论 needs fixes。发现 1 个 Critical：公式内 Shift+Left 转整公式范围后按 Shift+Right 会安装 `[After, After]` 空 BlockEdge 范围，导致选区不可见、Backspace/Delete 永久 no-op，并掩盖空段落退格路径；修复为“覆盖为空时不安装结构范围，清空并回落普通选区/停靠”，删除计划为空时回落普通删除，块边界输入前清理结构态，并加精确手势回归测试。另发现 1 个 Warning：IME 提交不消费结构范围，修复为 `CommitComposition` 走同一替换事务并加测试。第 2 个 Warning（范围内中间段落只截断不合并）确认为预期语义并写入 block-interaction.md。3 条 Suggestion（冗余派生谓词、BlockEdge 注释、`math_block_geometry` 找到标记顺序）中注释与几何顺序已修，冗余谓词保留为防御性检查。修复后 `cargo test --workspace --locked` = 1719 passed / 0 failed。另一份并行只读终审在修复前结论为 mergeable，未覆盖该空范围手势；以发现并修复 Critical 的终审为准。
+- PR #136 修复轮分域只读评审（deepseek-v4.1-flash 独立只读 subagent，行为/状态/测试与架构/分层/文档两组）：均通过、无阻断；建议项已收敛（合并前置条件单一权威、共享文本锚点、注释/架构文档与实现对齐、加强断言并补环境内合并/ExplicitBreak 回落/IME 替换/Align 反向多 cell 测试），详见决策与工作记录。
+- PR #136 修复轮 brooks-review（PR 门禁，只读，balanced）：Health Score **83/100**（完整 PR diff 抽样：未提交修复全部生产代码 + 基线高风险模块）；2 条 Warning、2 条 Suggestion。Warning 1「块外侧边界锚点的结构选区在 Shift+Home/End/Down 带候选时丢失覆盖对象」已修复：新增 `structure_selection_text_anchor` 按边界侧向投影文本锚点，横向/纵向/Home/End 候选共用，补垂直与 Home/End 覆盖回归；Warning 2「MathText 文本岛边界转换文档与实现不一致」按实现语义收敛文档（同侧无其它文本岛即转整公式对象）并补正向转换测试；Warning 3「正向转换/纵向扩展缺行为测试」已补 4 组测试；Suggestion R4（锚点解析重复）随共享 helper 消除。R1（删除计划函数偏长、补位段落逻辑重复）保留为后续重构项。
 - 本环境没有 gpt-6.1-terra / gpt-6.1-sol，使用 deepseek-v4.1-flash 的独立只读 subagent 承担相同分域与最终评审角色。
 - 保留的后续项：`plan_structure_range_deletion` 仍为 140 行编排（阶段 helper 已分离）；结构范围覆盖/文本端点派生仍按块/段落线性扫描，复杂度未做基准，建议纳入 041；`BlockEdge.side` 仍复用 `Direction`，可后续引入 `BlockSide`。这些不改变当前行为，不作为本任务的阻断项。
 
