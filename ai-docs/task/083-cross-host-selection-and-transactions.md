@@ -109,6 +109,8 @@
 
 - 2026-11-12：桌面测试小瑕疵补漏（083 范围）：①`\math` 内 Shift+Right 到右边界转换后光标落在对象左缘（段尾场景）：`inline_math_slot_bounds` 前后亲和性写反，改为 before=(start,Downstream)/after=(end,Upstream)，与 `exit_math_edit_for_navigation`/停靠路径统一；补 app 段首/段中/段尾与 Shift/非 Shift 一致性回归。②左右键无法进入连续 Equation/Align、Shift 一次选中整条公式链：水平候选跨多个纯公式块时改为逐个文档单元（非扩展先停靠再进块，扩展走 `extend_structure_selection`），补 engine/app 回归。③集成期回归：32490721 的非严格“中间段完全包含”判定会把与块外侧边界重合的零宽空段落当作范围内段落一并删除；改为“至少一个严格位于范围内的段落”才算中间段，补 7 条回归（含真实 Shift 手势与 Undo/Redo）。
 - 2026-11-12：本轮另有 2 项非 083 范围的小瑕疵按用户要求在同分支修复并独立任务记录：InlineEnvironment 普通 Backspace 清理见 [089](089-inline-environment-backspace-cleanup.md)；跨公式块/块环境拖选实时预览见 [090](090-drag-selection-live-preview.md)。PR 范围扩大的原因与 086/087 相同（桌面测试后用户要求同分支继续），任务卡与提交信息逐项标注。
+- 2026-11-12：用户反馈 3 项回归修复：①行内公式选中时同一对象可能画出两个重叠矩形（Parley 把对象 advance 折进后一字素簇，086 只处理未选中对象）；caret-layout 改为统一归一化——对每个非零宽 inline object 盒区间始终从同 line 选区矩形裁除（可拆左右段），仅对被完整选中的对象补一次整盒，最后合并同 line 相邻矩形；起点/终点在对象任一侧、RTL、零宽对象均不重复/不膨胀。②非纯公式块链（p｜Eq｜Section｜q）方向键只在全公式时逐块：新增 `next_range_focus_step`/`candidate_skips_next_complex_unit`，候选越过紧邻复杂块且其后仍有复杂单元时按一个文档单元处理；扩选每次只加一个对象，非扩展先停靠/进入第一个公式；补公式外停靠进入相邻块环境的入口；单块后接普通文本仍保持精确文本端点契约。③structure 中间段注释与判定（相交语义，含内部零宽段）已对齐。环境入口首末公式的既定取舍记录为“标题/首个可编辑文本段落入口，随后按方向键逐块进入”，未在入口伪造块外侧停靠。
+- 2026-11-12：CI 增加 Rust 改动时 `cargo test --locked --package caret-app --lib` 兜底步骤（选择器漏选 caret-app 时仍覆盖快照/高亮投影单测）；顺带修正拖选架构文档与 086 归一化契约记录。
 ## 独立评审
 
 - 行为/状态域（Terra/medium，只读）：发现 1 个 Critical（结构选区 Delete 被 `delete_empty_paragraph_after_math` 抢先，删错空段落并残留悬空选区）、1 个 Warning（app 仍用 `structure_selection()` 判断，BlockEdge 范围误画外层 Section 高亮）、1 个 Suggestion（空文本替换仍提交删除计划）。全部修复并加回归测试；同时修复纯文本步骤误装结构选区、纵向无候选伪造字素范围、鼠标晋级端点未规范、公式文本岛过早转对象范围、替换回滚未覆盖 history/generation/pending style。
