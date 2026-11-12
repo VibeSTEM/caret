@@ -117,7 +117,7 @@
 | 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
 | 084 | 文档模型 | [行内与数学内容形状及容器边界](task/084-document-content-shapes-and-boundaries.md) | P1 | 025、032、081、082 | L | planned |
 | 085 | 文档存储 | [已知节点严格字段与消费者校验](task/085-strict-document-schema-validation.md) | P1 | 025、032、084 | L | draft |
-| 086 | 画布几何 | [行内对象边界选区几何修正](task/086-inline-box-selection-geometry.md) | P1 | 030、044、068 | S | planned |
-| 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | planned |
+| 086 | 画布几何 | [行内对象边界选区几何修正](task/086-inline-box-selection-geometry.md) | P1 | 030、044、068 | S | implemented |
+| 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | implemented |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

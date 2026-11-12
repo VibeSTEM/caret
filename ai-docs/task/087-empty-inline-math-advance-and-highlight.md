@@ -1,6 +1,6 @@
 # 087 — 空 InlineMath 行内推进与聚焦高亮契约
 
-- 状态：planned
+- 状态：implemented
 - 依赖：044、072、074
 - 优先级：P1
 - 创建 / 更新：2026-11-12 / 2026-11-12
@@ -58,7 +58,9 @@
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
 | 2026-11-12 | 只读调查（临时 engine/app 探针） | 定位 advance/高亮来源并验证可行 | 已确认（数值见目标与背景） |
-| — | `cargo test --locked -p caret-math`、`-p caret-engine`、`-p caret-app` | 行内推进/高亮/命中回归通过 | 未执行 |
+| 2026-11-12 | `cargo test --locked -p caret-math -p caret-engine -p caret-app` | 行内推进/高亮/命中/删除/Undo 回归 | 通过：math 136、engine 843、app 314，0 failed；空公式 IME 未单独覆盖（既有非空数学 IME 用例通过） |
+| 2026-11-12 | `cargo test --workspace --locked`、workspace clippy `-D warnings`、fmt check | 全量无回归 | 通过（exit 0） |
+| — | Qt 桌面截图（颜色/padding/radius/zoom≠1） | 空公式粉色槽与空 Bold 视觉一致 | 未执行（本环境无窗口） |
 
 ## 风险与回退
 
@@ -69,3 +71,7 @@
 ## 决策与工作记录
 
 - 2026-11-12：从 PR #136 桌面测试发现中拆出；只读调查确认 072 契约漏了“隐藏盒宽进入正文 advance”和“粉色按 U+FFFC 范围而非插入槽”两条；建议独立 fix(072/044) PR，不混入 #136。
+- 2026-11-12：按用户继续指令在 PR #136 分支追加实现（与 086 分开提交），决策采用“零推进 + 插入槽命中”而非 1.5pt 极小推进：caret-math `MathLayout.inline_advance`（只在 Inline 空宿主为 0，frame/节点盒 0.6em×0.7em 与 072 描边契约不变）；engine advance 改用该字段，空宿主命中以公式 caret 居中的插入槽（`max(0.5em,4pt)`）并在点落入正宽正文/文本岛字素内部时跳过公式候选，避免吞邻字；`EnvironmentEntry.empty_inline_host` 单一标记 + app 复用插入槽投影。数值：12pt 空 InlineMath advance 0、相邻文本 caret x 与空 Bold 一致（79.623）、粉色槽 6pt 居中、9/20pt 为 4.5/10pt；命中槽中心进入公式、邻字内部落正文；空公式 Backspace→"AB"、Undo 恢复。072 既有命中采样点按新契约调整（Equation/Align 不变）。遗留：零推进后实际可点入区域约为 caret 两侧各 1.5pt（视觉槽更宽但边缘按字素内缩归正文），桌面验收需按此预期检查；engine 的字素内缩判定与 app 命中语义目前两处实现，建议后续下沉为单一 helper；Qt 截图/zoom 未验证。
+- 2026-11-12：增量独立评审发现并修复阻断：选区恰好覆盖空 InlineMath 时，caret-layout 的“完整覆盖对象补整框”会补出零宽矩形（advance=0），Qt 快照 codec 因 x1<=x0 拒绝整份快照。修复：caret-layout 补框跳过 width<=0 对象；engine selection/composition 投影防御性过滤 x1<=x0；app 空宿主在无公式 caret（Source 分支）时退回共享 caret/行框插入槽而不是按 U+FFFC 范围投影。补 engine/app 回归：选中空公式 `1..4`、段落首 `0..3` 不产生零宽 selectionRects。
+
+- 2026-11-12：B1 修复后的短增量独立复核结论 mergeable：caret-layout 补框跳过零宽对象、engine 投影过滤零宽、app Source 分支退回插入槽三条均落地；独立 probe 复测 `A{math}B` 选区 1..4、段落首 0..3 现在返回空矩形而非零宽，相邻文字正常选区不变；caret-math/engine/app 全绿，Qt codec 的 x1<=x0 拒绝分支不可再达。残留：engine/app 的插入槽与正文优先规则仍两份实现，建议后续下沉为单一 helper；Qt 桌面截图与 zoom≠1 未验证。
