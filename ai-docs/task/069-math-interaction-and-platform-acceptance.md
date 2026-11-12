@@ -71,3 +71,5 @@
 ## 完成摘要
 
 未完成。按本任务标准完成交互行为和三平台验收后更新状态及 011。
+
+- 2026-11-12：PR #136 桌面测试新增 4 项发现并分流：公式内部 Shift 选区无蓝色高亮、InlineMath 上下键 no-op 属 083 补漏，已在当前 PR 修复并补回归；紧邻 InlineMath 被粉色误高亮（行内对象边界选区几何）由 [086](086-inline-box-selection-geometry.md) 跟踪；空 InlineMath 额外间隙与聚焦高亮不一致由 [087](087-empty-inline-math-advance-and-highlight.md) 跟踪。本任务继续负责三平台真实桌面复验，不复制上述实现。
