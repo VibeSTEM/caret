@@ -3,7 +3,8 @@
 use super::*;
 use caret_doc::{
     BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment, InlineEnvironmentKind,
-    MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineMath, MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
+    TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -1846,4 +1847,1218 @@ fn invalid_model_is_rejected_and_unknown_content_does_not_publish_a_partial_layo
     assert!(runtime.last_snapshot.is_none());
     assert_eq!(runtime.session.document_generation(), 0);
     Ok(())
+}
+
+/// 构造带一个文本片段的段落。
+fn paragraph_with_id(id: &NodeId, text: &str) -> Paragraph {
+    let mut paragraph = Paragraph::empty(id.clone());
+    paragraph.inlines = vec![ParagraphContent::Text(TextFlow {
+        runs: vec![Run {
+            text: text.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })];
+    paragraph
+}
+
+/// 构造带一个文本片段的显示公式块。
+fn equation_block(id: &NodeId, text: &str) -> Block {
+    Block::Equation(Equation {
+        id: id.clone(),
+        math_tree: MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: MathFlow {
+                id: NodeId::generate(),
+                content: vec![MathContent::Text(TextFlow {
+                    runs: vec![Run {
+                        text: text.to_owned(),
+                        language: None,
+                        props: BTreeMap::new(),
+                        extra: BTreeMap::new(),
+                    }],
+                    extra: BTreeMap::new(),
+                })],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    })
+}
+
+fn collapsed_selection(paragraph_id: &NodeId, offset: usize) -> caret_engine::Selection {
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity: caret_engine::Affinity::Upstream,
+    };
+    caret_engine::Selection {
+        anchor: position.clone(),
+        focus: position,
+    }
+}
+
+fn rectangle_close(
+    actual: &(i64, f64, f64, f64, f64),
+    expected: (i64, f64, f64, f64, f64),
+) -> bool {
+    actual.0 == expected.0
+        && (actual.1 - expected.1).abs() < 1e-9
+        && (actual.2 - expected.2).abs() < 1e-9
+        && (actual.3 - expected.3).abs() < 1e-9
+        && (actual.4 - expected.4).abs() < 1e-9
+}
+
+/// 连续扩选直到公式块被结构范围覆盖；单步的边界停靠不属于本测试的契约。
+fn extend_until_math_selected(
+    runtime: &mut DocumentViewRuntime,
+    forward: bool,
+    math_id: &NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..4 {
+        if runtime.session.selected_math_blocks() == std::slice::from_ref(math_id) {
+            return Ok(());
+        }
+        runtime.move_visual_caret_json(forward, true)?;
+    }
+    Err(std::io::Error::other("structural extension did not cover the equation").into())
+}
+
+fn rectangle_tuples(value: &Value) -> Vec<(i64, f64, f64, f64, f64)> {
+    value
+        .as_array()
+        .map(|rectangles| {
+            rectangles
+                .iter()
+                .map(|rectangle| {
+                    (
+                        rectangle["pageIndex"].as_i64().unwrap_or_default(),
+                        rectangle["x0Pt"].as_f64().unwrap_or_default(),
+                        rectangle["y0Pt"].as_f64().unwrap_or_default(),
+                        rectangle["x1Pt"].as_f64().unwrap_or_default(),
+                        rectangle["y1Pt"].as_f64().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn structural_selection_geometry_covers_equation_hosts_across_host_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let page = runtime.current_snapshot()?.pages[0].clone();
+    let math_rectangles = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    assert_eq!(math_rectangles.len(), 1);
+    let math_rectangle = math_rectangles[0];
+    let math_tuple = (
+        i64::try_from(math_rectangle.page_index)?,
+        math_rectangle.x0_pt,
+        math_rectangle.y0_pt,
+        math_rectangle.x1_pt,
+        math_rectangle.y1_pt,
+    );
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+
+    // 第一次 Shift+Right：公式整体进入结构选区，选区层由公式整栏矩形表示。
+    let first: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert!(
+        runtime.session.structure_selection_range().is_some(),
+        "cross-host selection must publish structural endpoints"
+    );
+    let first_rectangles = rectangle_tuples(&first["selectionRects"]);
+    assert_eq!(
+        first_rectangles.len(),
+        1,
+        "the selected equation must be the only visible selection geometry"
+    );
+    assert!(
+        rectangle_close(&first_rectangles[0], math_tuple),
+        "selection geometry must match the equation host rectangle"
+    );
+    assert!(
+        (math_rectangle.x1_pt - (page.width_pt - page.margin_right_pt)).abs() < 1e-9
+            && (math_rectangle.x0_pt - page.margin_left_pt).abs() < 1e-9,
+        "the equation selection must span the page content width"
+    );
+    assert_eq!(
+        first["mathBlockHighlightRects"],
+        serde_json::json!([]),
+        "a structural selection belongs to the selection layer, not the block highlight layer"
+    );
+
+    // 继续 Shift+Right：结构范围保留公式并延伸到后一段文字。
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    let extended: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)?;
+    let extended_rectangles = rectangle_tuples(&extended["selectionRects"]);
+    assert!(
+        extended_rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, math_tuple)),
+        "the equation rectangle must survive further extension"
+    );
+    assert!(
+        extended_rectangles
+            .iter()
+            .any(|(_, x0, _, x1, _)| { (x1 - x0) < (math_rectangle.x1_pt - math_rectangle.x0_pt) }),
+        "extension into the following paragraph must add its text rectangle"
+    );
+    Ok(())
+}
+
+#[test]
+fn block_edge_structural_selection_geometry_resolves_without_a_preceding_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&after_id, 0),
+        )))?;
+
+    extend_until_math_selected(&mut runtime, false, &math_id)?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    assert!(
+        runtime
+            .session
+            .structure_selection_range()
+            .is_some_and(|(anchor, focus)| {
+                [anchor, focus].into_iter().any(|endpoint| {
+                    matches!(
+                        endpoint,
+                        caret_engine::DocumentRangeEndpoint::BlockEdge {
+                            side: caret_engine::Direction::Backward,
+                            ..
+                        }
+                    )
+                })
+            }),
+        "an equation without a preceding paragraph must use the block backward edge"
+    );
+    let bounds = runtime
+        .session
+        .structure_selection_text_bounds()
+        .ok_or_else(|| std::io::Error::other("block edge text bounds are missing"))?;
+    assert_eq!(bounds.0.paragraph_id, after_id);
+    assert_eq!(bounds.1.paragraph_id, after_id);
+    let interaction_rectangles = rectangle_tuples(&interaction["selectionRects"]);
+    assert_eq!(interaction_rectangles.len(), 1);
+    assert!(rectangle_close(
+        &interaction_rectangles[0],
+        (
+            i64::try_from(math_rectangle.page_index)?,
+            math_rectangle.x0_pt,
+            math_rectangle.y0_pt,
+            math_rectangle.x1_pt,
+            math_rectangle.y1_pt,
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn block_edge_forward_endpoint_projects_a_trailing_equation_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+
+    extend_until_math_selected(&mut runtime, true, &math_id)?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let bounds = runtime
+        .session
+        .structure_selection_text_bounds()
+        .ok_or_else(|| std::io::Error::other("block edge text bounds are missing"))?;
+    assert_eq!(bounds.0.paragraph_id, before_id);
+    assert_eq!(bounds.1.paragraph_id, before_id);
+    assert!(
+        runtime
+            .session
+            .structure_selection_range()
+            .is_some_and(|(anchor, focus)| {
+                [anchor, focus].into_iter().any(|endpoint| {
+                    matches!(
+                        endpoint,
+                        caret_engine::DocumentRangeEndpoint::BlockEdge {
+                            side: caret_engine::Direction::Forward,
+                            ..
+                        }
+                    )
+                })
+            }),
+        "a trailing equation selection must include the block forward edge"
+    );
+    let rectangles = rectangle_tuples(&interaction["selectionRects"]);
+    assert_eq!(rectangles.len(), 1);
+    assert!(rectangle_close(
+        &rectangles[0],
+        (
+            i64::try_from(math_rectangle.page_index)?,
+            math_rectangle.x0_pt,
+            math_rectangle.y0_pt,
+            math_rectangle.x1_pt,
+            math_rectangle.y1_pt,
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn equation_selection_inside_a_section_suppresses_block_and_inline_highlights()
+-> Result<(), Box<dyn std::error::Error>> {
+    let section_id = NodeId::generate();
+    let title_id = NodeId::generate();
+    let p0_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Environment(BlockEnvironment {
+        id: section_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph_with_id(&title_id, "title")),
+        children: vec![
+            Block::Paragraph(paragraph_with_id(&p0_id, "p0")),
+            equation_block(&math_id, "x"),
+        ],
+        extra: BTreeMap::new(),
+    })];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&p0_id, "p0".len()),
+        )))?;
+
+    extend_until_math_selected(&mut runtime, true, &math_id)?;
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+
+    // 该范围一端是公式块外侧边界：`structure_selection()` 为 `None`，但结构选区实际存在。
+    assert!(runtime.session.has_structure_selection());
+    assert!(runtime.session.structure_selection().is_none());
+    assert!(
+        runtime
+            .session
+            .structure_selection_range()
+            .is_some_and(|(_, focus)| matches!(
+                focus,
+                caret_engine::DocumentRangeEndpoint::BlockEdge { .. }
+            )),
+        "the regression case needs a block edge endpoint"
+    );
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert!(runtime.session.selected_block_environment().is_none());
+    // 结构选区激活时不得回落到外层 Section 的块高亮、公式块高亮或行内空槽。
+    assert_eq!(
+        interaction["blockEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        interaction["mathBlockHighlightRects"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        interaction["inlineEnvironmentHighlightRects"],
+        serde_json::json!([])
+    );
+    assert!(!runtime.session.has_pending_inline_style());
+    // 选中的公式只由选区层对象矩形呈现。
+    let rectangles = rectangle_tuples(&interaction["selectionRects"]);
+    assert_eq!(rectangles.len(), 1);
+    assert!(rectangle_close(
+        &rectangles[0],
+        (
+            i64::try_from(math_rectangle.page_index)?,
+            math_rectangle.x0_pt,
+            math_rectangle.y0_pt,
+            math_rectangle.x1_pt,
+            math_rectangle.y1_pt,
+        )
+    ));
+    Ok(())
+}
+
+#[test]
+fn replacing_an_equation_only_structural_range_publishes_a_full_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+    assert!(runtime.session.selected_block_environment().is_none());
+
+    // 只覆盖公式块的结构范围也必须发布完整快照，不能走单段增量路径。
+    let result: Value = serde_json::from_str(&runtime.insert_text_delta_json("Z".to_owned())?)?;
+    assert!(
+        result.get("partial").is_none(),
+        "a structural replacement must not publish a delta view"
+    );
+    assert!(
+        result.get("baseDocumentGeneration").is_none(),
+        "a structural replacement must not publish delta base metadata"
+    );
+    assert_eq!(result["documentGeneration"], "1");
+    let paragraphs = result["paragraphs"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("full snapshot paragraphs are missing"))?
+        .iter()
+        .map(|paragraph| paragraph["text"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+    // 两端文本端点与纯文本跨段替换一致：合并两端段落后在切口插入，公式块移除。
+    assert_eq!(paragraphs, ["beforeZafter"]);
+    // 文档中不再有公式块，替换后的插入点折叠在合并段落切口处。
+    assert!(
+        runtime
+            .session
+            .document()
+            .body
+            .iter()
+            .all(|block| { matches!(block, Block::Paragraph(_)) })
+    );
+    assert!(!runtime.session.has_structure_selection());
+    assert!(runtime.session.selected_math_blocks().is_empty());
+    let selection = runtime.session.selection();
+    assert_eq!(selection.anchor, selection.focus);
+    assert_eq!(selection.focus.paragraph_id, before_id);
+    assert_eq!(selection.focus.offset, "beforeZ".len());
+    assert_eq!(runtime.document().body.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn incremental_and_full_snapshots_publish_equal_structural_selection_geometry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+    runtime.move_visual_caret_json(true, true)?;
+    runtime.move_visual_caret_json(true, true)?;
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    let generation = runtime
+        .last_snapshot
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("layout snapshot is missing"))?
+        .document_generation;
+
+    let delta: Value = serde_json::from_str(
+        &runtime.layout_snapshot_json_with_delta(Some((&after_id, 0, generation)))?,
+    )?;
+    assert_eq!(delta["partial"], true);
+    assert_eq!(delta["documentGeneration"], full["documentGeneration"]);
+    assert_eq!(delta["fontGeneration"], full["fontGeneration"]);
+    assert_eq!(delta["selectionRects"], full["selectionRects"]);
+    assert_eq!(
+        delta["mathBlockHighlightRects"],
+        full["mathBlockHighlightRects"]
+    );
+    assert_eq!(
+        delta["blockEnvironmentHighlightRects"],
+        full["blockEnvironmentHighlightRects"]
+    );
+    assert_eq!(
+        delta["inlineEnvironmentHighlightRects"],
+        full["inlineEnvironmentHighlightRects"]
+    );
+    Ok(())
+}
+
+#[test]
+fn plain_arrow_collapses_a_structural_selection_instead_of_moving_from_its_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+
+    // 布局候选路径的 Shift+Right 把公式对象纳入文本范围：终点是公式后段落起点。
+    runtime.move_visual_caret_json(true, true)?;
+    assert!(runtime.session.has_structure_selection());
+
+    let collapsed: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, false)?)?;
+
+    // 普通 Right 折叠到范围终点并停靠在公式后边界，而不是从焦点再前移一个字符。
+    assert!(!runtime.session.has_structure_selection());
+    assert!(runtime.session.selected_math_blocks().is_empty());
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 0);
+    assert_eq!(
+        collapsed["selectionRects"],
+        serde_json::json!([]),
+        "折叠后不应继续绘制结构选区矩形"
+    );
+
+    // 折叠消费了本次按键；再从折叠落点按 Right 正常前进一个视觉步长。
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+    assert_eq!(runtime.session.selection().focus.offset, 1);
+    Ok(())
+}
+
+#[test]
+fn plain_left_collapses_a_text_structural_selection_to_its_document_start()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before_id = NodeId::generate();
+    let after_id = NodeId::generate();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_id(&before_id, "before")),
+        equation_block(&math_id, "x"),
+        Block::Paragraph(paragraph_with_id(&after_id, "after")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            collapsed_selection(&before_id, "before".len()),
+        )))?;
+    // 两次 Shift+Right：先覆盖公式，再把焦点写进后一段文字。
+    runtime.move_visual_caret_json(true, true)?;
+    runtime.move_visual_caret_json(true, true)?;
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, after_id);
+
+    runtime.move_visual_caret_json(false, false)?;
+
+    // Left 折叠到结构范围起点（前一端段落末尾），而不是从焦点向左退一个字符。
+    assert!(!runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selection().anchor,
+        runtime.session.selection().focus
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, before_id);
+    assert_eq!(runtime.session.selection().focus.offset, "before".len());
+    Ok(())
+}
+
+fn empty_inline_math_runtime(
+    font_size_centipoints: u16,
+) -> Result<(DocumentViewRuntime, NodeId), Box<dyn std::error::Error>> {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "A".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "B".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.global_settings.default_font_size_centipoints = font_size_centipoints;
+    document.body = vec![Block::Paragraph(paragraph)];
+    Ok((DocumentViewRuntime::new(document)?, paragraph_id))
+}
+
+fn focus_empty_inline_math(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))?;
+    runtime.session.run(caret_engine::Command::EnterMath(
+        caret_engine::Direction::Forward,
+    ))?;
+    runtime.layout_snapshot_json()?;
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_focus_publishes_the_shared_insertion_slot()
+-> Result<(), Box<dyn std::error::Error>> {
+    for font_size_centipoints in [900u16, 1200, 2000] {
+        let (mut runtime, paragraph_id) = empty_inline_math_runtime(font_size_centipoints)?;
+        focus_empty_inline_math(&mut runtime, &paragraph_id)?;
+        let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        let caret_x = interaction["caretGeometry"]["xPt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("empty inline math caret is missing"))?;
+        let rectangles = interaction["inlineEnvironmentHighlightRects"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("inline highlight was omitted"))?;
+        assert_eq!(rectangles.len(), 1);
+        let x0 = rectangles[0]["x0Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("slot x0 is missing"))?;
+        let x1 = rectangles[0]["x1Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("slot x1 is missing"))?;
+        let expected_width = (f64::from(font_size_centipoints) / 100.0 * 0.5).max(4.0);
+        assert!(
+            (x1 - x0 - expected_width).abs() < 1e-6,
+            "slot width mismatch at {font_size_centipoints}: {x0}..{x1}"
+        );
+        assert!(
+            ((x0 + x1) / 2.0 - caret_x).abs() < 1e-6,
+            "slot must be centered on the math caret at {font_size_centipoints}"
+        );
+        assert_eq!(interaction["selectionRects"], serde_json::json!([]));
+        assert_eq!(
+            interaction["mathBlockHighlightRects"],
+            serde_json::json!([])
+        );
+    }
+
+    // 与待输入格式槽完全同宽（12pt 时都是 6pt）。
+    let (mut math_runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    focus_empty_inline_math(&mut math_runtime, &paragraph_id)?;
+    let math_snapshot: Value = serde_json::from_str(&math_runtime.layout_snapshot_json()?)?;
+    let math_rectangles = math_snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("empty inline math highlight is missing"))?;
+    let mut pending_runtime = DocumentViewRuntime::new_blank()?;
+    pending_runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Bold,
+        ))?;
+    let pending: Value = serde_json::from_str(&pending_runtime.layout_snapshot_json()?)?;
+    let pending_rectangles = pending["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("pending format slot is missing"))?;
+    assert_eq!(math_rectangles.len(), 1);
+    assert_eq!(pending_rectangles.len(), 1);
+    let math_x0 = math_rectangles[0]["x0Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("math slot x0 is missing"))?;
+    let math_x1 = math_rectangles[0]["x1Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("math slot x1 is missing"))?;
+    let pending_x0 = pending_rectangles[0]["x0Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("pending slot x0 is missing"))?;
+    let pending_x1 = pending_rectangles[0]["x1Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("pending slot x1 is missing"))?;
+    let math_width = math_x1 - math_x0;
+    let pending_width = pending_x1 - pending_x0;
+    assert!((math_width - pending_width).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn selecting_only_an_empty_inline_math_publishes_no_zero_width_rectangles()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    runtime.layout_snapshot_json()?;
+    let position = |offset, affinity| caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position(1, caret_engine::Affinity::Downstream),
+                focus: position(4, caret_engine::Affinity::Upstream),
+            },
+        )))?;
+
+    for json in [
+        runtime.interaction_state_json()?,
+        runtime.layout_snapshot_json()?,
+    ] {
+        let value: Value = serde_json::from_str(&json)?;
+        let rectangles = value["selectionRects"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("selectionRects is missing"))?;
+        for rectangle in rectangles {
+            let x0 = rectangle["x0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("x0Pt is missing"))?;
+            let x1 = rectangle["x1Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("x1Pt is missing"))?;
+            let y0 = rectangle["y0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("y0Pt is missing"))?;
+            let y1 = rectangle["y1Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("y1Pt is missing"))?;
+            assert!(
+                x1 > x0 && y1 > y0,
+                "empty inline math selection produced a degenerate rectangle: {rectangle:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_click_hits_the_slot_without_swallowing_following_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    let snapshot = runtime.current_snapshot()?.clone();
+
+    // 右侧相邻文本内部仍归正文，不因空公式槽重叠而进入公式。
+    let following_caret = snapshot
+        .caret_geometry(
+            &caret_engine::Pos {
+                story: caret_engine::StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 4,
+                affinity: caret_engine::Affinity::Downstream,
+            },
+            caret_engine::VisualAffinity::Downstream,
+        )
+        .ok_or_else(|| std::io::Error::other("following text caret is missing"))?;
+    let body: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        0,
+        following_caret.x_pt + 2.5,
+        following_caret.y0_pt + 2.0,
+    )?)?;
+    assert_ne!(body["mathTree"], true);
+    let offset = body["position"]["offsetUtf8"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("body position is missing"))?;
+    assert!(
+        offset == "4" || offset == "5",
+        "unexpected body offset {offset}"
+    );
+
+    // 插入槽中心（公式 caret 处）仍可命中并进入公式。
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    let snapshot = runtime.current_snapshot()?.clone();
+    let math_caret = snapshot
+        .caret_geometry(
+            &caret_engine::Pos {
+                story: caret_engine::StoryId::Body,
+                paragraph_id,
+                offset: 1,
+                affinity: caret_engine::Affinity::Downstream,
+            },
+            caret_engine::VisualAffinity::Upstream,
+        )
+        .ok_or_else(|| std::io::Error::other("empty inline math caret is missing"))?;
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        0,
+        math_caret.x_pt,
+        math_caret.y0_pt + 2.0,
+    )?)?;
+    assert_eq!(placed["valid"], true);
+    assert_eq!(placed["mathTree"], true);
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_zero_advance_keeps_delete_and_undo() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    focus_empty_inline_math(&mut runtime, &paragraph_id)?;
+    runtime.delete_backward_json()?;
+    assert_eq!(paragraph_plain_text(runtime.document()), "AB");
+    runtime.undo_json()?;
+    assert_eq!(paragraph_plain_text(runtime.document()), "A\u{fffc}B");
+    Ok(())
+}
+
+fn paragraph_plain_text(document: &Document) -> String {
+    fn collect(contents: &[ParagraphContent], out: &mut String) {
+        for content in contents {
+            match content {
+                ParagraphContent::Text(flow) => {
+                    for run in &flow.runs {
+                        out.push_str(&run.text);
+                    }
+                }
+                ParagraphContent::Math(_) => out.push('\u{fffc}'),
+                ParagraphContent::Environment(environment) => {
+                    collect(&environment.children, out);
+                }
+                ParagraphContent::SoftBreak(_) => out.push('\n'),
+                ParagraphContent::Opaque(_) => out.push('\u{fffc}'),
+            }
+        }
+    }
+    let mut text = String::new();
+    if let Some(Block::Paragraph(paragraph)) = document.body.first() {
+        collect(&paragraph.inlines, &mut text);
+    }
+    text
+}
+
+/// 构造与 C++ `setSelection` 桥接一致的正文拖选载荷，模拟拖动中的每次提交。
+fn body_drag_payload(anchor: (&NodeId, usize), focus: (&NodeId, usize)) -> String {
+    let position = |paragraph_id: &NodeId, offset: usize| {
+        serde_json::json!({
+            "kind": "body",
+            "domainId": "body",
+            "paragraphId": paragraph_id.to_string(),
+            "offsetUtf8": offset.to_string(),
+            "orderUtf8": offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream",
+        })
+    };
+    serde_json::json!({
+        "anchor": position(anchor.0, anchor.1),
+        "focus": position(focus.0, focus.1),
+    })
+    .to_string()
+}
+
+#[test]
+fn dragging_across_display_math_previews_the_math_block_rect_before_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "abc");
+    let before_id = before.id.clone();
+    let after = paragraph_with_id(&NodeId::generate(), "xyz");
+    let after_id = after.id.clone();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation_block(&math_id, "x+y"),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    let math_tuple = (
+        i64::try_from(math_rectangle.page_index)?,
+        math_rectangle.x0_pt,
+        math_rectangle.y0_pt,
+        math_rectangle.x1_pt,
+        math_rectangle.y1_pt,
+    );
+
+    // 根因确认：现有拖选命中映射只有正文片段，没有覆盖公式块对象的预览矩形。
+    let drag_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let drag_map_rows = drag_map["segments"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag hit map segments are missing"))?;
+    assert!(
+        !drag_map_rows
+            .iter()
+            .any(|segment| rectangle_close(&tuple_from_rect(segment), math_tuple)),
+        "drag hit map must not yet expose the display math rectangle"
+    );
+
+    // 拖动过程（松手前）：每次焦点变化提交同一套 Rust 选区投影，公式块矩形必须可见。
+    let drag_payload = body_drag_payload((&before_id, 1), (&after_id, 1));
+    let dragging: Value = serde_json::from_str(&runtime.set_selection_json(&drag_payload)?)?;
+    let dragging_rectangles = rectangle_tuples(&dragging["selectionRects"]);
+    assert!(
+        dragging_rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, math_tuple)),
+        "dragging across an equation must preview its full-width block rectangle"
+    );
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+
+    // 松手后的提交与拖动中几何一致。
+    let released: Value = serde_json::from_str(&runtime.set_selection_json(&drag_payload)?)?;
+    assert_eq!(released["selectionRects"], dragging["selectionRects"]);
+    Ok(())
+}
+
+fn tuple_from_rect(value: &Value) -> (i64, f64, f64, f64, f64) {
+    (
+        value["pageIndex"].as_i64().unwrap_or_default(),
+        value["x0Pt"].as_f64().unwrap_or_default(),
+        value["y0Pt"].as_f64().unwrap_or_default(),
+        value["x1Pt"].as_f64().unwrap_or_default(),
+        value["y1Pt"].as_f64().unwrap_or_default(),
+    )
+}
+
+#[test]
+fn dragging_within_paragraph_before_display_math_does_not_preview_the_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "abc");
+    let before_id = before.id.clone();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), equation_block(&math_id, "x+y")];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    let math_tuple = (
+        i64::try_from(math_rectangle.page_index)?,
+        math_rectangle.x0_pt,
+        math_rectangle.y0_pt,
+        math_rectangle.x1_pt,
+        math_rectangle.y1_pt,
+    );
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&before_id, 0), (&before_id, 2)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    assert!(!runtime.session.has_structure_selection());
+    assert!(
+        !rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, math_tuple))
+    );
+    Ok(())
+}
+
+#[test]
+fn dragging_across_a_block_environment_previews_its_environment_rect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "before");
+    let before_id = before.id.clone();
+    let environment_id = NodeId::generate();
+    let title_id = NodeId::generate();
+    let child = paragraph_with_id(&NodeId::generate(), "inside");
+    let child_id = child.id.clone();
+    let after = paragraph_with_id(&NodeId::generate(), "after");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(paragraph_with_id(&title_id, "title")),
+            children: vec![Block::Paragraph(child)],
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let environment_rectangles = runtime
+        .current_snapshot()?
+        .environment_ranges
+        .iter()
+        .filter(|range| range.environment_id == environment_id)
+        .map(|range| {
+            (
+                i64::try_from(range.page_index).unwrap_or_default(),
+                range.x0_pt,
+                range.y0_pt,
+                range.x1_pt,
+                range.y1_pt,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(!environment_rectangles.is_empty());
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&before_id, 1), (&child_id, 1)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        std::slice::from_ref(&environment_id)
+    );
+    for expected in environment_rectangles {
+        assert!(
+            rectangles
+                .iter()
+                .any(|rectangle| rectangle_close(rectangle, expected)),
+            "dragging across a block environment must preview its environment rect"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dragging_across_inline_math_and_rtl_text_keeps_page_bounded_rects()
+-> Result<(), Box<dyn std::error::Error>> {
+    // InlineMath：先经命令面板插入并输入内容，再退出公式编辑后整体拖选。
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
+    runtime.command_line_command_json("accept", String::new())?;
+    runtime.insert_text_json("x".to_owned())?;
+    runtime.handle_editor_key_json("escape")?;
+    runtime.layout_snapshot_json()?;
+    let paragraph_id = runtime
+        .document()
+        .body
+        .first()
+        .and_then(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| std::io::Error::other("paragraph is missing"))?;
+    let text_len = runtime
+        .session
+        .document()
+        .body
+        .first()
+        .and_then(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph_text_len(paragraph)),
+            _ => None,
+        });
+    let text_len = text_len.ok_or_else(|| std::io::Error::other("paragraph text is missing"))?;
+    let selection: Value = serde_json::from_str(&runtime.set_selection_json(
+        &body_drag_payload((&paragraph_id, 0), (&paragraph_id, text_len)),
+    )?)?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    assert!(!runtime.session.has_structure_selection());
+    let page = &runtime.current_snapshot()?.pages[0];
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle.0 == 0
+            && rectangle.1 >= 0.0
+            && rectangle.2 >= 0.0
+            && rectangle.3 <= page.width_pt
+            && rectangle.4 <= page.height_pt
+            && rectangle.1 < rectangle.3
+    }));
+
+    // RTL 文本：提交与释放路径几何一致，且不越出页面。
+    let rtl = paragraph_with_id(&NodeId::generate(), "شكرا");
+    let rtl_id = rtl.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(rtl)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&rtl_id, 0), (&rtl_id, 8)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    let page = &runtime.current_snapshot()?.pages[0];
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle.1 >= 0.0
+            && rectangle.2 >= 0.0
+            && rectangle.3 <= page.width_pt
+            && rectangle.4 <= page.height_pt
+    }));
+    Ok(())
+}
+
+#[test]
+fn dragging_across_pages_previews_page_clipped_rectangles() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut document = Document::blank();
+    document.body = (0..60)
+        .map(|index| {
+            Block::Paragraph(paragraph_with_id(
+                &NodeId::generate(),
+                &format!("line {index}"),
+            ))
+        })
+        .collect();
+    let first_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let last_id = match document.body.last() {
+        Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let pages = runtime.current_snapshot()?.pages.len();
+    assert!(pages > 1, "test document must paginate");
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&first_id, 1), (&last_id, 5)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    let page_count = runtime.current_snapshot()?.pages.len();
+    assert!(
+        rectangles
+            .iter()
+            .all(|rectangle| usize::try_from(rectangle.0).is_ok_and(|page| page < page_count))
+    );
+    assert!(
+        rectangles.iter().any(|rectangle| rectangle.0 > 0),
+        "multi-page selection must include later-page rectangles"
+    );
+    Ok(())
+}
+
+fn paragraph_text_len(paragraph: &Paragraph) -> usize {
+    let mut text = String::new();
+    paragraph_text_into(paragraph, &mut text);
+    text.len()
+}
+
+fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
+    for inline in &paragraph.inlines {
+        match inline {
+            ParagraphContent::Text(flow) => {
+                for run in &flow.runs {
+                    out.push_str(&run.text);
+                }
+            }
+            ParagraphContent::Math(_) => out.push('\u{fffc}'),
+            ParagraphContent::Environment(environment) => {
+                for child in &environment.children {
+                    if let ParagraphContent::Text(flow) = child {
+                        for run in &flow.runs {
+                            out.push_str(&run.text);
+                        }
+                    }
+                }
+            }
+            ParagraphContent::SoftBreak(_) => out.push('\n'),
+            ParagraphContent::Opaque(_) => out.push('\u{fffc}'),
+        }
+    }
 }

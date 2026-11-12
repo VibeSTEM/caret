@@ -10,12 +10,12 @@ use super::super::{
     Selection,
 };
 use super::Session;
-use super::StructureSelection;
 use super::formatting::PendingInlineStyle;
 use super::history::{
     self, DocumentPatch, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
 };
 use super::math_edit::{MathEditBranch, MathEditTarget, MathPositionAffinity, MathTextPosition};
+use crate::editing::StructureSelection;
 use std::mem;
 
 /// 供布局验证后安装的公式外组字候选。
@@ -47,8 +47,8 @@ struct CompositionCandidateBase {
     command_line: Option<super::super::CommandLine>,
     math_edit: Option<super::math_edit::MathEdit>,
     host_caret_position: Option<HostCaretPosition<Pos>>,
-    selected_block_environment: Option<caret_doc::NodeId>,
     selected_block_environments: Vec<caret_doc::NodeId>,
+    selected_math_blocks: Vec<caret_doc::NodeId>,
     structure_selection: Option<StructureSelection>,
     last_committed_composition: Option<u64>,
     history_state_id: u64,
@@ -69,8 +69,8 @@ impl CompositionCandidateBase {
             command_line: session.command_line.clone(),
             math_edit: session.math_edit.clone(),
             host_caret_position: session.host_caret_position.clone(),
-            selected_block_environment: session.selected_block_environment.clone(),
             selected_block_environments: session.selected_block_environments.clone(),
+            selected_math_blocks: session.selected_math_blocks.clone(),
             structure_selection: session.structure_selection.clone(),
             last_committed_composition: session.last_committed_composition,
             history_state_id: session.history_state_id,
@@ -534,8 +534,8 @@ impl Session {
             command_line: self.command_line.clone(),
             math_edit: self.math_edit.clone(),
             host_caret_position: self.host_caret_position.clone(),
-            selected_block_environment: self.selected_block_environment.clone(),
             selected_block_environments: self.selected_block_environments.clone(),
+            selected_math_blocks: self.selected_math_blocks.clone(),
             structure_selection: self.structure_selection.clone(),
             last_committed_composition: self.last_committed_composition,
             text_map_cache: self.text_map_cache.clone(),

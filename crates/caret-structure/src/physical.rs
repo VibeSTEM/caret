@@ -18,6 +18,21 @@ pub enum DocumentNodeKind {
     InlineEnvironment,
 }
 
+impl DocumentNodeKind {
+    /// 该节点可作为文档级结构范围的原子块单元。
+    ///
+    /// Section/Custom 以环境子树参与范围；Equation/Align 以整个公式块参与范围。
+    /// 未来的 Table/Figure 等复杂 Block 在此声明能力后即可复用共享范围协议。
+    pub fn is_range_block(self) -> bool {
+        matches!(self, Self::Environment | Self::Equation | Self::Align)
+    }
+
+    /// 该节点是块级公式（Equation/Align），在结构范围中按原子对象处理。
+    pub fn is_math_block(self) -> bool {
+        matches!(self, Self::Equation | Self::Align)
+    }
+}
+
 /// 仅供同一文档顺序查询内部比较的路径键。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DocumentOrderKey(Vec<usize>);

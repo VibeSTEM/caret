@@ -38,7 +38,7 @@ impl Session {
         if candidate.is_none() {
             return self.complete_vertical_document_edge(direction, extend);
         }
-        self.commit_document_vertical_navigation_candidate(candidate, extend)
+        self.commit_document_vertical_navigation_candidate(candidate, extend, direction)
     }
 
     /// 提交当前数学焦点下的上下键候选。
@@ -118,16 +118,20 @@ impl Session {
         }
     }
 
+    /// 公式内部没有垂直候选时按宿主边界退出。
+    ///
+    /// 块级公式保留外侧停靠语义，但扩选仍需要布局候选，因此 Block + Shift 保持
+    /// no-op。InlineMath 没有块外侧停靠：垂直边缘先按局部边界退到 U+FFFC 前/后侧；
+    /// 扩选也先退出，由 app 在同一次按键内继续文档纵向导航，避免静默吞键。
     fn exit_vertical_math_block(
         &mut self,
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
-        if extend
-            || !self
-                .math_edit()
-                .is_some_and(|edit| matches!(&edit.target, crate::MathEditTarget::Block { .. }))
-        {
+        let Some(edit) = self.math_edit() else {
+            return Ok(Effect::default());
+        };
+        if extend && matches!(&edit.target, crate::MathEditTarget::Block { .. }) {
             return Ok(Effect::default());
         }
         self.exit_math_edit_for_navigation(direction)
@@ -138,9 +142,17 @@ impl Session {
         &mut self,
         candidate: Option<NavigationCandidate>,
         extend: bool,
+        direction: Direction,
     ) -> Result<Effect, EditError> {
         if self.math_edit.is_some() {
             return Err(EditError::InvalidPosition);
+        }
+        if extend
+            && self.has_structure_selection()
+            && self.structure_selection_text_anchor().is_none()
+        {
+            // 文档边缘的块对象没有同侧文本锚点：按文档方向继续扩展，保持已覆盖对象。
+            return self.extend_structure_selection(direction);
         }
         match candidate {
             Some(NavigationCandidate::Document {
@@ -150,9 +162,7 @@ impl Session {
             }) => {
                 self.validate_navigation_generation(&generation)?;
                 let anchor = if extend {
-                    self.structure_selection
-                        .as_ref()
-                        .map(|selection| selection.anchor.clone())
+                    self.structure_selection_text_anchor()
                         .unwrap_or_else(|| self.selection.anchor.clone())
                 } else {
                     focus.clone()

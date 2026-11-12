@@ -686,12 +686,10 @@ fn backspace_deletes_the_entire_paragraph_section_paragraph_selection()
 
     runtime.delete_backward_json()?;
 
-    assert_eq!(runtime.document().body.len(), 2);
+    // 两端文本端点按纯文本跨段删除语义合并：Section 与终点段落移除，只剩合并段落。
+    assert_eq!(runtime.document().body.len(), 1);
     assert!(
         matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
-    );
-    assert!(
-        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
     );
     runtime.undo_json()?;
     assert_eq!(runtime.document().body.len(), 3);
@@ -704,12 +702,9 @@ fn backspace_deletes_the_entire_paragraph_section_paragraph_selection()
     );
 
     runtime.redo_json()?;
-    assert_eq!(runtime.document().body.len(), 2);
+    assert_eq!(runtime.document().body.len(), 1);
     assert!(
         matches!(&runtime.document().body[0], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
-    );
-    assert!(
-        matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph).is_empty())
     );
     Ok(())
 }
@@ -768,5 +763,62 @@ fn backspace_deletes_multiple_selected_sections_and_intervening_paragraph()
         matches!(&runtime.document().body[1], Block::Paragraph(paragraph) if paragraph_text(paragraph) == "middle")
     );
     assert!(matches!(&runtime.document().body[2], Block::Environment(_)));
+    Ok(())
+}
+
+#[test]
+fn backspace_cleans_empty_inline_environment_before_deleting_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let paragraph = caret_doc::Paragraph {
+        inlines: vec![
+            text_flow(Run {
+                text: "ab".to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }),
+            ParagraphContent::Environment(caret_doc::InlineEnvironment {
+                id: caret_doc::NodeId::generate(),
+                kind: caret_doc::InlineEnvironmentKind::Bold,
+                definition_id: None,
+                props: std::collections::BTreeMap::from([(
+                    "enabled".to_owned(),
+                    serde_json::Value::Bool(true),
+                )]),
+                children: Vec::new(),
+                extra: Default::default(),
+            }),
+        ],
+        ..caret_doc::Paragraph::empty(caret_doc::NodeId::generate())
+    };
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let endpoint = serde_json::json!({
+        "paragraphId": paragraph_id.to_string(),
+        "offsetUtf8": "2",
+        "affinity": "downstream",
+        "visualAffinity": "downstream",
+    });
+    runtime.set_selection_json(
+        &serde_json::json!({ "anchor": endpoint, "focus": endpoint }).to_string(),
+    )?;
+
+    let cleaned: Value = serde_json::from_str(&runtime.handle_editor_key_json("backspace")?)?;
+
+    assert_eq!(cleaned["paragraphs"][0]["text"], "ab");
+    let Block::Paragraph(paragraph) = &runtime.document().body[0] else {
+        return Err("Backspace 后首块应为段落".into());
+    };
+    assert!(
+        paragraph
+            .inlines
+            .iter()
+            .all(|node| !matches!(node, ParagraphContent::Environment(_)))
+    );
+
+    let deleted: Value = serde_json::from_str(&runtime.handle_editor_key_json("backspace")?)?;
+    assert_eq!(deleted["paragraphs"][0]["text"], "a");
     Ok(())
 }

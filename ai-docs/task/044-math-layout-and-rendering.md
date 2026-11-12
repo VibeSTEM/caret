@@ -78,3 +78,5 @@
 ## 完成摘要
 
 044 已完成：数学页面布局/渲染、正文与数学共享文本排版和编辑核心、主题模板样式解析、存储与主要交互均已接通并通过本机验证、分域复核、Sol/medium final review 和功能提交 CI。维护者接受本次 Rust 函数覆盖率 84.98% 不作为阻塞。复杂 bidi、完整拖选、跨 TextFlow 用户反馈及三平台桌面验收继续由 069 跟踪；SafePreview 的独立建模与转换器另按 032 后续方向推进。当前状态记录和任务索引同步提交推送后触发的新 CI 尚待确认。
+
+- 2026-11-12：PR #136 桌面测试发现两项行内对象边界几何问题并拆出后续任务：选区/高亮从相邻 InlineMath 左缘开始（Parley 0.12 inline box advance 边界与 caret-layout 对象插入点，main 已存在）由 [086](086-inline-box-selection-geometry.md) 跟踪；空 InlineMath 的隐藏宿主盒宽被当作正文 advance、聚焦高亮按 U+FFFC 范围而非插入槽由 [087](087-empty-inline-math-advance-and-highlight.md) 跟踪。044/072 的既有验收不变，补充契约在上述任务完成前不宣称已交付。

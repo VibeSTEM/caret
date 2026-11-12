@@ -18,14 +18,14 @@ pub use caret_structure::{
 pub use editing::{
     Affinity, Capabilities, ClipboardAction, Command, CommandCandidate, CommandLine,
     CommandLineMode, CompositionRange, CompositionUpdateCandidate, CurrentEnvironmentView,
-    Direction, DocumentCaretPosition, EditError, EditorKey, Effect, EnvironmentEntry,
-    EnvironmentKind, EnvironmentLevel, EnvironmentSource, InlineEnvironmentRange, InlineSpan,
-    InputComposition, MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity,
+    Direction, DocumentCaretPosition, DocumentRangeEndpoint, EditError, EditorKey, Effect,
+    EnvironmentEntry, EnvironmentKind, EnvironmentLevel, EnvironmentSource, InlineEnvironmentRange,
+    InlineSpan, InputComposition, MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity,
     MathPositionHost, MathSequencePath, MathSequenceStep, MathTextFlowPath, MathTextFlowPathStep,
     MathTextInputContext, MathTextPosition, MathTreePosition, MathTreePositionError,
     NavigationCandidate, NavigationGeneration, NavigationIntent, Pos, PositionMap, Selection,
-    Session, SessionCaretSnapshot, SessionCheckpoint, StoryId, utf8_offset_to_utf16,
-    utf16_offset_to_utf8,
+    Session, SessionCaretSnapshot, SessionCheckpoint, StoryId, StructureSelection,
+    utf8_offset_to_utf16, utf16_offset_to_utf8,
 };
 pub use layout::{
     DocumentLayoutError, DocumentLayoutRuntime, DocumentLayoutService, DocumentLayoutSnapshot,

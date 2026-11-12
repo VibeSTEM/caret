@@ -14367,3 +14367,631 @@ fn math_pending_explicit_off_is_written_even_when_the_text_flow_is_unset() -> Re
     }
     Ok(())
 }
+
+fn paragraph_with_run_text(text: &str) -> Paragraph {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph
+        .inlines
+        .push(ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![Run {
+                text: text.to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }));
+    paragraph
+}
+
+fn equation_with_inline_math_tree(source: &str) -> (Block, NodeId) {
+    let id = NodeId::generate();
+    (
+        Block::Equation(Equation {
+            id: id.clone(),
+            math_tree: parsed_inline_tree(source),
+            extra: Default::default(),
+        }),
+        id,
+    )
+}
+
+fn shift_right(session: &mut Session) -> Result<Effect, EditError> {
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))
+}
+
+fn shift_left(session: &mut Session) -> Result<Effect, EditError> {
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: true,
+    }))
+}
+
+/// 断言扩选焦点停在锚点所在序列层，而不是下钻到嵌套结构。
+fn assert_tree_extension_stays_on_anchor_sequence(
+    session: &Session,
+    expected_anchor_offset: usize,
+    expected_cursor: usize,
+) {
+    let edit = session
+        .math_edit()
+        .unwrap_or_else(|| panic!("公式编辑状态应保留"));
+    let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+        panic!("扩选焦点应停留在 MathTree 分支");
+    };
+    assert_eq!(
+        anchor.offset, expected_anchor_offset,
+        "扩选只移动焦点，锚点必须固定在起点"
+    );
+    assert_eq!(edit.cursor, expected_cursor, "扩选光标应原子步进");
+    assert_ne!(anchor.offset, edit.cursor, "扩选范围不能坍缩成一个光标位置");
+    assert_eq!(
+        anchor.path, *path,
+        "扩选焦点路径必须与锚点路径一致，否则历史恢复和后续按键无法消费该范围"
+    );
+}
+
+fn assert_whole_equation_structure_range(
+    session: &Session,
+    equation_id: &NodeId,
+    direction: Direction,
+) {
+    assert!(
+        session.math_edit().is_none(),
+        "转换为结构范围后应退出公式编辑"
+    );
+    let (anchor, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("缺少整公式结构范围"));
+    let (anchor_side, focus_side) = match direction {
+        Direction::Forward => (Direction::Backward, Direction::Forward),
+        Direction::Backward => (Direction::Forward, Direction::Backward),
+    };
+    assert!(matches!(
+        anchor,
+        crate::editing::DocumentRangeEndpoint::BlockEdge { block_id, side }
+            if block_id == equation_id && *side == anchor_side
+    ));
+    assert!(matches!(
+        focus,
+        crate::editing::DocumentRangeEndpoint::BlockEdge { block_id, side }
+            if block_id == equation_id && *side == focus_side
+    ));
+}
+
+#[test]
+fn math_tree_shift_right_extension_steps_over_nested_structures_atomically() -> Result<(), EditError>
+{
+    let (equation, equation_id) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(path.steps().is_empty() && anchor.path.steps().is_empty());
+    assert_eq!(edit.cursor, 0);
+
+    // 前三次 Shift+Right 依次跨过 a、分式、d，每个嵌套结构整体作为一个原子。
+    for expected_cursor in [1, 2, 3] {
+        let effect = shift_right(&mut session)?;
+        assert!(effect.selection_changed);
+        assert_tree_extension_stays_on_anchor_sequence(&session, 0, expected_cursor);
+        assert!(!session.has_structure_selection());
+    }
+
+    // 到达 root 边界后转换为整公式结构范围，而不是返回 InvalidPosition。
+    shift_right(&mut session)?;
+    assert_whole_equation_structure_range(&session, &equation_id, Direction::Forward);
+    Ok(())
+}
+
+#[test]
+fn math_tree_shift_left_extension_steps_over_nested_structures_atomically() -> Result<(), EditError>
+{
+    let (equation, equation_id) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let after = paragraph_with_run_text("q");
+    let paragraph_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![equation, Block::Paragraph(after)];
+    let mut session = Session::new(document)?;
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: position.clone(),
+        focus: position,
+    })))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    assert_eq!(session.math_edit().map(|edit| edit.cursor), Some(3));
+
+    // 反向扩选同样按原子步进，不下钻到分式内部。
+    for expected_cursor in [2, 1, 0] {
+        shift_left(&mut session)?;
+        assert_tree_extension_stays_on_anchor_sequence(&session, 3, expected_cursor);
+        assert!(!session.has_structure_selection());
+    }
+
+    shift_left(&mut session)?;
+    assert_whole_equation_structure_range(&session, &equation_id, Direction::Backward);
+    Ok(())
+}
+
+#[test]
+fn math_tree_selection_context_exposes_anchor_and_focus_only_while_current() -> Result<(), EditError>
+{
+    let (equation, _) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+
+    // 坍缩状态：锚点与焦点重合，上下文仍暴露同一序列两端。
+    let (target, anchor, focus) = session
+        .math_tree_selection_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(anchor.offset, focus.offset);
+    assert_eq!(anchor.path, focus.path);
+
+    // 扩选后锚点固定在起点、焦点随光标前进；旧输入上下文只暴露焦点。
+    shift_right(&mut session)?;
+    shift_right(&mut session)?;
+    let (extended_target, extended_anchor, extended_focus) = session
+        .math_tree_selection_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(extended_target, target);
+    assert_eq!(extended_anchor.offset, 0);
+    assert_eq!(extended_focus.offset, 2);
+    assert_eq!(extended_anchor.path, extended_focus.path);
+    assert_eq!(extended_anchor.host, extended_focus.host);
+    let (_, input_focus) = session
+        .math_tree_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(input_focus, extended_focus);
+
+    // 过期 revision 返回 None，但不修改已提交的公式编辑状态。
+    let revision = session.current_math_edit_revision();
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    edit.revision.document_generation += 1;
+    assert!(session.math_tree_selection_context().is_none());
+    session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .revision = revision;
+
+    // TextFlow 分支没有结构序列范围。
+    let mut text_session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut text_session, r"\text{}")?;
+    move_into_math_text(&mut text_session)?;
+    assert!(text_session.math_tree_selection_context().is_none());
+    Ok(())
+}
+
+#[test]
+fn math_tree_shift_extension_from_inside_nested_sequence_converts_the_host_range()
+-> Result<(), EditError> {
+    let (equation, equation_id) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    // 非扩选导航仍可下钻：越过 a 后进入分式分子。
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(
+        path.steps(),
+        &[MathSequenceStep::Operand {
+            content_index: 1,
+            operand_index: 0,
+        }]
+    );
+    assert_eq!(anchor.path, *path);
+    assert_eq!(edit.cursor, 0);
+
+    // 分子内扩选先原子步进到分子末尾，再越出序列转换为宿主结构范围，全程不报错。
+    shift_right(&mut session)?;
+    assert_tree_extension_stays_on_anchor_sequence(&session, 0, 1);
+    assert!(session.math_edit().is_some());
+    shift_right(&mut session)?;
+    assert_whole_equation_structure_range(&session, &equation_id, Direction::Forward);
+    Ok(())
+}
+
+#[test]
+fn math_tree_non_extending_arrows_still_descend_into_nested_structures() -> Result<(), EditError> {
+    let (equation, _) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert_eq!(
+        path.steps(),
+        &[MathSequenceStep::Operand {
+            content_index: 1,
+            operand_index: 0,
+        }],
+        "非扩选 Right 应继续下钻到分式分子"
+    );
+    assert_eq!(edit.cursor, 0);
+
+    session.run(Command::MoveCaret(Direction::Backward))?;
+    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
+    let MathEditBranch::Tree { path, .. } = &edit.branch else {
+        return Err(EditError::InvalidPosition);
+    };
+    assert!(path.steps().is_empty(), "非扩选 Left 应爬回根序列");
+    Ok(())
+}
+
+fn inline_math_paragraph(inlines: Vec<ParagraphContent>) -> (Document, NodeId) {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = inlines;
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    (document, paragraph_id)
+}
+
+fn inline_math_node(source: &str) -> ParagraphContent {
+    ParagraphContent::Math(InlineMath {
+        id: NodeId::generate(),
+        math_tree: parsed_inline_tree(source),
+        extra: Default::default(),
+    })
+}
+
+fn text_content(text: &str) -> ParagraphContent {
+    ParagraphContent::Text(caret_doc::TextFlow {
+        runs: vec![Run {
+            text: text.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    })
+}
+
+#[test]
+fn inline_math_shift_right_past_tree_end_uses_a_plain_object_text_selection()
+-> Result<(), EditError> {
+    let (document, paragraph_id) =
+        inline_math_paragraph(vec![inline_math_node(r"\frac{a}{b}"), text_content("cd")]);
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+
+    // 第一次 Shift+Right 仍按原子步进停留在公式树内。
+    shift_right(&mut session)?;
+    assert_tree_extension_stays_on_anchor_sequence(&session, 0, 1);
+    assert!(!session.has_structure_selection());
+
+    // 越过行内公式右边界：普通文本选区覆盖 U+FFFC，而不是空覆盖的伪结构选区。
+    shift_right(&mut session)?;
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
+    assert_eq!(
+        session.selection().anchor,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 0,
+            affinity: Affinity::Downstream,
+        }
+    );
+    assert_eq!(
+        session.selection().focus,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 3,
+            affinity: Affinity::Upstream,
+        }
+    );
+    assert_eq!(
+        session.selection_visual_affinity(),
+        VisualAffinity::Upstream
+    );
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        VisualAffinity::Downstream
+    );
+
+    // 下一次 Shift+Right 继续按普通文档文本扩选，不报 InvalidPosition。
+    let effect = shift_right(&mut session)?;
+    assert!(effect.selection_changed);
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert_eq!(
+        session.selection().anchor,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id,
+            offset: 0,
+            affinity: Affinity::Downstream,
+        }
+    );
+    assert_eq!(session.selection().focus.offset, 4);
+    Ok(())
+}
+
+#[test]
+fn inline_math_shift_left_past_tree_start_uses_a_plain_object_text_selection()
+-> Result<(), EditError> {
+    let (document, paragraph_id) =
+        inline_math_paragraph(vec![text_content("ab"), inline_math_node(r"\frac{a}{b}")]);
+    let mut session = Session::new(document)?;
+    let after_object = Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 5,
+        affinity: Affinity::Downstream,
+    };
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: after_object.clone(),
+        focus: after_object,
+    })))?;
+    session.run(Command::EnterMath(Direction::Backward))?;
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+
+    shift_left(&mut session)?;
+    assert_tree_extension_stays_on_anchor_sequence(&session, 1, 0);
+    assert!(!session.has_structure_selection());
+
+    shift_left(&mut session)?;
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert!(session.structure_selection_range().is_none());
+    assert_eq!(
+        session.selection().anchor,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 5,
+            affinity: Affinity::Upstream,
+        }
+    );
+    assert_eq!(
+        session.selection().focus,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 2,
+            affinity: Affinity::Downstream,
+        }
+    );
+
+    // 下一次 Shift+Left 继续按普通文档文本扩选，不报 InvalidPosition。
+    shift_left(&mut session)?;
+    assert!(session.math_edit().is_none());
+    assert!(!session.has_structure_selection());
+    assert_eq!(
+        session.selection().anchor,
+        Pos {
+            story: StoryId::Body,
+            paragraph_id,
+            offset: 5,
+            affinity: Affinity::Upstream,
+        }
+    );
+    assert_eq!(session.selection().focus.offset, 1);
+    Ok(())
+}
+
+#[test]
+fn shift_right_at_the_last_equation_text_island_converts_to_the_whole_equation()
+-> Result<(), EditError> {
+    let (equation, equation_id) = equation_with_inline_math_tree(r"x\text{ab}y");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    for _ in 0..2 {
+        session.run(Command::MoveCaret(Direction::Forward))?;
+    }
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+
+    // 同方向没有其它文本岛时，即使 `ab` 之后仍有符号 `y`，结构范围也以整个公式
+    // 对象为目标：转换为整公式 BlockEdge 范围而不是返回错误或停留本地。
+    shift_right(&mut session)?;
+
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    let (anchor, focus) = session
+        .structure_selection_range()
+        .unwrap_or_else(|| panic!("缺少整公式结构范围"));
+    assert!(matches!(
+        anchor,
+        crate::editing::DocumentRangeEndpoint::BlockEdge { block_id, .. }
+            if block_id == &equation_id
+    ));
+    assert!(matches!(
+        focus,
+        crate::editing::DocumentRangeEndpoint::BlockEdge { block_id, .. }
+            if block_id == &equation_id
+    ));
+    Ok(())
+}
+
+fn enter_text_branch_at_align_cell(
+    session: &mut Session,
+    row: usize,
+    cell: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    session.run(Command::EnterMath(Direction::Forward))?;
+    for _ in 0..32 {
+        if let Some(MathEditBranch::Text { path, .. }) =
+            session.math_edit().map(|edit| &edit.branch)
+            && path.align_cell() == Some((row, cell))
+        {
+            return Ok(());
+        }
+        session.run(Command::MoveCaret(Direction::Forward))?;
+    }
+    Err(format!("Align cell ({row}, {cell}) text island is unreachable").into())
+}
+
+#[test]
+fn align_first_cell_text_edge_shift_converts_the_whole_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align = display_math_block(true, r"\text{ab} & \text{cd}")?;
+    let align_id = match &align {
+        caret_doc::Block::Align(align) => align.id.clone(),
+        _ => return Err("expected an Align block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        align,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    enter_text_branch_at_align_cell(&mut session, 0, 0)?;
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    // 首 cell 不是 Align 宿主边界；没有本地后续时与 Tree 分支一致，转为整个公式选区。
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert!(session.structure_selection_range().is_some());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&align_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn align_last_cell_text_edge_shift_left_converts_the_whole_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align = display_math_block(true, r"\text{ab} & \text{cd}")?;
+    let align_id = match &align {
+        caret_doc::Block::Align(align) => align.id.clone(),
+        _ => return Err("expected an Align block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        align,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    enter_text_branch_at_align_cell(&mut session, 0, 1)?;
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 0,
+    })?;
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&align_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn middle_text_island_shift_right_converts_the_whole_equation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = display_math_block(false, r"\text{a}+\text{b}")?;
+    let equation_id = match &equation {
+        caret_doc::Block::Equation(equation) => equation.id.clone(),
+        _ => return Err("expected an Equation block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        equation,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    for _ in 0..16 {
+        if matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Text { .. })
+        ) {
+            break;
+        }
+        session.run(Command::MoveCaret(Direction::Forward))?;
+    }
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    // 第一个文本岛之后还有 `+\text{b}`：离开当前层即整个公式对象，不在中间层停靠。
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    Ok(())
+}

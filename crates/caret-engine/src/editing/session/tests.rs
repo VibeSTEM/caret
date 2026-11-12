@@ -1,7 +1,7 @@
 //! 验证编辑会话缓存与修订代际。
 
 use super::*;
-use crate::editing::EditorKey;
+use crate::editing::{DocumentRangeEndpoint, EditorKey, EnvironmentSource, StructureSelection};
 use caret_doc::{
     Block, BlockEnvironment, BlockEnvironmentKind, Document, DocumentFontTarget, InlineEnvironment,
     InlineEnvironmentKind, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
@@ -2233,4 +2233,168 @@ fn environment_stack_reports_math_and_mod_backspace_downgrades_it() {
             if environment.kind == InlineEnvironmentKind::Bold
                 && text.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "!"
     ));
+}
+
+#[test]
+fn current_inline_environment_is_the_view_projection_for_innermost_inline_environment() {
+    let mut document = Document::blank();
+    let outer_id = NodeId::generate();
+    let inner_id = NodeId::generate();
+    let Block::Paragraph(paragraph) = &mut document.body[0] else {
+        panic!("blank document should start with a paragraph");
+    };
+    paragraph.inlines = vec![ParagraphContent::Environment(InlineEnvironment {
+        id: outer_id,
+        kind: InlineEnvironmentKind::Bold,
+        definition_id: None,
+        props: BTreeMap::new(),
+        children: vec![ParagraphContent::Environment(InlineEnvironment {
+            id: inner_id.clone(),
+            kind: InlineEnvironmentKind::Italic,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![text_flow(Run {
+                text: "inside".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        })],
+        extra: BTreeMap::new(),
+    })];
+    // 空覆盖范围不再是结构选区（install_structure_selection 拒绝）；用一个真实的
+    // 块环境覆盖范围制造“结构选区期间无行内候选”的状态。
+    let selected_environment_id = NodeId::generate();
+    document.body.push(Block::Environment(BlockEnvironment {
+        id: selected_environment_id.clone(),
+        kind: BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: None,
+        children: Vec::new(),
+        extra: BTreeMap::new(),
+    }));
+    let mut session =
+        Session::new(document).unwrap_or_else(|error| panic!("session creation failed: {error}"));
+
+    let projected = session
+        .current_inline_environment()
+        .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+        .unwrap_or_else(|| panic!("caret should inherit nested inline environments"));
+    let view = session
+        .current_environment_view()
+        .unwrap_or_else(|error| panic!("environment view failed: {error}"));
+    let innermost = view
+        .inline()
+        .iter()
+        .rev()
+        .find(|entry| entry.source == EnvironmentSource::InlineEnvironment)
+        .unwrap_or_else(|| panic!("view should expose the inline environment"));
+    let range = innermost
+        .inline_range
+        .as_ref()
+        .unwrap_or_else(|| panic!("view entry should carry an inline range"));
+    assert_eq!(Some(projected.environment_id), innermost.id);
+    assert_eq!(projected.paragraph_id, range.paragraph_id);
+    assert_eq!(projected.start_utf8, range.start_utf8);
+    assert_eq!(projected.end_utf8, range.end_utf8);
+
+    // 结构选区期间视图没有行内候选，投影必须一致地返回空。
+    session
+        .install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::BlockEdge {
+                block_id: selected_environment_id.clone(),
+                side: Direction::Backward,
+            },
+            focus: DocumentRangeEndpoint::BlockEdge {
+                block_id: selected_environment_id,
+                side: Direction::Forward,
+            },
+        })
+        .unwrap_or_else(|error| panic!("structure selection failed: {error}"));
+    assert!(
+        session
+            .current_inline_environment()
+            .unwrap_or_else(|error| panic!("inline environment lookup failed: {error}"))
+            .is_none()
+    );
+}
+
+#[test]
+fn install_structure_selection_rejects_empty_coverage_without_side_effects() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("session creation failed: {error}"));
+    run_ok(&mut session, Command::InsertText("abcd".to_owned()));
+    let Some(Block::Paragraph(paragraph)) = session.document.body.first() else {
+        panic!("first block should be a paragraph");
+    };
+    let paragraph_id = paragraph.id.clone();
+    let environment_id = NodeId::generate();
+    session
+        .document
+        .body
+        .push(Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Custom,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: None,
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        }));
+    // 先安装一个合法结构选区，确保“拒绝空覆盖”不会清空已有范围。
+    session
+        .install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::BlockEdge {
+                block_id: environment_id.clone(),
+                side: Direction::Backward,
+            },
+            focus: DocumentRangeEndpoint::BlockEdge {
+                block_id: environment_id,
+                side: Direction::Forward,
+            },
+        })
+        .unwrap_or_else(|error| panic!("valid structure selection failed: {error}"));
+    let position = |offset, affinity| Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity,
+    };
+    let selection_before = session.selection().clone();
+    let visual_affinity_before = session.selection_visual_affinity();
+    let anchor_visual_affinity_before = session.selection_anchor_visual_affinity();
+    let structure_before = session
+        .structure_selection_range()
+        .map(|(anchor, focus)| (anchor.clone(), focus.clone()));
+    let environments_before = session.selected_block_environments().to_vec();
+    let math_blocks_before = session.selected_math_blocks().to_vec();
+    let generation_before = session.document_generation();
+    let can_undo_before = session.can_undo();
+
+    // 纯文本段落范围覆盖不到任何块环境或公式块：空覆盖不是结构选区。
+    assert_eq!(
+        session.install_structure_selection(StructureSelection {
+            anchor: DocumentRangeEndpoint::Text(position(0, Affinity::Downstream)),
+            focus: DocumentRangeEndpoint::Text(position(3, Affinity::Upstream)),
+        }),
+        Err(EditError::InvalidPosition)
+    );
+    assert_eq!(session.selection(), &selection_before);
+    assert_eq!(session.selection_visual_affinity(), visual_affinity_before);
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        anchor_visual_affinity_before
+    );
+    assert_eq!(
+        session
+            .structure_selection_range()
+            .map(|(anchor, focus)| (anchor.clone(), focus.clone())),
+        structure_before
+    );
+    assert_eq!(session.selected_block_environments(), environments_before);
+    assert_eq!(session.selected_math_blocks(), math_blocks_before);
+    assert_eq!(session.document_generation(), generation_before);
+    assert_eq!(session.can_undo(), can_undo_before);
 }

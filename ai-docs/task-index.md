@@ -1,6 +1,6 @@
 # Task 索引
 
-更新日期：2026-11-10。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
+更新日期：2026-11-12。非平凡改动先从[模板](task/_template.md)建 task，在本索引登记，然后再动代码。行为规格在[架构](architecture/README.md)和[规范](standards/README.md)。2026-10-25 删去未执行的旧队列，现行任务从 001 重新编号。
 
 ## 使用方式
 
@@ -114,8 +114,13 @@
 | 080 | 架构 | [Block/Inline 共享交互底座（Paragraph 为基线）](task/080-shared-host-boundary-interaction.md) | P1 | 071、074、077、081–083 | L | planned |
 | 081 | 编辑交互 | [Block/Inline 共享三态焦点仲裁](task/081-host-three-state-caret-arbitration.md) | P0 | 071、074、077 | M | done |
 | 082 | 架构 | [共享文档位置、全序与宿主定位](task/082-shared-document-position-and-order.md) | P1 | 071、074、077、081 | M | done |
-| 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | planned |
+| 083 | 编辑交互 | [跨宿主选区、编辑事务与几何投影](task/083-cross-host-selection-and-transactions.md) | P1 | 071、074、077、081、082 | L | done |
 | 084 | 文档模型 | [行内与数学内容形状及容器边界](task/084-document-content-shapes-and-boundaries.md) | P1 | 025、032、081、082 | L | planned |
 | 085 | 文档存储 | [已知节点严格字段与消费者校验](task/085-strict-document-schema-validation.md) | P1 | 025、032、084 | L | draft |
+| 086 | 画布几何 | [行内对象边界选区几何修正](task/086-inline-box-selection-geometry.md) | P1 | 030、044、068 | S | implemented |
+| 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | implemented |
+| 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
+| 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | implemented |
+| 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。

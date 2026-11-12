@@ -1,15 +1,21 @@
-//! 校验当前会话中的位置快照并比较可证明的文档顺序。
+//! 校验当前会话中的位置快照、比较文档顺序并共享块宿主落点策略。
 //
 // SPDX-License-Identifier: Apache-2.0
 // 署名：Yuki Lu
 
 mod host;
 mod math;
+mod range;
 #[cfg(test)]
 mod tests;
 
-use super::{DocumentCaretPosition, EditError, Session, SessionCaretSnapshot};
+use super::{
+    Affinity, Direction, DocumentCaretPosition, DocumentRangeEndpoint, EditError,
+    HostCaretPosition, Pos, Session, SessionCaretSnapshot,
+};
+use crate::VisualAffinity;
 use crate::editing::paragraph_ops::compare_positions;
+use caret_doc::NodeId;
 use std::cmp::Ordering;
 
 impl Session {
@@ -42,5 +48,65 @@ impl Session {
                 self.compare_host_carets(left, right)
             }
         }
+    }
+
+    /// 结构选区端点落点：文本端点保持原位置，块外侧边界复用共享宿主停靠策略。
+    pub(in crate::editing::session) fn park_at_range_endpoint(
+        &mut self,
+        endpoint: &DocumentRangeEndpoint,
+    ) -> Result<(Pos, Option<HostCaretPosition<Pos>>), EditError> {
+        if let DocumentRangeEndpoint::Text(position) = endpoint {
+            self.text_map_for(position)?.validate_pos(position)?;
+            return Ok((position.clone(), None));
+        }
+        let DocumentRangeEndpoint::BlockEdge { block_id, side } = endpoint else {
+            return Err(EditError::InvalidPosition);
+        };
+        let (caret, host) = self.park_beside_block_host(block_id, *side)?;
+        Ok((caret, Some(host)))
+    }
+
+    /// 把块公式等复杂宿主停靠到其外侧边界：优先同方向相邻段落，否则同侧最近文本边界。
+    ///
+    /// 返回落点 TextMap 位置和共享外后/外前停靠状态；任何验证失败都返回
+    /// `InvalidPosition` 且不改变会话。
+    pub(in crate::editing::session) fn park_beside_block_host(
+        &mut self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<(Pos, HostCaretPosition<Pos>), EditError> {
+        let endpoint = DocumentRangeEndpoint::BlockEdge {
+            block_id: block_id.clone(),
+            side: direction,
+        };
+        let caret = match self.paragraph_beside_block(block_id, direction)? {
+            Some(position) => position,
+            None => self
+                .text_endpoint_clamped(&endpoint)
+                .ok_or(EditError::InvalidPosition)?,
+        };
+        self.text_map_for(&caret)?.validate_pos(&caret)?;
+        Ok((
+            caret,
+            HostCaretPosition::outside(block_id.clone(), direction),
+        ))
+    }
+}
+
+/// 将文本逻辑亲和性投影为同一侧的可视亲和性。
+pub(in crate::editing::session) fn visual_affinity_for(affinity: Affinity) -> VisualAffinity {
+    match affinity {
+        Affinity::Upstream => VisualAffinity::Upstream,
+        Affinity::Downstream => VisualAffinity::Downstream,
+    }
+}
+
+/// 将块外侧边界方向投影为同侧的可视亲和性。
+pub(in crate::editing::session) fn visual_affinity_for_block_edge(
+    direction: Direction,
+) -> VisualAffinity {
+    match direction {
+        Direction::Forward => VisualAffinity::Downstream,
+        Direction::Backward => VisualAffinity::Upstream,
     }
 }

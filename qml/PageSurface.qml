@@ -255,7 +255,7 @@ Item {
             caretGeometry: LayoutViewModel.caretGeometry
             commandMode: LayoutViewModel.commandLine.active === true
             caretPreviewGeometry: pointerHandler.selectionDragActive ? pointerHandler.dragFocusCaretGeometry : ({})
-            selectionRects: pointerHandler.selectionDragActive ? [] : LayoutViewModel.selectionRects
+            selectionRects: pointerHandler.selectionDragActive && pointerHandler.previewOnly ? [] : LayoutViewModel.selectionRects
             selectionColor: Theme.colorSelected
             blockHighlightRects: LayoutViewModel.blockHighlightRects
             inlineHighlightRects: LayoutViewModel.inlineHighlightRects

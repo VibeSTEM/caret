@@ -1257,8 +1257,11 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCOMPARE(canvas->caretPreviewGeometry().value(QStringLiteral("pageIndex")).toInt(),
              preview_focus.value(QStringLiteral("pageIndex")).toInt());
     QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(), ime_caret_before_drag);
-    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionPreviewRects().isEmpty(), 3000);
-    const QVariantList preview_rectangles = canvas->selectionPreviewRects();
+    // 正文拖选在拖动中直接提交同一 Rust 选区投影；预览矩形列表保持为空，画布消费
+    // selectionRects，因此跨公式块/块环境也能在拖动中显示与松手后一致的高亮。
+    QTRY_VERIFY_WITH_TIMEOUT(canvas->selectionPreviewRects().isEmpty(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
+    const QVariantList preview_rectangles = layout_view_model->selectionRects();
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
     QTRY_VERIFY_WITH_TIMEOUT(!layout_view_model->selectionRects().isEmpty(), 3000);
     const QVariantList committed_rectangles = layout_view_model->selectionRects();
@@ -1286,8 +1289,6 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCOMPARE(
         layout_view_model->inputMethodContext().value(QStringLiteral("cursorPosition")).toInt(), 4);
 
-    const QRectF ime_caret_before_reverse_drag =
-        canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF();
     QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
     QMouseEvent reverse_drag_move(QEvent::MouseMove, drag_preview_start_window,
                                   drag_preview_start_window,
@@ -1303,8 +1304,10 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
              QStringLiteral("0"));
     QTRY_COMPARE_WITH_TIMEOUT(canvas->caretPreviewGeometry().value(QStringLiteral("xPt")).toReal(),
                               reverse_focus.value(QStringLiteral("xPt")).toReal(), 3000);
-    QCOMPARE(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF(),
-             ime_caret_before_reverse_drag);
+    // 正文拖选在拖动中提交选区，输入法光标随之移动到反向拖动焦点，而不是冻结在原位。
+    const QPointF reverse_focus_content = stop_point(reverse_focus);
+    QTRY_COMPARE_WITH_TIMEOUT(qRound(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x()),
+                              qRound(reverse_focus_content.x()), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier,
                         drag_preview_start_window.toPoint());
     QTRY_COMPARE_WITH_TIMEOUT(
@@ -1340,7 +1343,7 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
     QCoreApplication::sendEvent(&window, &drag_move);
     QTRY_VERIFY_WITH_TIMEOUT(pointer_handler->property("selectionDragActive").toBool(), 3000);
     QVERIFY(!layout_view_model->selectionRects().isEmpty());
-    QVERIFY(canvas->selectionRects().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, drag_end_window.toPoint());
     QTRY_VERIFY_WITH_TIMEOUT(!pointer_handler->property("selectionDragActive").toBool(), 3000);
     QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
@@ -1462,13 +1465,14 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                                       Q_ARG(QVariant, third_point),
                                       Q_ARG(QVariant, QVariant(false))));
     QVERIFY(!pointer_handler->property("dragAnchor").toMap().isEmpty());
-    const QVariantList cross_page_preview = canvas->selectionPreviewRects();
+    // 正文拖选在拖动中提交同一选区投影；跨页范围直接来自 LayoutViewModel.selectionRects。
+    const QVariantList cross_page_preview = layout_view_model->selectionRects();
     QVERIFY(std::any_of(
         cross_page_preview.cbegin(), cross_page_preview.cend(), [](const QVariant& rectangle) {
             return rectangle.toMap().value(QStringLiteral("pageIndex")).toInt() == 1;
         }));
     pointer_handler->setProperty("selectionDragActive", true);
-    QVERIFY(canvas->selectionPreviewRects().size() > 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!canvas->selectionRects().isEmpty(), 3000);
     QVERIFY(!canvas->caretPreviewGeometry().isEmpty());
     QVERIFY(
         layout_view_model->insertText(QStringLiteral("x")).value(QStringLiteral("valid")).toBool());

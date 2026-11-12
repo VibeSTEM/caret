@@ -1390,14 +1390,32 @@ impl DocumentLayoutSnapshot {
                     };
                     (path, environment.children.as_slice(), true)
                 };
-                let x0_pt = projection.object_x_pt + node.x;
+                // 空行内宿主不占正文推进，命中区收窄为以公式 caret 居中的插入槽；
+                // 槽与相邻正文重叠的部分由正文优先判定吸收。
+                let empty_inline_host = projection.inline_index.is_some()
+                    && node.path.is_empty()
+                    && math_flow_is_empty_host(root);
+                let (x0_pt, x1_pt, width_pt) = if empty_inline_host {
+                    let slot_width = node
+                        .font_size_pt
+                        .map_or(node.width, |size| (size * 0.5).max(4.0));
+                    let center = projection.object_x_pt + node.x;
+                    (
+                        center - slot_width / 2.0,
+                        center + slot_width / 2.0,
+                        slot_width,
+                    )
+                } else {
+                    let x0_pt = projection.object_x_pt + node.x;
+                    (x0_pt, x0_pt + node.width, node.width)
+                };
                 let y0_pt = projection.baseline_y_pt + node.y;
-                let width_pt = node.width;
                 let height_pt = node.height;
-                let x1_pt = x0_pt + width_pt;
                 let y1_pt = y0_pt + height_pt;
-                let caret_band = projection
-                    .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + node.baseline);
+                let caret_band = projection.caret_at_math_baseline(
+                    x0_pt + width_pt / 2.0,
+                    projection.baseline_y_pt + node.baseline,
+                );
                 let hit_y0_pt = y0_pt.min(caret_band.y0_pt);
                 let hit_y1_pt = y1_pt.max(caret_band.y1_pt);
                 if !x0_pt.is_finite()
@@ -1411,6 +1429,9 @@ impl DocumentLayoutSnapshot {
                 }
                 let strict_hit = y_pt >= y0_pt && y_pt <= y1_pt;
                 if !strict_hit && (y_pt < hit_y0_pt || y_pt > hit_y1_pt) {
+                    continue;
+                }
+                if empty_inline_host && self.point_inside_body_text(page_index, x_pt, y_pt) {
                     continue;
                 }
                 let child_step = |index| {
@@ -1513,6 +1534,65 @@ impl DocumentLayoutSnapshot {
         best.map(|(_, _, _, _, hit)| hit)
     }
 
+    /// 判断页面点是否落在正宽正文/文本岛字素内部。
+    ///
+    /// 与 app 命中测试使用同一内缩规则：正文保留正宽字素内部区域，字素间的重合边界
+    /// 留给零宽公式 caret。空 InlineMath 的插入槽与相邻文字重叠时据此让正文优先，
+    /// 避免吞掉邻字点击。
+    fn point_inside_body_text(&self, page_index: usize, x_pt: f64, y_pt: f64) -> bool {
+        let Some(hit) = self.hit_test(page_index, x_pt, y_pt) else {
+            return false;
+        };
+        let Some(paragraph) = self.paragraph_by_id(&hit.position.paragraph_id) else {
+            return false;
+        };
+        let boundaries = &paragraph.layout.grapheme_boundaries;
+        let Ok(offset_index) = boundaries.binary_search(&hit.position.offset) else {
+            return false;
+        };
+        let mut candidates = Vec::with_capacity(2);
+        if let Some(start_index) = offset_index.checked_sub(1) {
+            candidates.push((boundaries[start_index], boundaries[offset_index]));
+        }
+        if let Some(end) = boundaries.get(offset_index + 1) {
+            candidates.push((boundaries[offset_index], *end));
+        }
+        candidates.into_iter().any(|(start, end)| {
+            if start >= end
+                || paragraph
+                    .inline_math_source_ranges
+                    .iter()
+                    .any(|range| range.start == start && range.end == end)
+            {
+                return false;
+            }
+            let selection = Selection {
+                anchor: Pos {
+                    offset: start,
+                    affinity: Affinity::Downstream,
+                    ..hit.position.clone()
+                },
+                focus: Pos {
+                    offset: end,
+                    affinity: Affinity::Upstream,
+                    ..hit.position.clone()
+                },
+            };
+            self.selection_geometry(&selection)
+                .is_some_and(|rectangles| {
+                    rectangles.into_iter().any(|rectangle| {
+                        let inset =
+                            1.5_f64.min((rectangle.x1_pt - rectangle.x0_pt).max(0.0) * 0.25);
+                        rectangle.page_index == page_index
+                            && x_pt > rectangle.x0_pt + inset
+                            && x_pt < rectangle.x1_pt - inset
+                            && y_pt >= rectangle.y0_pt
+                            && y_pt <= rectangle.y1_pt
+                    })
+                })
+        })
+    }
+
     /// 根据同代公式结构插入点返回所属 MathFlow 的页面 caret 几何。
     pub fn math_tree_caret_geometry(
         &self,
@@ -1521,6 +1601,36 @@ impl DocumentLayoutSnapshot {
     ) -> Option<PageCaretGeometry> {
         self.math_tree_caret(target, position)
             .map(|(caret, _)| caret)
+    }
+
+    /// 把公式布局节点解析为所在结构序列：路径、序列长度和子项是否为环境子节点。
+    ///
+    /// MathFlow 聚合成节点（非 TextFlow）对应其内容序列，透明容器或 InlineEnvironment
+    /// 对应环境子节点序列；其他布局盒不提供序列位置。
+    fn math_layout_sequence(
+        &self,
+        projection: &MathPageProjection,
+        node: &caret_math::layout::MathNodeBox,
+    ) -> Option<(MathSequencePath, usize, bool)> {
+        if node.is_flow && !node.is_text_flow {
+            let root = self.math_scope_root(projection, &node.scope_id)?;
+            let flow = math_flow_at_layout_path(root, &node.path)?;
+            Some((
+                math_sequence_path_for_flow(&node.path)?,
+                flow.content.len(),
+                false,
+            ))
+        } else if node.is_container {
+            let root = self.math_scope_root(projection, &node.scope_id)?;
+            let environment = math_environment_at_layout_path(root, &node.path)?;
+            Some((
+                math_sequence_path_for_environment_children(&node.path)?,
+                environment.children.len(),
+                true,
+            ))
+        } else {
+            None
+        }
     }
 
     /// 根据树原生数学插入位置返回同一数学盒中的光标几何和有效字号。
@@ -1540,32 +1650,9 @@ impl DocumentLayoutSnapshot {
                 continue;
             }
             for node in &layout.nodes {
-                let (sequence_path, sequence_len, environment_children) = if node.is_flow
-                    && !node.is_text_flow
-                {
-                    let Some(root) = self.math_scope_root(projection, &node.scope_id) else {
-                        continue;
-                    };
-                    let Some(flow) = math_flow_at_layout_path(root, &node.path) else {
-                        continue;
-                    };
-                    let Some(path) = math_sequence_path_for_flow(&node.path) else {
-                        continue;
-                    };
-                    (path, flow.content.len(), false)
-                } else if node.is_container {
-                    let Some(root) = self.math_scope_root(projection, &node.scope_id) else {
-                        continue;
-                    };
-                    let Some(environment) = math_environment_at_layout_path(root, &node.path)
-                    else {
-                        continue;
-                    };
-                    let Some(path) = math_sequence_path_for_environment_children(&node.path) else {
-                        continue;
-                    };
-                    (path, environment.children.len(), true)
-                } else {
+                let Some((sequence_path, sequence_len, environment_children)) =
+                    self.math_layout_sequence(projection, node)
+                else {
                     continue;
                 };
                 if !node.x.is_finite()
@@ -1739,6 +1826,100 @@ impl DocumentLayoutSnapshot {
                     .and_then(|size| visible_font_size_centipoints(size as f32))
                     .unwrap_or(self.default_font_size_centipoints);
                 return Some((caret, font_size_centipoints));
+            }
+        }
+        None
+    }
+
+    /// 返回公式树内部同一序列中锚点到焦点的页面选区矩形。
+    ///
+    /// 只接受同一宿主、同一序列路径的端点：扩选不进入嵌套结构，焦点离开锚点所在
+    /// 序列时由调用方转换为整个公式宿主的文档范围，因此跨路径端点不属于本查询。
+    /// 每个被选结构项独立投影：嵌套 Math/Environment 作为原子取整盒；纵向范围使用
+    /// 同位置 caret 的正文行框，Align 按所属行裁切。空范围返回空矩形而不是过期投影。
+    pub fn math_tree_selection_geometry(
+        &self,
+        target: &MathEditTarget,
+        anchor: &MathTreePosition,
+        focus: &MathTreePosition,
+    ) -> Option<Vec<PageSelectionRect>> {
+        if anchor.host != focus.host || anchor.path != focus.path {
+            return None;
+        }
+        let (start, end) = if anchor.offset <= focus.offset {
+            (anchor.offset, focus.offset)
+        } else {
+            (focus.offset, anchor.offset)
+        };
+        if start == end {
+            return Some(Vec::new());
+        }
+        for projection in self.math_projections_for_target(target) {
+            let Some((layout, _)) = self.math_projection_items(projection) else {
+                continue;
+            };
+            let Some(host) = self.math_host(&projection.math_id) else {
+                continue;
+            };
+            if &host.target != target {
+                continue;
+            }
+            for node in &layout.nodes {
+                let Some((sequence_path, sequence_len, environment_children)) =
+                    self.math_layout_sequence(projection, node)
+                else {
+                    continue;
+                };
+                let Some(scope_host) = host.for_scope(&node.scope_id) else {
+                    continue;
+                };
+                if scope_host.host != anchor.host || sequence_path != anchor.path {
+                    continue;
+                }
+                if end > sequence_len {
+                    continue;
+                }
+                let row_id = math_row_id_for_host(&anchor.host);
+                let mut rectangles = Vec::with_capacity(end - start);
+                for index in start..end {
+                    let mut child_path = node.path.clone();
+                    child_path.push(if environment_children {
+                        MathPathStep::EnvironmentChild(index)
+                    } else {
+                        MathPathStep::Content(index)
+                    });
+                    let Some(child) = layout
+                        .nodes
+                        .iter()
+                        .find(|child| child.scope_id == node.scope_id && child.path == child_path)
+                    else {
+                        continue;
+                    };
+                    if !child.x.is_finite()
+                        || !child.width.is_finite()
+                        || !child.baseline.is_finite()
+                        || child.width <= 0.0
+                    {
+                        continue;
+                    }
+                    let x0_pt = projection.object_x_pt + child.x;
+                    let x1_pt = x0_pt + child.width;
+                    let caret_band = projection
+                        .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + child.baseline);
+                    let Some((y0_pt, y1_pt)) =
+                        projection.clip_range_for_row(caret_band.y0_pt, caret_band.y1_pt, row_id)
+                    else {
+                        continue;
+                    };
+                    rectangles.push(PageSelectionRect {
+                        page_index: projection.page_index,
+                        x0_pt,
+                        y0_pt,
+                        x1_pt,
+                        y1_pt,
+                    });
+                }
+                return Some(rectangles);
             }
         }
         None
@@ -2270,7 +2451,7 @@ impl DocumentLayoutSnapshot {
     }
 
     /// 返回跨 Story 结构选区中环境外文字的几何；选中的块环境由环境矩形单独绘制。
-    pub fn structure_selection_geometry(
+    fn structure_selection_geometry(
         &self,
         anchor: &Pos,
         focus: &Pos,
@@ -2304,6 +2485,89 @@ impl DocumentLayoutSnapshot {
             None,
             selected_environment_ids,
         )
+    }
+
+    /// 返回选中块级公式在同一代布局中的整栏矩形。
+    ///
+    /// 每个矩形横跨页面版心宽度，纵向采用该公式片段的 MathBox 范围并裁切到页面，
+    /// 供选区层与活动公式高亮共用同一几何来源；不进入公式内部 MathBox。
+    /// 任一公式 ID 在当前快照中没有任何分页片段时返回 `None`，让调用方拒绝过期投影。
+    ///
+    /// 退化片段（零高度或裁切后纵向区间为空）在当前布局契约下不可达：Equation
+    /// 无 soft break 时宿主行框由正文行网格撑开正高度（`calculate_math_host_metrics`），
+    /// 含 soft break 的 Equation 与 Align 由 `calculate_math_align_host_metrics`
+    /// 拒绝非正高度，分页再拒绝负高度；即使公式行高于整页，页边距校验也保证裁切后
+    /// 仍为正高度。因此下面的跳过分支只是防御性检查，不应据此断言快照过期。
+    pub fn math_block_geometry(&self, block_ids: &[NodeId]) -> Option<Vec<PageSelectionRect>> {
+        if block_ids.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut found = vec![false; block_ids.len()];
+        let mut rectangles = Vec::new();
+        for (page_index, page) in self.pages.iter().enumerate() {
+            let x0_pt = page.margin_left_pt;
+            let x1_pt = page.width_pt - page.margin_right_pt;
+            if !x0_pt.is_finite() || !x1_pt.is_finite() || x1_pt <= x0_pt {
+                return None;
+            }
+            for fragment in &page.layout.math_fragments {
+                let Some(index) = block_ids
+                    .iter()
+                    .position(|block_id| block_id == &fragment.math_id)
+                else {
+                    continue;
+                };
+                let y0_pt = (page.margin_top_pt + f64::from(fragment.y_offset_pt))
+                    .clamp(0.0, page.height_pt);
+                let y1_pt = (page.margin_top_pt
+                    + f64::from(fragment.y_offset_pt)
+                    + f64::from(fragment.height_pt))
+                .clamp(0.0, page.height_pt);
+                if !y0_pt.is_finite() || !y1_pt.is_finite() || y1_pt <= y0_pt {
+                    continue;
+                }
+                // 只有真正产出矩形后才标记该 ID 已定位，退化片段不能让整体误判为成功。
+                // 当前布局契约保证片段高度为正且裁切区间非空，见函数文档。
+                found[index] = true;
+                rectangles.push(PageSelectionRect {
+                    page_index,
+                    x0_pt,
+                    y0_pt,
+                    x1_pt,
+                    y1_pt,
+                });
+            }
+        }
+        found.iter().all(|found| *found).then_some(rectangles)
+    }
+
+    /// 返回结构选区在同一代布局中的全部可见矩形：环境外正文、被选块环境与公式块。
+    ///
+    /// 文本端点必须与本快照同代；选中的公式 ID 任一缺少分页片段时整体
+    /// 返回 `None`。空块环境没有排版内容，因此没有环境矩形，这不视为过期投影。
+    pub fn structure_selection_rectangles(
+        &self,
+        anchor: &Pos,
+        focus: &Pos,
+        selected_environment_ids: &[NodeId],
+        selected_math_block_ids: &[NodeId],
+    ) -> Option<Vec<PageSelectionRect>> {
+        let mut rectangles =
+            self.structure_selection_geometry(anchor, focus, selected_environment_ids)?;
+        rectangles.extend(
+            self.environment_ranges
+                .iter()
+                .filter(|range| selected_environment_ids.contains(&range.environment_id))
+                .map(|range| PageSelectionRect {
+                    page_index: range.page_index,
+                    x0_pt: range.x0_pt,
+                    y0_pt: range.y0_pt,
+                    x1_pt: range.x1_pt,
+                    y1_pt: range.y1_pt,
+                }),
+        );
+        rectangles.extend(self.math_block_geometry(selected_math_block_ids)?);
+        Some(rectangles)
     }
 
     fn range_geometry(
@@ -2420,14 +2684,17 @@ impl DocumentLayoutSnapshot {
                         location.y0_pt + f64::from(line.metrics.height_pt),
                     )
                 };
-                if y1 <= y0 {
+                let x0_pt = bounds.x0 + page.margin_left_pt;
+                let x1_pt = bounds.x1 + page.margin_left_pt;
+                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
+                if x1_pt <= x0_pt || y1 <= y0 {
                     continue;
                 }
                 rectangles.push(PageSelectionRect {
                     page_index: location.page_index,
-                    x0_pt: bounds.x0 + page.margin_left_pt,
+                    x0_pt,
                     y0_pt: y0,
-                    x1_pt: bounds.x1 + page.margin_left_pt,
+                    x1_pt,
                     y1_pt: y1,
                 });
             }
@@ -3625,6 +3892,18 @@ fn contains_inline_math(nodes: &[ParagraphContent]) -> bool {
     })
 }
 
+/// 判断公式根流是否为空宿主：内容为空或仅一个根占位符。
+///
+/// 与 caret-math `is_empty_host_flow` 的判据保持一致；空宿主在行内流中不占推进，
+/// 只保留 MathNodeBox 作为公式 caret/命中锚点。
+pub(crate) fn math_flow_is_empty_host(flow: &MathFlow) -> bool {
+    flow.content.is_empty()
+        || matches!(
+            flow.content.as_slice(),
+            [MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder
+        )
+}
+
 fn math_flow_contains_text(flow: &MathFlow) -> bool {
     flow.content.iter().any(|content| match content {
         MathContent::Text(_) => true,
@@ -4357,9 +4636,11 @@ impl InlineMathLayoutBuilder<'_, '_> {
                         let value = value as f32;
                         value.is_finite().then_some(value)
                     };
-                    let advance_pt = as_f32(layout.width)
+                    // 空宿主只保留节点盒供 caret/命中使用，不占正文推进；
+                    // 零推进文本岛仍用透明最小推进保留点击槽位。
+                    let advance_pt = as_f32(layout.inline_advance)
                         .ok_or_else(|| {
-                            DocumentLayoutError::Math("invalid inline math width".to_owned())
+                            DocumentLayoutError::Math("invalid inline math advance".to_owned())
                         })?
                         .max(0.0);
                     let advance_pt = if advance_pt == 0.0

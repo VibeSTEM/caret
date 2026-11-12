@@ -44,6 +44,22 @@ impl DocumentViewRuntime {
         self.base_snapshot()
     }
 
+    /// 以不可变借用读取当前快照，供同代校验与几何投影共用。
+    ///
+    /// 调用方须先确保快照与当前代际一致（`base_snapshot`）；组合预览快照可能仍在
+    /// 校验中过期，因此是否可发布由调用方的同代校验决定，而不是在此重排。
+    pub(super) fn current_snapshot_ref(&self) -> Result<&DocumentLayoutSnapshot, String> {
+        if self.composition_preview_session.is_some() {
+            return self
+                .composition_snapshot
+                .as_ref()
+                .ok_or_else(|| "ime.composition_layout_unavailable".to_owned());
+        }
+        self.last_snapshot
+            .as_ref()
+            .ok_or_else(|| "layout.snapshot_unavailable".to_owned())
+    }
+
     pub(super) fn relayout_reusing_paragraph(
         &mut self,
         previous: &DocumentLayoutSnapshot,

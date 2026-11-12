@@ -39,10 +39,15 @@ impl Session {
                             .math_text_input_context()
                             .ok_or(EditError::InvalidPosition)?;
                         let text_len = context.surrounding_text.encode_utf16().count();
-                        if context.focus_utf16 == text_len && !extend {
+                        if context.focus_utf16 != text_len {
+                            return Ok(Effect::default());
+                        }
+                        if !extend {
                             self.run(Command::MoveCaret(Direction::Forward))
                         } else {
-                            Ok(Effect::default())
+                            // 文本岛内没有同方向后续：与 Tree 分支一致，离开当前层即转为
+                            // 整个公式宿主选区，不在光标处静默丢失已累积的锚点。
+                            self.convert_math_host_to_document_selection(Direction::Forward)
                         }
                     }
                     Some(_) => Err(EditError::InvalidPosition),
@@ -60,13 +65,25 @@ impl Session {
                             }
                         }
                     }
-                    if extend {
-                        Ok(Effect::default())
-                    } else {
-                        self.run(Command::MoveCaret(Direction::Forward))
+                    match &edit.branch {
+                        MathEditBranch::Tree { .. } if extend => {
+                            self.extend_math_tree_selection(Direction::Forward)
+                        }
+                        MathEditBranch::Tree { .. } => {
+                            self.run(Command::MoveCaret(Direction::Forward))
+                        }
+                        // 源码分支没有本地选区；扩选沿用非扩选的光标移动（已知限制）。
+                        MathEditBranch::Source => self.run(Command::MoveCaret(Direction::Forward)),
+                        // 文本分支已由外层处理；FFI 路径不制造 panic，改为可恢复错误。
+                        MathEditBranch::Text { .. } => Err(EditError::InvalidPosition),
                     }
                 }
             };
+        }
+        // 结构范围是文档级选区：普通 Right 先折叠到范围终点并消费按键，不能沿用
+        // 折叠在焦点端的文本光标继续前移一个步长。
+        if !extend && self.has_structure_selection() {
+            return self.collapse_structure_selection(Direction::Forward);
         }
         if !extend
             && self.empty_inline_boundary_candidate_matches(candidate.as_ref())?

@@ -17,63 +17,38 @@ use crate::editing::{
 
 impl Session {
     /// 返回当前真实 InlineEnvironment 的最内层范围，不含 Run 属性和公式对象。
+    ///
+    /// 该查询是 [`Session::current_environment_view`] 的投影：块外停靠、结构选区或
+    /// 公式块聚焦时视图本身没有行内候选，因此这里无需重复判断。
     pub fn current_inline_environment(
         &mut self,
     ) -> Result<Option<InlineEnvironmentRange>, EditError> {
-        if self.block_boundary_exit().is_some()
-            || self.selected_block_environment().is_some()
-            || !self.selected_block_environments().is_empty()
-        {
-            return Ok(None);
-        }
-
-        let focus = self.selection().focus.clone();
-        let host_caret_position = self.host_caret_position.clone();
-        let map = self.text_map_for(&focus)?;
-        let empty_focus_id = host_caret_position
-            .as_ref()
-            .and_then(|position| match position {
-                crate::editing::HostCaretPosition::Inside {
-                    host_id,
-                    kind: crate::editing::HostCaretKind::Inline,
-                    local,
-                } if local == &focus
-                    && map
-                        .empty_inline_environment_stack_for_host(focus.offset, host_id)
-                        .iter()
-                        .any(|span| span.id.as_ref() == Some(host_id)) =>
-                {
-                    Some(host_id.clone())
-                }
-                _ => None,
-            });
-        let range = empty_focus_id
-            .and_then(|id| {
-                map.empty_inline_environment_stack_for_host(focus.offset, &id)
-                    .into_iter()
-                    .find(|span| span.id.as_ref() == Some(&id))
-                    .map(|span| (id, span.start, span.end))
-            })
-            .or_else(|| map.inline_environment_at(focus.offset, focus.affinity));
-        let Some((environment_id, start_utf8, end_utf8)) = range else {
+        let view = self.current_environment_view()?;
+        let Some(entry) = view
+            .inline()
+            .iter()
+            .rev()
+            .find(|entry| entry.source == EnvironmentSource::InlineEnvironment)
+        else {
             return Ok(None);
         };
-
+        let (Some(environment_id), Some(range)) = (entry.id.clone(), entry.inline_range.clone())
+        else {
+            return Ok(None);
+        };
         Ok(Some(InlineEnvironmentRange {
             environment_id,
-            paragraph_id: focus.paragraph_id,
-            story: focus.story,
-            start_utf8,
-            end_utf8,
+            paragraph_id: range.paragraph_id,
+            story: range.story,
+            start_utf8: range.start_utf8,
+            end_utf8: range.end_utf8,
         }))
     }
 
     /// 从编辑状态推导 Inline 和 Block 候选；此查询不依赖布局快照。
     pub fn current_environment_view(&mut self) -> Result<CurrentEnvironmentView, EditError> {
         self.ensure_math_edit_revision_current()?;
-        if self.selected_block_environment().is_some()
-            || !self.selected_block_environments().is_empty()
-        {
+        if self.has_structure_selection() {
             return Ok(CurrentEnvironmentView::default());
         }
         let exited_environment_id = self
@@ -121,6 +96,7 @@ impl Session {
                 source: adapter.source,
                 inline_range: None,
                 depth: block.len(),
+                empty_inline_host: false,
             });
         }
 
@@ -132,6 +108,7 @@ impl Session {
                 source: adapter.source,
                 inline_range: None,
                 depth: block.len(),
+                empty_inline_host: false,
             });
         }
 
@@ -153,6 +130,15 @@ impl Session {
                     MathEditTarget::Block { .. } => None,
                 });
         let host_caret_position = self.host_caret_position.clone();
+        // 公式树为空宿主时只保留 caret/命中锚点，app 据此投影插入槽高亮。
+        let active_inline_math_empty_host = active_inline_math_id.as_ref().is_some_and(|math_id| {
+            self.paragraph_for(&focus)
+                .ok()
+                .and_then(|paragraph| {
+                    super::math_edit::find_inline_math(&paragraph.inlines, math_id)
+                })
+                .is_some_and(|math| crate::layout::math_flow_is_empty_host(&math.math_tree.root))
+        });
         let map = self.text_map_for(&focus)?;
         let mut inline = map
             .inline_environment_stack_at(focus.offset, focus.affinity)
@@ -172,6 +158,8 @@ impl Session {
                     end_utf8: span.end,
                 }),
                 depth: span.depth,
+                empty_inline_host: span.source == EnvironmentSource::InlineMath
+                    && active_inline_math_empty_host,
             })
             .collect::<Vec<_>>();
         if let Some(crate::editing::HostCaretPosition::Inside {
@@ -195,6 +183,7 @@ impl Session {
                             end_utf8: span.end,
                         }),
                         depth: span.depth,
+                        empty_inline_host: false,
                     }),
             );
         }
@@ -215,6 +204,7 @@ impl Session {
                     end_utf8: span.end,
                 }),
                 depth: span.depth,
+                empty_inline_host: active_inline_math_empty_host,
             });
         }
         inline.sort_by(|left, right| {

@@ -44,6 +44,7 @@ fn innermost_unwrappable_skips_atomic_math() {
         source,
         inline_range: None,
         depth: 0,
+        empty_inline_host: false,
     };
     let bold = entry(EnvironmentKind::Bold, EnvironmentSource::InlineEnvironment);
     let view = CurrentEnvironmentView::new(

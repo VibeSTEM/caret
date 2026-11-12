@@ -11,9 +11,10 @@ use caret_doc::{
 };
 
 use super::{
-    MathHostRowGrid, MathItem, MathLayout, MathLayoutEngine, MathLayoutError, MathNodeBox,
-    MathStyle, MathTextRequest, MathTextRunBox, MathTextShape, MathTextShapeError, MathTextShaper,
-    layout_align, layout_align_with_host_row_grid, layout_math, layout_math_with_text_shaper,
+    MATH_PLACEHOLDER_HEIGHT_EM, MATH_PLACEHOLDER_WIDTH_EM, MathHostRowGrid, MathItem, MathLayout,
+    MathLayoutEngine, MathLayoutError, MathNodeBox, MathStyle, MathTextRequest, MathTextRunBox,
+    MathTextShape, MathTextShapeError, MathTextShaper, layout_align,
+    layout_align_with_host_row_grid, layout_math, layout_math_with_text_shaper,
 };
 use crate::layout::MathFont;
 use crate::{MathInputKind, ParsedMath, parse};
@@ -570,6 +571,15 @@ fn empty_math_and_text_flows_emit_stable_position_boxes() {
                 .all(|item| !matches!(item, MathItem::Rectangle { .. }))
         );
         assert!(empty.nodes[0].width > 0.0 && empty.nodes[0].height > 0.0);
+        // 行内空宿主的节点盒保留非零几何，但不进入正文推进；显示公式仍用盒宽。
+        assert_eq!(
+            empty.inline_advance,
+            if style == MathStyle::Inline {
+                0.0
+            } else {
+                empty.width
+            }
+        );
 
         let placeholder_id = NodeId::generate();
         let placeholder_root = MathFlow {
@@ -604,6 +614,14 @@ fn empty_math_and_text_flows_emit_stable_position_boxes() {
                 .iter()
                 .all(|item| !matches!(item, MathItem::Rectangle { .. }))
         );
+        assert_eq!(
+            layout.inline_advance,
+            if style == MathStyle::Inline {
+                0.0
+            } else {
+                layout.width
+            }
+        );
     }
 
     let empty_text_flow = MathFlow {
@@ -623,6 +641,61 @@ fn empty_math_and_text_flows_emit_stable_position_boxes() {
     assert_eq!(text_slot.path, [MathPathStep::Content(0)]);
     assert!(text_slot.is_text_flow);
     assert_eq!(text_slot.text_run_index, None);
+}
+
+#[test]
+fn inline_advance_is_zero_only_for_empty_inline_hosts() {
+    for size in [9.0, 12.0, 20.0] {
+        let empty_math_flow = MathFlow {
+            id: NodeId::generate(),
+            content: Vec::new(),
+            extra: Default::default(),
+        };
+        let empty_inline = layout_math(font(), &empty_math_flow, size, MathStyle::Inline)
+            .unwrap_or_else(|error| panic!("空行内宿主应合法：{error}"));
+        let root_slot = empty_inline
+            .nodes
+            .first()
+            .unwrap_or_else(|| panic!("空行内宿主应保留节点盒"));
+        // 072 契约：节点盒宽高保持 0.6em/0.7em，仅正文推进为零。
+        assert!(root_slot.width > 0.0 && root_slot.height > 0.0);
+        assert!((root_slot.width - MATH_PLACEHOLDER_WIDTH_EM * size).abs() < EPSILON);
+        assert!((root_slot.height - MATH_PLACEHOLDER_HEIGHT_EM * size).abs() < EPSILON);
+        assert_eq!(empty_inline.width, root_slot.width);
+        assert_eq!(empty_inline.inline_advance, 0.0);
+
+        let placeholder_root = MathFlow {
+            id: NodeId::generate(),
+            content: vec![MathContent::Math(MathNode {
+                id: NodeId::generate(),
+                kind: MathNodeKind::Placeholder,
+                text: None,
+                attributes: Default::default(),
+                children: Vec::new(),
+                extra: Default::default(),
+            })],
+            extra: Default::default(),
+        };
+        let placeholder_inline = layout_math(font(), &placeholder_root, size, MathStyle::Inline)
+            .unwrap_or_else(|error| panic!("单 Placeholder 行内宿主应合法：{error}"));
+        assert_eq!(placeholder_inline.inline_advance, 0.0);
+        assert!(placeholder_inline.width > 0.0);
+
+        let empty_display = layout_math(font(), &empty_math_flow, size, MathStyle::Display)
+            .unwrap_or_else(|error| panic!("空显示公式应合法：{error}"));
+        assert_eq!(empty_display.inline_advance, empty_display.width);
+    }
+
+    // 非空行内公式保持内容宽度推进。
+    let nonempty = inline("x");
+    assert!(nonempty.width > 0.0);
+    assert_eq!(nonempty.inline_advance, nonempty.width);
+    assert!(
+        nonempty
+            .items
+            .iter()
+            .any(|item| !matches!(item, MathItem::Rectangle { .. }))
+    );
 }
 
 #[test]

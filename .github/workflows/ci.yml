@@ -472,6 +472,14 @@ jobs:
             cargo test --locked --package caret-tests --test native
           fi
 
+      # 选区/布局投影的单元测试位于 caret-app 的 lib target。L1/L2 选择器正常时
+      # 已会执行它们；当选择器漏选 caret-app 时显式补跑，避免快照/高亮投影回归
+      # 只被其它选中包的绿色结果掩盖。
+      - name: Test caret-app document view unit tests
+        if: needs.changes.outputs.rust == 'true' && !contains(fromJSON(needs.changes.outputs.test_packages), 'caret-app')
+        shell: bash
+        run: cargo test --locked --package caret-app --lib
+
       - name: Verify Cargo-provisioned toolchain
         if: needs.changes.outputs.native_labels != '[]'
         shell: bash

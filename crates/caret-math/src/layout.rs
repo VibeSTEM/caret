@@ -168,6 +168,12 @@ pub struct MathNodeBox {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MathLayout {
     pub width: f64,
+    /// 行内公式在正文行内流中的推进宽度。
+    ///
+    /// 空宿主（根流为空或仅根占位符）在行内样式中为 `0`：根节点盒保留非零几何用于
+    /// 公式 caret/命中锚点，但隐藏的占位盒不应在正文流中留下不可见间隙。其余情况
+    /// 与 [`MathLayout::width`] 相同。
+    pub inline_advance: f64,
     pub ascent: f64,
     pub descent: f64,
     pub items: Vec<MathItem>,
@@ -457,6 +463,9 @@ fn layout_nodes<'a>(
         converter.ctx.host_row_descent = row_grid.descent;
         converter.ctx.host_row_leading = row_grid.leading;
     }
+    // 行内空宿主的隐藏根占位盒只服务 caret/命中锚点，不进入正文推进。
+    let empty_host_inline = style == MathStyle::Inline
+        && matches!(backend_nodes.as_slice(), [node] if convert::is_empty_host_flow(node));
     let fragment = match backend_nodes.as_slice() {
         [node] => converter.node(node, Style::root(style == MathStyle::Display)),
         nodes => converter.row(nodes, Style::root(style == MathStyle::Display)),
@@ -474,6 +483,7 @@ fn layout_nodes<'a>(
     }
     let mut layout = MathLayout {
         width: frame.width,
+        inline_advance: if empty_host_inline { 0.0 } else { frame.width },
         ascent: frame.ascent(),
         descent: frame.descent(),
         items: Vec::with_capacity(frame.items.len()),
