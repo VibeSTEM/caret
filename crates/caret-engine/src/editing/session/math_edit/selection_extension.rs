@@ -11,7 +11,7 @@ use super::super::{
 use super::tree_position::{MathTreeCaretMove, advance_math_tree_selection_position};
 use super::{MathEdit, MathEditBranch, MathEditTarget, inline_math_slots};
 use crate::editing::paragraph_ops::paragraph_at_location;
-use caret_doc::{Block, NodeId};
+use caret_doc::NodeId;
 use caret_structure::find_document_node;
 
 impl Session {
@@ -85,65 +85,6 @@ impl Session {
                 self.apply_math_tree_caret_move(&edit, movement, direction)
             }
         }
-    }
-
-    /// 当前 MathText 分支的焦点是否已到达整个公式宿主的文本岛边缘。
-    ///
-    /// Align 的每个 cell 有自己的文本岛，只有首个/末个 cell 的边缘才等于宿主边缘。
-    pub(in crate::editing::session) fn math_text_at_host_edge(
-        &self,
-        direction: Direction,
-    ) -> Result<bool, EditError> {
-        let Some(edit) = self.math_edit.as_ref() else {
-            return Ok(false);
-        };
-        let MathEditBranch::Text { path, .. } = &edit.branch else {
-            return Ok(false);
-        };
-        // Align 的每个 cell 有自己的树：先要求当前 cell 是该块的首/末 cell。
-        if let MathEditTarget::Block {
-            block_id,
-            align: true,
-        } = &edit.target
-        {
-            let Some((row, cell)) = path.align_cell() else {
-                return Ok(false);
-            };
-            let Some(Block::Align(align)) = super::find_block_by_id(&self.document.body, block_id)
-            else {
-                return Err(EditError::InvalidPosition);
-            };
-            let cells = align
-                .rows
-                .iter()
-                .enumerate()
-                .flat_map(|(row_index, row)| {
-                    (0..row.cells.len()).map(move |cell_index| (row_index, cell_index))
-                })
-                .collect::<Vec<_>>();
-            let current = cells
-                .iter()
-                .position(|position| *position == (row, cell))
-                .ok_or(EditError::InvalidPosition)?;
-            let at_cell_edge = match direction {
-                Direction::Forward => current + 1 == cells.len(),
-                Direction::Backward => current == 0,
-            };
-            if !at_cell_edge {
-                return Ok(false);
-            }
-        }
-        // 只有当前文本岛是同方向最后一个文本岛时才是宿主边界；多个 `\text{}`
-        // 岛或操作数内部文本岛不会提前转换为整个公式对象。
-        let align_cell = path.align_cell();
-        let Ok(tree) = self.math_tree_for_edit(edit, align_cell) else {
-            return Ok(false);
-        };
-        Ok(super::path::text_island_is_host_edge(
-            tree,
-            path,
-            direction == Direction::Forward,
-        ))
     }
 
     /// 把当前公式宿主的本地焦点转换为文档级选区，并把 caret 停靠到宿主外侧边界。

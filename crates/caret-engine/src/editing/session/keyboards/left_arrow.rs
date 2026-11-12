@@ -43,11 +43,10 @@ impl Session {
                         }
                         if !extend {
                             self.run(Command::MoveCaret(Direction::Backward))
-                        } else if self.math_text_at_host_edge(Direction::Backward)? {
-                            self.convert_math_host_to_document_selection(Direction::Backward)
                         } else {
-                            // Align 中间 cell 的文本岛边缘：沿用本地移动语义，不伪造整块范围。
-                            self.run(Command::MoveCaret(Direction::Backward))
+                            // 文本岛内没有同方向后续：与 Tree 分支一致，离开当前层即转为
+                            // 整个公式宿主选区，不在光标处静默丢失已累积的锚点。
+                            self.convert_math_host_to_document_selection(Direction::Backward)
                         }
                     }
                     Some(_) => Err(EditError::InvalidPosition),

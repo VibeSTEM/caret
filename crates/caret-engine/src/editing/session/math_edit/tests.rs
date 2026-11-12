@@ -14856,3 +14856,142 @@ fn shift_right_at_the_last_equation_text_island_converts_to_the_whole_equation()
     ));
     Ok(())
 }
+
+fn enter_text_branch_at_align_cell(
+    session: &mut Session,
+    row: usize,
+    cell: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    session.run(Command::EnterMath(Direction::Forward))?;
+    for _ in 0..32 {
+        if let Some(MathEditBranch::Text { path, .. }) =
+            session.math_edit().map(|edit| &edit.branch)
+            && path.align_cell() == Some((row, cell))
+        {
+            return Ok(());
+        }
+        session.run(Command::MoveCaret(Direction::Forward))?;
+    }
+    Err(format!("Align cell ({row}, {cell}) text island is unreachable").into())
+}
+
+#[test]
+fn align_first_cell_text_edge_shift_converts_the_whole_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align = display_math_block(true, r"\text{ab} & \text{cd}")?;
+    let align_id = match &align {
+        caret_doc::Block::Align(align) => align.id.clone(),
+        _ => return Err("expected an Align block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        align,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    enter_text_branch_at_align_cell(&mut session, 0, 0)?;
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 2,
+        focus: 2,
+    })?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    // 首 cell 不是 Align 宿主边界；没有本地后续时与 Tree 分支一致，转为整个公式选区。
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert!(session.structure_selection_range().is_some());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&align_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn align_last_cell_text_edge_shift_left_converts_the_whole_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let align = display_math_block(true, r"\text{ab} & \text{cd}")?;
+    let align_id = match &align {
+        caret_doc::Block::Align(align) => align.id.clone(),
+        _ => return Err("expected an Align block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        align,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    enter_text_branch_at_align_cell(&mut session, 0, 1)?;
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 0,
+        focus: 0,
+    })?;
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&align_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn middle_text_island_shift_right_converts_the_whole_equation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = display_math_block(false, r"\text{a}+\text{b}")?;
+    let equation_id = match &equation {
+        caret_doc::Block::Equation(equation) => equation.id.clone(),
+        _ => return Err("expected an Equation block".into()),
+    };
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+        equation,
+        caret_doc::Block::Paragraph(caret_doc::Paragraph::empty(NodeId::generate())),
+    ];
+    let mut session = Session::new(document)?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+    for _ in 0..16 {
+        if matches!(
+            session.math_edit().map(|edit| &edit.branch),
+            Some(MathEditBranch::Text { .. })
+        ) {
+            break;
+        }
+        session.run(Command::MoveCaret(Direction::Forward))?;
+    }
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Text { .. })
+    ));
+
+    session.run(Command::SetMathTextSelection {
+        anchor: 1,
+        focus: 1,
+    })?;
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+
+    // 第一个文本岛之后还有 `+\text{b}`：离开当前层即整个公式对象，不在中间层停靠。
+    assert!(session.math_edit().is_none());
+    assert!(session.has_structure_selection());
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    Ok(())
+}

@@ -240,7 +240,7 @@ fn shift_left_at_inline_math_tree_start_uses_a_plain_object_text_selection() {
 }
 
 #[test]
-fn shift_left_at_nested_math_text_island_stays_local_without_whole_object_range() {
+fn shift_left_at_nested_math_text_island_converts_the_inline_host_range() {
     let mut session = session_in_inline_math_text_island();
     session
         .run(Command::SetMathTextSelection {
@@ -256,15 +256,17 @@ fn shift_left_at_nested_math_text_island_stays_local_without_whole_object_range(
         }))
         .unwrap_or_else(|error| panic!("shift-left at text edge failed: {error}"));
 
-    // `\text{}` 位于分式操作数内部，不是公式宿主的边界；继续本地树导航，
-    // 不能仅凭文本岛端点提前把整个 InlineMath 纳入结构范围。
-    assert!(session.math_edit().is_some());
+    // 文本岛内没有同方向后续，离开当前层即转为整个 InlineMath 的普通文本范围；
+    // 光标状态不保留已累积的锚点，也不暴露空覆盖结构选区。
+    assert!(session.math_edit().is_none());
     assert!(!session.has_structure_selection());
     assert!(session.structure_selection_range().is_none());
+    assert_eq!(session.selection().anchor.offset, 3);
+    assert_eq!(session.selection().focus.offset, 0);
 }
 
 #[test]
-fn shift_right_at_nested_math_text_island_stays_local_without_whole_object_range() {
+fn shift_right_at_nested_math_text_island_converts_the_inline_host_range() {
     let mut session = session_in_inline_math_text_island();
     session
         .run(Command::SetMathTextSelection {
@@ -280,9 +282,11 @@ fn shift_right_at_nested_math_text_island_stays_local_without_whole_object_range
         }))
         .unwrap_or_else(|error| panic!("shift-right at text edge failed: {error}"));
 
-    assert!(session.math_edit().is_some());
+    assert!(session.math_edit().is_none());
     assert!(!session.has_structure_selection());
     assert!(session.structure_selection_range().is_none());
+    assert_eq!(session.selection().anchor.offset, 0);
+    assert_eq!(session.selection().focus.offset, 3);
 }
 
 #[test]

@@ -380,50 +380,6 @@ pub(super) fn adjacent_text_flow_path(
     Some(adjacent)
 }
 
-/// 判断当前根级文本岛是否是整个数学宿主序列中的首/末文本岛。
-///
-/// 同侧不再有其它文本岛时返回 `true`；符号、环境等非文本内容不阻止转换，因为
-/// 结构范围仍以整个公式对象为目标（`x\text{ab}y` 的文本岛同时是首个与末个文本岛）。
-/// 操作数内部的文本岛前后仍有公式结构内容，不能仅凭文本岛内部偏移判断宿主边界；
-/// 这类位置返回 `false`，由既有树导航继续推进。
-pub(super) fn text_island_is_host_edge(
-    tree: &MathTree,
-    current: &MathTextFlowPath,
-    forward: bool,
-) -> bool {
-    if current.resolve_structurally(tree).is_none()
-        || current
-            .steps()
-            .iter()
-            .any(|step| matches!(step, MathTextFlowPathStep::Operand(_)))
-    {
-        return false;
-    }
-    let mut candidates = Vec::new();
-    collect_text_island_candidates(
-        &tree.root.content,
-        false,
-        &mut Vec::new(),
-        current.align_cell,
-        &mut candidates,
-    );
-    let text_islands = candidates
-        .into_iter()
-        .flatten()
-        .collect::<Vec<MathTextFlowPath>>();
-    let Some(index) = text_islands
-        .iter()
-        .position(|island| island.steps == current.steps)
-    else {
-        return false;
-    };
-    if forward {
-        index + 1 == text_islands.len()
-    } else {
-        index == 0
-    }
-}
-
 /// 返回当前槽位中由 InlineEnvironment 包装连接的连续文本流及其边界。
 pub(super) fn contiguous_text_flow_paths(
     tree: &MathTree,
