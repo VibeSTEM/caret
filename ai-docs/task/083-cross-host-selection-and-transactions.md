@@ -65,7 +65,7 @@
 
 | 日期 | 环境 / 命令 | 预期 | 实际结果 |
 | --- | --- | --- | --- |
-| 2026-11-11 | Shift 四向键跨 Paragraph/Section/Equation/Align/InlineMath 测试（`range_extension/tests.rs`、`selection/tests.rs`、`math_edit`/`navigation` 测试） | anchor/focus 与结构范围一致，内部位置可映射 | 通过：覆盖横向/纵向、反向选区、BlockEdge 端点、相邻公式链、Align cell 逐步、纯文本步骤不安装结构选区、鼠标跨界晋级 |
+| 2026-11-11 | Shift 四向键跨 Paragraph/Section/Equation/Align/InlineMath 测试（`range_extension/tests.rs`、`selection/tests.rs`、`math_edit`/`navigation` 测试） | anchor/focus 与结构范围一致，内部位置可映射 | 通过：覆盖横向/纵向、反向选区、BlockEdge 端点、相邻公式链、Align cell 边界整块转换、纯文本步骤不安装结构选区、鼠标跨界晋级 |
 | 2026-11-11 | 删除/替换/复制/Undo/Redo 跨宿主测试（`structure/tests.rs`） | 同一范围，无数据丢失 | 通过：Section/Equation/Align 组合、相邻公式链、空文档补位、对象复制 U+FFFC、失败/替换回滚、Undo/Redo 精确恢复 |
 | 2026-11-11 | 同代 Environment/selection 几何测试（`layout/tests.rs`、app `document_view` 测试） | 完整/增量投影一致，旧 generation 不覆盖 | 通过：文本+环境+公式对象矩形、BlockEdge 起止、full vs delta 相等、旧 generation/缺失公式几何整体拒绝 |
 | 2026-11-11 | `cargo test --workspace --locked` | 全 workspace 通过 | 通过（Engine 797、App 296、workspace 1719；其余 crate 与 native/QML 聚合通过，exit 0） |
@@ -76,6 +76,7 @@
 | 2026-11-11 | `cargo test --workspace --locked` | 全 workspace 通过 | 通过（exit 0，含 native/QML/CTest 聚合；Engine 823、App 298、native/QML 聚合均通过） |
 | 2026-11-11 | 分域只读评审（行为/状态/测试、架构/分层/文档） | 无阻断发现 | 通过；建议项与修复见“独立评审” |
 | 2026-11-12 | 桌面测试补漏：`cargo test --locked -p caret-engine`、`-p caret-app` | 公式内 Shift 高亮与 InlineMath 上下键回归 | 通过：Engine 837 passed、App 308 passed，0 failed；`cargo test --workspace --locked` exit 0；clippy/fmt 通过 |
+| 2026-11-12 | 复查反馈修复：`cargo test --locked -p caret-engine`、`-p caret-app` | 文本岛边缘 Shift 转整公式、Align 首/末 cell 与多文本岛回归 | 通过：Engine 846 passed、App 314 passed，0 failed；`cargo test --workspace --locked` exit 0；clippy/fmt 通过 |
 | — | nightly `cargo coverage` 85% 门槛、Qt 桌面手工/平台验收 | 覆盖率与真实绘制/输入 | 未执行：本地未运行 nightly 覆盖率与 Qt 手工交互；记录为未验证项 |
 
 ## 风险与回退
@@ -104,7 +105,7 @@
 - 2026-11-11：PR #136 修复的分域只读评审（独立 deepseek-v4.1-flash subagent，行为/状态/测试与架构/分层/文档两组）结论均通过、无阻断。按建议收敛实现与文档：结构范围合并可行性只由 `paragraph_ops::merge_paragraph_range` 判定，Session 仅解析端点位置并移除无效文档克隆；`convert_math_host_to_structure_range` 更名为 `convert_math_host_to_document_selection` 并注明 Block/InlineMath 两种结果；`park_at_range_endpoint` 移入 `document_position.rs` 作为共享端点落点；`block-interaction.md`、`structure-navigation.md` 补齐不可合并回落、MathText 局部扩选与 Align cell 边界转换、普通 Left/Right 折叠规则；加强扩选锚点固定/范围非空的断言与空覆盖守卫的既有结构选区前置断言，并补环境内段落合并、ExplicitBreak 不可合并回落、IME 提交替换结构范围、Align 反向多 cell 边界测试。
 - 2026-11-11：保留项与未验证风险：结构删除新增“几何完全包含”判定按候选段落做端点比较、`remove_range_paragraphs` 做定位排序，属删除路径非逐字符热路径，未做基准（与既有覆盖派生同阶，纳入 041 基准范围考虑）；`selected_block_environment()` 清理后已无生产消费者，保留为单值派生/测试查询（同 `current_inline_environment` 先例）；无段落文档在 `Session::new` 的文档校验阶段即被拒绝，普通左右键折叠无需额外降级分支；MathTree→TextFlow 迁移时 Tree 锚点被替换、已累积 Tree 选区静默丢弃属既有行为，非本次引入，记录为后续单独评估项。
 - 2026-11-11：brooks-review 门禁发现的两条 Warning 已处理：结构选区块外侧边界锚点在 Home/End 与纵向候选扩展时按 `text_endpoint_clamped` 侧向投影为文本锚点（新增 `structure_selection_text_anchor`，横向/纵向/Home/End 共用，删除两处重复投影回退），补 Shift+Down/Home/End 覆盖公式对象回归与块外前边界的普通 Left 折叠测试；MathText 文本岛转换规则按实现语义收敛文档——同侧再无其它文本岛即转换为整公式对象（即使之后仍有符号/环境等非文本内容），补 `x\text{ab}y` 正向转换测试与 `\text{ab}` 块公式用例；InlineMath 根文本岛在文档校验阶段即被拒绝（必须提升为段落文本），不作为有效转换场景。
-
+- 2026-11-12：复查反馈的公式内 Shift 文本岛边缘问题修复：MathText 分支在文本岛内没有同方向后续时，原先退化为不扩选的 `MoveCaret` 并丢失已累积锚点；现与 Tree 分支统一——离开当前层即调用 `convert_math_host_to_document_selection` 转为整个公式宿主选区（Align 中间 cell、操作数内部文本岛、多个 `\text{}` 中间岛均如此）。删除不再使用的 `math_text_at_host_edge`/`text_island_is_host_edge`，更新两条旧的“保持本地导航”断言，并补 Align 首 cell 文本岛边缘 Shift+Right 转为整块 Align 的回归。复查同时确认设计取舍：公式内扩选按当前层逐项，离开该层直接选中整个公式，不在中间结构层级停靠；本 PR 的 086/087 追加实现为桌面测试反馈后的同分支补丁，任务卡与提交均独立标注。
 
 ## 独立评审
 

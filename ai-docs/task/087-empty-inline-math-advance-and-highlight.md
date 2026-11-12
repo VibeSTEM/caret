@@ -75,3 +75,5 @@
 - 2026-11-12：增量独立评审发现并修复阻断：选区恰好覆盖空 InlineMath 时，caret-layout 的“完整覆盖对象补整框”会补出零宽矩形（advance=0），Qt 快照 codec 因 x1<=x0 拒绝整份快照。修复：caret-layout 补框跳过 width<=0 对象；engine selection/composition 投影防御性过滤 x1<=x0；app 空宿主在无公式 caret（Source 分支）时退回共享 caret/行框插入槽而不是按 U+FFFC 范围投影。补 engine/app 回归：选中空公式 `1..4`、段落首 `0..3` 不产生零宽 selectionRects。
 
 - 2026-11-12：B1 修复后的短增量独立复核结论 mergeable：caret-layout 补框跳过零宽对象、engine 投影过滤零宽、app Source 分支退回插入槽三条均落地；独立 probe 复测 `A{math}B` 选区 1..4、段落首 0..3 现在返回空矩形而非零宽，相邻文字正常选区不变；caret-math/engine/app 全绿，Qt codec 的 x1<=x0 拒绝分支不可再达。残留：engine/app 的插入槽与正文优先规则仍两份实现，建议后续下沉为单一 helper；Qt 桌面截图与 zoom≠1 未验证。
+
+- 2026-11-12：复查反馈建议：engine 的空宿主插入槽与“正文优先”判定和 app 各有一份实现，与单一权威原则有偏差；按复查意见先合并，后续由 [088](088-unify-empty-inline-math-hit-slot.md) 跟踪下沉为共享 helper，本任务不继续扩大实现范围。
