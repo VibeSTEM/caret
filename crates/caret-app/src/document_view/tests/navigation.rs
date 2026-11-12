@@ -5077,3 +5077,147 @@ fn text_selection_after_inline_math_excludes_the_math_box() -> Result<(), Box<dy
     }
     Ok(())
 }
+
+/// 构造 `p / Equation / Align / q` 文档：连续两个显示公式块夹在段落之间。
+fn consecutive_math_blocks_document() -> (Document, NodeId, NodeId, NodeId, NodeId) {
+    let before = paragraph_with_text("p");
+    let before_id = before.id.clone();
+    let (first, first_id) = formula_block(false);
+    let (second, second_id) = formula_block(true);
+    let after = paragraph_with_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        first,
+        second,
+        Block::Paragraph(after),
+    ];
+    (document, before_id, first_id, second_id, after_id)
+}
+
+#[test]
+fn arrow_keys_enter_consecutive_display_math_blocks_one_at_a_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, before_id, first_id, second_id, after_id) = consecutive_math_blocks_document();
+    let reverse_document = document.clone();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, before_id.clone(), 1)?;
+
+    // 第一次 Right 只在第一块外侧停靠，不跨过连续公式链。
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((first_id.clone(), caret_engine::Direction::Backward))
+    );
+    // 第二次 Right 进入第一个 Equation。
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, align: false })
+            if block_id == &first_id
+    ));
+    // 继续 Right：文本末尾 → 第一块外侧 → 进入第二个 Align（一次一个块）。
+    runtime.move_visual_caret_json(true, false)?;
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((first_id, caret_engine::Direction::Forward))
+    );
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, align: true })
+            if block_id == &second_id
+    ));
+
+    // 反向对称：从后段起点 Left，先停在最后一块外侧，再进入。
+    let mut runtime = DocumentViewRuntime::new(reverse_document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, after_id.clone(), 0)?;
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((second_id.clone(), caret_engine::Direction::Forward))
+    );
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, align: true })
+            if block_id == &second_id
+    ));
+    Ok(())
+}
+
+#[test]
+fn shift_arrows_include_consecutive_display_math_blocks_one_at_a_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, before_id, first_id, second_id, after_id) = consecutive_math_blocks_document();
+    let reverse_document = document.clone();
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, before_id.clone(), 1)?;
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&first_id)
+    );
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        &[first_id.clone(), second_id.clone()]
+    );
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or_else(|| "structural range should exist".to_owned())?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: caret_engine::Direction::Forward,
+        } if block_id == &second_id
+    ));
+    // 第三次 Shift+Right 越过公式链进入后段文本起点。
+    runtime.move_visual_caret_json(true, true)?;
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or_else(|| "structural range should exist".to_owned())?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == after_id && position.offset == 0
+    ));
+    assert!(runtime.session.block_boundary_exit().is_none());
+
+    // 反向对称：Shift+Left 从后段起点逐个纳入公式块。
+    let mut runtime = DocumentViewRuntime::new(reverse_document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, after_id.clone(), 0)?;
+    runtime.move_visual_caret_json(false, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&second_id)
+    );
+    runtime.move_visual_caret_json(false, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        &[first_id.clone(), second_id.clone()]
+    );
+    runtime.move_visual_caret_json(false, true)?;
+    let (_, focus) = runtime
+        .session
+        .structure_selection_range()
+        .ok_or_else(|| "structural range should exist".to_owned())?;
+    assert!(matches!(
+        focus,
+        caret_engine::DocumentRangeEndpoint::Text(position)
+            if position.paragraph_id == before_id && position.offset == 1
+    ));
+    Ok(())
+}

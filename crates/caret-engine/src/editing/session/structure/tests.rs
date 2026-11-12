@@ -2435,6 +2435,238 @@ fn deleting_block_edge_range_removes_middle_paragraphs_instead_of_clearing_them(
 }
 
 #[test]
+fn deleting_selected_block_object_keeps_preceding_empty_paragraph_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preceding = paragraph();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(preceding.clone()), equation];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+    let original_selection = session.selection().clone();
+    select_block_object(&mut session, equation_id.clone())?;
+    let generation_before_delete = session.document_generation();
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    // 块对象删除只移除对象本身；范围外的空段落必须保留原 ID 和位置。
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    // caret 沿用对象删除规则：折叠到范围起点一侧段落的末尾边界。
+    assert_eq!(
+        session.selection().focus,
+        body_position(&preceding, 0, Affinity::Upstream)
+    );
+    assert!(!session.has_structure_selection());
+    assert!(session.selected_math_blocks().is_empty());
+    assert_eq!(session.document_generation(), generation_before_delete + 1);
+
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    assert_eq!(session.selection(), &original_selection);
+    session.run(Command::Redo)?;
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    Ok(())
+}
+
+#[test]
+fn deleting_text_to_block_edge_range_keeps_preceding_empty_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preceding = paragraph();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(preceding.clone()), equation];
+    let mut session = Session::new(document)?;
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::Text(body_position(&preceding, 0, Affinity::Downstream)),
+        focus: DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Forward,
+        },
+    })?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    Ok(())
+}
+
+#[test]
+fn deleting_block_edge_to_text_range_keeps_following_empty_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let following = paragraph();
+    let mut document = Document::blank();
+    document.body = vec![equation, Block::Paragraph(following.clone())];
+    let mut session = Session::new(document)?;
+    session.install_structure_selection(StructureSelection {
+        anchor: DocumentRangeEndpoint::BlockEdge {
+            block_id: equation_id.clone(),
+            side: Direction::Backward,
+        },
+        focus: DocumentRangeEndpoint::Text(body_position(&following, 0, Affinity::Downstream)),
+    })?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == following.id
+    ));
+    Ok(())
+}
+
+#[test]
+fn shift_right_from_empty_paragraph_deletes_block_object_without_the_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preceding = paragraph();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(preceding.clone()), equation];
+    let mut session = Session::new(document)?;
+    let caret = body_position(&preceding, 0, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: caret.clone(),
+        focus: caret,
+    })))?;
+
+    // 真实手势：空段落段首 Shift+Right 选中紧随其后的块对象。
+    session.run(Command::EditorKey(EditorKey::RightArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert_eq!(
+        session.structure_selection_anchor(),
+        Some(&body_position(&preceding, 0, Affinity::Downstream))
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    Ok(())
+}
+
+#[test]
+fn shift_left_from_empty_paragraph_deletes_block_object_without_the_paragraph()
+-> Result<(), Box<dyn std::error::Error>> {
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let following = paragraph();
+    let mut document = Document::blank();
+    document.body = vec![equation, Block::Paragraph(following.clone())];
+    let mut session = Session::new(document)?;
+    let caret = body_position(&following, 0, Affinity::Downstream);
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: caret.clone(),
+        focus: caret,
+    })))?;
+
+    // 真实手势：空段落段首 Shift+Left 选中前一个块对象。
+    session.run(Command::EditorKey(EditorKey::LeftArrow {
+        candidate: None,
+        extend: true,
+    }))?;
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == following.id
+    ));
+    Ok(())
+}
+
+#[test]
+fn deleting_selected_custom_environment_keeps_preceding_empty_paragraph_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preceding = paragraph();
+    let custom = environment(
+        BlockEnvironmentKind::Custom,
+        vec![Block::Paragraph(paragraph_with_text("content"))],
+    );
+    let custom_id = block_id(&custom);
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(preceding.clone()), custom];
+    let mut session = Session::new(document)?;
+    let original = session.document().clone();
+
+    session.select_block_environment(custom_id.clone())?;
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 1);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    session.run(Command::Undo)?;
+    assert_eq!(session.document(), &original);
+    Ok(())
+}
+
+#[test]
+fn deleting_selected_block_object_keeps_empty_paragraphs_on_both_sides()
+-> Result<(), Box<dyn std::error::Error>> {
+    let preceding = paragraph();
+    let equation = equation_block();
+    let equation_id = block_id(&equation);
+    let following = paragraph();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(preceding.clone()),
+        equation,
+        Block::Paragraph(following.clone()),
+    ];
+    let mut session = Session::new(document)?;
+    select_block_object(&mut session, equation_id)?;
+
+    session.run(Command::Delete(Direction::Backward))?;
+
+    assert_eq!(session.document().body.len(), 2);
+    assert!(matches!(
+        &session.document().body[0],
+        Block::Paragraph(paragraph) if paragraph.id == preceding.id
+    ));
+    assert!(matches!(
+        &session.document().body[1],
+        Block::Paragraph(paragraph) if paragraph.id == following.id
+    ));
+    Ok(())
+}
+
+#[test]
 fn deleting_selected_math_block_object_keeps_neighbouring_paragraph()
 -> Result<(), Box<dyn std::error::Error>> {
     let before = paragraph_with_text("before");

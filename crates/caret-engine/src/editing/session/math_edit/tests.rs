@@ -14706,7 +14706,7 @@ fn inline_math_shift_right_past_tree_end_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id: paragraph_id.clone(),
             offset: 0,
-            affinity: Affinity::Upstream,
+            affinity: Affinity::Downstream,
         }
     );
     assert_eq!(
@@ -14715,16 +14715,16 @@ fn inline_math_shift_right_past_tree_end_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id: paragraph_id.clone(),
             offset: 3,
-            affinity: Affinity::Downstream,
+            affinity: Affinity::Upstream,
         }
     );
     assert_eq!(
         session.selection_visual_affinity(),
-        VisualAffinity::Downstream
+        VisualAffinity::Upstream
     );
     assert_eq!(
         session.selection_anchor_visual_affinity(),
-        VisualAffinity::Upstream
+        VisualAffinity::Downstream
     );
 
     // 下一次 Shift+Right 继续按普通文档文本扩选，不报 InvalidPosition。
@@ -14738,7 +14738,7 @@ fn inline_math_shift_right_past_tree_end_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id,
             offset: 0,
-            affinity: Affinity::Upstream,
+            affinity: Affinity::Downstream,
         }
     );
     assert_eq!(session.selection().focus.offset, 4);
@@ -14781,7 +14781,7 @@ fn inline_math_shift_left_past_tree_start_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id: paragraph_id.clone(),
             offset: 5,
-            affinity: Affinity::Downstream,
+            affinity: Affinity::Upstream,
         }
     );
     assert_eq!(
@@ -14790,7 +14790,7 @@ fn inline_math_shift_left_past_tree_start_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id: paragraph_id.clone(),
             offset: 2,
-            affinity: Affinity::Upstream,
+            affinity: Affinity::Downstream,
         }
     );
 
@@ -14804,7 +14804,7 @@ fn inline_math_shift_left_past_tree_start_uses_a_plain_object_text_selection()
             story: StoryId::Body,
             paragraph_id,
             offset: 5,
-            affinity: Affinity::Downstream,
+            affinity: Affinity::Upstream,
         }
     );
     assert_eq!(session.selection().focus.offset, 1);

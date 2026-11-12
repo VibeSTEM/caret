@@ -438,6 +438,22 @@ impl Session {
         self.ensure_math_edit_revision_current()?;
         self.validate_navigation_position(&selection.anchor)?;
         self.validate_navigation_position(&selection.focus)?;
+        let candidate_direction = if self.selection.focus.story == selection.focus.story
+            && self.selection.focus != selection.focus
+        {
+            match compare_positions(
+                &self.document.body,
+                &self.paragraph_index,
+                &self.selection.focus,
+                &selection.focus,
+            )? {
+                std::cmp::Ordering::Less => Some(Direction::Forward),
+                std::cmp::Ordering::Greater => Some(Direction::Backward),
+                std::cmp::Ordering::Equal => None,
+            }
+        } else {
+            None
+        };
         let was_collapsed = selection.anchor == selection.focus;
         if intent == NavigationIntent::Horizontal
             && was_collapsed
@@ -453,6 +469,18 @@ impl Session {
         } else {
             self.selection_anchor_visual_affinity
         };
+        // 连续显示公式按对象逐个纳入：布局候选可能一次跨过多个公式块，不能把整段
+        // 文本范围直接提升为覆盖全部公式的结构选区。
+        if intent == NavigationIntent::Horizontal
+            && selection.anchor != selection.focus
+            && let Some(direction) = logical_direction
+        {
+            let (environments, math_blocks) =
+                self.covered_block_nodes_for_text_pair(&selection.anchor, &selection.focus)?;
+            if environments.is_empty() && math_blocks.len() > 1 {
+                return self.extend_structure_selection(direction);
+            }
+        }
         if self.range_requires_structure_selection(&selection.anchor, &selection.focus)? {
             return self.promote_text_range_to_structure(
                 selection.anchor,
@@ -483,6 +511,20 @@ impl Session {
             && self.math_edit.is_none()
             && let Some(direction) =
                 self.navigation_math_crossing_direction(&self.selection.focus, &selection.focus)?
+            && self.enter_adjacent_math_if_present(direction)?
+        {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
+        // 连续显示公式链：候选可能一次跨过多个公式块，仍按块外侧停靠/进入逐个消费。
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && self.selection.anchor == self.selection.focus
+            && self.math_edit.is_none()
+            && let Some(direction) = candidate_direction
+            && self.crosses_math_blocks(&self.selection.focus, &selection.focus)?
             && self.enter_adjacent_math_if_present(direction)?
         {
             return Ok(Effect {
@@ -759,6 +801,19 @@ impl Session {
         } else {
             None
         })
+    }
+
+    /// 判断文档级水平候选是否跨过一个或多个显示公式块。
+    fn crosses_math_blocks(&self, current: &Pos, target: &Pos) -> Result<bool, EditError> {
+        if current.story != target.story
+            || current.story != StoryId::Body
+            || current.paragraph_id == target.paragraph_id
+        {
+            return Ok(false);
+        }
+        let (environments, math_blocks) =
+            self.covered_block_nodes_for_text_pair(current, target)?;
+        Ok(environments.is_empty() && !math_blocks.is_empty())
     }
 
     /// 将输入命令使用的选区规整为文档顺序，并拒绝不同文本 Story 的范围。

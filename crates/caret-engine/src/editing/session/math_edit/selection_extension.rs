@@ -177,6 +177,11 @@ impl Session {
     }
 
     /// 返回 InlineMath 在所属段落 U+FFFC 两侧的外部位置。
+    ///
+    /// 位置亲和性必须描述视觉侧而不是普通文本邻接：U+FFFC 是原子对象，前侧用
+    /// `(start, Downstream)`、后侧用 `(end, Upstream)` 才会投影到对象的左/右边缘。
+    /// 该编码与 `exit_math_edit_for_navigation` 和 InlineMath 停靠位置一致；若后侧
+    /// 用 Downstream，公式位于段落末尾时布局会把 caret 回退到对象左缘。
     fn inline_math_slot_bounds(
         &mut self,
         paragraph_id: &NodeId,
@@ -210,12 +215,12 @@ impl Session {
         Ok((
             Pos {
                 offset: start,
-                affinity: Affinity::Upstream,
+                affinity: Affinity::Downstream,
                 ..probe.clone()
             },
             Pos {
                 offset: end,
-                affinity: Affinity::Downstream,
+                affinity: Affinity::Upstream,
                 ..probe
             },
         ))

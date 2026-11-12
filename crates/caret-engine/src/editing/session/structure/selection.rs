@@ -618,12 +618,16 @@ impl Session {
                 offset: text_len,
                 affinity: Affinity::Upstream,
             };
-            let starts_inside = !self
-                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_start), start)?
-                .is_lt();
-            let ends_inside = !self
-                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_end), end)?
+            // 完全包含判定使用严格边界：段落必须至少有一个字素落在范围内部才算范围内
+            // 段落。相邻节点的物理边界键相等，零宽空段落又与其相邻块对象的边界重合，
+            // 非严格的“起点不早于范围起点”会把紧邻被选对象、实际位于范围之外的空
+            // 段落误判为范围内而删除。
+            let starts_inside = self
+                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_end), start)?
                 .is_gt();
+            let ends_inside = self
+                .compare_range_endpoints(&DocumentRangeEndpoint::Text(paragraph_start), end)?
+                .is_lt();
             if starts_inside && ends_inside {
                 removed_ids.push(paragraph_id);
             }

@@ -1038,3 +1038,241 @@ fn missing_active_math_highlight_geometry_is_rejected() -> Result<(), String> {
     );
     Ok(())
 }
+
+/// 构造 `before + InlineMath(逐符号) + after` 的单段落文档。
+fn runtime_with_inline_math(
+    before: &str,
+    symbols: &[&str],
+    after: &str,
+) -> Result<(DocumentViewRuntime, caret_doc::NodeId, caret_doc::NodeId), String> {
+    let text_content = |text: &str| {
+        caret_doc::ParagraphContent::Text(caret_doc::TextFlow {
+            runs: vec![caret_doc::Run {
+                text: text.to_owned(),
+                language: None,
+                props: Default::default(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        })
+    };
+    let mut paragraph = caret_doc::Paragraph::empty(caret_doc::NodeId::generate());
+    if !before.is_empty() {
+        paragraph.inlines.push(text_content(before));
+    }
+    let math_id = caret_doc::NodeId::generate();
+    paragraph
+        .inlines
+        .push(caret_doc::ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree: symbol_math_tree(symbols),
+            extra: Default::default(),
+        }));
+    if !after.is_empty() {
+        paragraph.inlines.push(text_content(after));
+    }
+    let paragraph_id = paragraph.id.clone();
+    let mut document = caret_doc::Document::blank();
+    document.body = vec![caret_doc::Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    Ok((runtime, paragraph_id, math_id))
+}
+
+/// 把文档选区放到 InlineMath 外前/外后侧并进入公式编辑。
+fn enter_inline_math(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &caret_doc::NodeId,
+    offset: usize,
+    backward: bool,
+) -> Result<(), String> {
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity: if backward {
+            caret_engine::Affinity::Upstream
+        } else {
+            caret_engine::Affinity::Downstream
+        },
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::EnterMath(if backward {
+            caret_engine::Direction::Backward
+        } else {
+            caret_engine::Direction::Forward
+        }))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn interaction_json(runtime: &mut DocumentViewRuntime) -> Result<Value, String> {
+    serde_json::from_str(&runtime.interaction_state_json()?).map_err(|error| error.to_string())
+}
+
+fn caret_x(value: &Value) -> Result<f64, String> {
+    value["caretGeometry"]["xPt"]
+        .as_f64()
+        .ok_or_else(|| "caretGeometry.xPt must be a number".to_owned())
+}
+
+fn single_selection_rect(value: &Value) -> Result<(f64, f64), String> {
+    let rectangles = value["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    let [rectangle] = rectangles.as_slice() else {
+        return Err(format!(
+            "converted object selection should publish exactly one rectangle, got {}",
+            rectangles.len()
+        ));
+    };
+    let x0 = rectangle["x0Pt"]
+        .as_f64()
+        .ok_or_else(|| "selectionRects[0].x0Pt must be a number".to_owned())?;
+    let x1 = rectangle["x1Pt"]
+        .as_f64()
+        .ok_or_else(|| "selectionRects[0].x1Pt must be a number".to_owned())?;
+    Ok((x0, x1))
+}
+
+#[test]
+fn inline_math_shift_boundary_caret_stays_on_the_object_outside_edge() -> Result<(), String> {
+    // 覆盖用户报告的“公式位于段落末尾”以及前后有文本、位于段首/段尾的场景。
+    for (before, after) in [("ab", ""), ("ab", "cd"), ("", "cd")] {
+        for backward in [false, true] {
+            let (mut runtime, paragraph_id, _math_id) =
+                runtime_with_inline_math(before, &["x", "y"], after)?;
+            let start = before.len();
+            let end = start + 3;
+            enter_inline_math(
+                &mut runtime,
+                &paragraph_id,
+                if backward { end } else { start },
+                backward,
+            )?;
+            while runtime.session.math_edit().is_some() {
+                runtime
+                    .move_visual_caret_json(!backward, true)
+                    .map_err(|error| format!("shift boundary conversion failed: {error}"))?;
+            }
+
+            let interaction = interaction_json(&mut runtime)?;
+            let (rect_x0, rect_x1) = single_selection_rect(&interaction)?;
+            let caret = caret_x(&interaction)?;
+            let expected = if backward { rect_x0 } else { rect_x1 };
+            assert!(
+                (caret - expected).abs() < 1e-9,
+                "before={before:?} after={after:?} backward={backward}: caret {caret} must sit on \
+                 the {} object edge {expected} (rect {rect_x0}..{rect_x1})",
+                if backward { "left" } else { "right" }
+            );
+            assert!(
+                rect_x1 - rect_x0 > 1.0,
+                "the object selection rectangle must span the formula object"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn inline_math_shift_boundary_conversion_matches_the_non_shift_exit_side() -> Result<(), String> {
+    for backward in [false, true] {
+        let (mut runtime, paragraph_id, _math_id) =
+            runtime_with_inline_math("ab", &["x", "y"], "cd")?;
+        let start = 2;
+        let end = start + 3;
+        enter_inline_math(
+            &mut runtime,
+            &paragraph_id,
+            if backward { end } else { start },
+            backward,
+        )?;
+        while runtime.session.math_edit().is_some() {
+            runtime
+                .move_visual_caret_json(!backward, false)
+                .map_err(|error| format!("non-shift boundary exit failed: {error}"))?;
+        }
+        let non_shift = interaction_json(&mut runtime)?;
+        let non_shift_caret = caret_x(&non_shift)?;
+        let non_shift_selection = runtime.session.selection().clone();
+        assert_eq!(non_shift_selection.anchor, non_shift_selection.focus);
+        let expected_affinity = if backward {
+            caret_engine::Affinity::Downstream
+        } else {
+            caret_engine::Affinity::Upstream
+        };
+        assert_eq!(
+            non_shift_selection.focus.offset,
+            if backward { start } else { end }
+        );
+        assert_eq!(non_shift_selection.focus.affinity, expected_affinity);
+
+        let (mut runtime, paragraph_id, _math_id) =
+            runtime_with_inline_math("ab", &["x", "y"], "cd")?;
+        enter_inline_math(
+            &mut runtime,
+            &paragraph_id,
+            if backward { end } else { start },
+            backward,
+        )?;
+        while runtime.session.math_edit().is_some() {
+            runtime
+                .move_visual_caret_json(!backward, true)
+                .map_err(|error| format!("shift boundary conversion failed: {error}"))?;
+        }
+        let shift = interaction_json(&mut runtime)?;
+        assert!(
+            (caret_x(&shift)? - non_shift_caret).abs() < 1e-9,
+            "shift and non-shift exits must land the caret on the same object side"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn inline_math_shift_right_after_conversion_continues_plain_text_extension() -> Result<(), String> {
+    let (mut runtime, paragraph_id, _math_id) = runtime_with_inline_math("ab", &["x", "y"], "cd")?;
+    enter_inline_math(&mut runtime, &paragraph_id, 2, false)?;
+    while runtime.session.math_edit().is_some() {
+        runtime
+            .move_visual_caret_json(true, true)
+            .map_err(|error| format!("shift boundary conversion failed: {error}"))?;
+    }
+    let converted = interaction_json(&mut runtime)?;
+    let (converted_x0, converted_x1) = single_selection_rect(&converted)?;
+    let converted_caret = caret_x(&converted)?;
+    assert!((converted_caret - converted_x1).abs() < 1e-9);
+
+    runtime
+        .move_visual_caret_json(true, true)
+        .map_err(|error| format!("continued shift-right failed: {error}"))?;
+    let continued = interaction_json(&mut runtime)?;
+    let selection = runtime.session.selection().clone();
+    assert_eq!(selection.anchor.offset, 2);
+    assert_eq!(
+        selection.anchor.affinity,
+        caret_engine::Affinity::Downstream
+    );
+    assert_eq!(selection.focus.offset, 6);
+    let (continued_x0, _continued_x1) = single_selection_rect(&continued)?;
+    assert!(
+        (continued_x0 - converted_x0).abs() < 1e-9,
+        "continued extension must keep the object anchor on the left edge"
+    );
+    assert!(
+        caret_x(&continued)? > converted_caret,
+        "continued Shift+Right should move the caret past the object"
+    );
+    Ok(())
+}
