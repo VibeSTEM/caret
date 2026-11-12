@@ -27,6 +27,8 @@ Item {
         })
     property int dragAnchorPage: -1
     property bool selectionDragActive: false
+    // 正文拖选直接把焦点变化提交给 Rust 会话，由同一选区投影绘制；公式文本岛仍用片段预览。
+    property bool previewOnly: false
 
     signal documentPositionHit(var result)
 
@@ -122,6 +124,7 @@ Item {
         dragAnchor = null;
         dragFocus = null;
         dragAnchorPage = -1;
+        previewOnly = true;
         canvas.selectionPreviewRects = [];
     }
 
@@ -189,12 +192,34 @@ Item {
         }
         if (best === null)
             return;
+        const focusChanged = start || dragFocus !== best;
         if (start) {
             dragAnchor = best;
             dragAnchorPage = pageHit.pageIndex;
         }
         dragFocus = best;
-        canvas.selectionPreviewRects = previewRectangles(dragAnchor, dragFocus);
+        if (!focusChanged)
+            return;
+        if (dragAnchor.domainId === "body" && best.domainId === "body") {
+            // 正文拖选：每次焦点变化都提交同一套 Rust 选区投影，公式块与块环境随
+            // 松手后的范围一起显示；画布直接消费 LayoutViewModel.selectionRects。
+            previewOnly = false;
+            canvas.selectionPreviewRects = [];
+            commitDragSelection();
+        } else {
+            previewOnly = true;
+            canvas.selectionPreviewRects = previewRectangles(dragAnchor, dragFocus);
+        }
+    }
+
+    function commitDragSelection() {
+        const result = LayoutViewModel.setSelection(dragAnchor, dragFocus);
+        if (!result.valid) {
+            console.warn("Document drag selection failed:", result.error);
+            return;
+        }
+        if (result.compositionCancelled === true)
+            canvas.cancelPreedit();
     }
 
     function distanceToLine(stop, yPt) {

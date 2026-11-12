@@ -7,7 +7,7 @@
 - `caret-engine` 持有光标、锚点、活动端、逻辑环境亲和性和文档位置；这些状态不由 QML 或画布复制维护。
 - `caret-layout` 根据文档与字体生成视觉 caret 候选和 selection 几何，包括换行、分页及双向文本的映射。
 - 布局结果使用 `(sessionId, documentGeneration)` 标识输入版本；替换或克隆 Session 会生成新 ID，成功文档变更递增 generation，选区和 IME 预编辑不改变文档代际。
-- Qt 画布接收同一 generation 的布局结果，绘制 caret 和选区；拖动期间在本地暂存 anchor/focus 与选区几何，并用当前 focus 命中点的布局几何显示活动端光标。拖选方向反转时活动端光标随 focus 移到相应一侧；这只是视图预览，不更新 Rust 选区或输入法查询状态，释放时再一次提交最终位置。
+- Qt 画布接收同一 generation 的布局结果，绘制 caret 和选区。正文拖选在 focus 命中点变化时把 anchor/focus 提交给 Rust，复用与释放相同的选区投影：布局未改变时不重排，但会更新 Session 与输入法查询状态，释放时幂等再提交；公式内 MathText 文本岛拖选仍用画布片段预览并在释放时提交。拖选方向反转时活动端光标随 focus 移到相应一侧，正文拖选显示同一 Rust 选区几何。
 - 文字插入、删除、格式继承、逻辑亲和性和位置映射由 Rust 命令处理。像素坐标与 Rust UTF-8 位置的转换只在适配边界发生。
 
 ## 外观
@@ -22,7 +22,7 @@
 ## 绘制和性能
 
 - 布局结果提供 caret 和 selection 的页面内几何；画布使用页面坐标与 zoom 映射绘制，不重新排版文本。Caret 几何来自 Rust 命中结果，`DocumentCanvas` 负责 scene graph 绘制并裁切到纸张范围。
-- 拖选预览只更新画布局部几何；布局未改变时不触发 Rust 往返或整页排版。
+- 正文拖选在焦点变化时复用 Rust 选区投影（更新 Session/IME，不触发整页排版）；公式内 MathText 文本岛拖选只更新画布局部几何，释放时提交。
 - 跨页选区仍是一份 Rust 逻辑范围，视图按可见页面裁剪几何。
 - QML 负责主题绑定和焦点/无障碍语义；不在 QML 中重建 Rust 的选区或键盘移动规则。
 

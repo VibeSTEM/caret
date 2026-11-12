@@ -2731,3 +2731,334 @@ fn paragraph_plain_text(document: &Document) -> String {
     }
     text
 }
+
+/// 构造与 C++ `setSelection` 桥接一致的正文拖选载荷，模拟拖动中的每次提交。
+fn body_drag_payload(anchor: (&NodeId, usize), focus: (&NodeId, usize)) -> String {
+    let position = |paragraph_id: &NodeId, offset: usize| {
+        serde_json::json!({
+            "kind": "body",
+            "domainId": "body",
+            "paragraphId": paragraph_id.to_string(),
+            "offsetUtf8": offset.to_string(),
+            "orderUtf8": offset.to_string(),
+            "affinity": "downstream",
+            "visualAffinity": "downstream",
+        })
+    };
+    serde_json::json!({
+        "anchor": position(anchor.0, anchor.1),
+        "focus": position(focus.0, focus.1),
+    })
+    .to_string()
+}
+
+#[test]
+fn dragging_across_display_math_previews_the_math_block_rect_before_release()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "abc");
+    let before_id = before.id.clone();
+    let after = paragraph_with_id(&NodeId::generate(), "xyz");
+    let after_id = after.id.clone();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation_block(&math_id, "x+y"),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    let math_tuple = (
+        i64::try_from(math_rectangle.page_index)?,
+        math_rectangle.x0_pt,
+        math_rectangle.y0_pt,
+        math_rectangle.x1_pt,
+        math_rectangle.y1_pt,
+    );
+
+    // 根因确认：现有拖选命中映射只有正文片段，没有覆盖公式块对象的预览矩形。
+    let drag_map: Value = serde_json::from_str(&runtime.drag_hit_map_json(0)?)?;
+    let drag_map_rows = drag_map["segments"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("drag hit map segments are missing"))?;
+    assert!(
+        !drag_map_rows
+            .iter()
+            .any(|segment| rectangle_close(&tuple_from_rect(segment), math_tuple)),
+        "drag hit map must not yet expose the display math rectangle"
+    );
+
+    // 拖动过程（松手前）：每次焦点变化提交同一套 Rust 选区投影，公式块矩形必须可见。
+    let drag_payload = body_drag_payload((&before_id, 1), (&after_id, 1));
+    let dragging: Value = serde_json::from_str(&runtime.set_selection_json(&drag_payload)?)?;
+    let dragging_rectangles = rectangle_tuples(&dragging["selectionRects"]);
+    assert!(
+        dragging_rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, math_tuple)),
+        "dragging across an equation must preview its full-width block rectangle"
+    );
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&math_id)
+    );
+
+    // 松手后的提交与拖动中几何一致。
+    let released: Value = serde_json::from_str(&runtime.set_selection_json(&drag_payload)?)?;
+    assert_eq!(released["selectionRects"], dragging["selectionRects"]);
+    Ok(())
+}
+
+fn tuple_from_rect(value: &Value) -> (i64, f64, f64, f64, f64) {
+    (
+        value["pageIndex"].as_i64().unwrap_or_default(),
+        value["x0Pt"].as_f64().unwrap_or_default(),
+        value["y0Pt"].as_f64().unwrap_or_default(),
+        value["x1Pt"].as_f64().unwrap_or_default(),
+        value["y1Pt"].as_f64().unwrap_or_default(),
+    )
+}
+
+#[test]
+fn dragging_within_paragraph_before_display_math_does_not_preview_the_block()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "abc");
+    let before_id = before.id.clone();
+    let math_id = NodeId::generate();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(before), equation_block(&math_id, "x+y")];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let math_rectangle = runtime
+        .current_snapshot()?
+        .math_block_geometry(std::slice::from_ref(&math_id))
+        .and_then(|rectangles| rectangles.first().copied())
+        .ok_or_else(|| std::io::Error::other("equation fragment is missing"))?;
+    let math_tuple = (
+        i64::try_from(math_rectangle.page_index)?,
+        math_rectangle.x0_pt,
+        math_rectangle.y0_pt,
+        math_rectangle.x1_pt,
+        math_rectangle.y1_pt,
+    );
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&before_id, 0), (&before_id, 2)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    assert!(!runtime.session.has_structure_selection());
+    assert!(
+        !rectangles
+            .iter()
+            .any(|rectangle| rectangle_close(rectangle, math_tuple))
+    );
+    Ok(())
+}
+
+#[test]
+fn dragging_across_a_block_environment_previews_its_environment_rect()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_id(&NodeId::generate(), "before");
+    let before_id = before.id.clone();
+    let environment_id = NodeId::generate();
+    let title_id = NodeId::generate();
+    let child = paragraph_with_id(&NodeId::generate(), "inside");
+    let child_id = child.id.clone();
+    let after = paragraph_with_id(&NodeId::generate(), "after");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        Block::Environment(BlockEnvironment {
+            id: environment_id.clone(),
+            kind: BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(paragraph_with_id(&title_id, "title")),
+            children: vec![Block::Paragraph(child)],
+            extra: BTreeMap::new(),
+        }),
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let environment_rectangles = runtime
+        .current_snapshot()?
+        .environment_ranges
+        .iter()
+        .filter(|range| range.environment_id == environment_id)
+        .map(|range| {
+            (
+                i64::try_from(range.page_index).unwrap_or_default(),
+                range.x0_pt,
+                range.y0_pt,
+                range.x1_pt,
+                range.y1_pt,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(!environment_rectangles.is_empty());
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&before_id, 1), (&child_id, 1)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(runtime.session.has_structure_selection());
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        std::slice::from_ref(&environment_id)
+    );
+    for expected in environment_rectangles {
+        assert!(
+            rectangles
+                .iter()
+                .any(|rectangle| rectangle_close(rectangle, expected)),
+            "dragging across a block environment must preview its environment rect"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dragging_across_inline_math_and_rtl_text_keeps_page_bounded_rects()
+-> Result<(), Box<dyn std::error::Error>> {
+    // InlineMath：先经命令面板插入并输入内容，再退出公式编辑后整体拖选。
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.command_line_command_json("begin", String::new())?;
+    runtime.command_line_command_json("type", "math".to_owned())?;
+    runtime.command_line_command_json("accept", String::new())?;
+    runtime.insert_text_json("x".to_owned())?;
+    runtime.handle_editor_key_json("escape")?;
+    runtime.layout_snapshot_json()?;
+    let paragraph_id = runtime
+        .document()
+        .body
+        .first()
+        .and_then(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| std::io::Error::other("paragraph is missing"))?;
+    let text_len = runtime
+        .session
+        .document()
+        .body
+        .first()
+        .and_then(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph_text_len(paragraph)),
+            _ => None,
+        });
+    let text_len = text_len.ok_or_else(|| std::io::Error::other("paragraph text is missing"))?;
+    let selection: Value = serde_json::from_str(&runtime.set_selection_json(
+        &body_drag_payload((&paragraph_id, 0), (&paragraph_id, text_len)),
+    )?)?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    assert!(!runtime.session.has_structure_selection());
+    let page = &runtime.current_snapshot()?.pages[0];
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle.0 == 0
+            && rectangle.1 >= 0.0
+            && rectangle.2 >= 0.0
+            && rectangle.3 <= page.width_pt
+            && rectangle.4 <= page.height_pt
+            && rectangle.1 < rectangle.3
+    }));
+
+    // RTL 文本：提交与释放路径几何一致，且不越出页面。
+    let rtl = paragraph_with_id(&NodeId::generate(), "شكرا");
+    let rtl_id = rtl.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(rtl)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&rtl_id, 0), (&rtl_id, 8)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    let page = &runtime.current_snapshot()?.pages[0];
+    assert!(rectangles.iter().all(|rectangle| {
+        rectangle.1 >= 0.0
+            && rectangle.2 >= 0.0
+            && rectangle.3 <= page.width_pt
+            && rectangle.4 <= page.height_pt
+    }));
+    Ok(())
+}
+
+#[test]
+fn dragging_across_pages_previews_page_clipped_rectangles() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut document = Document::blank();
+    document.body = (0..60)
+        .map(|index| {
+            Block::Paragraph(paragraph_with_id(
+                &NodeId::generate(),
+                &format!("line {index}"),
+            ))
+        })
+        .collect();
+    let first_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let last_id = match document.body.last() {
+        Some(Block::Paragraph(paragraph)) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let pages = runtime.current_snapshot()?.pages.len();
+    assert!(pages > 1, "test document must paginate");
+    let selection: Value = serde_json::from_str(
+        &runtime.set_selection_json(&body_drag_payload((&first_id, 1), (&last_id, 5)))?,
+    )?;
+    let rectangles = rectangle_tuples(&selection["selectionRects"]);
+    assert!(!rectangles.is_empty());
+    let page_count = runtime.current_snapshot()?.pages.len();
+    assert!(
+        rectangles
+            .iter()
+            .all(|rectangle| usize::try_from(rectangle.0).is_ok_and(|page| page < page_count))
+    );
+    assert!(
+        rectangles.iter().any(|rectangle| rectangle.0 > 0),
+        "multi-page selection must include later-page rectangles"
+    );
+    Ok(())
+}
+
+fn paragraph_text_len(paragraph: &Paragraph) -> usize {
+    let mut text = String::new();
+    paragraph_text_into(paragraph, &mut text);
+    text.len()
+}
+
+fn paragraph_text_into(paragraph: &Paragraph, out: &mut String) {
+    for inline in &paragraph.inlines {
+        match inline {
+            ParagraphContent::Text(flow) => {
+                for run in &flow.runs {
+                    out.push_str(&run.text);
+                }
+            }
+            ParagraphContent::Math(_) => out.push('\u{fffc}'),
+            ParagraphContent::Environment(environment) => {
+                for child in &environment.children {
+                    if let ParagraphContent::Text(flow) = child {
+                        for run in &flow.runs {
+                            out.push_str(&run.text);
+                        }
+                    }
+                }
+            }
+            ParagraphContent::SoftBreak(_) => out.push('\n'),
+            ParagraphContent::Opaque(_) => out.push('\u{fffc}'),
+        }
+    }
+}
