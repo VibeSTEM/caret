@@ -73,3 +73,5 @@
 - 2026-11-12：增量独立复核结论 mergeable（最终树含 087 零宽修复）：`selection_geometry` 裁切只影响选区几何、完整覆盖保留整框、RTL/邻接/完整覆盖通过；087 的零宽对象在补框循环被跳过，engine 投影另有 x1<=x0 防御过滤。遗留：跨行选区用例留 069 平台验收；每选区 O(objects×rects) 纳入 041 基准考虑；Qt 桌面未验证。
 
 - 2026-11-12：用户环境反馈“选中行内公式出现两个重叠高亮框，其中一个多出后一字素宽度”；确认 086 只对未完整覆盖对象裁盒、已选中对象仅做 containment 去重，Parley 把对象 advance 折进后一字素簇时仍可能输出两个重叠矩形（mac 上 Parley 合并为单矩形故旧测试通过）。修复为统一归一化：每个非零宽 inline object 盒区间始终从同 line 选区矩形裁除（可拆左右段），仅对被完整选中的对象补一次整盒，最后合并同 line 相邻矩形；新增合成平台差异输入、前后文本、反向选区、RTL 与零宽对象回归。旧 086 场景成为该规则特例，全部兼容。
+
+- 2026-11-12：keep 侧判定二次修正：跨自动换行的多行选区不能用首尾光标全局视觉 span 判定中间行对象左右文本（末行较短会误丢对象所在行右侧合法选中文本，ui 高亮断档）；改为逻辑偏移 + 对象 run 的 RTL 方向：keep_left = if rtl { end > object.end } else { start < object.start }，keep_right = if rtl { start < object.start } else { end > object.end }，与行数无关。补自动换行 2–5 行 + 行内公式 + 末行较短的全选回归（逐行矩形并集覆盖整行、对象区间只在所在行一次）与 bidi/RTL 多行变体；`duplicate_platform_rectangles_collapse_to_one_object_interval` 期望由“对象+后一字素宽”修正为对象区间。
