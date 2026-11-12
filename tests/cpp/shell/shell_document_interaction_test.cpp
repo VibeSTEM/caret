@@ -1306,9 +1306,8 @@ void ShellLoadTest::documentHitTestReturnsRustPosition() {
                               reverse_focus.value(QStringLiteral("xPt")).toReal(), 3000);
     // 正文拖选在拖动中提交选区，输入法光标随之移动到反向拖动焦点，而不是冻结在原位。
     const QPointF reverse_focus_content = stop_point(reverse_focus);
-    QTRY_COMPARE_WITH_TIMEOUT(
-        qRound(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x()),
-        qRound(reverse_focus_content.x()), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(qRound(canvas->inputMethodQuery(Qt::ImCursorRectangle).toRectF().x()),
+                              qRound(reverse_focus_content.x()), 3000);
     QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier,
                         drag_preview_start_window.toPoint());
     QTRY_COMPARE_WITH_TIMEOUT(
