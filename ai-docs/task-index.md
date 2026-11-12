@@ -120,5 +120,7 @@
 | 086 | 画布几何 | [行内对象边界选区几何修正](task/086-inline-box-selection-geometry.md) | P1 | 030、044、068 | S | implemented |
 | 087 | 数学排版 | [空 InlineMath 行内推进与聚焦高亮契约](task/087-empty-inline-math-advance-and-highlight.md) | P1 | 044、072、074 | M | implemented |
 | 088 | 数学排版 | [收敛空 InlineMath 插入槽与正文命中优先级](task/088-unify-empty-inline-math-hit-slot.md) | P2 | 087、069 | S | planned |
+| 089 | 行内格式 | [InlineEnvironment 普通 Backspace 清理语义](task/089-inline-environment-backspace-cleanup.md) | P1 | 031、044、075 | S | implemented |
+| 090 | 画布交互 | [拖选跨公式块/块环境的实时预览](task/090-drag-selection-live-preview.md) | P1 | 027、031、044、083 | M | implemented |
 
 分类描述任务主题；里程碑和实施边界写在对应任务中。任务拆分、状态变更及执行记录以各任务文档为准。
