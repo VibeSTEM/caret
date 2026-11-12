@@ -154,6 +154,16 @@ impl Session {
         }
     }
 
+    /// 只读地返回焦点按一个文档单元前进后的端点，供按键仲裁判断候选是否跳过
+    /// 紧邻的复杂块；不安装结构选区、不改变 Session 状态。
+    pub(in crate::editing::session) fn next_range_focus_step(
+        &mut self,
+        endpoint: &DocumentRangeEndpoint,
+        direction: Direction,
+    ) -> Result<Option<DocumentRangeEndpoint>, EditError> {
+        self.range_focus_step(endpoint, direction)
+    }
+
     fn text_range_focus_step(
         &mut self,
         position: &Pos,

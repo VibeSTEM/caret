@@ -97,6 +97,19 @@ impl Session {
         }
         if extend
             && self.has_structure_selection()
+            && let Some(direction) = direction
+            && let Ok((_, focus)) = self.ordered_structure_selection()
+            && let DocumentRangeEndpoint::BlockEdge { .. } = focus
+            && let Ok(Some(DocumentRangeEndpoint::BlockEdge { .. })) =
+                self.next_range_focus_step(&focus.clone(), direction)
+        {
+            // 焦点停在复杂块外侧边界且下一个单元仍是复杂块时，下一次扩选必须纳入
+            // 下一个文档单元；否则沿用折叠在块内部/后方的文本候选，保持既有精确
+            // 文本端点契约。
+            return self.extend_structure_selection(direction);
+        }
+        if extend
+            && self.has_structure_selection()
             && self.structure_selection_anchor().is_none()
             && let Some(direction) = direction
         {

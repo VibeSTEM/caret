@@ -3,8 +3,8 @@ use super::super::super::{
     NavigationCandidate, NavigationGeneration, Pos, Selection, Session, StoryId,
 };
 use caret_doc::{
-    Block, Document, InlineEnvironment, InlineEnvironmentKind, NodeId, ParagraphContent, Run,
-    TextFlow,
+    Block, BlockEnvironment, Document, InlineEnvironment, InlineEnvironmentKind, NodeId,
+    ParagraphContent, Run, TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -1757,4 +1757,192 @@ fn shift_candidate_crossing_consecutive_math_blocks_extends_one_block_at_a_time(
         crate::editing::DocumentRangeEndpoint::Text(position)
             if position.paragraph_id == before_end.paragraph_id && position.offset == 1
     ));
+}
+
+fn equation_block_for_unit_navigation() -> (Block, NodeId) {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x", caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("equation fixture failed: {error}"))
+    else {
+        panic!("equation fixture should produce a MathTree");
+    };
+    let id = NodeId::generate();
+    (
+        Block::Equation(caret_doc::Equation {
+            id: id.clone(),
+            math_tree,
+            extra: Default::default(),
+        }),
+        id,
+    )
+}
+
+fn section_block_for_unit_navigation(title: &str, body: &str) -> (Block, NodeId, NodeId, NodeId) {
+    let title_paragraph = paragraph_with_run_text(title);
+    let title_id = title_paragraph.id.clone();
+    let body_paragraph = paragraph_with_run_text(body);
+    let body_id = body_paragraph.id.clone();
+    let id = NodeId::generate();
+    (
+        Block::Environment(BlockEnvironment {
+            id: id.clone(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: std::collections::BTreeMap::new(),
+            title: Some(title_paragraph),
+            children: vec![Block::Paragraph(body_paragraph)],
+            extra: std::collections::BTreeMap::new(),
+        }),
+        id,
+        title_id,
+        body_id,
+    )
+}
+
+fn document_candidate_for(
+    session: &Session,
+    focus: Pos,
+    visual_affinity: caret_layout::VisualAffinity,
+) -> NavigationCandidate {
+    NavigationCandidate::Document {
+        focus,
+        visual_affinity,
+        generation: NavigationGeneration {
+            session_id: session.session_id().clone(),
+            document_generation: session.document_generation(),
+            font_generation: 0,
+        },
+    }
+}
+
+fn title_start_position(environment_id: &NodeId, title_id: &NodeId) -> Pos {
+    Pos {
+        story: StoryId::EnvironmentTitle(environment_id.clone()),
+        paragraph_id: title_id.clone(),
+        offset: 0,
+        affinity: Affinity::Downstream,
+    }
+}
+
+#[test]
+fn horizontal_candidate_stops_at_equation_before_entering_environment() {
+    let before = paragraph_with_run_text("p");
+    let before_id = before.id.clone();
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let (environment, environment_id, title_id, _body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation,
+        environment,
+        Block::Paragraph(paragraph_with_run_text("q")),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = Pos {
+        story: StoryId::Body,
+        paragraph_id: before_id,
+        offset: 1,
+        affinity: Affinity::Upstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start.clone(),
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+
+    let candidate = document_candidate_for(
+        &session,
+        title_start_position(&environment_id, &title_id),
+        caret_layout::VisualAffinity::Downstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate.clone()),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("right candidate failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id.clone(), Direction::Backward))
+    );
+    assert_eq!(session.selection().focus, start);
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("second right candidate failed: {error}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(crate::MathEditTarget::Block { block_id, .. }) if block_id == &equation_id
+    ));
+}
+
+#[test]
+fn shift_candidate_adds_equation_then_environment_one_unit_at_a_time() {
+    let before = paragraph_with_run_text("p");
+    let before_id = before.id.clone();
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let (environment, environment_id, title_id, _body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation,
+        environment,
+        Block::Paragraph(paragraph_with_run_text("q")),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = Pos {
+        story: StoryId::Body,
+        paragraph_id: before_id,
+        offset: 1,
+        affinity: Affinity::Upstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    let candidate = document_candidate_for(
+        &session,
+        title_start_position(&environment_id, &title_id),
+        caret_layout::VisualAffinity::Downstream,
+    );
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate.clone()),
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("first shift candidate failed: {error}"));
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert!(session.selected_block_environments().is_empty());
+
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("second shift candidate failed: {error}"));
+    assert_eq!(
+        session.selected_block_environments(),
+        std::slice::from_ref(&environment_id)
+    );
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
 }

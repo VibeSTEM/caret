@@ -5221,3 +5221,376 @@ fn shift_arrows_include_consecutive_display_math_blocks_one_at_a_time()
     ));
     Ok(())
 }
+
+fn section_environment_ids(block: &Block) -> (NodeId, NodeId, NodeId) {
+    let Block::Environment(environment) = block else {
+        panic!("expected environment block");
+    };
+    let title = environment
+        .title
+        .as_ref()
+        .unwrap_or_else(|| panic!("expected environment title"));
+    let Block::Paragraph(body) = environment
+        .children
+        .first()
+        .unwrap_or_else(|| panic!("expected environment body paragraph"))
+    else {
+        panic!("expected environment body paragraph");
+    };
+    (environment.id.clone(), title.id.clone(), body.id.clone())
+}
+
+#[test]
+fn horizontal_navigation_steps_through_equation_before_section()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p");
+    let before_id = before.id.clone();
+    let (equation, equation_id) = formula_block(false);
+    let environment = section("s", "body");
+    let (environment_id, title_id, _body_id) = section_environment_ids(&environment);
+    let after = paragraph_with_text("q");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation,
+        environment,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, before_id, 1)?;
+
+    // 第一次 Right 只能停在公式外前，不能跳过公式直接进入后面的环境标题。
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Backward))
+    );
+    assert_ne!(runtime.session.selection().focus.paragraph_id, title_id);
+
+    // 第二次 Right 进入公式，随后逐个单元离开公式并在下次按键进入环境标题。
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, .. })
+            if block_id == &equation_id
+    ));
+    for _ in 0..6 {
+        if runtime.session.math_edit().is_none() {
+            break;
+        }
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Forward))
+    );
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, title_id);
+    assert_eq!(runtime.session.selected_block_environments(), &[]);
+    assert!(runtime.session.selected_math_blocks().is_empty());
+
+    // 反向：从环境内部退出后，先进入公式外后再继续向左，不跳过公式。
+    let mut runtime = DocumentViewRuntime::new({
+        let mut document = Document::blank();
+        document.body = vec![
+            Block::Paragraph(paragraph_with_text("p")),
+            section("s", "body"),
+            formula_block(false).0,
+            Block::Paragraph(paragraph_with_text("q")),
+        ];
+        document
+    })?;
+    runtime.layout_snapshot_json()?;
+    let q_id = match &runtime.document().body[3] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    set_body_caret(&mut runtime, q_id, 0)?;
+    runtime.move_visual_caret_json(false, false)?;
+    let reverse_equation_id = match &runtime.document().body[2] {
+        Block::Equation(equation) => equation.id.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((
+            reverse_equation_id.clone(),
+            caret_engine::Direction::Forward
+        ))
+    );
+    let _ = environment_id;
+    Ok(())
+}
+
+#[test]
+fn shift_navigation_adds_equation_and_section_one_unit_at_a_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p");
+    let before_id = before.id.clone();
+    let (equation, equation_id) = formula_block(false);
+    let environment = section("s", "body");
+    let (environment_id, _title_id, _body_id) = section_environment_ids(&environment);
+    let after = paragraph_with_text("q");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation,
+        environment,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, before_id, 1)?;
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert!(
+        runtime.session.selected_block_environments().is_empty(),
+        "one Shift+Right must not include the following section in the same step"
+    );
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        std::slice::from_ref(&environment_id)
+    );
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn backward_navigation_steps_through_section_before_equation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p");
+    let (environment, environment_id, _title_id, body_id) = {
+        let environment = section("s", "body");
+        let (environment_id, title_id, body_id) = section_environment_ids(&environment);
+        (environment, environment_id, title_id, body_id)
+    };
+    let (equation, equation_id) = formula_block(false);
+    let after = paragraph_with_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        environment,
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, after_id, 0)?;
+
+    // 从后段起点向左先停在公式外后，再进入公式。
+    runtime.move_visual_caret_json(false, false)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Forward))
+    );
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, .. })
+            if block_id == &equation_id
+    ));
+    for _ in 0..6 {
+        if runtime.session.math_edit().is_none() {
+            break;
+        }
+        runtime.move_visual_caret_json(false, false)?;
+    }
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Backward))
+    );
+
+    // 公式外前继续向左必须进入相邻块环境的末位，而不是越过整个环境。
+    runtime.move_visual_caret_json(false, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(runtime.session.selection().focus.paragraph_id, body_id);
+    assert_eq!(runtime.session.selection().focus.offset, "body".len());
+    assert!(runtime.session.selected_block_environments().is_empty());
+    let _ = environment_id;
+    Ok(())
+}
+
+#[test]
+fn shift_navigation_backward_adds_equation_then_section_one_unit_at_a_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let before = paragraph_with_text("p");
+    let environment = section("s", "body");
+    let (environment_id, _title_id, _body_id) = section_environment_ids(&environment);
+    let (equation, equation_id) = formula_block(false);
+    let after = paragraph_with_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        environment,
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, after_id, 0)?;
+
+    runtime.move_visual_caret_json(false, true)?;
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert!(
+        runtime.session.selected_block_environments().is_empty(),
+        "one Shift+Left must not include the preceding section in the same step"
+    );
+
+    runtime.move_visual_caret_json(false, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        std::slice::from_ref(&environment_id)
+    );
+    assert_eq!(
+        runtime.session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    Ok(())
+}
+
+#[test]
+fn shift_navigation_adds_consecutive_environments_one_at_a_time()
+-> Result<(), Box<dyn std::error::Error>> {
+    let first = section("s1", "b1");
+    let (first_id, _first_title, _first_body) = section_environment_ids(&first);
+    let second = section("s2", "b2");
+    let (second_id, _second_title, _second_body) = section_environment_ids(&second);
+    let before = paragraph_with_text("p");
+    let before_id = before.id.clone();
+    let after = paragraph_with_text("q");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        first,
+        second,
+        Block::Paragraph(after),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, before_id, 1)?;
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        std::slice::from_ref(&first_id)
+    );
+
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(
+        runtime.session.selected_block_environments(),
+        &[first_id, second_id]
+    );
+    Ok(())
+}
+
+#[test]
+fn horizontal_navigation_steps_through_equation_inside_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let a = paragraph_with_text("a");
+    let a_id = a.id.clone();
+    let (equation, equation_id) = formula_block(false);
+    let b = paragraph_with_text("b");
+    let b_id = b.id.clone();
+    let environment = Block::Environment(caret_doc::BlockEnvironment {
+        id: NodeId::generate(),
+        kind: caret_doc::BlockEnvironmentKind::Section,
+        definition_id: None,
+        props: BTreeMap::new(),
+        title: Some(paragraph_with_text("S")),
+        children: vec![Block::Paragraph(a), equation, Block::Paragraph(b)],
+        extra: BTreeMap::new(),
+    });
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(paragraph_with_text("p")),
+        environment,
+        Block::Paragraph(paragraph_with_text("q")),
+    ];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, a_id, 1)?;
+
+    // 环境内部同样逐个复杂块处理：先停在公式外前，再进入公式，最后落到后段起点。
+    runtime.move_visual_caret_json(true, false)?;
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Backward))
+    );
+    runtime.move_visual_caret_json(true, false)?;
+    assert!(matches!(
+        runtime.session.math_edit().map(|edit| &edit.target),
+        Some(caret_engine::MathEditTarget::Block { block_id, .. })
+            if block_id == &equation_id
+    ));
+    for _ in 0..6 {
+        if runtime.session.math_edit().is_none() {
+            break;
+        }
+        runtime.move_visual_caret_json(true, false)?;
+    }
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.block_boundary_exit(),
+        Some((equation_id.clone(), caret_engine::Direction::Forward))
+    );
+    assert_eq!(runtime.session.selection().focus.paragraph_id, b_id);
+
+    // Shift+Right 在环境内部也一次只纳入一个单元：公式对象 → 后段文本起点。
+    let mut runtime = DocumentViewRuntime::new({
+        let mut document = Document::blank();
+        let a = paragraph_with_text("a");
+        let (equation, _) = formula_block(false);
+        let b = paragraph_with_text("b");
+        let environment = Block::Environment(caret_doc::BlockEnvironment {
+            id: NodeId::generate(),
+            kind: caret_doc::BlockEnvironmentKind::Section,
+            definition_id: None,
+            props: BTreeMap::new(),
+            title: Some(paragraph_with_text("S")),
+            children: vec![Block::Paragraph(a), equation, Block::Paragraph(b)],
+            extra: BTreeMap::new(),
+        });
+        document.body = vec![environment];
+        document
+    })?;
+    runtime.layout_snapshot_json()?;
+    let section_block_id = match &runtime.document().body[0] {
+        Block::Environment(environment) => environment.id.clone(),
+        _ => unreachable!(),
+    };
+    let first_child_a = match &runtime.document().body[0] {
+        Block::Environment(environment) => match &environment.children[0] {
+            Block::Paragraph(paragraph) => paragraph.id.clone(),
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+    set_body_caret(&mut runtime, first_child_a, 1)?;
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(runtime.session.selected_math_blocks().len(), 1);
+    assert!(runtime.session.selected_block_environments().is_empty());
+    runtime.move_visual_caret_json(true, true)?;
+    assert_eq!(runtime.session.selected_math_blocks().len(), 1);
+    assert!(runtime.session.selected_block_environments().is_empty());
+    let _ = section_block_id;
+    Ok(())
+}

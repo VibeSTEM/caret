@@ -42,8 +42,8 @@ use crate::{StructureIndex, VisualAffinity};
 #[cfg(test)]
 use caret_doc::TextFlow;
 use caret_doc::{
-    Align, Block, Equation, InlineMath, MathAlignRow, MathContent, MathFlow, MathNode,
-    MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
+    Align, Block, BlockEnvironment, Equation, InlineMath, MathAlignRow, MathContent, MathFlow,
+    MathNode, MathNodeKind, MathTree, NodeId, Paragraph, ParagraphContent,
 };
 use inline_root_split::{
     InlineRootFocus, replace_inline_math_with_split, split_inline_math_root_with_map,
@@ -4195,6 +4195,15 @@ impl Session {
                 ..Effect::default()
             }));
         }
+        if let Some(position) = self.environment_beside_block(block_id, direction)? {
+            self.set_math_exit_selection(position);
+            self.host_caret_position = None;
+            self.advance_history_merge_epoch();
+            return Ok(Some(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            }));
+        }
         if let Some(position) = self.paragraph_beside_block(block_id, direction)? {
             let empty_inline_host = self
                 .text_map_for(&position)?
@@ -4227,6 +4236,30 @@ impl Session {
             }));
         }
         Ok(Some(Effect::default()))
+    }
+
+    /// 紧邻块环境在方向上的可编辑入口；没有内部段落的空环境返回 `None`。
+    ///
+    /// 复杂块逐块移动时，公式外侧停靠不能跳过相邻环境直接落到后面的段落：前进取
+    /// 环境标题起点（无标题取首个后代段落起点），后退取最后一个后代段落终点
+    /// （无子项取标题终点）。
+    fn environment_beside_block(
+        &self,
+        block_id: &NodeId,
+        direction: Direction,
+    ) -> Result<Option<Pos>, EditError> {
+        let (parent_environment_ids, sibling_index) =
+            find_block_path(&self.document.body, block_id).ok_or(EditError::InvalidPosition)?;
+        let siblings = block_list_ref(&self.document.body, &parent_environment_ids)?;
+        let neighbour = match direction {
+            Direction::Forward => sibling_index.checked_add(1),
+            Direction::Backward => sibling_index.checked_sub(1),
+        };
+        let Some(Block::Environment(environment)) = neighbour.and_then(|index| siblings.get(index))
+        else {
+            return Ok(None);
+        };
+        Ok(block_environment_entry(environment, direction))
     }
 
     fn math_edit_for_block(
@@ -6271,6 +6304,97 @@ fn absolute_source_edit(
         projection.edit_range().start.checked_add(edit.start)?
             ..projection.edit_range().start.checked_add(edit.end)?,
     )
+}
+
+/// 返回块环境在方向上的第一个可编辑入口，供逐块水平导航和公式外侧停靠使用。
+fn block_environment_entry(environment: &BlockEnvironment, direction: Direction) -> Option<Pos> {
+    match direction {
+        Direction::Forward => {
+            if let Some(title) = &environment.title {
+                return Some(environment_title_position(
+                    environment,
+                    title,
+                    Affinity::Downstream,
+                ));
+            }
+            first_entry_in_blocks(&environment.children)
+        }
+        Direction::Backward => {
+            if let Some(position) = last_entry_in_blocks(&environment.children) {
+                return Some(position);
+            }
+            let title = environment.title.as_ref()?;
+            let offset = TextMap::new(title).ok()?.text.len();
+            Some(Pos {
+                offset,
+                affinity: Affinity::Upstream,
+                ..environment_title_position(environment, title, Affinity::Upstream)
+            })
+        }
+    }
+}
+
+fn environment_title_position(
+    environment: &BlockEnvironment,
+    title: &Paragraph,
+    affinity: Affinity,
+) -> Pos {
+    Pos {
+        story: StoryId::EnvironmentTitle(environment.id.clone()),
+        paragraph_id: title.id.clone(),
+        offset: 0,
+        affinity,
+    }
+}
+
+/// 环境入口的既定契约是“标题起点 / 首个可编辑文本段落”，不直接停靠到首个子公式。
+///
+/// 公式外停靠进入环境时复用该入口（见 `block_environment_entry`）；环境内部以公式
+/// 开头/结尾时，随后按方向键由共享块顺序仲裁逐个进入该公式，不在入口一步伪造
+/// 块外侧停靠。空环境或全是不可编辑块时返回 `None`，由调用方保持 no-op。
+fn first_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => {
+                return Some(Pos {
+                    story: StoryId::Body,
+                    paragraph_id: paragraph.id.clone(),
+                    offset: 0,
+                    affinity: Affinity::Downstream,
+                });
+            }
+            Block::Environment(environment) => {
+                if let Some(position) = block_environment_entry(environment, Direction::Forward) {
+                    return Some(position);
+                }
+            }
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+        }
+    }
+    None
+}
+
+fn last_entry_in_blocks(blocks: &[Block]) -> Option<Pos> {
+    for block in blocks.iter().rev() {
+        match block {
+            Block::Paragraph(paragraph) => {
+                let offset = TextMap::new(paragraph).ok()?.text.len();
+                return Some(Pos {
+                    story: StoryId::Body,
+                    paragraph_id: paragraph.id.clone(),
+                    offset,
+                    affinity: Affinity::Upstream,
+                });
+            }
+            Block::Environment(environment) => {
+                if let Some(position) = block_environment_entry(environment, Direction::Backward) {
+                    return Some(position);
+                }
+            }
+            Block::Equation(_) | Block::Align(_) | Block::ExplicitBreak(_) | Block::Opaque(_) => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
