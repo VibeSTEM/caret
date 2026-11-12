@@ -226,6 +226,11 @@ impl ParleyParagraphLayout {
             let Some((line_index, inline_box)) = self.positioned_inline_box(*id) else {
                 continue;
             };
+            // 零宽行内对象（空 MathBox 等）没有可见几何；补矩形会产出 Qt 拒绝的
+            // 零宽选区，交给上层插入槽或空范围表达。
+            if inline_box.width <= 0.0 {
+                continue;
+            }
             let (Some(line_top), Some(line)) = (
                 self.line_box_tops_pt.get(line_index),
                 self.paragraph.lines.get(line_index),
@@ -243,6 +248,42 @@ impl ParleyParagraphLayout {
             }) {
                 rectangles.push((bounds, line_index));
             }
+        }
+        // Parley 把行内对象的推进并入其后首个字素簇：选区从对象之后开始时，该簇的
+        // 矩形会回溯覆盖对象框。未被选区完整覆盖的对象按版面盒区间从矩形中裁除，
+        // 保证高亮不覆盖未选中的原子对象；完整覆盖的对象保留上面补充的整框。
+        for (id, object_range) in &self.inline_object_source_ranges {
+            if start <= object_range.start && object_range.end <= end {
+                continue;
+            }
+            let Some((line_index, inline_box)) = self.positioned_inline_box(*id) else {
+                continue;
+            };
+            let box_x0 = f64::from(inline_box.x);
+            let box_x1 = box_x0 + f64::from(inline_box.width);
+            if box_x1 <= box_x0 {
+                continue;
+            }
+            let mut trimmed = Vec::with_capacity(rectangles.len());
+            for (bounds, rectangle_line) in rectangles {
+                if rectangle_line != line_index || bounds.x1 <= box_x0 || bounds.x0 >= box_x1 {
+                    trimmed.push((bounds, rectangle_line));
+                    continue;
+                }
+                if bounds.x0 < box_x0 {
+                    trimmed.push((
+                        parley::BoundingBox::new(bounds.x0, bounds.y0, box_x0, bounds.y1),
+                        rectangle_line,
+                    ));
+                }
+                if bounds.x1 > box_x1 {
+                    trimmed.push((
+                        parley::BoundingBox::new(box_x1, bounds.y0, bounds.x1, bounds.y1),
+                        rectangle_line,
+                    ));
+                }
+            }
+            rectangles = trimmed;
         }
         rectangles.sort_by(|(left, left_line), (right, right_line)| {
             left_line

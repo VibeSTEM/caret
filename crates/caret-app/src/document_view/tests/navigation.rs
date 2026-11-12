@@ -1,7 +1,10 @@
 //! 验证指针选区、命中图与视觉光标导航。
 
 use super::*;
-use caret_doc::{BlockEnvironment, BlockEnvironmentKind, NodeId, Paragraph, Run};
+use caret_doc::{
+    BlockEnvironment, BlockEnvironmentKind, InlineEnvironment, InlineEnvironmentKind, NodeId,
+    Paragraph, Run,
+};
 use std::collections::BTreeMap;
 
 fn paragraph_with_text(text: &str) -> Paragraph {
@@ -4902,6 +4905,174 @@ fn empty_inline_math_vertical_navigation_exits_the_formula()
         assert_eq!(
             runtime.session.selection().focus.affinity,
             expected_affinity
+        );
+    }
+    Ok(())
+}
+
+/// 页面矩形边界 `(x0, y0, x1, y1)`。
+type RectangleBounds = (f64, f64, f64, f64);
+
+/// 返回段落逻辑文本中 InlineMath 的 U+FFFC 槽位选区几何，供边界选区断言。
+fn inline_math_slot_geometry(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &NodeId,
+    math_offset: usize,
+) -> Result<Vec<RectangleBounds>, Box<dyn std::error::Error>> {
+    let selection = caret_engine::Selection {
+        anchor: caret_engine::Pos {
+            story: caret_engine::StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: math_offset,
+            affinity: caret_engine::Affinity::Upstream,
+        },
+        focus: caret_engine::Pos {
+            story: caret_engine::StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: math_offset + "\u{fffc}".len(),
+            affinity: caret_engine::Affinity::Downstream,
+        },
+    };
+    Ok(runtime
+        .current_snapshot()?
+        .selection_geometry(&selection)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|rectangle| {
+            (
+                rectangle.x0_pt,
+                rectangle.y0_pt,
+                rectangle.x1_pt,
+                rectangle.y1_pt,
+            )
+        })
+        .collect())
+}
+
+fn rectangle_bounds(value: &Value) -> Vec<RectangleBounds> {
+    value
+        .as_array()
+        .map(|rectangles| {
+            rectangles
+                .iter()
+                .map(|rectangle| {
+                    (
+                        rectangle["x0Pt"].as_f64().unwrap_or(-1.0),
+                        rectangle["y0Pt"].as_f64().unwrap_or(-1.0),
+                        rectangle["x1Pt"].as_f64().unwrap_or(-1.0),
+                        rectangle["y1Pt"].as_f64().unwrap_or(-1.0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn inline_environment_highlight_excludes_adjacent_inline_math()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: NodeId::generate(),
+            math_tree: inline_math_tree(),
+            extra: BTreeMap::new(),
+        }));
+    paragraph
+        .inlines
+        .push(ParagraphContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: vec![text_flow(Run {
+                text: "ab".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        }));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    set_body_caret(&mut runtime, paragraph_id.clone(), 4)?;
+
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let highlight = rectangle_bounds(&interaction["inlineEnvironmentHighlightRects"]);
+    assert!(!highlight.is_empty(), "活动 Bold 应发布粉色高亮");
+    let slot = inline_math_slot_geometry(&mut runtime, &paragraph_id, 0)?;
+    assert!(!slot.is_empty(), "InlineMath 槽位应有选区几何");
+    for (x0, _, x1, _) in &highlight {
+        assert!(x1 > x0);
+        assert!(
+            *x0 >= slot[0].2 - 1e-9,
+            "InlineEnvironment 高亮不能覆盖相邻 InlineMath：highlight x0={x0}，math 右缘={}",
+            slot[0].2
+        );
+    }
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)?;
+    assert_eq!(
+        full["inlineEnvironmentHighlightRects"],
+        interaction["inlineEnvironmentHighlightRects"]
+    );
+    Ok(())
+}
+
+#[test]
+fn text_selection_after_inline_math_excludes_the_math_box() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    let paragraph_id = paragraph.id.clone();
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: NodeId::generate(),
+            math_tree: inline_math_tree(),
+            extra: BTreeMap::new(),
+        }));
+    paragraph.inlines.push(text_flow(Run {
+        text: "ab".to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    }));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    let anchor = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 3,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    let focus = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 5,
+        affinity: caret_engine::Affinity::Upstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection { anchor, focus },
+        )))?;
+
+    let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+    let rectangles = rectangle_bounds(&interaction["selectionRects"]);
+    assert!(!rectangles.is_empty(), "公式后文本选区应发布矩形");
+    let slot = inline_math_slot_geometry(&mut runtime, &paragraph_id, 0)?;
+    assert!(!slot.is_empty(), "InlineMath 槽位应有选区几何");
+    for (x0, _, x1, _) in &rectangles {
+        assert!(x1 > x0);
+        assert!(
+            *x0 >= slot[0].2 - 1e-9,
+            "普通选区不能覆盖未选中的 InlineMath：rect x0={x0}，math 右缘={}",
+            slot[0].2
         );
     }
     Ok(())

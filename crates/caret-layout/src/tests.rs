@@ -203,6 +203,167 @@ fn inline_object_uses_parley_advance_and_expands_the_shared_line_box() {
     );
 }
 
+/// 构造带行内对象的段落布局，供对象边界选区几何测试使用。
+fn paragraph_layout_with_inline_objects(
+    text_value: &str,
+    language: Option<&str>,
+    objects: &[InlineObjectLayout],
+) -> crate::ParleyParagraphLayout {
+    let mut catalog = font_catalog();
+    let settings = document_settings();
+    let base_style = ShapingStyle::new(1200);
+    let text = paragraph(text_value, language);
+    let mut layouter = ParagraphLayouter::new();
+    layouter
+        .layout_with_inline_objects(
+            &mut catalog,
+            &text,
+            &settings,
+            &base_style,
+            layout_options(200.0),
+            objects,
+        )
+        .unwrap_or_else(|error| panic!("paragraph with inline objects should layout: {error}"))
+        .1
+}
+
+/// 返回行内对象在行内的版面盒区间 [x0, x1]。
+fn inline_object_box(layout: &crate::ParleyParagraphLayout, id: u64) -> (f64, f64) {
+    for line in layout.layout.lines() {
+        for item in line.items() {
+            if let parley::PositionedLayoutItem::InlineBox(box_item) = item
+                && box_item.id == id
+            {
+                let x0 = f64::from(box_item.x);
+                return (x0, x0 + f64::from(box_item.width));
+            }
+        }
+    }
+    panic!("inline object {id} should be positioned");
+}
+
+fn inline_object_layout() -> InlineObjectLayout {
+    InlineObjectLayout {
+        id: 42,
+        source_bytes: 1..4,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    }
+}
+
+fn second_inline_object_layout() -> InlineObjectLayout {
+    InlineObjectLayout {
+        id: 43,
+        source_bytes: 4..7,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    }
+}
+
+#[test]
+fn selection_starting_after_inline_object_excludes_its_box() {
+    let layout =
+        paragraph_layout_with_inline_objects("a\u{fffc}b", Some("en"), &[inline_object_layout()]);
+    let (object_x0, object_x1) = inline_object_box(&layout, 42);
+
+    // 选区起点紧接对象之后：矩形从对象右缘开始，而不是回溯到对象左缘。
+    let after = layout
+        .selection_text_geometry("a\u{fffc}b", 4..5)
+        .unwrap_or_else(|| panic!("text after the inline object should be selectable"));
+    assert_eq!(after.len(), 1);
+    assert!(
+        (after[0].0.x0 - object_x1).abs() < 0.01,
+        "selection after the object must start at its right edge: {} vs {object_x1}",
+        after[0].0.x0
+    );
+
+    // 对象自身被完整选中时保留整框。
+    let covering = layout
+        .selection_text_geometry("a\u{fffc}b", 1..4)
+        .unwrap_or_else(|| panic!("inline object source range should be selectable"));
+    assert!(covering.iter().any(|(bounds, _)| {
+        (bounds.x0 - object_x0).abs() < 0.01 && (bounds.x1 - object_x1).abs() < 0.01
+    }));
+
+    // 选区在对象之前时不会扩展进对象框。
+    let before = layout
+        .selection_text_geometry("a\u{fffc}b", 0..1)
+        .unwrap_or_else(|| panic!("text before the inline object should be selectable"));
+    assert!(
+        before
+            .iter()
+            .all(|(bounds, _)| bounds.x1 <= object_x0 + 0.01)
+    );
+}
+
+#[test]
+fn selection_after_inline_object_in_mixed_bidi_run_excludes_its_box() {
+    let text = "abc\u{fffc}אב";
+    let layout = paragraph_layout_with_inline_objects(
+        text,
+        Some("he"),
+        &[InlineObjectLayout {
+            id: 42,
+            source_bytes: 3..6,
+            advance_pt: 30.0,
+            ascent_pt: 20.0,
+            descent_pt: 5.0,
+        }],
+    );
+    let (object_x0, object_x1) = inline_object_box(&layout, 42);
+    // 对象之后的 RTL 文本在视觉上位于对象右侧；选区起点紧随对象字节之后。
+    let after = layout
+        .selection_text_geometry(text, 6..10)
+        .unwrap_or_else(|| panic!("RTL text after the inline object should be selectable"));
+    assert_eq!(after.len(), 1);
+    let (bounds, _) = after[0];
+    assert!(
+        bounds.x1 <= object_x0 + 0.01 || bounds.x0 >= object_x1 - 0.01,
+        "bidirectional selection must not cover the unselected inline object: {bounds:?}"
+    );
+    assert!(
+        (bounds.x0 - object_x1).abs() < 0.01,
+        "selection after the object must start at the object right edge: {} vs {object_x1}",
+        bounds.x0
+    );
+}
+
+#[test]
+fn selection_skips_adjacent_unselected_inline_objects() {
+    let layout = paragraph_layout_with_inline_objects(
+        "a\u{fffc}\u{fffc}b",
+        Some("en"),
+        &[inline_object_layout(), second_inline_object_layout()],
+    );
+    let (first_x0, first_x1) = inline_object_box(&layout, 42);
+    let (second_x0, second_x1) = inline_object_box(&layout, 43);
+
+    // 选区起点在第二个对象之后：矩形只覆盖其后文本，不回溯到任一对象框。
+    let after = layout
+        .selection_text_geometry("a\u{fffc}\u{fffc}b", 7..8)
+        .unwrap_or_else(|| panic!("text after adjacent inline objects should be selectable"));
+    assert_eq!(after.len(), 1);
+    assert!((after[0].0.x0 - second_x1).abs() < 0.01);
+    assert!(after[0].0.x1 <= 200.0);
+
+    // 选区覆盖第二个对象但不覆盖第一个：保留第二个整框，第一个框保持未选中。
+    let covering = layout
+        .selection_text_geometry("a\u{fffc}\u{fffc}b", 4..8)
+        .unwrap_or_else(|| panic!("second inline object text should be selectable"));
+    assert!(
+        covering
+            .iter()
+            .all(|(bounds, _)| { bounds.x1 <= first_x0 + 0.01 || bounds.x0 >= first_x1 - 0.01 })
+    );
+    assert!(
+        covering
+            .iter()
+            .any(|(bounds, _)| { bounds.x0 <= second_x0 + 0.01 && bounds.x1 >= second_x1 - 0.01 })
+    );
+}
+
 #[test]
 fn inline_object_wider_than_line_occupies_an_overflowing_line() {
     let mut catalog = font_catalog();
