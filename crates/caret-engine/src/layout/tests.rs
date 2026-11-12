@@ -7,8 +7,9 @@ use crate::{
 };
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
-    MathAlignRow, NodeId, OpaqueNode, Orientation, PageGeometry, PageMargins, PaperSize, Paragraph,
-    ParagraphContent, Run, SoftBreak, TextFlow,
+    InlineEnvironment, InlineEnvironmentKind, InlineMath, MathAlignRow, NodeId, OpaqueNode,
+    Orientation, PageGeometry, PageMargins, PaperSize, Paragraph, ParagraphContent, Run, SoftBreak,
+    TextFlow,
 };
 use caret_layout::{FontCatalog, FontCatalogError, HitAffinity, ShapingStyle, VisualAffinity};
 use std::collections::BTreeMap;
@@ -4122,10 +4123,16 @@ fn empty_formula_projections_keep_host_geometry_without_placeholder_rectangles()
                     .iter()
                     .any(|shape| shape.kind == crate::PageMathShapeKind::Rectangle)
             );
+            // 空 InlineMath 的命中区是公式 caret 居中的插入槽；显示公式仍以节点盒为准。
+            let hit_x_pt = if id == &inline_id {
+                projection.object_x_pt + slot.x
+            } else {
+                projection.object_x_pt + slot.x + slot.width / 2.0
+            };
             let hit = snapshot
                 .hit_test_math_structure(
                     projection.page_index,
-                    projection.object_x_pt + slot.x + slot.width / 2.0,
+                    hit_x_pt,
                     projection.baseline_y_pt + slot.y + slot.height / 2.0,
                 )
                 .unwrap_or_else(|| panic!("empty host slot should remain hittable: {id}"));
@@ -4304,4 +4311,342 @@ fn target_paragraph_id(target: &MathEditTarget) -> NodeId {
         MathEditTarget::Inline { paragraph_id, .. } => paragraph_id.clone(),
         _ => panic!("expected inline"),
     }
+}
+
+fn empty_inline_math_host() -> InlineMath {
+    InlineMath {
+        id: NodeId::generate(),
+        math_tree: empty_math_tree(),
+        extra: BTreeMap::new(),
+    }
+}
+
+fn parsed_inline_math(source: &str) -> InlineMath {
+    let projection = caret_math::parse_projection(source, caret_math::MathInputKind::Inline)
+        .unwrap_or_else(|error| panic!("inline source should parse: {error}"));
+    let caret_math::ProjectedMath::Tree(tree) = projection.content().clone() else {
+        panic!("inline source should parse as a tree");
+    };
+    InlineMath {
+        id: NodeId::generate(),
+        math_tree: tree,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn inline_math_document(math: InlineMath) -> Document {
+    let mut paragraph = paragraph("");
+    paragraph.inlines = vec![
+        text_flow(Run {
+            text: "A".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(math),
+        text_flow(Run {
+            text: "B".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    document
+}
+
+fn empty_bold_environment_document() -> Document {
+    let mut paragraph = paragraph("");
+    paragraph.inlines = vec![
+        text_flow(Run {
+            text: "A".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Environment(InlineEnvironment {
+            id: NodeId::generate(),
+            kind: InlineEnvironmentKind::Bold,
+            definition_id: None,
+            props: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        }),
+        text_flow(Run {
+            text: "B".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    document
+}
+
+fn document_caret_x(
+    snapshot: &super::DocumentLayoutSnapshot,
+    paragraph_id: &NodeId,
+    offset: usize,
+) -> f64 {
+    snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset,
+                affinity: Affinity::Downstream,
+            },
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("caret geometry should exist at offset {offset}"))
+        .x_pt
+}
+
+#[test]
+fn empty_inline_math_has_zero_advance_and_keeps_its_math_node_box() {
+    let document = inline_math_document(empty_inline_math_host());
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let snapshot = layout_document(&document);
+    let paragraph = &snapshot.paragraphs[0];
+    assert_eq!(paragraph.text.as_ref(), "A\u{fffc}B");
+    let math_layout = paragraph
+        .inline_math_layouts
+        .first()
+        .unwrap_or_else(|| panic!("empty inline math layout is missing"));
+    assert_eq!(math_layout.inline_advance, 0.0);
+    assert!(math_layout.width > 0.0);
+    let root_box = math_layout
+        .nodes
+        .first()
+        .unwrap_or_else(|| panic!("empty inline math should keep its root node box"));
+    assert!(root_box.width > 0.0 && root_box.height > 0.0);
+
+    let x_before = document_caret_x(&snapshot, &paragraph_id, 1);
+    let x_after = document_caret_x(&snapshot, &paragraph_id, 4);
+    assert!(
+        (x_before - x_after).abs() < 1e-6,
+        "empty inline math must not advance text: {x_before} vs {x_after}"
+    );
+
+    // 与空 Bold InlineEnvironment 的相邻字符位置一致。
+    let bold_document = empty_bold_environment_document();
+    let bold_paragraph_id = match &bold_document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let bold_snapshot = layout_document(&bold_document);
+    assert_eq!(
+        document_caret_x(&bold_snapshot, &bold_paragraph_id, 1),
+        x_before
+    );
+}
+
+#[test]
+fn selecting_only_an_empty_inline_math_does_not_publish_zero_width_rectangles() {
+    let document = inline_math_document(empty_inline_math_host());
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let snapshot = layout_document(&document);
+    for (start, end) in [(1, 4), (0, 3)] {
+        let selection = Selection {
+            anchor: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: start,
+                affinity: Affinity::Downstream,
+            },
+            focus: Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: end,
+                affinity: Affinity::Upstream,
+            },
+        };
+        // 没有可见字素时引擎可以返回 None；调用方按空投影处理，同样不能产生零宽矩形。
+        let rectangles = snapshot.selection_geometry(&selection).unwrap_or_default();
+        assert!(
+            rectangles
+                .iter()
+                .all(|rectangle| rectangle.x1_pt > rectangle.x0_pt
+                    && rectangle.y1_pt > rectangle.y0_pt),
+            "empty inline math selection {start}..{end} produced a degenerate rectangle: {rectangles:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_inline_math_hit_uses_insertion_slot_and_leaves_neighbour_text_to_body() {
+    let document = inline_math_document(empty_inline_math_host());
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let snapshot = layout_document(&document);
+    let caret = snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 1,
+                affinity: Affinity::Downstream,
+            },
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("empty inline math caret is missing"));
+    let y_pt = caret.y0_pt + 2.0;
+    // 插入槽中心（公式 caret 处）仍可命中并进入公式。
+    let hit = snapshot
+        .hit_test_math_structure(0, caret.x_pt, y_pt)
+        .unwrap_or_else(|| panic!("empty inline math slot must stay hittable"));
+    assert!(matches!(hit.target, MathEditTarget::Inline { .. }));
+    assert_eq!(hit.position.offset, 0);
+
+    let following_text_x = document_caret_x(&snapshot, &paragraph_id, 4);
+    // 右侧邻字内部：正文优先，不吞掉 B 的点击。
+    assert!(
+        snapshot
+            .hit_test_math_structure(0, following_text_x + 2.5, y_pt)
+            .is_none()
+    );
+    let body_hit = snapshot
+        .hit_test(0, following_text_x + 2.5, y_pt)
+        .unwrap_or_else(|| panic!("following text should keep its body hit"));
+    assert_eq!(body_hit.position.paragraph_id, paragraph_id);
+    // 左侧邻字内部同理。
+    assert!(
+        snapshot
+            .hit_test_math_structure(0, caret.x_pt - 2.5, y_pt)
+            .is_none()
+    );
+}
+
+#[test]
+fn nonempty_inline_math_keeps_content_advance_and_structure_hit() {
+    let document = inline_math_document(parsed_inline_math("x"));
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let snapshot = layout_document(&document);
+    let paragraph = &snapshot.paragraphs[0];
+    let math_layout = &paragraph.inline_math_layouts[0];
+    assert!(math_layout.width > 0.0);
+    assert_eq!(math_layout.inline_advance, math_layout.width);
+    let x_before = document_caret_x(&snapshot, &paragraph_id, 1);
+    let x_after = document_caret_x(&snapshot, &paragraph_id, 4);
+    assert!((x_after - x_before - math_layout.width as f32 as f64).abs() < 1e-6);
+    let caret = snapshot
+        .caret_geometry(
+            &Pos {
+                story: StoryId::Body,
+                paragraph_id,
+                offset: 1,
+                affinity: Affinity::Downstream,
+            },
+            VisualAffinity::Upstream,
+        )
+        .unwrap_or_else(|| panic!("nonempty inline math caret is missing"));
+    assert!(
+        snapshot
+            .hit_test_math_structure(0, caret.x_pt + 1.0, caret.y0_pt + 2.0)
+            .is_some()
+    );
+}
+
+#[test]
+fn empty_inline_math_zero_advance_across_font_sizes() {
+    for font_size_centipoints in [900u16, 1200, 2000] {
+        let mut document = inline_math_document(empty_inline_math_host());
+        document.global_settings.default_font_size_centipoints = font_size_centipoints;
+        let mut service = DocumentLayoutService::new();
+        let mut catalog =
+            FontCatalog::system().unwrap_or_else(|error| panic!("font catalog failed: {error}"));
+        let snapshot = service
+            .layout(
+                &document,
+                1,
+                &mut catalog,
+                &ShapingStyle::new(font_size_centipoints),
+            )
+            .unwrap_or_else(|error| panic!("document layout failed: {error}"));
+        let paragraph = &snapshot.paragraphs[0];
+        let math_layout = &paragraph.inline_math_layouts[0];
+        assert_eq!(math_layout.inline_advance, 0.0);
+        let paragraph_id = paragraph.id.clone();
+        assert!(
+            (document_caret_x(&snapshot, &paragraph_id, 1)
+                - document_caret_x(&snapshot, &paragraph_id, 4))
+            .abs()
+                < 1e-6
+        );
+    }
+}
+
+#[test]
+fn empty_inline_math_zero_advance_keeps_delete_and_undo_text_model()
+-> Result<(), Box<dyn std::error::Error>> {
+    let document = inline_math_document(empty_inline_math_host());
+    let paragraph_id = match &document.body[0] {
+        Block::Paragraph(paragraph) => paragraph.id.clone(),
+        _ => unreachable!(),
+    };
+    let mut session = Session::new(document)?;
+    session.run(Command::SetSelection(Some(Selection {
+        anchor: Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 4,
+            affinity: Affinity::Upstream,
+        },
+        focus: Pos {
+            story: StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: 4,
+            affinity: Affinity::Upstream,
+        },
+    })))?;
+    session.run(Command::Delete(crate::Direction::Backward))?;
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        panic!("paragraph should stay");
+    };
+    assert_eq!(paragraph_plain_text(paragraph), "AB");
+    session.run(Command::Undo)?;
+    let Block::Paragraph(paragraph) = &session.document().body[0] else {
+        panic!("paragraph should stay after undo");
+    };
+    assert_eq!(paragraph_plain_text(paragraph), "A\u{fffc}B");
+    assert!(paragraph.inlines.iter().any(|inline| {
+        matches!(inline, ParagraphContent::Math(math) if math.math_tree.root.content.is_empty())
+    }));
+    Ok(())
+}
+
+fn paragraph_plain_text(paragraph: &Paragraph) -> String {
+    fn collect(contents: &[ParagraphContent], out: &mut String) {
+        for content in contents {
+            match content {
+                ParagraphContent::Text(flow) => {
+                    for run in &flow.runs {
+                        out.push_str(&run.text);
+                    }
+                }
+                ParagraphContent::Math(_) => out.push('\u{fffc}'),
+                ParagraphContent::Environment(environment) => {
+                    collect(&environment.children, out);
+                }
+                ParagraphContent::SoftBreak(_) => out.push('\n'),
+                ParagraphContent::Opaque(_) => out.push('\u{fffc}'),
+            }
+        }
+    }
+    let mut text = String::new();
+    collect(&paragraph.inlines, &mut text);
+    text
 }

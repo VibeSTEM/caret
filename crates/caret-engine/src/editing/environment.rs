@@ -121,6 +121,8 @@ pub struct EnvironmentEntry {
     pub source: EnvironmentSource,
     pub inline_range: Option<InlineSpan>,
     pub depth: usize,
+    /// 当前聚焦的空 InlineMath 宿主：节点盒只作 caret/命中锚点，正文推进为零。
+    pub empty_inline_host: bool,
 }
 
 /// 行内环境或 Run 属性在段落中的逻辑范围。

@@ -96,6 +96,7 @@ impl Session {
                 source: adapter.source,
                 inline_range: None,
                 depth: block.len(),
+                empty_inline_host: false,
             });
         }
 
@@ -107,6 +108,7 @@ impl Session {
                 source: adapter.source,
                 inline_range: None,
                 depth: block.len(),
+                empty_inline_host: false,
             });
         }
 
@@ -128,6 +130,15 @@ impl Session {
                     MathEditTarget::Block { .. } => None,
                 });
         let host_caret_position = self.host_caret_position.clone();
+        // 公式树为空宿主时只保留 caret/命中锚点，app 据此投影插入槽高亮。
+        let active_inline_math_empty_host = active_inline_math_id.as_ref().is_some_and(|math_id| {
+            self.paragraph_for(&focus)
+                .ok()
+                .and_then(|paragraph| {
+                    super::math_edit::find_inline_math(&paragraph.inlines, math_id)
+                })
+                .is_some_and(|math| crate::layout::math_flow_is_empty_host(&math.math_tree.root))
+        });
         let map = self.text_map_for(&focus)?;
         let mut inline = map
             .inline_environment_stack_at(focus.offset, focus.affinity)
@@ -147,6 +158,8 @@ impl Session {
                     end_utf8: span.end,
                 }),
                 depth: span.depth,
+                empty_inline_host: span.source == EnvironmentSource::InlineMath
+                    && active_inline_math_empty_host,
             })
             .collect::<Vec<_>>();
         if let Some(crate::editing::HostCaretPosition::Inside {
@@ -170,6 +183,7 @@ impl Session {
                             end_utf8: span.end,
                         }),
                         depth: span.depth,
+                        empty_inline_host: false,
                     }),
             );
         }
@@ -190,6 +204,7 @@ impl Session {
                     end_utf8: span.end,
                 }),
                 depth: span.depth,
+                empty_inline_host: active_inline_math_empty_host,
             });
         }
         inline.sort_by(|left, right| {

@@ -1390,14 +1390,32 @@ impl DocumentLayoutSnapshot {
                     };
                     (path, environment.children.as_slice(), true)
                 };
-                let x0_pt = projection.object_x_pt + node.x;
+                // 空行内宿主不占正文推进，命中区收窄为以公式 caret 居中的插入槽；
+                // 槽与相邻正文重叠的部分由正文优先判定吸收。
+                let empty_inline_host = projection.inline_index.is_some()
+                    && node.path.is_empty()
+                    && math_flow_is_empty_host(root);
+                let (x0_pt, x1_pt, width_pt) = if empty_inline_host {
+                    let slot_width = node
+                        .font_size_pt
+                        .map_or(node.width, |size| (size * 0.5).max(4.0));
+                    let center = projection.object_x_pt + node.x;
+                    (
+                        center - slot_width / 2.0,
+                        center + slot_width / 2.0,
+                        slot_width,
+                    )
+                } else {
+                    let x0_pt = projection.object_x_pt + node.x;
+                    (x0_pt, x0_pt + node.width, node.width)
+                };
                 let y0_pt = projection.baseline_y_pt + node.y;
-                let width_pt = node.width;
                 let height_pt = node.height;
-                let x1_pt = x0_pt + width_pt;
                 let y1_pt = y0_pt + height_pt;
-                let caret_band = projection
-                    .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + node.baseline);
+                let caret_band = projection.caret_at_math_baseline(
+                    x0_pt + width_pt / 2.0,
+                    projection.baseline_y_pt + node.baseline,
+                );
                 let hit_y0_pt = y0_pt.min(caret_band.y0_pt);
                 let hit_y1_pt = y1_pt.max(caret_band.y1_pt);
                 if !x0_pt.is_finite()
@@ -1411,6 +1429,9 @@ impl DocumentLayoutSnapshot {
                 }
                 let strict_hit = y_pt >= y0_pt && y_pt <= y1_pt;
                 if !strict_hit && (y_pt < hit_y0_pt || y_pt > hit_y1_pt) {
+                    continue;
+                }
+                if empty_inline_host && self.point_inside_body_text(page_index, x_pt, y_pt) {
                     continue;
                 }
                 let child_step = |index| {
@@ -1511,6 +1532,65 @@ impl DocumentLayoutSnapshot {
             }
         }
         best.map(|(_, _, _, _, hit)| hit)
+    }
+
+    /// 判断页面点是否落在正宽正文/文本岛字素内部。
+    ///
+    /// 与 app 命中测试使用同一内缩规则：正文保留正宽字素内部区域，字素间的重合边界
+    /// 留给零宽公式 caret。空 InlineMath 的插入槽与相邻文字重叠时据此让正文优先，
+    /// 避免吞掉邻字点击。
+    fn point_inside_body_text(&self, page_index: usize, x_pt: f64, y_pt: f64) -> bool {
+        let Some(hit) = self.hit_test(page_index, x_pt, y_pt) else {
+            return false;
+        };
+        let Some(paragraph) = self.paragraph_by_id(&hit.position.paragraph_id) else {
+            return false;
+        };
+        let boundaries = &paragraph.layout.grapheme_boundaries;
+        let Ok(offset_index) = boundaries.binary_search(&hit.position.offset) else {
+            return false;
+        };
+        let mut candidates = Vec::with_capacity(2);
+        if let Some(start_index) = offset_index.checked_sub(1) {
+            candidates.push((boundaries[start_index], boundaries[offset_index]));
+        }
+        if let Some(end) = boundaries.get(offset_index + 1) {
+            candidates.push((boundaries[offset_index], *end));
+        }
+        candidates.into_iter().any(|(start, end)| {
+            if start >= end
+                || paragraph
+                    .inline_math_source_ranges
+                    .iter()
+                    .any(|range| range.start == start && range.end == end)
+            {
+                return false;
+            }
+            let selection = Selection {
+                anchor: Pos {
+                    offset: start,
+                    affinity: Affinity::Downstream,
+                    ..hit.position.clone()
+                },
+                focus: Pos {
+                    offset: end,
+                    affinity: Affinity::Upstream,
+                    ..hit.position.clone()
+                },
+            };
+            self.selection_geometry(&selection)
+                .is_some_and(|rectangles| {
+                    rectangles.into_iter().any(|rectangle| {
+                        let inset =
+                            1.5_f64.min((rectangle.x1_pt - rectangle.x0_pt).max(0.0) * 0.25);
+                        rectangle.page_index == page_index
+                            && x_pt > rectangle.x0_pt + inset
+                            && x_pt < rectangle.x1_pt - inset
+                            && y_pt >= rectangle.y0_pt
+                            && y_pt <= rectangle.y1_pt
+                    })
+                })
+        })
     }
 
     /// 根据同代公式结构插入点返回所属 MathFlow 的页面 caret 几何。
@@ -2604,14 +2684,17 @@ impl DocumentLayoutSnapshot {
                         location.y0_pt + f64::from(line.metrics.height_pt),
                     )
                 };
-                if y1 <= y0 {
+                let x0_pt = bounds.x0 + page.margin_left_pt;
+                let x1_pt = bounds.x1 + page.margin_left_pt;
+                // Qt 快照校验拒绝零宽几何；退化行内对象不应让整份选区投影失败。
+                if x1_pt <= x0_pt || y1 <= y0 {
                     continue;
                 }
                 rectangles.push(PageSelectionRect {
                     page_index: location.page_index,
-                    x0_pt: bounds.x0 + page.margin_left_pt,
+                    x0_pt,
                     y0_pt: y0,
-                    x1_pt: bounds.x1 + page.margin_left_pt,
+                    x1_pt,
                     y1_pt: y1,
                 });
             }
@@ -3809,6 +3892,18 @@ fn contains_inline_math(nodes: &[ParagraphContent]) -> bool {
     })
 }
 
+/// 判断公式根流是否为空宿主：内容为空或仅一个根占位符。
+///
+/// 与 caret-math `is_empty_host_flow` 的判据保持一致；空宿主在行内流中不占推进，
+/// 只保留 MathNodeBox 作为公式 caret/命中锚点。
+pub(crate) fn math_flow_is_empty_host(flow: &MathFlow) -> bool {
+    flow.content.is_empty()
+        || matches!(
+            flow.content.as_slice(),
+            [MathContent::Math(node)] if node.kind == caret_doc::MathNodeKind::Placeholder
+        )
+}
+
 fn math_flow_contains_text(flow: &MathFlow) -> bool {
     flow.content.iter().any(|content| match content {
         MathContent::Text(_) => true,
@@ -4541,9 +4636,11 @@ impl InlineMathLayoutBuilder<'_, '_> {
                         let value = value as f32;
                         value.is_finite().then_some(value)
                     };
-                    let advance_pt = as_f32(layout.width)
+                    // 空宿主只保留节点盒供 caret/命中使用，不占正文推进；
+                    // 零推进文本岛仍用透明最小推进保留点击槽位。
+                    let advance_pt = as_f32(layout.inline_advance)
                         .ok_or_else(|| {
-                            DocumentLayoutError::Math("invalid inline math width".to_owned())
+                            DocumentLayoutError::Math("invalid inline math advance".to_owned())
                         })?
                         .max(0.0);
                     let advance_pt = if advance_pt == 0.0

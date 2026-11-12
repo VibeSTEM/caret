@@ -3,7 +3,8 @@
 use super::*;
 use caret_doc::{
     BlockEnvironment, BlockEnvironmentKind, Equation, InlineEnvironment, InlineEnvironmentKind,
-    MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run, TextFlow,
+    InlineMath, MathContent, MathFlow, MathTree, NodeId, Paragraph, ParagraphContent, Run,
+    TextFlow,
 };
 use std::collections::BTreeMap;
 
@@ -2444,4 +2445,289 @@ fn plain_left_collapses_a_text_structural_selection_to_its_document_start()
     assert_eq!(runtime.session.selection().focus.paragraph_id, before_id);
     assert_eq!(runtime.session.selection().focus.offset, "before".len());
     Ok(())
+}
+
+fn empty_inline_math_runtime(
+    font_size_centipoints: u16,
+) -> Result<(DocumentViewRuntime, NodeId), Box<dyn std::error::Error>> {
+    let mut paragraph = Paragraph::empty(NodeId::generate());
+    paragraph.inlines = vec![
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "A".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Math(InlineMath {
+            id: NodeId::generate(),
+            math_tree: MathTree {
+                schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+                root: MathFlow {
+                    id: NodeId::generate(),
+                    content: Vec::new(),
+                    extra: BTreeMap::new(),
+                },
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        }),
+        ParagraphContent::Text(TextFlow {
+            runs: vec![Run {
+                text: "B".to_owned(),
+                language: None,
+                props: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }),
+    ];
+    let paragraph_id = paragraph.id.clone();
+    let mut document = Document::blank();
+    document.global_settings.default_font_size_centipoints = font_size_centipoints;
+    document.body = vec![Block::Paragraph(paragraph)];
+    Ok((DocumentViewRuntime::new(document)?, paragraph_id))
+}
+
+fn focus_empty_inline_math(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &NodeId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: 1,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position.clone(),
+                focus: position,
+            },
+        )))?;
+    runtime.session.run(caret_engine::Command::EnterMath(
+        caret_engine::Direction::Forward,
+    ))?;
+    runtime.layout_snapshot_json()?;
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_focus_publishes_the_shared_insertion_slot()
+-> Result<(), Box<dyn std::error::Error>> {
+    for font_size_centipoints in [900u16, 1200, 2000] {
+        let (mut runtime, paragraph_id) = empty_inline_math_runtime(font_size_centipoints)?;
+        focus_empty_inline_math(&mut runtime, &paragraph_id)?;
+        let interaction: Value = serde_json::from_str(&runtime.interaction_state_json()?)?;
+        let caret_x = interaction["caretGeometry"]["xPt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("empty inline math caret is missing"))?;
+        let rectangles = interaction["inlineEnvironmentHighlightRects"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("inline highlight was omitted"))?;
+        assert_eq!(rectangles.len(), 1);
+        let x0 = rectangles[0]["x0Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("slot x0 is missing"))?;
+        let x1 = rectangles[0]["x1Pt"]
+            .as_f64()
+            .ok_or_else(|| std::io::Error::other("slot x1 is missing"))?;
+        let expected_width = (f64::from(font_size_centipoints) / 100.0 * 0.5).max(4.0);
+        assert!(
+            (x1 - x0 - expected_width).abs() < 1e-6,
+            "slot width mismatch at {font_size_centipoints}: {x0}..{x1}"
+        );
+        assert!(
+            ((x0 + x1) / 2.0 - caret_x).abs() < 1e-6,
+            "slot must be centered on the math caret at {font_size_centipoints}"
+        );
+        assert_eq!(interaction["selectionRects"], serde_json::json!([]));
+        assert_eq!(
+            interaction["mathBlockHighlightRects"],
+            serde_json::json!([])
+        );
+    }
+
+    // 与待输入格式槽完全同宽（12pt 时都是 6pt）。
+    let (mut math_runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    focus_empty_inline_math(&mut math_runtime, &paragraph_id)?;
+    let math_snapshot: Value = serde_json::from_str(&math_runtime.layout_snapshot_json()?)?;
+    let math_rectangles = math_snapshot["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("empty inline math highlight is missing"))?;
+    let mut pending_runtime = DocumentViewRuntime::new_blank()?;
+    pending_runtime
+        .session
+        .run(caret_engine::Command::ToggleInlineFormat(
+            InlineEnvironmentKind::Bold,
+        ))?;
+    let pending: Value = serde_json::from_str(&pending_runtime.layout_snapshot_json()?)?;
+    let pending_rectangles = pending["inlineEnvironmentHighlightRects"]
+        .as_array()
+        .ok_or_else(|| std::io::Error::other("pending format slot is missing"))?;
+    assert_eq!(math_rectangles.len(), 1);
+    assert_eq!(pending_rectangles.len(), 1);
+    let math_x0 = math_rectangles[0]["x0Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("math slot x0 is missing"))?;
+    let math_x1 = math_rectangles[0]["x1Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("math slot x1 is missing"))?;
+    let pending_x0 = pending_rectangles[0]["x0Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("pending slot x0 is missing"))?;
+    let pending_x1 = pending_rectangles[0]["x1Pt"]
+        .as_f64()
+        .ok_or_else(|| std::io::Error::other("pending slot x1 is missing"))?;
+    let math_width = math_x1 - math_x0;
+    let pending_width = pending_x1 - pending_x0;
+    assert!((math_width - pending_width).abs() < 1e-6);
+    Ok(())
+}
+
+#[test]
+fn selecting_only_an_empty_inline_math_publishes_no_zero_width_rectangles()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    runtime.layout_snapshot_json()?;
+    let position = |offset, affinity| caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: position(1, caret_engine::Affinity::Downstream),
+                focus: position(4, caret_engine::Affinity::Upstream),
+            },
+        )))?;
+
+    for json in [
+        runtime.interaction_state_json()?,
+        runtime.layout_snapshot_json()?,
+    ] {
+        let value: Value = serde_json::from_str(&json)?;
+        let rectangles = value["selectionRects"]
+            .as_array()
+            .ok_or_else(|| std::io::Error::other("selectionRects is missing"))?;
+        for rectangle in rectangles {
+            let x0 = rectangle["x0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("x0Pt is missing"))?;
+            let x1 = rectangle["x1Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("x1Pt is missing"))?;
+            let y0 = rectangle["y0Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("y0Pt is missing"))?;
+            let y1 = rectangle["y1Pt"]
+                .as_f64()
+                .ok_or_else(|| std::io::Error::other("y1Pt is missing"))?;
+            assert!(
+                x1 > x0 && y1 > y0,
+                "empty inline math selection produced a degenerate rectangle: {rectangle:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_click_hits_the_slot_without_swallowing_following_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    let snapshot = runtime.current_snapshot()?.clone();
+
+    // 右侧相邻文本内部仍归正文，不因空公式槽重叠而进入公式。
+    let following_caret = snapshot
+        .caret_geometry(
+            &caret_engine::Pos {
+                story: caret_engine::StoryId::Body,
+                paragraph_id: paragraph_id.clone(),
+                offset: 4,
+                affinity: caret_engine::Affinity::Downstream,
+            },
+            caret_engine::VisualAffinity::Downstream,
+        )
+        .ok_or_else(|| std::io::Error::other("following text caret is missing"))?;
+    let body: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        0,
+        following_caret.x_pt + 2.5,
+        following_caret.y0_pt + 2.0,
+    )?)?;
+    assert_ne!(body["mathTree"], true);
+    let offset = body["position"]["offsetUtf8"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("body position is missing"))?;
+    assert!(
+        offset == "4" || offset == "5",
+        "unexpected body offset {offset}"
+    );
+
+    // 插入槽中心（公式 caret 处）仍可命中并进入公式。
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    let snapshot = runtime.current_snapshot()?.clone();
+    let math_caret = snapshot
+        .caret_geometry(
+            &caret_engine::Pos {
+                story: caret_engine::StoryId::Body,
+                paragraph_id,
+                offset: 1,
+                affinity: caret_engine::Affinity::Downstream,
+            },
+            caret_engine::VisualAffinity::Upstream,
+        )
+        .ok_or_else(|| std::io::Error::other("empty inline math caret is missing"))?;
+    let placed: Value = serde_json::from_str(&runtime.place_caret_at_page_json(
+        0,
+        math_caret.x_pt,
+        math_caret.y0_pt + 2.0,
+    )?)?;
+    assert_eq!(placed["valid"], true);
+    assert_eq!(placed["mathTree"], true);
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_zero_advance_keeps_delete_and_undo() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut runtime, paragraph_id) = empty_inline_math_runtime(1200)?;
+    focus_empty_inline_math(&mut runtime, &paragraph_id)?;
+    runtime.delete_backward_json()?;
+    assert_eq!(paragraph_plain_text(runtime.document()), "AB");
+    runtime.undo_json()?;
+    assert_eq!(paragraph_plain_text(runtime.document()), "A\u{fffc}B");
+    Ok(())
+}
+
+fn paragraph_plain_text(document: &Document) -> String {
+    fn collect(contents: &[ParagraphContent], out: &mut String) {
+        for content in contents {
+            match content {
+                ParagraphContent::Text(flow) => {
+                    for run in &flow.runs {
+                        out.push_str(&run.text);
+                    }
+                }
+                ParagraphContent::Math(_) => out.push('\u{fffc}'),
+                ParagraphContent::Environment(environment) => {
+                    collect(&environment.children, out);
+                }
+                ParagraphContent::SoftBreak(_) => out.push('\n'),
+                ParagraphContent::Opaque(_) => out.push('\u{fffc}'),
+            }
+        }
+    }
+    let mut text = String::new();
+    if let Some(Block::Paragraph(paragraph)) = document.body.first() {
+        collect(&paragraph.inlines, &mut text);
+    }
+    text
 }

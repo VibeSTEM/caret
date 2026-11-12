@@ -1636,7 +1636,7 @@ fn is_placeholder_flow(node: &MathNode) -> bool {
         && matches!(node.children.as_slice(), [only] if only.kind == K::Placeholder)
 }
 
-fn is_empty_host_flow(node: &MathNode) -> bool {
+pub(crate) fn is_empty_host_flow(node: &MathNode) -> bool {
     node.position.as_ref().is_some_and(|position| {
         position.is_flow
             && position.path.is_empty()

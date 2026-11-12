@@ -439,14 +439,35 @@ fn math_text_highlight_rects(
     )
 }
 
+/// 行内环境/空公式高亮输入：文本范围、空宿主标记与公式 caret 插入槽。
+struct InlineHighlightContext<'a> {
+    range: Option<&'a caret_engine::InlineSpan>,
+    empty_inline_host: bool,
+    math_caret: Option<(caret_engine::PageCaretGeometry, u16)>,
+}
+
 /// 将当前最内层行内环境投影为布局层选区矩形。
 fn inline_environment_highlight_rects(
-    range: Option<&caret_engine::InlineSpan>,
+    context: InlineHighlightContext<'_>,
     pending_style: bool,
     focus: &Pos,
     visual_affinity: caret_engine::VisualAffinity,
     snapshot: &caret_engine::DocumentLayoutSnapshot,
 ) -> Value {
+    let InlineHighlightContext {
+        range,
+        empty_inline_host,
+        math_caret,
+    } = context;
+    // 空 InlineMath 与空 InlineEnvironment 一致：不按 U+FFFC 跨度铺满隐藏盒，
+    // 而以公式 caret 为中心绘制同一插入槽。Source 分支拿不到公式 caret 时退回
+    // 共享 caret/行框插入槽，避免零宽对象或无意义范围高亮。
+    if empty_inline_host {
+        if let Some((caret, font_size)) = math_caret {
+            return insertion_slot_rect_from_caret(caret, font_size, snapshot);
+        }
+        return insertion_slot_rect(focus, visual_affinity, snapshot);
+    }
     let Some(range) = range else {
         if pending_style {
             return insertion_slot_rect(focus, visual_affinity, snapshot);
@@ -504,6 +525,15 @@ fn insertion_slot_rect(
     let Some(font_size) = snapshot.font_size_centipoints_at(focus, visual_affinity) else {
         return Value::Array(Vec::new());
     };
+    insertion_slot_rect_from_caret(caret, font_size, snapshot)
+}
+
+/// 以给定 caret 几何与字号生成可见插入槽；空宿主公式与零长度格式范围共用。
+fn insertion_slot_rect_from_caret(
+    caret: caret_engine::PageCaretGeometry,
+    font_size: u16,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Value {
     let Some(page) = snapshot.pages.get(caret.page_index) else {
         return Value::Array(Vec::new());
     };
@@ -579,10 +609,18 @@ impl DocumentViewRuntime {
         let math_block_target = current_math_block_target(highlight_session);
         let inline_context =
             math_block_target.is_none() && !highlight_session.has_structure_selection();
-        let inline_environment = inline_context
+        let inline_environment_entry = inline_context
             .then(|| environment_view.innermost_inline())
-            .flatten()
-            .and_then(|entry| entry.inline_range.as_ref());
+            .flatten();
+        let empty_inline_host =
+            inline_environment_entry.is_some_and(|entry| entry.empty_inline_host);
+        let inline_environment =
+            inline_environment_entry.and_then(|entry| entry.inline_range.as_ref());
+        let inline_math_tree_context = if empty_inline_host {
+            highlight_session.math_tree_input_context()
+        } else {
+            None
+        };
         let pending_inline_slot = inline_context
             && highlight_session.has_pending_inline_style()
             && highlight_session.selection().anchor == highlight_session.selection().focus;
@@ -609,6 +647,8 @@ impl DocumentViewRuntime {
         };
         let expected_font_generation = self.layout.font_generation();
         require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
+        let inline_math_caret = inline_math_tree_context
+            .and_then(|(target, position)| snapshot.math_tree_caret(&target, &position));
         let mut view = match changed_paragraph {
             Some((paragraph_id, page_start_index, base_generation)) => serde_json::to_value(
                 DocumentLayoutDeltaView::for_paragraph(
@@ -654,7 +694,11 @@ impl DocumentViewRuntime {
             .insert(
                 "inlineEnvironmentHighlightRects".to_owned(),
                 inline_environment_highlight_rects(
-                    inline_environment,
+                    InlineHighlightContext {
+                        range: inline_environment,
+                        empty_inline_host,
+                        math_caret: inline_math_caret,
+                    },
                     pending_inline_slot,
                     &inline_focus,
                     inline_visual_affinity,
@@ -891,10 +935,18 @@ impl DocumentViewRuntime {
         let math_block_target = current_math_block_target(highlight_session);
         let inline_context =
             math_block_target.is_none() && !highlight_session.has_structure_selection();
-        let inline_environment = inline_context
+        let inline_environment_entry = inline_context
             .then(|| environment_view.innermost_inline())
-            .flatten()
-            .and_then(|entry| entry.inline_range.as_ref());
+            .flatten();
+        let empty_inline_host =
+            inline_environment_entry.is_some_and(|entry| entry.empty_inline_host);
+        let inline_environment =
+            inline_environment_entry.and_then(|entry| entry.inline_range.as_ref());
+        let inline_math_tree_context = if empty_inline_host {
+            highlight_session.math_tree_input_context()
+        } else {
+            None
+        };
         let pending_inline_slot = inline_context
             && highlight_session.has_pending_inline_style()
             && highlight_session.selection().anchor == highlight_session.selection().focus;
@@ -925,8 +977,14 @@ impl DocumentViewRuntime {
         let expected_font_generation = self.layout.font_generation();
         let snapshot = self.current_snapshot_ref()?;
         require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
+        let inline_math_caret = inline_math_tree_context
+            .and_then(|(target, position)| snapshot.math_tree_caret(&target, &position));
         let inline_environment_rectangles = inline_environment_highlight_rects(
-            inline_environment,
+            InlineHighlightContext {
+                range: inline_environment,
+                empty_inline_host,
+                math_caret: inline_math_caret,
+            },
             pending_inline_slot,
             &inline_focus,
             inline_visual_affinity,
