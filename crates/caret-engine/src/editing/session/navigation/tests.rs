@@ -1,6 +1,6 @@
 use super::super::super::{
     Affinity, ClipboardAction, Command, Direction, EditorKey, EnvironmentKind, MathEditBranch,
-    NavigationCandidate, NavigationGeneration, Pos, Selection, Session,
+    NavigationCandidate, NavigationGeneration, Pos, Selection, Session, StoryId,
 };
 use caret_doc::{
     Block, Document, InlineEnvironment, InlineEnvironmentKind, NodeId, ParagraphContent, Run,
@@ -1144,4 +1144,252 @@ fn clipboard_keys_are_decided_by_the_session_focus_owner() {
         .run(Command::EditorKey(EditorKey::ModV))
         .unwrap_or_else(|error| panic!("command line clipboard shortcut failed: {error}"));
     assert_eq!(blocked.clipboard_action, None);
+}
+
+fn paragraph_with_run_text(text: &str) -> caret_doc::Paragraph {
+    let mut paragraph = caret_doc::Paragraph::empty(NodeId::generate());
+    paragraph.inlines.push(ParagraphContent::Text(TextFlow {
+        runs: vec![Run {
+            text: text.to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    }));
+    paragraph
+}
+
+fn inline_math_content(source: &str) -> ParagraphContent {
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse(source, caret_math::MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("inline formula fixture failed: {error}"))
+    else {
+        panic!("inline formula fixture should produce a MathTree");
+    };
+    ParagraphContent::Math(caret_doc::InlineMath {
+        id: NodeId::generate(),
+        math_tree,
+        extra: BTreeMap::new(),
+    })
+}
+
+/// 创建 middle = `ab{inline math}cd`、前后各有一个段落的文档，并把焦点放到公式前。
+fn session_with_inline_math_in_the_middle(source: &str) -> (Session, NodeId) {
+    let above = paragraph_with_run_text("above");
+    let mut middle = paragraph_with_run_text("ab");
+    middle.inlines.push(inline_math_content(source));
+    middle.inlines.push(ParagraphContent::Text(TextFlow {
+        runs: vec![Run {
+            text: "cd".to_owned(),
+            language: None,
+            props: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    }));
+    let middle_id = middle.id.clone();
+    let below = paragraph_with_run_text("below");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(above),
+        Block::Paragraph(middle),
+        Block::Paragraph(below),
+    ];
+    let mut session = Session::new(document)
+        .unwrap_or_else(|error| panic!("session initialization failed: {error}"));
+    let position = Pos {
+        story: StoryId::Body,
+        paragraph_id: middle_id.clone(),
+        offset: 2,
+        affinity: Affinity::Downstream,
+    };
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: position.clone(),
+            focus: position,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    session
+        .run(Command::EnterMath(Direction::Forward))
+        .unwrap_or_else(|error| panic!("inline formula focus failed: {error}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.branch),
+        Some(MathEditBranch::Tree { .. })
+    ));
+    (session, middle_id)
+}
+
+fn vertical_key(direction: Direction, extend: bool) -> Command {
+    let candidate = None;
+    Command::EditorKey(match direction {
+        Direction::Backward => EditorKey::UpArrow {
+            candidate,
+            extend,
+            structure: false,
+        },
+        Direction::Forward => EditorKey::DownArrow {
+            candidate,
+            extend,
+            structure: false,
+        },
+    })
+}
+
+#[test]
+fn inline_math_up_at_tree_edge_exits_to_the_object_front() {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x");
+
+    let effect = session
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("inline math Up failed: {error}"));
+
+    assert!(effect.selection_changed);
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+    assert_eq!(session.selection().focus.offset, 2);
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
+}
+
+#[test]
+fn inline_math_down_at_tree_edge_exits_to_the_object_back() {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x");
+
+    session
+        .run(vertical_key(Direction::Forward, false))
+        .unwrap_or_else(|error| panic!("inline math Down failed: {error}"));
+
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+    assert_eq!(session.selection().focus.offset, 5);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+}
+
+#[test]
+fn inline_math_shift_vertical_at_tree_edge_also_exits_the_math_edit() {
+    for direction in [Direction::Backward, Direction::Forward] {
+        let (mut session, _paragraph_id) = session_with_inline_math_in_the_middle("x");
+
+        let effect = session
+            .run(vertical_key(direction, true))
+            .unwrap_or_else(|error| panic!("inline math shift vertical failed: {error}"));
+
+        assert!(effect.selection_changed);
+        assert!(
+            session.math_edit().is_none(),
+            "Shift+vertical must not be swallowed inside InlineMath"
+        );
+        assert_eq!(session.selection().anchor, session.selection().focus);
+    }
+}
+
+#[test]
+fn inline_math_text_island_vertical_edge_exits_to_the_object_sides() {
+    let mut session = session_in_inline_math_text_island();
+    session
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("math text Up failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.offset, 0);
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
+
+    let mut session = session_in_inline_math_text_island();
+    session
+        .run(vertical_key(Direction::Forward, false))
+        .unwrap_or_else(|error| panic!("math text Down failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.offset, 3);
+    assert_eq!(session.selection().focus.affinity, Affinity::Upstream);
+}
+
+#[test]
+fn block_math_vertical_edge_behavior_is_unchanged() {
+    let mut session = Session::new(Document::blank())
+        .unwrap_or_else(|error| panic!("blank session initialization failed: {error}"));
+    session
+        .insert_display_math(false)
+        .unwrap_or_else(|error| panic!("equation insertion failed: {error}"));
+
+    // Block 的 Shift 垂直仍没有布局候选：保持既有 no-op。
+    let before = session.selection().clone();
+    let effect = session
+        .run(vertical_key(Direction::Backward, true))
+        .unwrap_or_else(|error| panic!("equation Shift+Up failed: {error}"));
+    assert!(!effect.selection_changed);
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(crate::MathEditTarget::Block { .. })
+    ));
+    assert_eq!(session.selection(), &before);
+
+    // Block 的非扩展垂直在边缘退出到块外侧停靠。
+    session
+        .run(vertical_key(Direction::Forward, false))
+        .unwrap_or_else(|error| panic!("equation Down failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert!(session.block_boundary_exit().is_some());
+}
+
+#[test]
+fn command_line_vertical_navigation_keeps_formula_focus_and_query() {
+    let mut session = session_in_inline_math_tree("x");
+    session
+        .run(Command::BeginCommandLine)
+        .unwrap_or_else(|error| panic!("command line did not start: {error}"));
+    session
+        .run(Command::TypeCommandLine("abc".to_owned()))
+        .unwrap_or_else(|error| panic!("command line typing failed: {error}"));
+
+    session
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("command line Up failed: {error}"));
+
+    assert!(session.math_edit().is_some());
+    assert_eq!(
+        session.command_line().map(|line| line.query.as_str()),
+        Some("abc")
+    );
+}
+
+#[test]
+fn ime_composition_vertical_navigation_does_not_exit_formula() {
+    let mut session = session_in_inline_math_text_island();
+    session
+        .run(Command::UpdateComposition {
+            id: 902,
+            preedit: "中".to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("composition update failed: {error}"));
+    let before = session.document().clone();
+
+    let effect = session
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("composition Up failed: {error}"));
+
+    assert!(!effect.selection_changed);
+    assert_eq!(session.document(), &before);
+    assert!(session.math_edit().is_some());
+    assert!(session.composition_preview_with_range(0).is_ok());
+}
+
+#[test]
+fn inline_math_source_branch_vertical_edge_exits_the_formula() {
+    let (mut session, paragraph_id) = session_with_inline_math_in_the_middle("x");
+    // Source 分支与 MathTree/MathText 同规则：垂直边缘退出到 U+FFFC 前侧。
+    let Some(edit) = session.math_edit.as_mut() else {
+        panic!("inline math edit should be active");
+    };
+    edit.branch = MathEditBranch::Source;
+    edit.source_draft = None;
+
+    session
+        .run(vertical_key(Direction::Backward, false))
+        .unwrap_or_else(|error| panic!("inline source Up failed: {error}"));
+
+    assert!(session.math_edit().is_none());
+    assert_eq!(session.selection().focus.paragraph_id, paragraph_id);
+    assert_eq!(session.selection().focus.offset, 2);
+    assert_eq!(session.selection().focus.affinity, Affinity::Downstream);
 }

@@ -296,8 +296,32 @@ fn tree_math_shift_movement_extends_the_formula_selection_without_leaving_the_ho
         caret["fontSizeCentipoints"].as_u64(),
         Some(u64::from(expected_font_size))
     );
-    // 目前公式树内部扩选没有文本层矩形；错误的正文投影会在此暴露。
-    assert_eq!(interaction["selectionRects"], serde_json::json!([]));
+    // 公式树内部扩选发布本地选区矩形：覆盖被选符号，且纵向范围与焦点 caret 一致。
+    let selection_rectangles = interaction["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    assert!(
+        !selection_rectangles.is_empty(),
+        "formula tree selection must publish visible rects"
+    );
+    assert_rectangles_within_page(&mut runtime, &interaction["selectionRects"])?;
+    let rectangle = &selection_rectangles[0];
+    for (key, expected) in [
+        ("x0Pt", expected_caret.x_pt),
+        ("y0Pt", expected_caret.y0_pt),
+        ("y1Pt", expected_caret.y1_pt),
+    ] {
+        let actual = rectangle[key]
+            .as_f64()
+            .ok_or_else(|| format!("selectionRects[0].{key} must be a number"))?;
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "selectionRects[0].{key} differs: {actual} vs {expected}"
+        );
+    }
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(full["selectionRects"], interaction["selectionRects"]);
     runtime.insert_text_json("X".to_owned())?;
 
     let paragraph = runtime
@@ -323,6 +347,263 @@ fn tree_math_shift_movement_extends_the_formula_selection_without_leaving_the_ho
         .ok_or_else(|| "math insertion should keep the inline math node".to_owned())?;
     assert_eq!(math_tree_text(&math.math_tree), "aX");
     assert!(runtime.session.math_tree_input_context().is_some());
+    Ok(())
+}
+
+#[test]
+fn equation_tree_shift_selection_publishes_page_selection_rects() -> Result<(), String> {
+    let mut document = caret_doc::Document::blank();
+    let paragraph_id = document
+        .body
+        .iter()
+        .find_map(|block| match block {
+            caret_doc::Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| "blank document should contain a paragraph".to_owned())?;
+    document.body.insert(
+        0,
+        caret_doc::Block::Equation(caret_doc::Equation {
+            id: caret_doc::NodeId::generate(),
+            math_tree: symbol_math_tree(&["x", "+", "y"]),
+            extra: Default::default(),
+        }),
+    );
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::EnterMath(
+            caret_engine::Direction::Backward,
+        ))
+        .map_err(|error| error.to_string())?;
+
+    // 反向扩选公式末尾符号：焦点复用本地序列，选区矩形从此发布。
+    let interaction: Value = serde_json::from_str(&runtime.move_visual_caret_json(false, true)?)
+        .map_err(|error| error.to_string())?;
+    let rectangles = interaction["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    assert!(
+        !rectangles.is_empty(),
+        "equation tree selection must publish visible rects"
+    );
+    assert_rectangles_within_page(&mut runtime, &interaction["selectionRects"])?;
+    let (target, anchor, focus) = runtime
+        .session
+        .math_tree_selection_context()
+        .ok_or_else(|| "equation tree selection context is missing".to_owned())?;
+    assert_tree_selection_projection(
+        &mut runtime,
+        &interaction["selectionRects"],
+        &target,
+        &anchor,
+        &focus,
+    )?;
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(full["selectionRects"], interaction["selectionRects"]);
+
+    // 继续扩选仍然发布矩形，并向前扩展左边界。
+    let extended: Value = serde_json::from_str(&runtime.move_visual_caret_json(false, true)?)
+        .map_err(|error| error.to_string())?;
+    let extended_rectangles = extended["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "extended selectionRects must be an array".to_owned())?;
+    assert!(!extended_rectangles.is_empty());
+    let first_left = rectangles
+        .iter()
+        .filter_map(|rectangle| rectangle["x0Pt"].as_f64())
+        .fold(f64::INFINITY, f64::min);
+    let extended_left = extended_rectangles
+        .iter()
+        .filter_map(|rectangle| rectangle["x0Pt"].as_f64())
+        .fold(f64::INFINITY, f64::min);
+    assert!(extended_left < first_left);
+    Ok(())
+}
+
+#[test]
+fn align_tree_shift_selection_publishes_page_selection_rects() -> Result<(), String> {
+    let mut document = caret_doc::Document::blank();
+    let paragraph_id = document
+        .body
+        .iter()
+        .find_map(|block| match block {
+            caret_doc::Block::Paragraph(paragraph) => Some(paragraph.id.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| "blank document should contain a paragraph".to_owned())?;
+    document
+        .body
+        .push(caret_doc::Block::Align(caret_doc::Align {
+            id: caret_doc::NodeId::generate(),
+            rows: vec![
+                caret_doc::MathAlignRow {
+                    id: caret_doc::NodeId::generate(),
+                    cells: vec![symbol_math_tree(&["a", "+", "b"])],
+                    extra: Default::default(),
+                },
+                caret_doc::MathAlignRow {
+                    id: caret_doc::NodeId::generate(),
+                    cells: vec![symbol_math_tree(&["c", "+", "d"])],
+                    extra: Default::default(),
+                },
+            ],
+            extra: Default::default(),
+        }));
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    let caret = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id,
+        offset: 0,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    runtime
+        .session
+        .run(caret_engine::Command::SetSelection(Some(
+            caret_engine::Selection {
+                anchor: caret.clone(),
+                focus: caret,
+            },
+        )))
+        .map_err(|error| error.to_string())?;
+    runtime
+        .session
+        .run(caret_engine::Command::EnterMath(
+            caret_engine::Direction::Forward,
+        ))
+        .map_err(|error| error.to_string())?;
+
+    let interaction: Value = serde_json::from_str(&runtime.move_visual_caret_json(true, true)?)
+        .map_err(|error| error.to_string())?;
+    let rectangles = interaction["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    assert!(
+        !rectangles.is_empty(),
+        "align tree selection must publish visible rects"
+    );
+    assert_rectangles_within_page(&mut runtime, &interaction["selectionRects"])?;
+    let (target, anchor, focus) = runtime
+        .session
+        .math_tree_selection_context()
+        .ok_or_else(|| "align tree selection context is missing".to_owned())?;
+    assert_tree_selection_projection(
+        &mut runtime,
+        &interaction["selectionRects"],
+        &target,
+        &anchor,
+        &focus,
+    )?;
+    let full: Value = serde_json::from_str(&runtime.layout_snapshot_json()?)
+        .map_err(|error| error.to_string())?;
+    assert_eq!(full["selectionRects"], interaction["selectionRects"]);
+    Ok(())
+}
+
+/// 逐符号拆分的公式树，供公式树内部选区快照测试使用。
+fn symbol_math_tree(symbols: &[&str]) -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: caret_doc::NodeId::generate(),
+            content: symbols
+                .iter()
+                .map(|symbol| {
+                    caret_doc::MathContent::Math(caret_doc::MathNode {
+                        id: caret_doc::NodeId::generate(),
+                        kind: caret_doc::MathNodeKind::Symbol,
+                        text: Some((*symbol).to_owned()),
+                        attributes: std::collections::BTreeMap::new(),
+                        children: Vec::new(),
+                        extra: std::collections::BTreeMap::new(),
+                    })
+                })
+                .collect(),
+            extra: std::collections::BTreeMap::new(),
+        },
+        extra: std::collections::BTreeMap::new(),
+    }
+}
+
+/// 断言发布给界面的选区矩形与同代引擎几何一致。
+fn assert_tree_selection_projection(
+    runtime: &mut DocumentViewRuntime,
+    rectangles: &Value,
+    target: &caret_engine::MathEditTarget,
+    anchor: &caret_engine::MathTreePosition,
+    focus: &caret_engine::MathTreePosition,
+) -> Result<(), String> {
+    let expected = runtime
+        .current_snapshot()?
+        .math_tree_selection_geometry(target, anchor, focus)
+        .ok_or_else(|| "formula tree selection geometry is missing".to_owned())?;
+    let actual = rectangles
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(
+            actual["pageIndex"].as_u64(),
+            Some(expected.page_index as u64)
+        );
+        for (key, expected) in [
+            ("x0Pt", expected.x0_pt),
+            ("y0Pt", expected.y0_pt),
+            ("x1Pt", expected.x1_pt),
+            ("y1Pt", expected.y1_pt),
+        ] {
+            let actual = actual[key]
+                .as_f64()
+                .ok_or_else(|| format!("selectionRects[0].{key} must be a number"))?;
+            assert!((actual - expected).abs() < 1e-9);
+        }
+    }
+    Ok(())
+}
+
+/// 断言选区矩形落在所属页面内，避免 Qt 快照校验拒绝整份投影。
+fn assert_rectangles_within_page(
+    runtime: &mut DocumentViewRuntime,
+    rectangles: &Value,
+) -> Result<(), String> {
+    let snapshot = runtime.current_snapshot()?;
+    let rectangles = rectangles
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    for rectangle in rectangles {
+        let page_index = rectangle["pageIndex"]
+            .as_u64()
+            .ok_or_else(|| "selectionRects pageIndex must be an integer".to_owned())?;
+        let page = snapshot
+            .pages
+            .get(usize::try_from(page_index).map_err(|error| error.to_string())?)
+            .ok_or_else(|| "selectionRects pageIndex is out of range".to_owned())?;
+        let mut values = [0.0; 4];
+        for (index, key) in ["x0Pt", "y0Pt", "x1Pt", "y1Pt"].into_iter().enumerate() {
+            values[index] = rectangle[key]
+                .as_f64()
+                .ok_or_else(|| format!("selectionRects {key} must be a number"))?;
+        }
+        let [x0, y0, x1, y1] = values;
+        assert!(x0 >= 0.0 && y0 >= 0.0 && x1 > x0 && y1 > y0);
+        assert!(x1 <= page.width_pt && y1 <= page.height_pt);
+    }
     Ok(())
 }
 

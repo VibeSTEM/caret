@@ -1,6 +1,6 @@
 # 画布与交互背景
 
-更新日期：2026-11-11。本文是文稿画布交互高亮与命令提示背景的唯一权威，定义数据来源、渲染层和复用边界。命令行为见[命令输入](../editor/command-input.md)，环境语义见[结构导航](../editor/structure-navigation.md)，数学节点语义见[数学公式](../editor/math.md)，实现进度见[031 当前环境背景高亮](../../task/031-environment-highlight.md)和[075 Equation/Align 活动焦点高亮](../../task/075-equation-align-active-highlight.md)。
+更新日期：2026-11-12。本文是文稿画布交互高亮与命令提示背景的唯一权威，定义数据来源、渲染层和复用边界。命令行为见[命令输入](../editor/command-input.md)，环境语义见[结构导航](../editor/structure-navigation.md)，数学节点语义见[数学公式](../editor/math.md)，实现进度见[031 当前环境背景高亮](../../task/031-environment-highlight.md)和[075 Equation/Align 活动焦点高亮](../../task/075-equation-align-active-highlight.md)。
 
 ## 两个渲染层
 
@@ -12,7 +12,7 @@ Caret 有两类不同用途的背景：
 | 行内焦点高亮 | 当前行内环境、活动 InlineMath、块级公式内的活动 TextFlow island，或空光标处有效的 PendingInlineStyle，粉色 | 文档画布通用 inline 高亮 QSG 层；位于块层之上、选区与字形之下 | Rust 投影行内环境文本视觉行/空范围槽位、InlineMath MathBox、数学 TextFlow island 或 caret/行框派生的 pending-style 槽位；ViewModel 合并到同一列表 |
 | 命令提示背景 | 正在输入的命令查询/候选控件 | QML 命令输入/补全控件自身的背景 | QML 控件的内容尺寸、候选尺寸和插入点锚定位置 |
 
-结构选区覆盖的 Equation/Align 属于文本选区层：Rust 用同代布局快照的 MathFragment 生成整栏对象矩形，与选区端点文本矩形、块环境范围矩形合并后交给选区绘制；它不是块焦点高亮，只在范围完整覆盖该公式对象时出现。块与 inline 焦点是文稿画布内容的临时视觉投影。Paragraph 虽是 Block，但普通段落焦点不自动产生块背景；只有活动环境或公式适配器提供有效高亮范围时才绘制块底色。两个层级可同时显示，各取本层级的活动范围；Qt/QML 保留并绘制两组独立矩形与颜色。文本范围按视觉行切片，公式块使用 MathFragment，数学文本使用 TextFlow island 几何。InlineMath 和 InlineEnvironment 共用 inline 空范围槽位策略：MathBox 已有占位宽度时复用其几何；空格式环境或活动的空光标 PendingInlineStyle 则以布局提供的 caret/行框几何生成非零背景槽位，不能因范围长度为零或尚未产生环境节点就丢失活动反馈。槽位仅用于绘制，不创建文档字符或环境节点；PendingInlineStyle 关闭或焦点移走后不再投影。所有几何必须与页面缩放、分页裁剪、文字、选区和光标处于同一画布坐标与场景图顺序中。Rust 提供领域范围及布局几何，Qt 校验快照并合并同视觉层的来源，QSG 在字形之前绘制背景；这些层不遍历文档树、不重复塑形，也不改写文档或布局状态。
+结构选区覆盖的 Equation/Align 属于文本选区层：Rust 用同代布局快照的 MathFragment 生成整栏对象矩形，与选区端点文本矩形、块环境范围矩形合并后交给选区绘制；它不是块焦点高亮，只在范围完整覆盖该公式对象时出现。公式宿主内部的 MathTree 局部选区也属于文本选区层：Rust 从同代布局快照把同一结构序列中锚点到焦点之间的结构项盒投影为选区矩形，嵌套 Math/Environment 作为整体、Align 按所属行裁切，空范围不发布矩形；Qt 只消费该矩形列表，不重算公式内部选区。块与 inline 焦点是文稿画布内容的临时视觉投影。Paragraph 虽是 Block，但普通段落焦点不自动产生块背景；只有活动环境或公式适配器提供有效高亮范围时才绘制块底色。两个层级可同时显示，各取本层级的活动范围；Qt/QML 保留并绘制两组独立矩形与颜色。文本范围按视觉行切片，公式块使用 MathFragment，数学文本使用 TextFlow island 几何。InlineMath 和 InlineEnvironment 共用 inline 空范围槽位策略：MathBox 已有占位宽度时复用其几何；空格式环境或活动的空光标 PendingInlineStyle 则以布局提供的 caret/行框几何生成非零背景槽位，不能因范围长度为零或尚未产生环境节点就丢失活动反馈。槽位仅用于绘制，不创建文档字符或环境节点；PendingInlineStyle 关闭或焦点移走后不再投影。所有几何必须与页面缩放、分页裁剪、文字、选区和光标处于同一画布坐标与场景图顺序中。Rust 提供领域范围及布局几何，Qt 校验快照并合并同视觉层的来源，QSG 在字形之前绘制背景；这些层不遍历文档树、不重复塑形，也不改写文档或布局状态。
 
 ## 活动公式焦点
 

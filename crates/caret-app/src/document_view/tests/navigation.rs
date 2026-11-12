@@ -2186,7 +2186,7 @@ fn math_textflow_vertical_navigation_enters_next_align_row_tree_slot()
 }
 
 #[test]
-fn unsupported_tree_vertical_and_line_edge_navigation_preserves_formula_focus()
+fn unsupported_line_edge_navigation_preserves_formula_focus()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = DocumentViewRuntime::new_blank()?;
     runtime
@@ -2198,8 +2198,6 @@ fn unsupported_tree_vertical_and_line_edge_navigation_preserves_formula_focus()
     assert!(runtime.session.math_tree_input_context().is_some());
     let selection = runtime.session.selection().clone();
 
-    runtime.move_vertical_caret_json(-1, false)?;
-    assert!(runtime.session.math_tree_input_context().is_some());
     runtime.move_to_visual_line_edge_json(true, false)?;
     assert!(runtime.session.math_tree_input_context().is_some());
     assert_eq!(runtime.session.selection(), &selection);
@@ -4578,5 +4576,333 @@ fn current_structure_exposes_heading_kind_and_level() -> Result<(), Box<dyn std:
     assert_eq!(state[0]["kind"], "heading");
     assert_eq!(state[0]["level"], 2);
     assert!(state[0].get("label").is_none());
+    Ok(())
+}
+
+fn paragraph_with_inline_math(
+    before: &str,
+    math_tree: caret_doc::MathTree,
+    after: &str,
+) -> (Paragraph, NodeId) {
+    let mut paragraph = paragraph_with_text(before);
+    let math_id = NodeId::generate();
+    paragraph
+        .inlines
+        .push(ParagraphContent::Math(caret_doc::InlineMath {
+            id: math_id.clone(),
+            math_tree,
+            extra: BTreeMap::new(),
+        }));
+    paragraph.inlines.push(text_flow(Run {
+        text: after.to_owned(),
+        language: None,
+        props: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    }));
+    (paragraph, math_id)
+}
+
+fn document_with_middle_inline_math(
+    math_tree: caret_doc::MathTree,
+) -> (Document, NodeId, NodeId, NodeId) {
+    let above = paragraph_with_text("above");
+    let above_id = above.id.clone();
+    let (middle, _) = paragraph_with_inline_math("ab", math_tree, "cd");
+    let middle_id = middle.id.clone();
+    let below = paragraph_with_text("below");
+    let below_id = below.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(above),
+        Block::Paragraph(middle),
+        Block::Paragraph(below),
+    ];
+    (document, above_id, middle_id, below_id)
+}
+
+fn inline_fraction_tree() -> caret_doc::MathTree {
+    caret_doc::MathTree {
+        schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+        root: caret_doc::MathFlow {
+            id: NodeId::generate(),
+            content: vec![caret_doc::MathContent::Math(caret_doc::MathNode {
+                id: NodeId::generate(),
+                kind: caret_doc::MathNodeKind::Fraction,
+                text: None,
+                attributes: BTreeMap::from([("style".to_owned(), "frac".to_owned())]),
+                children: vec![symbol_flow("a"), symbol_flow("b")],
+                extra: BTreeMap::new(),
+            })],
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }
+}
+
+fn enter_inline_math_tree(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &NodeId,
+    offset: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    set_body_caret(runtime, paragraph_id.clone(), offset)?;
+    runtime.session.run(caret_engine::Command::EnterMath(
+        caret_engine::Direction::Forward,
+    ))?;
+    assert!(
+        runtime.session.math_tree_input_context().is_some(),
+        "inline formula should enter MathTree focus"
+    );
+    Ok(())
+}
+
+fn enter_inline_math_text_island(
+    runtime: &mut DocumentViewRuntime,
+) -> Result<(), Box<dyn std::error::Error>> {
+    runtime
+        .session
+        .run(caret_engine::Command::InsertInlineMath(
+            r"\frac{1}{\text{ab}}".to_owned(),
+        ))?;
+    runtime.session.run(caret_engine::Command::EnterMath(
+        caret_engine::Direction::Backward,
+    ))?;
+    for _ in 0..16 {
+        if runtime.session.math_text_input_context().is_some() {
+            return Ok(());
+        }
+        runtime.session.run(caret_engine::Command::MoveCaret(
+            caret_engine::Direction::Backward,
+        ))?;
+    }
+    Err("inline math text island focus was not reached".into())
+}
+
+#[test]
+fn inline_math_vertical_navigation_exits_and_moves_to_adjacent_visual_line()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (line_delta, target_is_above) in [(-1isize, true), (1, false)] {
+        let (document, above_id, middle_id, below_id) =
+            document_with_middle_inline_math(inline_math_tree());
+        let mut runtime = DocumentViewRuntime::new(document)?;
+        runtime.layout_snapshot_json()?;
+        enter_inline_math_tree(&mut runtime, &middle_id, 2)?;
+
+        runtime.move_vertical_caret_json(line_delta, false)?;
+
+        assert!(
+            runtime.session.math_edit().is_none(),
+            "Up/Down from InlineMath must leave the formula editor"
+        );
+        assert!(!runtime.session.has_structure_selection());
+        let expected = if target_is_above {
+            &above_id
+        } else {
+            &below_id
+        };
+        assert_eq!(
+            &runtime.session.selection().focus.paragraph_id,
+            expected,
+            "one key press should reach the adjacent visual line"
+        );
+        assert_ne!(
+            runtime.session.selection().focus.paragraph_id,
+            middle_id,
+            "focus should leave the formula paragraph"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn inline_math_shift_vertical_navigation_extends_document_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (line_delta, anchor_offset, anchor_affinity) in [
+        (-1isize, 2usize, caret_engine::Affinity::Downstream),
+        (1, 5, caret_engine::Affinity::Upstream),
+    ] {
+        let (document, _above_id, middle_id, _below_id) =
+            document_with_middle_inline_math(inline_math_tree());
+        let mut runtime = DocumentViewRuntime::new(document)?;
+        runtime.layout_snapshot_json()?;
+        enter_inline_math_tree(&mut runtime, &middle_id, 2)?;
+
+        runtime.move_vertical_caret_json(line_delta, true)?;
+
+        assert!(runtime.session.math_edit().is_none());
+        assert!(!runtime.session.has_structure_selection());
+        let selection = runtime.session.selection().clone();
+        assert_ne!(
+            selection.anchor, selection.focus,
+            "Shift+vertical must extend the document selection instead of being swallowed"
+        );
+        assert_eq!(selection.anchor.paragraph_id, middle_id);
+        assert_eq!(selection.anchor.offset, anchor_offset);
+        assert_eq!(selection.anchor.affinity, anchor_affinity);
+    }
+    Ok(())
+}
+
+#[test]
+fn inline_math_fraction_vertical_navigation_moves_inside_then_exits()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, _above_id, middle_id, below_id) =
+        document_with_middle_inline_math(inline_fraction_tree());
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    enter_inline_math_tree(&mut runtime, &middle_id, 2)?;
+
+    // 第一次 Down 仍使用公式内部垂直候选，进入分母。
+    runtime.move_vertical_caret_json(1, false)?;
+    let (target, position) = runtime
+        .session
+        .math_tree_input_context()
+        .ok_or_else(|| std::io::Error::other("fraction Down should stay in MathTree"))?;
+    assert!(matches!(
+        target,
+        caret_engine::MathEditTarget::Inline { .. }
+    ));
+    assert!(
+        matches!(
+            position.path.steps().last(),
+            Some(caret_engine::MathSequenceStep::Operand {
+                operand_index: 1,
+                ..
+            })
+        ),
+        "first Down should focus the denominator operand: {position:?}"
+    );
+
+    // 第二次 Down 到达公式底边，退出并继续到下一段落视觉行。
+    runtime.move_vertical_caret_json(1, false)?;
+    assert!(runtime.session.math_edit().is_none());
+    assert_eq!(
+        runtime.session.selection().focus.paragraph_id,
+        below_id,
+        "second Down should leave the fraction and reach the next paragraph"
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_math_text_island_vertical_edge_exits_at_the_document_edge()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.layout_snapshot_json()?;
+    enter_inline_math_text_island(&mut runtime)?;
+
+    // 文档只有这一行：分母文本岛底边没有更下方的候选，按键仍应退出公式编辑。
+    runtime.move_vertical_caret_json(1, false)?;
+
+    assert!(runtime.session.math_edit().is_none());
+    assert!(!runtime.session.has_structure_selection());
+    assert_eq!(runtime.session.selection().focus.offset, 3);
+    assert_eq!(
+        runtime.session.selection().focus.affinity,
+        caret_engine::Affinity::Upstream
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_math_vertical_navigation_at_document_edges_only_exits_the_formula()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (line_delta, expected_offset, expected_affinity) in [
+        (-1isize, 2usize, caret_engine::Affinity::Downstream),
+        (1, 5, caret_engine::Affinity::Upstream),
+    ] {
+        let (middle, _) = paragraph_with_inline_math("ab", inline_math_tree(), "cd");
+        let middle_id = middle.id.clone();
+        let mut document = Document::blank();
+        document.body = vec![Block::Paragraph(middle)];
+        let mut runtime = DocumentViewRuntime::new(document)?;
+        runtime.layout_snapshot_json()?;
+        enter_inline_math_tree(&mut runtime, &middle_id, 2)?;
+
+        runtime.move_vertical_caret_json(line_delta, false)?;
+
+        assert!(runtime.session.math_edit().is_none());
+        assert_eq!(runtime.session.selection().focus.offset, expected_offset);
+        assert_eq!(
+            runtime.session.selection().focus.affinity,
+            expected_affinity
+        );
+        assert!(!runtime.session.has_structure_selection());
+    }
+    Ok(())
+}
+
+#[test]
+fn command_query_vertical_navigation_does_not_leave_inline_math()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (document, _above_id, middle_id, _below_id) =
+        document_with_middle_inline_math(inline_math_tree());
+    let mut runtime = DocumentViewRuntime::new(document)?;
+    runtime.layout_snapshot_json()?;
+    enter_inline_math_tree(&mut runtime, &middle_id, 2)?;
+    runtime
+        .session
+        .run(caret_engine::Command::BeginCommandLine)?;
+    runtime
+        .session
+        .run(caret_engine::Command::TypeCommandLine("abc".to_owned()))?;
+
+    runtime.move_vertical_caret_json(-1, false)?;
+
+    assert!(
+        runtime.session.command_line().is_some(),
+        "command query keeps priority over formula exit"
+    );
+    assert!(runtime.session.math_edit().is_some());
+    Ok(())
+}
+
+#[test]
+fn ime_composition_vertical_navigation_does_not_leave_inline_math()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = DocumentViewRuntime::new_blank()?;
+    runtime.layout_snapshot_json()?;
+    enter_inline_math_text_island(&mut runtime)?;
+    runtime
+        .session
+        .run(caret_engine::Command::UpdateComposition {
+            id: 902,
+            preedit: "中".to_owned(),
+        })?;
+    let document_before = runtime.session.document().clone();
+
+    runtime.move_vertical_caret_json(-1, false)?;
+
+    assert!(runtime.session.math_edit().is_some());
+    assert_eq!(runtime.session.document(), &document_before);
+    assert!(runtime.session.composition_preview_with_range(0).is_ok());
+    Ok(())
+}
+
+#[test]
+fn empty_inline_math_vertical_navigation_exits_the_formula()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (line_delta, expected_offset, expected_affinity) in [
+        (-1isize, 0usize, caret_engine::Affinity::Downstream),
+        (1, 3, caret_engine::Affinity::Upstream),
+    ] {
+        let mut runtime = DocumentViewRuntime::new_blank()?;
+        runtime
+            .session
+            .run(caret_engine::Command::InsertInlineMath(String::new()))?;
+        runtime.layout_snapshot_json()?;
+        runtime.session.run(caret_engine::Command::EnterMath(
+            caret_engine::Direction::Backward,
+        ))?;
+        assert!(runtime.session.math_tree_input_context().is_some());
+
+        runtime.move_vertical_caret_json(line_delta, false)?;
+
+        assert!(runtime.session.math_edit().is_none());
+        assert_eq!(runtime.session.selection().focus.offset, expected_offset);
+        assert_eq!(
+            runtime.session.selection().focus.affinity,
+            expected_affinity
+        );
+    }
     Ok(())
 }

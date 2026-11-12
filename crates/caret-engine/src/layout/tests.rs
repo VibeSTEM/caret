@@ -2,7 +2,8 @@
 
 use crate::{
     Affinity, Command, EditError, MathEditTarget, MathPositionAffinity, MathPositionHost,
-    MathTextPosition, Pos, Selection, Session, StoryId,
+    MathSequencePath, MathSequenceStep, MathTextPosition, MathTreePosition, Pos, Selection,
+    Session, StoryId,
 };
 use caret_doc::{
     Align, Block, BlockEnvironment, BlockEnvironmentKind, Document, Equation, ExplicitBreak,
@@ -1551,6 +1552,296 @@ fn math_tree_caret_uses_inline_environment_children_geometry() {
         .unwrap_or_else(|| panic!("outer boundary after environment should have caret geometry"));
     assert_eq!(outer_boundary.0, text_end.0);
     assert_eq!(caret.1, 1200);
+}
+
+#[test]
+fn math_tree_selection_geometry_matches_equation_symbol_carets() {
+    let equation_id = NodeId::generate();
+    let caret_math::ParsedMath::Tree(math_tree) =
+        caret_math::parse("x+y", caret_math::MathInputKind::Equation)
+            .unwrap_or_else(|error| panic!("equation source should parse: {error}"))
+    else {
+        panic!("equation source should produce a math tree")
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree,
+        extra: BTreeMap::new(),
+    }));
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let host = MathPositionHost::Equation {
+        owner_id: equation_id.clone(),
+    };
+    let anchor = MathTreePosition {
+        host,
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let focus = MathTreePosition {
+        offset: 1,
+        ..anchor.clone()
+    };
+
+    let rectangles = snapshot
+        .math_tree_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("first equation symbol should have selection geometry"));
+    assert_eq!(rectangles.len(), 1);
+    let (start_caret, _) = snapshot
+        .math_tree_caret(&target, &anchor)
+        .unwrap_or_else(|| panic!("first equation symbol start should have caret geometry"));
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should have a page projection"));
+    let symbol = snapshot.math_blocks[&equation_id]
+        .nodes
+        .iter()
+        .find(|node| node.path == [caret_doc::MathPathStep::Content(0)])
+        .unwrap_or_else(|| panic!("first symbol should have a layout box"));
+    assert!((rectangles[0].x0_pt - (projection.object_x_pt + symbol.x)).abs() < 1e-9);
+    assert!(
+        (rectangles[0].x1_pt - (projection.object_x_pt + symbol.x + symbol.width)).abs() < 1e-9
+    );
+    assert!((rectangles[0].x0_pt - start_caret.x_pt).abs() < 1e-9);
+    assert!((rectangles[0].y0_pt - start_caret.y0_pt).abs() < 1e-9);
+    assert!((rectangles[0].y1_pt - start_caret.y1_pt).abs() < 1e-9);
+    assert_eq!(rectangles[0].page_index, start_caret.page_index);
+
+    // 反向端点得到同一矩形；空范围不是过期投影。
+    assert_eq!(
+        snapshot.math_tree_selection_geometry(&target, &focus, &anchor),
+        Some(rectangles)
+    );
+    assert_eq!(
+        snapshot.math_tree_selection_geometry(&target, &anchor, &anchor),
+        Some(Vec::new())
+    );
+    // 跨序列路径或越界偏移不能由本查询伪造范围。
+    let other_path = MathTreePosition {
+        path: MathSequencePath::new(vec![MathSequenceStep::Operand {
+            content_index: 0,
+            operand_index: 0,
+        }]),
+        ..anchor.clone()
+    };
+    assert_eq!(
+        snapshot.math_tree_selection_geometry(&target, &anchor, &other_path),
+        None
+    );
+    let out_of_bounds = MathTreePosition {
+        offset: 99,
+        ..anchor.clone()
+    };
+    assert_eq!(
+        snapshot.math_tree_selection_geometry(&target, &anchor, &out_of_bounds),
+        None
+    );
+}
+
+#[test]
+fn math_tree_selection_geometry_matches_inline_math_symbol_carets() {
+    let paragraph_id = NodeId::generate();
+    let mut paragraph = Paragraph::empty(paragraph_id.clone());
+    paragraph.inlines = vec![inline_math("x+y")];
+    let math_id = paragraph
+        .inlines
+        .iter()
+        .find_map(|content| match content {
+            ParagraphContent::Math(math) => Some(math.id.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("inline math should be present"));
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph)];
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Inline {
+        paragraph_id,
+        math_id: math_id.clone(),
+    };
+    let anchor = MathTreePosition {
+        host: MathPositionHost::InlineMath {
+            owner_id: math_id.clone(),
+        },
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let focus = MathTreePosition {
+        offset: 1,
+        ..anchor.clone()
+    };
+    let rectangles = snapshot
+        .math_tree_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("inline math symbol should have selection geometry"));
+    assert_eq!(rectangles.len(), 1);
+    let (start_caret, _) = snapshot
+        .math_tree_caret(&target, &anchor)
+        .unwrap_or_else(|| panic!("inline math start should have caret geometry"));
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == math_id)
+        .unwrap_or_else(|| panic!("inline math should have a page projection"));
+    let symbol = snapshot.paragraphs[0]
+        .inline_math_layouts
+        .first()
+        .and_then(|layout| {
+            layout
+                .nodes
+                .iter()
+                .find(|node| node.path == [caret_doc::MathPathStep::Content(0)])
+        })
+        .unwrap_or_else(|| panic!("first inline symbol should have a layout box"));
+    assert!((rectangles[0].x0_pt - (projection.object_x_pt + symbol.x)).abs() < 1e-9);
+    assert!(
+        (rectangles[0].x1_pt - (projection.object_x_pt + symbol.x + symbol.width)).abs() < 1e-9
+    );
+    assert!((rectangles[0].x0_pt - start_caret.x_pt).abs() < 1e-9);
+    assert!((rectangles[0].y0_pt - start_caret.y0_pt).abs() < 1e-9);
+    assert!((rectangles[0].y1_pt - start_caret.y1_pt).abs() < 1e-9);
+}
+
+#[test]
+fn math_tree_selection_geometry_clips_align_selection_to_its_row() {
+    let caret_math::ParsedMath::Align(align) = caret_math::parse(
+        r"\begin{aligned}a+b\\c+d\end{aligned}",
+        caret_math::MathInputKind::Align,
+    )
+    .unwrap_or_else(|error| panic!("valid Align source should parse: {error}")) else {
+        panic!("Align source should produce an Align model")
+    };
+    let align_id = align.id.clone();
+    let first_row_id = align.rows[0].id.clone();
+    let first_cell_id = align.rows[0].cells[0].root.id.clone();
+    let mut document = Document::blank();
+    // Exactly 行距产生固定的行墨迹裁切区，用于断言选区不越出所属 Align 行。
+    document.global_settings.paragraph_layout.line_spacing =
+        caret_doc::ParagraphLineSpacing::Exactly {
+            centipoints: 100,
+            extra: Default::default(),
+        };
+    document.body.push(Block::Align(align));
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Block {
+        block_id: align_id.clone(),
+        align: true,
+    };
+    let anchor = MathTreePosition {
+        host: MathPositionHost::AlignCell {
+            row_id: first_row_id.clone(),
+            cell_id: first_cell_id,
+        },
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let focus = MathTreePosition {
+        offset: 1,
+        ..anchor.clone()
+    };
+    let rectangles = snapshot
+        .math_tree_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("align cell symbol should have selection geometry"));
+    assert_eq!(rectangles.len(), 1);
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == align_id)
+        .unwrap_or_else(|| panic!("align should have a page projection"));
+    let row_clip = projection
+        .row_clips
+        .iter()
+        .find(|clip| clip.row_id == first_row_id)
+        .unwrap_or_else(|| panic!("first align row should have a clip range"));
+    assert!(rectangles[0].y0_pt >= row_clip.y0_pt - 1e-9);
+    assert!(rectangles[0].y1_pt <= row_clip.y1_pt + 1e-9);
+    let (start_caret, _) = snapshot
+        .math_tree_caret(&target, &anchor)
+        .unwrap_or_else(|| panic!("align row start should have caret geometry"));
+    assert!((rectangles[0].x0_pt - start_caret.x_pt).abs() < 1e-9);
+}
+
+#[test]
+fn math_tree_selection_geometry_keeps_nested_environment_atomic() {
+    let equation_id = NodeId::generate();
+    let environment_id = NodeId::generate();
+    let symbol = |text: &str| {
+        caret_doc::MathContent::Math(caret_doc::MathNode {
+            id: NodeId::generate(),
+            kind: caret_doc::MathNodeKind::Symbol,
+            text: Some(text.to_owned()),
+            attributes: BTreeMap::new(),
+            children: Vec::new(),
+            extra: BTreeMap::new(),
+        })
+    };
+    let mut document = Document::blank();
+    document.body.push(Block::Equation(Equation {
+        id: equation_id.clone(),
+        math_tree: caret_doc::MathTree {
+            schema_version: caret_doc::MATH_TREE_SCHEMA_VERSION,
+            root: caret_doc::MathFlow {
+                id: NodeId::generate(),
+                content: vec![
+                    caret_doc::MathContent::Environment(caret_doc::InlineEnvironment {
+                        id: environment_id,
+                        kind: caret_doc::InlineEnvironmentKind::Bold,
+                        definition_id: None,
+                        props: BTreeMap::new(),
+                        children: vec![symbol("a"), symbol("b")],
+                        extra: BTreeMap::new(),
+                    }),
+                    symbol("c"),
+                ],
+                extra: BTreeMap::new(),
+            },
+            extra: BTreeMap::new(),
+        },
+        extra: BTreeMap::new(),
+    }));
+    let snapshot = layout_document(&document);
+    let target = MathEditTarget::Block {
+        block_id: equation_id.clone(),
+        align: false,
+    };
+    let anchor = MathTreePosition {
+        host: MathPositionHost::Equation {
+            owner_id: equation_id.clone(),
+        },
+        path: MathSequencePath::root(),
+        offset: 0,
+        affinity: MathPositionAffinity::Downstream,
+    };
+    let focus = MathTreePosition {
+        offset: 1,
+        ..anchor.clone()
+    };
+    let rectangles = snapshot
+        .math_tree_selection_geometry(&target, &anchor, &focus)
+        .unwrap_or_else(|| panic!("environment child should have selection geometry"));
+    assert_eq!(rectangles.len(), 1, "嵌套环境必须作为一个原子矩形");
+    let projection = snapshot
+        .math_projections
+        .iter()
+        .find(|projection| projection.math_id == equation_id)
+        .unwrap_or_else(|| panic!("equation should have a page projection"));
+    let environment = snapshot.math_blocks[&equation_id]
+        .nodes
+        .iter()
+        .find(|node| node.path == [caret_doc::MathPathStep::Content(0)])
+        .unwrap_or_else(|| panic!("environment should have a layout box"));
+    assert!((rectangles[0].x0_pt - (projection.object_x_pt + environment.x)).abs() < 1e-9);
+    assert!(
+        (rectangles[0].x1_pt - (projection.object_x_pt + environment.x + environment.width)).abs()
+            < 1e-9
+    );
 }
 
 #[test]

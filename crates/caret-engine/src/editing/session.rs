@@ -248,6 +248,24 @@ impl Session {
         Some((edit.target.clone(), focus))
     }
 
+    /// 返回当前数学结构序列选区的锚点和焦点；源码/TextFlow 分支或过期焦点返回 `None`。
+    ///
+    /// Tree 分支的扩选保持焦点与锚点在同一序列路径，`MathEdit.cursor` 只记录焦点
+    /// 偏移；局部选区几何需要同时读取两端，不能从只含焦点的输入上下文还原范围。
+    pub fn math_tree_selection_context(
+        &self,
+    ) -> Option<(MathEditTarget, MathTreePosition, MathTreePosition)> {
+        self.ensure_math_edit_revision_current().ok()?;
+        let edit = self.math_edit.as_ref()?;
+        let MathEditBranch::Tree { path, anchor } = &edit.branch else {
+            return None;
+        };
+        let mut focus = anchor.clone();
+        focus.path = path.clone();
+        focus.offset = edit.cursor;
+        Some((edit.target.clone(), anchor.clone(), focus))
+    }
+
     fn current_math_edit_revision(&self) -> math_edit::MathEditRevision {
         let projection_id = self
             .math_edit

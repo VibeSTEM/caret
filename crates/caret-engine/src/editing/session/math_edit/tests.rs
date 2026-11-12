@@ -14527,6 +14527,61 @@ fn math_tree_shift_left_extension_steps_over_nested_structures_atomically() -> R
 }
 
 #[test]
+fn math_tree_selection_context_exposes_anchor_and_focus_only_while_current() -> Result<(), EditError>
+{
+    let (equation, _) = equation_with_inline_math_tree(r"a\frac{b}{c}d");
+    let mut document = Document::blank();
+    document.body = vec![Block::Paragraph(paragraph_with_run_text("p")), equation];
+    let mut session = Session::new(document)?;
+    session.run(Command::MoveCaret(Direction::Forward))?;
+    session.run(Command::EnterMath(Direction::Forward))?;
+
+    // 坍缩状态：锚点与焦点重合，上下文仍暴露同一序列两端。
+    let (target, anchor, focus) = session
+        .math_tree_selection_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(anchor.offset, focus.offset);
+    assert_eq!(anchor.path, focus.path);
+
+    // 扩选后锚点固定在起点、焦点随光标前进；旧输入上下文只暴露焦点。
+    shift_right(&mut session)?;
+    shift_right(&mut session)?;
+    let (extended_target, extended_anchor, extended_focus) = session
+        .math_tree_selection_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(extended_target, target);
+    assert_eq!(extended_anchor.offset, 0);
+    assert_eq!(extended_focus.offset, 2);
+    assert_eq!(extended_anchor.path, extended_focus.path);
+    assert_eq!(extended_anchor.host, extended_focus.host);
+    let (_, input_focus) = session
+        .math_tree_input_context()
+        .ok_or(EditError::InvalidPosition)?;
+    assert_eq!(input_focus, extended_focus);
+
+    // 过期 revision 返回 None，但不修改已提交的公式编辑状态。
+    let revision = session.current_math_edit_revision();
+    let edit = session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?;
+    edit.revision.document_generation += 1;
+    assert!(session.math_tree_selection_context().is_none());
+    session
+        .math_edit
+        .as_mut()
+        .ok_or(EditError::InvalidPosition)?
+        .revision = revision;
+
+    // TextFlow 分支没有结构序列范围。
+    let mut text_session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
+    insert_equation_text(&mut text_session, r"\text{}")?;
+    move_into_math_text(&mut text_session)?;
+    assert!(text_session.math_tree_selection_context().is_none());
+    Ok(())
+}
+
+#[test]
 fn math_tree_shift_extension_from_inside_nested_sequence_converts_the_host_range()
 -> Result<(), EditError> {
     let (equation, equation_id) = equation_with_inline_math_tree(r"a\frac{b}{c}d");

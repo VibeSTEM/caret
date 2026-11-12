@@ -6,7 +6,7 @@
 use super::DocumentViewRuntime;
 use caret_engine::{
     Affinity, Command, Direction, DocumentLayoutSnapshot, EditorKey, Effect, HitAffinity,
-    NavigationCandidate, Pos, VisualAffinity,
+    MathEditTarget, NavigationCandidate, Pos, VisualAffinity,
 };
 
 impl DocumentViewRuntime {
@@ -249,15 +249,35 @@ impl DocumentViewRuntime {
                 "navigation.math_block_boundary",
             );
         }
-        if self.session.math_text_input_context().is_some()
-            && let Some(result) = move_math_vertical(self, line_delta, extend)
-        {
-            return result;
-        }
-        if self.session.math_tree_input_context().is_some()
-            && let Some(result) = move_math_tree_vertical(self, line_delta, extend)
-        {
-            return result;
+        // InlineMath 在公式内没有垂直候选时先退出 MathEdit，同一次按键还要继续
+        // 文档纵向导航；记录进入数学分支前的 Inline 目标，退出后按文档路径重放。
+        let inline_math_edit = self
+            .session
+            .math_edit()
+            .is_some_and(|edit| matches!(edit.target, MathEditTarget::Inline { .. }));
+        let math_result = if self.session.math_text_input_context().is_some() {
+            move_math_vertical(self, line_delta, extend)
+        } else if self.session.math_tree_input_context().is_some() {
+            move_math_tree_vertical(self, line_delta, extend)
+        } else if inline_math_edit {
+            // InlineMath 的 Source 分支没有本地垂直选区：直接按公式边界退出，
+            // 随后由本函数在同一次按键内继续文档纵向导航。
+            Some(dispatch_navigation_key(
+                self,
+                vertical_navigation_key(line_delta, None, extend),
+                "navigation.inline_math_source_exit",
+            ))
+        } else {
+            None
+        };
+        if let Some(result) = math_result {
+            let result = result?;
+            if inline_math_edit && self.session.math_edit().is_none() {
+                // 公式已在本次按键中退出到 U+FFFC 前/后侧，继续同一方向的文档
+                // 纵向导航；此时 math_edit 为 None，递归不会再次进入数学分支。
+                return self.move_vertical_caret_json(line_delta, extend);
+            }
+            return Ok(result);
         }
         let at_vertical_edge = {
             let focus = self.session.selection().focus.clone();
@@ -661,6 +681,9 @@ fn move_math_vertical(
     let moved = match moved {
         Ok(moved) => moved,
         Err(error) if error == "navigation.math_text_edge" => {
+            if let Some(preferred_x) = preferred_x {
+                runtime.preferred_visual_x_pt = Some(preferred_x);
+            }
             return Some(dispatch_navigation_key(
                 runtime,
                 vertical_navigation_key(line_delta, None, extend),
@@ -729,6 +752,9 @@ fn move_math_vertical(
         }
         caret_engine::MathTextVerticalTarget::DifferentTextIsland(_)
         | caret_engine::MathTextVerticalTarget::DifferentMathStructure(_) => {
+            if let Some(preferred_x) = preferred_x {
+                runtime.preferred_visual_x_pt = Some(preferred_x);
+            }
             return Some(dispatch_navigation_key(
                 runtime,
                 vertical_navigation_key(line_delta, None, extend),

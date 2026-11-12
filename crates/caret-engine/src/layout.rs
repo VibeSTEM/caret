@@ -1523,6 +1523,36 @@ impl DocumentLayoutSnapshot {
             .map(|(caret, _)| caret)
     }
 
+    /// 把公式布局节点解析为所在结构序列：路径、序列长度和子项是否为环境子节点。
+    ///
+    /// MathFlow 聚合成节点（非 TextFlow）对应其内容序列，透明容器或 InlineEnvironment
+    /// 对应环境子节点序列；其他布局盒不提供序列位置。
+    fn math_layout_sequence(
+        &self,
+        projection: &MathPageProjection,
+        node: &caret_math::layout::MathNodeBox,
+    ) -> Option<(MathSequencePath, usize, bool)> {
+        if node.is_flow && !node.is_text_flow {
+            let root = self.math_scope_root(projection, &node.scope_id)?;
+            let flow = math_flow_at_layout_path(root, &node.path)?;
+            Some((
+                math_sequence_path_for_flow(&node.path)?,
+                flow.content.len(),
+                false,
+            ))
+        } else if node.is_container {
+            let root = self.math_scope_root(projection, &node.scope_id)?;
+            let environment = math_environment_at_layout_path(root, &node.path)?;
+            Some((
+                math_sequence_path_for_environment_children(&node.path)?,
+                environment.children.len(),
+                true,
+            ))
+        } else {
+            None
+        }
+    }
+
     /// 根据树原生数学插入位置返回同一数学盒中的光标几何和有效字号。
     pub fn math_tree_caret(
         &self,
@@ -1540,32 +1570,9 @@ impl DocumentLayoutSnapshot {
                 continue;
             }
             for node in &layout.nodes {
-                let (sequence_path, sequence_len, environment_children) = if node.is_flow
-                    && !node.is_text_flow
-                {
-                    let Some(root) = self.math_scope_root(projection, &node.scope_id) else {
-                        continue;
-                    };
-                    let Some(flow) = math_flow_at_layout_path(root, &node.path) else {
-                        continue;
-                    };
-                    let Some(path) = math_sequence_path_for_flow(&node.path) else {
-                        continue;
-                    };
-                    (path, flow.content.len(), false)
-                } else if node.is_container {
-                    let Some(root) = self.math_scope_root(projection, &node.scope_id) else {
-                        continue;
-                    };
-                    let Some(environment) = math_environment_at_layout_path(root, &node.path)
-                    else {
-                        continue;
-                    };
-                    let Some(path) = math_sequence_path_for_environment_children(&node.path) else {
-                        continue;
-                    };
-                    (path, environment.children.len(), true)
-                } else {
+                let Some((sequence_path, sequence_len, environment_children)) =
+                    self.math_layout_sequence(projection, node)
+                else {
                     continue;
                 };
                 if !node.x.is_finite()
@@ -1739,6 +1746,100 @@ impl DocumentLayoutSnapshot {
                     .and_then(|size| visible_font_size_centipoints(size as f32))
                     .unwrap_or(self.default_font_size_centipoints);
                 return Some((caret, font_size_centipoints));
+            }
+        }
+        None
+    }
+
+    /// 返回公式树内部同一序列中锚点到焦点的页面选区矩形。
+    ///
+    /// 只接受同一宿主、同一序列路径的端点：扩选不进入嵌套结构，焦点离开锚点所在
+    /// 序列时由调用方转换为整个公式宿主的文档范围，因此跨路径端点不属于本查询。
+    /// 每个被选结构项独立投影：嵌套 Math/Environment 作为原子取整盒；纵向范围使用
+    /// 同位置 caret 的正文行框，Align 按所属行裁切。空范围返回空矩形而不是过期投影。
+    pub fn math_tree_selection_geometry(
+        &self,
+        target: &MathEditTarget,
+        anchor: &MathTreePosition,
+        focus: &MathTreePosition,
+    ) -> Option<Vec<PageSelectionRect>> {
+        if anchor.host != focus.host || anchor.path != focus.path {
+            return None;
+        }
+        let (start, end) = if anchor.offset <= focus.offset {
+            (anchor.offset, focus.offset)
+        } else {
+            (focus.offset, anchor.offset)
+        };
+        if start == end {
+            return Some(Vec::new());
+        }
+        for projection in self.math_projections_for_target(target) {
+            let Some((layout, _)) = self.math_projection_items(projection) else {
+                continue;
+            };
+            let Some(host) = self.math_host(&projection.math_id) else {
+                continue;
+            };
+            if &host.target != target {
+                continue;
+            }
+            for node in &layout.nodes {
+                let Some((sequence_path, sequence_len, environment_children)) =
+                    self.math_layout_sequence(projection, node)
+                else {
+                    continue;
+                };
+                let Some(scope_host) = host.for_scope(&node.scope_id) else {
+                    continue;
+                };
+                if scope_host.host != anchor.host || sequence_path != anchor.path {
+                    continue;
+                }
+                if end > sequence_len {
+                    continue;
+                }
+                let row_id = math_row_id_for_host(&anchor.host);
+                let mut rectangles = Vec::with_capacity(end - start);
+                for index in start..end {
+                    let mut child_path = node.path.clone();
+                    child_path.push(if environment_children {
+                        MathPathStep::EnvironmentChild(index)
+                    } else {
+                        MathPathStep::Content(index)
+                    });
+                    let Some(child) = layout
+                        .nodes
+                        .iter()
+                        .find(|child| child.scope_id == node.scope_id && child.path == child_path)
+                    else {
+                        continue;
+                    };
+                    if !child.x.is_finite()
+                        || !child.width.is_finite()
+                        || !child.baseline.is_finite()
+                        || child.width <= 0.0
+                    {
+                        continue;
+                    }
+                    let x0_pt = projection.object_x_pt + child.x;
+                    let x1_pt = x0_pt + child.width;
+                    let caret_band = projection
+                        .caret_at_math_baseline(x0_pt, projection.baseline_y_pt + child.baseline);
+                    let Some((y0_pt, y1_pt)) =
+                        projection.clip_range_for_row(caret_band.y0_pt, caret_band.y1_pt, row_id)
+                    else {
+                        continue;
+                    };
+                    rectangles.push(PageSelectionRect {
+                        page_index: projection.page_index,
+                        x0_pt,
+                        y0_pt,
+                        x1_pt,
+                        y1_pt,
+                    });
+                }
+                return Some(rectangles);
             }
         }
         None

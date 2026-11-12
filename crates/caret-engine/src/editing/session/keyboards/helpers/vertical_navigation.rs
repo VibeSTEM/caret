@@ -118,16 +118,20 @@ impl Session {
         }
     }
 
+    /// 公式内部没有垂直候选时按宿主边界退出。
+    ///
+    /// 块级公式保留外侧停靠语义，但扩选仍需要布局候选，因此 Block + Shift 保持
+    /// no-op。InlineMath 没有块外侧停靠：垂直边缘先按局部边界退到 U+FFFC 前/后侧；
+    /// 扩选也先退出，由 app 在同一次按键内继续文档纵向导航，避免静默吞键。
     fn exit_vertical_math_block(
         &mut self,
         direction: Direction,
         extend: bool,
     ) -> Result<Effect, EditError> {
-        if extend
-            || !self
-                .math_edit()
-                .is_some_and(|edit| matches!(&edit.target, crate::MathEditTarget::Block { .. }))
-        {
+        let Some(edit) = self.math_edit() else {
+            return Ok(Effect::default());
+        };
+        if extend && matches!(&edit.target, crate::MathEditTarget::Block { .. }) {
             return Ok(Effect::default());
         }
         self.exit_math_edit_for_navigation(direction)

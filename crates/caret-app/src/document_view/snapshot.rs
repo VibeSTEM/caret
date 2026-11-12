@@ -9,7 +9,8 @@ use super::{
 use caret_doc::NodeId;
 use caret_engine::{
     Affinity, CompositionRange, DocumentLayoutDeltaView, MathEditTarget, MathTextInputContext,
-    PageCaretGeometry, Pos, Selection, StructureClass, StructureKind, StructurePosition,
+    MathTreePosition, PageCaretGeometry, Pos, Selection, StructureClass, StructureKind,
+    StructurePosition,
 };
 use serde_json::{Value, json};
 
@@ -214,6 +215,55 @@ fn math_text_selection_json(
                     "y0Pt": rectangle.y0_pt,
                     "x1Pt": rectangle.x1_pt,
                     "y1Pt": rectangle.y1_pt,
+                })
+            })
+            .collect(),
+    ))
+}
+
+/// 将公式树内部同一序列的锚点/焦点范围投影为页面矩形，并按页面边界裁切。
+///
+/// 几何缺失按过期投影拒绝发布；越出纸张的公式排版先裁切再交给 Qt，避免整份
+/// 交互快照因单条越界矩形被拒绝。
+fn math_tree_selection_json(
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+    target: &MathEditTarget,
+    anchor: &MathTreePosition,
+    focus: &MathTreePosition,
+) -> Result<Value, String> {
+    let rectangles = snapshot
+        .math_tree_selection_geometry(target, anchor, focus)
+        .ok_or_else(|| "layout.invalid_math_tree_selection_geometry".to_owned())?;
+    let rectangles = rectangles
+        .into_iter()
+        .filter_map(|rectangle| {
+            let page = snapshot.pages.get(rectangle.page_index)?;
+            let (mut x0, mut y0, mut x1, mut y1) = (
+                rectangle.x0_pt,
+                rectangle.y0_pt,
+                rectangle.x1_pt,
+                rectangle.y1_pt,
+            );
+            if ![x0, y0, x1, y1].into_iter().all(f64::is_finite) {
+                return None;
+            }
+            x0 = x0.clamp(0.0, page.width_pt);
+            y0 = y0.clamp(0.0, page.height_pt);
+            x1 = x1.clamp(0.0, page.width_pt);
+            y1 = y1.clamp(0.0, page.height_pt);
+            (x1 > x0 && y1 > y0).then_some((rectangle.page_index, x0, y0, x1, y1))
+        })
+        .collect::<Vec<_>>();
+    Ok(Value::Array(
+        rectangles
+            .into_iter()
+            .map(|(page_index, x0_pt, y0_pt, x1_pt, y1_pt)| {
+                json!({
+                    "pageIndex": page_index,
+                    "x0Pt": x0_pt,
+                    "y0Pt": y0_pt,
+                    "x1Pt": x1_pt,
+                    "y1Pt": y1_pt,
                 })
             })
             .collect(),
@@ -621,6 +671,7 @@ impl DocumentViewRuntime {
         }
         let math_context = self.session.math_text_input_context();
         let math_tree_context = self.session.math_tree_input_context();
+        let math_tree_selection_context = self.session.math_tree_selection_context();
         let math_geometry_context = self
             .composition_preview_session
             .as_ref()
@@ -635,8 +686,8 @@ impl DocumentViewRuntime {
             Value::Array(Vec::new())
         } else if let Some(context) = &math_context {
             math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
-        } else if math_tree_context.is_some() {
-            Value::Array(Vec::new())
+        } else if let Some((target, anchor, focus)) = &math_tree_selection_context {
+            math_tree_selection_json(snapshot, target, anchor, focus)?
         } else {
             selection_rectangles_json(
                 &selection,
@@ -791,6 +842,7 @@ impl DocumentViewRuntime {
         let command_input_context = self.session.command_line();
         let math_context = self.session.math_text_input_context();
         let math_tree_context = self.session.math_tree_input_context();
+        let math_tree_selection_context = self.session.math_tree_selection_context();
         let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
             surrounding_text: context.surrounding_text.clone(),
             target: context.target.clone(),
@@ -894,8 +946,8 @@ impl DocumentViewRuntime {
         )?;
         let rectangles = if let Some(context) = &math_geometry_context {
             math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
-        } else if math_tree_context.is_some() {
-            Value::Array(Vec::new())
+        } else if let Some((target, anchor, focus)) = &math_tree_selection_context {
+            math_tree_selection_json(snapshot, target, anchor, focus)?
         } else {
             body_rectangles
         };
