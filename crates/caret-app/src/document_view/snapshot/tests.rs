@@ -1145,6 +1145,110 @@ fn single_selection_rect(value: &Value) -> Result<(f64, f64), String> {
     Ok((x0, x1))
 }
 
+/// 读取全部选区矩形 `(x0, y0, x1, y1)`，供平台无关的不重叠/不膨胀断言使用。
+fn selection_rectangles(value: &Value) -> Result<Vec<(f64, f64, f64, f64)>, String> {
+    let rectangles = value["selectionRects"]
+        .as_array()
+        .ok_or_else(|| "selectionRects must be an array".to_owned())?;
+    rectangles
+        .iter()
+        .map(|rectangle| {
+            Ok((
+                rectangle["x0Pt"]
+                    .as_f64()
+                    .ok_or_else(|| "selectionRects x0Pt must be a number".to_owned())?,
+                rectangle["y0Pt"]
+                    .as_f64()
+                    .ok_or_else(|| "selectionRects y0Pt must be a number".to_owned())?,
+                rectangle["x1Pt"]
+                    .as_f64()
+                    .ok_or_else(|| "selectionRects x1Pt must be a number".to_owned())?,
+                rectangle["y1Pt"]
+                    .as_f64()
+                    .ok_or_else(|| "selectionRects y1Pt must be a number".to_owned())?,
+            ))
+        })
+        .collect()
+}
+
+fn assert_selection_rectangles_are_disjoint(rectangles: &[(f64, f64, f64, f64)], label: &str) {
+    for (index, left) in rectangles.iter().enumerate() {
+        assert!(
+            left.2 > left.0,
+            "{label}: selection rect {index} must have positive width"
+        );
+        for right in rectangles.iter().skip(index + 1) {
+            let horizontal_overlap = left.2.min(right.2) - left.0.max(right.0);
+            let vertical_overlap = left.3.min(right.3) - left.1.max(right.1);
+            assert!(
+                horizontal_overlap <= 0.01 || vertical_overlap <= 0.01,
+                "{label}: selection rectangles must not overlap: {left:?} vs {right:?}"
+            );
+        }
+    }
+}
+
+/// 断言对象盒区间在选区矩形中完整出现且只出现一次；未选中时完全不出现。
+fn assert_object_interval_selected_once(
+    rectangles: &[(f64, f64, f64, f64)],
+    interval: (f64, f64),
+    selected: bool,
+    label: &str,
+) {
+    let (object_x0, object_x1) = interval;
+    let mut overlap_total = 0.0;
+    let mut containing = 0;
+    for rectangle in rectangles {
+        let overlap = rectangle.2.min(object_x1) - rectangle.0.max(object_x0);
+        if overlap <= 0.01 {
+            continue;
+        }
+        assert!(
+            rectangle.0 <= object_x0 + 0.01 && rectangle.2 >= object_x1 - 0.01,
+            "{label}: a rectangle may only cover the object interval completely: {rectangle:?}"
+        );
+        overlap_total += overlap;
+        containing += 1;
+    }
+    let expected = if selected { object_x1 - object_x0 } else { 0.0 };
+    assert!(
+        (overlap_total - expected).abs() < 0.01,
+        "{label}: object interval overlap {overlap_total} must equal {expected}"
+    );
+    assert!(
+        containing <= 1,
+        "{label}: the object interval must not be drawn twice"
+    );
+}
+
+/// 用对象外前/外后 caret 几何取 InlineMath 的版面盒区间。
+fn inline_math_object_span(
+    runtime: &mut DocumentViewRuntime,
+    paragraph_id: &caret_doc::NodeId,
+    start: usize,
+) -> Result<(f64, f64), String> {
+    let snapshot = runtime.current_snapshot()?;
+    let start_position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: start,
+        affinity: caret_engine::Affinity::Downstream,
+    };
+    let end_position = caret_engine::Pos {
+        story: caret_engine::StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset: start + '\u{fffc}'.len_utf8(),
+        affinity: caret_engine::Affinity::Upstream,
+    };
+    let left = snapshot
+        .caret_geometry(&start_position, caret_engine::VisualAffinity::Downstream)
+        .ok_or_else(|| "InlineMath left caret is missing".to_owned())?;
+    let right = snapshot
+        .caret_geometry(&end_position, caret_engine::VisualAffinity::Upstream)
+        .ok_or_else(|| "InlineMath right caret is missing".to_owned())?;
+    Ok((left.x_pt, right.x_pt))
+}
+
 #[test]
 fn inline_math_shift_boundary_caret_stays_on_the_object_outside_edge() -> Result<(), String> {
     // 覆盖用户报告的“公式位于段落末尾”以及前后有文本、位于段首/段尾的场景。
@@ -1250,9 +1354,27 @@ fn inline_math_shift_right_after_conversion_continues_plain_text_extension() -> 
             .map_err(|error| format!("shift boundary conversion failed: {error}"))?;
     }
     let converted = interaction_json(&mut runtime)?;
-    let (converted_x0, converted_x1) = single_selection_rect(&converted)?;
+    let converted_rectangles = selection_rectangles(&converted)?;
+    let (object_x0, object_x1) = inline_math_object_span(&mut runtime, &paragraph_id, 2)?;
+    assert_selection_rectangles_are_disjoint(&converted_rectangles, "converted object selection");
+    assert_object_interval_selected_once(
+        &converted_rectangles,
+        (object_x0, object_x1),
+        true,
+        "converted object selection",
+    );
+    let converted_x0 = converted_rectangles
+        .iter()
+        .map(|rectangle| rectangle.0)
+        .fold(f64::INFINITY, f64::min);
+    let converted_x1 = converted_rectangles
+        .iter()
+        .map(|rectangle| rectangle.2)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((converted_x0 - object_x0).abs() < 0.01);
+    assert!((converted_x1 - object_x1).abs() < 0.01);
     let converted_caret = caret_x(&converted)?;
-    assert!((converted_caret - converted_x1).abs() < 1e-9);
+    assert!((converted_caret - converted_x1).abs() < 1e-6);
 
     runtime
         .move_visual_caret_json(true, true)
@@ -1265,14 +1387,102 @@ fn inline_math_shift_right_after_conversion_continues_plain_text_extension() -> 
         caret_engine::Affinity::Downstream
     );
     assert_eq!(selection.focus.offset, 6);
-    let (continued_x0, _continued_x1) = single_selection_rect(&continued)?;
+    let continued_rectangles = selection_rectangles(&continued)?;
+    assert_selection_rectangles_are_disjoint(&continued_rectangles, "continued object selection");
+    // 对象区间只能出现一次；选区继续到对象之后的文本时不能产生覆盖同一对象的第二个矩形。
+    assert_object_interval_selected_once(
+        &continued_rectangles,
+        (object_x0, object_x1),
+        true,
+        "continued object selection",
+    );
+    let continued_x0 = continued_rectangles
+        .iter()
+        .map(|rectangle| rectangle.0)
+        .fold(f64::INFINITY, f64::min);
+    let continued_x1 = continued_rectangles
+        .iter()
+        .map(|rectangle| rectangle.2)
+        .fold(f64::NEG_INFINITY, f64::max);
     assert!(
-        (continued_x0 - converted_x0).abs() < 1e-9,
+        (continued_x0 - converted_x0).abs() < 0.01,
         "continued extension must keep the object anchor on the left edge"
     );
+    let continued_caret = caret_x(&continued)?;
     assert!(
-        caret_x(&continued)? > converted_caret,
+        continued_caret > converted_caret,
         "continued Shift+Right should move the caret past the object"
     );
+    // 高亮不能越过选区焦点：否则就是被折进对象 advance 的下一字素膨胀。
+    assert!(
+        continued_x1 <= continued_caret + 0.01,
+        "selection highlight must not extend past the focus caret"
+    );
+    assert!(
+        continued_x1 >= object_x1 - 0.01,
+        "selection highlight must cover the selected object and following text"
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_math_object_selection_with_surrounding_text_has_no_overlap_or_inflation()
+-> Result<(), String> {
+    let (mut runtime, paragraph_id, _math_id) = runtime_with_inline_math("ab", &["x", "y"], "cd")?;
+    let object_start = 2;
+    let (object_x0, object_x1) =
+        inline_math_object_span(&mut runtime, &paragraph_id, object_start)?;
+    // 覆盖对象前后文本、对象本身以及反向选区的组合；选区端点按字节偏移给出。
+    for (anchor_offset, focus_offset) in [(0usize, 5usize), (2, 5), (2, 6), (0, 7), (5, 6), (6, 2)]
+    {
+        let anchor = caret_engine::Pos {
+            story: caret_engine::StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: anchor_offset,
+            affinity: caret_engine::Affinity::Downstream,
+        };
+        let focus = caret_engine::Pos {
+            story: caret_engine::StoryId::Body,
+            paragraph_id: paragraph_id.clone(),
+            offset: focus_offset,
+            affinity: caret_engine::Affinity::Upstream,
+        };
+        runtime
+            .session
+            .run(caret_engine::Command::SetSelection(Some(
+                caret_engine::Selection { anchor, focus },
+            )))
+            .map_err(|error| error.to_string())?;
+        let interaction = interaction_json(&mut runtime)?;
+        let rectangles = selection_rectangles(&interaction)?;
+        let label = format!("selection {anchor_offset}..{focus_offset}");
+        assert!(
+            !rectangles.is_empty(),
+            "{label}: selection must publish rects"
+        );
+        assert_selection_rectangles_are_disjoint(&rectangles, &label);
+        let start = anchor_offset.min(focus_offset);
+        let end = anchor_offset.max(focus_offset);
+        assert_object_interval_selected_once(
+            &rectangles,
+            (object_x0, object_x1),
+            start <= object_start && object_start + 3 <= end,
+            &label,
+        );
+        for (x0, y0, x1, y1) in &rectangles {
+            assert!(x1 > x0 && y1 > y0, "{label}: rect must have positive area");
+        }
+        let union_x1 = rectangles
+            .iter()
+            .map(|rectangle| rectangle.2)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if anchor_offset < focus_offset && focus_offset == 6 {
+            let caret = caret_x(&interaction)?;
+            assert!(
+                union_x1 <= caret + 0.01,
+                "{label}: highlight must not extend past the focus caret"
+            );
+        }
+    }
     Ok(())
 }

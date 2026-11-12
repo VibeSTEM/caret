@@ -364,6 +364,301 @@ fn selection_skips_adjacent_unselected_inline_objects() {
     );
 }
 
+fn selection_union(rectangles: &[(parley::BoundingBox, usize)]) -> (f64, f64) {
+    let mut union = (f64::INFINITY, f64::NEG_INFINITY);
+    for (bounds, _) in rectangles {
+        union.0 = union.0.min(bounds.x0);
+        union.1 = union.1.max(bounds.x1);
+    }
+    union
+}
+
+fn assert_selection_rectangles_are_disjoint(
+    rectangles: &[(parley::BoundingBox, usize)],
+    label: &str,
+) {
+    for (index, (left, left_line)) in rectangles.iter().enumerate() {
+        assert!(
+            left.x1 > left.x0,
+            "{label}: rect {index} must have positive width"
+        );
+        for (right, right_line) in rectangles.iter().skip(index + 1) {
+            if left_line != right_line {
+                continue;
+            }
+            let overlap = left.x1.min(right.x1) - left.x0.max(right.x0);
+            assert!(
+                overlap <= 0.01,
+                "{label}: selection rectangles must not overlap: {left:?} vs {right:?}"
+            );
+        }
+    }
+}
+
+/// 用零推进对象的同文布局作为纯文本基准，按对象结束位置补偿对象宽度。
+fn expected_ltr_selection_span(
+    zero_layout: &crate::ParleyParagraphLayout,
+    text: &str,
+    range: std::ops::Range<usize>,
+    objects: &[(std::ops::Range<usize>, f64)],
+) -> Option<(f64, f64)> {
+    let zero_rectangles = zero_layout
+        .selection_text_geometry(text, range.clone())
+        .unwrap_or_else(|| panic!("zero-advance layout should select {range:?}"));
+    if zero_rectangles.is_empty() {
+        // 选区只覆盖零宽对象本身：纯文本基准没有矩形，由调用方用对象盒断言。
+        return None;
+    }
+    let (zero_x0, zero_x1) = selection_union(&zero_rectangles);
+    let start_shift: f64 = objects
+        .iter()
+        .filter(|(object, _)| range.start >= object.end)
+        .map(|(_, width)| width)
+        .sum();
+    let end_shift: f64 = objects
+        .iter()
+        .filter(|(object, _)| range.end >= object.end)
+        .map(|(_, width)| width)
+        .sum();
+    Some((zero_x0 + start_shift, zero_x1 + end_shift))
+}
+
+fn assert_object_interval_selected_once(
+    rectangles: &[(parley::BoundingBox, usize)],
+    interval: (f64, f64),
+    selected: bool,
+    label: &str,
+) {
+    let (object_x0, object_x1) = interval;
+    let mut overlap_total = 0.0;
+    let mut containing_rectangles = 0;
+    for (bounds, _) in rectangles {
+        let overlap = bounds.x1.min(object_x1) - bounds.x0.max(object_x0);
+        if overlap <= 0.01 {
+            continue;
+        }
+        overlap_total += overlap;
+        let contains = bounds.x0 <= object_x0 + 0.01 && bounds.x1 >= object_x1 - 0.01;
+        assert!(
+            contains,
+            "{label}: a rectangle may only touch the object interval completely: {bounds:?}"
+        );
+        containing_rectangles += 1;
+    }
+    let expected = if selected { object_x1 - object_x0 } else { 0.0 };
+    assert!(
+        (overlap_total - expected).abs() < 0.01,
+        "{label}: object interval overlap {overlap_total} must equal {expected}"
+    );
+    assert!(
+        containing_rectangles <= 1,
+        "{label}: the object interval must appear at most once"
+    );
+}
+
+#[test]
+fn inline_object_selection_rectangles_are_stable_on_both_object_sides() {
+    let text = "ab\u{fffc}cd";
+    let object = InlineObjectLayout {
+        id: 42,
+        source_bytes: 2..5,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    };
+    let layout =
+        paragraph_layout_with_inline_objects(text, Some("en"), std::slice::from_ref(&object));
+    let zero_object = InlineObjectLayout {
+        advance_pt: 0.0,
+        ..object.clone()
+    };
+    let zero_layout =
+        paragraph_layout_with_inline_objects(text, Some("en"), std::slice::from_ref(&zero_object));
+    let (object_x0, object_x1) = inline_object_box(&layout, 42);
+    let object_width = object_x1 - object_x0;
+    let objects = [(object.source_bytes.clone(), object_width)];
+
+    for range in [0..2usize, 0..5, 2..5, 2..6, 0..7, 5..6] {
+        let label = format!("range {range:?}");
+        let rectangles = layout
+            .selection_text_geometry(text, range.clone())
+            .unwrap_or_else(|| panic!("{label}: selection geometry missing"));
+        assert_selection_rectangles_are_disjoint(&rectangles, &label);
+        let (union_x0, union_x1) = selection_union(&rectangles);
+        if let Some(expected) =
+            expected_ltr_selection_span(&zero_layout, text, range.clone(), &objects)
+        {
+            assert!(
+                (union_x0 - expected.0).abs() < 0.01 && (union_x1 - expected.1).abs() < 0.01,
+                "{label}: selection union ({union_x0}, {union_x1}) must stay within {expected:?}"
+            );
+        } else {
+            let selected =
+                range.start <= object.source_bytes.start && object.source_bytes.end <= range.end;
+            assert!(
+                selected
+                    && (union_x0 - object_x0).abs() < 0.01
+                    && (union_x1 - object_x1).abs() < 0.01,
+                "{label}: object-only selection must keep the object box span"
+            );
+        }
+        let selected =
+            range.start <= object.source_bytes.start && object.source_bytes.end <= range.end;
+        assert_object_interval_selected_once(&rectangles, (object_x0, object_x1), selected, &label);
+    }
+}
+
+#[test]
+fn adjacent_inline_objects_do_not_duplicate_selection_rectangles() {
+    let text = "a\u{fffc}\u{fffc}b";
+    let first = InlineObjectLayout {
+        id: 42,
+        source_bytes: 1..4,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    };
+    let second = InlineObjectLayout {
+        id: 43,
+        source_bytes: 4..7,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    };
+    let layout =
+        paragraph_layout_with_inline_objects(text, Some("en"), &[first.clone(), second.clone()]);
+    let zero_layout = paragraph_layout_with_inline_objects(
+        text,
+        Some("en"),
+        &[
+            InlineObjectLayout {
+                advance_pt: 0.0,
+                ..first.clone()
+            },
+            InlineObjectLayout {
+                advance_pt: 0.0,
+                ..second.clone()
+            },
+        ],
+    );
+    let first_box = inline_object_box(&layout, 42);
+    let second_box = inline_object_box(&layout, 43);
+    let objects = [
+        (first.source_bytes.clone(), first_box.1 - first_box.0),
+        (second.source_bytes.clone(), second_box.1 - second_box.0),
+    ];
+
+    for range in [0..8usize, 0..1, 0..4, 1..4, 4..7, 1..7, 4..8, 7..8] {
+        let label = format!("range {range:?}");
+        let rectangles = layout
+            .selection_text_geometry(text, range.clone())
+            .unwrap_or_else(|| panic!("{label}: selection geometry missing"));
+        assert_selection_rectangles_are_disjoint(&rectangles, &label);
+        let (union_x0, union_x1) = selection_union(&rectangles);
+        if let Some(expected) =
+            expected_ltr_selection_span(&zero_layout, text, range.clone(), &objects)
+        {
+            assert!(
+                (union_x0 - expected.0).abs() < 0.01 && (union_x1 - expected.1).abs() < 0.01,
+                "{label}: selection union ({union_x0}, {union_x1}) must stay within {expected:?}"
+            );
+        } else {
+            let selected_boxes = [
+                (first_box, first.source_bytes.clone()),
+                (second_box, second.source_bytes.clone()),
+            ]
+            .into_iter()
+            .filter(|(_, object)| range.start <= object.start && object.end <= range.end)
+            .map(|(bounds, _)| bounds)
+            .collect::<Vec<_>>();
+            assert!(!selected_boxes.is_empty());
+            let expected_x0 = selected_boxes
+                .iter()
+                .map(|bounds| bounds.0)
+                .fold(f64::INFINITY, f64::min);
+            let expected_x1 = selected_boxes
+                .iter()
+                .map(|bounds| bounds.1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert!(
+                (union_x0 - expected_x0).abs() < 0.01 && (union_x1 - expected_x1).abs() < 0.01,
+                "{label}: object-only selection must keep the selected object boxes"
+            );
+        }
+        assert_object_interval_selected_once(
+            &rectangles,
+            first_box,
+            range.start <= first.source_bytes.start && first.source_bytes.end <= range.end,
+            &label,
+        );
+        assert_object_interval_selected_once(
+            &rectangles,
+            second_box,
+            range.start <= second.source_bytes.start && second.source_bytes.end <= range.end,
+            &label,
+        );
+    }
+}
+
+#[test]
+fn mixed_bidi_inline_object_selection_rectangles_do_not_overlap() {
+    let text = "abc\u{fffc}אב";
+    let object = InlineObjectLayout {
+        id: 42,
+        source_bytes: 3..6,
+        advance_pt: 30.0,
+        ascent_pt: 20.0,
+        descent_pt: 5.0,
+    };
+    let layout =
+        paragraph_layout_with_inline_objects(text, Some("he"), std::slice::from_ref(&object));
+    let (object_x0, object_x1) = inline_object_box(&layout, 42);
+    let line_advance = layout.paragraph.lines[0].advance_pt;
+    for range in [0..3usize, 3..6, 6..10, 0..10] {
+        let label = format!("range {range:?}");
+        let rectangles = layout
+            .selection_text_geometry(text, range.clone())
+            .unwrap_or_else(|| panic!("{label}: bidirectional selection geometry missing"));
+        assert_selection_rectangles_are_disjoint(&rectangles, &label);
+        for (bounds, _) in &rectangles {
+            assert!(bounds.x0 >= -0.01 && bounds.x1 <= f64::from(line_advance) + 0.01);
+        }
+        assert_object_interval_selected_once(
+            &rectangles,
+            (object_x0, object_x1),
+            range.start <= object.source_bytes.start && object.source_bytes.end <= range.end,
+            &label,
+        );
+    }
+}
+
+#[test]
+fn zero_width_inline_object_adds_no_selection_rectangle() {
+    let text = "a\u{fffc}b";
+    let layout = paragraph_layout_with_inline_objects(
+        text,
+        Some("en"),
+        &[InlineObjectLayout {
+            id: 42,
+            source_bytes: 1..4,
+            advance_pt: 0.0,
+            ascent_pt: 0.0,
+            descent_pt: 0.0,
+        }],
+    );
+    for range in [0..1usize, 0..5, 1..4, 4..5] {
+        let label = format!("zero-width range {range:?}");
+        let rectangles = layout
+            .selection_text_geometry(text, range)
+            .unwrap_or_else(|| panic!("{label}: selection geometry missing"));
+        assert_selection_rectangles_are_disjoint(&rectangles, &label);
+        assert!(
+            rectangles.iter().all(|(bounds, _)| bounds.x1 > bounds.x0),
+            "{label}: zero-width rerects must not be published"
+        );
+    }
+}
+
 #[test]
 fn inline_object_wider_than_line_occupies_an_overflowing_line() {
     let mut catalog = font_catalog();
