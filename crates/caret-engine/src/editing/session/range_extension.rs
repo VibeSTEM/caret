@@ -13,6 +13,16 @@ use crate::editing::StoryId;
 use caret_doc::{Block, NodeId};
 use caret_structure::{DocumentNodeKind, block_list_by_environment_ids, find_document_node};
 
+/// 水平逐块导航中紧邻当前文档位置的复杂单元。
+///
+/// 公式对象（Equation/Align）与整棵块环境都按一个文档单元处理；普通段落不在此
+/// 列，遇到段落时继续沿用字素/视觉候选，避免改变纯文本导航。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AdjacentComplexUnit {
+    Math { block_id: NodeId },
+    Environment { environment_id: NodeId },
+}
+
 impl Session {
     /// 将结构选区焦点按一个文档单元向指定方向移动。
     ///
@@ -126,7 +136,7 @@ impl Session {
     }
 
     /// 当前扩展焦点：优先使用结构选区焦点，其次块外侧停靠，最后普通文本焦点。
-    fn current_range_focus_endpoint(&self) -> DocumentRangeEndpoint {
+    pub(super) fn current_range_focus_endpoint(&self) -> DocumentRangeEndpoint {
         if let Some(selection) = &self.structure_selection {
             return selection.focus.clone();
         }
@@ -373,6 +383,121 @@ impl Session {
             neighbour.and_then(|index| siblings.get(index)),
             Some(Block::Equation(_) | Block::Align(_))
         ))
+    }
+
+    /// 返回当前文档位置在方向上紧邻的复杂块单元，允许跨出所在块环境。
+    ///
+    /// 与只检查同级兄弟的 `paragraph_beside_block_math` 不同，这里按文档顺序向上
+    /// 越过块环境边界：环境内部最后一个段落向右的下一单元是环境之后的块，环境
+    /// 标题向左的下一单元是环境之前的块。这样环境外侧停靠/BlockEdge 焦点无需先
+    /// 落回相邻文本段落也能识别紧邻公式。
+    pub(super) fn adjacent_complex_unit(
+        &self,
+        position: &Pos,
+        direction: Direction,
+    ) -> Result<Option<AdjacentComplexUnit>, EditError> {
+        let Some(location) = self.paragraph_index.get(&position.paragraph_id) else {
+            return Ok(None);
+        };
+        let (mut parent_ids, mut index) = if location.is_title {
+            let Some(environment_id) = self
+                .structure_index
+                .title_environment_id(&position.paragraph_id)
+                .cloned()
+            else {
+                return Ok(None);
+            };
+            let Some((outer_parent_ids, environment_index)) =
+                find_block_path(&self.document.body, &environment_id)
+            else {
+                return Ok(None);
+            };
+            match direction {
+                Direction::Forward => {
+                    let siblings =
+                        block_list_by_environment_ids(&self.document.body, &outer_parent_ids)
+                            .ok_or(EditError::InvalidPosition)?;
+                    let Some(Block::Environment(environment)) = siblings.get(environment_index)
+                    else {
+                        return Ok(None);
+                    };
+                    return Ok(classify_adjacent_block(first_navigable_block(
+                        &environment.children,
+                        Direction::Forward,
+                    )));
+                }
+                Direction::Backward => (outer_parent_ids, environment_index),
+            }
+        } else {
+            let Some(path) = find_block_path(&self.document.body, &position.paragraph_id) else {
+                return Ok(None);
+            };
+            path
+        };
+        loop {
+            let siblings = block_list_by_environment_ids(&self.document.body, &parent_ids)
+                .ok_or(EditError::InvalidPosition)?;
+            match direction {
+                Direction::Forward => {
+                    let mut cursor = index + 1;
+                    while let Some(block) = siblings.get(cursor) {
+                        if !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
+                            return Ok(classify_adjacent_block(Some(block)));
+                        }
+                        cursor += 1;
+                    }
+                }
+                Direction::Backward => {
+                    let mut cursor = index;
+                    while let Some(candidate) = cursor.checked_sub(1) {
+                        cursor = candidate;
+                        let block = siblings.get(candidate).ok_or(EditError::InvalidPosition)?;
+                        if !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)) {
+                            return Ok(classify_adjacent_block(Some(block)));
+                        }
+                    }
+                }
+            }
+            // 同级块序列到头：越过父环境外后/外前继续查找。
+            let Some(environment_id) = parent_ids.last().cloned() else {
+                return Ok(None);
+            };
+            let Some((outer_parent_ids, environment_index)) =
+                find_block_path(&self.document.body, &environment_id)
+            else {
+                return Ok(None);
+            };
+            parent_ids = outer_parent_ids;
+            index = environment_index;
+        }
+    }
+}
+
+/// 取块序列方向上第一个可导航块；跳过不产生身份的显式换行与不透明块。
+fn first_navigable_block(blocks: &[Block], direction: Direction) -> Option<&Block> {
+    let mut blocks = blocks.iter();
+    match direction {
+        Direction::Forward => {
+            blocks.find(|block| !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_)))
+        }
+        Direction::Backward => blocks
+            .rev()
+            .find(|block| !matches!(block, Block::ExplicitBreak(_) | Block::Opaque(_))),
+    }
+}
+
+fn classify_adjacent_block(block: Option<&Block>) -> Option<AdjacentComplexUnit> {
+    match block {
+        Some(Block::Equation(equation)) => Some(AdjacentComplexUnit::Math {
+            block_id: equation.id.clone(),
+        }),
+        Some(Block::Align(align)) => Some(AdjacentComplexUnit::Math {
+            block_id: align.id.clone(),
+        }),
+        Some(Block::Environment(environment)) => Some(AdjacentComplexUnit::Environment {
+            environment_id: environment.id.clone(),
+        }),
+        _ => None,
     }
 }
 

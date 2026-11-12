@@ -1946,3 +1946,331 @@ fn shift_candidate_adds_equation_then_environment_one_unit_at_a_time() {
         std::slice::from_ref(&equation_id)
     );
 }
+
+fn body_position(paragraph_id: &NodeId, offset: usize, affinity: Affinity) -> Pos {
+    Pos {
+        story: StoryId::Body,
+        paragraph_id: paragraph_id.clone(),
+        offset,
+        affinity,
+    }
+}
+
+#[test]
+fn horizontal_candidate_from_environment_outer_stop_stops_at_adjacent_equation() {
+    let before = paragraph_with_run_text("p");
+    let (environment, environment_id, _title_id, body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let after = paragraph_with_run_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        environment,
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = body_position(&body_id, "body".len(), Affinity::Upstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&after_id, 0, Affinity::Downstream),
+        caret_layout::VisualAffinity::Downstream,
+    );
+
+    // 先按环境外侧边界契约停靠；下一次按键必须停在相邻公式外前，不能直接到后段。
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate.clone()),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("environment exit failed: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id, Direction::Forward))
+    );
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate.clone()),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("equation stop failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id.clone(), Direction::Backward))
+    );
+    // 停靠必须同步折叠选区与可视亲和性，而不是只写共享宿主。
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(
+        session.selection().focus,
+        body_position(&body_id, "body".len(), Affinity::Upstream)
+    );
+    assert_eq!(
+        session.selection_visual_affinity(),
+        caret_layout::VisualAffinity::Upstream
+    );
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        caret_layout::VisualAffinity::Upstream
+    );
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("equation entry failed: {error}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(crate::MathEditTarget::Block { block_id, .. }) if block_id == &equation_id
+    ));
+}
+
+#[test]
+fn horizontal_candidate_backward_from_environment_outer_stop_stops_at_adjacent_equation() {
+    let before = paragraph_with_run_text("p");
+    let before_id = before.id.clone();
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let (environment, environment_id, title_id, _body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let after = paragraph_with_run_text("q");
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        equation,
+        environment,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = title_start_position(&environment_id, &title_id);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&before_id, 1, Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate.clone()),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("environment exit failed: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id.clone(), Direction::Backward))
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate.clone()),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("equation stop failed: {error}"));
+    assert!(session.math_edit().is_none());
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((equation_id.clone(), Direction::Forward))
+    );
+    assert_eq!(session.selection().anchor, session.selection().focus);
+    assert_eq!(
+        session.selection().focus,
+        title_start_position(&environment_id, &title_id)
+    );
+    assert_eq!(
+        session.selection_visual_affinity(),
+        caret_layout::VisualAffinity::Downstream
+    );
+    assert_eq!(
+        session.selection_anchor_visual_affinity(),
+        caret_layout::VisualAffinity::Downstream
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("equation entry failed: {error}"));
+    assert!(matches!(
+        session.math_edit().map(|edit| &edit.target),
+        Some(crate::MathEditTarget::Block { block_id, .. }) if block_id == &equation_id
+    ));
+}
+
+#[test]
+fn shift_candidate_backward_from_environment_extends_by_document_units() {
+    let before = paragraph_with_run_text("p");
+    let before_id = before.id.clone();
+    let (first, first_id, _first_title, _first_body) =
+        section_block_for_unit_navigation("s1", "b1");
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let (second, second_id, _second_title, second_body) =
+        section_block_for_unit_navigation("s2", "b2");
+    let after = paragraph_with_run_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        first,
+        equation,
+        second,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = body_position(&after_id, 0, Affinity::Downstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+
+    // 第一次选中结尾环境；第二次必须加入前一个公式，而不是在环境内逐字后退。
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&second_body, "b2".len(), Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("first shift left failed: {error}"));
+    assert_eq!(
+        session.selected_block_environments(),
+        std::slice::from_ref(&second_id)
+    );
+
+    let candidate = document_candidate_for(
+        &session,
+        body_position(&before_id, 1, Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: Some(candidate),
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("second shift left failed: {error}"));
+    assert_eq!(
+        session.selected_math_blocks(),
+        std::slice::from_ref(&equation_id)
+    );
+    assert_eq!(
+        session.selected_block_environments(),
+        std::slice::from_ref(&second_id)
+    );
+
+    // 第三次继续加入前一个环境；第四次才扩展到前段文本终点。
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("third shift left failed: {error}"));
+    assert_eq!(
+        session.selected_block_environments(),
+        &[first_id.clone(), second_id.clone()]
+    );
+    assert!(matches!(
+        session.structure_selection_range().map(|(_, focus)| focus),
+        Some(crate::editing::DocumentRangeEndpoint::BlockEdge {
+            block_id,
+            side: Direction::Backward,
+        }) if block_id == &first_id
+    ));
+    session
+        .run(Command::EditorKey(EditorKey::LeftArrow {
+            candidate: None,
+            extend: true,
+        }))
+        .unwrap_or_else(|error| panic!("fourth shift left failed: {error}"));
+    assert_eq!(
+        session.structure_selection_range().map(|(_, focus)| focus),
+        Some(&crate::editing::DocumentRangeEndpoint::Text(body_position(
+            &before_id,
+            1,
+            Affinity::Upstream
+        )))
+    );
+}
+
+#[test]
+fn horizontal_candidate_direction_mismatch_does_not_park_at_equation() {
+    let before = paragraph_with_run_text("p");
+    let before_id = before.id.clone();
+    let (environment, environment_id, _title_id, body_id) =
+        section_block_for_unit_navigation("s", "body");
+    let (equation, equation_id) = equation_block_for_unit_navigation();
+    let after = paragraph_with_run_text("q");
+    let after_id = after.id.clone();
+    let mut document = Document::blank();
+    document.body = vec![
+        Block::Paragraph(before),
+        environment,
+        equation,
+        Block::Paragraph(after),
+    ];
+    let mut session = Session::new(document).unwrap_or_else(|error| {
+        panic!("session initialization failed: {error}");
+    });
+    let start = body_position(&body_id, "body".len(), Affinity::Upstream);
+    session
+        .run(Command::SetSelection(Some(Selection {
+            anchor: start.clone(),
+            focus: start,
+        })))
+        .unwrap_or_else(|error| panic!("selection setup failed: {error}"));
+
+    // 先按右手键离开环境外侧停靠。
+    let forward_candidate = document_candidate_for(
+        &session,
+        body_position(&after_id, 0, Affinity::Downstream),
+        caret_layout::VisualAffinity::Downstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(forward_candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("environment exit failed: {error}"));
+    assert_eq!(
+        session.block_boundary_exit(),
+        Some((environment_id, Direction::Forward))
+    );
+
+    // RightArrow 却带反向候选：方向冲突时不能把光标反向停到公式外前。
+    let reverse_candidate = document_candidate_for(
+        &session,
+        body_position(&before_id, 1, Affinity::Upstream),
+        caret_layout::VisualAffinity::Upstream,
+    );
+    session
+        .run(Command::EditorKey(EditorKey::RightArrow {
+            candidate: Some(reverse_candidate),
+            extend: false,
+        }))
+        .unwrap_or_else(|error| panic!("mismatched candidate failed: {error}"));
+    assert_ne!(
+        session.block_boundary_exit(),
+        Some((equation_id, Direction::Backward))
+    );
+}

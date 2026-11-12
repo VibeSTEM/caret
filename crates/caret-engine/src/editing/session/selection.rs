@@ -6,11 +6,12 @@
 use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
 use super::super::text_map::{OBJECT_REPLACEMENT, TextMap};
 use super::super::{
-    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, NavigationIntent, Pos,
-    Selection, StoryId, StructureSelection,
+    Affinity, Command, Direction, DocumentRangeEndpoint, EditError, Effect, HostCaretKind,
+    NavigationIntent, Pos, Selection, StoryId, StructureSelection,
 };
 use super::Session;
 use super::document_position::{visual_affinity_for, visual_affinity_for_block_edge};
+use super::range_extension::AdjacentComplexUnit;
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
 
@@ -534,6 +535,27 @@ impl Session {
                 ..Effect::default()
             });
         }
+        // 环境外侧停靠/BlockEdge 焦点不在紧邻公式的文本段落里：按文档顺序向上越过
+        // 环境边界识别下一个复杂单元，先停靠/进入它，避免直接跳到环境后的段落。
+        // 仅在外侧停靠状态生效，环境内部的普通离开仍先走环境外侧边界停靠契约。
+        if intent == NavigationIntent::Horizontal
+            && was_collapsed
+            && self.selection.anchor == self.selection.focus
+            && self.math_edit.is_none()
+            && self
+                .host_caret_position
+                .as_ref()
+                .is_some_and(|position| position.kind() == HostCaretKind::Block)
+            && let Some(direction) = Self::arrow_direction(candidate_direction, logical_direction)
+            && let Some(unit) = self.adjacent_complex_unit(&self.selection.focus, direction)?
+            && self.candidate_beyond_complex_unit(&selection.focus, &unit, direction)?
+            && self.stop_or_enter_adjacent_complex_unit(&unit, direction)?
+        {
+            return Ok(Effect {
+                selection_changed: true,
+                ..Effect::default()
+            });
+        }
         if intent == NavigationIntent::Horizontal
             && was_collapsed
             && self.selection.anchor == self.selection.focus
@@ -815,10 +837,9 @@ impl Session {
         target: &Pos,
         direction: Direction,
     ) -> Result<bool, EditError> {
-        let current = match self.ordered_structure_selection() {
-            Ok((_, focus)) => focus.clone(),
-            Err(_) => DocumentRangeEndpoint::Text(self.selection.focus.clone()),
-        };
+        // 结构选区的活动焦点是最近一次扩展落点（可能位于反向选区的前端），
+        // 继续扩选必须从它而不是排序后的后端起步。
+        let current = self.current_range_focus_endpoint();
         let Some(unit) = self.next_range_focus_step(&current, direction)? else {
             return Ok(false);
         };
@@ -840,6 +861,44 @@ impl Session {
             return Ok(false);
         };
         Ok(matches!(following, DocumentRangeEndpoint::BlockEdge { .. }))
+    }
+
+    /// 判断水平候选是否越过复杂单元在原方向上的外侧边界。
+    fn candidate_beyond_complex_unit(
+        &mut self,
+        target: &Pos,
+        unit: &AdjacentComplexUnit,
+        direction: Direction,
+    ) -> Result<bool, EditError> {
+        let block_id = match unit {
+            AdjacentComplexUnit::Math { block_id } => block_id,
+            AdjacentComplexUnit::Environment { environment_id } => environment_id,
+        };
+        let endpoint = DocumentRangeEndpoint::BlockEdge {
+            block_id: block_id.clone(),
+            side: direction,
+        };
+        let ordering =
+            self.compare_range_endpoints(&DocumentRangeEndpoint::Text(target.clone()), &endpoint)?;
+        Ok(match direction {
+            Direction::Forward => ordering.is_gt(),
+            Direction::Backward => ordering.is_lt(),
+        })
+    }
+
+    /// 箭头键逐块停靠优先采用实体方向键方向。
+    ///
+    /// 候选方向来自布局位置比较，可能因亲和性/跨 Story 折叠与按键方向不一致；两者
+    /// 冲突时不进入逐块停靠分支，回退原有候选路径，避免把光标反向停靠到错误一侧。
+    fn arrow_direction(
+        candidate_direction: Option<Direction>,
+        logical_direction: Option<Direction>,
+    ) -> Option<Direction> {
+        match (logical_direction, candidate_direction) {
+            (Some(logical), Some(candidate)) if logical != candidate => None,
+            (Some(logical), _) => Some(logical),
+            (None, candidate) => candidate,
+        }
     }
 
     /// 将输入命令使用的选区规整为文档顺序，并拒绝不同文本 Story 的范围。

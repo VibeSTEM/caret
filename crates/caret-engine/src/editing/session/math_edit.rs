@@ -35,9 +35,11 @@ use super::super::{
     HostCaretTransition, Pos, PositionMap, Selection, StoryId,
 };
 use super::Session;
+use super::document_position::visual_affinity_for_block_edge;
 use super::history::{
     self, DocumentPatch, EditGroup, MathEditPosition, SessionHistoryEdit, SessionHistoryState,
 };
+use super::range_extension::AdjacentComplexUnit;
 use crate::{StructureIndex, VisualAffinity};
 #[cfg(test)]
 use caret_doc::TextFlow;
@@ -4262,6 +4264,63 @@ impl Session {
         Ok(block_environment_entry(environment, direction))
     }
 
+    /// 从非文本/块外侧焦点消费紧邻复杂单元。
+    ///
+    /// 公式对象先停到对应外侧边界，下一次按键再进入 MathEdit；块环境直接进入其
+    /// 方向入口（标题起点/最后后代段落终点）。返回 false 表示无法定位入口，由
+    /// 调用方保持原有候选路径。
+    pub(super) fn stop_or_enter_adjacent_complex_unit(
+        &mut self,
+        unit: &AdjacentComplexUnit,
+        direction: Direction,
+    ) -> Result<bool, EditError> {
+        match unit {
+            AdjacentComplexUnit::Math { block_id } => {
+                let opposite = match direction {
+                    Direction::Backward => Direction::Forward,
+                    Direction::Forward => Direction::Backward,
+                };
+                // 与其它块外侧停靠路径一致：落点、双侧可视亲和性与共享宿主一起写入；
+                // 只写 host 会让 IME/绘制与 selection 折叠位置不同步。极端形态下
+                // 找不到同侧文本落点时保持原候选路径，不把导航按键升级为错误。
+                let Ok((caret, host)) = self.park_beside_block_host(block_id, opposite) else {
+                    return Ok(false);
+                };
+                let visual_affinity = visual_affinity_for_block_edge(opposite);
+                self.selection = Selection {
+                    anchor: caret.clone(),
+                    focus: caret,
+                };
+                self.selection_visual_affinity = visual_affinity;
+                self.selection_anchor_visual_affinity = visual_affinity;
+                self.host_caret_position = Some(host);
+                self.advance_history_merge_epoch();
+                Ok(true)
+            }
+            AdjacentComplexUnit::Environment { environment_id } => {
+                let Some((parent_ids, index)) =
+                    find_block_path(&self.document.body, environment_id)
+                else {
+                    return Ok(false);
+                };
+                let siblings = block_list_ref(&self.document.body, &parent_ids)?;
+                let Some(Block::Environment(environment)) = siblings.get(index) else {
+                    return Ok(false);
+                };
+                let Some(position) = block_environment_entry(environment, direction) else {
+                    return Ok(false);
+                };
+                if position == self.selection.focus {
+                    return Ok(false);
+                }
+                self.set_math_exit_selection(position);
+                self.host_caret_position = None;
+                self.advance_history_merge_epoch();
+                Ok(true)
+            }
+        }
+    }
+
     fn math_edit_for_block(
         &self,
         block: &Block,
@@ -6307,7 +6366,10 @@ fn absolute_source_edit(
 }
 
 /// 返回块环境在方向上的第一个可编辑入口，供逐块水平导航和公式外侧停靠使用。
-fn block_environment_entry(environment: &BlockEnvironment, direction: Direction) -> Option<Pos> {
+pub(super) fn block_environment_entry(
+    environment: &BlockEnvironment,
+    direction: Direction,
+) -> Option<Pos> {
     match direction {
         Direction::Forward => {
             if let Some(title) = &environment.title {

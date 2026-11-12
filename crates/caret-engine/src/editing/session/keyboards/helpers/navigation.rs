@@ -98,15 +98,22 @@ impl Session {
         if extend
             && self.has_structure_selection()
             && let Some(direction) = direction
-            && let Ok((_, focus)) = self.ordered_structure_selection()
-            && let DocumentRangeEndpoint::BlockEdge { .. } = focus
-            && let Ok(Some(DocumentRangeEndpoint::BlockEdge { .. })) =
-                self.next_range_focus_step(&focus.clone(), direction)
         {
-            // 焦点停在复杂块外侧边界且下一个单元仍是复杂块时，下一次扩选必须纳入
-            // 下一个文档单元；否则沿用折叠在块内部/后方的文本候选，保持既有精确
-            // 文本端点契约。
-            return self.extend_structure_selection(direction);
+            // 活动焦点是最近一次扩展落点：正向选区在后端，反向选区在前端。继续扩选
+            // 必须从它按一个文档单元前进，否则反向 Shift+Left 会退化成环境内部逐字移动。
+            let active = self.current_range_focus_endpoint();
+            if matches!(active, DocumentRangeEndpoint::BlockEdge { .. }) {
+                // 反向扩选从块外侧边界进入前段文本时，单元边界是段落终点；视觉候选
+                // 仍停在标题起点等折叠落点，必须按单元落点继续。正向扩选只在下一个
+                // 单元仍是复杂块时强制按单元，保留普通文本候选的精确端点契约。
+                let next_is_complex = matches!(
+                    self.next_range_focus_step(&active, direction),
+                    Ok(Some(DocumentRangeEndpoint::BlockEdge { .. }))
+                );
+                if direction == Direction::Backward || next_is_complex {
+                    return self.extend_structure_selection(direction);
+                }
+            }
         }
         if extend
             && self.has_structure_selection()
