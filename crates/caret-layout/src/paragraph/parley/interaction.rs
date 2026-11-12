@@ -222,6 +222,13 @@ impl ParleyParagraphLayout {
         // 行内对象的推进由 Parley 折进其后首个字素簇；选区从对象任一侧开始或结束时，
         // 折叠会让矩形覆盖对象框或把对象宽度膨胀进相邻文本。统一按对象盒规整，
         // 得到与平台字素划分无关的稳定选区几何。
+        //
+        // 折叠伪影只可能出现在对象盒被选中的一侧，因此保留哪一侧必须按“该侧是否真有
+        // 被选中的文本”判断。这里用逻辑偏移 + 对象所在 run 的 RTL 方向换算视觉侧，
+        // 而不使用选区首尾插入点的跨行全局 x 范围：自动换行的多行选区末行通常较短，
+        // 全局 end_x 会小于中间行的行尾，从而错误丢弃对象右侧的合法文本段。
+        //   LTR: 逻辑前=视觉左、逻辑后=视觉右
+        //   RTL: 逻辑前=视觉右、逻辑后=视觉左
         let mut object_boxes = Vec::with_capacity(self.inline_object_source_ranges.len());
         for (id, object_range) in &self.inline_object_source_ranges {
             let Some((line_index, inline_box)) = self.positioned_inline_box(*id) else {
@@ -233,6 +240,9 @@ impl ParleyParagraphLayout {
             ) else {
                 continue;
             };
+            let rtl = self.inline_object_is_rtl(*id, object_range);
+            let starts_before = start < object_range.start;
+            let ends_after = end > object_range.end;
             object_boxes.push(InlineObjectSelectionBox {
                 line_index,
                 x0: f64::from(inline_box.x),
@@ -240,6 +250,8 @@ impl ParleyParagraphLayout {
                 y0: f64::from(*line_top),
                 y1: f64::from(*line_top + line.metrics.height_pt),
                 selected: start <= object_range.start && object_range.end <= end,
+                keep_left: if rtl { ends_after } else { starts_before },
+                keep_right: if rtl { starts_before } else { ends_after },
             });
         }
         Some(normalize_inline_object_selection_rectangles(
@@ -851,7 +863,8 @@ fn move_to_visual_line_edge(
         .then_some(cursor)
 }
 
-/// 行内对象在同代排版中的版面盒及其是否被选区完整覆盖。
+/// 行内对象在同代排版中的版面盒、选区覆盖状态，以及对象盒左侧/右侧是否落在
+/// 选区的视觉范围内（用于区分被选中的文本与 Parley 退化推进的伪影尾段）。
 #[derive(Debug, Clone, Copy)]
 struct InlineObjectSelectionBox {
     line_index: usize,
@@ -860,6 +873,8 @@ struct InlineObjectSelectionBox {
     y0: f64,
     y1: f64,
     selected: bool,
+    keep_left: bool,
+    keep_right: bool,
 }
 
 /// 将 Parley 选区矩形规整为与平台字素划分无关的对象边界几何。
@@ -867,14 +882,24 @@ struct InlineObjectSelectionBox {
 /// Parley 会把行内对象推进折进其后首个字素簇：对象被选中时，相邻文本矩形可能
 /// 覆盖对象盒或膨胀进对象宽度；对象未被选中时，后续文本矩形可能回溯到对象框。
 /// 因此先从所有矩形裁除每个非零宽对象盒，再仅对被完整选中的对象补一次整盒；
-/// 最后合并首尾相接的同段矩形。零宽对象没有可见几何，既不裁除也不补盒。
+/// 最后合并首尾相接的同段矩形。裁除时只保留确实落在选区视觉范围内的左右文本段，
+/// 丢弃对象盒之外由退化推进产生的伪影尾段（例如选区终点就在对象终点时，右侧
+/// `[object_x1, object_x1 + next_grapheme]` 并不是真正选中的文本）。零宽对象没有
+/// 可见几何，既不裁除也不补盒。
 fn normalize_inline_object_selection_rectangles(
     rectangles: Vec<(parley::BoundingBox, usize)>,
     object_boxes: &[InlineObjectSelectionBox],
 ) -> Vec<(parley::BoundingBox, usize)> {
     let mut rectangles = rectangles;
     for object in object_boxes.iter().filter(|object| object.x1 > object.x0) {
-        rectangles = trim_selection_interval(rectangles, object.line_index, object.x0, object.x1);
+        rectangles = trim_selection_interval(
+            rectangles,
+            object.line_index,
+            object.x0,
+            object.x1,
+            object.keep_left,
+            object.keep_right,
+        );
     }
     for object in object_boxes
         .iter()
@@ -894,12 +919,15 @@ fn normalize_inline_object_selection_rectangles(
     rectangles
 }
 
-/// 从同一行的选区矩形中裁除指定 x 区间，必要时拆成左右两段。
+/// 从同一行的选区矩形中裁除指定 x 区间，必要时拆成左右两段；
+/// `keep_left`/`keep_right` 为 false 时丢弃对应侧的余段（退化推进伪影）。
 fn trim_selection_interval(
     rectangles: Vec<(parley::BoundingBox, usize)>,
     line_index: usize,
     interval_x0: f64,
     interval_x1: f64,
+    keep_left: bool,
+    keep_right: bool,
 ) -> Vec<(parley::BoundingBox, usize)> {
     let mut trimmed = Vec::with_capacity(rectangles.len());
     for (bounds, rectangle_line) in rectangles {
@@ -907,13 +935,13 @@ fn trim_selection_interval(
             trimmed.push((bounds, rectangle_line));
             continue;
         }
-        if bounds.x0 < interval_x0 {
+        if keep_left && bounds.x0 < interval_x0 {
             trimmed.push((
                 parley::BoundingBox::new(bounds.x0, bounds.y0, interval_x0, bounds.y1),
                 rectangle_line,
             ));
         }
-        if bounds.x1 > interval_x1 {
+        if keep_right && bounds.x1 > interval_x1 {
             trimmed.push((
                 parley::BoundingBox::new(interval_x1, bounds.y0, bounds.x1, bounds.y1),
                 rectangle_line,
@@ -1145,16 +1173,43 @@ mod tests {
             .collect()
     }
 
+    fn object_box(selected: bool, keep_left: bool, keep_right: bool) -> InlineObjectSelectionBox {
+        InlineObjectSelectionBox {
+            line_index: 0,
+            x0: 12.0,
+            x1: 42.0,
+            y0: 0.0,
+            y1: 20.0,
+            selected,
+            keep_left,
+            keep_right,
+        }
+    }
+
     #[test]
     fn trim_selection_interval_splits_and_drops_overlapping_rectangles() {
-        let trimmed = trim_selection_interval(vec![rectangle(0.0, 50.0)], 0, 20.0, 40.0);
+        let trimmed =
+            trim_selection_interval(vec![rectangle(0.0, 50.0)], 0, 20.0, 40.0, true, true);
         assert_eq!(bounds(&trimmed), [(0.0, 20.0), (40.0, 50.0)]);
 
-        let partial = trim_selection_interval(vec![rectangle(10.0, 30.0)], 0, 20.0, 40.0);
+        let partial =
+            trim_selection_interval(vec![rectangle(10.0, 30.0)], 0, 20.0, 40.0, true, true);
         assert_eq!(bounds(&partial), [(10.0, 20.0)]);
 
-        let dropped = trim_selection_interval(vec![rectangle(25.0, 35.0)], 0, 20.0, 40.0);
+        let dropped =
+            trim_selection_interval(vec![rectangle(25.0, 35.0)], 0, 20.0, 40.0, true, true);
         assert!(dropped.is_empty());
+
+        // 侧向保留开关用于丢弃对象盒之外、不在选区视觉范围内的退化推进伪影。
+        let kept_left_only =
+            trim_selection_interval(vec![rectangle(0.0, 50.0)], 0, 20.0, 40.0, true, false);
+        assert_eq!(bounds(&kept_left_only), [(0.0, 20.0)]);
+        let kept_right_only =
+            trim_selection_interval(vec![rectangle(0.0, 50.0)], 0, 20.0, 40.0, false, true);
+        assert_eq!(bounds(&kept_right_only), [(40.0, 50.0)]);
+        let dropped_both =
+            trim_selection_interval(vec![rectangle(0.0, 50.0)], 0, 20.0, 40.0, false, false);
+        assert!(dropped_both.is_empty());
     }
 
     #[test]
@@ -1177,25 +1232,24 @@ mod tests {
     #[test]
     fn duplicate_platform_rectangles_collapse_to_one_object_interval() {
         // 模拟另一平台 Parley 输出：对象矩形与其后字素矩形都从对象左缘开始，
-        // 其中后者被折进了对象推进，看起来比对象宽一个字素。
-        let object_x0 = 12.0;
-        let object_x1 = 42.0;
-        let inflated_x1 = 47.76;
+        // 其中后者被折进了对象推进，看起来比对象宽一个字素。选区终点就在对象终点
+        // （keep_right=false），对象盒之后的尾段是退化伪影，必须整体丢弃。
         let rectangles = normalize_inline_object_selection_rectangles(
-            vec![
-                rectangle(object_x0, object_x1),
-                rectangle(object_x0, inflated_x1),
-            ],
-            &[InlineObjectSelectionBox {
-                line_index: 0,
-                x0: object_x0,
-                x1: object_x1,
-                y0: 0.0,
-                y1: 20.0,
-                selected: true,
-            }],
+            vec![rectangle(12.0, 42.0), rectangle(12.0, 47.76)],
+            &[object_box(true, false, false)],
         );
-        assert_eq!(bounds(&rectangles), [(object_x0, inflated_x1)]);
+        assert_eq!(bounds(&rectangles), [(12.0, 42.0)]);
+    }
+
+    #[test]
+    fn selected_object_with_following_selected_text_keeps_the_legitimate_tail() {
+        // 选区确实延伸到对象之后（keep_right=true）：尾段是已选中的后一字素，
+        // 归一化后应与对象盒合并成连续高亮，而不是被裁掉。
+        let rectangles = normalize_inline_object_selection_rectangles(
+            vec![rectangle(12.0, 42.0), rectangle(12.0, 47.76)],
+            &[object_box(true, false, true)],
+        );
+        assert_eq!(bounds(&rectangles), [(12.0, 47.76)]);
     }
 
     #[test]
@@ -1203,14 +1257,7 @@ mod tests {
         // 选区起点在对象之后：Parley 把对象推进折进后续字素，矩形回溯到对象左缘。
         let rectangles = normalize_inline_object_selection_rectangles(
             vec![rectangle(12.0, 60.0)],
-            &[InlineObjectSelectionBox {
-                line_index: 0,
-                x0: 12.0,
-                x1: 42.0,
-                y0: 0.0,
-                y1: 20.0,
-                selected: false,
-            }],
+            &[object_box(false, false, true)],
         );
         assert_eq!(bounds(&rectangles), [(42.0, 60.0)]);
     }
@@ -1226,9 +1273,31 @@ mod tests {
                 y0: 0.0,
                 y1: 20.0,
                 selected: true,
+                keep_left: true,
+                keep_right: true,
             }],
         );
         assert_eq!(bounds(&rectangles), [(12.0, 60.0)]);
+    }
+
+    #[test]
+    fn object_only_selection_drops_left_artifact_and_keeps_the_object_box() {
+        // 镜像场景：选区只包含对象，平台把对象推进折进左侧字素导致矩形左溢；
+        // keep_left=false 丢弃左侧伪影，只保留一次对象盒。
+        let rectangles = normalize_inline_object_selection_rectangles(
+            vec![rectangle(0.0, 40.0)],
+            &[object_box(true, false, false)],
+        );
+        assert_eq!(bounds(&rectangles), [(12.0, 42.0)]);
+    }
+
+    #[test]
+    fn selection_covering_text_before_object_keeps_the_left_text_piece() {
+        let rectangles = normalize_inline_object_selection_rectangles(
+            vec![rectangle(0.0, 40.0)],
+            &[object_box(true, true, false)],
+        );
+        assert_eq!(bounds(&rectangles), [(0.0, 42.0)]);
     }
 
     #[test]
