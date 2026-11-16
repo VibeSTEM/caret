@@ -5,6 +5,7 @@
 
 use super::super::paragraph_ops::{ParagraphIndex, validated_paragraph_location};
 use super::super::{HostCaretPosition, Pos, PositionMap, Selection, StoryId};
+use super::Session;
 use super::formatting::PendingInlineStyle;
 use super::math_edit::{MathEdit, MathEditBranch, MathEditTarget};
 use caret_doc::{
@@ -447,6 +448,70 @@ impl Edit for SessionHistoryEdit {
         *current_after = next_after;
         self.after = other.after;
         Merged::Yes
+    }
+}
+
+/// 文档变更事务提交后历史快照的采集口径。
+///
+/// 正文命令、结构编辑与 IME/格式事务对“提交后状态”的记录既有差异，必须逐点保留：
+/// 前者折叠选区时同步锚点视觉亲和并记录宿主插入点，后者沿用当前锚点视觉亲和。
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DocumentEditSnapshot {
+    /// 正文命令与结构编辑：折叠选区同步锚点视觉亲和，记录数学编辑与宿主插入点。
+    Body,
+    /// IME 替换与仅格式事务：沿用当前锚点视觉亲和，只记录数学编辑位置。
+    Inline,
+}
+
+impl DocumentEditSnapshot {
+    fn anchor_visual_affinity(self, session: &Session) -> VisualAffinity {
+        match self {
+            Self::Body if session.selection.anchor == session.selection.focus => {
+                session.selection_visual_affinity
+            }
+            Self::Body | Self::Inline => session.selection_anchor_visual_affinity,
+        }
+    }
+
+    fn history_state(self, session: &Session, state_id: u64) -> SessionHistoryState {
+        let state = SessionHistoryState::new(
+            session.selection.clone(),
+            session.selection_visual_affinity,
+            session.pending_inline_style.clone(),
+            state_id,
+        )
+        .with_anchor_visual_affinity(self.anchor_visual_affinity(session))
+        .with_math_edit(session.math_edit.as_ref().map(MathEditPosition::from_edit));
+        match self {
+            Self::Body => state.with_host_caret_position(session.host_caret_position.clone()),
+            Self::Inline => state,
+        }
+    }
+}
+
+impl Session {
+    /// 文档变更事务的唯一提交入口。
+    ///
+    /// 统一完成状态 ID 分配（仅格式补丁沿用修改前 ID）、历史记录登记、
+    /// 当前历史状态 ID 赋值与文档代际推进；调用方只负责产出补丁与提交前快照。
+    pub(super) fn commit_document_edit(
+        &mut self,
+        patch: DocumentPatch,
+        before_state: SessionHistoryState,
+        snapshot: DocumentEditSnapshot,
+    ) {
+        let document_changed = patch.affects_document();
+        let after_state_id = if document_changed {
+            self.allocate_history_state_id()
+        } else {
+            before_state.state_id
+        };
+        let after_state = snapshot.history_state(self, after_state_id);
+        self.record_history_edit(SessionHistoryEdit::new(patch, before_state, after_state));
+        self.history_state_id = after_state_id;
+        if document_changed {
+            self.advance_document_generation();
+        }
     }
 }
 

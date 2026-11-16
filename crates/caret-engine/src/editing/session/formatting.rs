@@ -10,7 +10,7 @@ use super::super::flow_format::{
     InheritedInlineStyle, inline_format_range_state, run_property_range_state,
 };
 use super::super::paragraph_ops::{ParagraphLocation, paragraph_at_location};
-use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
+use super::super::session::history::{DocumentEditSnapshot, DocumentPatch, SessionHistoryState};
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, InlineSpan, Pos};
 use super::Session;
@@ -583,24 +583,18 @@ impl Session {
         let before_state_id = self.history_state_id;
         mutate(&mut self.pending_inline_style)?;
         self.advance_history_merge_epoch();
-        self.record_history_edit(SessionHistoryEdit::new(
+        let before_state = SessionHistoryState::new(
+            before_selection,
+            before_visual_affinity,
+            before_pending_style,
+            before_state_id,
+        )
+        .with_anchor_visual_affinity(before_anchor_visual_affinity);
+        self.commit_document_edit(
             DocumentPatch::PendingStyle,
-            SessionHistoryState::new(
-                before_selection,
-                before_visual_affinity,
-                before_pending_style,
-                before_state_id,
-            )
-            .with_anchor_visual_affinity(before_anchor_visual_affinity),
-            SessionHistoryState::new(
-                self.selection.clone(),
-                self.selection_visual_affinity,
-                self.pending_inline_style.clone(),
-                before_state_id,
-            )
-            .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
-        ));
-        self.history_state_id = before_state_id;
+            before_state,
+            DocumentEditSnapshot::Inline,
+        );
         Ok(())
     }
 

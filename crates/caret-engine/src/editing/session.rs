@@ -49,7 +49,7 @@ use std::{collections::VecDeque, sync::Arc};
 use undo::History;
 
 use self::formatting::PendingInlineStyle;
-use self::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
+use self::history::{DocumentEditSnapshot, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 
 const TEXT_MAP_CACHE_CAPACITY: usize = 2;
 
@@ -1281,7 +1281,6 @@ impl Session {
             {
                 self.structure_index = Arc::new(StructureIndex::build(&self.document));
             }
-            let after_state_id = self.allocate_history_state_id();
             let patch = if let Some(before) = before_page_geometry {
                 let after = self
                     .document
@@ -1330,39 +1329,16 @@ impl Session {
                 }
             };
             effect.changed_paragraph_id = patch.single_changed_paragraph_id();
-            let edit = SessionHistoryEdit::new(
-                patch,
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    before_pending_style,
-                    before_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity)
-                .with_math_edit(before_math_edit)
-                .with_host_caret_position(before_host_caret_position),
-                SessionHistoryState::new(
-                    self.selection.clone(),
-                    self.selection_visual_affinity,
-                    self.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(if self.selection.anchor == self.selection.focus {
-                    self.selection_visual_affinity
-                } else {
-                    self.selection_anchor_visual_affinity
-                })
-                .with_math_edit(self.math_edit.as_ref().map(math_edit::history_position))
-                .with_host_caret_position(self.host_caret_position.clone()),
-            );
-            self.record_history_edit(edit);
-            self.history_state_id = after_state_id;
-            if let Some(next) = self.document_generation.checked_add(1) {
-                self.document_generation = next;
-            } else {
-                self.session_id = NodeId::generate();
-                self.document_generation = 0;
-            }
+            let before_state = SessionHistoryState::new(
+                before_selection,
+                before_visual_affinity,
+                before_pending_style,
+                before_state_id,
+            )
+            .with_anchor_visual_affinity(before_anchor_visual_affinity)
+            .with_math_edit(before_math_edit)
+            .with_host_caret_position(before_host_caret_position);
+            self.commit_document_edit(patch, before_state, DocumentEditSnapshot::Body);
         }
         Ok(effect)
     }

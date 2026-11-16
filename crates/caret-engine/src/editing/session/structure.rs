@@ -9,7 +9,7 @@ use super::super::{
     Selection, StoryId,
 };
 use super::Session;
-use super::history::{self, DocumentPatch, SessionHistoryEdit, SessionHistoryState};
+use super::history::{self, DocumentEditSnapshot, DocumentPatch, SessionHistoryState};
 use crate::editing::paragraph_ops::{
     ParagraphLocation, compare_positions, paragraph_at_location, paragraph_parent_path,
 };
@@ -69,7 +69,6 @@ impl Session {
         self.text_map_cache.clear();
         self.advance_history_merge_epoch();
 
-        let after_state_id = self.allocate_history_state_id();
         let before_state = SessionHistoryState::new(
             before.selection,
             before.visual_affinity,
@@ -78,29 +77,7 @@ impl Session {
         )
         .with_anchor_visual_affinity(before.anchor_visual_affinity)
         .with_host_caret_position(before.host_caret_position);
-        self.record_history_edit(SessionHistoryEdit::new(
-            patch,
-            before_state,
-            SessionHistoryState::new(
-                self.selection.clone(),
-                self.selection_visual_affinity,
-                self.pending_inline_style.clone(),
-                after_state_id,
-            )
-            .with_anchor_visual_affinity(if self.selection.anchor == self.selection.focus {
-                self.selection_visual_affinity
-            } else {
-                self.selection_anchor_visual_affinity
-            })
-            .with_math_edit(
-                self.math_edit
-                    .as_ref()
-                    .map(super::math_edit::history_position),
-            )
-            .with_host_caret_position(self.host_caret_position.clone()),
-        ));
-        self.history_state_id = after_state_id;
-        self.advance_document_generation();
+        self.commit_document_edit(patch, before_state, DocumentEditSnapshot::Body);
     }
 
     /// 在块环境后的空段落段首退格时，仅移除内容为空的环境。
