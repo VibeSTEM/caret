@@ -5342,27 +5342,6 @@ fn empty_align_cell_backspace_keeps_other_cells_and_moves_out() -> Result<(), Ed
 }
 
 #[test]
-fn superscript_template_uses_previous_tree_content_as_its_base() -> Result<(), EditError> {
-    let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
-    session.begin_inline_math()?;
-    session.run(Command::InsertText("x".to_owned()))?;
-    session.math_insert_template("^{}")?;
-    assert_eq!(inline_source(&session).as_deref(), Some("x^{}"));
-    let edit = session.math_edit().ok_or(EditError::InvalidPosition)?;
-    let MathEditBranch::Tree { path, .. } = &edit.branch else {
-        return Err(EditError::InvalidPosition);
-    };
-    assert!(matches!(
-        path.steps(),
-        [MathSequenceStep::Operand {
-            operand_index: 1,
-            ..
-        }]
-    ));
-    Ok(())
-}
-
-#[test]
 fn escape_cancels_math_text_composition_without_exiting_formula() -> Result<(), EditError> {
     let mut session = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
     session.run(Command::InsertInlineMath(r"\frac{1}{\text{ab}}".to_owned()))?;
@@ -14335,13 +14314,13 @@ fn superscript_and_subscript_templates_use_previous_tree_content_as_their_base()
         let MathEditBranch::Tree { path, .. } = &edit.branch else {
             return Err(EditError::InvalidPosition);
         };
-        assert!(path.steps().iter().any(|step| matches!(
-            step,
-            MathSequenceStep::Operand {
+        assert!(matches!(
+            path.steps(),
+            [MathSequenceStep::Operand {
                 operand_index: 1,
                 ..
-            }
-        )));
+            }]
+        ));
 
         session.run(Command::InsertText("2".to_owned()))?;
         assert_eq!(inline_source(&session).as_deref(), Some(filled_script));
