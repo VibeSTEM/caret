@@ -8,10 +8,10 @@ use super::super::super::environment::inline_adapter::{
 };
 use super::super::super::flow_format::{format_flow_run_property, run_property_range_state};
 use super::super::history::{DocumentPatch, MathEditPosition, SessionHistoryEdit};
-use super::super::{Affinity, EditError, Effect};
+use super::super::{EditError, Effect};
 use super::{
-    MathEdit, MathEditBranch, MathPositionAffinity, Session, history_position,
-    math_text_selection_range,
+    MathEdit, MathEditBranch, MathTextPosition, Session, history_position,
+    math_position_affinity_to_affinity, math_text_selection_range,
 };
 use crate::editing::session::history::SessionHistoryState;
 use caret_doc::{FlowContent, MathNode, TextFlow};
@@ -90,13 +90,12 @@ impl Session {
             edit,
             updated_tree,
             super::text_branch::MathTextTreeCommit {
-                branch: super::MathEditBranch::Text {
-                    path: path.clone(),
+                branch: super::MathEditBranch::text_selection(
                     anchor,
-                    focus_affinity,
+                    MathTextPosition::new(path.clone(), cursor, focus_affinity),
                     anchor_visual_affinity,
                     visual_affinity,
-                },
+                ),
                 align_cell: path.align_cell(),
                 cursor,
                 merge_group: None,
@@ -114,10 +113,9 @@ impl Session {
         offset: usize,
     ) -> Result<Effect, EditError> {
         let affinity = match &edit.branch {
-            MathEditBranch::Text { focus_affinity, .. } => match focus_affinity {
-                MathPositionAffinity::Upstream => Affinity::Upstream,
-                MathPositionAffinity::Downstream => Affinity::Downstream,
-            },
+            MathEditBranch::Text { focus_affinity, .. } => {
+                math_position_affinity_to_affinity(*focus_affinity)
+            }
             MathEditBranch::Source | MathEditBranch::Tree { .. } => {
                 return Err(EditError::InvalidPosition);
             }

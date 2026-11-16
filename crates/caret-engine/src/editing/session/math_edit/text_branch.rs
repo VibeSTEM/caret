@@ -13,7 +13,7 @@ use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{
     MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
     MathSequencePath, MathSequenceStep, MathTextPosition, MathTreePosition, history_position,
-    math_text_selection_range,
+    math_position_affinity_to_affinity, math_text_selection_range,
 };
 use super::{Session, optional_placeholder_operand};
 use caret_doc::{Block, MathContent, MathNodeKind};
@@ -586,10 +586,7 @@ impl Session {
         } else {
             focus_position
         };
-        let insertion_affinity = match insertion_position.affinity {
-            MathPositionAffinity::Upstream => Affinity::Upstream,
-            MathPositionAffinity::Downstream => Affinity::Downstream,
-        };
+        let insertion_affinity = math_position_affinity_to_affinity(insertion_position.affinity);
         let insertion_global = range.start;
         let requested_global_cursor = insertion_global
             .checked_add(inserted.len())
@@ -797,11 +794,6 @@ impl Session {
         let (next_path, local_cursor) = preferred_cursor
             .or_else(|| island.path_at_offset(global_cursor, true))
             .ok_or(EditError::InvalidPosition)?;
-        let next_position = MathTextPosition::new(
-            next_path.clone(),
-            local_cursor,
-            MathPositionAffinity::Downstream,
-        );
         target_tree
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
@@ -809,13 +801,12 @@ impl Session {
             edit,
             target_tree,
             MathTextTreeCommit {
-                branch: MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_position,
-                    focus_affinity: MathPositionAffinity::Downstream,
-                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                    visual_affinity: crate::VisualAffinity::Downstream,
-                },
+                branch: MathEditBranch::text(
+                    next_path.clone(),
+                    local_cursor,
+                    MathPositionAffinity::Downstream,
+                    crate::VisualAffinity::Downstream,
+                ),
                 align_cell: next_path.align_cell(),
                 cursor: local_cursor,
                 merge_group: Some(EditGroup::InsertText),
@@ -926,11 +917,6 @@ impl Session {
             .checked_sub(updated_flow_ranges[focus_index].start)
             .ok_or(EditError::InvalidPosition)?;
         let next_path = edit_path.clone();
-        let next_position = MathTextPosition::new(
-            next_path.clone(),
-            next_cursor,
-            MathPositionAffinity::Downstream,
-        );
         target_tree
             .validate()
             .map_err(|error| EditError::InvalidMath(error.to_string()))?;
@@ -938,13 +924,12 @@ impl Session {
             edit,
             target_tree,
             MathTextTreeCommit {
-                branch: MathEditBranch::Text {
-                    path: next_path.clone(),
-                    anchor: next_position,
-                    focus_affinity: MathPositionAffinity::Downstream,
-                    anchor_visual_affinity: crate::VisualAffinity::Downstream,
-                    visual_affinity: crate::VisualAffinity::Downstream,
-                },
+                branch: MathEditBranch::text(
+                    next_path,
+                    next_cursor,
+                    MathPositionAffinity::Downstream,
+                    crate::VisualAffinity::Downstream,
+                ),
                 align_cell: edit_path.align_cell(),
                 cursor: next_cursor,
                 merge_group: Some(match direction {

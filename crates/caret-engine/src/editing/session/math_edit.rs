@@ -164,16 +164,14 @@ fn math_tree_edge_position(
             Direction::Forward => 0,
             Direction::Backward => length,
         };
-        let anchor = MathTextPosition::new(path.clone(), cursor, MathPositionAffinity::Downstream);
         return Ok((
             cursor,
-            MathEditBranch::Text {
+            MathEditBranch::text(
                 path,
-                anchor,
-                focus_affinity: MathPositionAffinity::Downstream,
-                anchor_visual_affinity: VisualAffinity::Downstream,
-                visual_affinity: VisualAffinity::Downstream,
-            },
+                cursor,
+                MathPositionAffinity::Downstream,
+                VisualAffinity::Downstream,
+            ),
         ));
     }
     let position = MathTreePosition {
@@ -198,6 +196,14 @@ fn math_tree_edge_position(
             anchor: position,
         },
     ))
+}
+
+/// 数学位置亲和性映射为文本位置的逻辑亲和性。
+fn math_position_affinity_to_affinity(affinity: MathPositionAffinity) -> Affinity {
+    match affinity {
+        MathPositionAffinity::Upstream => Affinity::Upstream,
+        MathPositionAffinity::Downstream => Affinity::Downstream,
+    }
 }
 
 fn first_placeholder_position(
@@ -478,6 +484,39 @@ pub enum MathEditBranch {
     },
 }
 
+impl MathEditBranch {
+    /// 进入单一 TextFlow 的文本分支：锚点与焦点重合，两侧视觉侧相同。
+    pub(super) fn text(
+        path: MathTextFlowPath,
+        offset: usize,
+        affinity: MathPositionAffinity,
+        visual_affinity: VisualAffinity,
+    ) -> Self {
+        Self::text_selection(
+            MathTextPosition::new(path.clone(), offset, affinity),
+            MathTextPosition::new(path, offset, affinity),
+            visual_affinity,
+            visual_affinity,
+        )
+    }
+
+    /// 进入文本分支并保留两端各自的位置；两端可位于同一文本岛的不同 TextFlow。
+    pub(super) fn text_selection(
+        anchor: MathTextPosition,
+        focus: MathTextPosition,
+        anchor_visual_affinity: VisualAffinity,
+        visual_affinity: VisualAffinity,
+    ) -> Self {
+        Self::Text {
+            path: focus.path,
+            anchor,
+            focus_affinity: focus.affinity,
+            anchor_visual_affinity,
+            visual_affinity,
+        }
+    }
+}
+
 struct MathSourceWriteOptions {
     before_math_position_override: Option<MathEditPosition>,
     reject_unmapped_metadata: bool,
@@ -495,11 +534,11 @@ pub(super) struct MathEditRevision {
 #[derive(Debug, Clone)]
 pub struct MathEdit {
     pub target: MathEditTarget,
-    pub source_projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
+    pub(super) source_projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
     pub(super) source_draft: Option<MathSourceDraft>,
     /// 绑定投影的会话与文档 generation；不一致时拒绝向该投影应用编辑。
     pub(super) revision: MathEditRevision,
-    pub cursor: usize,
+    pub(super) cursor: usize,
     /// 光标所属的数学树分支；源码和 TextFlow 分别使用各自的字节坐标。
     pub branch: MathEditBranch,
 }
@@ -518,6 +557,38 @@ impl PartialEq for MathEdit {
 impl Eq for MathEdit {}
 
 impl MathEdit {
+    /// 进入公式编辑的初始状态：没有源码投影，也没有可恢复的源码草稿。
+    ///
+    /// `revision` 由调用方在同一时点从会话与文档代际取得，构造器不自行生成身份。
+    pub(super) fn entering(
+        target: MathEditTarget,
+        cursor: usize,
+        branch: MathEditBranch,
+        revision: MathEditRevision,
+    ) -> Self {
+        Self {
+            target,
+            source_projection: None,
+            source_draft: None,
+            revision,
+            cursor,
+            branch,
+        }
+    }
+
+    /// 进入源码分支并绑定既有源码投影；`None` 表示该编辑尚无投影。
+    pub(super) fn editing_source(
+        target: MathEditTarget,
+        source_projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
+        cursor: usize,
+        revision: MathEditRevision,
+    ) -> Self {
+        Self {
+            source_projection,
+            ..Self::entering(target, cursor, MathEditBranch::Source, revision)
+        }
+    }
+
     pub(super) fn replace_source_projection(
         &mut self,
         projection: Option<Arc<caret_math::MathSourceMap<'static>>>,
@@ -695,14 +766,12 @@ pub(super) fn restore_math_edit(
         if focus.resolve(tree).is_err() || anchor.resolve(tree).is_err() {
             return None;
         }
-        return Some(MathEdit {
-            target: position.target,
-            source_projection: None,
-            source_draft: None,
+        return Some(MathEdit::entering(
+            position.target,
+            position.cursor,
+            position.branch,
             revision,
-            cursor: position.cursor,
-            branch: position.branch,
-        });
+        ));
     }
 
     if let MathEditBranch::Text { path, anchor, .. } = &position.branch {
@@ -744,14 +813,12 @@ pub(super) fn restore_math_edit(
             _ => return None,
         };
         math_text_selection_range(tree, path, anchor, position.cursor)?;
-        return Some(MathEdit {
-            target: position.target,
-            source_projection: None,
-            source_draft: None,
+        return Some(MathEdit::entering(
+            position.target,
+            position.cursor,
+            position.branch,
             revision,
-            cursor: position.cursor,
-            branch: position.branch,
-        });
+        ));
     }
 
     let MathEditBranch::Source = &position.branch else {
@@ -817,14 +884,12 @@ pub(super) fn restore_math_edit(
     if position.cursor > edit_source.len() || !edit_source.is_char_boundary(position.cursor) {
         return None;
     }
-    Some(MathEdit {
-        target: position.target,
-        source_projection: Some(source_projection),
-        source_draft: None,
+    Some(MathEdit::editing_source(
+        position.target,
+        Some(source_projection),
+        position.cursor,
         revision,
-        cursor: position.cursor,
-        branch: MathEditBranch::Source,
-    })
+    ))
 }
 
 enum HistoryProjectionTarget {
@@ -1061,17 +1126,15 @@ impl Session {
             Affinity::Upstream => VisualAffinity::Upstream,
             Affinity::Downstream => VisualAffinity::Downstream,
         };
-        self.math_edit = Some(MathEdit {
-            target: hit.target.clone(),
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
-            cursor: focused_position.offset,
-            branch: MathEditBranch::Tree {
+        self.math_edit = Some(MathEdit::entering(
+            hit.target.clone(),
+            focused_position.offset,
+            MathEditBranch::Tree {
                 path: focused_position.path.clone(),
                 anchor: focused_position,
             },
-        });
+            self.current_math_edit_revision(),
+        ));
         self.pending_inline_style.clear();
         self.clear_structure_selection_state();
         self.host_caret_position = None;
@@ -1208,20 +1271,17 @@ impl Session {
             Affinity::Upstream => VisualAffinity::Upstream,
             Affinity::Downstream => VisualAffinity::Downstream,
         };
-        self.math_edit = Some(MathEdit {
-            target: hit.target.clone(),
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
-            cursor: hit.position.offset,
-            branch: MathEditBranch::Text {
-                path: hit.position.path.clone(),
-                anchor: hit.position.clone(),
-                focus_affinity: hit.position.affinity,
-                anchor_visual_affinity: hit.visual_affinity,
-                visual_affinity: hit.visual_affinity,
-            },
-        });
+        self.math_edit = Some(MathEdit::entering(
+            hit.target.clone(),
+            hit.position.offset,
+            MathEditBranch::text(
+                hit.position.path.clone(),
+                hit.position.offset,
+                hit.position.affinity,
+                hit.visual_affinity,
+            ),
+            self.current_math_edit_revision(),
+        ));
         self.pending_inline_style.clear();
         self.clear_structure_selection_state();
         self.host_caret_position = None;
@@ -1490,14 +1550,12 @@ impl Session {
             anchor: plan.next_position.clone(),
             focus: plan.next_position,
         };
-        self.math_edit = Some(MathEdit {
-            target: plan.target,
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
-            cursor: plan.cursor,
-            branch: plan.branch,
-        });
+        self.math_edit = Some(MathEdit::entering(
+            plan.target,
+            plan.cursor,
+            plan.branch,
+            self.current_math_edit_revision(),
+        ));
         let index = build_paragraph_index(&self.document.body);
         self.finalize_structure_edit(
             index,
@@ -1955,14 +2013,12 @@ impl Session {
                 paragraph_id: paragraph.id.clone(),
                 math_id,
             };
-            self.math_edit = Some(MathEdit {
-                target: target.clone(),
-                source_projection: None,
-                source_draft: None,
-                revision: self.current_math_edit_revision(),
+            self.math_edit = Some(MathEdit::entering(
+                target.clone(),
                 cursor,
                 branch,
-            });
+                self.current_math_edit_revision(),
+            ));
             self.advance_history_merge_epoch();
             return Ok(Effect {
                 selection_changed: true,
@@ -2052,14 +2108,12 @@ impl Session {
                 }
             };
         let target = MathEditTarget::Block { block_id, align };
-        self.math_edit = Some(MathEdit {
-            target: target.clone(),
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
+        self.math_edit = Some(MathEdit::entering(
+            target.clone(),
             cursor,
             branch,
-        });
+            self.current_math_edit_revision(),
+        ));
         self.advance_history_merge_epoch();
         Ok(Effect {
             selection_changed: true,
@@ -2114,17 +2168,15 @@ impl Session {
             offset: root_offset,
             affinity: MathPositionAffinity::Downstream,
         };
-        self.math_edit = Some(MathEdit {
-            target: MathEditTarget::Inline {
+        self.math_edit = Some(MathEdit::entering(
+            MathEditTarget::Inline {
                 paragraph_id: paragraph_id.clone(),
                 math_id: math_id.clone(),
             },
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
-            cursor: root_offset,
-            branch: MathEditBranch::Tree { path, anchor },
-        });
+            root_offset,
+            MathEditBranch::Tree { path, anchor },
+            self.current_math_edit_revision(),
+        ));
         self.advance_history_merge_epoch();
         Ok(())
     }
@@ -2401,20 +2453,15 @@ impl Session {
                 let position = island
                     .position_at_offset(cursor, affinity)
                     .ok_or(EditError::InvalidPosition)?;
-                let focus_affinity = position.affinity;
                 if let Some(current) = &mut self.math_edit {
                     current.cursor = position.offset;
-                    let visual_affinity = match direction {
-                        Direction::Backward => VisualAffinity::Upstream,
-                        Direction::Forward => VisualAffinity::Downstream,
-                    };
-                    current.branch = MathEditBranch::Text {
-                        path: position.path.clone(),
-                        anchor: position,
-                        focus_affinity,
-                        anchor_visual_affinity: visual_affinity,
-                        visual_affinity,
-                    };
+                    // 文本 caret 的视觉侧与块外侧停靠共用同一方向投影：向前落在下游。
+                    current.branch = MathEditBranch::text(
+                        position.path,
+                        position.offset,
+                        position.affinity,
+                        visual_affinity_for_block_edge(direction),
+                    );
                 }
                 self.advance_history_merge_epoch();
                 return Ok(Effect {
@@ -2442,10 +2489,7 @@ impl Session {
                                 MathPositionAffinity::Downstream,
                             );
                             *focus_affinity = MathPositionAffinity::Downstream;
-                            let next_visual_affinity = match direction {
-                                Direction::Backward => VisualAffinity::Upstream,
-                                Direction::Forward => VisualAffinity::Downstream,
-                            };
+                            let next_visual_affinity = visual_affinity_for_block_edge(direction);
                             *anchor_visual_affinity = next_visual_affinity;
                             *visual_affinity = next_visual_affinity;
                         }
@@ -2453,23 +2497,12 @@ impl Session {
                 }
                 MathTextCaretStep::CrossFlow(next_path, cursor) => {
                     if let Some(current) = &mut self.math_edit {
-                        current.branch = MathEditBranch::Text {
-                            path: next_path.clone(),
-                            anchor: MathTextPosition::new(
-                                next_path,
-                                cursor,
-                                MathPositionAffinity::Downstream,
-                            ),
-                            focus_affinity: MathPositionAffinity::Downstream,
-                            anchor_visual_affinity: match direction {
-                                Direction::Backward => VisualAffinity::Upstream,
-                                Direction::Forward => VisualAffinity::Downstream,
-                            },
-                            visual_affinity: match direction {
-                                Direction::Backward => VisualAffinity::Upstream,
-                                Direction::Forward => VisualAffinity::Downstream,
-                            },
-                        };
+                        current.branch = MathEditBranch::text(
+                            next_path,
+                            cursor,
+                            MathPositionAffinity::Downstream,
+                            visual_affinity_for_block_edge(direction),
+                        );
                         current.cursor = cursor;
                     }
                 }
@@ -2491,23 +2524,12 @@ impl Session {
                             adjacent_display.len()
                         };
                         if let Some(current) = &mut self.math_edit {
-                            current.branch = MathEditBranch::Text {
-                                path: adjacent_path.clone(),
-                                anchor: MathTextPosition::new(
-                                    adjacent_path,
-                                    cursor,
-                                    MathPositionAffinity::Downstream,
-                                ),
-                                focus_affinity: MathPositionAffinity::Downstream,
-                                anchor_visual_affinity: match direction {
-                                    Direction::Backward => VisualAffinity::Upstream,
-                                    Direction::Forward => VisualAffinity::Downstream,
-                                },
-                                visual_affinity: match direction {
-                                    Direction::Backward => VisualAffinity::Upstream,
-                                    Direction::Forward => VisualAffinity::Downstream,
-                                },
-                            };
+                            current.branch = MathEditBranch::text(
+                                adjacent_path,
+                                cursor,
+                                MathPositionAffinity::Downstream,
+                                visual_affinity_for_block_edge(direction),
+                            );
                             current.cursor = cursor;
                         }
                         self.advance_history_merge_epoch();
@@ -2995,19 +3017,16 @@ impl Session {
                 .ok_or(EditError::InvalidPosition)?;
             let text_path =
                 tree_position::text_path_for_content(&anchor, content_index, align_cell);
-            let text_anchor =
-                MathTextPosition::new(text_path.clone(), 0, MathPositionAffinity::Downstream);
             return self.commit_math_text_tree(
                 edit,
                 tree,
                 text_branch::MathTextTreeCommit {
-                    branch: MathEditBranch::Text {
-                        path: text_path,
-                        anchor: text_anchor,
-                        focus_affinity: MathPositionAffinity::Downstream,
-                        anchor_visual_affinity: VisualAffinity::Downstream,
-                        visual_affinity: VisualAffinity::Downstream,
-                    },
+                    branch: MathEditBranch::text(
+                        text_path,
+                        0,
+                        MathPositionAffinity::Downstream,
+                        VisualAffinity::Downstream,
+                    ),
                     align_cell,
                     cursor: 0,
                     merge_group: None,
@@ -3235,15 +3254,12 @@ impl Session {
             let original_edit = edit.clone();
             let mut text_edit = edit;
             text_edit.cursor = cursor;
-            let text_anchor =
-                MathTextPosition::new(text_path.clone(), cursor, MathPositionAffinity::Downstream);
-            text_edit.branch = MathEditBranch::Text {
-                path: text_path,
-                anchor: text_anchor,
-                focus_affinity: MathPositionAffinity::Downstream,
-                anchor_visual_affinity: VisualAffinity::Downstream,
-                visual_affinity: VisualAffinity::Downstream,
-            };
+            text_edit.branch = MathEditBranch::text(
+                text_path,
+                cursor,
+                MathPositionAffinity::Downstream,
+                VisualAffinity::Downstream,
+            );
             self.math_edit = Some(text_edit.clone());
             return match self.math_text_delete(direction) {
                 Ok(effect) => Ok(effect),
@@ -3433,13 +3449,12 @@ impl Session {
         self.pending_inline_style.clear();
         if let Some(current) = &mut self.math_edit {
             current.cursor = focus_position.offset;
-            current.branch = MathEditBranch::Text {
-                path: focus_position.path.clone(),
-                anchor: anchor_position,
-                focus_affinity: focus_position.affinity,
+            current.branch = MathEditBranch::text_selection(
+                anchor_position,
+                focus_position,
                 anchor_visual_affinity,
                 visual_affinity,
-            };
+            );
         }
         self.advance_history_merge_epoch();
         Ok(Effect {
@@ -3629,18 +3644,12 @@ impl Session {
                     current.replace_source_projection(None);
                     current.source_draft = None;
                     current.cursor = cursor;
-                    let anchor = MathTextPosition::new(
-                        path.clone(),
+                    current.branch = MathEditBranch::text(
+                        path,
                         cursor,
                         MathPositionAffinity::Downstream,
+                        VisualAffinity::Downstream,
                     );
-                    current.branch = MathEditBranch::Text {
-                        path,
-                        anchor,
-                        focus_affinity: MathPositionAffinity::Downstream,
-                        anchor_visual_affinity: VisualAffinity::Downstream,
-                        visual_affinity: VisualAffinity::Downstream,
-                    };
                 }
             }
             MathTreeCaretMove::Boundary => {
@@ -3837,13 +3846,12 @@ impl Session {
         }
         let _ = projected_target;
         edit.replace_source_projection(Some(Arc::new(projection)));
-        edit.branch = MathEditBranch::Text {
-            path,
+        edit.branch = MathEditBranch::text_selection(
             anchor,
-            focus_affinity: MathPositionAffinity::Downstream,
-            anchor_visual_affinity: VisualAffinity::Downstream,
-            visual_affinity: VisualAffinity::Downstream,
-        };
+            MathTextPosition::new(path, edit.cursor, MathPositionAffinity::Downstream),
+            VisualAffinity::Downstream,
+            VisualAffinity::Downstream,
+        );
         self.math_edit = Some(edit);
         Ok(())
     }
@@ -3936,15 +3944,12 @@ impl Session {
             edit.replace_source_projection(None);
             edit.source_draft = None;
             edit.cursor = cursor;
-            let anchor =
-                MathTextPosition::new(path.clone(), cursor, MathPositionAffinity::Downstream);
-            edit.branch = MathEditBranch::Text {
+            edit.branch = MathEditBranch::text(
                 path,
-                anchor,
-                focus_affinity: MathPositionAffinity::Downstream,
-                anchor_visual_affinity: VisualAffinity::Downstream,
-                visual_affinity: VisualAffinity::Downstream,
-            };
+                cursor,
+                MathPositionAffinity::Downstream,
+                VisualAffinity::Downstream,
+            );
         }
         self.advance_history_merge_epoch();
     }
@@ -4371,14 +4376,12 @@ impl Session {
             _ => return Ok(None),
         };
         let target = MathEditTarget::Block { block_id, align };
-        Ok(Some(MathEdit {
-            target: target.clone(),
-            source_projection: None,
-            source_draft: None,
-            revision: self.current_math_edit_revision(),
+        Ok(Some(MathEdit::entering(
+            target.clone(),
             cursor,
             branch,
-        }))
+            self.current_math_edit_revision(),
+        )))
     }
 
     /// 块公式前（向后）或后（向前）的同级正文段落边缘。
@@ -4712,14 +4715,12 @@ impl Session {
         };
         let mut next_branch = MathEditBranch::Source;
         let mut next_cursor = cursor;
-        let mut next_edit = MathEdit {
-            target: edit.target.clone(),
-            source_projection: edit.source_projection.clone(),
-            source_draft: None,
-            revision: edit.revision.clone(),
+        let mut next_edit = MathEdit::editing_source(
+            edit.target.clone(),
+            edit.source_projection.clone(),
             cursor,
-            branch: MathEditBranch::Source,
-        };
+            edit.revision.clone(),
+        );
         let before_selection = self.selection.clone();
         let before_visual_affinity = self.selection_visual_affinity;
         let mut position_map = None;
@@ -4915,14 +4916,12 @@ impl Session {
                                     "split formula cannot be bound to its source map".to_owned(),
                                 ));
                             }
-                            next_edit = MathEdit {
-                                target: target.clone(),
-                                source_projection: Some(Arc::new(source_projection)),
-                                source_draft: None,
-                                revision: edit.revision.clone(),
+                            next_edit = MathEdit::editing_source(
+                                target.clone(),
+                                Some(Arc::new(source_projection)),
                                 cursor,
-                                branch: MathEditBranch::Source,
-                            };
+                                edit.revision.clone(),
+                            );
                             let position = Pos {
                                 offset,
                                 affinity: Affinity::Upstream,
