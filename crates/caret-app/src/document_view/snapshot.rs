@@ -522,6 +522,220 @@ fn insertion_slot_horizontal_bounds(x: f64, page_width: f64, width: f64) -> (f64
     (x0, x0 + width)
 }
 
+/// 布局与交互快照共享的高亮状态；组合预览会话优先于主会话。
+///
+/// 两个入口此前各自按同一顺序读取选区、视觉侧、公式编辑与结构选择；集中推导后
+/// 空宿主、行内环境与待输入格式的判定只有一处来源。
+struct HighlightState {
+    math_block_target: Option<MathEditTarget>,
+    inline_environment: Option<caret_engine::InlineSpan>,
+    empty_inline_host: bool,
+    inline_math_tree_context: Option<(MathEditTarget, MathTreePosition)>,
+    pending_inline_slot: bool,
+    inline_focus: Pos,
+    inline_visual_affinity: caret_engine::VisualAffinity,
+    math_text_context: Option<MathTextInputContext>,
+    focus_environment_id: Option<NodeId>,
+}
+
+/// 两个快照入口共享的四个高亮层矩形；字段名沿用各自的 JSON 键。
+struct HighlightRectangles {
+    block_environment: Value,
+    math_block: Value,
+    math_text: Value,
+    inline_environment: Value,
+}
+
+impl HighlightState {
+    /// 以同一代快照投影四个高亮层，两个入口只在字段插入位置上不同。
+    fn rectangles(
+        &self,
+        snapshot: &caret_engine::DocumentLayoutSnapshot,
+    ) -> Result<HighlightRectangles, String> {
+        let inline_math_caret = self
+            .inline_math_tree_context
+            .as_ref()
+            .and_then(|(target, position)| snapshot.math_tree_caret(target, position));
+        Ok(HighlightRectangles {
+            block_environment: block_environment_highlight_rects(
+                self.focus_environment_id.as_ref(),
+                snapshot,
+            ),
+            math_block: math_block_highlight_rects(self.math_block_target.as_ref(), snapshot)?,
+            math_text: math_text_highlight_rects(self.math_text_context.as_ref(), snapshot),
+            inline_environment: inline_environment_highlight_rects(
+                InlineHighlightContext {
+                    range: self.inline_environment.as_ref(),
+                    empty_inline_host: self.empty_inline_host,
+                    math_caret: inline_math_caret,
+                },
+                self.pending_inline_slot,
+                &self.inline_focus,
+                self.inline_visual_affinity,
+                snapshot,
+            ),
+        })
+    }
+}
+
+/// 从「组合预览优先」的高亮会话推导两个快照入口共享的高亮状态。
+fn current_highlight_state(runtime: &mut DocumentViewRuntime) -> Result<HighlightState, String> {
+    let highlight_session = runtime
+        .composition_preview_session
+        .as_mut()
+        .unwrap_or(&mut runtime.session);
+    let environment_view = highlight_session
+        .current_environment_view()
+        .map_err(|error| format!("layout.inline_environment: {error}"))?;
+    let math_block_target = current_math_block_target(highlight_session);
+    let inline_context =
+        math_block_target.is_none() && !highlight_session.has_structure_selection();
+    let inline_environment_entry = inline_context
+        .then(|| environment_view.innermost_inline())
+        .flatten();
+    let empty_inline_host = inline_environment_entry.is_some_and(|entry| entry.empty_inline_host);
+    let inline_environment = inline_environment_entry.and_then(|entry| entry.inline_range.clone());
+    let inline_math_tree_context = if empty_inline_host {
+        highlight_session.math_tree_input_context()
+    } else {
+        None
+    };
+    let pending_inline_slot = inline_context
+        && highlight_session.has_pending_inline_style()
+        && highlight_session.selection().anchor == highlight_session.selection().focus;
+    let inline_focus = highlight_session.selection().focus.clone();
+    let inline_visual_affinity = highlight_session.selection_visual_affinity();
+    let math_text_context = math_block_target
+        .as_ref()
+        .and_then(|_| highlight_session.math_text_input_context());
+    let focus_environment_id = current_block_environment_id(highlight_session, &environment_view);
+    Ok(HighlightState {
+        math_block_target,
+        inline_environment,
+        empty_inline_host,
+        inline_math_tree_context,
+        pending_inline_slot,
+        inline_focus,
+        inline_visual_affinity,
+        math_text_context,
+        focus_environment_id,
+    })
+}
+
+/// 组合预览优先、主线会话回落的公式几何上下文；两个快照入口共用同一优先级。
+fn math_geometry_contexts(
+    preview_session: Option<&caret_engine::Session>,
+    math_context: &Option<MathTextInputContext>,
+    math_tree_context: &Option<(MathEditTarget, MathTreePosition)>,
+) -> (
+    Option<MathTextInputContext>,
+    Option<(MathEditTarget, MathTreePosition)>,
+) {
+    (
+        preview_session
+            .and_then(caret_engine::Session::math_text_input_context)
+            .or_else(|| math_context.clone()),
+        preview_session
+            .and_then(caret_engine::Session::math_tree_input_context)
+            .or_else(|| math_tree_context.clone()),
+    )
+}
+
+/// 将公式文本输入上下文投影为交互上下文缓存键。
+fn math_interaction_context(context: &MathTextInputContext) -> MathInteractionContext {
+    MathInteractionContext {
+        surrounding_text: context.surrounding_text.clone(),
+        target: context.target.clone(),
+        anchor: context.anchor.clone(),
+        focus: context.focus.clone(),
+        anchor_visual_affinity: context.anchor_visual_affinity,
+        visual_affinity: context.visual_affinity,
+    }
+}
+
+/// 将公式树输入上下文投影为交互上下文缓存键。
+fn math_tree_interaction_context(
+    (target, position): &(MathEditTarget, MathTreePosition),
+) -> MathTreeInteractionContext {
+    MathTreeInteractionContext {
+        target: target.clone(),
+        position: position.clone(),
+    }
+}
+
+/// 交互上下文缓存键；正文代际与命令态由各入口决定。
+fn interaction_context(
+    document_generation: u64,
+    selection: &Selection,
+    command_input_active: bool,
+    math_context: Option<MathInteractionContext>,
+    math_tree_context: Option<MathTreeInteractionContext>,
+) -> InteractionContext {
+    InteractionContext {
+        document_generation,
+        focused_paragraph_id: selection.focus.paragraph_id.clone(),
+        command_input_active,
+        math_context,
+        math_tree_context,
+    }
+}
+
+/// 公式 caret 几何；两个快照入口共享同一优先级与错误码。
+fn math_caret_geometry(
+    math_context: Option<&MathTextInputContext>,
+    math_tree_context: Option<&(MathEditTarget, MathTreePosition)>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Result<Option<(PageCaretGeometry, u16)>, String> {
+    if let Some(context) = math_context {
+        return snapshot
+            .math_text_caret(&context.target, &context.focus, context.visual_affinity)
+            .map(Some)
+            .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned());
+    }
+    if let Some((target, position)) = math_tree_context {
+        return snapshot
+            .math_tree_caret(target, position)
+            .map(Some)
+            .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned());
+    }
+    Ok(None)
+}
+
+/// caret 几何的界面 JSON；两个快照入口的字段名共享一处来源。
+fn caret_geometry_json(caret: PageCaretGeometry, font_size_centipoints: u16) -> Value {
+    json!({
+        "pageIndex": caret.page_index,
+        "xPt": caret.x_pt,
+        "y0Pt": caret.y0_pt,
+        "y1Pt": caret.y1_pt,
+        "fontSizeCentipoints": font_size_centipoints,
+    })
+}
+
+/// 数学选区优先、正文结构选区回落的矩形投影。
+///
+/// `body_rectangles` 以闭包延迟求值，使布局入口在公式分支不额外读取正文选区，而
+/// 交互入口可以保持先校验正文矩形的既有顺序。
+fn selection_rectangles_with_math(
+    math_context: Option<&MathTextInputContext>,
+    math_tree_selection_context: Option<&(MathEditTarget, MathTreePosition, MathTreePosition)>,
+    body_rectangles: impl FnOnce() -> Result<Value, String>,
+    snapshot: &caret_engine::DocumentLayoutSnapshot,
+) -> Result<Value, String> {
+    if let Some(context) = math_context {
+        return math_text_selection_json(
+            snapshot,
+            &context.target,
+            &context.anchor,
+            &context.focus,
+        );
+    }
+    if let Some((target, anchor, focus)) = math_tree_selection_context {
+        return math_tree_selection_json(snapshot, target, anchor, focus);
+    }
+    body_rectangles()
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -558,38 +772,7 @@ impl DocumentViewRuntime {
             self.base_snapshot()?;
         }
         let composing = self.composition_preview_session.is_some();
-        let highlight_session = self
-            .composition_preview_session
-            .as_mut()
-            .unwrap_or(&mut self.session);
-        let environment_view = highlight_session
-            .current_environment_view()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let math_block_target = current_math_block_target(highlight_session);
-        let inline_context =
-            math_block_target.is_none() && !highlight_session.has_structure_selection();
-        let inline_environment_entry = inline_context
-            .then(|| environment_view.innermost_inline())
-            .flatten();
-        let empty_inline_host =
-            inline_environment_entry.is_some_and(|entry| entry.empty_inline_host);
-        let inline_environment =
-            inline_environment_entry.and_then(|entry| entry.inline_range.as_ref());
-        let inline_math_tree_context = if empty_inline_host {
-            highlight_session.math_tree_input_context()
-        } else {
-            None
-        };
-        let pending_inline_slot = inline_context
-            && highlight_session.has_pending_inline_style()
-            && highlight_session.selection().anchor == highlight_session.selection().focus;
-        let inline_focus = highlight_session.selection().focus.clone();
-        let inline_visual_affinity = highlight_session.selection_visual_affinity();
-        let math_text_context = math_block_target
-            .as_ref()
-            .and_then(|_| highlight_session.math_text_input_context());
-        let focus_environment_id =
-            current_block_environment_id(highlight_session, &environment_view);
+        let highlight = current_highlight_state(self)?;
         let selection = self.session.selection().clone();
         let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
@@ -606,8 +789,6 @@ impl DocumentViewRuntime {
         };
         let expected_font_generation = self.layout.font_generation();
         require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
-        let inline_math_caret = inline_math_tree_context
-            .and_then(|(target, position)| snapshot.math_tree_caret(&target, &position));
         let mut view = match changed_paragraph {
             Some((paragraph_id, page_start_index, base_generation)) => serde_json::to_value(
                 DocumentLayoutDeltaView::for_paragraph(
@@ -630,39 +811,30 @@ impl DocumentViewRuntime {
                 "currentStructure".to_owned(),
                 current_structure_state(&self.session),
             );
+        let highlight_rectangles = highlight.rectangles(snapshot)?;
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "blockEnvironmentHighlightRects".to_owned(),
-                block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
+                highlight_rectangles.block_environment,
             );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "mathBlockHighlightRects".to_owned(),
-                math_block_highlight_rects(math_block_target.as_ref(), snapshot)?,
+                highlight_rectangles.math_block,
             );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "mathTextHighlightRects".to_owned(),
-                math_text_highlight_rects(math_text_context.as_ref(), snapshot),
+                highlight_rectangles.math_text,
             );
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert(
                 "inlineEnvironmentHighlightRects".to_owned(),
-                inline_environment_highlight_rects(
-                    InlineHighlightContext {
-                        range: inline_environment,
-                        empty_inline_host,
-                        math_caret: inline_math_caret,
-                    },
-                    pending_inline_slot,
-                    &inline_focus,
-                    inline_visual_affinity,
-                    snapshot,
-                ),
+                highlight_rectangles.inline_environment,
             );
         if composing && changed_paragraph.is_some() {
             view.as_object_mut()
@@ -675,66 +847,43 @@ impl DocumentViewRuntime {
         let math_context = self.session.math_text_input_context();
         let math_tree_context = self.session.math_tree_input_context();
         let math_tree_selection_context = self.session.math_tree_selection_context();
-        let math_geometry_context = self
-            .composition_preview_session
-            .as_ref()
-            .and_then(caret_engine::Session::math_text_input_context)
-            .or_else(|| math_context.clone());
-        let math_tree_geometry_context = self
-            .composition_preview_session
-            .as_ref()
-            .and_then(caret_engine::Session::math_tree_input_context)
-            .or_else(|| math_tree_context.clone());
+        let (math_geometry_context, math_tree_geometry_context) = math_geometry_contexts(
+            self.composition_preview_session.as_ref(),
+            &math_context,
+            &math_tree_context,
+        );
         let rectangles = if composing {
             Value::Array(Vec::new())
-        } else if let Some(context) = &math_context {
-            math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
-        } else if let Some((target, anchor, focus)) = &math_tree_selection_context {
-            math_tree_selection_json(snapshot, target, anchor, focus)?
         } else {
-            selection_rectangles_json(
-                &selection,
-                structure_text_bounds.clone(),
-                has_structure_selection,
-                &selected_environment_ids,
-                &selected_math_block_ids,
+            selection_rectangles_with_math(
+                math_context.as_ref(),
+                math_tree_selection_context.as_ref(),
+                || {
+                    selection_rectangles_json(
+                        &selection,
+                        structure_text_bounds.clone(),
+                        has_structure_selection,
+                        &selected_environment_ids,
+                        &selected_math_block_ids,
+                        snapshot,
+                    )
+                },
                 snapshot,
             )?
         };
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("selectionRects".to_owned(), rectangles);
-        if let Some(context) = &math_geometry_context {
-            let (caret, font_size_centipoints) = snapshot
-                .math_text_caret(&context.target, &context.focus, context.visual_affinity)
-                .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?;
+        if let Some((caret, font_size_centipoints)) = math_caret_geometry(
+            math_geometry_context.as_ref(),
+            math_tree_geometry_context.as_ref(),
+            snapshot,
+        )? {
             view.as_object_mut()
                 .ok_or_else(|| "layout.invalid_view_object".to_owned())?
                 .insert(
                     "caretGeometry".to_owned(),
-                    json!({
-                        "pageIndex": caret.page_index,
-                        "xPt": caret.x_pt,
-                        "y0Pt": caret.y0_pt,
-                        "y1Pt": caret.y1_pt,
-                        "fontSizeCentipoints": font_size_centipoints,
-                    }),
-                );
-        } else if let Some((target, position)) = &math_tree_geometry_context {
-            let (caret, font_size_centipoints) = snapshot
-                .math_tree_caret(target, position)
-                .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned())?;
-            view.as_object_mut()
-                .ok_or_else(|| "layout.invalid_view_object".to_owned())?
-                .insert(
-                    "caretGeometry".to_owned(),
-                    json!({
-                        "pageIndex": caret.page_index,
-                        "xPt": caret.x_pt,
-                        "y0Pt": caret.y0_pt,
-                        "y1Pt": caret.y1_pt,
-                        "fontSizeCentipoints": font_size_centipoints,
-                    }),
+                    caret_geometry_json(caret, font_size_centipoints),
                 );
         }
         let composition_rectangles = if composing {
@@ -797,28 +946,17 @@ impl DocumentViewRuntime {
             "enabled": math_input_method_enabled(&self.session),
             "preferLatin": math_input_method_prefers_latin(&self.session),
         });
-        let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
-            surrounding_text: context.surrounding_text.clone(),
-            target: context.target.clone(),
-            anchor: context.anchor.clone(),
-            focus: context.focus.clone(),
-            anchor_visual_affinity: context.anchor_visual_affinity,
-            visual_affinity: context.visual_affinity,
-        });
-        let math_tree_context_key =
-            math_tree_context
-                .as_ref()
-                .map(|(target, position)| MathTreeInteractionContext {
-                    target: target.clone(),
-                    position: position.clone(),
-                });
-        self.last_interaction_context = Some(InteractionContext {
-            document_generation: snapshot.document_generation,
-            focused_paragraph_id: logical_selection.focus.paragraph_id.clone(),
-            command_input_active: false,
-            math_context: math_context_key,
-            math_tree_context: math_tree_context_key,
-        });
+        let math_context_key = math_context.as_ref().map(math_interaction_context);
+        let math_tree_context_key = math_tree_context
+            .as_ref()
+            .map(math_tree_interaction_context);
+        self.last_interaction_context = Some(interaction_context(
+            snapshot.document_generation,
+            logical_selection,
+            false,
+            math_context_key,
+            math_tree_context_key,
+        ));
         view.as_object_mut()
             .ok_or_else(|| "layout.invalid_view_object".to_owned())?
             .insert("inputMethodContext".to_owned(), input_method_context);
@@ -834,28 +972,17 @@ impl DocumentViewRuntime {
         let math_context = self.session.math_text_input_context();
         let math_tree_context = self.session.math_tree_input_context();
         let math_tree_selection_context = self.session.math_tree_selection_context();
-        let math_context_key = math_context.as_ref().map(|context| MathInteractionContext {
-            surrounding_text: context.surrounding_text.clone(),
-            target: context.target.clone(),
-            anchor: context.anchor.clone(),
-            focus: context.focus.clone(),
-            anchor_visual_affinity: context.anchor_visual_affinity,
-            visual_affinity: context.visual_affinity,
-        });
-        let math_tree_context_key =
-            math_tree_context
-                .as_ref()
-                .map(|(target, position)| MathTreeInteractionContext {
-                    target: target.clone(),
-                    position: position.clone(),
-                });
-        let context_key = InteractionContext {
-            document_generation: self.session.document_generation(),
-            focused_paragraph_id: selection.focus.paragraph_id.clone(),
-            command_input_active: command_input_context.is_some(),
-            math_context: math_context_key,
-            math_tree_context: math_tree_context_key,
-        };
+        let math_context_key = math_context.as_ref().map(math_interaction_context);
+        let math_tree_context_key = math_tree_context
+            .as_ref()
+            .map(math_tree_interaction_context);
+        let context_key = interaction_context(
+            self.session.document_generation(),
+            &selection,
+            command_input_context.is_some(),
+            math_context_key,
+            math_tree_context_key,
+        );
         let include_surrounding_text = self.last_interaction_context.as_ref() != Some(&context_key);
         let command_line = command_line_state(&self.session);
         let command_input_context = command_input_context.map(|line| {
@@ -869,51 +996,12 @@ impl DocumentViewRuntime {
         });
         let current_structure = current_structure_state(&self.session);
         let input_method_prefer_latin = math_input_method_prefers_latin(&self.session);
-        let environment_view = self
-            .composition_preview_session
-            .as_mut()
-            .unwrap_or(&mut self.session)
-            .current_environment_view()
-            .map_err(|error| format!("layout.inline_environment: {error}"))?;
-        let highlight_session = self
-            .composition_preview_session
-            .as_ref()
-            .unwrap_or(&self.session);
-        let math_block_target = current_math_block_target(highlight_session);
-        let inline_context =
-            math_block_target.is_none() && !highlight_session.has_structure_selection();
-        let inline_environment_entry = inline_context
-            .then(|| environment_view.innermost_inline())
-            .flatten();
-        let empty_inline_host =
-            inline_environment_entry.is_some_and(|entry| entry.empty_inline_host);
-        let inline_environment =
-            inline_environment_entry.and_then(|entry| entry.inline_range.as_ref());
-        let inline_math_tree_context = if empty_inline_host {
-            highlight_session.math_tree_input_context()
-        } else {
-            None
-        };
-        let pending_inline_slot = inline_context
-            && highlight_session.has_pending_inline_style()
-            && highlight_session.selection().anchor == highlight_session.selection().focus;
-        let inline_focus = highlight_session.selection().focus.clone();
-        let inline_visual_affinity = highlight_session.selection_visual_affinity();
-        let math_text_highlight_context = math_block_target
-            .as_ref()
-            .and_then(|_| highlight_session.math_text_input_context());
-        let focus_environment_id =
-            current_block_environment_id(highlight_session, &environment_view);
-        let math_geometry_context = self
-            .composition_preview_session
-            .as_ref()
-            .and_then(caret_engine::Session::math_text_input_context)
-            .or_else(|| math_context.clone());
-        let math_tree_geometry_context = self
-            .composition_preview_session
-            .as_ref()
-            .and_then(caret_engine::Session::math_tree_input_context)
-            .or_else(|| math_tree_context.clone());
+        let highlight = current_highlight_state(self)?;
+        let (math_geometry_context, math_tree_geometry_context) = math_geometry_contexts(
+            self.composition_preview_session.as_ref(),
+            &math_context,
+            &math_tree_context,
+        );
         let block_boundary_exit = self.session.block_boundary_exit();
         let has_structure_selection = self.session.has_structure_selection();
         let selected_environment_ids = self.session.selected_block_environments().to_vec();
@@ -924,23 +1012,7 @@ impl DocumentViewRuntime {
         let expected_font_generation = self.layout.font_generation();
         let snapshot = self.current_snapshot_ref()?;
         require_current_snapshot(snapshot, &self.session, expected_font_generation)?;
-        let inline_math_caret = inline_math_tree_context
-            .and_then(|(target, position)| snapshot.math_tree_caret(&target, &position));
-        let inline_environment_rectangles = inline_environment_highlight_rects(
-            InlineHighlightContext {
-                range: inline_environment,
-                empty_inline_host,
-                math_caret: inline_math_caret,
-            },
-            pending_inline_slot,
-            &inline_focus,
-            inline_visual_affinity,
-            snapshot,
-        );
-        let math_block_rectangles =
-            math_block_highlight_rects(math_block_target.as_ref(), snapshot)?;
-        let math_text_rectangles =
-            math_text_highlight_rects(math_text_highlight_context.as_ref(), snapshot);
+        let highlight_rectangles = highlight.rectangles(snapshot)?;
         let body_rectangles = selection_rectangles_json(
             &selection,
             structure_text_bounds,
@@ -949,13 +1021,12 @@ impl DocumentViewRuntime {
             &selected_math_block_ids,
             snapshot,
         )?;
-        let rectangles = if let Some(context) = &math_geometry_context {
-            math_text_selection_json(snapshot, &context.target, &context.anchor, &context.focus)?
-        } else if let Some((target, anchor, focus)) = &math_tree_selection_context {
-            math_tree_selection_json(snapshot, target, anchor, focus)?
-        } else {
-            body_rectangles
-        };
+        let rectangles = selection_rectangles_with_math(
+            math_geometry_context.as_ref(),
+            math_tree_selection_context.as_ref(),
+            || Ok(body_rectangles),
+            snapshot,
+        )?;
         let focus = &selection.focus;
         let paragraph = snapshot
             .paragraph_by_id(&focus.paragraph_id)
@@ -1015,14 +1086,12 @@ impl DocumentViewRuntime {
                 serde_json::Value::from(cursor_utf16),
             );
         }
-        let (caret, font_size_centipoints) = if let Some(context) = &math_geometry_context {
-            snapshot
-                .math_text_caret(&context.target, &context.focus, context.visual_affinity)
-                .ok_or_else(|| "layout.invalid_math_caret_geometry".to_owned())?
-        } else if let Some((target, position)) = &math_tree_geometry_context {
-            snapshot
-                .math_tree_caret(target, position)
-                .ok_or_else(|| "layout.invalid_math_tree_caret_geometry".to_owned())?
+        let (caret, font_size_centipoints) = if let Some(caret) = math_caret_geometry(
+            math_geometry_context.as_ref(),
+            math_tree_geometry_context.as_ref(),
+            snapshot,
+        )? {
+            caret
         } else {
             let caret = snapshot
                 .caret_geometry(focus, visual_affinity)
@@ -1042,17 +1111,11 @@ impl DocumentViewRuntime {
             "inputMethodContext": input_method_context,
             "commandLine": command_line,
             "currentStructure": current_structure,
-            "blockEnvironmentHighlightRects": block_environment_highlight_rects(focus_environment_id.as_ref(), snapshot),
-            "mathBlockHighlightRects": math_block_rectangles,
-            "mathTextHighlightRects": math_text_rectangles,
-            "inlineEnvironmentHighlightRects": inline_environment_rectangles,
-            "caretGeometry": {
-                "pageIndex": caret.page_index,
-                "xPt": caret.x_pt,
-                "y0Pt": caret.y0_pt,
-                "y1Pt": caret.y1_pt,
-                "fontSizeCentipoints": font_size_centipoints,
-            },
+            "blockEnvironmentHighlightRects": highlight_rectangles.block_environment,
+            "mathBlockHighlightRects": highlight_rectangles.math_block,
+            "mathTextHighlightRects": highlight_rectangles.math_text,
+            "inlineEnvironmentHighlightRects": highlight_rectangles.inline_environment,
+            "caretGeometry": caret_geometry_json(caret, font_size_centipoints),
         }))
         .map_err(|error| format!("layout.interaction_serialize: {error}"))?;
         self.last_interaction_context = Some(context_key);
