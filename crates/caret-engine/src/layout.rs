@@ -1344,7 +1344,36 @@ impl DocumentLayoutSnapshot {
         if x_pt < 0.0 || y_pt < 0.0 || x_pt > page.width_pt || y_pt > page.height_pt {
             return None;
         }
-        let mut best: Option<(f64, u8, f64, usize, PageMathStructureHit)> = None;
+        // 结构命中的排序键：strict 命中优先，strict 内按面积/深度/距离，loose 命中按距离优先。
+        #[derive(Clone, Copy)]
+        struct MathStructureHitRank {
+            distance_pt: f64,
+            strict: bool,
+            area_pt2: f64,
+            depth: usize,
+        }
+
+        impl MathStructureHitRank {
+            fn better_than(self, other: Self) -> bool {
+                if self.strict != other.strict {
+                    return self.strict;
+                }
+                if self.strict {
+                    self.area_pt2 < other.area_pt2
+                        || (self.area_pt2 == other.area_pt2
+                            && (self.depth > other.depth
+                                || (self.depth == other.depth
+                                    && self.distance_pt < other.distance_pt)))
+                } else {
+                    self.distance_pt < other.distance_pt
+                        || (self.distance_pt == other.distance_pt
+                            && (self.area_pt2 < other.area_pt2
+                                || (self.area_pt2 == other.area_pt2 && self.depth > other.depth)))
+                }
+            }
+        }
+
+        let mut best: Option<(MathStructureHitRank, PageMathStructureHit)> = None;
         for projection in self.math_projections_on_page(page_index) {
             if !projection.contains_y(y_pt) {
                 continue;
@@ -1505,33 +1534,21 @@ impl DocumentLayoutSnapshot {
                     position,
                     caret,
                 };
-                let priority = u8::from(!strict_hit);
-                let distance = (y_pt - (y0_pt + y1_pt) / 2.0).abs();
-                let area = width_pt * height_pt;
-                let depth = node.path.len();
-                if best.as_ref().is_none_or(
-                    |(best_distance, best_priority, best_area, best_depth, _)| {
-                        priority < *best_priority
-                            || (priority == *best_priority
-                                && if priority == 0 {
-                                    area < *best_area
-                                        || (area == *best_area
-                                            && (depth > *best_depth
-                                                || (depth == *best_depth
-                                                    && distance < *best_distance)))
-                                } else {
-                                    distance < *best_distance
-                                        || (distance == *best_distance
-                                            && (area < *best_area
-                                                || (area == *best_area && depth > *best_depth)))
-                                })
-                    },
-                ) {
-                    best = Some((distance, priority, area, depth, hit));
+                let rank = MathStructureHitRank {
+                    distance_pt: (y_pt - (y0_pt + y1_pt) / 2.0).abs(),
+                    strict: strict_hit,
+                    area_pt2: width_pt * height_pt,
+                    depth: node.path.len(),
+                };
+                if best
+                    .as_ref()
+                    .is_none_or(|(best_rank, _)| rank.better_than(*best_rank))
+                {
+                    best = Some((rank, hit));
                 }
             }
         }
-        best.map(|(_, _, _, _, hit)| hit)
+        best.map(|(_, hit)| hit)
     }
 
     /// 判断页面点是否落在正宽正文/文本岛字素内部。
@@ -3400,11 +3417,7 @@ fn collect_math_projections(
                     continue;
                 };
                 let height = f64::from(line_box.metrics.height_pt);
-                if let (Some(line), Some(raw_top), Some(adjustment)) = (
-                    paragraph.layout.layout.get(line_index),
-                    paragraph.layout.parley_line_tops_pt.get(line_index),
-                    paragraph.layout.baseline_adjustments_pt.get(line_index),
-                ) {
+                if let Some(line) = paragraph.layout.layout.get(line_index) {
                     for item in line.items() {
                         let PositionedGlyphLayoutItem::InlineBox(inline_box) = item else {
                             continue;
