@@ -28,7 +28,7 @@ DialogWindow {
             selectedId = "";
     }
 
-    width: Theme.dialogActionWidth * 3 + Theme.dialogActionSpacing * 2 + Theme.spacingLarge * 2
+    width: Theme.actionDialogWidth
     height: Theme.titlebarHeight + Theme.controlHeight * 5 + Theme.spacingLarge * 8
     title: qsTr("Recover documents")
 
