@@ -2792,17 +2792,69 @@ fn inline_math_run_property_keeps_text_selection_without_reparsing_source() -> R
     Ok(())
 }
 
+fn inline_math_text_session_with_selection(
+    source: &str,
+    anchor: usize,
+    focus: usize,
+) -> Result<Session, Box<dyn std::error::Error>> {
+    let mut session = session_with_text("")?;
+    session.run(Command::InsertInlineMath(source.to_owned()))?;
+    move_into_math_text(&mut session)?;
+    session.run(Command::SetMathTextSelection { anchor, focus })?;
+    Ok(session)
+}
+
+fn align_math_text_session_with_selection(
+    anchor: usize,
+    focus: usize,
+) -> Result<Session, Box<dyn std::error::Error>> {
+    let (parsed_align, projection) =
+        display_math_block_with_projection(true, r"x+\text{abcd}", NodeId::generate())?;
+    let Block::Align(align_block) = parsed_align else {
+        return Err(EditError::InvalidPosition.into());
+    };
+    let block_id = align_block.id.clone();
+    let row = align_block.rows.first().ok_or(EditError::InvalidPosition)?;
+    let cell = row.cells.first().ok_or(EditError::InvalidPosition)?;
+    let source_map = projection
+        .align()
+        .and_then(|map| map.cell_tree(0, 0))
+        .ok_or(EditError::InvalidPosition)?;
+    let text_source =
+        first_text_source_range(&cell.root, source_map.root()).ok_or(EditError::InvalidPosition)?;
+    let text_path =
+        path::path_at_source_boundary(source_map, text_source.start, true, Some((0, 0)))
+            .ok_or(EditError::InvalidPosition)?;
+    let cursor = 0;
+    let branch = MathEditBranch::Text {
+        path: text_path.clone(),
+        anchor: MathTextPosition::new(text_path, cursor, MathPositionAffinity::Downstream),
+        focus_affinity: MathPositionAffinity::Downstream,
+        anchor_visual_affinity: crate::VisualAffinity::Downstream,
+        visual_affinity: crate::VisualAffinity::Downstream,
+    };
+    let mut align_document = Document::blank();
+    align_document.body.push(Block::Align(align_block));
+    let mut session = Session::new(align_document)?;
+    session.math_edit = Some(MathEdit {
+        target: MathEditTarget::Block {
+            block_id,
+            align: true,
+        },
+        source_projection: Some(Arc::new(projection)),
+        source_draft: None,
+        revision: session.current_math_edit_revision(),
+        cursor,
+        branch,
+    });
+    session.run(Command::SetMathTextSelection { anchor, focus })?;
+    Ok(session)
+}
+
 #[test]
-fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), EditError> {
-    let mut selected = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
-    selected.run(Command::InsertInlineMath(
-        r"\frac{x}{\text{abcd}}".to_owned(),
-    ))?;
-    move_into_math_text(&mut selected)?;
-    selected.run(Command::SetMathTextSelection {
-        anchor: 1,
-        focus: 3,
-    })?;
+fn math_text_font_family_rejects_invalid_family_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut selected = inline_math_text_session_with_selection(r"\frac{x}{\text{abcd}}", 1, 3)?;
     let document_before = selected.document().clone();
     let edit_before = selected.math_edit().cloned();
     let generation_before = selected.document_generation();
@@ -2815,7 +2867,13 @@ fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), Ed
     assert_eq!(selected.math_edit(), edit_before.as_ref());
     assert_eq!(selected.document_generation(), generation_before);
     assert_eq!(selected.history_state_id(), history_before);
+    Ok(())
+}
 
+#[test]
+fn math_text_font_family_writes_environment_that_undo_redo_and_serialization_preserve()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut selected = inline_math_text_session_with_selection(r"\frac{x}{\text{abcd}}", 1, 3)?;
     let effect = selected.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     assert!(effect.document_changed);
     assert!(effect.selection_changed);
@@ -2879,23 +2937,20 @@ fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), Ed
         caret_math::parse(&serialized, caret_math::MathInputKind::Inline)
             .map_err(|error| EditError::InvalidMath(error.to_string()))?
     else {
-        return Err(EditError::InvalidPosition);
+        return Err(EditError::InvalidPosition.into());
     };
     assert!(math_tree_has_font_environment_for(
         &round_trip.root,
         "sans-serif",
         "bc"
     ));
+    Ok(())
+}
 
-    let mut navigation = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
-    navigation.run(Command::InsertInlineMath(
-        r"\frac{x}{\text{abcd}}".to_owned(),
-    ))?;
-    move_into_math_text(&mut navigation)?;
-    navigation.run(Command::SetMathTextSelection {
-        anchor: 1,
-        focus: 3,
-    })?;
+#[test]
+fn math_text_font_family_survives_navigation_out_of_the_text_branch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut navigation = inline_math_text_session_with_selection(r"\frac{x}{\text{abcd}}", 1, 3)?;
     navigation.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     navigation.run(Command::SetMathTextSelection {
         anchor: 0,
@@ -2922,16 +2977,13 @@ fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), Ed
         "Noto Serif",
         "bc"
     ));
+    Ok(())
+}
 
-    let mut pending = session_with_text("").map_err(|_| EditError::InvalidPosition)?;
-    pending.run(Command::InsertInlineMath(
-        r"\frac{x}{\textsf{ab}}".to_owned(),
-    ))?;
-    move_into_math_text(&mut pending)?;
-    pending.run(Command::SetMathTextSelection {
-        anchor: 1,
-        focus: 1,
-    })?;
+#[test]
+fn math_text_pending_font_family_tracks_history_and_styles_inserted_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut pending = inline_math_text_session_with_selection(r"\frac{x}{\textsf{ab}}", 1, 1)?;
     pending.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     assert_eq!(
         pending.pending_inline_style.active_font_family(),
@@ -2951,55 +3003,18 @@ fn math_text_font_family_uses_inline_environment_transactions() -> Result<(), Ed
     pending.run(Command::InsertText("X".to_owned()))?;
     assert!(math_tree_has_font_environment_for(
         &pending
-            .math_tree_for_edit(pending.math_edit().ok_or(EditError::InvalidPosition)?, None,)?
+            .math_tree_for_edit(pending.math_edit().ok_or(EditError::InvalidPosition)?, None)?
             .root,
         "sans-serif",
         "X"
     ));
+    Ok(())
+}
 
-    let (parsed_align, projection) =
-        display_math_block_with_projection(true, r"x+\text{abcd}", NodeId::generate())?;
-    let Block::Align(align_block) = parsed_align else {
-        return Err(EditError::InvalidPosition);
-    };
-    let block_id = align_block.id.clone();
-    let row = align_block.rows.first().ok_or(EditError::InvalidPosition)?;
-    let cell = row.cells.first().ok_or(EditError::InvalidPosition)?;
-    let source_map = projection
-        .align()
-        .and_then(|map| map.cell_tree(0, 0))
-        .ok_or(EditError::InvalidPosition)?;
-    let text_source =
-        first_text_source_range(&cell.root, source_map.root()).ok_or(EditError::InvalidPosition)?;
-    let text_path =
-        path::path_at_source_boundary(source_map, text_source.start, true, Some((0, 0)))
-            .ok_or(EditError::InvalidPosition)?;
-    let cursor = 0;
-    let branch = MathEditBranch::Text {
-        path: text_path.clone(),
-        anchor: MathTextPosition::new(text_path, cursor, MathPositionAffinity::Downstream),
-        focus_affinity: MathPositionAffinity::Downstream,
-        anchor_visual_affinity: crate::VisualAffinity::Downstream,
-        visual_affinity: crate::VisualAffinity::Downstream,
-    };
-    let mut align_document = Document::blank();
-    align_document.body.push(Block::Align(align_block));
-    let mut align = Session::new(align_document)?;
-    align.math_edit = Some(MathEdit {
-        target: MathEditTarget::Block {
-            block_id,
-            align: true,
-        },
-        source_projection: Some(Arc::new(projection)),
-        source_draft: None,
-        revision: align.current_math_edit_revision(),
-        cursor,
-        branch,
-    });
-    align.run(Command::SetMathTextSelection {
-        anchor: 1,
-        focus: 3,
-    })?;
+#[test]
+fn align_math_text_font_family_survives_undo_redo_and_tree_navigation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut align = align_math_text_session_with_selection(1, 3)?;
     align.run(Command::SetInlineFontFamily("Noto Serif".to_owned()))?;
     assert!(math_tree_has_font_environment_for(
         &align
