@@ -7,17 +7,6 @@ use caret_doc::{
 };
 use std::collections::BTreeMap;
 
-fn paragraph_with_text(text: &str) -> Paragraph {
-    let mut paragraph = Paragraph::empty(NodeId::generate());
-    paragraph.inlines.push(text_flow(Run {
-        text: text.to_owned(),
-        language: None,
-        props: BTreeMap::new(),
-        extra: BTreeMap::new(),
-    }));
-    paragraph
-}
-
 fn section(title: &str, body: &str) -> Block {
     Block::Environment(BlockEnvironment {
         id: NodeId::generate(),
