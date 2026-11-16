@@ -9,7 +9,7 @@ use super::super::environment::inline_adapter::{
 use super::super::flow_format::{
     InheritedInlineStyle, inline_format_range_state, run_property_range_state,
 };
-use super::super::paragraph_ops::{compare_positions, paragraph_at_location};
+use super::super::paragraph_ops::{ParagraphLocation, paragraph_at_location};
 use super::super::session::history::{DocumentPatch, SessionHistoryEdit, SessionHistoryState};
 use super::super::text_map::TextMap;
 use super::super::{Affinity, EditError, Effect, InlineSpan, Pos};
@@ -35,6 +35,19 @@ fn is_collapsed_text_range(anchor: &Pos, focus: &Pos) -> bool {
     anchor.story == focus.story
         && anchor.paragraph_id == focus.paragraph_id
         && anchor.offset == focus.offset
+}
+
+/// 以选区起点为模板，把编辑目标换到 `location` 所在段落。
+fn paragraph_edit_position(start: &Pos, location: &ParagraphLocation) -> Pos {
+    Pos {
+        paragraph_id: location.paragraph_id.clone(),
+        ..start.clone()
+    }
+}
+
+/// 段落内容允许嵌套行内环境的最大层数：块环境深度加上标题槽。
+fn paragraph_inline_depth(location: &ParagraphLocation) -> usize {
+    location.block_path.len() + usize::from(location.is_title)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -229,156 +242,51 @@ impl Session {
                 .pending_inline_style
                 .run_property(property)
                 .unwrap_or(inherited);
-            let before_pending_style = self.pending_inline_style.clone();
-            let before_selection = self.selection.clone();
-            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
-            let before_visual_affinity = self.selection_visual_affinity;
-            let before_state_id = self.history_state_id;
-            self.pending_inline_style
-                .set_run_property(property, !current);
-            self.advance_history_merge_epoch();
-            let after_state_id = before_state_id;
-            self.record_history_edit(SessionHistoryEdit::new(
-                DocumentPatch::PendingStyle,
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    before_pending_style,
-                    before_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity),
-                SessionHistoryState::new(
-                    self.selection.clone(),
-                    self.selection_visual_affinity,
-                    self.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
-            ));
-            self.history_state_id = after_state_id;
+            let enabled = !current;
+            self.record_pending_style_edit(|style| {
+                style.set_run_property(property, enabled);
+                Ok(())
+            })?;
             return Ok(Effect::default());
         }
 
-        let ordering =
-            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
-        let (start, end) = if ordering.is_le() {
-            (anchor, focus)
-        } else {
-            (focus, anchor)
-        };
-        let mut paragraphs: Vec<_> = self
-            .paragraph_index
-            .iter()
-            .filter(|(_, location)| location.story == start.story)
-            .collect();
-        paragraphs.sort_by(|(_, left), (_, right)| {
-            left.block_path
-                .cmp(&right.block_path)
-                .then_with(|| left.is_title.cmp(&right.is_title).reverse())
-        });
-        let start_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &start.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let end_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &end.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        if start_index > end_index {
-            return Err(EditError::InvalidPosition);
-        }
-
-        let mut ranges = Vec::with_capacity(end_index - start_index + 1);
+        let (start, end) = self.ordered_text_range(&anchor, &focus)?;
+        let mut ranges = Vec::new();
         let mut any_disabled = false;
         let mut any_text = false;
-        for (index, entry) in paragraphs
-            .iter()
-            .enumerate()
-            .take(end_index + 1)
-            .skip(start_index)
-        {
-            let (paragraph_id, location) = *entry;
-            let paragraph = paragraph_at_location(&self.document.body, location)
-                .ok_or(EditError::InvalidPosition)?;
-            let map = TextMap::new(paragraph)?;
-            let range_start = if index == start_index {
-                start.offset
-            } else {
-                0
-            };
-            let range_end = if index == end_index {
-                end.offset
-            } else {
-                map.text.len()
-            };
-            if range_start > range_end || range_end > map.text.len() {
-                return Err(EditError::InvalidPosition);
+        self.visit_ordered_paragraph_ranges(&start, &end, |location, paragraph, _, range| {
+            if range.is_empty() {
+                return Ok(());
             }
-            if range_start == range_end {
-                continue;
-            }
-            map.validate_pos(&Pos {
-                offset: range_start,
-                ..start.clone()
-            })?;
-            map.validate_pos(&Pos {
-                paragraph_id: paragraph_id.clone(),
-                offset: range_end,
-                ..start.clone()
-            })?;
             let (contains_run, contains_disabled) =
-                run_property_range_state(&paragraph.inlines, range_start..range_end, property)?;
+                run_property_range_state(&paragraph.inlines, range.clone(), property)?;
             any_text |= contains_run;
             any_disabled |= contains_disabled;
-            ranges.push((
-                paragraph_id.clone(),
-                location.clone(),
-                range_start,
-                range_end,
-            ));
-        }
+            ranges.push((location.clone(), range));
+            Ok(())
+        })?;
         if !any_text {
             return Ok(Effect::default());
         }
         let enabled = any_disabled;
         let mut edits = Vec::with_capacity(ranges.len());
-        for (paragraph_id, location, range_start, range_end) in ranges {
+        for (location, range) in ranges {
             let original = paragraph_at_location(&self.document.body, &location)
                 .ok_or(EditError::InvalidPosition)?;
             let map = TextMap::new(original)?;
             let mut paragraph = original.clone();
             set_run_property_to_range(
                 &mut paragraph.inlines,
-                map.snap_to_grapheme_boundary(range_start, Affinity::Upstream),
-                map.snap_to_grapheme_boundary(range_end, Affinity::Downstream),
+                map.snap_to_grapheme_boundary(range.start, Affinity::Upstream),
+                map.snap_to_grapheme_boundary(range.end, Affinity::Downstream),
                 property,
                 enabled,
             )?;
             if paragraph != *original {
-                edits.push((
-                    Pos {
-                        paragraph_id,
-                        ..start.clone()
-                    },
-                    paragraph,
-                ));
+                edits.push((paragraph_edit_position(&start, &location), paragraph));
             }
         }
-        if edits.is_empty() {
-            return Ok(Effect::default());
-        }
-        for (position, paragraph) in edits {
-            self.replace_paragraph(&position, paragraph)?;
-        }
-        self.text_map_cache.clear();
-        self.pending_inline_style.clear();
-        self.advance_history_merge_epoch();
-        Ok(Effect {
-            document_changed: true,
-            changed_paragraph_id: (start.paragraph_id == end.paragraph_id)
-                .then_some(start.paragraph_id),
-            ..Effect::default()
-        })
+        self.apply_paragraph_edits(edits, &start, &end)
     }
 
     pub(super) fn set_document_font_family(
@@ -415,11 +323,10 @@ impl Session {
         &self,
         paragraph_id: &NodeId,
     ) -> Result<usize, EditError> {
-        let location = self
-            .paragraph_index
+        self.paragraph_index
             .get(paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        Ok(location.block_path.len() + usize::from(location.is_title))
+            .map(paragraph_inline_depth)
+            .ok_or(EditError::InvalidPosition)
     }
 
     pub(super) fn set_default_font_family(
@@ -439,45 +346,17 @@ impl Session {
         let inherited = inherited_inline_style(self.document.global_settings.theme.as_ref())?;
         let (anchor, focus) = self.edit_range()?;
         if is_collapsed_text_range(&anchor, &focus) {
-            let before_pending_style = self.pending_inline_style.clone();
-            if before_pending_style.font_family.as_deref() == Some(family) {
+            if self.pending_inline_style.font_family.as_deref() == Some(family) {
                 return Ok(Effect::default());
             }
-            let before_selection = self.selection.clone();
-            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
-            let before_visual_affinity = self.selection_visual_affinity;
-            let before_state_id = self.history_state_id;
-            self.pending_inline_style.font_family = Some(family.to_owned());
-            self.advance_history_merge_epoch();
-            let after_state_id = before_state_id;
-            self.record_history_edit(SessionHistoryEdit::new(
-                DocumentPatch::PendingStyle,
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    before_pending_style,
-                    before_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity),
-                SessionHistoryState::new(
-                    self.selection.clone(),
-                    self.selection_visual_affinity,
-                    self.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
-            ));
-            self.history_state_id = after_state_id;
+            self.record_pending_style_edit(|style| {
+                style.set_font_family(family.to_owned());
+                Ok(())
+            })?;
             return Ok(Effect::default());
         }
 
-        let ordering =
-            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
-        let (start, end) = if ordering.is_le() {
-            (anchor, focus)
-        } else {
-            (focus, anchor)
-        };
+        let (start, end) = self.ordered_text_range(&anchor, &focus)?;
         if start.paragraph_id == end.paragraph_id {
             let location = self
                 .paragraph_index
@@ -497,113 +376,36 @@ impl Session {
                 start.offset,
                 end.offset,
                 family,
-                location.block_path.len() + usize::from(location.is_title),
-                inherited.clone(),
+                paragraph_inline_depth(location),
+                inherited,
             )?;
-            if paragraph == *original {
-                return Ok(Effect::default());
+            let mut edits = Vec::new();
+            if paragraph != *original {
+                edits.push((start.clone(), paragraph));
             }
-            self.replace_paragraph(&start, paragraph)?;
-            self.text_map_cache.clear();
-            self.pending_inline_style.clear();
-            self.advance_history_merge_epoch();
-            return Ok(Effect {
-                document_changed: true,
-                changed_paragraph_id: Some(start.paragraph_id),
-                ..Effect::default()
-            });
+            return self.apply_paragraph_edits(edits, &start, &end);
         }
 
-        let mut paragraphs: Vec<_> = self
-            .paragraph_index
-            .iter()
-            .filter(|(_, location)| location.story == start.story)
-            .collect();
-        paragraphs.sort_by(|(_, left), (_, right)| {
-            left.block_path
-                .cmp(&right.block_path)
-                .then_with(|| left.is_title.cmp(&right.is_title).reverse())
-        });
-        let start_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &start.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let end_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &end.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        if start_index > end_index {
-            return Err(EditError::InvalidPosition);
-        }
-
-        let mut edits = Vec::with_capacity(end_index - start_index + 1);
-        for (index, entry) in paragraphs
-            .iter()
-            .enumerate()
-            .take(end_index + 1)
-            .skip(start_index)
-        {
-            let (paragraph_id, location) = *entry;
-            let original = paragraph_at_location(&self.document.body, location)
-                .ok_or(EditError::InvalidPosition)?;
-            let map = TextMap::new(original)?;
-            let range_start = if index == start_index {
-                start.offset
-            } else {
-                0
-            };
-            let range_end = if index == end_index {
-                end.offset
-            } else {
-                map.text.len()
-            };
-            if range_start >= range_end || range_end > map.text.len() {
-                continue;
+        let mut edits = Vec::new();
+        self.visit_ordered_paragraph_ranges(&start, &end, |location, original, _, range| {
+            if range.is_empty() {
+                return Ok(());
             }
-            map.validate_pos(&Pos {
-                offset: range_start,
-                ..start.clone()
-            })?;
-            map.validate_pos(&Pos {
-                paragraph_id: paragraph_id.clone(),
-                offset: range_end,
-                ..start.clone()
-            })?;
             let mut paragraph = original.clone();
             apply_font_family_to_range(
                 &mut paragraph,
-                range_start,
-                range_end,
+                range.start,
+                range.end,
                 family,
-                location.block_path.len() + usize::from(location.is_title),
+                paragraph_inline_depth(location),
                 inherited.clone(),
             )?;
-            if paragraph == *original {
-                continue;
+            if paragraph != *original {
+                edits.push((paragraph_edit_position(&start, location), paragraph));
             }
-            edits.push((
-                Pos {
-                    paragraph_id: paragraph_id.clone(),
-                    ..start.clone()
-                },
-                paragraph,
-            ));
-        }
-        if edits.is_empty() {
-            return Ok(Effect::default());
-        }
-        for (position, paragraph) in edits {
-            self.replace_paragraph(&position, paragraph)?;
-        }
-        self.text_map_cache.clear();
-        self.pending_inline_style.clear();
-        self.advance_history_merge_epoch();
-        Ok(Effect {
-            document_changed: true,
-            changed_paragraph_id: (start.paragraph_id == end.paragraph_id)
-                .then_some(start.paragraph_id),
-            ..Effect::default()
-        })
+            Ok(())
+        })?;
+        self.apply_paragraph_edits(edits, &start, &end)
     }
 
     pub(super) fn toggle_inline_format(
@@ -626,126 +428,33 @@ impl Session {
                 position.offset,
                 position.affinity,
                 kind,
-                inherited.clone(),
+                inherited,
             )?;
             let current = self
                 .pending_inline_style
                 .get(kind)
                 .unwrap_or(inherited_value);
-            let before_pending_style = self.pending_inline_style.clone();
-            let before_selection = self.selection.clone();
-            let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
-            let before_visual_affinity = self.selection_visual_affinity;
-            let before_state_id = self.history_state_id;
-            self.pending_inline_style.set(kind, !current)?;
-            self.advance_history_merge_epoch();
-            let after_state_id = before_state_id;
-            self.record_history_edit(SessionHistoryEdit::new(
-                DocumentPatch::PendingStyle,
-                SessionHistoryState::new(
-                    before_selection,
-                    before_visual_affinity,
-                    before_pending_style,
-                    before_state_id,
-                )
-                .with_anchor_visual_affinity(before_anchor_visual_affinity),
-                SessionHistoryState::new(
-                    self.selection.clone(),
-                    self.selection_visual_affinity,
-                    self.pending_inline_style.clone(),
-                    after_state_id,
-                )
-                .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
-            ));
-            self.history_state_id = after_state_id;
+            self.record_pending_style_edit(|style| style.set(kind, !current))?;
             return Ok(Effect::default());
         }
 
-        let ordering =
-            compare_positions(&self.document.body, &self.paragraph_index, &anchor, &focus)?;
-        let (start, end) = if ordering.is_le() {
-            (anchor, focus)
-        } else {
-            (focus, anchor)
-        };
-        let mut paragraphs: Vec<_> = self
-            .paragraph_index
-            .iter()
-            .filter(|(_, location)| location.story == start.story)
-            .collect();
-        paragraphs.sort_by(|(_, left), (_, right)| {
-            left.block_path
-                .cmp(&right.block_path)
-                .then_with(|| left.is_title.cmp(&right.is_title).reverse())
-        });
-        let start_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &start.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        let end_index = paragraphs
-            .iter()
-            .position(|(id, _)| *id == &end.paragraph_id)
-            .ok_or(EditError::InvalidPosition)?;
-        if start_index > end_index {
-            return Err(EditError::InvalidPosition);
-        }
-
-        let mut ranges = Vec::with_capacity(end_index - start_index + 1);
+        let (start, end) = self.ordered_text_range(&anchor, &focus)?;
+        let mut ranges = Vec::new();
         let mut any_disabled = false;
         let mut any_content = false;
-        for (index, entry) in paragraphs
-            .iter()
-            .enumerate()
-            .take(end_index + 1)
-            .skip(start_index)
-        {
-            let (paragraph_id, location) = *entry;
-            let paragraph = paragraph_at_location(&self.document.body, location)
-                .ok_or(EditError::InvalidPosition)?;
-            let map = TextMap::new(paragraph)?;
-            let range_start = if index == start_index {
-                start.offset
-            } else {
-                0
-            };
-            let range_end = if index == end_index {
-                end.offset
-            } else {
-                map.text.len()
-            };
-            if range_start > range_end || range_end > map.text.len() {
-                return Err(EditError::InvalidPosition);
+        self.visit_ordered_paragraph_ranges(&start, &end, |location, paragraph, _, range| {
+            if range.is_empty() {
+                return Ok(());
             }
-            if range_start == range_end {
-                continue;
-            }
-            map.validate_pos(&Pos {
-                offset: range_start,
-                ..start.clone()
-            })?;
-            map.validate_pos(&Pos {
-                paragraph_id: paragraph_id.clone(),
-                offset: range_end,
-                ..start.clone()
-            })?;
             // 正文旧适配器对段落内未知 TextFlow 扩展采取整体拒绝策略，继续保留该边界。
             format_spans_with_inherited(&paragraph.inlines, inherited.clone())?;
-            let (contains_text, contains_disabled) = inline_format_range_state(
-                &paragraph.inlines,
-                range_start..range_end,
-                kind,
-                &inherited,
-            )?;
+            let (contains_text, contains_disabled) =
+                inline_format_range_state(&paragraph.inlines, range.clone(), kind, &inherited)?;
             any_content |= contains_text;
             any_disabled |= contains_disabled;
-            ranges.push((
-                paragraph_id.clone(),
-                location.clone(),
-                range_start,
-                range_end,
-                location.block_path.len() + usize::from(location.is_title),
-            ));
-        }
+            ranges.push((location.clone(), range));
+            Ok(())
+        })?;
         if !any_content {
             return Ok(Effect::default());
         }
@@ -753,39 +462,22 @@ impl Session {
 
         // 先在段落副本中完成所有切分；任何一处失败都不会留下部分格式修改。
         let mut edits = Vec::with_capacity(ranges.len());
-        for (paragraph_id, location, range_start, range_end, inline_depth) in ranges {
+        for (location, range) in ranges {
             let mut paragraph = paragraph_at_location(&self.document.body, &location)
                 .ok_or(EditError::InvalidPosition)?
                 .clone();
             wrap_format_range(
                 &mut paragraph.inlines,
-                range_start,
-                range_end,
+                range.start,
+                range.end,
                 kind,
                 enabled,
-                inline_depth,
+                paragraph_inline_depth(&location),
                 inherited.clone(),
             )?;
-            edits.push((
-                Pos {
-                    paragraph_id,
-                    ..start.clone()
-                },
-                paragraph,
-            ));
+            edits.push((paragraph_edit_position(&start, &location), paragraph));
         }
-        for (position, paragraph) in edits {
-            self.replace_paragraph(&position, paragraph)?;
-        }
-        self.text_map_cache.clear();
-        self.pending_inline_style.clear();
-        self.advance_history_merge_epoch();
-        Ok(Effect {
-            document_changed: true,
-            changed_paragraph_id: (start.paragraph_id == end.paragraph_id)
-                .then_some(start.paragraph_id),
-            ..Effect::default()
-        })
+        self.apply_paragraph_edits(edits, &start, &end)
     }
 
     pub(super) fn apply_pending_style_to_inserted_text(
@@ -877,6 +569,63 @@ impl Session {
             )?;
         }
         Ok(())
+    }
+
+    /// 记录一次仅修改待输入格式的事务；撤销合并粒度沿用 `PendingStyle` 补丁语义。
+    fn record_pending_style_edit(
+        &mut self,
+        mutate: impl FnOnce(&mut PendingInlineStyle) -> Result<(), EditError>,
+    ) -> Result<(), EditError> {
+        let before_pending_style = self.pending_inline_style.clone();
+        let before_selection = self.selection.clone();
+        let before_anchor_visual_affinity = self.selection_anchor_visual_affinity;
+        let before_visual_affinity = self.selection_visual_affinity;
+        let before_state_id = self.history_state_id;
+        mutate(&mut self.pending_inline_style)?;
+        self.advance_history_merge_epoch();
+        self.record_history_edit(SessionHistoryEdit::new(
+            DocumentPatch::PendingStyle,
+            SessionHistoryState::new(
+                before_selection,
+                before_visual_affinity,
+                before_pending_style,
+                before_state_id,
+            )
+            .with_anchor_visual_affinity(before_anchor_visual_affinity),
+            SessionHistoryState::new(
+                self.selection.clone(),
+                self.selection_visual_affinity,
+                self.pending_inline_style.clone(),
+                before_state_id,
+            )
+            .with_anchor_visual_affinity(self.selection_anchor_visual_affinity),
+        ));
+        self.history_state_id = before_state_id;
+        Ok(())
+    }
+
+    /// 提交已收集的段落替换：全部落盘后统一清缓存、清待输入格式并推进合并轮次。
+    fn apply_paragraph_edits(
+        &mut self,
+        edits: Vec<(Pos, Paragraph)>,
+        start: &Pos,
+        end: &Pos,
+    ) -> Result<Effect, EditError> {
+        if edits.is_empty() {
+            return Ok(Effect::default());
+        }
+        for (position, paragraph) in edits {
+            self.replace_paragraph(&position, paragraph)?;
+        }
+        self.text_map_cache.clear();
+        self.pending_inline_style.clear();
+        self.advance_history_merge_epoch();
+        Ok(Effect {
+            document_changed: true,
+            changed_paragraph_id: (start.paragraph_id == end.paragraph_id)
+                .then_some(start.paragraph_id.clone()),
+            ..Effect::default()
+        })
     }
 }
 
