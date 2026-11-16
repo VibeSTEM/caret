@@ -4999,27 +4999,6 @@ fn collect_blocks<'a>(
                         ),
                         shaper.into_sidecars(),
                     )
-                } else if !context.settings.inline_environment_templates().is_empty() {
-                    (
-                        Arc::new(
-                            caret_math::layout::layout_align_with_host_row_grid(
-                                engine.font(),
-                                align,
-                                DocumentUnits::centipoints_to_points(u32::from(
-                                    context.font_size_centipoints,
-                                )),
-                                context.settings.inline_environment_templates(),
-                                None,
-                                math_host_row_grid(
-                                    context.line_grid_metrics,
-                                    context.caret_metrics,
-                                    context.line_spacing,
-                                )?,
-                            )
-                            .map_err(|error| DocumentLayoutError::Math(error.to_string()))?,
-                        ),
-                        HashMap::new(),
-                    )
                 } else {
                     (
                         Arc::new(
