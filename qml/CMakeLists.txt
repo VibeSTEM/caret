@@ -38,6 +38,7 @@ set(CARET_SHELL_QML_FILES
     Components/Composites/DialogWindow.qml
     Components/Composites/DialogFrame.qml
     Components/Composites/DialogButtonRow.qml
+    Components/Composites/SuggestionListPopup.qml
     Dialogs/NewProjectDialog.qml
     Dialogs/RecoveryDialog.qml
     Dialogs/SaveConflictDialog.qml
