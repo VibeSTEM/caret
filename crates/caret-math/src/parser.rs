@@ -406,6 +406,57 @@ fn parse_align<'source>(
     .ok_or(MathParseError::InvalidSourceMap)
 }
 
+/// 流自身来源映射范围的来源。
+///
+/// 根流（公式根或单元格裸条目）不记录流范围；槽位流与行流则用条目范围平移出范围。
+#[derive(Debug, Clone)]
+enum FlowRangeSource {
+    /// 映射范围留空，不对应任何源码区间。
+    Default,
+    /// 由条目自身范围平移得到；条目无范围时同样留空。
+    Node(Option<Range<usize>>),
+}
+
+/// 三个解析入口共用的流构建：按顺序展开条目为内容，并组装流与其来源映射。
+///
+/// 各入口只保留真正不同的部分：条目来源（单个条目或整行子条目）、流的身份字段
+/// （新建 id 并清空 extra，或沿用行节点）以及流范围来源。内容追加与范围映射的
+/// 先后顺序保持不变：先逐条追加内容（失败即返回 `None`），再按需平移流范围。
+fn parser_flow_from_contents(
+    nodes: impl IntoIterator<Item = MathNode>,
+    id: NodeId,
+    extra: BTreeMap<String, Value>,
+    capture_source_map: bool,
+    source_offset: usize,
+    source: &str,
+    range_source: FlowRangeSource,
+) -> Option<(MathFlow, Option<MathFlowSourceMap>)> {
+    let mut content = Vec::new();
+    let mut mapped_content = capture_source_map.then(Vec::new);
+    let mut text_state = None;
+    for node in nodes {
+        append_parser_node(
+            &mut content,
+            &mut mapped_content,
+            node,
+            source_offset,
+            source,
+            &mut text_state,
+        )?;
+    }
+    let flow = MathFlow { id, content, extra };
+    let flow_map = if let Some(content) = mapped_content {
+        let range = match range_source {
+            FlowRangeSource::Default => MathRangeSourceMap::default(),
+            FlowRangeSource::Node(range) => map_range(range.as_ref(), source_offset)?,
+        };
+        Some(MathFlowSourceMap::from_parser_parts(range, content))
+    } else {
+        None
+    };
+    Some((flow, flow_map))
+}
+
 fn parser_root_to_flow(
     root: MathNode,
     capture_source_map: bool,
@@ -415,27 +466,15 @@ fn parser_root_to_flow(
     if root.kind == MathNodeKind::Row {
         return parser_row_to_flow(root, capture_source_map, source_offset, source);
     }
-    let id = NodeId::generate();
-    let mut content = Vec::new();
-    let mut mapped_content = capture_source_map.then(Vec::new);
-    let mut text_state = None;
-    append_parser_node(
-        &mut content,
-        &mut mapped_content,
-        root,
+    parser_flow_from_contents(
+        std::iter::once(root),
+        NodeId::generate(),
+        BTreeMap::new(),
+        capture_source_map,
         source_offset,
         source,
-        &mut text_state,
-    )?;
-    let flow = MathFlow {
-        id,
-        content,
-        extra: BTreeMap::new(),
-    };
-    let flow_map = mapped_content.map(|content| {
-        MathFlowSourceMap::from_parser_parts(MathRangeSourceMap::default(), content)
-    });
-    Some((flow, flow_map))
+        FlowRangeSource::Default,
+    )
 }
 
 fn parser_slot_to_flow(
@@ -448,32 +487,15 @@ fn parser_slot_to_flow(
         return parser_row_to_flow(node, capture_source_map, source_offset, source);
     }
     let source_range = node.source_range.clone();
-    let id = NodeId::generate();
-    let mut content = Vec::new();
-    let mut mapped_content = capture_source_map.then(Vec::new);
-    let mut text_state = None;
-    append_parser_node(
-        &mut content,
-        &mut mapped_content,
-        node,
+    parser_flow_from_contents(
+        std::iter::once(node),
+        NodeId::generate(),
+        BTreeMap::new(),
+        capture_source_map,
         source_offset,
         source,
-        &mut text_state,
-    )?;
-    let flow = MathFlow {
-        id,
-        content,
-        extra: BTreeMap::new(),
-    };
-    let flow_map = if let Some(content) = mapped_content {
-        Some(MathFlowSourceMap::from_parser_parts(
-            map_range(source_range.as_ref(), source_offset)?,
-            content,
-        ))
-    } else {
-        None
-    };
-    Some((flow, flow_map))
+        FlowRangeSource::Node(source_range),
+    )
 }
 
 fn parser_row_to_flow(
@@ -482,34 +504,15 @@ fn parser_row_to_flow(
     source_offset: usize,
     source: &str,
 ) -> Option<(MathFlow, Option<MathFlowSourceMap>)> {
-    let mut content = Vec::new();
-    let mut mapped_content = capture_source_map.then(Vec::new);
-    let mut text_state = None;
-    for node in row.children {
-        append_parser_node(
-            &mut content,
-            &mut mapped_content,
-            node,
-            source_offset,
-            source,
-            &mut text_state,
-        )?;
-    }
-    let range = row.source_range.clone();
-    let flow = MathFlow {
-        id: row.id,
-        content,
-        extra: row.extra,
-    };
-    let flow_map = if let Some(content) = mapped_content {
-        Some(MathFlowSourceMap::from_parser_parts(
-            map_range(range.as_ref(), source_offset)?,
-            content,
-        ))
-    } else {
-        None
-    };
-    Some((flow, flow_map))
+    parser_flow_from_contents(
+        row.children,
+        row.id,
+        row.extra,
+        capture_source_map,
+        source_offset,
+        source,
+        FlowRangeSource::Node(row.source_range),
+    )
 }
 
 fn append_parser_node(
@@ -2705,5 +2708,94 @@ mod text_accumulator_tests {
                 ..
             })
         ));
+    }
+}
+
+#[cfg(test)]
+mod parser_flow_tests {
+    use super::*;
+    use crate::ProjectedMath;
+
+    fn tree_sidecar(source: &str) -> MathTreeSourceMap {
+        let projection = parse_projection(source, MathInputKind::Inline)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let (ProjectedMath::Tree(_), sidecar) = projection.into_parts() else {
+            panic!("inline input should produce a tree");
+        };
+        sidecar
+            .tree()
+            .cloned()
+            .unwrap_or_else(|| panic!("{source} should capture a source map"))
+    }
+
+    fn content_ranges(flow: &MathFlowSourceMap) -> Vec<Option<Range<usize>>> {
+        flow.content()
+            .iter()
+            .map(|content| content.range())
+            .collect()
+    }
+
+    fn operand_ranges(flow: &MathFlowSourceMap) -> Vec<Option<Range<usize>>> {
+        flow.content()
+            .first()
+            .and_then(|content| content.operands())
+            .unwrap_or_else(|| panic!("flow should map operands"))
+            .iter()
+            .map(|operand| operand.range())
+            .collect()
+    }
+
+    /// 共享流构建后仍须保留的入口差异：根流留空范围，槽位流与行流用条目范围平移。
+    #[test]
+    fn entry_flows_keep_default_and_node_range_rules() {
+        // 单条目直接成为根流：根流不记录范围。
+        let single = tree_sidecar("x");
+        assert_eq!(single.root().range(), None);
+        assert_eq!(content_ranges(single.root()), vec![Some(0..1)]);
+
+        // 多条目被包成行：行流用整行范围映射。
+        let row = tree_sidecar("x+y");
+        assert_eq!(row.root().range(), Some(0..3));
+        assert_eq!(
+            content_ranges(row.root()),
+            vec![Some(0..1), Some(1..2), Some(2..3)]
+        );
+
+        // 裸条目作为槽位：槽位流用条目自身范围映射。
+        let fraction = tree_sidecar(r"\frac{x}{y}");
+        assert_eq!(fraction.root().range(), None);
+        assert_eq!(
+            operand_ranges(fraction.root()),
+            vec![Some(6..7), Some(9..10)]
+        );
+
+        // 槽位条目是多条目行时经行入口：流范围覆盖整段花括号参数。
+        let wide = tree_sidecar(r"\frac{a+b}{c}");
+        assert_eq!(wide.root().range(), None);
+        assert_eq!(operand_ranges(wide.root()), vec![Some(5..10), Some(11..12)]);
+    }
+
+    /// 对齐单元格同样区分裸条目根流与多条目行流。
+    #[test]
+    fn align_cell_flows_keep_default_and_node_range_rules() {
+        let source = r"\begin{aligned}a&b\\a+b&c\end{aligned}";
+        let projection = parse_projection(source, MathInputKind::Align)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let (ProjectedMath::Align(_), sidecar) = projection.into_parts() else {
+            panic!("align input should produce an align");
+        };
+        let map = sidecar.align().unwrap_or_else(|| panic!("align sidecar"));
+        let cell_root_range = |row: usize, cell: usize| {
+            map.cell_tree(row, cell)
+                .unwrap_or_else(|| panic!("row {row} cell {cell} should capture a tree map"))
+                .root()
+                .range()
+        };
+        // 单条目 cell 直接成为根流：根流范围留空。
+        assert_eq!(cell_root_range(0, 0), None);
+        assert_eq!(cell_root_range(0, 1), None);
+        // 多条目 cell 被包成行：树根流范围等于 cell 语义范围。
+        assert_eq!(cell_root_range(1, 0), map.cell_range(1, 0));
+        assert_eq!(cell_root_range(1, 1), None);
     }
 }
