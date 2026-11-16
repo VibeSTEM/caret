@@ -148,14 +148,15 @@ pub fn paginate_paragraphs(
         return Err(PaginationError::InvalidPageHeight);
     }
 
-    let mut pages = vec![PageLayout::default()];
+    let mut pages: Vec<PageLayout> = Vec::new();
+    let mut current = PageLayout::default();
     let mut previous_space_after_pt = 0.0_f32;
     let keep_group_heights = build_keep_group_heights(items);
 
     for (item_index, item) in items.iter().enumerate() {
         let paragraph = match item {
             PaginationItem::ExplicitPageBreak => {
-                pages.push(PageLayout::default());
+                pages.push(std::mem::take(&mut current));
                 previous_space_after_pt = 0.0;
                 continue;
             }
@@ -177,24 +178,20 @@ pub fn paginate_paragraphs(
                     return Err(PaginationError::InvalidMathBlock);
                 }
                 // 不让换页分支掩盖版面累计值与新公式相加时的浮点溢出。
-                if !current_page(&pages)
-                    .is_some_and(|page| (page.used_height_pt + math.height_pt).is_finite())
-                {
+                if !(current.used_height_pt + math.height_pt).is_finite() {
                     return Err(PaginationError::InvalidMathBlock);
                 }
-                let pending_space_pt = if current_page(&pages).is_some_and(page_has_content) {
+                let pending_space_pt = if page_has_content(&current) {
                     previous_space_after_pt.max(math.space_before_pt)
                 } else {
                     0.0
                 };
-                if current_page(&pages).is_some_and(page_has_content)
-                    && current_page(&pages).is_some_and(|page| {
-                        page.used_height_pt + pending_space_pt + math.height_pt > page_height_pt
-                    })
+                if page_has_content(&current)
+                    && current.used_height_pt + pending_space_pt + math.height_pt > page_height_pt
                 {
-                    pages.push(PageLayout::default());
+                    pages.push(std::mem::take(&mut current));
                 }
-                let page = pages.last_mut().ok_or(PaginationError::InvalidMathBlock)?;
+                let page = &mut current;
                 let pending_space_pt = if page_has_content(page) {
                     pending_space_pt
                 } else {
@@ -237,13 +234,13 @@ pub fn paginate_paragraphs(
             return Err(PaginationError::InvalidLineHeight);
         }
 
-        if paragraph.page_break_before && current_page(&pages).is_some_and(page_has_content) {
-            pages.push(PageLayout::default());
+        if paragraph.page_break_before && page_has_content(&current) {
+            pages.push(std::mem::take(&mut current));
             previous_space_after_pt = 0.0;
         }
 
         let mut line_index = 0;
-        let mut pending_space_pt = if current_page(&pages).is_some_and(page_has_content) {
+        let mut pending_space_pt = if page_has_content(&current) {
             previous_space_after_pt.max(paragraph.space_before_pt)
         } else {
             0.0
@@ -251,11 +248,10 @@ pub fn paginate_paragraphs(
 
         if is_keep_group_leader(items, item_index, paragraph)
             && let Some(Some(group_height)) = keep_group_heights.get(item_index)
-            && let Some(page) = current_page(&pages)
-            && page_has_content(page)
-            && page.used_height_pt + pending_space_pt + group_height > page_height_pt
+            && page_has_content(&current)
+            && current.used_height_pt + pending_space_pt + group_height > page_height_pt
         {
-            pages.push(PageLayout::default());
+            pages.push(std::mem::take(&mut current));
             pending_space_pt = 0.0;
         }
 
@@ -267,11 +263,10 @@ pub fn paginate_paragraphs(
                 .map(|line| line.metrics.height_pt)
                 .sum::<f32>();
             if paragraph_height <= page_height_pt
-                && let Some(page) = current_page(&pages)
-                && page_has_content(page)
-                && page.used_height_pt + pending_space_pt + paragraph_height > page_height_pt
+                && page_has_content(&current)
+                && current.used_height_pt + pending_space_pt + paragraph_height > page_height_pt
             {
-                pages.push(PageLayout::default());
+                pages.push(std::mem::take(&mut current));
                 pending_space_pt = 0.0;
             }
         }
@@ -280,9 +275,7 @@ pub fn paginate_paragraphs(
             let Some(remaining_lines) = paragraph.layout.lines.get(line_index..) else {
                 return Err(PaginationError::InvalidLineHeight);
             };
-            let Some(page) = current_page(&pages) else {
-                return Err(PaginationError::InvalidLineHeight);
-            };
+            let page = &current;
             let mut fitting_lines = 0usize;
             let mut fitting_height_pt = pending_space_pt;
             for line in remaining_lines {
@@ -297,7 +290,7 @@ pub fn paginate_paragraphs(
                 fitting_lines += 1;
             }
             if fitting_lines == 0 {
-                pages.push(PageLayout::default());
+                pages.push(std::mem::take(&mut current));
                 pending_space_pt = 0.0;
                 continue;
             }
@@ -310,7 +303,7 @@ pub fn paginate_paragraphs(
             let mut lines_to_place = fitting_lines;
             if paragraph.widow_orphan_control && fitting_lines < remaining_count {
                 if fitting_lines == 1 && !page_has_paragraph && page_has_content(page) {
-                    pages.push(PageLayout::default());
+                    pages.push(std::mem::take(&mut current));
                     pending_space_pt = 0.0;
                     continue;
                 }
@@ -326,7 +319,7 @@ pub fn paginate_paragraphs(
                     } else if page_has_content(page)
                         && (!page_has_paragraph || previous_fragment_lines >= 2)
                     {
-                        pages.push(PageLayout::default());
+                        pages.push(std::mem::take(&mut current));
                         pending_space_pt = 0.0;
                         continue;
                     } else {
@@ -341,9 +334,7 @@ pub fn paginate_paragraphs(
                     return Err(PaginationError::InvalidLineHeight);
                 };
                 let line_height_pt = line.metrics.height_pt;
-                let Some(page) = pages.last_mut() else {
-                    return Err(PaginationError::InvalidLineHeight);
-                };
+                let page = &mut current;
                 let y_offset_pt = page.used_height_pt + pending_space_pt;
                 if let Some(last) = page.fragments.last_mut()
                     && last.paragraph_id == *paragraph.paragraph_id
@@ -366,6 +357,7 @@ pub fn paginate_paragraphs(
         previous_space_after_pt = paragraph.space_after_pt;
     }
 
+    pages.push(current);
     Ok(pages)
 }
 
@@ -439,10 +431,6 @@ fn build_keep_group_heights(items: &[PaginationItem<'_>]) -> Vec<Option<f32>> {
         heights[index] = Some(height);
     }
     heights
-}
-
-fn current_page(pages: &[PageLayout]) -> Option<&PageLayout> {
-    pages.last()
 }
 
 fn page_has_content(page: &PageLayout) -> bool {
