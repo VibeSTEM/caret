@@ -834,7 +834,8 @@ class DocumentInteractionFixture {
     QString error;
 };
 
-// 页面渲染依赖 Theme 单例；单独运行某个 slot 时也要先注入与完整 suite 相同的主题快照。
+// 页面渲染依赖 Theme 单例；单独运行某个 slot 时先注入断言所需的主题 token。
+// 断言只依赖 colorText/colorPanel 等 facade 合成值，与巨函数拆分前执行环境的主题 token 等价。
 void installDocumentInteractionTheme() {
     const QString theme =
         QString::fromUtf8(CARET_SOURCE_DIR) + QStringLiteral("/qml/Themes/Theme.qml");

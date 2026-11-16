@@ -189,9 +189,10 @@ if(BUILD_TESTING)
   caret_add_qml_test(Qml.ShellLoad caret_shell_load_test)
   caret_add_qml_test(Qml.MathTextDrag caret_shell_load_test qml
                      mathTextDragUsesSharedPreviewAndCommitProtocol)
-  # 该聚合测试在 Ubuntu CI 超过通用 20 秒阈值；只为 ShellLoad 留出运行余量。
+  # 该聚合测试在 Ubuntu CI 超过通用 20 秒阈值；按 21 个窗口 fixture 的独立重放
+  # 留出余量（本地 macOS 约 12s，CI 余量按 60s 设置）。
   if(NOT _caret_sanitizers)
-    set_tests_properties(Qml.ShellLoad PROPERTIES TIMEOUT 45)
+    set_tests_properties(Qml.ShellLoad PROPERTIES TIMEOUT 60)
   endif()
   if(CARET_ENABLE_APP)
     caret_add_qml_test(Qml.PreferencesWithoutRuntime caret_shell_load_test qml
