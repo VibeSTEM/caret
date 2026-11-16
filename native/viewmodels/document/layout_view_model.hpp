@@ -17,6 +17,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
+#include <cstdint>
 #include <memory>
 
 namespace caret {
@@ -201,6 +202,11 @@ class LayoutViewModel final : public QObject {
     // 测试直接验证失效交互快照对公开投影属性的影响，不把协议入口暴露给 QML。
     friend struct LayoutViewModelTestProbe;
 
+    // 打开与恢复命令共享的异步准备来源；只影响忙碌标记、失败清理与安装语义。
+    enum class PreparedDocumentSource : std::uint8_t { FilePath, RecoveryEntry };
+    // 校验当前状态快照代际后，在 IO 池准备候选文档，再回到 GUI 线程安装。
+    QVariantMap beginPreparedDocumentInstall(PreparedDocumentSource source,
+                                             const QString& source_id);
     bool installSnapshot(const QString& snapshot_json, bool replace_document = false);
     bool installSnapshot(const QJsonDocument& snapshot_document, bool replace_document = false);
     bool installSnapshot(layout_snapshot::ParsedLayoutSnapshot parsed_snapshot);

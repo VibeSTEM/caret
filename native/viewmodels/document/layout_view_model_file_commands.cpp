@@ -30,6 +30,175 @@
 
 namespace caret {
 
+// openDocument 与 restoreRecovery 共用的异步安装骨架：在 GUI 线程读取并校验
+// session/document 代际，在 IO 池准备候选文档，再回到 GUI 线程重新核对代际后安装。
+// 两个命令只在忙碌标记、安装错误解释、失败清理与成功后续动作上不同。
+QVariantMap LayoutViewModel::beginPreparedDocumentInstall(PreparedDocumentSource source,
+                                                          const QString& source_id) {
+#ifdef CARET_ENABLE_APP
+    const bool restoring_recovery = source == PreparedDocumentSource::RecoveryEntry;
+    ffi::DocumentRuntime* runtime = document_runtime();
+    if (runtime == nullptr) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+    }
+    const rust::String status_response = ffi::document_status_json(*runtime);
+    const QByteArray status_bytes = layout_view_model_support::response_bytes(status_response);
+    QJsonParseError status_parse_error;
+    const QJsonDocument status_document =
+        QJsonDocument::fromJson(status_bytes, &status_parse_error);
+    if (status_parse_error.error != QJsonParseError::NoError || !status_document.isObject()) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("document.invalid_status_snapshot")}};
+    }
+    // 解析失败时 fromJson 必得非对象文档，两个命令共用同一道状态快照校验。
+    const QJsonObject status = status_document.object();
+    bool session_generation_ok = false;
+    bool document_generation_ok = false;
+    const quint64 expected_session_generation = status.value(QStringLiteral("sessionGeneration"))
+                                                    .toString()
+                                                    .toULongLong(&session_generation_ok);
+    const quint64 expected_document_generation = status.value(QStringLiteral("documentGeneration"))
+                                                     .toString()
+                                                     .toULongLong(&document_generation_ok);
+    if (!session_generation_ok || !document_generation_ok) {
+        return {{QStringLiteral("valid"), false},
+                {QStringLiteral("error"), QStringLiteral("document.invalid_revision")}};
+    }
+
+    if (restoring_recovery) {
+        m_recovery_operation_busy = true;
+    } else {
+        m_document_opening = true;
+    }
+    ++m_pending_file_operations;
+    setDocumentFileBusy(true);
+    emit documentFileChanged();
+    auto* watcher = new QFutureWatcher<DocumentOpenTaskResult>(this);
+    connect(
+        watcher, &QFutureWatcher<DocumentOpenTaskResult>::finished, this,
+        [this, watcher, restoring_recovery] {
+            const DocumentOpenTaskResult result = watcher->result();
+            watcher->deleteLater();
+            if (restoring_recovery) {
+                m_recovery_operation_busy = false;
+            } else {
+                m_document_opening = false;
+            }
+            --m_pending_file_operations;
+            setDocumentFileBusy(m_pending_file_operations != 0);
+            emit documentFileChanged();
+            // 恢复命令失败后重新读取条目，让列表与恢复区保持一致。
+            const auto refresh_recovery_after_failure = [this, restoring_recovery] {
+                if (restoring_recovery) {
+                    (void)refreshRecoveryEntries();
+                }
+            };
+            if (!result.error.isEmpty()) {
+                emit documentFileOperationFinished(false, result.error);
+                refresh_recovery_after_failure();
+                return;
+            }
+            if (result.snapshot == nullptr) {
+                emit documentFileOperationFinished(false,
+                                                   QStringLiteral("layout.invalid_snapshot"));
+                refresh_recovery_after_failure();
+                return;
+            }
+
+            ffi::DocumentRuntime* active_runtime = document_runtime();
+            if (active_runtime == nullptr) {
+                emit documentFileOperationFinished(false,
+                                                   QStringLiteral("layout.runtime_unavailable"));
+                refresh_recovery_after_failure();
+                return;
+            }
+            const rust::String install_response =
+                ffi::install_prepared_document(*active_runtime, result.ticket);
+            const QByteArray install_bytes =
+                layout_view_model_support::response_bytes(install_response);
+            if (restoring_recovery) {
+                // 恢复安装失败返回完整的服务端错误文本。
+                if (!install_bytes.isEmpty()) {
+                    emit documentFileOperationFinished(false, QString::fromUtf8(install_bytes));
+                    refresh_recovery_after_failure();
+                    return;
+                }
+            } else if (install_bytes.startsWith("error:")) {
+                // 打开命令只把 error: 前缀之后的部分作为错误文本。
+                emit documentFileOperationFinished(false,
+                                                   QString::fromUtf8(install_bytes.sliced(6)));
+                return;
+            }
+            if (result.ticket_owner != nullptr) {
+                result.ticket_owner->armed = false;
+            }
+            if (!installSnapshot(std::move(*result.snapshot))) {
+                emit documentFileOperationFinished(false, m_error);
+                return;
+            }
+            if (!restoring_recovery) {
+                clearSaveConflict();
+            }
+            const rust::String caret_response = ffi::current_caret_json(*active_runtime);
+            const QByteArray caret_bytes =
+                layout_view_model_support::response_bytes(caret_response);
+            // 解析失败时 fromJson 必得非对象文档，两个命令共用同一道 caret 校验。
+            QJsonParseError caret_parse_error;
+            const QJsonDocument caret_document =
+                QJsonDocument::fromJson(caret_bytes, &caret_parse_error);
+            if (caret_parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
+                emit documentFileOperationFinished(false,
+                                                   QStringLiteral("layout.invalid_caret_geometry"));
+                return;
+            }
+            installCaretGeometry(caret_document.object().toVariantMap());
+            refreshDocumentFileStatus();
+            if (restoring_recovery) {
+                refreshAutoSaveDeadline();
+            }
+            emit documentFileOperationFinished(true, QString{});
+        });
+    watcher->setFuture(QtConcurrent::run(&m_document_io_pool, [source, source_id,
+                                                               expected_session_generation,
+                                                               expected_document_generation] {
+        const ffi::DocumentOpenResult prepared =
+            source == PreparedDocumentSource::RecoveryEntry
+                ? ffi::prepare_recovery_document(
+                      layout_view_model_support::to_rust_string(source_id),
+                      expected_session_generation, expected_document_generation)
+                : ffi::prepare_document_file(layout_view_model_support::to_rust_string(source_id),
+                                             expected_session_generation,
+                                             expected_document_generation);
+        DocumentOpenTaskResult result;
+        if (!prepared.error.empty()) {
+            result.error = QString::fromUtf8(prepared.error.data(),
+                                             static_cast<qsizetype>(prepared.error.size()));
+            return result;
+        }
+        result.ticket = prepared.ticket;
+        result.snapshot = std::make_shared<layout_snapshot::ParsedLayoutSnapshot>();
+        const QByteArray snapshot_json = QByteArray::fromRawData(
+            prepared.snapshot_json.data(), static_cast<qsizetype>(prepared.snapshot_json.size()));
+        if (!layout_snapshot::parse(snapshot_json, *result.snapshot, result.error)) {
+            ffi::cancel_prepared_document(result.ticket);
+            result.ticket = 0;
+            result.snapshot.reset();
+            return result;
+        }
+        result.ticket_owner = std::make_shared<DocumentOpenTicketOwner>();
+        result.ticket_owner->ticket = result.ticket;
+        return result;
+    }));
+    return {{QStringLiteral("valid"), true}, {QStringLiteral("pending"), true}};
+#else
+    Q_UNUSED(source)
+    Q_UNUSED(source_id)
+    return {{QStringLiteral("valid"), false},
+            {QStringLiteral("error"), QStringLiteral("layout.runtime_unavailable")}};
+#endif
+}
+
 QVariantMap LayoutViewModel::openDocument(const QString& path) {
 #ifdef CARET_ENABLE_APP
     ffi::DocumentRuntime* runtime = nullptr;
@@ -49,112 +218,7 @@ QVariantMap LayoutViewModel::openDocument(const QString& path) {
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("error"), QStringLiteral("document.unsaved_changes")}};
     }
-
-    const rust::String status_response = ffi::document_status_json(*runtime);
-    const QByteArray status_bytes = layout_view_model_support::response_bytes(status_response);
-    QJsonParseError status_parse_error;
-    const QJsonDocument status_document =
-        QJsonDocument::fromJson(status_bytes, &status_parse_error);
-    if (status_parse_error.error != QJsonParseError::NoError || !status_document.isObject()) {
-        return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("document.invalid_status_snapshot")}};
-    }
-    const QJsonObject status = status_document.object();
-    bool session_generation_ok = false;
-    bool document_generation_ok = false;
-    const quint64 expected_session_generation = status.value(QStringLiteral("sessionGeneration"))
-                                                    .toString()
-                                                    .toULongLong(&session_generation_ok);
-    const quint64 expected_document_generation = status.value(QStringLiteral("documentGeneration"))
-                                                     .toString()
-                                                     .toULongLong(&document_generation_ok);
-    if (!session_generation_ok || !document_generation_ok) {
-        return {{QStringLiteral("valid"), false},
-                {QStringLiteral("error"), QStringLiteral("document.invalid_revision")}};
-    }
-
-    ++m_pending_file_operations;
-    m_document_opening = true;
-    setDocumentFileBusy(true);
-    emit documentFileChanged();
-    auto* watcher = new QFutureWatcher<DocumentOpenTaskResult>(this);
-    connect(watcher, &QFutureWatcher<DocumentOpenTaskResult>::finished, this, [this, watcher] {
-        const DocumentOpenTaskResult result = watcher->result();
-        watcher->deleteLater();
-        m_document_opening = false;
-        --m_pending_file_operations;
-        setDocumentFileBusy(m_pending_file_operations != 0);
-        emit documentFileChanged();
-        if (!result.error.isEmpty()) {
-            emit documentFileOperationFinished(false, result.error);
-            return;
-        }
-        if (result.snapshot == nullptr) {
-            emit documentFileOperationFinished(false, QStringLiteral("layout.invalid_snapshot"));
-            return;
-        }
-
-        ffi::DocumentRuntime* active_runtime = document_runtime();
-        if (active_runtime == nullptr) {
-            emit documentFileOperationFinished(false, QStringLiteral("layout.runtime_unavailable"));
-            return;
-        }
-        const rust::String response =
-            ffi::install_prepared_document(*active_runtime, result.ticket);
-        const QByteArray response_bytes = layout_view_model_support::response_bytes(response);
-        if (response_bytes.startsWith("error:")) {
-            emit documentFileOperationFinished(false, QString::fromUtf8(response_bytes.sliced(6)));
-            return;
-        }
-        if (result.ticket_owner != nullptr) {
-            result.ticket_owner->armed = false;
-        }
-        if (!installSnapshot(std::move(*result.snapshot))) {
-            emit documentFileOperationFinished(false, m_error);
-            return;
-        }
-        clearSaveConflict();
-        const rust::String caret_response = ffi::current_caret_json(*active_runtime);
-        const QByteArray caret_bytes = layout_view_model_support::response_bytes(caret_response);
-        QJsonParseError caret_parse_error;
-        const QJsonDocument caret_document =
-            QJsonDocument::fromJson(caret_bytes, &caret_parse_error);
-        if (caret_parse_error.error != QJsonParseError::NoError || !caret_document.isObject()) {
-            emit documentFileOperationFinished(false,
-                                               QStringLiteral("layout.invalid_caret_geometry"));
-            return;
-        }
-        installCaretGeometry(caret_document.object().toVariantMap());
-        refreshDocumentFileStatus();
-        emit documentFileOperationFinished(true, QString{});
-    });
-    watcher->setFuture(QtConcurrent::run(
-        &m_document_io_pool, [path, expected_session_generation, expected_document_generation] {
-            const rust::String rust_path = layout_view_model_support::to_rust_string(path);
-            const ffi::DocumentOpenResult open_result = ffi::prepare_document_file(
-                rust_path, expected_session_generation, expected_document_generation);
-            DocumentOpenTaskResult result;
-            if (!open_result.error.empty()) {
-                result.error = QString::fromUtf8(open_result.error.data(),
-                                                 static_cast<qsizetype>(open_result.error.size()));
-                return result;
-            }
-            result.ticket = open_result.ticket;
-            result.snapshot = std::make_shared<layout_snapshot::ParsedLayoutSnapshot>();
-            const QByteArray snapshot_json =
-                QByteArray::fromRawData(open_result.snapshot_json.data(),
-                                        static_cast<qsizetype>(open_result.snapshot_json.size()));
-            if (!layout_snapshot::parse(snapshot_json, *result.snapshot, result.error)) {
-                ffi::cancel_prepared_document(result.ticket);
-                result.ticket = 0;
-                result.snapshot.reset();
-                return result;
-            }
-            result.ticket_owner = std::make_shared<DocumentOpenTicketOwner>();
-            result.ticket_owner->ticket = result.ticket;
-            return result;
-        }));
-    return {{QStringLiteral("valid"), true}, {QStringLiteral("pending"), true}};
+    return beginPreparedDocumentInstall(PreparedDocumentSource::FilePath, path);
 #else
     Q_UNUSED(path)
     return {{QStringLiteral("valid"), false},
