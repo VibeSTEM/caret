@@ -42,12 +42,6 @@ pub use run::Run;
 /// 文档字体设置的统一默认标记；具体字体由字体角色解析。
 pub const DEFAULT_FONT_FAMILY: &str = "<default>";
 
-// 保留节点转换函数在 crate 内原有的访问路径。
-#[allow(unused_imports)]
-pub(crate) use codec::{
-    block_from_value, block_to_value, paragraph_content_from_value, paragraph_content_to_value,
-};
-
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 文档中稳定且唯一的节点标识。
