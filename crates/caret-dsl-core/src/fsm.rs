@@ -14,10 +14,9 @@ pub use generate::generate_rust;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pest::Parser as PestParser;
-
 use crate::diagnostic::{SourcePositions, push_diagnostic};
-use crate::syntax::{MAX_SOURCE_BYTES, PaParser, Rule, pest_diagnostic};
+use crate::parser::parse_entry;
+use crate::syntax::Rule;
 use crate::{Diagnostic, Diagnostics};
 
 /// 状态与转移的资源上限：与 language 的声明上限同型，保证生成体积可测。
@@ -64,36 +63,8 @@ pub struct FsmDocument {
 
 /// 解析 `.pa` 有限状态机（FSM）文档并做静态校验。
 pub fn parse(source: &str) -> Result<FsmDocument, Diagnostics> {
-    if source.len() > MAX_SOURCE_BYTES {
-        return Err(Diagnostics::one(
-            "pa.source_too_large",
-            format!("source exceeds {} bytes", MAX_SOURCE_BYTES),
-            0,
-            source,
-        ));
-    }
-    if let Some(offset) = source.find('\t') {
-        return Err(Diagnostics::one(
-            "pa.tab_indentation",
-            "tabs are not allowed; use two spaces for indentation",
-            offset,
-            source,
-        ));
-    }
-
-    let positions = SourcePositions::new(source);
+    let (positions, document_pair) = parse_entry(source, Rule::fsm_document)?;
     let source = &positions;
-    let Some(document_pair) = PaParser::parse(Rule::fsm_document, source)
-        .map_err(|error| pest_diagnostic(error, source))?
-        .next()
-    else {
-        return Err(Diagnostics::one(
-            "pa.syntax",
-            "document is empty",
-            0,
-            source,
-        ));
-    };
 
     let mut version: Option<u32> = None;
     let mut kind: Option<String> = None;

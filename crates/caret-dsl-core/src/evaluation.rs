@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::diagnostic::{SourcePositions, push_diagnostic_span};
+use crate::parser::decode_escape;
 use crate::{Diagnostic, Diagnostics, Document, Kind, ValueType, parse};
 
 const MAX_EXPRESSION_DEPTH: usize = 128;
@@ -398,24 +399,20 @@ fn decode_literal(
             );
             return None;
         };
-        match escaped {
-            'n' => result.push('\n'),
-            'r' => result.push('\r'),
-            't' => result.push('\t'),
-            ':' | '=' | ' ' | '\\' | '"' => result.push(escaped),
-            _ => {
-                push_variable_error(
-                    diagnostics,
-                    "variables.invalid_escape",
-                    format!("unsupported escape \\{escaped}"),
-                    variable,
-                    base_offset + offset,
-                    base_offset + escaped_offset + escaped.len_utf8(),
-                    source,
-                );
-                return None;
-            }
-        }
+        // 转义表与数据字面量共用；错误码、文本与跨度仍按变量诊断模型生成。
+        let Some(decoded) = decode_escape(escaped) else {
+            push_variable_error(
+                diagnostics,
+                "variables.invalid_escape",
+                format!("unsupported escape \\{escaped}"),
+                variable,
+                base_offset + offset,
+                base_offset + escaped_offset + escaped.len_utf8(),
+                source,
+            );
+            return None;
+        };
+        result.push(decoded);
     }
     Some(result)
 }

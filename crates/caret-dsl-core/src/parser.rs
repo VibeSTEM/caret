@@ -18,36 +18,8 @@ use crate::{
 /// 解析并校验 language / theme / variables；FSM 文档应使用专用解析入口。
 /// 语法、容量或语义错误返回诊断。
 pub fn parse(source: &str) -> Result<Document, Diagnostics> {
-    if source.len() > MAX_SOURCE_BYTES {
-        return Err(Diagnostics::one(
-            "pa.source_too_large",
-            format!("source exceeds {MAX_SOURCE_BYTES} bytes"),
-            0,
-            source,
-        ));
-    }
-    if let Some(offset) = source.find('\t') {
-        return Err(Diagnostics::one(
-            "pa.tab_indentation",
-            "tabs are not allowed; use two spaces for indentation",
-            offset,
-            source,
-        ));
-    }
-
-    let positions = SourcePositions::new(source);
+    let (positions, document_pair) = parse_entry(source, Rule::document)?;
     let source = &positions;
-    let Some(document_pair) = PaParser::parse(Rule::document, source)
-        .map_err(|error| pest_diagnostic(error, source))?
-        .next()
-    else {
-        return Err(Diagnostics::one(
-            "pa.syntax",
-            "document is empty",
-            0,
-            source,
-        ));
-    };
 
     let mut result = Document {
         version: 0,
@@ -465,6 +437,47 @@ pub fn parse(source: &str) -> Result<Document, Diagnostics> {
     }
 }
 
+/// 数据文档与 FSM 文档共用的解析入口前奏。
+///
+/// 两个入口共享同一套容量、tab 与空文档检查，检查顺序与诊断文本必须一致；
+/// 差异只是传给 Pest 的起始规则不同。返回的位置索引供调用方后续诊断复用；
+/// 返回的 `Pair` 生命周期绑定原始源码，与位置索引相互独立。
+pub(crate) fn parse_entry(
+    source: &str,
+    rule: Rule,
+) -> Result<(SourcePositions<'_>, Pair<'_, Rule>), Diagnostics> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(Diagnostics::one(
+            "pa.source_too_large",
+            format!("source exceeds {MAX_SOURCE_BYTES} bytes"),
+            0,
+            source,
+        ));
+    }
+    if let Some(offset) = source.find('\t') {
+        return Err(Diagnostics::one(
+            "pa.tab_indentation",
+            "tabs are not allowed; use two spaces for indentation",
+            offset,
+            source,
+        ));
+    }
+
+    let positions = SourcePositions::new(source);
+    let Some(document_pair) = PaParser::parse(rule, source)
+        .map_err(|error| pest_diagnostic(error, source))?
+        .next()
+    else {
+        return Err(Diagnostics::one(
+            "pa.syntax",
+            "document is empty",
+            0,
+            source,
+        ));
+    };
+    Ok((positions, document_pair))
+}
+
 fn count_declaration(
     count: &mut usize,
     diagnostics: &mut Vec<Diagnostic>,
@@ -682,6 +695,21 @@ fn decode_pair_value(
     }
 }
 
+/// 解码单个转义字符：`Some` 为替换值，`None` 表示该转义不受支持。
+///
+/// 数据字面量的 `decode_scalar` 与变量求值的 `decode_literal` 共用这张转义表，
+/// 保证两处接受/拒绝的转义集合与替换值一致；错误码、错误文本与位置由调用方
+/// 按各自诊断模型生成。
+pub(crate) fn decode_escape(character: char) -> Option<char> {
+    match character {
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        ':' | '=' | ' ' | '\\' | '"' => Some(character),
+        _ => None,
+    }
+}
+
 fn decode_scalar(
     raw: &str,
     source: &SourcePositions<'_>,
@@ -692,12 +720,9 @@ fn decode_scalar(
     let mut escape_offset = None;
     for (relative_offset, character) in raw.char_indices() {
         if let Some(escape_start) = escape_offset {
-            match character {
-                'n' => result.push('\n'),
-                'r' => result.push('\r'),
-                't' => result.push('\t'),
-                ':' | '=' | ' ' | '\\' | '"' => result.push(character),
-                _ => {
+            match decode_escape(character) {
+                Some(decoded) => result.push(decoded),
+                None => {
                     push_diagnostic(
                         diagnostics,
                         "pa.invalid_escape",
