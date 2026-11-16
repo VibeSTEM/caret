@@ -2412,7 +2412,8 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
     const QVariantMap last_paragraph = initial_paragraphs.last().toMap();
     const QVariantList initial_page_sizes = view_model.pageSizesPt();
     QVERIFY2(!initial_page_sizes.isEmpty(), "初始快照缺少页面尺寸");
-    const QVariantMap last_hit_map = view_model.dragHitMap(initial_page_sizes.size() - 1);
+    const int last_page_index = static_cast<int>(initial_page_sizes.size()) - 1;
+    const QVariantMap last_hit_map = view_model.dragHitMap(last_page_index);
     QVERIFY2(last_hit_map.value(QStringLiteral("valid")).toBool(),
              qPrintable(last_hit_map.value(QStringLiteral("error")).toString()));
     const QString end_offset =
@@ -2437,8 +2438,8 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
     const QVariantList post_insert_glyph_revisions = view_model.pageGlyphRevisions();
     const QVariantMap preedit_result =
         view_model.inputMethodEvent(QStringLiteral("n"), QString(), 0, 0, 1);
-    const int preedit_paragraph_count = view_model.paragraphLayouts().size();
-    const int preedit_rect_count = view_model.compositionRects().size();
+    const int preedit_paragraph_count = static_cast<int>(view_model.paragraphLayouts().size());
+    const int preedit_rect_count = static_cast<int>(view_model.compositionRects().size());
     const QVariantMap updated_preedit_result =
         view_model.inputMethodEvent(QStringLiteral("ni"), QString(), 0, 0, 2);
     const QVariantMap commit_result =
@@ -2462,10 +2463,11 @@ void ShellLoadTest::documentInputDeltaKeepsUntouchedPagesAndParagraphs() {
     const QVariantMap cross_selection_result = view_model.setSelection(cross_anchor, cross_focus);
     const QVariantMap cross_preedit_result =
         view_model.inputMethodEvent(QStringLiteral("x"), QString(), 0, 0, 1);
-    const int cross_preedit_paragraph_count = view_model.paragraphLayouts().size();
+    const int cross_preedit_paragraph_count =
+        static_cast<int>(view_model.paragraphLayouts().size());
     const QVariantMap cross_cancel_result =
         view_model.inputMethodEvent(QString(), QString(), 0, 0, 0);
-    const int cross_cancel_paragraph_count = view_model.paragraphLayouts().size();
+    const int cross_cancel_paragraph_count = static_cast<int>(view_model.paragraphLayouts().size());
 
     QVERIFY2(result.value(QStringLiteral("valid")).toBool(),
              qPrintable(result.value(QStringLiteral("error")).toString()));
