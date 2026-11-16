@@ -28,9 +28,10 @@ Item {
         return pageCanvas.documentToContent(pageIndex, Qt.point(x, y));
     }
 
-    function updateVisiblePageRange() {
+    // 返回当前可见页范围；背景页与字形栅格化共用同一份边界计算。
+    function visiblePageBounds() {
         if (scroller.width <= 0 || scroller.height <= 0)
-            return false;
+            return null;
         const pageSizes = pageCanvas.pageSizesPt;
         const visibleTop = scroller.contentY;
         const visibleBottom = visibleTop + scroller.height;
@@ -53,8 +54,20 @@ Item {
             if (pageBottom > visibleTop)
                 lastVisiblePage = pageIndex;
         }
-        const nextRange = [Math.max(0, low - 1), Math.min(pageSizes.length, lastVisiblePage + 2)];
-        const nextGlyphRange = [low, lastVisiblePage + 1];
+        return {
+            first: low,
+            last: lastVisiblePage,
+            pageCount: pageSizes.length,
+            pageSizes: pageSizes
+        };
+    }
+
+    function updateVisiblePageRange() {
+        const bounds = visiblePageBounds();
+        if (bounds === null)
+            return false;
+        const nextRange = [Math.max(0, bounds.first - 1), Math.min(bounds.pageCount, bounds.last + 2)];
+        const nextGlyphRange = [bounds.first, bounds.last + 1];
         const currentRange = pageCanvas.visiblePageRange;
         const backgroundRangeChanged = currentRange[0] !== nextRange[0] || currentRange[1] !== nextRange[1];
         const glyphRangeChanged = activeGlyphPageRange[0] !== nextGlyphRange[0] || activeGlyphPageRange[1] !== nextGlyphRange[1];
@@ -86,37 +99,17 @@ Item {
     }
 
     function rasterizeVisiblePages(prefetchNextPage) {
-        if (scroller.width <= 0 || scroller.height <= 0)
+        const bounds = visiblePageBounds();
+        if (bounds === null)
             return;
-        const pageSizes = pageCanvas.pageSizesPt;
-        const visibleTop = scroller.contentY;
-        const visibleBottom = visibleTop + scroller.height;
-        let low = 0;
-        let high = pageSizes.length;
-        while (low < high) {
-            const middle = low + Math.floor((high - low) / 2);
-            const pageBottom = pageCanvas.documentToContent(middle, Qt.point(0, pageSizes[middle].height)).y;
-            if (pageBottom <= visibleTop)
-                low = middle + 1;
-            else
-                high = middle;
-        }
-
+        const low = bounds.first;
+        const lastVisiblePage = bounds.last;
+        const pageSizes = bounds.pageSizes;
         const frames = [];
         const keys = [];
         const requests = [];
-        let lastVisiblePage = low - 1;
         const color = Theme.colorText;
         const pageGlyphRevisions = LayoutViewModel.pageGlyphRevisions;
-        for (let pageIndex = low; pageIndex < pageSizes.length; ++pageIndex) {
-            const origin = pageCanvas.pageOrigin(pageIndex);
-            if (origin.y >= visibleBottom)
-                break;
-            const pageBottom = pageCanvas.documentToContent(pageIndex, Qt.point(0, pageSizes[pageIndex].height)).y;
-            if (pageBottom <= visibleTop)
-                continue;
-            lastVisiblePage = pageIndex;
-        }
         // 滚动停止后预读下一页，避免在每次输入更新时额外栅格化整页字形。
         const rasterEnd = lastVisiblePage >= low ? Math.min(pageSizes.length, lastVisiblePage + (prefetchNextPage ? 2 : 1)) : low;
         for (let pageIndex = low; pageIndex < rasterEnd; ++pageIndex) {
