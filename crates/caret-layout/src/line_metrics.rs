@@ -187,45 +187,40 @@ pub fn calculate_content_line_metrics_with_grid(
     if !content_ascent.is_finite() || !content_descent.is_finite() {
         return Err(LineMetricsError::InvalidObjectMetrics);
     }
+    // 基础行框仍从共享行距算法解析，保留字体度量、行距与非法输入的错误路径。
     let base = calculate_line_metrics_with_grid_inner(line_grid, &[], &[], spacing)?;
     let row_spacing = match spacing {
         LineSpacing::Exactly { .. } => row_spacing_for_line_spacing(spacing),
-        _ => caret_grid_layout::RowSpacing::ExpandToFit {
-            base_height: f64::from(base.height_pt),
-            base_baseline: f64::from(base.baseline_pt),
-        },
+        _ => {
+            let base_height = f64::from(base.height_pt);
+            let base_baseline = f64::from(base.baseline_pt);
+            // 共享网格在输入校验中要求 ExpandToFit 的基础基线位于基础行框内；
+            // 直接计算沿用这一约束，越界几何返回与网格路径相同的错误。
+            if base_baseline > base_height {
+                return Err(LineMetricsError::InvalidObjectMetrics);
+            }
+            caret_grid_layout::RowSpacing::ExpandToFit {
+                base_height,
+                base_baseline,
+            }
+        }
     };
-    let grid = caret_grid_layout::layout_grid(
-        &[caret_grid_layout::GridRow::Cells(vec![
-            caret_grid_layout::CellMetrics {
-                width: 0.0,
-                ascent: f64::from(content_ascent),
-                descent: f64::from(content_descent),
-            },
-        ])],
-        &caret_grid_layout::GridSpec {
-            column_widths: vec![None],
-            column_alignments: vec![caret_grid_layout::HorizontalAlignment::Center],
-            vertical_rules: Vec::new(),
-            horizontal_rules: Vec::new(),
-            column_gap: 0.0,
-            row_gap: 0.0,
-            minimum_row_ascent: 0.0,
-            minimum_row_descent: 0.0,
-            row_spacing: Some(row_spacing),
-            base_row_ascent: f64::from(line_grid.ascent_pt),
-            base_row_descent: f64::from(line_grid.descent_pt),
-            base_row_leading: f64::from(line_grid.leading_pt),
-        },
+    // 网格行先把单元格的 signed 度量夹到行最小度量 0，再解析行距；直接计算复用
+    // 同一夹取规则与共享行框算法，不再为单个行框装配伪 GridSpec。
+    let frame = caret_grid_layout::calculate_row_frame(
+        f64::from(line_grid.ascent_pt),
+        f64::from(line_grid.descent_pt),
+        f64::from(line_grid.leading_pt),
+        0.0_f64.max(f64::from(content_ascent)),
+        0.0_f64.max(f64::from(content_descent)),
+        row_spacing,
     )
     .map_err(|_| LineMetricsError::InvalidObjectMetrics)?;
-    let row = grid
-        .rows
-        .first()
-        .ok_or(LineMetricsError::InvalidObjectMetrics)?;
-    let height = row.ascent + row.descent;
-    let baseline = row.ascent;
-    let content_overflow = row.content_overflow;
+    // layout_grid 的行高由 RowFrame 的 ascent=baseline 与 descent=height-baseline
+    // 相加得到；保持同一拆分与相加顺序，使行高转换为 f32 时的舍入与网格路径一致。
+    let height = frame.baseline + (frame.height - frame.baseline);
+    let baseline = frame.baseline;
+    let content_overflow = frame.content_overflow;
     let ink_overflow =
         f64::from(content_ascent) > baseline || f64::from(content_descent) > height - baseline;
     let height_pt = height as f32;
@@ -238,7 +233,7 @@ pub fn calculate_content_line_metrics_with_grid(
         baseline_pt,
         content_metrics_overflow_line_box: content_overflow,
         object_ink_overflows_line_box: ink_overflow,
-        clip_ink_to_line_height: row.clip_content,
+        clip_ink_to_line_height: frame.clip_content,
     })
 }
 
