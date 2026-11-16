@@ -53,8 +53,8 @@ use inline_root_split::{
 pub(super) use path::TextIslandSnapshot;
 pub use path::{MathTextFlowPath, MathTextFlowPathStep, MathTextPosition};
 use source_draft::MathSourceDraft;
+use text_branch::is_grapheme_boundary;
 pub(super) use text_branch::math_text_split_is_available;
-use text_branch::{MathTextEdit, apply_math_text_split_tree_edit, is_grapheme_boundary};
 pub use tree_position::{
     MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep, MathTreePosition,
     MathTreePositionError,
@@ -479,7 +479,6 @@ pub enum MathEditBranch {
 }
 
 struct MathSourceWriteOptions {
-    text_edit: Option<MathTextEdit>,
     before_math_position_override: Option<MathEditPosition>,
     reject_unmapped_metadata: bool,
 }
@@ -2261,7 +2260,6 @@ impl Session {
             None,
             source_edit,
             MathSourceWriteOptions {
-                text_edit: None,
                 before_math_position_override: before_math_position,
                 reject_unmapped_metadata: false,
             },
@@ -4589,7 +4587,6 @@ impl Session {
             merge_group,
             old_edit,
             MathSourceWriteOptions {
-                text_edit: None,
                 before_math_position_override: None,
                 reject_unmapped_metadata: false,
             },
@@ -4610,7 +4607,6 @@ impl Session {
             merge_group,
             old_edit,
             MathSourceWriteOptions {
-                text_edit: None,
                 before_math_position_override: None,
                 reject_unmapped_metadata: true,
             },
@@ -4626,7 +4622,6 @@ impl Session {
         options: MathSourceWriteOptions,
     ) -> Result<Effect, EditError> {
         let MathSourceWriteOptions {
-            text_edit,
             before_math_position_override,
             reject_unmapped_metadata,
         } = options;
@@ -4637,7 +4632,7 @@ impl Session {
             .ok_or(EditError::InvalidPosition)?;
         let current_source = edit.source().ok_or(EditError::InvalidPosition)?;
         let current_projection = edit.required_source_projection()?;
-        if source == current_source && text_edit.is_none() {
+        if source == current_source {
             self.set_math_cursor(cursor);
             return Ok(Effect::default());
         }
@@ -4648,51 +4643,50 @@ impl Session {
         {
             return Err(EditError::InvalidPosition);
         }
-        let mut source_projection_candidate =
-            if text_edit.is_some() || matches!(edit.branch, MathEditBranch::Source) {
-                let (kind, candidate_source) = match &edit.target {
-                    MathEditTarget::Inline { .. } => {
-                        (caret_math::MathInputKind::Inline, source.clone())
-                    }
-                    MathEditTarget::Block { align: false, .. } => {
-                        (caret_math::MathInputKind::Equation, source.clone())
-                    }
-                    MathEditTarget::Block { align: true, .. } => (
-                        caret_math::MathInputKind::Align,
-                        format!("{ALIGN_BEGIN}{source}{ALIGN_END}"),
-                    ),
-                };
-                match caret_math::parse_projection(&candidate_source, kind) {
-                    Ok(projection) => Some(projection.into_parts()),
-                    Err(caret_math::MathParseError::InputTooLong { .. }) => {
-                        return Err(EditError::InvalidMath(
-                            "math source exceeds the editing limit".to_owned(),
-                        ));
-                    }
-                    Err(error)
-                        if text_edit.is_none() && error.is_incomplete()
-                            || (matches!(&error, caret_math::MathParseError::Parse { .. })
-                                && caret_math::classify_input(&candidate_source, kind)
-                                    == caret_math::MathInputStatus::Incomplete) =>
-                    {
-                        if reject_unmapped_metadata {
-                            return Err(EditError::InvalidMath(error.to_string()));
-                        }
-                        self.math_edit
-                            .as_mut()
-                            .ok_or(EditError::InvalidPosition)?
-                            .record_source_draft(source, cursor)?;
-                        self.advance_history_merge_epoch();
-                        return Ok(Effect {
-                            selection_changed: true,
-                            ..Effect::default()
-                        });
-                    }
-                    Err(error) => return Err(EditError::InvalidMath(error.to_string())),
+        let mut source_projection_candidate = if matches!(edit.branch, MathEditBranch::Source) {
+            let (kind, candidate_source) = match &edit.target {
+                MathEditTarget::Inline { .. } => {
+                    (caret_math::MathInputKind::Inline, source.clone())
                 }
-            } else {
-                None
+                MathEditTarget::Block { align: false, .. } => {
+                    (caret_math::MathInputKind::Equation, source.clone())
+                }
+                MathEditTarget::Block { align: true, .. } => (
+                    caret_math::MathInputKind::Align,
+                    format!("{ALIGN_BEGIN}{source}{ALIGN_END}"),
+                ),
             };
+            match caret_math::parse_projection(&candidate_source, kind) {
+                Ok(projection) => Some(projection.into_parts()),
+                Err(caret_math::MathParseError::InputTooLong { .. }) => {
+                    return Err(EditError::InvalidMath(
+                        "math source exceeds the editing limit".to_owned(),
+                    ));
+                }
+                Err(error)
+                    if error.is_incomplete()
+                        || (matches!(&error, caret_math::MathParseError::Parse { .. })
+                            && caret_math::classify_input(&candidate_source, kind)
+                                == caret_math::MathInputStatus::Incomplete) =>
+                {
+                    if reject_unmapped_metadata {
+                        return Err(EditError::InvalidMath(error.to_string()));
+                    }
+                    self.math_edit
+                        .as_mut()
+                        .ok_or(EditError::InvalidPosition)?
+                        .record_source_draft(source, cursor)?;
+                    self.advance_history_merge_epoch();
+                    return Ok(Effect {
+                        selection_changed: true,
+                        ..Effect::default()
+                    });
+                }
+                Err(error) => return Err(EditError::InvalidMath(error.to_string())),
+            }
+        } else {
+            None
+        };
         let (transaction_old_edit, new_edit) = if edit.source_draft_is_pending() {
             changed_source_range(current_projection.edit_source(), &source)
                 .ok_or(EditError::InvalidPosition)?
@@ -4753,22 +4747,7 @@ impl Session {
                 let caret_math::ProjectedMath::Tree(parsed_tree) = parsed else {
                     return Err(EditError::InvalidMath("expected inline math".to_owned()));
                 };
-                let mut math_tree = if let Some(text_edit) = &text_edit {
-                    let replacement = source
-                        .get(old_edit.start..new_edit.end)
-                        .ok_or(EditError::InvalidPosition)?;
-                    let mut math_tree = math.math_tree.clone();
-                    apply_math_text_split_tree_edit(
-                        &mut math_tree,
-                        &text_edit.path,
-                        text_edit.range.clone(),
-                        replacement,
-                        &text_edit.split_math_contents,
-                    )?;
-                    math_tree
-                } else {
-                    parsed_tree.clone()
-                };
+                let mut math_tree = parsed_tree.clone();
                 let previous_projection = edit.required_source_projection()?;
                 let previous_map = previous_projection
                     .tree()
@@ -4793,7 +4772,7 @@ impl Session {
                     source_projection.tree().ok_or(EditError::InvalidPosition)?,
                 );
                 if !metadata_preserved {
-                    if text_edit.is_none() && matches!(edit.branch, MathEditBranch::Source) {
+                    if matches!(edit.branch, MathEditBranch::Source) {
                         self.math_edit
                             .as_mut()
                             .ok_or(EditError::InvalidPosition)?
@@ -5063,40 +5042,19 @@ impl Session {
                 let (content, mut source_projection) = source_projection_candidate
                     .take()
                     .ok_or(EditError::InvalidPosition)?;
-                let parsed_for_binding = text_edit.as_ref().map(|_| content.clone());
-                let mut block = if let Some(text_edit) = &text_edit {
-                    let replacement = source
-                        .get(old_edit.start..new_edit.end)
-                        .ok_or(EditError::InvalidPosition)?;
-                    let mut block = original.clone().ok_or(EditError::InvalidPosition)?;
-                    let tree = text_run_property::block_math_tree_mut(
-                        &mut block,
-                        text_edit.path.align_cell(),
-                    )
-                    .ok_or(EditError::InvalidPosition)?;
-                    apply_math_text_split_tree_edit(
-                        tree,
-                        &text_edit.path,
-                        text_edit.range.clone(),
-                        replacement,
-                        &text_edit.split_math_contents,
-                    )?;
-                    block
-                } else {
-                    match (align, content) {
-                        (false, caret_math::ProjectedMath::Tree(math_tree)) => {
-                            Block::Equation(Equation {
-                                id: block_id.clone(),
-                                math_tree,
-                                extra: Default::default(),
-                            })
-                        }
-                        (true, caret_math::ProjectedMath::Align(parsed)) => Block::Align(Align {
+                let mut block = match (align, content) {
+                    (false, caret_math::ProjectedMath::Tree(math_tree)) => {
+                        Block::Equation(Equation {
                             id: block_id.clone(),
-                            ..parsed
-                        }),
-                        _ => return Err(EditError::InvalidPosition),
+                            math_tree,
+                            extra: Default::default(),
+                        })
                     }
+                    (true, caret_math::ProjectedMath::Align(parsed)) => Block::Align(Align {
+                        id: block_id.clone(),
+                        ..parsed
+                    }),
+                    _ => return Err(EditError::InvalidPosition),
                 };
                 match &block {
                     Block::Equation(equation) => equation
@@ -5111,35 +5069,19 @@ impl Session {
                 let previous_projection = edit.required_source_projection()?;
                 let rebound = match (&block, align) {
                     (Block::Equation(equation), false) => {
-                        let parsed = parsed_for_binding
-                            .as_ref()
-                            .and_then(|content| match content {
-                                caret_math::ProjectedMath::Tree(tree) => Some(tree),
-                                caret_math::ProjectedMath::Align(_) => None,
-                            })
-                            .unwrap_or(&equation.math_tree);
                         crate::math_validation::bind_tree_sidecar(
                             &mut source_projection,
-                            parsed,
+                            &equation.math_tree,
                             &equation.math_tree,
                             previous_projection.tree(),
                         )
                     }
-                    (Block::Align(align), true) => {
-                        let parsed = parsed_for_binding
-                            .as_ref()
-                            .and_then(|content| match content {
-                                caret_math::ProjectedMath::Align(align) => Some(align),
-                                caret_math::ProjectedMath::Tree(_) => None,
-                            })
-                            .unwrap_or(align);
-                        crate::math_validation::bind_align_sidecars(
-                            &mut source_projection,
-                            parsed,
-                            align,
-                            previous_projection.align(),
-                        )
-                    }
+                    (Block::Align(align), true) => crate::math_validation::bind_align_sidecars(
+                        &mut source_projection,
+                        align,
+                        align,
+                        previous_projection.align(),
+                    ),
                     _ => false,
                 };
                 if !rebound {
@@ -5147,9 +5089,7 @@ impl Session {
                         "edited formula cannot be rebound to its source map".to_owned(),
                     ));
                 }
-                if text_edit.is_none()
-                    && let Some(original) = original.as_ref()
-                {
+                if let Some(original) = original.as_ref() {
                     let metadata_preserved = preserve_display_math_metadata(
                         original,
                         &mut block,
@@ -5164,7 +5104,7 @@ impl Session {
                                 "editing would discard unmapped math metadata".to_owned(),
                             ));
                         }
-                        if text_edit.is_none() && matches!(edit.branch, MathEditBranch::Source) {
+                        if matches!(edit.branch, MathEditBranch::Source) {
                             self.math_edit
                                 .as_mut()
                                 .ok_or(EditError::InvalidPosition)?
@@ -5190,32 +5130,23 @@ impl Session {
                         .map_err(|error| EditError::InvalidMath(error.to_string()))?,
                     _ => return Err(EditError::InvalidPosition),
                 }
-                let rebound = text_edit.is_some()
-                    || match (&block, align) {
-                        (Block::Equation(equation), false) => {
-                            crate::math_validation::bind_tree_sidecar(
-                                &mut source_projection,
-                                &equation.math_tree,
-                                &equation.math_tree,
-                                if text_edit.is_none() {
-                                    previous_projection.tree()
-                                } else {
-                                    None
-                                },
-                            )
-                        }
-                        (Block::Align(align), true) => crate::math_validation::bind_align_sidecars(
+                let rebound = match (&block, align) {
+                    (Block::Equation(equation), false) => {
+                        crate::math_validation::bind_tree_sidecar(
                             &mut source_projection,
-                            align,
-                            align,
-                            if text_edit.is_none() {
-                                previous_projection.align()
-                            } else {
-                                None
-                            },
-                        ),
-                        _ => false,
-                    };
+                            &equation.math_tree,
+                            &equation.math_tree,
+                            previous_projection.tree(),
+                        )
+                    }
+                    (Block::Align(align), true) => crate::math_validation::bind_align_sidecars(
+                        &mut source_projection,
+                        align,
+                        align,
+                        previous_projection.align(),
+                    ),
+                    _ => false,
+                };
                 if !rebound {
                     return Err(EditError::InvalidMath(
                         "edited formula cannot be rebound to its source map".to_owned(),

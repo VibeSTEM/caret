@@ -14,7 +14,7 @@ use super::{
     math_text_selection_range,
 };
 use crate::editing::session::history::SessionHistoryState;
-use caret_doc::{Block, FlowContent, MathNode, MathTree, TextFlow};
+use caret_doc::{FlowContent, MathNode, TextFlow};
 
 impl Session {
     pub(super) fn toggle_math_text_run_property(
@@ -184,19 +184,6 @@ pub(super) fn apply_pending_run_properties(
         edit_text_flow_property(text, start..end, *descriptor, Some(*enabled))?;
     }
     Ok(())
-}
-
-pub(super) fn block_math_tree_mut(
-    block: &mut Block,
-    cell: Option<(usize, usize)>,
-) -> Option<&mut MathTree> {
-    match (block, cell) {
-        (Block::Equation(equation), None) => Some(&mut equation.math_tree),
-        (Block::Align(align), Some((row, column))) => {
-            align.rows.get_mut(row)?.cells.get_mut(column)
-        }
-        _ => None,
-    }
 }
 
 fn text_range_has_disabled_property(

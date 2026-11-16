@@ -12,8 +12,8 @@ use super::super::{Affinity, Direction, EditError, Effect};
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{
     MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
-    MathSequencePath, MathSequenceStep, MathTextFlowPath, MathTextPosition, MathTreePosition,
-    history_position, math_text_selection_range,
+    MathSequencePath, MathSequenceStep, MathTextPosition, MathTreePosition, history_position,
+    math_text_selection_range,
 };
 use super::{Session, optional_placeholder_operand};
 use caret_doc::{Block, MathContent, MathNodeKind};
@@ -30,13 +30,6 @@ pub(super) use format_tree_edit::{
 };
 pub(super) use split_tree_edit::apply_math_text_split_tree_edit;
 use std::ops::Range;
-
-#[derive(Debug, Clone)]
-pub(super) struct MathTextEdit {
-    pub(super) path: MathTextFlowPath,
-    pub(super) range: Range<usize>,
-    pub(super) split_math_contents: Vec<MathContent>,
-}
 
 #[derive(Clone, Copy)]
 pub(super) enum PendingStylePolicy {
