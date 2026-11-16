@@ -275,10 +275,19 @@ impl ParagraphLayouter {
                 return Err(TextIslandError::InvalidFontSize);
             }
         }
-        let text: String = spans.iter().map(|span| span.text).collect();
-        if text.is_empty() {
+        let styled_spans: Vec<_> = spans
+            .iter()
+            .filter(|span| !span.text.is_empty())
+            .map(|span| StyledSpan {
+                text: span.text,
+                style: span.style.clone(),
+                underline: span.underline,
+            })
+            .collect();
+        let Some(base_style) = styled_spans.first().map(|span| &span.style) else {
+            // 空文本岛不进入 Parley：返回零度量的默认布局，也不触碰共享塑形缓存。
             return Ok(TextIslandLayout {
-                text,
+                text: String::new(),
                 layout: Layout::default(),
                 metrics: TextIslandMetrics {
                     advance_pt: 0.0,
@@ -290,57 +299,28 @@ impl ParagraphLayouter {
                 missing_requested_families: Vec::new(),
                 has_missing_glyph: false,
             });
-        }
-        let styled_spans: Vec<_> = spans
-            .iter()
-            .filter(|span| !span.text.is_empty())
-            .map(|span| StyledSpan {
-                text: span.text,
-                style: span.style.clone(),
-                underline: span.underline,
-            })
-            .collect();
-        let layout_text = normalize_mandatory_breaks(&text);
-        let space_style_signature = self.shaping_cache.prepare(
-            catalog,
-            settings,
-            styled_spans.iter().map(|span| span.style.clone()).collect(),
-            font_size_override_pt,
-            &mut self.context,
-        );
-        let base_style = &styled_spans[0].style;
-        let prepared = prepare_text_shaping(
-            layout_text.as_ref(),
-            &styled_spans,
-            settings,
-            catalog,
-            font_size_override_pt,
-        );
-        // 光标边界始终取自源文本；等长的替换字符不一定有相同的 Unicode 边界。
-        let grapheme_boundaries = if matches!(&layout_text, Cow::Borrowed(_)) {
-            prepared.boundaries.grapheme.clone()
-        } else {
-            boundaries_for_spans(&text, &styled_spans).grapheme
         };
-        let requested_family_missing = prepared.requested_family_missing;
-        let missing_requested_families = prepared.missing_requested_families.clone();
-        let space_adjustments = self
-            .shaping_cache
-            .space_adjustments_for(space_style_signature);
-        let layout = build_prepared_layout(
-            &mut self.context,
-            catalog,
-            layout_text.as_ref(),
-            base_style,
-            &prepared,
-            space_adjustments,
-            PreparedLayoutOptions {
-                width_pt: None,
-                first_line_indent_chars: None,
-                inline_objects: &[],
-            },
-        )
-        .map_err(|_| TextIslandError::InconsistentShaping)?;
+        let PreparedShaping {
+            text,
+            layout,
+            grapheme_boundaries,
+            requested_family_missing,
+            missing_requested_families,
+            has_missing_glyph,
+        } = self
+            .prepare_shaping(
+                catalog,
+                settings,
+                &styled_spans,
+                base_style,
+                font_size_override_pt,
+                PreparedLayoutOptions {
+                    width_pt: None,
+                    first_line_indent_chars: None,
+                    inline_objects: &[],
+                },
+            )
+            .map_err(|_| TextIslandError::InconsistentShaping)?;
         let mut lines = layout.lines();
         let first_line = lines.next().ok_or(TextIslandError::InconsistentShaping)?;
         let first_baseline = first_line.metrics().baseline;
@@ -369,7 +349,6 @@ impl ParagraphLayouter {
         }
         // 归一化负零，同时保留自然字形度量。
         metrics.advance_pt = metrics.advance_pt.max(0.0);
-        let has_missing_glyph = layout_has_missing_glyph(&layout);
         Ok(TextIslandLayout {
             text,
             layout,
@@ -498,85 +477,25 @@ impl ParagraphLayouter {
             return Err(ParagraphLayoutError::InvalidFontSize);
         }
         let spans = paragraph_style_spans(paragraph, settings, base_style);
-        let space_style_signature = self.shaping_cache.prepare(
+        let PreparedShaping {
+            text,
+            layout,
+            grapheme_boundaries,
+            requested_family_missing,
+            missing_requested_families,
+            has_missing_glyph,
+        } = self.prepare_shaping(
             catalog,
             settings,
-            spans.iter().map(|span| span.style.clone()).collect(),
-            None,
-            &mut self.context,
-        );
-        let text: String = spans.iter().map(|span| span.text).collect();
-        let layout_text = normalize_mandatory_breaks(&text);
-        let mut inline_object_ids = HashSet::with_capacity(inline_objects.len());
-        let mut inline_object_ranges = Vec::with_capacity(inline_objects.len());
-        if inline_objects.iter().any(|object| {
-            object.source_bytes.start >= object.source_bytes.end
-                || object.source_bytes.end > text.len()
-                || !text.is_char_boundary(object.source_bytes.start)
-                || !text.is_char_boundary(object.source_bytes.end)
-                || text.get(object.source_bytes.clone()) != Some("\u{fffc}")
-                || !inline_object_ids.insert(object.id)
-                || !object.advance_pt.is_finite()
-                || !object.ascent_pt.is_finite()
-                || !object.descent_pt.is_finite()
-                || object.advance_pt < 0.0
-                || object.ascent_pt < 0.0
-                || object.descent_pt < 0.0
-        }) {
-            return Err(ParagraphLayoutError::InconsistentShaping);
-        }
-        inline_object_ranges.extend(
-            inline_objects
-                .iter()
-                .map(|object| object.source_bytes.clone()),
-        );
-        inline_object_ranges.sort_unstable_by_key(|range| range.start);
-        if inline_object_ranges
-            .windows(2)
-            .any(|ranges| ranges[0].end > ranges[1].start)
-        {
-            return Err(ParagraphLayoutError::InconsistentShaping);
-        }
-        let prepared = prepare_text_shaping_with_grapheme_fences(
-            layout_text.as_ref(),
             &spans,
-            settings,
-            catalog,
-            None,
-            &inline_object_ranges,
-        );
-        let boundaries = if matches!(&layout_text, Cow::Owned(_)) {
-            let mut boundaries = boundaries_for_spans(&text, &spans);
-            for range in &inline_object_ranges {
-                boundaries.grapheme.push(range.start);
-                boundaries.grapheme.push(range.end);
-            }
-            boundaries.grapheme.sort_unstable();
-            boundaries.grapheme.dedup();
-            boundaries
-        } else {
-            prepared.boundaries.clone()
-        };
-        let requested_family_missing = prepared.requested_family_missing;
-        let missing_requested_families = prepared.missing_requested_families.clone();
-
-        let space_adjustments = self
-            .shaping_cache
-            .space_adjustments_for(space_style_signature);
-        let layout = build_prepared_layout(
-            &mut self.context,
-            catalog,
-            layout_text.as_ref(),
             base_style,
-            &prepared,
-            space_adjustments,
+            None,
             PreparedLayoutOptions {
                 width_pt: Some(width_pt),
                 first_line_indent_chars,
                 inline_objects,
             },
         )?;
-        let has_missing_glyph = layout_has_missing_glyph(&layout);
         let ParagraphLineMapping {
             paragraph: paragraph_layout,
             line_top_offsets_pt,
@@ -597,7 +516,7 @@ impl ParagraphLayouter {
             ParleyParagraphLayout {
                 layout,
                 paragraph: paragraph_layout,
-                grapheme_boundaries: boundaries.grapheme,
+                grapheme_boundaries,
                 line_top_offsets_pt,
                 line_box_tops_pt,
                 parley_line_tops_pt,
@@ -743,23 +662,150 @@ fn build_prepared_layout(
     Ok(layout)
 }
 
-fn prepare_text_shaping(
-    text: &str,
-    spans: &[StyledSpan<'_>],
-    settings: &ResolvedDocumentTextSettings,
-    catalog: &FontCatalog,
-    font_size_override_pt: Option<f32>,
-) -> PreparedTextShaping {
-    prepare_text_shaping_with_grapheme_fences(
-        text,
-        spans,
-        settings,
-        catalog,
-        font_size_override_pt,
-        &[],
-    )
+/// 正文段落与公式文本岛共用的塑形准备结果。
+///
+/// `layout` 是最终的 Parley 布局；`text` 和 `grapheme_boundaries` 始终描述逻辑源文本，
+/// 而不是替换过 mandatory break 的布局文本。
+struct PreparedShaping {
+    text: String,
+    layout: Layout<[u8; 4]>,
+    grapheme_boundaries: Vec<usize>,
+    requested_family_missing: bool,
+    missing_requested_families: Vec<String>,
+    has_missing_glyph: bool,
 }
 
+impl ParagraphLayouter {
+    /// 正文段落与公式文本岛共享的塑形准备流水线。
+    ///
+    /// 两个入口的差异全部通过参数表达：`font_size_override_pt` 让公式文本岛按布局字号
+    /// 覆盖 span 字号；`layout_options` 携带正文的宽度、首行缩进和行内对象，文本岛既
+    /// 不设宽度和缩进，也没有行内对象。拼文本、mandatory break 归一化、塑形缓存键、
+    /// 样式/断行准备、字素边界和 Parley 布局都只在这里实现一次。
+    fn prepare_shaping(
+        &mut self,
+        catalog: &mut FontCatalog,
+        settings: &ResolvedDocumentTextSettings,
+        spans: &[StyledSpan<'_>],
+        base_style: &ShapingStyle,
+        font_size_override_pt: Option<f32>,
+        layout_options: PreparedLayoutOptions<'_>,
+    ) -> Result<PreparedShaping, ParagraphLayoutError> {
+        let text: String = spans.iter().map(|span| span.text).collect();
+        let layout_text = normalize_mandatory_breaks(&text);
+        let space_style_signature = self.shaping_cache.prepare(
+            catalog,
+            settings,
+            spans.iter().map(|span| span.style.clone()).collect(),
+            font_size_override_pt,
+            &mut self.context,
+        );
+        let inline_object_ranges =
+            inline_object_source_ranges(&text, layout_options.inline_objects)?;
+        let prepared = prepare_text_shaping_with_grapheme_fences(
+            layout_text.as_ref(),
+            spans,
+            settings,
+            catalog,
+            font_size_override_pt,
+            &inline_object_ranges,
+        );
+        // 光标边界始终取自源文本；等长的替换字符不一定有相同的 Unicode 边界。
+        let grapheme_boundaries = match &layout_text {
+            Cow::Borrowed(_) => prepared.boundaries.grapheme.clone(),
+            Cow::Owned(_) => normalized_grapheme_boundaries(&text, spans, &inline_object_ranges),
+        };
+        let requested_family_missing = prepared.requested_family_missing;
+        let missing_requested_families = prepared.missing_requested_families.clone();
+        let space_adjustments = self
+            .shaping_cache
+            .space_adjustments_for(space_style_signature);
+        let layout = build_prepared_layout(
+            &mut self.context,
+            catalog,
+            layout_text.as_ref(),
+            base_style,
+            &prepared,
+            space_adjustments,
+            layout_options,
+        )?;
+        let has_missing_glyph = layout_has_missing_glyph(&layout);
+        Ok(PreparedShaping {
+            text,
+            layout,
+            grapheme_boundaries,
+            requested_family_missing,
+            missing_requested_families,
+            has_missing_glyph,
+        })
+    }
+}
+
+/// 按源文本重新计算字素边界，并并入行内对象的起止 fence。
+///
+/// mandatory break 归一化只保持字节长度，替换字符的字素簇不一定与源文本一致，所以
+/// 归一化后必须回到源文本计算边界。`UnicodeBoundaries` 的字素边界本身有序且去重，
+/// 没有 fence 的文本岛再排序去重不会改变结果。
+fn normalized_grapheme_boundaries(
+    text: &str,
+    spans: &[StyledSpan<'_>],
+    inline_object_ranges: &[Range<usize>],
+) -> Vec<usize> {
+    let mut grapheme_boundaries = boundaries_for_spans(text, spans).grapheme;
+    for range in inline_object_ranges {
+        grapheme_boundaries.push(range.start);
+        grapheme_boundaries.push(range.end);
+    }
+    grapheme_boundaries.sort_unstable();
+    grapheme_boundaries.dedup();
+    grapheme_boundaries
+}
+
+/// 校验行内对象的源范围、ID 和度量，返回按起点排序的源范围。
+///
+/// 每个对象必须恰好覆盖一个 U+FFFC 且互不重叠；塑形时用等长零宽占位符替换，
+/// Parley 的字节索引因此仍能直接映射回逻辑文本。
+fn inline_object_source_ranges(
+    text: &str,
+    inline_objects: &[InlineObjectLayout],
+) -> Result<Vec<Range<usize>>, ParagraphLayoutError> {
+    let mut inline_object_ids = HashSet::with_capacity(inline_objects.len());
+    let mut inline_object_ranges = Vec::with_capacity(inline_objects.len());
+    if inline_objects.iter().any(|object| {
+        object.source_bytes.start >= object.source_bytes.end
+            || object.source_bytes.end > text.len()
+            || !text.is_char_boundary(object.source_bytes.start)
+            || !text.is_char_boundary(object.source_bytes.end)
+            || text.get(object.source_bytes.clone()) != Some("\u{fffc}")
+            || !inline_object_ids.insert(object.id)
+            || !object.advance_pt.is_finite()
+            || !object.ascent_pt.is_finite()
+            || !object.descent_pt.is_finite()
+            || object.advance_pt < 0.0
+            || object.ascent_pt < 0.0
+            || object.descent_pt < 0.0
+    }) {
+        return Err(ParagraphLayoutError::InconsistentShaping);
+    }
+    inline_object_ranges.extend(
+        inline_objects
+            .iter()
+            .map(|object| object.source_bytes.clone()),
+    );
+    inline_object_ranges.sort_unstable_by_key(|range| range.start);
+    if inline_object_ranges
+        .windows(2)
+        .any(|ranges| ranges[0].end > ranges[1].start)
+    {
+        return Err(ParagraphLayoutError::InconsistentShaping);
+    }
+    Ok(inline_object_ranges)
+}
+
+/// 计算一次 Parley 塑形所需的样式区间、行断决策、空格校准点和字体族候选。
+///
+/// 输出由四个具名阶段按流水线顺序产生：边界与行断决策、span 索引、逐字素样式与
+/// 空格校准、字体族解析；本函数只负责组装 `PreparedTextShaping`。
 fn prepare_text_shaping_with_grapheme_fences(
     text: &str,
     spans: &[StyledSpan<'_>],
@@ -768,6 +814,42 @@ fn prepare_text_shaping_with_grapheme_fences(
     font_size_override_pt: Option<f32>,
     inline_object_ranges: &[Range<usize>],
 ) -> PreparedTextShaping {
+    let (boundaries, decisions) =
+        shaping_boundaries_and_decisions(text, spans, inline_object_ranges);
+    let span_shaping = span_shaping_index(spans, font_size_override_pt);
+    let grapheme_shaping = collect_grapheme_shaping(
+        text,
+        &boundaries.grapheme,
+        &span_shaping,
+        inline_object_ranges,
+        font_size_override_pt,
+    );
+    let families = resolve_font_families(
+        &grapheme_shaping.style_ranges,
+        settings,
+        catalog,
+        inline_object_ranges,
+    );
+    PreparedTextShaping {
+        boundaries,
+        decisions,
+        style_ranges: grapheme_shaping.style_ranges,
+        space_style_font_sizes_pt: span_shaping.space_style_font_sizes_pt,
+        space_samples: grapheme_shaping.space_samples,
+        word_spacing_ranges: grapheme_shaping.word_spacing_ranges,
+        em_space_ranges: grapheme_shaping.em_space_ranges,
+        family_names_by_key: families.family_names_by_key,
+        requested_family_missing: families.requested_family_missing,
+        missing_requested_families: families.missing_requested_families,
+    }
+}
+
+/// 计算字素与行断边界，把行内对象起止位置并入字素 fence，并生成行断覆盖表。
+fn shaping_boundaries_and_decisions(
+    text: &str,
+    spans: &[StyledSpan<'_>],
+    inline_object_ranges: &[Range<usize>],
+) -> (crate::UnicodeBoundaries, Arc<PackedLineBreakDecisions>) {
     let mut boundaries = boundaries_for_spans(text, spans);
     for object_range in inline_object_ranges {
         boundaries.grapheme.push(object_range.start);
@@ -776,18 +858,33 @@ fn prepare_text_shaping_with_grapheme_fences(
     boundaries.grapheme.sort_unstable();
     boundaries.grapheme.dedup();
     let decisions = Arc::new(line_break_decisions(text, &boundaries));
-    let available_families = Arc::clone(&catalog.family_names_lowercase);
-    let mut requested_family_missing = false;
-    let mut missing_requested_families = std::collections::BTreeSet::new();
-    let mut span_ranges = Vec::with_capacity(spans.len());
-    let mut span_space_style_indices = Vec::with_capacity(spans.len());
+    (boundaries, decisions)
+}
+
+/// 单次塑形准备的 span 索引：字节范围、去重样式索引和空格校准字号。
+struct SpanShapingIndex<'a> {
+    /// 每个 span 的源字节范围、样式和下划线。
+    ranges: Vec<(Range<usize>, &'a ShapingStyle, bool)>,
+    /// 每个 span 的去重样式索引，对应 `space_style_font_sizes_pt` 中的字号。
+    space_style_indices: Vec<usize>,
+    /// 每种去重样式用于空格校准的字号，按首次出现顺序排列。
+    space_style_font_sizes_pt: Vec<f32>,
+}
+
+/// 记录每个 span 的源范围，并按首次出现顺序为样式分配空格校准字号。
+fn span_shaping_index<'a>(
+    spans: &'a [StyledSpan<'_>],
+    font_size_override_pt: Option<f32>,
+) -> SpanShapingIndex<'a> {
+    let mut ranges = Vec::with_capacity(spans.len());
+    let mut space_style_indices = Vec::with_capacity(spans.len());
     let mut space_style_font_sizes_pt = Vec::new();
-    let mut space_style_indices = std::collections::HashMap::new();
+    let mut style_indices = std::collections::HashMap::new();
     let mut offset = 0usize;
     for span in spans {
         let end = offset + span.text.len();
-        span_ranges.push((offset..end, &span.style, span.underline));
-        let style_index = *space_style_indices.entry(&span.style).or_insert_with(|| {
+        ranges.push((offset..end, &span.style, span.underline));
+        let style_index = *style_indices.entry(&span.style).or_insert_with(|| {
             let index = space_style_font_sizes_pt.len();
             space_style_font_sizes_pt.push(
                 font_size_override_pt
@@ -795,72 +892,94 @@ fn prepare_text_shaping_with_grapheme_fences(
             );
             index
         });
-        span_space_style_indices.push(style_index);
+        space_style_indices.push(style_index);
         offset = end;
     }
+    SpanShapingIndex {
+        ranges,
+        space_style_indices,
+        space_style_font_sizes_pt,
+    }
+}
+
+/// 一个字素簇的脚本与 emoji 呈现属性，决定字体族候选、空格校准键和区间合并。
+#[derive(Clone, Copy)]
+struct GraphemeAttributes {
+    script: Script,
+    emoji: bool,
+}
+
+/// 逐字素扫描得到的 Parley 样式区间与空格校准数据。
+struct GraphemeShaping {
+    style_ranges: Vec<PreparedStyleRange>,
+    space_samples: Vec<(Range<usize>, SpaceStyleKey)>,
+    word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)>,
+    em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)>,
+}
+
+/// 按字素簇切分 span 样式，并收集空格校准样本与字距范围。
+///
+/// 样式只在字素簇边界上切换；普通空格每种（样式, 脚本, emoji）组合只保留首个样本，
+/// 字距规则合并到连续区间，避免每个空格生成独立的 Parley 样式 run。
+fn collect_grapheme_shaping(
+    text: &str,
+    grapheme_boundaries: &[usize],
+    span_shaping: &SpanShapingIndex<'_>,
+    inline_object_ranges: &[Range<usize>],
+    font_size_override_pt: Option<f32>,
+) -> GraphemeShaping {
     let emoji_presentation = CodePointSetDataBorrowed::new::<props::EmojiPresentation>();
     let mut style_ranges: Vec<PreparedStyleRange> = Vec::new();
-    // 普通空格只保留每种塑形样式的一个测量样本；字距规则应用到连续样式区间，
-    // 避免每个空格都创建一个 Parley 样式 run。
     let mut space_samples: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
     let mut word_spacing_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
     let mut em_space_ranges: Vec<(Range<usize>, SpaceStyleKey)> = Vec::new();
-    let mut sampled_space_keys = std::collections::HashSet::new();
+    let mut sampled_space_keys = HashSet::new();
     let mut span_index = 0usize;
-    let first_script = boundaries
-        .grapheme
+    let mut previous_script = grapheme_boundaries
         .windows(2)
         .find_map(|range| strong_script(&text[range[0]..range[1]]));
-    let mut previous_script = first_script;
-    for pair in boundaries.grapheme.windows(2) {
+    for pair in grapheme_boundaries.windows(2) {
         let range = pair[0]..pair[1];
         if range.is_empty() {
             continue;
         }
-        while span_ranges
+        while span_shaping
+            .ranges
             .get(span_index)
             .is_some_and(|(span_range, _, _)| span_range.end <= range.start)
         {
             span_index += 1;
         }
         let cluster_text = &text[range.clone()];
-        let script = strong_script(cluster_text)
-            .or(previous_script)
-            .unwrap_or_else(default_script);
-        previous_script = Some(script);
-        let emoji = is_emoji_grapheme(&text[range.clone()], &emoji_presentation);
-        let space_kind = if cluster_text.starts_with(' ') {
-            Some(SpaceKind::Ordinary)
-        } else if cluster_text.starts_with('\u{2003}') {
-            Some(SpaceKind::Em)
-        } else {
-            None
+        let attributes = GraphemeAttributes {
+            script: strong_script(cluster_text)
+                .or(previous_script)
+                .unwrap_or_else(default_script),
+            emoji: is_emoji_grapheme(cluster_text, &emoji_presentation),
         };
-        let code_role = span_ranges
+        previous_script = Some(attributes.script);
+        let space_kind = leading_space_kind(cluster_text);
+        let code_role = span_shaping
+            .ranges
             .get(span_index)
             .is_some_and(|(_, style, _)| style.font_role == crate::shaping::FontRole::Code);
         // Parley 的 WordSpacing 也会调整 NBSP；把它从连续样式区间拆出，
         // 否则同一字体先排过普通空格后，NBSP 宽度会依排版历史改变。
-        if !code_role && span_ranges.get(span_index).is_some() && !cluster_text.contains('\u{00a0}')
+        if !code_role
+            && span_shaping.ranges.get(span_index).is_some()
+            && !cluster_text.contains('\u{00a0}')
         {
             let key = SpaceStyleKey {
-                style_index: span_space_style_indices[span_index],
-                script,
-                emoji,
+                style_index: span_shaping.space_style_indices[span_index],
+                script: attributes.script,
+                emoji: attributes.emoji,
                 kind: SpaceKind::Ordinary,
             };
-            if let Some((previous_range, previous_key)) = word_spacing_ranges.last_mut()
-                && previous_range.end == range.start
-                && *previous_key == key
-            {
-                previous_range.end = range.end;
-            } else {
-                word_spacing_ranges.push((range.clone(), key));
-            }
+            merge_word_spacing_range(&mut word_spacing_ranges, range.clone(), key);
         }
         if let Some(kind) = space_kind
             && !code_role
-            && span_ranges.get(span_index).is_some()
+            && span_shaping.ranges.get(span_index).is_some()
         {
             let space_end = range.start
                 + match kind {
@@ -868,106 +987,217 @@ fn prepare_text_shaping_with_grapheme_fences(
                     SpaceKind::Em => '\u{2003}'.len_utf8(),
                 };
             let key = SpaceStyleKey {
-                style_index: span_space_style_indices[span_index],
-                script,
-                emoji,
+                style_index: span_shaping.space_style_indices[span_index],
+                script: attributes.script,
+                emoji: attributes.emoji,
                 kind,
             };
-            if sampled_space_keys.insert(key) {
-                space_samples.push((range.start..space_end, key));
-            }
-            if kind == SpaceKind::Em {
-                em_space_ranges.push((range.start..space_end, key));
-            }
+            push_space_sample(
+                &mut space_samples,
+                &mut em_space_ranges,
+                &mut sampled_space_keys,
+                range.start..space_end,
+                key,
+            );
         }
-        let mut fragment_index = span_index;
-        while let Some((span_range, style, underline)) = span_ranges.get(fragment_index) {
-            if span_range.start >= range.end {
-                break;
-            }
-            let fragment = span_range.start.max(range.start)..span_range.end.min(range.end);
-            if fragment.start < fragment.end {
-                let fragment_font_size_pt = font_size_override_pt
-                    .unwrap_or_else(|| font_size_pt(style.font_size_centipoints));
-                if let Some((
-                    previous,
-                    previous_style,
-                    previous_script,
-                    previous_emoji,
-                    previous_underline,
-                    previous_font_size_pt,
-                )) = style_ranges.last_mut()
-                    && previous.end == fragment.start
-                    && !is_inline_object_boundary(inline_object_ranges, fragment.start)
-                    && *previous_style == **style
-                    && *previous_script == script
-                    && *previous_emoji == emoji
-                    && *previous_underline == *underline
-                    && *previous_font_size_pt == fragment_font_size_pt
-                {
-                    previous.end = fragment.end;
-                } else {
-                    style_ranges.push((
-                        fragment,
-                        (*style).clone(),
-                        script,
-                        emoji,
-                        *underline,
-                        fragment_font_size_pt,
-                    ));
-                }
-            }
-            if span_range.end <= range.end {
-                fragment_index += 1;
-            } else {
-                break;
-            }
-        }
-        span_index = fragment_index;
+        span_index = append_grapheme_style_ranges(
+            &mut style_ranges,
+            &range,
+            &span_shaping.ranges,
+            span_index,
+            attributes,
+            font_size_override_pt,
+            inline_object_ranges,
+        );
     }
+    GraphemeShaping {
+        style_ranges,
+        space_samples,
+        word_spacing_ranges,
+        em_space_ranges,
+    }
+}
+
+/// 返回字素簇开头的空格类型：U+0020 为普通空格，U+2003 为全字宽空格。
+fn leading_space_kind(cluster_text: &str) -> Option<SpaceKind> {
+    if cluster_text.starts_with(' ') {
+        Some(SpaceKind::Ordinary)
+    } else if cluster_text.starts_with('\u{2003}') {
+        Some(SpaceKind::Em)
+    } else {
+        None
+    }
+}
+
+/// 合并相邻且校准键相同的字距范围，避免连续空格生成大量 Parley 样式 run。
+fn merge_word_spacing_range(
+    ranges: &mut Vec<(Range<usize>, SpaceStyleKey)>,
+    range: Range<usize>,
+    key: SpaceStyleKey,
+) {
+    if let Some((previous_range, previous_key)) = ranges.last_mut()
+        && previous_range.end == range.start
+        && *previous_key == key
+    {
+        previous_range.end = range.end;
+    } else {
+        ranges.push((range, key));
+    }
+}
+
+/// 记录每种（样式, 脚本, emoji, 空格类型）组合的第一个空格测量样本。
+///
+/// 全字宽空格的 letter-spacing 修正需要覆盖每个实例，所以 `em_space_ranges` 不按样本键去重。
+fn push_space_sample(
+    space_samples: &mut Vec<(Range<usize>, SpaceStyleKey)>,
+    em_space_ranges: &mut Vec<(Range<usize>, SpaceStyleKey)>,
+    sampled_space_keys: &mut HashSet<SpaceStyleKey>,
+    range: Range<usize>,
+    key: SpaceStyleKey,
+) {
+    if sampled_space_keys.insert(key) {
+        space_samples.push((range.clone(), key));
+    }
+    if key.kind == SpaceKind::Em {
+        em_space_ranges.push((range, key));
+    }
+}
+
+/// 把字素簇在 span 上的片段切成 Parley 样式区间，返回下一个 span 索引。
+///
+/// 片段只在 span 边界和字素簇边界上断开；行内对象起止位置必须成为独立 fence，
+/// 否则 Parley 的 inline box 可能落在错误的样式区间一侧。
+fn append_grapheme_style_ranges(
+    style_ranges: &mut Vec<PreparedStyleRange>,
+    range: &Range<usize>,
+    span_ranges: &[(Range<usize>, &ShapingStyle, bool)],
+    mut span_index: usize,
+    attributes: GraphemeAttributes,
+    font_size_override_pt: Option<f32>,
+    inline_object_ranges: &[Range<usize>],
+) -> usize {
+    while let Some((span_range, style, underline)) = span_ranges.get(span_index) {
+        if span_range.start >= range.end {
+            break;
+        }
+        let fragment = span_range.start.max(range.start)..span_range.end.min(range.end);
+        if fragment.start < fragment.end {
+            let fragment_font_size_pt =
+                font_size_override_pt.unwrap_or_else(|| font_size_pt(style.font_size_centipoints));
+            push_style_range(
+                style_ranges,
+                (
+                    fragment,
+                    (*style).clone(),
+                    attributes.script,
+                    attributes.emoji,
+                    *underline,
+                    fragment_font_size_pt,
+                ),
+                inline_object_ranges,
+            );
+        }
+        if span_range.end <= range.end {
+            span_index += 1;
+        } else {
+            break;
+        }
+    }
+    span_index
+}
+
+/// 追加一个样式片段；相邻且属性完全相同的片段合并成一个连续区间。
+fn push_style_range(
+    style_ranges: &mut Vec<PreparedStyleRange>,
+    fragment: PreparedStyleRange,
+    inline_object_ranges: &[Range<usize>],
+) {
+    if let Some(previous) = style_ranges.last_mut()
+        && previous.0.end == fragment.0.start
+        && !is_inline_object_boundary(inline_object_ranges, fragment.0.start)
+        && previous.1 == fragment.1
+        && previous.2 == fragment.2
+        && previous.3 == fragment.3
+        && previous.4 == fragment.4
+        && previous.5 == fragment.5
+    {
+        previous.0.end = fragment.0.end;
+    } else {
+        style_ranges.push(fragment);
+    }
+}
+
+/// 每个（样式, 脚本, emoji）键的字体族候选链和缺失首选族诊断。
+struct ResolvedFontFamilies {
+    family_names_by_key: std::collections::HashMap<(ShapingStyle, Script, bool), Vec<String>>,
+    requested_family_missing: bool,
+    missing_requested_families: Vec<String>,
+}
+
+/// 为样式区间中出现过的每个（样式, 脚本, emoji）键解析字体族候选链。
+fn resolve_font_families(
+    style_ranges: &[PreparedStyleRange],
+    settings: &ResolvedDocumentTextSettings,
+    catalog: &FontCatalog,
+    inline_object_ranges: &[Range<usize>],
+) -> ResolvedFontFamilies {
+    let available_families = Arc::clone(&catalog.family_names_lowercase);
+    let mut requested_family_missing = false;
+    let mut missing_requested_families = std::collections::BTreeSet::new();
     let mut family_names_by_key =
         std::collections::HashMap::<(ShapingStyle, Script, bool), Vec<String>>::new();
-    for (range, style, script, emoji, _, _) in &style_ranges {
+    for (range, style, script, emoji, _, _) in style_ranges {
         if is_inline_object_range(inline_object_ranges, range) {
             continue;
         }
         let key = (style.clone(), *script, *emoji);
-        let _family_names = family_names_by_key.entry(key).or_insert_with(|| {
-            let candidates = settings.font_preferences().family_candidates(
-                crate::font_selection::FontSelectionContext {
-                    script: *script,
-                    language: style.language.as_deref(),
-                    role: style.font_role,
-                    explicit_family: style.requested_family.as_deref(),
-                },
-            );
-            if let Some(candidate) = candidates.first()
-                && !is_generic_family(candidate.family)
-                && !available_families.contains(&candidate.family.to_lowercase())
-            {
-                requested_family_missing = true;
-                missing_requested_families.insert(candidate.family.to_owned());
-            }
-            let mut names = Vec::with_capacity(candidates.len());
-            for candidate in candidates {
-                names.push(candidate.family.to_owned());
-            }
-            names
+        family_names_by_key.entry(key).or_insert_with(|| {
+            resolve_family_candidates(
+                style,
+                *script,
+                settings,
+                &available_families,
+                &mut requested_family_missing,
+                &mut missing_requested_families,
+            )
         });
     }
-
-    PreparedTextShaping {
-        boundaries,
-        decisions,
-        style_ranges,
-        space_style_font_sizes_pt,
-        space_samples,
-        word_spacing_ranges,
-        em_space_ranges,
+    ResolvedFontFamilies {
         family_names_by_key,
         requested_family_missing,
         missing_requested_families: missing_requested_families.into_iter().collect(),
     }
+}
+
+/// 解析单个样式键的候选字体族；首选候选族未安装时记录缺失诊断。
+fn resolve_family_candidates(
+    style: &ShapingStyle,
+    script: Script,
+    settings: &ResolvedDocumentTextSettings,
+    available_families: &HashSet<String>,
+    requested_family_missing: &mut bool,
+    missing_requested_families: &mut std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let candidates = settings.font_preferences().family_candidates(
+        crate::font_selection::FontSelectionContext {
+            script,
+            language: style.language.as_deref(),
+            role: style.font_role,
+            explicit_family: style.requested_family.as_deref(),
+        },
+    );
+    if let Some(candidate) = candidates.first()
+        && !is_generic_family(candidate.family)
+        && !available_families.contains(&candidate.family.to_lowercase())
+    {
+        *requested_family_missing = true;
+        missing_requested_families.insert(candidate.family.to_owned());
+    }
+    let mut names = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        names.push(candidate.family.to_owned());
+    }
+    names
 }
 
 struct ParleyLayoutInput<'a> {
