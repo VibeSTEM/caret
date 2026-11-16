@@ -206,12 +206,27 @@ fn math_position_affinity_to_affinity(affinity: MathPositionAffinity) -> Affinit
     }
 }
 
-fn first_placeholder_position(
+/// 在数学树指定路径的内容区间内定位第一个可编辑空槽。
+///
+/// 优先返回直接位于当前序列中的占位节点；否则按结构顺序下钻数学节点的非可选
+/// 占位操作数与行内环境 children。`range` 只限定起始序列的扫描内容索引范围，
+/// 递归下钻始终扫描子序列的完整范围；Text/SoftBreak/Opaque 不参与定位。
+pub(super) fn first_placeholder_position(
+    tree: &MathTree,
+    path: &MathSequencePath,
+    range: Range<usize>,
+) -> Option<(MathSequencePath, usize)> {
+    let contents = sequence_contents(tree, path)?;
+    first_placeholder_in_contents(contents, path, range)
+}
+
+fn first_placeholder_in_contents(
     contents: &[MathContent],
     path: &MathSequencePath,
+    range: Range<usize>,
 ) -> Option<(MathSequencePath, usize)> {
-    for (content_index, content) in contents.iter().enumerate() {
-        match content {
+    for content_index in range {
+        match contents.get(content_index)? {
             MathContent::Math(node) if node.kind == MathNodeKind::Placeholder => {
                 return Some((path.clone(), content_index));
             }
@@ -225,9 +240,11 @@ fn first_placeholder_position(
                         content_index,
                         operand_index,
                     });
-                    if let Some(found) =
-                        first_placeholder_position(&flow.content, &MathSequencePath::new(steps))
-                    {
+                    if let Some(found) = first_placeholder_in_contents(
+                        &flow.content,
+                        &MathSequencePath::new(steps),
+                        0..flow.content.len(),
+                    ) {
                         return Some(found);
                     }
                 }
@@ -235,9 +252,11 @@ fn first_placeholder_position(
             MathContent::Environment(environment) => {
                 let mut steps = path.steps().to_vec();
                 steps.push(MathSequenceStep::EnvironmentChildren { content_index });
-                if let Some(found) =
-                    first_placeholder_position(&environment.children, &MathSequencePath::new(steps))
-                {
+                if let Some(found) = first_placeholder_in_contents(
+                    &environment.children,
+                    &MathSequencePath::new(steps),
+                    0..environment.children.len(),
+                ) {
                     return Some(found);
                 }
             }
@@ -245,6 +264,29 @@ fn first_placeholder_position(
         }
     }
     None
+}
+
+/// 解析结构路径对应的内容序列；路径末端不要求是 TextFlow。
+fn sequence_contents<'a>(tree: &'a MathTree, path: &MathSequencePath) -> Option<&'a [MathContent]> {
+    let mut contents = tree.root.content.as_slice();
+    for step in path.steps() {
+        contents = match *step {
+            MathSequenceStep::Operand {
+                content_index,
+                operand_index,
+            } => match contents.get(content_index)? {
+                MathContent::Math(node) => node.children.get(operand_index)?.content.as_slice(),
+                _ => return None,
+            },
+            MathSequenceStep::EnvironmentChildren { content_index } => {
+                match contents.get(content_index)? {
+                    MathContent::Environment(environment) => environment.children.as_slice(),
+                    _ => return None,
+                }
+            }
+        };
+    }
+    Some(contents)
 }
 
 pub(super) fn optional_placeholder_operand(
@@ -2983,7 +3025,11 @@ impl Session {
             .get(cursor_in_template..)
             .is_some_and(|remaining| remaining.starts_with('}'))
         {
-            first_placeholder_position(&template_tree.root.content, &MathSequencePath::root())
+            first_placeholder_position(
+                &template_tree,
+                &MathSequencePath::root(),
+                0..template_tree.root.content.len(),
+            )
         } else {
             None
         };

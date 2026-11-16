@@ -6,6 +6,15 @@
 use super::super::block_rows::{self, BackspaceAction};
 use super::*;
 
+/// Align 逻辑行删除采用的事务。
+#[derive(Clone, Copy)]
+enum AlignRowTransaction {
+    /// 树与文本分支：提交 Align 树事务。
+    Tree,
+    /// 源码分支：按源码投影改写源码。
+    Source,
+}
+
 pub(super) fn handle_tree_backspace(
     session: &mut Session,
     edit: &MathEdit,
@@ -13,58 +22,27 @@ pub(super) fn handle_tree_backspace(
     start: usize,
     end: usize,
 ) -> Result<Option<Effect>, EditError> {
-    let MathEditTarget::Block {
-        block_id,
-        align: true,
-    } = &edit.target
-    else {
+    let MathEditTarget::Block { align: true, .. } = &edit.target else {
         return Ok(None);
     };
     let Some((row_index, cell_index)) = align_cell else {
         return Ok(None);
     };
-    let Block::Align(before_align) =
-        find_block_by_id(&session.document.body, block_id).ok_or(EditError::InvalidPosition)?
-    else {
-        return Err(EditError::InvalidPosition);
-    };
-    let row = before_align
-        .rows
-        .get(row_index)
-        .ok_or(EditError::InvalidPosition)?;
-    match block_rows::backspace_action(
-        align_row_content_is_empty(row),
-        cell_index == 0 && start == 0 && end == 0,
-    ) {
-        BackspaceAction::RemoveEmptyRow => {
-            if !align_row_removal_is_safe(row) {
-                return Err(EditError::UnsupportedOpaqueContent);
-            }
-            if before_align.rows.len() == 1 {
-                if !before_align.extra.is_empty() {
-                    return Err(EditError::UnsupportedOpaqueContent);
-                }
-                return session.delete_math_object().map(Some);
-            }
-            return remove_empty_tree_row(session, edit, before_align.clone(), row_index).map(Some);
-        }
-        BackspaceAction::IgnoreNonEmptyRowStart => {
-            return Ok(Some(Effect::default()));
-        }
-        BackspaceAction::DelegateToCell => {}
-    }
-    Ok(None)
+    let at_row_start = cell_index == 0 && start == 0 && end == 0;
+    align_row_backspace(
+        session,
+        edit,
+        row_index,
+        at_row_start,
+        AlignRowTransaction::Tree,
+    )
 }
 
 pub(super) fn handle_text_backspace(
     session: &mut Session,
     edit: &MathEdit,
 ) -> Result<Option<Effect>, EditError> {
-    let MathEditTarget::Block {
-        block_id,
-        align: true,
-    } = &edit.target
-    else {
+    let MathEditTarget::Block { align: true, .. } = &edit.target else {
         return Ok(None);
     };
     let MathEditBranch::Text { path, anchor, .. } = &edit.branch else {
@@ -76,35 +54,9 @@ pub(super) fn handle_text_backspace(
     let Some((row_index, _cell_index)) = path.align_cell() else {
         return Ok(None);
     };
-    let Block::Align(align) =
-        find_block_by_id(&session.document.body, block_id).ok_or(EditError::InvalidPosition)?
-    else {
-        return Err(EditError::InvalidPosition);
-    };
-    let row = align
-        .rows
-        .get(row_index)
-        .ok_or(EditError::InvalidPosition)?;
-    if !align_row_content_is_empty(row) {
-        // 非空 TextFlow 的退格范围由文本岛仲裁；局部 offset 0 不一定是逻辑行首。
-        return Ok(None);
-    }
-    match block_rows::backspace_action(true, false) {
-        BackspaceAction::RemoveEmptyRow => {
-            if !align_row_removal_is_safe(row) {
-                return Err(EditError::UnsupportedOpaqueContent);
-            }
-            if align.rows.len() == 1 {
-                if !align.extra.is_empty() {
-                    return Err(EditError::UnsupportedOpaqueContent);
-                }
-                return session.delete_math_object().map(Some);
-            }
-            remove_empty_tree_row(session, edit, align.clone(), row_index).map(Some)
-        }
-        BackspaceAction::IgnoreNonEmptyRowStart => Ok(Some(Effect::default())),
-        BackspaceAction::DelegateToCell => Ok(None),
-    }
+    // 非空 TextFlow 的退格范围由文本岛仲裁；局部 offset 0 不一定是逻辑行首，
+    // 因此这里只按整行为空处理，其余情况交回文本分支。
+    align_row_backspace(session, edit, row_index, false, AlignRowTransaction::Tree)
 }
 
 pub(super) fn handle_source_backspace(
@@ -114,14 +66,40 @@ pub(super) fn handle_source_backspace(
     if edit.source_draft_is_pending() || !matches!(edit.branch, MathEditBranch::Source) {
         return Ok(None);
     }
+    let MathEditTarget::Block { align: true, .. } = &edit.target else {
+        return Ok(None);
+    };
+    let Some((row_index, cell_index, offset)) = edit.align_cell_at_cursor() else {
+        return Ok(None);
+    };
+    let at_row_start = cell_index == 0 && offset == 0;
+    align_row_backspace(
+        session,
+        edit,
+        row_index,
+        at_row_start,
+        AlignRowTransaction::Source,
+    )
+}
+
+/// Align 行首 Backspace 的统一骨架。
+///
+/// 查找目标块并按整行内容与行首位置分类：空行校验元数据可安全移除后，仅剩一行时
+/// 删除整个数学对象，多行时按调用方选择的 `transaction` 删除该行并迁移焦点；
+/// 非空行首返回空效果，行内退格返回 `None` 交给行内编辑器。调用方只负责确定
+/// `row_index`、`at_row_start` 与删除事务。
+fn align_row_backspace(
+    session: &mut Session,
+    edit: &MathEdit,
+    row_index: usize,
+    at_row_start: bool,
+    transaction: AlignRowTransaction,
+) -> Result<Option<Effect>, EditError> {
     let MathEditTarget::Block {
         block_id,
         align: true,
     } = &edit.target
     else {
-        return Ok(None);
-    };
-    let Some((row_index, cell_index, offset)) = edit.align_cell_at_cursor() else {
         return Ok(None);
     };
     let Block::Align(align) =
@@ -133,21 +111,63 @@ pub(super) fn handle_source_backspace(
         .rows
         .get(row_index)
         .ok_or(EditError::InvalidPosition)?;
-    match block_rows::backspace_action(
-        align_row_content_is_empty(row),
-        cell_index == 0 && offset == 0,
-    ) {
-        BackspaceAction::RemoveEmptyRow => {
-            if !align_row_removal_is_safe(row) {
-                return Err(EditError::UnsupportedOpaqueContent);
-            }
-        }
-        BackspaceAction::IgnoreNonEmptyRowStart => {
-            return Ok(Some(Effect::default()));
-        }
+    match block_rows::backspace_action(align_row_content_is_empty(row), at_row_start) {
+        BackspaceAction::RemoveEmptyRow => {}
+        BackspaceAction::IgnoreNonEmptyRowStart => return Ok(Some(Effect::default())),
         BackspaceAction::DelegateToCell => return Ok(None),
     }
+    if !align_row_removal_is_safe(row) {
+        return Err(EditError::UnsupportedOpaqueContent);
+    }
+    let only_row = align.rows.len() == 1;
+    // 源码事务在删行前还要确认投影范围可改写（并拒绝含注释 % 的行）；该守卫先于
+    // 唯一行删除对象执行，以保持原有的错误优先级。
+    let source_removal = match transaction {
+        AlignRowTransaction::Tree => None,
+        AlignRowTransaction::Source => source_row_removal(edit, align, row_index, only_row)?,
+    };
+    if only_row {
+        if !align.extra.is_empty() {
+            return Err(EditError::UnsupportedOpaqueContent);
+        }
+        return session.delete_math_object().map(Some);
+    }
+    match transaction {
+        AlignRowTransaction::Tree => {
+            remove_empty_tree_row(session, edit, align.clone(), row_index).map(Some)
+        }
+        AlignRowTransaction::Source => {
+            let removal = source_removal.ok_or(EditError::InvalidPosition)?;
+            session
+                .write_math_source_strict(
+                    removal.updated_source,
+                    removal.cursor,
+                    Some(EditGroup::DeleteBackward),
+                    removal.start..removal.end,
+                )
+                .map(Some)
+        }
+    }
+}
 
+/// 源码事务删除空逻辑行所需的源码范围、焦点与改写结果。
+struct SourceRowRemoval {
+    start: usize,
+    end: usize,
+    cursor: usize,
+    updated_source: String,
+}
+
+/// 计算源码事务删除空逻辑行所需的投影范围与焦点。
+///
+/// `only_row` 为真时只执行投影与注释守卫并返回 `None`：唯一行随后走统一的
+/// “删除整个数学对象”路径，但守卫必须先运行，以保持原有的错误优先级。
+fn source_row_removal(
+    edit: &MathEdit,
+    align: &Align,
+    row_index: usize,
+    only_row: bool,
+) -> Result<Option<SourceRowRemoval>, EditError> {
     let projection = edit
         .source_projection
         .as_deref()
@@ -172,11 +192,8 @@ pub(super) fn handle_source_backspace(
     {
         return Err(EditError::UnsupportedOpaqueContent);
     }
-    if align.rows.len() == 1 {
-        if !align.extra.is_empty() {
-            return Err(EditError::UnsupportedOpaqueContent);
-        }
-        return session.delete_math_object().map(Some);
+    if only_row {
+        return Ok(None);
     }
     let (target_row, target_cell) = if row_index > 0 {
         let target_row = row_index - 1;
@@ -225,13 +242,12 @@ pub(super) fn handle_source_backspace(
     .ok_or(EditError::InvalidPosition)?;
     let mut updated_source = source.to_owned();
     updated_source.replace_range(start..end, "");
-    let effect = session.write_math_source_strict(
-        updated_source,
+    Ok(Some(SourceRowRemoval {
+        start,
+        end,
         cursor,
-        Some(EditGroup::DeleteBackward),
-        start..end,
-    )?;
-    Ok(Some(effect))
+        updated_source,
+    }))
 }
 
 pub(super) fn commit_align_tree_edit(

@@ -9,14 +9,14 @@ use super::super::super::flow_format::InheritedInlineStyle;
 use super::super::super::grapheme::GraphemeMap;
 use super::super::history::{self, DocumentPatch, EditGroup};
 use super::super::{Affinity, Direction, EditError, Effect};
+use super::Session;
 use super::navigation::{next_grapheme_end, previous_grapheme_start};
 use super::{
     MathEdit, MathEditBranch, MathEditTarget, MathPositionAffinity, MathPositionHost,
-    MathSequencePath, MathSequenceStep, MathTextPosition, MathTreePosition, history_position,
+    MathTextPosition, MathTreePosition, first_placeholder_position, history_position,
     math_position_affinity_to_affinity, math_text_selection_range,
 };
-use super::{Session, optional_placeholder_operand};
-use caret_doc::{Block, MathContent, MathNodeKind};
+use caret_doc::Block;
 
 pub(super) mod format_tree_edit;
 mod split_tree_edit;
@@ -988,68 +988,4 @@ fn math_position_host(
         }
         _ => Err(EditError::InvalidPosition),
     }
-}
-
-fn first_placeholder_position(
-    tree: &caret_doc::MathTree,
-    path: &MathSequencePath,
-    range: Range<usize>,
-) -> Option<(MathSequencePath, usize)> {
-    let mut contents = tree.root.content.as_slice();
-    for step in path.steps() {
-        contents = match *step {
-            MathSequenceStep::Operand {
-                content_index,
-                operand_index,
-            } => match contents.get(content_index)? {
-                MathContent::Math(node) => &node.children.get(operand_index)?.content,
-                _ => return None,
-            },
-            MathSequenceStep::EnvironmentChildren { content_index } => {
-                match contents.get(content_index)? {
-                    MathContent::Environment(environment) => &environment.children,
-                    _ => return None,
-                }
-            }
-        };
-    }
-    for content_index in range {
-        match contents.get(content_index)? {
-            MathContent::Math(node) if node.kind == MathNodeKind::Placeholder => {
-                return Some((path.clone(), content_index));
-            }
-            MathContent::Math(node) => {
-                for (operand_index, flow) in node.children.iter().enumerate() {
-                    if optional_placeholder_operand(node, operand_index) {
-                        continue;
-                    }
-                    let mut steps = path.steps().to_vec();
-                    steps.push(MathSequenceStep::Operand {
-                        content_index,
-                        operand_index,
-                    });
-                    if let Some(position) = first_placeholder_position(
-                        tree,
-                        &MathSequencePath::new(steps),
-                        0..flow.content.len(),
-                    ) {
-                        return Some(position);
-                    }
-                }
-            }
-            MathContent::Environment(environment) => {
-                let mut steps = path.steps().to_vec();
-                steps.push(MathSequenceStep::EnvironmentChildren { content_index });
-                if let Some(position) = first_placeholder_position(
-                    tree,
-                    &MathSequencePath::new(steps),
-                    0..environment.children.len(),
-                ) {
-                    return Some(position);
-                }
-            }
-            MathContent::Text(_) | MathContent::SoftBreak(_) | MathContent::Opaque(_) => {}
-        }
-    }
-    None
 }
