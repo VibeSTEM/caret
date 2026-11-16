@@ -15,6 +15,23 @@ use super::range_extension::AdjacentComplexUnit;
 use caret_doc::NodeId;
 use caret_layout::VisualAffinity;
 
+/// 结构选区文本投影的段落切口边界：按文档顺序的段落下标与段内字节偏移。
+#[derive(Debug, Clone, Copy)]
+struct StructureTextBounds {
+    start_ordinal: usize,
+    end_ordinal: usize,
+    start_offset: usize,
+    end_offset: usize,
+}
+
+/// 汇集结构选区文本时共享的只读选择上下文。
+#[derive(Debug, Clone, Copy)]
+struct StructureTextCopy<'a> {
+    bounds: Option<StructureTextBounds>,
+    environments: &'a [NodeId],
+    math_blocks: &'a [NodeId],
+}
+
 impl Session {
     /// 按文档顺序提取当前正文选区的纯文本，段落之间以换行连接。
     ///
@@ -119,22 +136,23 @@ impl Session {
         let (environments, math_blocks) = self.structure_range_block_nodes()?;
         // 只覆盖块对象时没有可复制文字，两端最近段落会交错，此时不按段落切口复制。
         let bounds = self.usable_structure_text_bounds()?.map(
-            |(start_position, end_position, start_ordinal, end_ordinal)| {
-                (
-                    start_ordinal,
-                    end_ordinal,
-                    start_position.offset,
-                    end_position.offset,
-                )
+            |(start_position, end_position, start_ordinal, end_ordinal)| StructureTextBounds {
+                start_ordinal,
+                end_ordinal,
+                start_offset: start_position.offset,
+                end_offset: end_position.offset,
             },
         );
+        let copy = StructureTextCopy {
+            bounds,
+            environments: &environments,
+            math_blocks: &math_blocks,
+        };
         let mut text = String::new();
         let mut first = true;
         self.collect_structure_selection_text(
             &self.document.body,
-            bounds,
-            &environments,
-            &math_blocks,
+            copy,
             false,
             &mut text,
             &mut first,
@@ -143,13 +161,10 @@ impl Session {
     }
 
     /// 按物理块顺序汇集结构选区文本；`whole` 表示当前位于被覆盖环境内部。
-    #[allow(clippy::too_many_arguments)]
     fn collect_structure_selection_text(
         &self,
         blocks: &[caret_doc::Block],
-        bounds: Option<(usize, usize, usize, usize)>,
-        environments: &[NodeId],
-        math_blocks: &[NodeId],
+        copy: StructureTextCopy<'_>,
         whole: bool,
         text: &mut String,
         first: &mut bool,
@@ -157,29 +172,27 @@ impl Session {
         for block in blocks {
             match block {
                 caret_doc::Block::Paragraph(paragraph) => {
-                    self.push_structure_paragraph(paragraph, bounds, whole, text, first)?;
+                    self.push_structure_paragraph(paragraph, copy, whole, text, first)?;
                 }
                 caret_doc::Block::Environment(environment) => {
-                    let covered = whole || environments.contains(&environment.id);
+                    let covered = whole || copy.environments.contains(&environment.id);
                     if let Some(title) = &environment.title {
-                        self.push_structure_paragraph(title, bounds, covered, text, first)?;
+                        self.push_structure_paragraph(title, copy, covered, text, first)?;
                     }
                     self.collect_structure_selection_text(
                         &environment.children,
-                        bounds,
-                        environments,
-                        math_blocks,
+                        copy,
                         covered,
                         text,
                         first,
                     )?;
                 }
                 caret_doc::Block::Equation(equation)
-                    if whole || math_blocks.contains(&equation.id) =>
+                    if whole || copy.math_blocks.contains(&equation.id) =>
                 {
                     push_structure_selection_unit(text, first, None);
                 }
-                caret_doc::Block::Align(align) if whole || math_blocks.contains(&align.id) => {
+                caret_doc::Block::Align(align) if whole || copy.math_blocks.contains(&align.id) => {
                     push_structure_selection_unit(text, first, None);
                 }
                 caret_doc::Block::Equation(_)
@@ -195,7 +208,7 @@ impl Session {
     fn push_structure_paragraph(
         &self,
         paragraph: &caret_doc::Paragraph,
-        bounds: Option<(usize, usize, usize, usize)>,
+        copy: StructureTextCopy<'_>,
         whole: bool,
         text: &mut String,
         first: &mut bool,
@@ -204,12 +217,18 @@ impl Session {
         let (from, to, emit) = if whole {
             (0, map.text.len(), true)
         } else {
-            let Some((start_ordinal, end_ordinal, start_offset, end_offset)) = bounds else {
+            let Some(bounds) = copy.bounds else {
                 return Ok(());
             };
             let Some(ordinal) = self.structure_index.paragraph_ordinal(&paragraph.id) else {
                 return Ok(());
             };
+            let StructureTextBounds {
+                start_ordinal,
+                end_ordinal,
+                start_offset,
+                end_offset,
+            } = bounds;
             if ordinal < start_ordinal || ordinal > end_ordinal {
                 return Ok(());
             }
