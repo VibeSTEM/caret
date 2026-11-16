@@ -4,9 +4,9 @@
 // 署名：Yuki Lu
 
 use super::{
-    DocumentLayoutSnapshot, MathTextVerticalTarget, MathTreeVerticalTarget, PageCaretGeometry,
-    PageMathStructureHit, math_environment_at_layout_path, math_flow_at_layout_path,
-    math_sequence_path_for_environment_children, math_sequence_path_for_flow,
+    DocumentLayoutSnapshot, MathSequenceEnd, MathTextVerticalTarget, MathTreeVerticalTarget,
+    PageCaretGeometry, PageMathStructureHit, math_environment_at_layout_path,
+    math_flow_at_layout_path, math_sequence_path,
 };
 use crate::{
     MathEditTarget, MathPositionAffinity, MathPositionHost, MathSequencePath, MathSequenceStep,
@@ -202,14 +202,14 @@ impl DocumentLayoutSnapshot {
                         let root = self.math_scope_root(projection, &node.scope_id)?;
                         let flow = math_flow_at_layout_path(root, &node.path)?;
                         Some((
-                            math_sequence_path_for_flow(&node.path)?,
+                            math_sequence_path(&node.path, MathSequenceEnd::Content)?,
                             flow.content.as_slice(),
                         ))
                     } else if node.is_container {
                         let root = self.math_scope_root(projection, &node.scope_id)?;
                         let environment = math_environment_at_layout_path(root, &node.path)?;
                         Some((
-                            math_sequence_path_for_environment_children(&node.path)?,
+                            math_sequence_path(&node.path, MathSequenceEnd::EnvironmentChildren)?,
                             environment.children.as_slice(),
                         ))
                     } else {
@@ -286,14 +286,15 @@ impl DocumentLayoutSnapshot {
     }
 }
 
-pub(super) fn math_text_candidate_is_vertical_neighbor(
+/// 对齐格宿主之间的垂直相邻性裁决。
+///
+/// `Some(true)` 表示跨对齐行、直接视为上下相邻；`Some(false)` 表示同行异格、不构成
+/// 相邻；`None` 表示落在同一对齐格，需要继续比较公式结构序列路径。
+fn align_cell_vertical_neighbor(
     current_host: &MathPositionHost,
-    current_path: &[MathSequenceStep],
-    current_offset: usize,
     candidate_host: &MathPositionHost,
-    candidate_path: &MathTextFlowPath,
-) -> bool {
-    if let (
+) -> Option<bool> {
+    let (
         MathPositionHost::AlignCell {
             row_id: current_row,
             cell_id: current_cell,
@@ -303,13 +304,27 @@ pub(super) fn math_text_candidate_is_vertical_neighbor(
             cell_id: candidate_cell,
         },
     ) = (current_host, candidate_host)
-    {
-        if current_row != candidate_row {
-            return true;
-        }
-        if current_cell != candidate_cell {
-            return false;
-        }
+    else {
+        return None;
+    };
+    if current_row != candidate_row {
+        Some(true)
+    } else if current_cell != candidate_cell {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+pub(super) fn math_text_candidate_is_vertical_neighbor(
+    current_host: &MathPositionHost,
+    current_path: &[MathSequenceStep],
+    current_offset: usize,
+    candidate_host: &MathPositionHost,
+    candidate_path: &MathTextFlowPath,
+) -> bool {
+    if let Some(neighbor) = align_cell_vertical_neighbor(current_host, candidate_host) {
+        return neighbor;
     }
     let Ok((candidate_path, _)) =
         MathTreePosition::sequence_boundary_from_text_path(candidate_path.steps())
@@ -326,23 +341,8 @@ fn math_tree_candidate_is_vertical_neighbor(
     candidate_host: &MathPositionHost,
     candidate_path: &[MathSequenceStep],
 ) -> bool {
-    if let (
-        MathPositionHost::AlignCell {
-            row_id: current_row,
-            cell_id: current_cell,
-        },
-        MathPositionHost::AlignCell {
-            row_id: candidate_row,
-            cell_id: candidate_cell,
-        },
-    ) = (current_host, candidate_host)
-    {
-        if current_row != candidate_row {
-            return true;
-        }
-        if current_cell != candidate_cell {
-            return false;
-        }
+    if let Some(neighbor) = align_cell_vertical_neighbor(current_host, candidate_host) {
+        return neighbor;
     }
     math_tree_paths_are_vertical_neighbors(current_path, candidate_path, current_offset)
 }

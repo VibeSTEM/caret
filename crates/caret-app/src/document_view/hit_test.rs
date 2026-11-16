@@ -188,74 +188,7 @@ pub(super) fn math_text_hit_wins_over_body(
     y_pt: f64,
     math_hit: &caret_engine::PageMathTextHit,
 ) -> bool {
-    !math_hit.is_zero_width
-        || !snapshot
-            .hit_test(page_index, x_pt, y_pt)
-            .as_ref()
-            .is_some_and(|hit| body_text_contains_point(snapshot, hit, page_index, x_pt, y_pt))
-}
-
-fn body_text_contains_point(
-    snapshot: &caret_engine::DocumentLayoutSnapshot,
-    hit: &caret_engine::PageHit,
-    page_index: usize,
-    x_pt: f64,
-    y_pt: f64,
-) -> bool {
-    let Some(paragraph) = snapshot.paragraph_by_id(&hit.position.paragraph_id) else {
-        return false;
-    };
-    let boundaries = paragraph_text_boundaries(paragraph);
-    let offset_index = match boundaries.binary_search(&hit.position.offset) {
-        Ok(index) => index,
-        Err(_) => return false,
-    };
-    let mut candidates = Vec::with_capacity(2);
-    if let Some(start_index) = offset_index.checked_sub(1) {
-        candidates.push((boundaries[start_index], boundaries[offset_index]));
-    }
-    if let Some(end) = boundaries.get(offset_index + 1) {
-        candidates.push((boundaries[offset_index], *end));
-    }
-    candidates.into_iter().any(|(start, end)| {
-        if start >= end
-            || paragraph
-                .inline_math_source_ranges
-                .iter()
-                .any(|range| range.start == start && range.end == end)
-        {
-            return false;
-        }
-        let selection = Selection {
-            anchor: caret_engine::Pos {
-                offset: start,
-                affinity: caret_engine::Affinity::Downstream,
-                ..hit.position.clone()
-            },
-            focus: caret_engine::Pos {
-                offset: end,
-                affinity: caret_engine::Affinity::Upstream,
-                ..hit.position.clone()
-            },
-        };
-        snapshot
-            .selection_geometry(&selection)
-            .is_some_and(|rectangles| {
-                rectangles.into_iter().any(|rectangle| {
-                    // 正文保留每个正宽字素的内部区域，重合边界留给零宽公式 caret。
-                    let inset = 1.5_f64.min((rectangle.x1_pt - rectangle.x0_pt).max(0.0) * 0.25);
-                    rectangle.page_index == page_index
-                        && x_pt > rectangle.x0_pt + inset
-                        && x_pt < rectangle.x1_pt - inset
-                        && y_pt >= rectangle.y0_pt
-                        && y_pt <= rectangle.y1_pt
-                })
-            })
-    })
-}
-
-fn paragraph_text_boundaries(paragraph: &caret_engine::LaidOutParagraph) -> Vec<usize> {
-    paragraph.layout.grapheme_boundaries.clone()
+    !math_hit.is_zero_width || !snapshot.body_text_contains_point(page_index, x_pt, y_pt)
 }
 
 #[cfg(test)]
@@ -358,7 +291,7 @@ mod tests {
         assert_eq!(paragraph.inline_math_source_ranges.len(), 1);
         assert_eq!(paragraph.inline_math_source_ranges[0], 1..4);
         assert_eq!(paragraph.inline_math_layouts[0].width, 0.0);
-        assert!(paragraph_text_boundaries(paragraph).contains(&4));
+        assert!(paragraph.layout.grapheme_boundaries.contains(&4));
         let inline_start = paragraph
             .layout
             .cursor_at(1, caret_engine::VisualAffinity::Downstream)
@@ -394,26 +327,9 @@ mod tests {
             .into_iter()
             .next()
             .ok_or_else(|| "combining text has no visible geometry".to_owned())?;
-        let hit = caret_engine::PageHit {
-            position: caret_engine::Pos {
-                story: caret_engine::StoryId::Body,
-                paragraph_id,
-                offset: 6,
-                affinity: caret_engine::Affinity::Downstream,
-            },
-            visual_affinity: caret_engine::VisualAffinity::Downstream,
-            caret: caret_engine::PageCaretGeometry {
-                page_index: rectangle.page_index,
-                x_pt: (rectangle.x0_pt + rectangle.x1_pt) / 2.0,
-                y0_pt: rectangle.y0_pt,
-                y1_pt: rectangle.y1_pt,
-            },
-        };
-        assert!(body_text_contains_point(
-            &snapshot,
-            &hit,
+        assert!(snapshot.body_text_contains_point(
             rectangle.page_index,
-            hit.caret.x_pt,
+            (rectangle.x0_pt + rectangle.x1_pt) / 2.0,
             (rectangle.y0_pt + rectangle.y1_pt) / 2.0,
         ));
         for page_origin_pt in [0.0, 0.375, 0.75, 1.125] {
@@ -434,8 +350,8 @@ mod tests {
                 )
                 .into_iter()
                 .find_map(|x| {
-                    let body_hit = snapshot.hit_test(rectangle.page_index, x, y)?;
-                    body_text_contains_point(&snapshot, &body_hit, rectangle.page_index, x, y)
+                    snapshot
+                        .body_text_contains_point(rectangle.page_index, x, y)
                         .then_some((x, y))
                 })
             })
@@ -463,17 +379,7 @@ mod tests {
                 .into_iter()
                 .find_map(|x| {
                     let body_text_hit =
-                        snapshot
-                            .hit_test(rectangle.page_index, x, y)
-                            .is_some_and(|body_hit| {
-                                body_text_contains_point(
-                                    &snapshot,
-                                    &body_hit,
-                                    rectangle.page_index,
-                                    x,
-                                    y,
-                                )
-                            });
+                        snapshot.body_text_contains_point(rectangle.page_index, x, y);
                     (snapshot
                         .hit_test_math_text(rectangle.page_index, x, y)
                         .is_some_and(|hit| hit.is_zero_width)
